@@ -200,7 +200,17 @@ impl WordApp {
     /// The framework fires one command per chord, so nothing waits for a browser paste event.
     fn paste_format_command(&self, ctx: &egui::Context, params: Value) -> (&'static str, Value) {
         let formatting = self.session.painter.is_some() || self.session.copied_format.is_some();
-        let chord = ctx.input(|i| i.modifiers.command && i.modifiers.shift && !i.modifiers.alt);
+        // The command runs a pass after its press, when a quick tap's modifiers are already up: with none held the fire
+        // is Mod+Shift+V's while that chord is still the command's.
+        let mods = ctx.input(|i| i.modifiers);
+        let chord = if mods.any() {
+            mods.command && mods.shift && !mods.alt
+        } else {
+            let default = Binding::parse("Mod+Shift+V").ok().map(|binding| binding.trigger.chord);
+            craft::ui::runtime::commands::bindings(ctx, &CommandRef::new("edit.pasteFormat"))
+                .iter()
+                .any(|binding| Some(binding.trigger.chord) == default)
+        };
         if !formatting && chord { ("edit.pasteText", json!({})) } else { ("edit.pasteFormat", params) }
     }
 }

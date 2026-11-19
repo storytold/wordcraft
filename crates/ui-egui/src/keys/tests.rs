@@ -105,6 +105,14 @@ fn alt_frame(h: &mut H, events: Vec<egui::Event>) {
     crate::test_harness::frame(h);
 }
 
+/// One frame whose input carries all of `events`, as a platform delivers one raw batch. `alt_frame` queues them
+/// through kittest's `event`, which runs a frame for each queued event, so a batch it is given arrives spread over as
+/// many frames.
+fn batch_frame(h: &mut H, events: Vec<egui::Event>) {
+    h.input_mut().events.extend(events);
+    crate::test_harness::frame(h);
+}
+
 /// One frame with `modifiers` held, then `events`.
 fn mods_frame(h: &mut H, modifiers: Modifiers, events: Vec<egui::Event>) {
     let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
@@ -1046,25 +1054,25 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     // The immediately following commit belongs to the refused replacement and is dropped;
     // the next commit in the same raw batch is fresh input and applies.
     let after_pair = linear(&mut h);
-    alt_frame(&mut h, vec![surround_bytes(1, 0), commit("Z"), commit("Y")]);
+    batch_frame(&mut h, vec![surround_bytes(1, 0), commit("Z"), commit("Y")]);
     assert_eq!(linear(&mut h), format!("{after_pair}Y"), "only the adjacent stale commit is dropped");
     let after_commit = linear(&mut h);
 
     // A platform that routes the replacement through `Text` before its `Commit` sends the
     // adjacent pair; both belong to the refused deletion, and a later commit still applies.
-    alt_frame(&mut h, vec![surround_bytes(1, 0), egui::Event::Text("Q".into()), commit("Q2"), commit("R")]);
+    batch_frame(&mut h, vec![surround_bytes(1, 0), egui::Event::Text("Q".into()), commit("Q2"), commit("R")]);
     assert_eq!(linear(&mut h), format!("{after_commit}R"), "the adjacent Text+Commit pair is stale, the next commit is not");
 
     // Any intervening event ends the pair: a key then its Text is ordinary fresh input.
     let after_commit = linear(&mut h);
     // Delete (at the equation's end it changes nothing) is a key the page reads; F20 is no editor input.
     let key = key_event(Key::Delete, true, Modifiers::NONE);
-    alt_frame(&mut h, vec![surround_bytes(1, 0), key, egui::Event::Text("K".into())]);
+    batch_frame(&mut h, vec![surround_bytes(1, 0), key, egui::Event::Text("K".into())]);
     assert_eq!(linear(&mut h), format!("{after_commit}K"), "a key between the deletion and text clears the suppression");
 
     // A pre-edit likewise ends the stale pair; its commit is fresh.
     let after_commit = linear(&mut h);
-    alt_frame(&mut h, vec![surround_bytes(1, 0), preedit("p"), commit("P")]);
+    batch_frame(&mut h, vec![surround_bytes(1, 0), preedit("p"), commit("P")]);
     assert_eq!(linear(&mut h), format!("{after_commit}P"), "a fresh composition in the same batch is accepted");
 }
 

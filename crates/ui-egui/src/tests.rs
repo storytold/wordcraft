@@ -113,8 +113,11 @@ fn row_heading_shortcut() {
     assert_eq!(first_style(&h).as_deref(), Some("Heading1"));
     // Alt+F7 can come with key text on some platforms; none is typed.
     // The platform sends the key's text in the frame of the press, which is where the runtime withholds it.
-    h.event(egui::Event::Key { key: egui::Key::F7, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
-    h.event(egui::Event::Text("x".into()));
+    // Both in one frame's input: kittest's `event` runs a frame for each queued event.
+    h.input_mut().events.extend([
+        egui::Event::Key { key: egui::Key::F7, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT },
+        egui::Event::Text("x".into()),
+    ]);
     h.step();
     h.step();
     assert_eq!(body_text(h.state()), "Kilns", "an Alt shortcut types nothing");
@@ -134,7 +137,11 @@ fn row_ctrl_q_resets_the_paragraph() {
     assert_eq!(align(&h), None, "Ctrl+Q resets the paragraph formatting");
     press(&mut h, egui::Key::Q, egui::Modifiers::CTRL | egui::Modifiers::COMMAND);
     assert!(!h.state().quit_requested && prompt(h.state()).is_none(), "Ctrl+Q doesn't close the window");
-    press(&mut h, egui::Key::Q, egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND);
+    // ⌘Q is the runtime's (S-L332): the platform's quit reaches the app as a close of the root window, which the app's
+    // close decision answers. The old app read ⌘Q as a key press on every host.
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.step();
+    h.step();
     assert_eq!(prompt(h.state()), Some("saveChanges"), "⌘Q still quits, asking about the typed text first");
 }
 

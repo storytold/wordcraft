@@ -728,8 +728,8 @@ fn alt_q_opens_search_and_typing_goes_there() {
     let Some(open) = chord_event(&chord) else {
         panic!("the chord {chord} names a key egui knows");
     };
-    h.event(open.clone());
-    h.event(egui::Event::Text("q".into()));
+    // Both in one frame's input, as the platform sends them: kittest's `event` runs a frame for each queued event.
+    h.input_mut().events.extend([open.clone(), egui::Event::Text("q".into())]);
     h.step();
     // The chord fires the command in that pass; the app runs it when the next pass begins (`driver_logic`).
     h.step();
@@ -743,6 +743,11 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.step();
     assert_eq!(search_text(&h).as_deref(), Some("bold"), "typing goes into the search box");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
+    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.step();
+    h.step();
+    // The framework gives Escape to a field holding a draft first (`overlay/dismissal.rs`): the typed "bold" takes the
+    // first one, and the second closes Search. The old app closed on one.
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.step();
     h.step();
