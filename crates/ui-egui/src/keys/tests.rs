@@ -77,7 +77,7 @@ fn app_harness(app: WordApp) -> H {
     let ctx = h.ctx.clone();
     h.state_mut().canvas.focus_page(&ctx);
     for _ in 0..8 {
-        h.step();
+        crate::test_harness::frame(&mut h);
         if h.state().canvas.focused(&ctx) {
             break;
         }
@@ -101,7 +101,8 @@ fn alt_frame(h: &mut H, events: Vec<egui::Event>) {
     for e in events {
         h.event(e);
     }
-    h.step();
+    // Each frame as the app's driver runs it: the runtime is handed the app's commands first.
+    crate::test_harness::frame(h);
 }
 
 /// One frame with `modifiers` held, then `events`.
@@ -162,21 +163,21 @@ fn user_assignments_become_overrides() {
         for (assign, ask, want) in rows {
             let mut h = alt_frame_app();
             craft::ui::testing::windows::set_os(&h.ctx, os);
-            h.step();
+            crate::test_harness::frame(&mut h);
             if let Some((chord, id)) = assign {
                 h.state_mut().session.keymap_mut().insert(CommandRef::new(id).key(), vec![chord.to_string()]);
-                h.step();
+                crate::test_harness::frame(&mut h);
             }
             assert_eq!(holder_of(&h, ask), want, "{os:?} {assign:?} {ask}");
         }
         // A bound chord leaves its default holder for the command it is bound to.
         let mut h = alt_frame_app();
         craft::ui::testing::windows::set_os(&h.ctx, os);
-        h.step();
+        crate::test_harness::frame(&mut h);
         let default = holder_of(&h, "Mod+Shift+Backspace");
         assert!(default.is_some() && default != command("select.all"), "{os:?}: the chord starts with its own command");
         h.state_mut().session.keymap_mut().insert(CommandRef::new("select.all").key(), vec!["Mod+Shift+Backspace".to_string()]);
-        h.step();
+        crate::test_harness::frame(&mut h);
         assert_eq!(holder_of(&h, "Mod+Shift+Backspace"), command("select.all"), "{os:?}");
     }
 }

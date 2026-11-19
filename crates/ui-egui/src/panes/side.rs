@@ -62,7 +62,7 @@ fn row_menu(ui: &mut Ui, label: &str, opener: &egui::Response, asked: Option<usi
 
 pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
-    let st = app.session.run("format.state", &json!({})).unwrap_or_default();
+    let st = wordcraft_engine::cmd::format::state(&app.session);
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
     let current_name = app
         .session
