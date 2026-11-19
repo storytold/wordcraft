@@ -1333,14 +1333,15 @@ fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
     for _ in 0..3 {
         frame(&mut a);
     }
-    let rects = page_rects(&a);
+    // The whole layout, as production's `page_rects` held it: the canvas places only the pages in view.
+    let rects = a.canvas.laid_page_rects().to_vec();
     assert_eq!(rects.len(), 4);
     assert!(rects[1].top() > rects[0].bottom(), "100%: one page per row");
     a.run("view.zoom", json!({"value": 30})).unwrap();
     for _ in 0..3 {
         frame(&mut a);
     }
-    let rects = page_rects(&a);
+    let rects = a.canvas.laid_page_rects().to_vec();
     assert_eq!(columns(&rects), 4, "30%: all four pages fit across: {rects:?}");
     assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
     // A click inside the last page's text puts the caret on that page.

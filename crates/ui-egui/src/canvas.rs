@@ -79,13 +79,15 @@ pub(crate) struct ShownPages {
     pub rect: Rect,
     /// The pages on screen.
     pub pages: Vec<PlacedPage>,
+    /// Every page of the view's layout, on screen or not, at its screen position this pass.
+    pub laid: Vec<Rect>,
     /// The canvas widget's id; `None` until a pass has shown it.
     pub canvas: Option<egui::Id>,
 }
 
 impl Default for ShownPages {
     fn default() -> Self {
-        ShownPages { rect: Rect::NOTHING, pages: Vec::new(), canvas: None }
+        ShownPages { rect: Rect::NOTHING, pages: Vec::new(), laid: Vec::new(), canvas: None }
     }
 }
 
@@ -295,6 +297,11 @@ impl CanvasState {
     /// The pages on screen in the last pass: page index and screen rectangle.
     pub fn page_rects(&self) -> impl Iterator<Item = (usize, Rect)> + '_ {
         self.shown.pages.iter().map(|p| (p.page, p.rect))
+    }
+
+    /// Every page's rectangle on screen in the last pass, in page order, including pages scrolled out of view.
+    pub fn laid_page_rects(&self) -> &[Rect] {
+        &self.shown.laid
     }
 
     /// The canvas widget's id, once a pass has shown it.
@@ -598,6 +605,18 @@ fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
     state.hide_white_space = v.hide_white_space && v.mode == wordcraft_layout::ViewMode::Print && !editing_part;
 }
 
+/// Every page of the pass's layout on screen: the layout's content rects moved by where a placed page shows.
+fn laid_rects(out: &craft::pages::ui::PageViewOutput) -> Vec<Rect> {
+    let Some(shift) = out.pages.iter().find_map(|placed| {
+        let r = out.layout.rects.get(placed.page)?;
+        Some(placed.rect.min - pos2(r.x0 as f32, r.y0 as f32))
+    }) else {
+        return Vec::new();
+    };
+    let at = |x: f64, y: f64| pos2(x as f32, y as f32) + shift;
+    out.layout.rects.iter().map(|r| Rect::from_min_max(at(r.x0, r.y0), at(r.x1, r.y1))).collect()
+}
+
 /// What the page body decided about the scroll position, applied after the pass.
 #[derive(Clone, Copy, Debug, Default)]
 struct ScrollFix {
@@ -656,7 +675,7 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
         .inner;
     app.canvas.page_keys = source.into_keys();
     app.canvas.reading = state;
-    app.canvas.shown = ShownPages { rect: columns, pages: Vec::new(), canvas: Some(out.response.id) };
+    app.canvas.shown = ShownPages { rect: columns, pages: Vec::new(), laid: Vec::new(), canvas: Some(out.response.id) };
     app.canvas.viewed_page = None;
     app.canvas.read_first_visible = reading_page_start(layout, app.canvas.reading.column);
     app.canvas.scroll_to_caret = false;
@@ -850,7 +869,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     app.canvas.viewed_page = Some(viewed_page(caret_span, &state, &out.layout, f64::from(body_rect.height())));
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
-    app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), canvas: Some(out.canvas.response.id) };
+    app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), canvas: Some(out.canvas.response.id) };
     if app.canvas.focus_pending && !app.modal_open() {
         let ctx = ui.ctx().clone();
         app.canvas.focus_page(&ctx);
