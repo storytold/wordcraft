@@ -814,9 +814,27 @@ mod smoke {
             }
         }
 
-        /// The OS asks the root window to close.
-        fn ask_to_close(&self) {
-            WindowHost::of(&self.ctx).act(egui::ViewportId::ROOT, WindowAction::Close);
+        /// One frame in which the OS asks the root window to close (its close button: a `Close` event in the
+        /// root's window facts, which the app's close decision answers; `WindowAction::Close` is the app's own
+        /// close command and asks nobody). Returns whether the app let the close through: it holds it by
+        /// cancelling the close.
+        fn close_request_is_let_through(&mut self) -> bool {
+            let Run { app, ctx, .. } = self;
+            embed::before_input(ctx, |out| app.app.frame_input(out));
+            let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0))), ..Default::default() };
+            input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
+            let mut first = true;
+            let output = ctx.run_ui(input, |ui| {
+                if std::mem::take(&mut first) {
+                    app.logic_pass(ui.ctx(), None);
+                }
+                app.ui_pass(ui, None);
+            });
+            let held = output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::CancelClose));
+            !held
         }
     }
 
@@ -840,8 +858,7 @@ mod smoke {
 
         run.app.app.run("text.insert", json!({"text": "unsaved"})).unwrap();
         run.settle();
-        run.ask_to_close();
-        assert!(!run.step(vec![]), "a modified document holds the close");
+        assert!(!run.close_request_is_let_through(), "a modified document holds the close");
         run.settle();
         assert!(run.app.app.dialog_host_mut().shows_modal(), "the Save Changes prompt shows");
 
@@ -856,8 +873,7 @@ mod smoke {
         run.step(vec![press]);
         run.settle();
         assert!(!run.app.app.dialog_host_mut().shows_modal(), "the prompt is answered");
-        run.ask_to_close();
-        let closed = (0..3).any(|_| run.step(vec![]));
+        let closed = (0..3).any(|_| run.close_request_is_let_through());
         assert!(closed, "Don't Save lets the close through");
     }
 }

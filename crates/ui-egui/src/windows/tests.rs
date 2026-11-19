@@ -36,7 +36,10 @@ impl Rig {
 
     fn info(&self, viewport: ViewportId) -> ViewportInfo {
         let events = if self.closing.contains(&viewport) { vec![ViewportEvent::Close] } else { Vec::new() };
-        ViewportInfo { focused: Some(self.focused == Some(viewport)), events, ..Default::default() }
+        // The window host reads a window's facts (focus included) only once it has reported its inner rect.
+        let size = if viewport == ViewportId::ROOT { egui::vec2(800.0, 600.0) } else { egui::vec2(400.0, 300.0) };
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        ViewportInfo { focused: Some(self.focused == Some(viewport)), events, inner_rect: Some(rect), outer_rect: Some(rect), ..Default::default() }
     }
 
     /// One frame of every window.
@@ -153,7 +156,11 @@ fn window_keys_differ_and_the_root_keeps_main() {
     assert_eq!(second.as_str(), format!("window-{}", a.windows.shown()));
     assert_ne!(second.as_str(), crate::windows::WindowKey::main().as_str());
 
+    // The root window's close button closes that window alone; its document has unsaved text, so it asks first.
     rig.close(ViewportId::ROOT);
+    rig.frame(&mut a);
+    assert_eq!(prompt(&a).as_deref(), Some("saveChanges"));
+    a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
     rig.frame(&mut a);
     assert_eq!(a.window_count(), 1);
     assert_eq!(a.windows.window_key().as_str(), crate::windows::WindowKey::main().as_str(), "the adopted entry is the root's");

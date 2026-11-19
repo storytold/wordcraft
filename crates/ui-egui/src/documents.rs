@@ -332,7 +332,8 @@ mod tests {
 
         h.state_mut().run("ui.tab", json!({"tab": "View"})).unwrap();
         crate::test_harness::frames(&mut h, 2);
-        h.get_by_label("Switch Windows").click();
+        // The ribbon's stacked label breaks the line after "Switch".
+        h.get_by_label("Switch\nWindows").click();
         crate::test_harness::frames(&mut h, 2);
         use egui::accesskit::Role;
         assert!(h.query_by_role_and_label(Role::Button, "Document1 •").is_some(), "the first document is listed, unsaved");
