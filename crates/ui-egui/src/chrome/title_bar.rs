@@ -114,7 +114,7 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) {
             let out = button.show(ui);
             // The ribbon's command menu: on or off the toolbar, and the customize rows.
             let request =
-                RibbonMenuRequest { command: Some(CommandRef::new(id.as_str())), at: out.response.rect.left_bottom(), opener: out.response.id };
+                RibbonMenuRequest { command: Some(CommandRef::new(id.as_str())), at: out.response.rect.left_bottom() };
             Menu::context(tl!("Quick Access Toolbar").to_string(), &out.response)
                 .show(ui, |ui, _| crate::ribbon::command_menu(ui, app, &request));
             if id == "edit.undo" {
