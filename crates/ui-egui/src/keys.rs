@@ -11,7 +11,7 @@ mod canvas;
 mod ime;
 mod shortcuts;
 
-pub(crate) use canvas::page_input;
+pub(crate) use canvas::{page_input, window_cancel};
 pub(crate) use ime::report_editor;
 #[cfg(test)]
 use ime::{ImeProof, MAX_IME_COMMIT_BYTES, MAX_IME_PREEDIT_BYTES, classify_ime_proof};

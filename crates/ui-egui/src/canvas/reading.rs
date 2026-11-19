@@ -1,5 +1,34 @@
 use super::{DocLayout, PX_PER_PT, Placed, Pos, StoryRef};
 
+/// How long a window size must hold still before a layout size follows it (seconds).
+pub(super) const RESIZE_SETTLE: f64 = 0.16;
+
+/// A layout size that follows the window: the last viewport seen and when it last changed, so a window drag reflows
+/// once it settles, not per frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Settle {
+    viewport: Option<egui::Vec2>,
+    resized_at: f64,
+}
+
+impl Settle {
+    /// Notes this frame's viewport `size` at time `now`. Returns whether a layout size that `changed` should be
+    /// applied now: at once when entering or `forced`, otherwise only after the viewport has held still.
+    pub(super) fn apply(&mut self, size: egui::Vec2, now: f64, changed: bool, forced: bool) -> bool {
+        let entering = self.viewport.is_none();
+        if self.viewport.is_none_or(|v| (v - size).length_sq() > 0.5) {
+            self.viewport = Some(size);
+            self.resized_at = now;
+        }
+        changed && (entering || forced || now - self.resized_at >= RESIZE_SETTLE)
+    }
+
+    /// The view was left: the next visit applies at once.
+    pub(super) fn leave(&mut self) {
+        self.viewport = None;
+    }
+}
+
 /// Web Layout's text width in points for a work area `avail_px` wide at `scale`: the whole width,
 /// clamped to what the layout accepts so a tiny or huge window never gives zero or a giant page.
 pub(super) fn web_layout_width(avail_px: f32, scale: f32) -> f32 {

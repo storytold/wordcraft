@@ -112,8 +112,10 @@ fn row_heading_shortcut() {
     press(&mut h, egui::Key::Num1, egui::Modifiers::COMMAND | egui::Modifiers::ALT);
     assert_eq!(first_style(&h).as_deref(), Some("Heading1"));
     // Alt+F7 can come with key text on some platforms; none is typed.
-    press(&mut h, egui::Key::F7, egui::Modifiers::ALT);
+    // The platform sends the key's text in the frame of the press, which is where the runtime withholds it.
+    h.event(egui::Event::Key { key: egui::Key::F7, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
     h.event(egui::Event::Text("x".into()));
+    h.step();
     h.step();
     assert_eq!(body_text(h.state()), "Kilns", "an Alt shortcut types nothing");
 }
@@ -285,6 +287,8 @@ fn row_mod_shift_equals_stays_superscript() {
     h.run_steps(6);
     let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
     h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    // The chord fires its command in that pass; the app runs it when the next pass begins (`driver_logic`).
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
     let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
@@ -1377,7 +1381,9 @@ fn prompt_message(a: &WordApp) -> Option<String> {
 /// The question the window is asking: Save Changes while a close waits (sh.A7), else the key of an
 /// open dialog the tests ask about.
 fn prompt(a: &WordApp) -> Option<&'static str> {
-    if a.closing.as_ref().is_some_and(|c| c.prompt.is_some()) {
+    // The close operation is the app's, the question is the drawn window's: a prompt asked in the window of a document
+    // that another window replaced is no longer the question this window asks.
+    if a.closing.as_ref().and_then(|c| c.prompt).is_some_and(|id| a.dialog_host.get_by_id::<craft::ui::dialog::UnsavedChangesDialog>(id).is_some()) {
         return Some("saveChanges");
     }
     let (key, _) = open_dialog(a)?;
@@ -3277,6 +3283,8 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
     }
     let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
     h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    // The chord fires its command in that pass; the app runs it when the next pass begins (`driver_logic`).
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
     let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };

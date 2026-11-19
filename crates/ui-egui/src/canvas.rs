@@ -147,6 +147,8 @@ pub struct CanvasState {
     pub(crate) nav_to_caret: bool,
     /// Reading controls (as opposed to window resizes) must reflow at once.
     pub(crate) read_force_reflow: bool,
+    /// Web Layout's width follows the window once a drag has settled, not on every frame of it.
+    web_viewport: reading::Settle,
     /// First text position on the column currently leading the reading view, captured from the last
     /// pass's layout. Survives changing page sizes, even when the caret stays elsewhere.
     pub(crate) read_first_visible: Option<Pos>,
@@ -354,6 +356,7 @@ impl Default for CanvasState {
             keep_view: false,
             nav_to_caret: false,
             read_force_reflow: false,
+            web_viewport: Default::default(),
             read_first_visible: None,
             dragging: false,
             column_drag: None,
@@ -400,7 +403,7 @@ impl Default for CanvasState {
 
 /// Settles the reading size and Web Layout's width from the room, and returns the text anchor to restore after a
 /// Read Mode reflow.
-fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32) -> Option<Pos> {
+fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32, ctx: &egui::Context) -> Option<Pos> {
     let mut reflow_anchor: Option<Pos> = None;
     if app.session.view.read_mode {
         let scale = ReadingView::screen_scale(app.session.view.read_zoom.clamp(0.75, 1.5));
@@ -421,11 +424,17 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
             // The page view keeps its side gutter (the rail width) clear on both sides of a page, so the page
             // fits the window only when its width leaves that room.
             let w = web_layout_width((full.width() - 2.0 * side).max(0.0), scale);
-            if (app.session.view.web_width - w).abs() > 0.5 {
+            let changed = (app.session.view.web_width - w).abs() > 0.5;
+            // At once on entry or a zoom (the viewport holds still), after a window drag has settled.
+            if app.canvas.web_viewport.apply(full.size(), ctx.input(|i| i.time), changed, false) {
                 app.session.view.web_width = w;
                 // The pixel offset no longer points at the same text: keep the caret's line in view.
                 app.canvas.scroll_to_caret = true;
+            } else if changed {
+                ctx.request_repaint_after(std::time::Duration::from_millis(170));
             }
+        } else {
+            app.canvas.web_viewport.leave();
         }
         app.canvas.read_force_reflow = false;
         app.canvas.read_first_visible = None;
@@ -434,8 +443,8 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
 }
 
 /// The layout the pass shows, after the viewport sizes are settled.
-fn prepare_layout(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32) -> Arc<DocLayout> {
-    let reflow_anchor = update_viewport(app, full, metrics, side);
+fn prepare_layout(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32, ctx: &egui::Context) -> Arc<DocLayout> {
+    let reflow_anchor = update_viewport(app, full, metrics, side, ctx);
     let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
@@ -661,7 +670,7 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
     let Some(metrics) = reading_metrics::read(ui) else { return };
-    let layout = prepare_layout(app, full, &metrics, Env::of(ui).tokens.size.rail.width);
+    let layout = prepare_layout(app, full, &metrics, Env::of(ui).tokens.size.rail.width, ui.ctx());
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
     } else {

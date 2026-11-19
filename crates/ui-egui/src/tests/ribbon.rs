@@ -65,6 +65,11 @@ fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
         // return says nothing, the zoom and the open dialogs do.
         let _ = a.dialog_host.confirm_by_id(&ctx, zoom.id);
         frame(&mut a);
+        // The first confirm files the held OK; a later one, after the pass that showed it, finishes the dialog.
+        if !a.dialog_host.open_dialogs().is_empty() {
+            let _ = a.dialog_host.confirm_by_id(&ctx, zoom.id);
+            frame(&mut a);
+        }
         assert!((a.session.view.zoom - fitted).abs() < 0.01, "{fit}: the Zoom dialog opens at the shown zoom");
         assert!(a.dialog_host.open_dialogs().is_empty(), "the Zoom dialog closed");
     }

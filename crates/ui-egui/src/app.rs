@@ -408,6 +408,10 @@ impl WordApp {
         if !moved(self) {
             self.show_overlays(ui, &ctx, &regions);
         }
+        // Last in the pass: the Escape that nothing in the window took.
+        if !moved(self) {
+            crate::keys::window_cancel(self, &ctx);
+        }
         if !moved(self) {
             self.frame_ms = monotonic_ms() - t0;
             // Typing and formatting land here, after `logic` has reported.

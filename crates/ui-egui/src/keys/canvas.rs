@@ -596,7 +596,34 @@ fn cancel(app: &mut WordApp, ctx: &egui::Context) {
         let _ = app.run("insert.closeHeader", json!({}));
         return;
     }
-    let _ = leave_full_screen(app, ctx, Key::Escape, Modifiers::NONE, true);
+    if leave_full_screen(app, ctx, Key::Escape, Modifiers::NONE, true) {
+        return;
+    }
+    // Plain Escape reaches the page as the editor's cancel, never as a chord, so the engine's
+    // `select.collapse` binding (Escape) is run here: a selection collapses to its start.
+    if !app.session.sel.is_collapsed() {
+        let _ = app.run("select.collapse", json!({}));
+    }
+}
+
+/// The Escape no component took, read last in the window's UI: the framework gives plain Escape to the focused
+/// component or, with none focused, to the window's intents, never to a command's chord. With the File page open it
+/// goes back to the document (`backstagePage.back`'s default key); otherwise it leaves Focus or Full Screen View, as
+/// the page's own Escape does when the page has the keyboard.
+pub(crate) fn window_cancel(app: &mut WordApp, ctx: &egui::Context) {
+    use craft::ui::runtime::keys::{Intent, with_window_intents};
+    if !with_window_intents(ctx, false, |window| window.take(Intent::Cancel)) {
+        return;
+    }
+    if app.ui.backstage {
+        // A dialog, menu or popup over the page took its own Escape before this read.
+        if app.dialog_host.is_empty() {
+            let _ = app.run("ui.backstage", json!({"value": false}));
+            app.canvas.focus_page(ctx);
+        }
+        return;
+    }
+    let _ = leave_full_screen(app, ctx, Key::Escape, Modifiers::NONE, false);
 }
 
 /// Escape leaves Focus or Full Screen View (#1678), then Full Screen (#980), once nothing nearer
