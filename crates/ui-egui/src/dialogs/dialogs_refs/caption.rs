@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::Block;
 
-use super::labels::{BUILT_IN_LABELS, NUMBER_FORMATS, SEPARATORS, caption_labels};
+use super::labels::{BUILT_IN_LABELS, NUMBER_FORMATS, SEPARATORS, own_labels};
 use crate::WordApp;
 use crate::dialogs::host::{Asks, ChildAnswer, Filed, WordForm, open_form};
 use egui::Ui;
@@ -43,7 +43,7 @@ pub struct CaptionForm {
 
 impl CaptionForm {
     pub fn read(app: &WordApp) -> CaptionForm {
-        let labels = caption_labels(app);
+        let labels = own_labels(app);
         // In a table the caption is for the table, unless a picture or shape in it is selected.
         let in_table = wordcraft_engine::cmd::objects::object_selection(&app.session).is_none()
             && app.session.sel.focus.path.depth() > 0

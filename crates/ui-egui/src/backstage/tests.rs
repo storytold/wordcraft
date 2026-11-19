@@ -37,6 +37,12 @@ fn file_page(mut a: WordApp, page: &str) -> egui_kittest::Harness<'static, WordA
     harness(a, egui::vec2(1440.0, 900.0))
 }
 
+/// A recent row by its file name. The framework names a row with its folder after the file name
+/// (`name` then the path), so a row is found by that prefix, not by the exact label.
+fn recent_row<'a>(h: &'a egui_kittest::Harness<'static, WordApp>, name: &str) -> Option<egui_kittest::Node<'a>> {
+    h.query_all_by_label_contains(name).next()
+}
+
 /// #1714: every side-menu item has its own icon, and each icon is one the app registers or the
 /// framework catalogue has (an unknown name would draw nothing useful).
 #[test]
@@ -60,7 +66,7 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     let mut a = new_app();
     a.ui.recent = vec![missing.to_string_lossy().into_owned()];
     let mut h = file_page(a, "open");
-    h.get_by_label(name.as_str()).focus();
+    recent_row(&h, name.as_str()).expect("the missing file's row shows").focus();
     h.run_steps(2);
     h.key_press(egui::Key::Enter);
     h.run_steps(4);
@@ -451,20 +457,20 @@ fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
     let mut a = new_app();
     a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
     let mut h = file_page(a, "open");
-    assert!(h.query_by_label("alpha.docx").is_some() && h.query_by_label("beta.docx").is_some(), "both rows show");
-    h.get_by_label("alpha.docx").focus();
+    assert!(recent_row(&h, "alpha.docx").is_some() && recent_row(&h, "beta.docx").is_some(), "both rows show");
+    recent_row(&h, "alpha.docx").expect("alpha's row shows").focus();
     h.run_steps(2);
     h.key_press(egui::Key::Delete);
     h.run_steps(4);
     assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "Remove takes its own row");
     assert!(h.state().ui.backstage, "removing opens nothing");
-    assert!(h.query_by_label("alpha.docx").is_none() && h.query_by_label("beta.docx").is_some());
-    h.get_by_label("beta.docx").click_secondary();
+    assert!(recent_row(&h, "alpha.docx").is_none() && recent_row(&h, "beta.docx").is_some());
+    recent_row(&h, "beta.docx").expect("beta's row shows").click_secondary();
     h.run_steps(3);
     h.get_by_label("Clear Recent Files").click();
     h.run_steps(4);
     assert!(h.state().ui.recent.is_empty(), "Clear empties the list");
-    assert!(h.query_by_label("beta.docx").is_none());
+    assert!(recent_row(&h, "beta.docx").is_none());
 }
 
 /// #260, #262: the Info fields once lost typed text when File was left by Escape (or the
@@ -521,7 +527,11 @@ fn info_fields_keep_typed_properties_through_a_web_save() {
 #[test]
 #[cfg(all(unix, not(target_os = "macos")))]
 fn save_as_saves_in_wordcraft_when_the_system_dialog_never_shows() {
-    let saved = std::path::PathBuf::from("/wordcraft-test/kept.docx");
+    // A native save writes the picked path itself (the file service only answers where), so the
+    // path is one in a folder of our own.
+    let dir = std::env::temp_dir().join(format!("wordcraft-save-own-browser-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = dir.join("kept.docx");
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
     let mut a = app_with_files(&files);
     a.run("text.insert", json!({"text": "Saved past a silent portal"})).unwrap();
@@ -535,7 +545,8 @@ fn save_as_saves_in_wordcraft_when_the_system_dialog_never_shows() {
     assert_eq!(asked[0].kind, craft::host::PickKind::Save);
     assert_eq!(h.state().session.path.as_deref(), Some(saved.as_path()));
     assert!(!h.state().ui.backstage, "the page closes once saved");
-    let bytes = files.file(&saved).expect("the file service holds the saved document");
+    let bytes = std::fs::read(&saved).expect("the picked path holds the saved document");
+    let _ = std::fs::remove_dir_all(&dir);
     let back = wordcraft_engine::io::open_bytes("kept.docx", &bytes).unwrap();
     assert!(back.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved past a silent portal"));
 }
@@ -622,7 +633,10 @@ fn backstage_save_navigates_to_save_as_when_unnamed() {
 /// answered by the file service, should land back on the document, not the "no document" screen.
 #[test]
 fn backstage_save_browse_native_dialog_lands_on_the_document() {
-    let path = std::path::PathBuf::from("/wordcraft-test/Document1.docx");
+    // A native save writes the picked path itself, so the path is one in a folder of our own.
+    let dir = std::env::temp_dir().join(format!("wordcraft-save-browse-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Document1.docx");
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]));
     let mut a = app_with_files(&files);
     a.run("text.insert", json!({"text": "Hello from the repro"})).unwrap();
@@ -633,7 +647,8 @@ fn backstage_save_browse_native_dialog_lands_on_the_document() {
     h.get_by_label("Browse…").click();
     h.run_steps(6);
     assert!(h.state().session.path.as_deref() == Some(path.as_path()), "the document was saved to the picked path");
-    assert!(files.file(&path).is_some(), "the file service holds the bytes");
+    assert!(path.is_file(), "the picked path holds the document");
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(!h.state().ui.backstage, "backstage closes once saved");
     assert!(h.state().has_document(), "the document stays open after Save");
 }

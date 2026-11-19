@@ -303,6 +303,9 @@ impl WordForm for SourceManagerForm {
         let rows = &self.rows;
         let shown = List::<usize>::new(Label::from(tl!("Sources in this document:").to_string()))
             .select(SelectMode::Single)
+            // The dialog body scrolls, and a collection owns its own scroll: the list shows this many rows
+            // and scrolls the rest itself.
+            .max_rows(10)
             .empty(Label::from(tl!("No sources yet.").to_string()))
             .selection(Bind::given(selection))
             .show_items(ui, &source, &mut |i, _| ListRow::new(Label::from(rows.get(*i).cloned().unwrap_or_default())));

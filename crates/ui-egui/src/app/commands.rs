@@ -961,13 +961,22 @@ impl WordApp {
         let (request, after) = match purpose {
             "picture" => (PickRequest::open("picture"), file_dialogs::AfterPick::Picture),
             "recipients" => (Self::recipients_request(), file_dialogs::AfterPick::Recipients),
-            "save" => (
-                PickRequest::save("document").file_name(self.default_save_name()),
-                file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document },
-            ),
+            "save" => {
+                // The same request as Browse…, with the save types of the name.
+                let name = self.default_save_name();
+                let mut request = PickRequest::save("document").file_name(name.clone()).save_as(true);
+                request.filters = crate::save_types::save_filters(&name);
+                (request, file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document })
+            }
             "export" => {
                 let ext = pending.unwrap_or_else(|| "pdf".into());
-                let request = PickRequest::save("export").file_name(format!("{}.{}", self.title_stem(), ext)).suggested_extension(ext.clone());
+                let file_ext = crate::print_page::export_file_ext(&ext).to_string();
+                let mut request =
+                    PickRequest::save("export").file_name(format!("{}.{}", self.title_stem(), file_ext)).suggested_extension(file_ext.clone());
+                // The chosen format's type, so the chooser's type menu shows it (as `export_dialog` does).
+                if let Some(&(label, _)) = crate::print_page::EXPORT_FORMATS.iter().find(|&&(_, e)| e == ext) {
+                    request = request.filter(tl!(label), &[file_ext.as_str()]);
+                }
                 (request, file_dialogs::AfterPick::Export { ext })
             }
             _ => (PickRequest::open("document"), file_dialogs::AfterPick::OpenDocument { document }),

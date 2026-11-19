@@ -973,7 +973,8 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for path in crate::rust_sources(&dir) {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            if path == dir.join("theme.rs") || path == dir.join("icons.rs") {
+            // This file holds the banned strings in the list above; theme.rs and icons.rs hold the theme's own colours.
+            if path == dir.join("theme.rs") || path == dir.join("theme").join("legacy.rs") || path == dir.join("icons.rs") {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();

@@ -210,6 +210,11 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
 
 /// The active page's body.
 fn page_body(ui: &mut Ui, app: &mut WordApp, page: &str) {
+    // The personal templates are read once per visit to New: a page that is not New drops the
+    // listing, so the next visit reads the folder again (a stale listing is re-read by New).
+    if page != "new" {
+        app.backstage_state.personal = None;
+    }
     match page {
         "home" => home::home(ui, app),
         "new" => new_page::show(ui, app),

@@ -179,7 +179,7 @@ impl DisplayServer {
 /// dialog reports, worded the same way. Right-click the count in the status bar, or File ›
 /// Options › Display, to choose; kept between runs in `ui.json`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "String", into = "String")]
+#[serde(try_from = "String", into = "String")]
 pub enum StatusCount {
     #[default]
     Words,
@@ -227,9 +227,13 @@ impl From<DisplayServer> for String {
     }
 }
 
-impl From<String> for StatusCount {
-    fn from(s: String) -> Self {
-        StatusCount::from_code(&s).unwrap_or_default()
+/// A code that is none of the three is an error, not the default, so a settings reader reports it
+/// (the legacy `ui.json` import lists it by its key) and the field reads as the default.
+impl TryFrom<String> for StatusCount {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        StatusCount::from_code(&s).ok_or_else(|| format!("{s:?} is not a status count"))
     }
 }
 

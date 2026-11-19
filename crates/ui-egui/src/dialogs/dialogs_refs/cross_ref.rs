@@ -159,6 +159,9 @@ impl WordForm for CrossRefForm {
         let _ = List::new(Label::from(tl!("For which item:").to_string()))
             .max_rows(8)
             .select(SelectMode::Single)
+            // The dialog body scrolls, and a collection owns its own scroll: the list shows this many rows
+            // and scrolls the rest itself.
+            .max_rows(10)
             .empty(Label::from(tl!("Nothing of this type in the document.").to_string()))
             .selection(Bind::bound(&mut selection))
             .show_items(ui, &source, &mut |i, _| ListRow::new(Label::from(targets.get(*i).cloned().unwrap_or_default())));

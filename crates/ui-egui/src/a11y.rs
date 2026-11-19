@@ -478,7 +478,12 @@ mod tests {
         assert_eq!(tree.with_role(role(accesskit::Role::Table)).len(), 1, "the previewed page has one table");
         assert_eq!(tree.with_role(role(accesskit::Role::Row)).len(), 2, "the 2 × 2 preview's rows");
         assert_eq!(tree.with_role(role(accesskit::Role::Cell)).len(), 4, "the 2 × 2 preview's cells");
-        assert!(!texts(tree, accesskit::Role::Paragraph).iter().any(|t| t.starts_with("Lanterns")), "the real paragraph is not at the preview's path");
+        // The preview copy has the table at the caret and the real paragraphs after it, so "Lanterns" is
+        // still described, below the table, never inside it where the real paragraph's path now holds the
+        // table.
+        let mut in_table = String::new();
+        text(tree, tree.with_role(role(accesskit::Role::Table))[0], &mut in_table);
+        assert!(!in_table.contains("Lanterns"), "the real paragraph is not at the preview's path: {in_table:?}");
     }
 
     /// #488: the canvas describes the document: a heading, a paragraph, a list item in a list, a table's
@@ -531,7 +536,9 @@ mod tests {
         assert_eq!(tree.with_role(role(accesskit::Role::Table)).len(), 1);
         assert_eq!(tree.with_role(role(accesskit::Role::Row)).len(), 2);
         assert_eq!(tree.with_role(role(accesskit::Role::Cell)).len(), 4);
-        assert_eq!(texts(tree, accesskit::Role::Cell)[0], "Cell A\n");
+        // The cells come in the order the nodes were made, which is not a reading order the framework
+        // promises; the typed cell is among them with its text and paragraph mark.
+        assert!(texts(tree, accesskit::Role::Cell).contains(&"Cell A\n".to_string()), "{:?}", texts(tree, accesskit::Role::Cell));
         for run in tree.with_role(role(accesskit::Role::TextRun)) {
             assert!(tree.bounds_of(run).is_some(), "{:?}", tree.value_of(run));
         }

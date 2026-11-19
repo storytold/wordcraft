@@ -138,7 +138,13 @@ impl WordApp {
                 Some(self.finish_pick(d.after, None))
             }
             Picked::Failed(reason) => {
-                self.status(reason);
+                // A plain Save As has no prompt to carry the reason to and Backstage hides the
+                // status bar, so the Save As page says it too.
+                if matches!(d.after, AfterPick::SaveAs { after: AfterSave::Nothing, .. }) {
+                    self.fail_save_as(&reason);
+                } else {
+                    self.status(reason);
+                }
                 Some(self.finish_pick(d.after, None))
             }
             Picked::Paths(paths) => {

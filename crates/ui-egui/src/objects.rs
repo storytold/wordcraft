@@ -560,11 +560,17 @@ impl ObjectGesture {
 
     /// The button went up. Commits a move as one command; false for a press on a Behind Text
     /// object that never became a drag, which is a click on the text under it.
-    pub(crate) fn release(self, app: &mut WordApp, _layout: &DocLayout, _body: &PageBody, _p: &ToolPointer, _cx: &mut ToolContext) -> bool {
+    pub(crate) fn release(mut self, app: &mut WordApp, layout: &DocLayout, body: &PageBody, p: &ToolPointer, cx: &mut ToolContext) -> bool {
         if self.pending_behind {
             // No drag threshold was crossed: let the text click finish normally.
             app.canvas.cancel_text_drag();
             return false;
+        }
+        // The canvas calls `drag` only when the pointer moves, so a modifier changed since then (Shift up
+        // frees an aligned copy's axis, Shift down locks it) is not yet in the placement. The release carries
+        // the modifiers live at that moment: the object is placed once more with them.
+        if self.moved {
+            self.drag(app, layout, body, p, cx);
         }
         drop(app, &self);
         true
@@ -582,7 +588,7 @@ impl ObjectGesture {
         {
             let tex = TextureCache::texture(ctx, ("object-drag", object.pos(), pv.scale_bits), || (*pv.image).clone());
             // A turned object's pixels fill its rotated bounds, which move with it.
-            let r = object.bounds();
+            let r = preview_bounds(object);
             let moved = wordcraft_geom::Rect::new(r.x + self.rect.x - self.start.x, r.y + self.rect.y - self.start.y, r.w, r.h);
             let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             let s = screen_rect(pp, moved);
@@ -853,6 +859,18 @@ fn preview_scale(px: f32, w: f32, h: f32, max_side: usize) -> f32 {
     px.min(room / w.max(h).max(1.0))
 }
 
+/// The thinnest a drag preview is, in page points: a level line has no height, and a texture over a
+/// rect with none paints nothing.
+const MIN_PREVIEW_SIDE: f32 = 2.0;
+
+/// `o`'s rotated bounds for its drag preview, grown about their centre to at least
+/// [`MIN_PREVIEW_SIDE`] each way.
+fn preview_bounds(o: &ObjectHit) -> wordcraft_geom::Rect {
+    let b = o.bounds();
+    let (w, h) = (b.w.max(MIN_PREVIEW_SIDE), b.h.max(MIN_PREVIEW_SIDE));
+    wordcraft_geom::Rect::new(b.x - (w - b.w) / 2.0, b.y - (h - b.h) / 2.0, w, h)
+}
+
 /// `o` drawn alone over its rotated bounds, at `scale` screen points per page point.
 fn preview(app: &WordApp, layout: &DocLayout, o: &ObjectHit, scale: f32, body: &PageBody) -> Option<Preview> {
     let obj = hit_object(app, o)?;
@@ -860,7 +878,7 @@ fn preview(app: &WordApp, layout: &DocLayout, o: &ObjectHit, scale: f32, body: &
     let mut opts = crate::canvas::screen_render_options();
     opts.dark = crate::canvas::dark_page(app);
     let items = wordcraft_layout::display::object_display(&app.session.doc, page, obj, o.rect, o.text_box, &opts.display);
-    let b = o.bounds();
+    let b = preview_bounds(o);
     let max_side = app.ctx.as_ref().map_or(2048, |c| c.input(|i| i.max_texture_side));
     let ppp = body.pass.and_then(|p| p.space.as_ref()).map_or(1.0, |s| s.pixels_per_point);
     let px = preview_scale(scale * ppp, b.w, b.h, max_side);
