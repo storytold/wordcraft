@@ -10,7 +10,7 @@ use craft_tiff::{ByteOrder, EntrySpan, FieldType, ParseOptions, Tiff, directory_
 pub(crate) fn payload(bytes: &[u8], mut reserve: impl FnMut(u64) -> Result<(), CodecError>) -> Result<Option<&[u8]>, CodecError> {
     observation_contract! {
         rules: "-";
-        collections: "type.HashMap*1,type.HashSet*1";
+        collections: "type.HashMap*2,type.HashSet*3";
         scope: "the TIFF directory graph within the part byte and metadata limits";
         loss: "header failure, malformed directory or metadata budget";
         fallback: "leave the image unassessed";
@@ -25,7 +25,10 @@ pub(crate) fn payload(bytes: &[u8], mut reserve: impl FnMut(u64) -> Result<(), C
         order,
         big,
         limits: ParseOptions::default(),
-        visited_ifds: HashSet::new(),
+        parsed: HashMap::new(),
+        on_path: HashSet::new(),
+        admitted: HashSet::new(),
+        followed: HashSet::new(),
         value_spans: HashMap::new(),
         entries: 0,
         end: if big { 16 } else { 8 },
@@ -49,7 +52,14 @@ struct DirectoryWalk<'a, R> {
     order: ByteOrder,
     big: bool,
     limits: ParseOptions,
-    visited_ifds: HashSet<u64>,
+    /// Directories already read and charged, with their tables and next pointers.
+    parsed: HashMap<u64, (BTreeMap<u16, EntrySpan>, u64)>,
+    /// Directories on the current traversal path. Reaching one again is a true cycle.
+    on_path: HashSet<u64>,
+    /// Directories whose pointers were all admitted. Sharing one costs nothing.
+    admitted: HashSet<u64>,
+    /// Directories whose next-directory chain was admitted in full.
+    followed: HashSet<u64>,
     value_spans: HashMap<u64, u64>,
     entries: usize,
     end: u64,
@@ -70,15 +80,58 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
         if self.big { self.order.read_u64(self.bytes, at) } else { self.order.read_u32(self.bytes, at).map(u64::from) }
     }
 
-    fn chain(&mut self, mut offset: u64, depth: usize, follow_next: bool) -> Result<bool, CodecError> {
+    /// Admit the directory graph reachable from `start`. The outcome depends only on that graph:
+    /// a directory reached again after it was admitted is free, and only a directory reached
+    /// from itself while still open is a cycle. The directory and entry budgets bound the walk.
+    fn chain(&mut self, start: u64, depth: usize, follow_next: bool) -> Result<bool, CodecError> {
+        observation_contract! {
+            rules: "-";
+            collections: "field.followed*1,field.on_path*1,type.Vec*1";
+            scope: "the directory path of one TIFF chain walk";
+            loss: "directory cycle or an unadmitted directory";
+            fallback: "leave the image unassessed";
+            package_loss: "independent";
+        }
+
         if depth > self.limits.max_depth {
             return Ok(false);
         }
+        let mut path = Vec::new();
+        let outcome = self.chain_path(start, depth, follow_next, &mut path);
+        for opened in &path {
+            self.on_path.remove(opened);
+        }
+        let admitted = outcome?;
+        if admitted && follow_next {
+            self.followed.extend(path);
+        }
+        Ok(admitted)
+    }
+
+    fn chain_path(&mut self, mut offset: u64, depth: usize, follow_next: bool, path: &mut Vec<u64>) -> Result<bool, CodecError> {
+        observation_contract! {
+            rules: "-";
+            collections: "field.admitted*1,field.followed*1,field.on_path*1,type.Vec*1";
+            scope: "one TIFF directory chain under directory, depth and work bounds";
+            loss: "directory cycle, malformed directory or metadata budget";
+            fallback: "leave the image unassessed";
+            package_loss: "independent";
+        }
+
         while offset != 0 {
-            let Some((tags, next)) = self.directory(offset)? else { return Ok(false) };
-            self.record_image_data(&tags)?;
-            if !self.children(&tags, depth)? {
+            if follow_next && self.followed.contains(&offset) {
+                break;
+            }
+            if !self.on_path.insert(offset) {
                 return Ok(false);
+            }
+            path.push(offset);
+            let Some((tags, next)) = self.directory(offset)? else { return Ok(false) };
+            if self.admitted.insert(offset) {
+                self.record_image_data(&tags)?;
+                if !self.children(&tags, depth)? {
+                    return Ok(false);
+                }
             }
             offset = if follow_next { next } else { 0 };
         }
@@ -88,20 +141,20 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
     fn directory(&mut self, offset: u64) -> Result<Option<(BTreeMap<u16, EntrySpan>, u64)>, CodecError> {
         observation_contract! {
             rules: "-";
-            collections: "field.bytes*2,field.declared*4,field.entries*3,field.value_spans*1,field.visited_ifds*2,type.BTreeMap*2";
+            collections: "field.bytes*2,field.declared*4,field.entries*3,field.parsed*3,field.value_spans*1,type.BTreeMap*2";
             scope: "TIFF directory table and physical value spans, bounded before directory or decoder allocations";
-            loss: "malformed or repeated directory, incomplete value or pointer, work/byte budget";
+            loss: "malformed directory, incomplete value or pointer, directory cycle, work/byte budget";
             fallback: "do not assess pixels from an incomplete preflight";
             package_loss: "independent";
         }
 
-        if self.visited_ifds.len() >= self.limits.max_ifds {
+        if let Some(known) = self.parsed.get(&offset) {
+            return Ok(Some(known.clone()));
+        }
+        if self.parsed.len() >= self.limits.max_ifds {
             return Ok(None);
         }
         (self.reserve)(512)?;
-        if !self.visited_ifds.insert(offset) {
-            return Ok(None);
-        }
         let Ok(dir) = directory_entries(self.bytes, offset, self.order, self.big, self.limits.max_entries) else { return Ok(None) };
         self.entries = self.entries.saturating_add(dir.read());
         if dir.declared() != dir.read() as u64 || self.entries > self.limits.max_entries_total {
@@ -133,6 +186,7 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
         let Some(next_at) = offset.checked_add(table) else { return Ok(None) };
         let Some(next) = usize::try_from(next_at).ok().and_then(|at| self.offset(at)) else { return Ok(None) };
         self.end = self.end.max(next_at.saturating_add(if self.big { 8 } else { 4 }));
+        self.parsed.insert(offset, (tags.clone(), next));
         Ok(Some((tags, next)))
     }
 

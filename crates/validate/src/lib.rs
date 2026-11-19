@@ -4653,6 +4653,119 @@ mod budget_tests {
         assert!(report.coverage_notes.iter().any(|note| note.contains("TIFF") && note.contains("limit")), "{report:?}");
     }
 
+    /// A classic little-endian TIFF built from explicit directories. A `None` value is
+    /// patched with the offset of the directory in the paired slot.
+    fn graph_tiff(directories: &[Vec<(u16, u16, Option<usize>, u32)>]) -> Vec<u8> {
+        let size = |entries: usize| 6 + 12 * entries as u32;
+        let mut offsets = Vec::new();
+        let mut at = 8;
+        for entries in directories {
+            offsets.push(at);
+            at += size(entries.len());
+        }
+        let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+        for (index, entries) in directories.iter().enumerate() {
+            bytes.extend((entries.len() as u16).to_le_bytes());
+            for &(tag, ty, link, value) in entries {
+                bytes.extend(tag.to_le_bytes());
+                bytes.extend(ty.to_le_bytes());
+                bytes.extend(1u32.to_le_bytes());
+                bytes.extend(link.map_or(value, |target| offsets[target]).to_le_bytes());
+            }
+            // Directory chains are explicit `next` entries below; the last field is rewritten.
+            let next = entries.iter().find(|entry| entry.0 == 0xffff).and_then(|entry| entry.2).map_or(0, |target| offsets[target]);
+            bytes.extend(next.to_le_bytes());
+            assert_eq!(bytes.len() as u32, offsets[index] + size(entries.len()));
+        }
+        bytes.push(0x7f);
+        bytes
+    }
+
+    #[test]
+    fn media_magic_tiff_admission_is_a_function_of_the_directory_graph() {
+        // Directories 0 and 1 are image pages chained by `next`; 2 and 3 are metadata directories.
+        // Every page may point at either metadata directory through a pointer tag, and each metadata
+        // directory may point at either one through Interop, so the graphs cover shared targets,
+        // self references and two-directory cycles. Only a directory reachable from itself rejects.
+        let choices: [Option<usize>; 3] = [None, Some(2), Some(3)];
+        let cyclic = |links: [Option<usize>; 4]| {
+            [0, 1].into_iter().any(|page| {
+                let mut seen = [false; 4];
+                let mut at = links[page];
+                while let Some(node) = at {
+                    if std::mem::replace(&mut seen[node], true) {
+                        return true;
+                    }
+                    at = links[node];
+                }
+                false
+            })
+        };
+        for pointer_tag in [34665u16, 34853, 330] {
+            for links in choices
+                .into_iter()
+                .flat_map(|a| choices.into_iter().map(move |b| (a, b)))
+                .flat_map(|(a, b)| choices.into_iter().flat_map(move |c| choices.into_iter().map(move |d| [a, b, c, d])))
+            {
+                let image = |link: Option<usize>, next: bool| {
+                    let mut entries = vec![
+                        (256u16, 4u16, None, 1u32),
+                        (257, 4, None, 1),
+                        (258, 4, None, 8),
+                        (259, 4, None, 1),
+                        (262, 4, None, 1),
+                        (273, 4, None, 0),
+                        (277, 4, None, 1),
+                        (278, 4, None, 1),
+                        (279, 4, None, 1),
+                    ];
+                    entries.extend(link.map(|target| (pointer_tag, 4, Some(target), 0)));
+                    entries.extend(next.then_some((0xffff, 4, Some(1), 0)));
+                    entries
+                };
+                let metadata = |link: Option<usize>| {
+                    let mut entries = vec![(40000u16, 4u16, None, 0u32)];
+                    entries.extend(link.map(|target| (40965, 4, Some(target), 0)));
+                    entries
+                };
+                let mut directories = vec![image(links[0], true), image(links[1], false), metadata(links[2]), metadata(links[3])];
+                let strip = 8 + directories.iter().map(|entries| 6 + 12 * entries.len() as u32).sum::<u32>();
+                for entry in directories.iter_mut().take(2).flatten().filter(|entry| entry.0 == 273) {
+                    entry.3 = strip;
+                }
+                let bytes = graph_tiff(&directories);
+                // Admission alone, so SubIFD targets need not be decodable pages.
+                let admitted = tiff_admission::payload(&bytes, |_| Ok(())).unwrap().is_some();
+                assert_eq!(admitted, !cyclic(links), "tag {pointer_tag} links {links:?}");
+                if pointer_tag == 330 {
+                    continue;
+                }
+                let report = validate_bytes(&media_zip(&[("word/media/drawn.png", &bytes)], DRAWN, "png"));
+                let grade = (report.verdict, report.findings.first().map(|f| (f.rule, f.severity)));
+                let expected = if cyclic(links) { (Verdict::Fail, Severity::Error) } else { (Verdict::Pass, Severity::Warning) };
+                assert_eq!(grade, (expected.0, Some(("MEDIA-MAGIC", expected.1))), "tag {pointer_tag} links {links:?}: {report:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn media_magic_tiff_admission_rejects_next_chain_cycles_and_admits_diamonds() {
+        let node = |next: Option<usize>, sub: Option<usize>| {
+            let mut entries = vec![(256u16, 4u16, None, 1u32), (273, 4, None, 0)];
+            entries.extend(next.map(|target| (0xffff, 4, Some(target), 0)));
+            entries.extend(sub.map(|target| (330, 4, Some(target), 0)));
+            entries
+        };
+        let admitted =
+            |directories: Vec<Vec<(u16, u16, Option<usize>, u32)>>| tiff_admission::payload(&graph_tiff(&directories), |_| Ok(())).unwrap().is_some();
+        // 0 -> 1 -> 2 reached again as SubIFD of 0 and 1: shared, not cyclic.
+        assert!(admitted(vec![node(Some(1), Some(2)), node(Some(2), Some(2)), node(None, None)]));
+        // A chain that returns to an open directory, directly or through SubIFD, is a cycle.
+        assert!(!admitted(vec![node(Some(1), None), node(Some(0), None)]));
+        assert!(!admitted(vec![node(Some(1), None), node(None, Some(0))]));
+        assert!(!admitted(vec![node(None, Some(0))]));
+    }
+
     #[test]
     fn media_magic_shared_tiff_values_ignore_padding() {
         let mut description = [b'A'; 256];

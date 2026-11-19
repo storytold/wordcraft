@@ -318,6 +318,8 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         ('package.rs', 'is_xml_part', 'pkg.xml_parts'),
         ('ownership.rs', 'with_budget', 'roots'),
         ('ownership.rs', 'parts', 'owners'),
+        # Traversal state of the TIFF directory graph, not an observed definition set.
+        ('tiff_admission.rs', 'chain_path', 'self.followed'),
     }
     for access in re.finditer(MEMBERSHIP, code):
         receiver=re.sub(r'\s+', '', access.group(1))
