@@ -308,7 +308,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-14 | trivial | A left tab past the right indent that wraps into a span beside a floating object goes on to the first line clear of the object, its text at the indent, as in Word (#6577). `layout::tests::left_tab_past_the_right_indent_beside_a_float_moves_clear_of_it` |
+| 2026-11-14 | trivial | A left tab past the right indent that wraps into a span beside a floating object goes on to the first line clear of the object, its text at the indent (#6577), as the issue reports for Word; not yet checked in Word here. A stop inside the right indent keeps its old zero-width path. `layout::tests::left_tab_past_the_right_indent_beside_a_float_moves_clear_of_it`, `a_left_tab_inside_the_right_indent_beside_a_float_keeps_its_line` |
 | 2026-10-29 | trivial | A list item deleted whole under Track Changes shows its number in the deletion's colour and with its mark (struck through by default) with markup, and not at all without (#4828) |
 | 2026-11-04 | trivial | Headers, footers and note separators of the second and later sections are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's; a regression from the #4501 refactor (#4683). `layout::tests::pages::a_sections_header_is_measured_without_the_previous_sections_grid` |
 | 2026-11-08 | trivial | Turned inline pictures with no recorded effect extent keep their line to the frame (exchanged near a quarter turn in Word 2013+ layout) and overhang it, cut at the line's top and bottom, as in Word |

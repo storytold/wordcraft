@@ -1994,6 +1994,37 @@ fn left_tab_past_the_right_indent_beside_a_float_moves_clear_of_it() {
     assert!(page.top >= r.bottom() - 0.5, "the text after the tab starts below the box: {page:?}, box {r:?}");
 }
 
+/// A left tab whose stop is inside the right indent is not a tab "past the right indent": beside
+/// a floating object it keeps the zero-width path, its text starting where the span does, and is
+/// not moved clear of the object (#6577).
+#[test]
+fn a_left_tab_inside_the_right_indent_beside_a_float_keeps_its_line() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    crate::test_fonts();
+    let mut d = Document::from_text("Name\tPage");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.tabs = Some(vec![TabStop { pos: 400.0, align: TabAlign::Left, leader: TabLeader::None }])
+    })
+    .unwrap();
+    // A box against the right indent, anchored after the text: every row beside it has only the
+    // span on its left, which ends before the 400 pt stop (inside the 468 pt text width).
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 360.0,
+        y: 0.0,
+        dist: 9.0,
+        ..Default::default()
+    };
+    let id = text_box(&mut d, 9, "", 100.0, 100.0, float);
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let page = l.caret(&Pos::body(0, 5)).unwrap();
+    assert!((page.x - 72.0).abs() < 0.5, "the text after the tab starts where the span does, not at the stop: {page:?}, box {r:?}");
+    assert!(page.top < r.bottom() - 0.5, "the text after the tab stays beside the box: {page:?}, box {r:?}");
+}
+
 /// A bookmark before such a tab is not text: the tab does not wrap away from it, and the
 /// paragraph breaks as it does without the bookmark (no line holding only the bookmark).
 #[test]
