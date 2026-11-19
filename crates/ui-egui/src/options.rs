@@ -726,6 +726,9 @@ impl PreferencesModel for OptionsModel<'_> {
     }
 }
 
+/// Rows of the custom dictionary's list shown before it scrolls.
+const CUSTOM_WORDS_SHOWN: u16 = 8;
+
 /// The word being typed into the custom dictionary's new-word field, kept in the session tier of
 /// the row's container so an edit in progress survives passes.
 #[derive(Clone, Default)]
@@ -745,7 +748,8 @@ impl OptionsModel<'_> {
         let removed = std::cell::Cell::new(None::<String>);
         let removed_ref = &removed;
         let source = keyed(&words, |w: &String| w.clone());
-        List::new(tl!("Custom dictionary")).show_items(ui, &source, &mut |word, _| {
+        // A collection owns its scroll and the page scrolls, so the list caps its rows (the dictionary can hold any number).
+        List::new(tl!("Custom dictionary")).max_rows(CUSTOM_WORDS_SHOWN).show_items(ui, &source, &mut |word, _| {
             let word = word.clone();
             ListRow::new(word.clone()).trailing_field(Button::new(tl!("Remove")), move |out| {
                 if out.clicked() {

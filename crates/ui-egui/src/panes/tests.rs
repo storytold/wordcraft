@@ -73,8 +73,9 @@ fn pane_bodies_fit_the_narrowest_pane() {
                 fonts = true;
                 return;
             }
-            // The least body width the pane area enforces is the theme's.
-            let least = craft::ui::runtime::env::Env::of(ui).tokens.size.pane.least;
+            // `size.pane.least` is only the dock's drag floor (S-L268), not what a body can wrap to: a body must fit
+            // the narrowest pane a person actually gets, 200 pt less the 10 pt body margins and the frame's strokes.
+            let least = 178.0;
             let mut row = Vec::new();
             for pane in panes {
                 let width = ui

@@ -31,6 +31,23 @@ fn app_frame(ui: &mut egui::Ui, app: &mut WordApp) {
     app.ui(ui);
 }
 
+/// Presses and releases `button` over `at` the way a person does: the pointer arrives and rests a frame before the
+/// press, and the release is a frame of its own. The framework opens a menu from its opener on that sequence;
+/// kittest's `click` sends the move, press and release in one frame.
+fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2, button: egui::PointerButton) {
+    h.event(egui::Event::PointerMoved(at));
+    crate::test_harness::frames(h, 2);
+    h.event(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: egui::Modifiers::NONE });
+    crate::test_harness::frames(h, 1);
+    h.event(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: egui::Modifiers::NONE });
+    crate::test_harness::frames(h, 2);
+}
+
+/// The title bar's title: its button (the bar also names a group of the same text).
+fn title_rect(h: &egui_kittest::Harness<'static, WordApp>) -> egui::Rect {
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Document1 \u{2014} Not saved").rect()
+}
+
 /// The viewport commands the next `steps` passes send.
 fn commands_over(h: &mut egui_kittest::Harness<'static, WordApp>, steps: usize) -> Vec<egui::ViewportCommand> {
     let mut sent = Vec::new();
@@ -92,7 +109,8 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     let mut h = harness(new_app());
     let names = ["Focus", "Print Layout", "Web Layout"];
     let mut seen: Vec<(f64, Vec<f32>)> = Vec::new();
-    for zoom in [10.0_f64, 9.0, 100.0, 500.0] {
+    // 9% is under the engine's floor (10%) and the canvas clamps to it, so the digits go 2, 3, 3.
+    for zoom in [10.0_f64, 25.0, 100.0, 500.0] {
         h.state_mut().run("view.zoom", json!({"value": zoom})).unwrap();
         crate::test_harness::frames(&mut h, 3);
         let xs = names.iter().map(|name| h.get_by_label(name).rect().min.x).collect();
@@ -136,8 +154,8 @@ fn the_status_bar_actions_run_their_commands() {
     a.session.prefs.overtype = true;
     let mut h = harness(a);
     assert_eq!(h.state().ui.status_count, StatusCount::Words);
-    h.get_by_label("4 words").click_secondary();
-    crate::test_harness::frames(&mut h, 3);
+    let at = h.get_by_label("4 words").rect().center();
+    click_at(&mut h, at, egui::PointerButton::Secondary);
     h.get_by_label("Characters (with spaces)").click();
     crate::test_harness::frames(&mut h, 3);
     assert_eq!(h.state().ui.status_count, StatusCount::Characters, "the menu's choice is taken");
@@ -178,7 +196,7 @@ fn status_bar_names_the_actual_part_being_edited() {
 fn the_integrated_title_bar_moves_and_closes_the_window() {
     use egui::accesskit::Role;
     let mut h = integrated_harness(new_app());
-    let title = h.query_by_label_contains("Not saved").expect("the title").rect();
+    let title = title_rect(&h);
     assert!(h.query_by_role_and_label(Role::Button, "Close").is_some(), "the caption buttons are drawn");
     for caption in ["Minimize", "Maximize", "Restore", "Close"] {
         if let Some(button) = h.query_by_role_and_label(Role::Button, caption) {
@@ -208,14 +226,14 @@ fn the_integrated_title_bar_moves_and_closes_the_window() {
 fn hide_quick_access_toolbar_takes_the_toolbar_out_of_the_title_bar() {
     let mut h = harness(new_app());
     assert!(h.query_by_label("Customize Quick Access Toolbar").is_some(), "the … button is drawn");
-    h.get_by_label("Customize Quick Access Toolbar").click();
-    crate::test_harness::frames(&mut h, 3);
+    let at = h.get_by_label("Customize Quick Access Toolbar").rect().center();
+    click_at(&mut h, at, egui::PointerButton::Primary);
     h.get_by_label("Hide Quick Access Toolbar").click();
     crate::test_harness::frames(&mut h, 3);
     assert!(!h.state().ui.quick_access_toolbar, "the menu's last item hides the toolbar");
     assert!(h.query_by_label("Hide Quick Access Toolbar").is_none(), "and closes the menu");
     assert!(h.query_by_label("Customize Quick Access Toolbar").is_none(), "so is the … button");
-    assert!(h.query_by_label_contains("Not saved").is_some(), "the title is still drawn");
+    assert!(h.query_all_by_label_contains("Not saved").count() > 0, "the title is still drawn");
     h.state_mut().run("ui.quickAccessToolbar", json!({"value": true})).unwrap();
     crate::test_harness::frames(&mut h, 3);
     assert!(h.query_by_label("Customize Quick Access Toolbar").is_some(), "the … button is back");
