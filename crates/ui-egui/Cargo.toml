@@ -70,3 +70,8 @@ craft-ui-test-kit = { workspace = true }
 craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "427c816db0ac8c72f3ba052086f642ed1be398fe", features = ["subset"] }
 serde_json = { workspace = true }
 toml = "1"
+
+# The headless screenshot tool is a program, so `cl build ui_shot` (a test build) runs its main.
+[[example]]
+name = "ui_shot"
+harness = false
