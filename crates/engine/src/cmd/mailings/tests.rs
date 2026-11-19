@@ -617,7 +617,8 @@ fn recipients_from_an_xls_workbook() {
     let book = wordcraft_formats::sheet::xls_fixture(&[(
         "收件人",
         vec![row(&["姓名", "城市", "数量"]), row(&["张三", "北京", "12"]), row(&["李四", "上海", "2"])],
-    )]);
+    )])
+    .unwrap();
     let mut s = Session::new(Document::new());
     let r = s.run("mailings.recipients", &json!({"path": "名单.xls", "data": b64(&book)})).unwrap();
     assert_eq!(r, json!({"fields": ["姓名", "城市", "数量"], "records": 2, "sheet": "收件人"}));
