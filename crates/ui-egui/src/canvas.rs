@@ -129,6 +129,8 @@ pub struct CanvasState {
     /// frame is the framework's `TransformBox`, not the page tool's [`ObjectGesture`], so it is recorded here, each
     /// pass, from the box's output.
     pub(crate) frame_held: bool,
+    /// The picture pixels of the object the frame's turn handle is turning, drawn once for the turn.
+    pub(crate) turning: Option<crate::objects::Turning>,
     /// Page content fingerprints of the current layout, for the page revision.
     pub(crate) page_keys: PageKeys,
     /// The caret colour last worked out and the key of the place it was worked out for, so a blink doesn't rebuild the
@@ -344,6 +346,7 @@ impl Default for CanvasState {
             smart_art_run: None,
             object_gesture: None,
             frame_held: false,
+            turning: None,
             page_keys: PageKeys::default(),
             caret_bg: None,
             markup_facts: Cell::new(None),

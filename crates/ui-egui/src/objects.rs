@@ -76,6 +76,15 @@ struct Preview {
     image: Arc<egui::ColorImage>,
 }
 
+/// The object the frame's turn handle is turning: its pixels, drawn once, turned live by the box's angle.
+pub(crate) struct Turning {
+    /// The object turned.
+    pos: Pos,
+    preview: Preview,
+    /// The turn so far beyond the object's own angle, degrees.
+    delta: f32,
+}
+
 /// An object being moved by the page tool.
 pub(crate) struct ObjectGesture {
     /// The object pressed; `None` for a press that was taken as a click (a link followed, an
@@ -175,6 +184,94 @@ impl Component for GlueSites {
     fn finish(self, cx: Cx<'_, Self>) -> egui::Response {
         cx.response.clone()
     }
+}
+
+/// The turning object's pixels on the clockwise screen quad `corners`, as the move preview shows them.
+#[derive(Component, Props)]
+#[component(canvas_control)]
+struct TurnPreview {
+    #[common]
+    common: Common,
+    corners: [Pos2; 4],
+    texture: egui::TextureId,
+}
+
+impl TurnPreview {
+    /// The pixels `texture` on `corners`, named `label`.
+    fn new(label: impl Into<Label>, corners: [Pos2; 4], texture: egui::TextureId) -> Self {
+        TurnPreview { common: Common::new(), corners, texture }.label(label)
+    }
+}
+
+/// The look of the turn preview: it has no colours of its own.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+struct TurnPreviewStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+impl Component for TurnPreview {
+    const ROLE: Role = Role::None;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const INPUT: Input = Input::Display;
+    const SHOWS_LABEL: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = TurnPreviewStyle;
+    type Output = egui::Response;
+
+    fn style(_: &StyleCx<'_>, _: TurnPreviewStyleKey) -> TurnPreviewStyle {
+        TurnPreviewStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> egui::Vec2 {
+        egui::Vec2::ZERO
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, _: &Cx<'_, Self>) {
+        let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        ui.draw().faded(PREVIEW_SHARE, |d| d.texture_quad(self.corners, self.texture, uv));
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// Keeps the pixels of the object `o` the frame is turning, turned to `live`, and shows them. A box that is not a
+/// pure turn (a resize) has no pixel preview; the frame's outline alone shows it.
+fn show_turning(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &PageBody, pp: &PlacedPage, o: &ObjectHit, live: &BoxState) {
+    let c = live.quad.map(|q| pp.from_doc(&body.view, q));
+    let (w, h) = ((c[1] - c[0]).hypot() as f32, (c[3] - c[0]).hypot() as f32);
+    if (w - o.rect.w).abs() > 0.5 || (h - o.rect.h).abs() > 0.5 {
+        app.canvas.turning = None;
+        return;
+    }
+    let deg = wordcraft_geom::normalize_degrees((c[1].y - c[0].y).atan2(c[1].x - c[0].x).to_degrees() as f32);
+    let delta = wordcraft_geom::normalize_degrees(deg - o.spin.deg);
+    if app.canvas.turning.as_ref().is_none_or(|t| t.pos != o.pos()) {
+        app.canvas.turning = preview(app, layout, o, pp.scale as f32, body).map(|preview| Turning { pos: o.pos(), preview, delta });
+    }
+    if let Some(t) = app.canvas.turning.as_mut() {
+        t.delta = delta;
+    }
+}
+
+/// Paints the pixels of the turning object, if the frame is turning one.
+fn paint_turning(app: &WordApp, ui: &mut Ui, body: &PageBody, pp: &PlacedPage, o: &ObjectHit) {
+    let (Some(t), Some(ctx)) = (app.canvas.turning.as_ref().filter(|t| t.pos == o.pos()), app.ctx.as_ref()) else { return };
+    let tex = TextureCache::texture(ctx, ("object-turn", t.pos.clone(), t.preview.scale_bits), || (*t.preview.image).clone());
+    let s = screen_rect(pp, preview_bounds(o));
+    // The cached pixels already hold the object's own turn and flips: only the turn beyond it is added, about the
+    // centre of the bounds.
+    let spin = egui::emath::Rot2::from_angle(t.delta.to_radians());
+    let centre = s.center();
+    let corners = [s.left_top(), s.right_top(), s.right_bottom(), s.left_bottom()].map(|p| centre + spin * (p - centre));
+    TurnPreview::new(tl!("Turning object").to_string(), corners, tex).show_at(ui, body.rect);
 }
 
 /// The page `page` of `body`, as placed on screen this pass.
@@ -1016,6 +1113,17 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
     }
     let out = tbox.show_at(ui, body.rect);
     app.canvas.frame_held = out.held.is_some();
+    // The object's pixels follow the turn handle live (a text box's text does not turn with its frame yet, so it
+    // keeps the outline until the release). The release and Escape end the preview.
+    let ended = out.edit.events.committed().is_some() || matches!(out.edit.events.last(), Some(craft::behavior::EditEvent::Cancel { .. }));
+    if ended || out.held.is_none() || o.text_box.is_some() {
+        app.canvas.turning = None;
+    } else {
+        if let Some(live) = out.edit.events.value() {
+            show_turning(app, ui, layout, body, pp, &o, live);
+        }
+        paint_turning(app, ui, body, pp, &o);
+    }
     if let Some(after) = out.edit.events.committed() {
         commit_box(app, &o, pp, view, after);
     }
