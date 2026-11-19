@@ -1937,7 +1937,8 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
         // The framework's button and the row that holds it can both carry the label.
         assert_eq!(h.query_all_by_label(LABEL).next().is_some(), hook, "hook {hook}: the button");
         if hook {
-            h.get_all_by_label(LABEL).next().expect("the button").click();
+            // The button itself, not the row that carries its label.
+            h.get_by_role_and_label(egui::accesskit::Role::Button, LABEL).click();
             h.run_steps(2);
             assert_eq!(calls.get(), 1, "the button ran the hook");
         }
@@ -2072,14 +2073,15 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     }
     assert!(h.state().canvas.focused(&h.ctx), "the page starts with keyboard focus");
 
-    // A Styles gallery tile.
-    h.get_by_role_and_label(Role::Button, "Heading 1").click();
+    // A Styles gallery tile: the framework gallery's tiles are its radio group's buttons.
+    h.get_by_role_and_label(Role::RadioButton, "Heading 1").click();
     type_after_click(&mut h, "Heading 1 tile", " gallery");
     let para = h.state().session.doc.para_at(&h.state().session.sel.focus).expect("caret paragraph");
     assert_eq!(para.props.style.as_deref(), Some("Heading1"), "the tile applied its style");
 
     // A ribbon tab name, then a View tab check box.
-    h.get_by_role_and_label(Role::Button, "View").click();
+    // The ribbon's tab names are tabs of its tab list.
+    h.get_by_role_and_label(Role::Tab, "View").click();
     type_after_click(&mut h, "View tab", " tab");
     assert_eq!(h.state().ui.tab, "View");
     let ruler = h.state().session.view.ruler;
@@ -2088,7 +2090,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_ne!(h.state().session.view.ruler, ruler, "the check box toggled the ruler");
 
     // Empty space at the right end of the ribbon, under the tab strip.
-    let tab = h.get_by_role_and_label(Role::Button, "View").rect();
+    let tab = h.get_by_role_and_label(Role::Tab, "View").rect();
     let blank = egui::pos2(1425.0, tab.max.y + 25.0);
     for pressed in [true, false] {
         h.hover_at(blank);
@@ -2125,7 +2127,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     type_after_click(&mut h, "language menu cancelled", " lang");
 
     // Back on Home, a text field still takes the focus: the font size box.
-    h.get_by_role_and_label(Role::Button, "Home").click();
+    h.get_by_role_and_label(Role::Tab, "Home").click();
     type_after_click(&mut h, "Home tab", " home");
     let before = body_text(h.state());
     let size_box =
@@ -3067,7 +3069,8 @@ fn task_panes_share_an_edge_close_and_keep_the_styles_place() {
     h.state_mut().run("view.stylesPane", json!({"value": true})).unwrap();
     h.run_steps(3);
     let styles = *bars(&h).last().unwrap();
-    click_button(&h, styles, "Pane options");
+    // The title row's menu action ("More actions") opens the pane's menu, which is the one named "Pane options".
+    click_button(&h, styles, "More actions");
     h.run_steps(2);
     h.get_by_label("Float").click();
     h.run_steps(3);
