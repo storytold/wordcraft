@@ -108,6 +108,7 @@ fn pages(app: &mut WordApp, ui: &mut Ui) {
         .map(|(at, p)| (at, crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())])))
         .collect();
     let out = List::<usize>::new(tl!("Pages").to_owned())
+        .natural_height(true)
         .select(SelectMode::Single)
         .selection(Bind::given(Selection::single(app.session.page_hint)))
         .show_items(ui, &places(&labels), &mut |key, _| ListRow::new(labels.get(*key).map(|label| label.1.clone()).unwrap_or_default()));
@@ -141,7 +142,7 @@ fn results(app: &mut WordApp, ui: &mut Ui) {
         hits.push(Hit { text, spans });
     }
     let rows: Vec<Place> = hits.iter().enumerate().map(|(at, hit)| (at, hit.text.clone())).collect();
-    let out = List::<usize>::new(tl!("Results").to_owned()).select(SelectMode::Single).show_items(ui, &places(&rows), &mut |key, _| {
+    let out = List::<usize>::new(tl!("Results").to_owned()).natural_height(true).select(SelectMode::Single).show_items(ui, &places(&rows), &mut |key, _| {
         match hits.get(*key) {
             Some(hit) => ListRow::new(hit.text.clone()).label_spans(hit.spans.clone()),
             None => ListRow::new(String::new()),
@@ -224,6 +225,7 @@ fn headings(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context) {
     let current = items.iter().rposition(|(path, ..)| *path <= caret.path);
     let outline = Outline::new(app, &items);
     let out = List::<usize>::new(tl!("Headings").to_owned())
+        .natural_height(true)
         .tree(true)
         .select(SelectMode::Single)
         .selection(Bind::given(current.map_or_else(Selection::default, Selection::single)))
