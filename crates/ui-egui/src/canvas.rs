@@ -162,6 +162,8 @@ pub struct CanvasState {
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
     pub context_menu_open: bool,
+    /// Where the open context menu is anchored: the framework keeps an anchor only for a context opening, and this menu opens by the app's one ask.
+    pub(crate) context_menu_at: Option<Pos2>,
     /// Screen rect of the selection's first line, for the floating mini toolbar.
     pub mini_anchor: Option<Rect>,
     /// The selection the mini toolbar was put away for by a click outside the document (the
@@ -340,6 +342,7 @@ impl Default for CanvasState {
             context_issue: None,
             context_synonyms: None,
             context_menu_open: false,
+            context_menu_at: None,
             mini_anchor: None,
             mini_dismissed: None,
             crop: None,
