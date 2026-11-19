@@ -104,9 +104,9 @@ fn open_watermark(app: &mut WordApp, ctx: &Context, parent: Option<DialogId>) ->
             ("horizontal".to_string(), Label::from(tl!("Horizontal").to_string())),
         ];
         let params = vec![
-            Param::new("text", tl!("Text").to_string(), ParamKind::text("CONFIDENTIAL")).max_chars(200),
+            // The old dialog's text field was about 280 pt wide, wider than the field length: some 38 characters.
+            Param::new("text", tl!("Text").to_string(), ParamKind::text("CONFIDENTIAL")).max_chars(200).field_chars(38),
             // The old dialog shows the two layouts side by side under the text, with no caption.
-            // PLAN: assumed `Param::options_in_row(self) -> Self` (look-dialogs-b framework fix)
             Param::new("layout", tl!("Layout").to_string(), ParamKind::radio(layout, Some("diagonal".into()))).options_in_row(),
         ];
         ParamDialog::command("watermark", tl!("Custom Watermark").to_string(), params).values(Bind::bound(fields)).alt_resets(false)
