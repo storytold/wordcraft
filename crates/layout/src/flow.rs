@@ -328,6 +328,8 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
+        // (Against the whole column: balanced columns grow to hold it.)
+        let room = pb.next_room(self.body_top);
         let mut need = height
             + if rp.keep_next {
                 let prev = PrevGap {
@@ -337,15 +339,17 @@ impl<'a> Flow<'a> {
                     after_auto: rp.after_auto,
                     listed: self.label.is_some(),
                 };
-                next_first_line(ctx, self.block, self.width, prev, &mut ctx.counters.clone())
+                // The whole chain, not just its next eight paragraphs: one that fits on a page
+                // moves over whole rather than leaving its first paragraph at the bottom (#6593
+                // review).
+                next_first_line(ctx, self.block, self.width, prev, &mut ctx.counters.clone(), room)
             } else {
                 0.0
             };
-        // (Against the whole column: balanced columns grow to hold it.)
-        let room = pb.next_room(self.body_top);
         // A chain too long for any page is not carried over: it breaks at the page bottom, and
-        // only keep lines together still moves the paragraph (#6593).
-        if rp.keep_next && pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= room && chain_overflows(ctx, self.block, self.width, room) {
+        // only keep lines together still moves the paragraph (#6593). One that needs more than a
+        // whole page from here is that long, without walking back to where it starts.
+        if rp.keep_next && pb.y + need > pb.bottom + 0.01 && !pb.fresh() && (need > room || chain_overflows(ctx, self.block, self.width, room)) {
             if !rp.keep_lines {
                 return before;
             }
@@ -1050,20 +1054,18 @@ fn settle_gap(prev: &PrevGap, mut before: f32, rp: &wordcraft_doc::resolve::Reso
 /// doesn't leave a single line at the bottom of a page; it moves over whole instead), all three
 /// of a three-line one under that control (two would leave a widow), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
-/// kept with the next too (a chain moves together in Word). Word carries a kept heading over
-/// when the paragraph after it cannot start on the page (#966).
+/// kept with the next too (a chain moves together in Word), to the end of the chain or `room`,
+/// whichever comes first: a chain taller than a page is not carried over (#6593). Word carries a
+/// kept heading over when the paragraph after it cannot start on the page (#966).
 /// The chain stops at a paragraph that starts a new page anyway: nothing after it needs room
 /// here (#6593).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, prev: PrevGap, counters: &mut Counters) -> f32 {
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, prev: PrevGap, counters: &mut Counters, room: f32) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) if ctx.doc.styles.resolve_para(&p.props).page_break_before => 0.0,
-        _ => chain_room(ctx, block + 1, width, Some(prev), counters, (MAX_KEPT_AHEAD, f32::INFINITY)).unwrap_or(0.0),
+        _ => chain_room(ctx, block + 1, width, Some(prev), counters, (MAX_CHAIN, room)).unwrap_or(room),
     }
 }
 
-/// Kept paragraphs [`next_first_line`] counts in full after the one being placed; the next is
-/// counted as a paragraph that is not kept.
-const MAX_KEPT_AHEAD: usize = 8;
 /// Most paragraphs of a keep-with-next chain measured to tell whether it fits on a page; a longer
 /// chain is taken not to fit.
 const MAX_CHAIN: usize = 512;

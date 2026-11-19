@@ -16327,6 +16327,48 @@ fn keep_with_next_chain_that_fits_with_collapsed_spacing_moves_together() {
     assert_eq!(pages(95.0, 20.0, false, true), vec![0, 0, 0, 1], "additive spacing still breaks an overlong chain");
 }
 
+/// A keep-with-next chain of more than eight paragraphs that fits on a fresh page but not in what
+/// is left of this one moves over whole: its first paragraph is not left alone at the bottom
+/// (#6593 review). The look-ahead stopped after eight kept paragraphs, so with paragraph spacing merged
+/// rather than summed it undercounted the chain, and the first paragraph stayed while the rest
+/// moved.
+#[test]
+fn keep_with_next_chain_longer_than_the_look_ahead_moves_whole() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    // Pages of the filler and of the twelve chain paragraphs, kept with next but for the last.
+    let pages = |fill: f32, keep: bool| -> Vec<usize> {
+        let mut d = Document::new();
+        d.last_section.margin_top = 50.0;
+        d.last_section.margin_bottom = 50.0;
+        d.last_section.page_h = 280.0; // 180 pt of room below the top margin
+        let para = |text: &str, props: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = props;
+            wordcraft_doc::para_block(x)
+        };
+        let filler =
+            ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(fill)), ..Default::default() };
+        let item =
+            ParaProps { space_before: Some(2.0), space_after: Some(2.0), line_spacing: Some(LineSpacing::Exactly(10.0)), ..Default::default() };
+        let kept = ParaProps { keep_next: Some(keep), ..item.clone() };
+        d.body = vec![para("Filler", filler)];
+        d.body.extend((0..11).map(|i| para(&format!("P{i}"), kept.clone())));
+        d.body.push(para("Last", item));
+        let l = lay(&d);
+        (0..d.body.len()).map(|k| l.caret(&Pos::body(k, 0)).unwrap().page).collect()
+    };
+    // The chain fits on a fresh page, so it stays there.
+    assert!(pages(1.0, true)[1..].iter().all(|&page| page == 0), "the chain fits on a fresh page");
+    // A filler that leaves less room than the whole chain needs takes the whole chain over: no
+    // filler height may leave the first paragraph behind.
+    for fill in 1..=60 {
+        let found = pages(fill as f32, true);
+        assert!(found[1..].windows(2).all(|pair| pair[0] == pair[1]), "a filler of {fill} pt splits the chain: {found:?}");
+    }
+    assert!(pages(60.0, true)[1..].iter().all(|&page| page == 1), "a tall filler takes the whole chain over");
+}
+
 /// A header paragraph beside a Square float on its last lines only: those lines are shorter than
 /// the first. A click on the first line past the short last line's end is still on the header's
 /// text, so a Behind Text picture under it is not grabbed there (#5601 review).
