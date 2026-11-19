@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Resolve from the mounted AppDir, without depending on the caller's working directory.
-APPDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-wordcraft="$APPDIR/usr/bin/wordcraft"
+# Resolve the launcher's location and preserve the AppImage runtime's APPDIR for WordCraft.
+launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+wordcraft="$launcher_dir/usr/bin/wordcraft"
 if [[ -n "${DISPLAY:-}" ]] && "$wordcraft" --appimage-needs-x11-fallback; then
-  wordcraft="$APPDIR/usr/lib/wordcraft-x11/wordcraft"
+  wordcraft="$launcher_dir/usr/lib/wordcraft-x11/wordcraft"
 fi
 exec "$wordcraft" "$@"

@@ -43,11 +43,11 @@ class AppImageRuntimeTests(unittest.TestCase):
             notice.parent.mkdir(parents=True)
             notice.write_text("Original test notice for " + package)
 
-    def compile_probe(self):
+    def compile_probe(self, rpath="$ORIGIN/wordcraft-x11-libraries", dtags="--disable-new-dtags"):
         binary = self.appdir / "usr/bin/wordcraft"
         binary.parent.mkdir(parents=True)
         subprocess.run(
-            ["gcc", "-x", "c", "-", "-o", str(binary), "-ldl", "-Wl,--disable-new-dtags,-rpath,$ORIGIN/wordcraft-x11-libraries"], input=r"""
+            ["gcc", "-x", "c", "-", "-o", str(binary), "-ldl", f"-Wl,{dtags},-rpath,{rpath}"], input=r"""
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
     executable[length] = 0;
     printf("%s\n%s\n%s\n", executable, getenv("LD_LIBRARY_PATH") ?: "(unset)",
            dlopen("libwordcraft-keyboard-probe.so", RTLD_NOW) ? "bundled" : "system");
+    printf("%s\n%s\n", getenv("APPDIR") ?: "(unset)", getenv("APPIMAGE") ?: "(unset)");
     for (int arg = 1; arg < argc; arg++) puts(argv[arg]);
     return 0;
 }
@@ -101,6 +102,24 @@ int main(int argc, char **argv) {
             path.write_bytes(original)
         self.assertNotEqual(self.bundle("aarch64").returncode, 0)
 
+    def test_staged_binary_requires_a_complete_rpath_entry(self):
+        library_path = "$ORIGIN/wordcraft-x11-libraries"
+        for name, rpath, dtags in [
+            ("suffix", f"/other:{library_path}-old", "--disable-new-dtags"),
+            ("prefix", f"/other/{library_path}:/extra", "--disable-new-dtags"),
+            ("runpath", library_path, "--enable-new-dtags"),
+            ("complete", f"{library_path}-old:{library_path}:/extra", "--disable-new-dtags"),
+        ]:
+            with self.subTest(name=name):
+                self.appdir = self.root / name
+                self.compile_probe(rpath, dtags)
+                result = self.bundle()
+                if name == "complete":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("lacks its AppImage library path", result.stderr)
+
     def test_launcher_uses_fallback_without_changing_the_library_environment(self):
         binary = self.compile_probe()
         result = self.bundle()
@@ -111,12 +130,18 @@ int main(int argc, char **argv) {
             input="int fixture(void) { return 0; }", check=True, text=True,
         )
         args = ["a document.docx", "--control", "7981", "Unicode é"]
-        for display, missing, prior in [
-            (None, True, None), (":123", False, ""), (":123", True, "/existing/library path"),
+        for display, missing, prior, runtime_dir in [
+            (None, True, None, None),
+            (":123", False, "", str(self.appdir)),
+            (":123", True, "/existing/library path", str(self.root / "another AppDir")),
         ]:
             with self.subTest(display=display, missing=missing, prior=prior):
                 env = dict(os.environ)
-                for key, value in [("DISPLAY", display), ("TEST_NO_SYSTEM_KEYBOARD", "1" if missing else None), ("LD_LIBRARY_PATH", prior)]:
+                runtime_image = f"{runtime_dir}.AppImage" if runtime_dir is not None else None
+                for key, value in [
+                    ("DISPLAY", display), ("TEST_NO_SYSTEM_KEYBOARD", "1" if missing else None), ("LD_LIBRARY_PATH", prior),
+                    ("APPDIR", runtime_dir), ("APPIMAGE", runtime_image),
+                ]:
                     if value is None:
                         env.pop(key, None)
                     else:
@@ -125,7 +150,8 @@ int main(int argc, char **argv) {
                 selected = bool(display and missing)
                 executable = fallback / "wordcraft" if selected else binary
                 self.assertEqual(run.stdout.splitlines(), [str(executable), "(unset)" if prior is None else prior,
-                                                           "bundled" if selected else "system", *args])
+                                                           "bundled" if selected else "system", runtime_dir or "(unset)",
+                                                           runtime_image or "(unset)", *args])
 
 
 if __name__ == "__main__":

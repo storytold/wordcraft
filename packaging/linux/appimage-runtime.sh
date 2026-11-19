@@ -3,7 +3,7 @@
 # AppImage packaging therefore has to copy it explicitly, together with the matching base library and libxcb-xkb (#5363).
 
 bundle_x11_keyboard() {
-  local appdir="$1" compiler="${CROSS_COMPILE:-}gcc" library source notice package machine sysroot
+  local appdir="$1" compiler="${CROSS_COMPILE:-}gcc" library source notice package machine sysroot rpath
   local fallback="$1/usr/lib/wordcraft-x11" binary="$1/usr/bin/wordcraft"
   machine="$("$compiler" -dumpmachine)"
   case "$ARCH:$machine" in
@@ -33,7 +33,8 @@ bundle_x11_keyboard() {
   done
   # Both launch paths name one ELF inode. Only the fallback path has the sibling
   # library directory. Verify the linker setting before accepting a --skip-build binary.
-  if ! LC_ALL=C readelf --dynamic "$binary" | grep -F '(RPATH)' | grep -F "\$ORIGIN/wordcraft-x11-libraries" >/dev/null; then
+  if ! rpath="$(LC_ALL=C readelf --dynamic "$binary" | sed -n '/(RPATH)/s/^[^[]*\[\(.*\)\]$/\1/p')" ||
+    [[ ":$rpath:" != *":\$ORIGIN/wordcraft-x11-libraries:"* ]]; then
     echo "error: the staged WordCraft binary lacks its AppImage library path; rebuild WordCraft" >&2
     return 1
   fi
