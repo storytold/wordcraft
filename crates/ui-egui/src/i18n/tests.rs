@@ -1306,7 +1306,8 @@ fn arabic_locales_and_saved_preference_work_without_changing_the_document() {
     assert_eq!(first_supported(["xx-XX", "ar-MA", "en-US"]), Some(ar));
     assert_eq!(normalize_pref("AR"), Some("ar"));
     assert!(ar.rtl());
-    assert!(Lang::all().filter(|l| l.rtl()).eq([ar]), "Arabic is the only right-to-left language");
+    let expected_rtl: Vec<Lang> = [Some(ar), Lang::from_code("he")].into_iter().flatten().collect();
+    assert!(Lang::all().filter(|l| l.rtl()).eq(expected_rtl), "Arabic and Hebrew are the right-to-left languages");
     assert!(!ar.uses_cjk());
     let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
     let before = serde_json::to_value(&app.session.doc).unwrap();

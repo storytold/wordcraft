@@ -1162,8 +1162,13 @@ fn rtl_ribbon_edge_cue_shows_left_chevron_when_overflowing() {
     if !crate::i18n::catalogs_embedded() {
         return;
     }
+    use egui_kittest::kittest::Queryable;
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    let _ = app.run("ui.language", json!({"value": "he"}));
+    app.run("ui.language", json!({"value": "he"})).unwrap();
+    assert_eq!(app.ui.language, "he");
+    let he = crate::i18n::Lang::from_pref(&app.ui.language);
+    assert_eq!(he.code(), "he");
+    assert!(he.rtl(), "Hebrew must be registered as an RTL interface language");
     app.ui.tab = "Home".to_string();
     app.ui.backstage = false;
     let mut h = egui_kittest::Harness::builder()
@@ -1172,18 +1177,53 @@ fn rtl_ribbon_edge_cue_shows_left_chevron_when_overflowing() {
         .build_ui_state(
             |ui, app: &mut WordApp| {
                 app.logic(ui.ctx());
+                assert!(crate::rtl::on(), "RTL layout mode must be active for Hebrew");
                 show(app, ui);
             },
             app,
         );
     h.run_steps(3);
 
-    // Click the left edge cue at (x = 9.0, y = 100.0)
-    let left_cue_pos = egui::pos2(9.0, 100.0);
-    h.event(egui::Event::PointerButton { pos: left_cue_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.step();
-    h.event(egui::Event::PointerButton { pos: left_cue_pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
+    let scroll_left = crate::i18n::tr(he, "Scroll ribbon left");
+    let scroll_right = crate::i18n::tr(he, "Scroll ribbon right");
+    assert_ne!(scroll_left, "Scroll ribbon left", "Hebrew catalog must translate ribbon scroll hints");
+    assert!(h.query_by_label(scroll_left).is_some(), "RTL overflowing ribbon must show left scroll cue initially");
+    assert!(h.query_by_label(scroll_right).is_none(), "RTL ribbon starts at the right edge without a right scroll cue");
+
+    let clipboard_label = crate::i18n::tr(he, "Clipboard");
+    let editor_label = crate::i18n::tr(he, "Editor");
+    let clipboard_before = h.get_by_label(clipboard_label).rect();
+    let editor_before = h.get_by_label(editor_label).rect();
+    assert!(clipboard_before.left() > 200.0 && clipboard_before.right() <= 400.0, "RTL Home tab starts on the right: {clipboard_before:?}");
+    assert!(editor_before.left() < 0.0, "trailing RTL groups overflow off the physical left edge initially: {editor_before:?}");
+
+    // Clicking the left overflow cue scrolls the ribbon right toward the trailing RTL groups and reveals Editor.
+    for _ in 0..8 {
+        let left_cue_rect = h.get_by_label(scroll_left).rect();
+        assert!(left_cue_rect.left() < 24.0, "left scroll cue sits on the physical left edge: {left_cue_rect:?}");
+        let prev_editor = h.get_by_label(editor_label).rect();
+        let left_cue_pos = left_cue_rect.center();
+        h.event(egui::Event::PointerButton { pos: left_cue_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: left_cue_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.run_steps(2);
+        let now_editor = h.get_by_label(editor_label).rect();
+        assert!(
+            now_editor.left() > prev_editor.left(),
+            "left chevron click must scroll hidden RTL groups into view: {prev_editor:?} -> {now_editor:?}"
+        );
+        if now_editor.left() >= 0.0 && now_editor.right() <= 400.0 {
+            break;
+        }
+    }
+    let editor_after = h.get_by_label(editor_label).rect();
+    assert!(editor_after.left() >= 0.0 && editor_after.right() <= 400.0, "initially hidden group is revealed inside the viewport: {editor_after:?}");
+    assert!(h.query_by_label(scroll_right).is_some(), "after scrolling left, the right scroll cue appears");
 }
 
 fn table_design_harness(language: &str, theme: egui::Theme) -> egui_kittest::Harness<'static, WordApp> {
