@@ -95,9 +95,18 @@ pub(super) fn page_shows(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, 
 }
 
 /// The texture cache key of page `i`: its content, the view, and the raster scale.
-pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64, scale_px: f32) -> u64 {
+/// `subpixel`: the order the raster's text is drawn in (`None`: greyscale). A page shrunk to the
+/// GPU's texture size has none, at the same raster scale as one shown one texel per pixel.
+pub(super) fn page_key(
+    app: &mut WordApp,
+    layout: &std::sync::Arc<DocLayout>,
+    i: usize,
+    view: u64,
+    scale_px: f32,
+    subpixel: Option<crate::Subpixel>,
+) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, scale_px.to_bits(), app.canvas.page_keys.content(layout, i)).hash(&mut h);
+    (view, scale_px.to_bits(), subpixel, app.canvas.page_keys.content(layout, i)).hash(&mut h);
     h.finish()
 }
 

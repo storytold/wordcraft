@@ -5983,3 +5983,22 @@ fn a_page_with_subpixel_text_differs_from_greyscale_only_at_text_edges() {
         assert!(inside * 2 > pa.len(), "most of a page is inside areas: {inside} of {}", pa.len());
     }
 }
+
+/// A page shrunk to the GPU's texture size is drawn without subpixel text, at the raster scale it
+/// also has when shown one texel per pixel: its key tells the two rasters apart, so neither passes
+/// for the other once the zoom changes, and it stays the same while that doesn't change.
+#[test]
+fn a_rasters_key_tells_subpixel_text_from_greyscale_at_one_scale() {
+    // A 1536 × 768 point page in 2048-pixel textures: 2048/1536 and 2 screen pixels per point both
+    // rasterise it at 2048/1536.
+    let fit = raster_scale(2048.0 / 1536.0, 2048.0, 1536.0, 768.0);
+    let shrunk = raster_scale(2.0, 2048.0, 1536.0, 768.0);
+    assert_eq!(fit.scale_px, shrunk.scale_px);
+    assert!(fit.one_to_one && !shrunk.one_to_one && !fit.tiled && !shrunk.tiled);
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+    let layout = a.session.layout();
+    let view = view_key(&a, false, None, true);
+    let key = |a: &mut WordApp, s: &RasterScale| pages::page_key(a, &layout, 0, view, s.scale_px, s.one_to_one.then_some(crate::Subpixel::Rgb));
+    assert_ne!(key(&mut a, &fit), key(&mut a, &shrunk));
+    assert_eq!(key(&mut a, &fit), key(&mut a, &raster_scale(2048.0 / 1536.0, 2048.0, 1536.0, 768.0)));
+}

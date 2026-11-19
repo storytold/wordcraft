@@ -1120,6 +1120,26 @@ fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page:
     }
 }
 
+/// The scale a page is rasterised at (raster pixels per point), for `screen` screen pixels per
+/// point within textures of `max_tex` pixels a side: whether it is split into tiles (a tall Web or
+/// Draft page), and whether the raster is shown one texel per screen pixel (not a page shrunk to
+/// the GPU's texture size, where it is scaled), which subpixel text needs.
+struct RasterScale {
+    scale_px: f32,
+    tiled: bool,
+    one_to_one: bool,
+}
+
+fn raster_scale(screen: f32, max_tex: f32, page_w: f32, page_h: f32) -> RasterScale {
+    // A Web/Draft page can be arbitrarily tall. Shrinking the whole page into one GPU
+    // texture makes the text blurry; split those pages into native-resolution tiles.
+    let width_scale = screen.min(max_tex / page_w.max(1.0)).max(0.05);
+    let tiled = page_h.clamp(1.0, 1e6) * width_scale > max_tex;
+    let scale_px = if tiled { width_scale } else { width_scale.min(max_tex / page_h.clamp(1.0, 1e6)).max(0.05) };
+    let one_to_one = (scale_px - screen).abs() <= 1e-4 * scale_px.abs().max(1.0);
+    RasterScale { scale_px, tiled, one_to_one }
+}
+
 fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
     let PagePaint {
         app,
@@ -1147,14 +1167,9 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         let sr = pr.translate(content_origin.to_vec2());
         let Some(page) = layout.pages.get(i) else { continue };
         let (band_top, band_bot) = geo.bands.get(i).copied().unwrap_or((0.0, sr.height()));
-        // A Web/Draft page can be arbitrarily tall. Shrinking the whole page into one GPU
-        // texture makes the text blurry; split those pages into native-resolution tiles.
-        let width_scale = (geo.scale * ppp).min(max_tex / page.w.max(1.0)).max(0.05);
-        let tiled = page.h.clamp(1.0, 1e6) * width_scale > max_tex;
-        let scale_px = if tiled { width_scale } else { width_scale.min(max_tex / page.h.clamp(1.0, 1e6)).max(0.05) };
-        // Subpixel text only where the raster is shown one texel per screen pixel: not on a
-        // page shrunk to the GPU's texture size, where it would be scaled.
-        let one_to_one = (scale_px - geo.scale * ppp).abs() <= 1e-4 * scale_px.abs().max(1.0);
+        let RasterScale { scale_px, tiled, one_to_one } = raster_scale(geo.scale * ppp, max_tex, page.w, page.h);
+        // Subpixel text where the raster has it: a raster drawn with it is not one drawn without.
+        let lcd = app.subpixel_order().filter(|_| one_to_one);
         let tile_height_px = TILE_HEIGHT_PX.min(max_tex as usize).max(1);
         // Hide White Space shows only a band of the page; everything below paints into it.
         let band_of = |r: Rect| Rect::from_min_max(pos2(r.min.x - 4.0, r.min.y + band_top), pos2(r.max.x + 4.0, r.min.y + band_bot));
@@ -1162,7 +1177,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         // Only pages on screen or with a texture need their key (#811).
         let cached = !tiled && app.canvas.textures.contains_key(&i);
         let key =
-            if visible || cached { page_key(app, layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
+            if visible || cached { page_key(app, layout, i, view, scale_px, lcd) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
         let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _, _)| *k == key);
         // The page a drag took an object off: render it this frame whatever the budget, or the
         // raster with the object still on it shows for a frame.
