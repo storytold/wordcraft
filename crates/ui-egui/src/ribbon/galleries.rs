@@ -7,7 +7,7 @@ use craft::menu::{Gallery, GalleryFace, GalleryItem, GalleryMore};
 use craft::ui::contract::overlay::Anchor;
 use craft::theme::Mode;
 use craft::ui::contract::{ActivateOn, Bind, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger};
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::IconSpec;
 use craft::ui::primitives::textures::Revision;
@@ -152,11 +152,12 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
         let doc = &app.session.doc;
         let makers: Vec<Maker<'_>> = entries.iter().map(|(id, _)| Box::new(move || style_tile_image(doc, id, ppp, dark_page, dark)) as Maker<'_>).collect();
         let items = image_items("style", &entries, &makers, ppp, revision);
-        // Each tile shows the sample's first letters at their size, as wide as `STYLE_TILE_W` crops them (twice the
-        // tile's height), with the style's name under it.
+        // Each tile shows the sample's first letters at their size: a large thumbnail as wide as `STYLE_TILE_W` crops
+        // them (68 by 48 points), so the sample is not scaled down, with the style's name under it.
         Gallery::new(tl!("Styles"), &items, Some(&current))
             .tiles(6, 3)
-            .aspect(ThumbAspect::new(2, 1))
+            .thumb(ThumbSize::Large)
+            .aspect(ThumbAspect::new(17, 12))
             .caption(CaptionPlace::Below)
             .more(GalleryMore::Command(CommandRef::with_params("view.stylesPane", json!({"value": true}))))
             .show(ui)
@@ -197,7 +198,9 @@ pub(crate) fn style_sets(ui: &mut Ui, app: &mut WordApp) {
     let entries: Vec<(String, String)> = STYLE_SETS.iter().map(|name| ((*name).to_string(), format!("Style set: {name}"))).collect();
     let makers: Vec<Maker<'_>> = entries.iter().map(|(name, _)| Box::new(move || style_set_image(name, ppp, dark)) as Maker<'_>).collect();
     let items = image_items("set", &entries, &makers, ppp, revision);
-    let out = Gallery::new(tl!("Style Sets"), &items, None).tiles(7, 4).show(ui);
+    // Each tile is a small page (title, heading, paragraph) at the large thumbnail size, about as wide as high as the
+    // image `style_set_image` renders, so the title and heading read as they did in the old ribbon.
+    let out = Gallery::new(tl!("Style Sets"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).show(ui);
     if let Some(name) = out.picked {
         let _ = app.run("design.styleSet", json!({"name": name}));
     }
