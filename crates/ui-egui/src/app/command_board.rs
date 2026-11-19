@@ -5,7 +5,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use craft::keymap::Overrides;
-use craft::ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, CommandState, FireSource, Scope, TypingRule, WindowCommand};
+use craft::ui::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, CommandState, FireSource, Scope, TypingRule, WindowCommand,
+};
 use craft::ui::runtime::frame::FrameOutput;
 
 use super::{Value, WordApp, json};
