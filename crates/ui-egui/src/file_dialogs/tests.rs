@@ -443,8 +443,8 @@ fn a_failed_save_as_says_so_and_keeps_the_document() {
 /// through the same `AfterPick::SaveAs` arm as Backstage's, under `AfterSave::AutoSave`
 /// instead of `AfterSave::Nothing`: a write failure there must reach the status bar too
 /// (visible here, since the switch only shows while Backstage is closed), and AutoSave must
-/// stay off rather than claim coverage it doesn't have (the raw `autosave` flag defaults to
-/// `true`; what actually governs coverage is `autosaves()`, the flag plus the block).
+/// stay off rather than claim coverage it doesn't have: `autosaves()` requires both the
+/// person's opt-in and an eligible saved file.
 #[test]
 fn a_failed_autosave_switch_save_as_says_so_and_leaves_autosave_off() {
     let dir = scratch("autosave-switch-write-fails");
