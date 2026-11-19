@@ -286,7 +286,7 @@ pub fn system_hebrew_ui_font() -> Option<SystemUiFont> {
     if crate::ui_hebrew_fonts().next().is_some() {
         return None;
     }
-    find_ui_font(&with_asset_data(crate::system_font_dirs()), hebrew_candidates(), &['א', 'ב', 'ת'], false)
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), hebrew_candidates(), &['א', 'ב', 'ת'], Region::Other)
 }
 
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
