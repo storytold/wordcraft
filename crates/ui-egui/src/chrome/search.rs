@@ -2,8 +2,8 @@
 
 use craft::keymap::CommandRef;
 use craft::ui::contract::Bind;
-use craft::ui::menu::search::HelpEntry;
-use craft::ui::patterns::{CommandPalette, PaletteFace};
+use craft::ui::menu::HelpEntry;
+use craft::ui::patterns::panels::{CommandPalette, PaletteFace};
 use craft::ui::runtime::env::{Label, WordTemplate};
 use craft::ui::runtime::inspect;
 use egui::Ui;

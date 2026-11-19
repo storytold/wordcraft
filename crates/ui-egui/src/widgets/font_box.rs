@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use craft::font_manager::{Catalog, FontPicker, FontPickerKind, FontPickerOutput, FontPickerSettings, MissingAdvice};
+use craft::font_manager::Catalog;
+use craft::font_manager::picker::{FontPicker, FontPickerKind, FontPickerOutput, FontPickerSettings, MissingAdvice};
 use craft::ui::contract::{Bind, Show as _};
 use craft::ui::runtime::env::Label;
 use egui::Ui;

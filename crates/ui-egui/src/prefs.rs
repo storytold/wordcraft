@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::scroll::ScrollSpeed;
-use crate::{DEFAULT_TAB, DisplayServer, MAX_RECENT, MAX_RECENT_FONTS, StatusCount, dialogs_insert, i18n, keytips, panes, print_page, theme};
+use crate::{DEFAULT_TAB, DisplayServer, MAX_RECENT, MAX_RECENT_FONTS, StatusCount, dialogs_insert, i18n, panes, print_page, theme};
 
 /// The user's custom shortcuts. A wrapper because `craft::keymap::Overrides` has no `PartialEq`, which
 /// [`Settings`] needs to see whether a save is due.
@@ -107,27 +107,6 @@ pub struct Prefs {
     pub read_aloud_skip_citations: bool,
     /// Show ribbon and Quick Access Toolbar KeyTips on Alt/F10 (#620).
     pub keytips_enabled: bool,
-    /// Digits entered for a multi-key Quick Access Toolbar badge; never persisted.
-    #[serde(skip)]
-    pub keytip_prefix: String,
-    /// Keytips (Alt) state; not persisted, it resets each session.
-    #[serde(skip)]
-    pub keytips: keytips::Phase,
-    /// Alt is held according to key or modifier events; never persisted.
-    #[serde(skip)]
-    pub alt_pressed: bool,
-    /// Since the last Alt press, another key or a mouse button was pressed: the Alt release
-    /// that follows ends a chord (Alt+click, Alt+drag column selection), not a keytip tap.
-    #[serde(skip)]
-    pub alt_chord_used: bool,
-    /// An Alt key is down according to key events. Its modifier can go before the key does:
-    /// AltGr on Linux reports the Right Alt key with Level 3 Shift, not Alt (#2388).
-    #[serde(skip)]
-    pub alt_key_down: bool,
-    /// Since the last Alt press the Alt modifier was on, or the key was Left Alt: a Right Alt
-    /// that never turns it on is AltGr, which types characters and never opens keytips (#2388).
-    #[serde(skip)]
-    pub alt_modifier_seen: bool,
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`Prefs::theme`] (#312).
     pub dark_page: bool,
@@ -227,12 +206,6 @@ impl Default for Prefs {
             read_aloud_rate: 1.0,
             read_aloud_skip_citations: true,
             keytips_enabled: true,
-            keytip_prefix: String::new(),
-            keytips: keytips::Phase::Off,
-            alt_pressed: false,
-            alt_chord_used: false,
-            alt_key_down: false,
-            alt_modifier_seen: false,
             dark_page: false,
             check_spelling: true,
             caret_animation: true,
