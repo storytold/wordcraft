@@ -6,9 +6,7 @@ use craft::automation::control::{ControlChannel, ControlRequest, Reply};
 
 /// A context with the framework runtime installed, as the app's host installs it.
 fn installed() -> egui::Context {
-    let ctx = crate::test_harness::context();
-    craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN));
-    ctx
+    crate::test_harness::context()
 }
 
 /// The app in a headless harness that runs `logic` and `ui` and installs the runtime.
@@ -16,7 +14,7 @@ fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, a: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            a.logic(&ctx);
+            crate::test_harness::logic(&ctx, a);
             a.ui(ui);
         },
         app,
@@ -199,6 +197,7 @@ fn control_resize_rejects_bad_sizes_and_clamps_huge_ones() {
 
     let out = ctx.run_ui(egui::RawInput::default(), |_| {});
     let asked = out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::InnerSize(_))));
+    out.drop_without_applying_deltas();
     assert!(asked, "the window was asked for the size");
 }
 
@@ -249,9 +248,7 @@ fn ui_closewindow_asks_the_close_guard_like_the_os_button() {
 fn ui_clipboard_sets_each_flavour_it_is_given() {
     use craft::platform::clipboard::{Clipboard, MemoryClipboard};
     use craft::ui::runtime::commands::ClipboardHandle;
-    let ctx = crate::test_harness::context();
-    let spec = craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
-    craft::ui::shell::embed::install(&ctx, spec, &crate::ui_fonts(crate::i18n::Lang::EN));
+    let ctx = crate::test_harness::context_with(|| craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
     let mut a = app();
     let r = call(&mut a, &ctx, "ui.clipboard", json!({"text": "plain", "html": "<b>rich</b>"}));
     assert_eq!(r["ok"], true, "{r}");

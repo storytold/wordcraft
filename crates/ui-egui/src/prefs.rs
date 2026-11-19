@@ -323,6 +323,10 @@ fn migrate_units_of(v: &mut Value) {
 /// The saved shortcuts in either shape: the old `{"assigned", "removed"}` map becomes overrides
 /// through the command registry; a value already in the new shape reads as it is.
 fn legacy_keyboard(saved: &Value) -> Option<Shortcuts> {
+    // Only an object is a shortcut map; anything else is junk, whatever the new shape would take of it.
+    if !saved.is_object() {
+        return None;
+    }
     if saved.get("assigned").is_some() || saved.get("removed").is_some() {
         let reg = wordcraft_engine::cmd::registry();
         return Some(Shortcuts(wordcraft_engine::keymap::overrides_from_legacy(&reg, saved)));

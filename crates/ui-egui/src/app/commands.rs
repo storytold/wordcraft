@@ -794,6 +794,8 @@ impl WordApp {
             // load it as the mail-merge recipients. Opens system UI, like `ui.openFileDialog`.
             "ui.openRecipientList" => {
                 self.pick_recipient_list();
+                // Pending while the host's picker is still open; a service that answers at once has loaded the list.
+                self.recipient_list_pending = self.file_dialog_open();
                 json!({"pending": self.recipient_list_pending})
             }
             // Native printing submits the selected queue on a worker; the browser owns its dialog.

@@ -443,7 +443,7 @@ fn the_app_window_shows_for_a_few_frames() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         app(),
@@ -539,7 +539,7 @@ fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::logic(&ctx, app);
             app.ui(ui);
         },
         a,
@@ -624,11 +624,7 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     for _ in 0..3 {
         frame(&mut a, Vec::new());
@@ -721,11 +717,7 @@ fn web_layout_fills_the_window_width() {
         t += dt;
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, 740.0));
         let input = egui::RawInput { events: vec![], time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     let lines = |a: &mut WordApp| {
         a.session
@@ -800,11 +792,7 @@ fn dragging_a_selection_past_the_viewport_edge_auto_scrolls() {
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     for _ in 0..3 {
         frame(&mut a, Vec::new());
@@ -855,11 +843,7 @@ fn a_press_inside_the_selected_comment_keeps_it_selected() {
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     for _ in 0..30 {
@@ -916,11 +900,7 @@ fn selected_comment_floats_and_keeps_its_clicks() {
         let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
             t += 1.0 / 60.0;
             let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-            ctx.run_ui(input, |ui| {
-                a.logic(ui.ctx());
-                a.ui(ui);
-            })
-            .drop_without_applying_deltas();
+            crate::test_harness::pass(&ctx, a, input);
         };
         let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
         for _ in 0..30 {
@@ -1001,11 +981,7 @@ fn a_press_on_the_ribbon_after_a_header_double_click_does_not_scroll() {
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     for _ in 0..30 {
@@ -1051,11 +1027,7 @@ fn escape_from_the_header_stays_on_the_page() {
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     for _ in 0..30 {
         frame(&mut a, Vec::new());
@@ -1094,11 +1066,7 @@ fn a_click_in_the_footer_while_editing_the_header_moves_there() {
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     a.run("caret.docStart", json!({})).unwrap();
@@ -1181,11 +1149,7 @@ fn double_clicking_a_later_pages_footer_does_not_scroll_to_the_top() {
     let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     let btn = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     for _ in 0..30 {
@@ -1299,11 +1263,7 @@ fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
     let mut frame = |a: &mut WordApp| {
         t += 1.0 / 60.0;
         let input = egui::RawInput { time: Some(t), screen_rect: Some(screen), ..Default::default() };
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     for _ in 0..3 {
         frame(&mut a);
@@ -1401,14 +1361,9 @@ fn cut_and_copy_reach_the_system_clipboard() {
 /// clipboard held, so Paste inserts the picture instead of the text copied before it.
 #[test]
 fn copying_a_picture_replaces_the_clipboards_old_text() {
-    // PLAN(platform-w10): pf.C-P10 `last_copied` reads the installed `MemoryClipboard`, not egui's `CopyText`.
+    // The system clipboard is the installed (memory) clipboard; Copy offers to it through the runtime.
     let last_copied = |ctx: &egui::Context| -> Option<String> {
-        ctx.output(|o| {
-            o.commands.iter().rev().find_map(|c| match c {
-                egui::OutputCommand::CopyText(t) => Some(t.clone()),
-                _ => None,
-            })
-        })
+        craft::ui::runtime::commands::ClipboardHandle::of(ctx).read_text().ok().flatten().filter(|t| !t.is_empty())
     };
     let ctx = crate::test_harness::context();
     let mut a = typed();
@@ -1422,7 +1377,7 @@ fn copying_a_picture_replaces_the_clipboards_old_text() {
     a.run("insert.picture", json!({"data": data})).unwrap();
     assert!(crate::objects::selected(&a).is_some());
     a.run("edit.copy", json!({})).unwrap();
-    assert_eq!(last_copied(&ctx).as_deref(), Some(""), "the old text is gone from the system clipboard");
+    assert_eq!(last_copied(&ctx), None, "the old text is gone from the system clipboard");
 
     // The system clipboard now holds no text, so Paste finds no text to send: our copy.
     a.run("select.collapse", json!({"end": true})).unwrap();
@@ -1462,7 +1417,7 @@ fn every_cut_entry_point_publishes_to_the_clipboard() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         typed(),
@@ -1849,7 +1804,8 @@ fn save_prompt_shows_why_the_save_failed() {
     assert_eq!(prompt_message(&a).as_deref(), Some(reason.as_str()));
     let mut h = harness(a);
     h.run_steps(4);
-    assert!(h.query_by_label(reason.as_str()).is_some(), "the reason is in the prompt");
+    // The prompt shows it, and so does the status line the failed save wrote it to (`prompt_message` above is the prompt's own).
+    assert!(h.query_all_by_label(reason.as_str()).next().is_some(), "the reason is in the prompt");
     assert!(h.query_by_label("Save").is_some(), "Save again is offered");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1918,7 +1874,7 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
         let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
-                app.logic(&ctx);
+                crate::test_harness::driver_logic(&ctx, app);
                 app.ui(ui);
             },
             a,
@@ -1973,7 +1929,7 @@ fn the_host_hears_about_edits_made_while_drawing() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         a,
@@ -1996,7 +1952,7 @@ fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         typed(),
@@ -2050,7 +2006,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         typed(),
@@ -2271,6 +2227,8 @@ fn host_saves_go_back_to_the_opened_file() {
     a.run("text.insert", json!({"text": "More "})).unwrap();
     a.execute("file.saveAs", json!({"path": "report copy.docx"})).unwrap();
     assert!(!a.session.dirty);
+    // The page answers after the hand-over (S-L159): the answer makes the copy the file the next Save writes.
+    a.settle_saves();
     a.run("text.insert", json!({"text": "Again "})).unwrap();
     a.execute("file.save", json!({})).unwrap();
     let got = got.borrow();
@@ -2307,6 +2265,8 @@ fn host_save_of_a_legacy_word_file_writes_a_docx() {
 fn host_save_of_an_untitled_document_is_save_as() {
     let (mut a, got) = host_app(false);
     a.execute("file.save", json!({})).unwrap();
+    // The page answers after the hand-over (S-L159): the answer records the file the second Save goes back to.
+    a.settle_saves();
     a.run("text.insert", json!({"text": "More "})).unwrap();
     a.execute("file.save", json!({})).unwrap();
     let got = got.borrow();
@@ -3121,11 +3081,7 @@ fn interface_size_is_absolute_and_auto_keeps_the_system_scale() {
         // The interface scale is a root value the runtime applies (`RootEnv::scale`): it comes
         // with the frame's input, as eframe's `raw_input_hook` hands it over.
         craft::ui::shell::embed::before_input(&ctx, |out| a.frame_input(out));
-        ctx.run_ui(input, |ui| {
-            a.logic(ui.ctx());
-            a.ui(ui);
-        })
-        .drop_without_applying_deltas();
+        crate::test_harness::pass(&ctx, a, input);
     };
     let ppp = |a: &mut WordApp, native: f32| {
         // The new factor applies from the next pass.
@@ -3243,7 +3199,7 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         a,
@@ -3269,7 +3225,7 @@ fn f11_and_escape_toggle_full_screen() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         app(),
@@ -3320,7 +3276,7 @@ fn escape_collapses_a_selection_before_leaving_full_screen() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         app(),
@@ -3464,7 +3420,7 @@ fn paste_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         a,
@@ -3734,7 +3690,7 @@ fn shift_f10_opens_the_context_menu_at_the_caret() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         app(),

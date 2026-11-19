@@ -97,6 +97,10 @@ pub struct CanvasState {
     pub(crate) reading: ReadingState,
     /// What the last pass showed.
     pub(crate) shown: ShownPages,
+    /// The page's request for the keyboard has not been taken yet (a window's page starts with it set: production's
+    /// `want_focus` started on). Kept until a real run takes it, because a measuring run moves no focus
+    /// (`focus::request` is `false` there).
+    pub(crate) focus_pending: bool,
     /// How many page pictures the page view kept resident after the last pass (S-L352).
     pub(crate) resident_pictures: usize,
     /// The caret's glide and blink.
@@ -258,11 +262,12 @@ impl CanvasState {
         self.unit_drag = None;
     }
 
-    /// Asks for the page's keyboard focus; nothing until a pass has shown the canvas.
-    pub fn focus_page(&mut self, ctx: &egui::Context) {
-        if let Some(id) = self.shown.canvas {
-            focus::request(ctx, FocusTarget::Id(id));
-        }
+    /// Asks for the page's keyboard focus. A request the framework could not take (no page shown yet, or a measuring
+    /// run, which moves no focus) is kept and made again by the next pass that shows the page. Whether it was taken.
+    pub fn focus_page(&mut self, ctx: &egui::Context) -> bool {
+        let taken = self.shown.canvas.is_some_and(|id| focus::request(ctx, FocusTarget::Id(id)));
+        self.focus_pending = !taken;
+        taken
     }
 
     /// The canvas body on screen, once a pass has shown it.
@@ -314,6 +319,7 @@ impl Default for CanvasState {
             view: PageViewState::default(),
             reading: ReadingState::default(),
             shown: ShownPages::default(),
+            focus_pending: true,
             resident_pictures: 0,
             glide: crate::caret_glide::CaretGlide::default(),
             comments: Default::default(),
@@ -798,9 +804,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     app.canvas.viewed_page = Some(viewed_page(caret_span, &state, &out.layout, f64::from(body_rect.height())));
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
-    let first_pass = app.canvas.shown.canvas.is_none();
     app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), canvas: Some(out.canvas.response.id) };
-    if first_pass && !app.modal_open() {
+    if app.canvas.focus_pending && !app.modal_open() {
         let ctx = ui.ctx().clone();
         app.canvas.focus_page(&ctx);
     }

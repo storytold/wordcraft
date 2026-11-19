@@ -103,7 +103,10 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     let names: Vec<(usize, String)> = list.iter().enumerate().map(|(at, s)| (at, s.1.clone())).collect();
     let source = keyed(&names, |name: &(usize, String)| name.0).with_text(|name: &(usize, String)| Cow::Borrowed(name.1.as_str()));
     let current = list.iter().position(|s| s.0 == cur);
+    // The task pane's body scrolls, and a collection owns its own scroll: the list shows this many styles and scrolls
+    // the rest itself.
     let out = List::<usize>::new(tl!("Styles").to_owned())
+        .max_rows(18)
         .select(SelectMode::Single)
         .row_menu()
         .selection(Bind::given(current.map_or_else(Selection::default, Selection::single)))

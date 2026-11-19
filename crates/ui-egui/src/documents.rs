@@ -62,6 +62,12 @@ impl WordApp {
         self.window_shows(id);
 
         self.canvas.show_other_document(seen);
+        // A Save Changes prompt asked about the document that left: it goes, and its answer with it. The
+        // operation stays (a quit closing documents one by one moves on), and an answer that arrives anyway
+        // is refused as being about a replaced document (`apply_close_answer`).
+        if let Some(id) = self.closing.as_mut().and_then(|c| c.prompt.take()) {
+            self.close_prompt(id);
+        }
         if let Some(ctx) = self.ctx.clone() {
             crate::dialogs::host::close_all(self, &ctx);
         }

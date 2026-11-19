@@ -8,11 +8,7 @@ use std::sync::Arc;
 /// since the last one. A test keeps one context, so what the host keeps in egui memory lasts
 /// between frames.
 fn pump(a: &mut WordApp, ctx: &egui::Context) {
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-        let ctx = ui.ctx().clone();
-        a.logic(&ctx);
-        a.ui(ui);
-    });
+    crate::test_harness::pass(ctx, a, egui::RawInput::default());
 }
 
 /// An app on `document` whose file service is `files` (app.H1).
@@ -72,7 +68,7 @@ fn table_properties_dialog_sets_every_selected_row() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         a,
@@ -110,6 +106,8 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
 
     let ctx = crate::test_harness::context();
     let frame = |a: &mut WordApp| pump(a, &ctx);
+    // A dialog opens once the window's context is known: after its first frame.
+    frame(&mut a);
     let id = dialogs::open(&mut a, "tableCellMargins", &json!({})).expect("the dialog opens");
     frame(&mut a);
     let fields = fields_of(&a, "tableCellMargins").expect("the dialog has fields");
@@ -139,6 +137,7 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
     let (tp, _, _) = b.session.sel.focus.path.cell().unwrap();
     assert_eq!(b.session.doc.table(b.session.sel.focus.story, &tp).unwrap().props.cell_margins, None);
     let ctx = crate::test_harness::context();
+    pump(&mut b, &ctx);
     let id = dialogs::open(&mut b, "tableCellMargins", &json!({})).expect("the dialog opens");
     pump(&mut b, &ctx);
     let depth = b.session.undo_depth();
@@ -300,7 +299,7 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut State| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         a,
@@ -385,29 +384,27 @@ fn an_existing_list_picked_on_the_desktop_loads_recipients() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn an_existing_list_picked_on_the_web_loads_recipients() {
-    // The scripted browser host answers each pick with the file contents, as the page does.
-    let files = Arc::new(
-        ScriptedFiles::answering([
-            Picked::Contents(vec![("people.txt".into(), b"Name\tCity\nAda\tLondon\n".to_vec())]),
-            Picked::Contents(vec![("more.csv".into(), b"Name\nBo\nCy\n".to_vec())]),
-            Picked::Contents(vec![("people.csv".into(), b"Name,City\nAda,London\n".to_vec())]),
-        ])
-        .in_browser(),
-    );
+    // The scripted browser host holds each pick open until the test answers it with the file contents, as the page
+    // does when the person has chosen.
+    let files = Arc::new(ScriptedFiles::held().in_browser());
+    let contents = |name: &str, bytes: &[u8]| Picked::Contents(vec![(name.into(), bytes.to_vec())]);
     let mut a = app_over(&files, wordcraft_doc::Document::new());
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     let ctx = crate::test_harness::context();
     assert_eq!(a.run("ui.openRecipientList", json!({})).unwrap(), json!({"pending": true}));
     assert_eq!(files.requests().first().map(|r| r.purpose.as_str()), Some("recipients"));
+    files.answer(contents("people.txt", b"Name\tCity\nAda\tLondon\n"));
     pump(&mut a, &ctx);
     assert_eq!(a.session.merge.headers, vec!["Name", "City"]);
     assert!(!a.recipient_list_pending);
     assert!(body_text(&a).contains(UNSAVED), "the document stays open");
     a.run("ui.openRecipientList", json!({})).unwrap();
+    files.answer(contents("more.csv", b"Name\nBo\nCy\n"));
     pump(&mut a, &ctx);
     assert_eq!(a.session.merge.rows.len(), 2);
     // A CSV picked through the picker must not turn the next .txt drop into recipients.
     a.run("ui.openRecipientList", json!({})).unwrap();
+    files.answer(contents("people.csv", b"Name,City\nAda,London\n"));
     pump(&mut a, &ctx);
     assert!(!a.recipient_list_pending);
     let dir = scratch("recipients-web");
@@ -421,8 +418,8 @@ fn an_existing_list_picked_on_the_web_loads_recipients() {
     a.run("view.switchWindows", json!({"id": first})).unwrap();
     assert_eq!(a.session.merge.headers, vec!["Name", "City"], "the recipients stay with their document");
     // A cancelled picker leaves nothing pending once the user does something else.
-    files.queue(Picked::Cancelled);
     a.run("ui.openRecipientList", json!({})).unwrap();
+    files.answer(Picked::Cancelled);
     a.run("format.bold", json!({})).unwrap();
     assert!(!a.recipient_list_pending);
     let _ = std::fs::remove_dir_all(&dir);
@@ -435,7 +432,7 @@ fn find_replace_and_go_to_keys_like_word() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         app(),

@@ -391,7 +391,9 @@ fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool,
         .enumerate()
         .map(|(j, f)| ColumnSpec::new(ColumnKey::index(j as u32), f.clone(), ColumnWidth::fill(1.0)).removable(tl!("Remove field"), can_remove))
         .collect();
-    let mut table = Table::<usize>::new(tl!("Recipients"), columns).striped(true);
+    // The dialog body scrolls, and a collection owns its own scroll: the grid shows this many records and scrolls
+    // the rest itself.
+    let mut table = Table::<usize>::new(tl!("Recipients"), columns).striped(true).max_rows(10);
     for (j, name) in fields.iter().enumerate() {
         table = table.header_field(ColumnKey::index(j as u32), TextField::new(tl!("Field name"), Bind::given(name.clone())), move |out| {
             acts_ref.borrow_mut().push(Act::Field(j, edit_of(&out).0));

@@ -179,7 +179,7 @@ impl WordApp {
     }
 
     /// Close prompt `id` from outside and drop the answer that leaves behind.
-    fn close_prompt(&mut self, id: DialogId) {
+    pub(crate) fn close_prompt(&mut self, id: DialogId) {
         if let Some(ctx) = self.ctx.clone() {
             self.dialog_host.cancel_by_id(&ctx, id);
         }

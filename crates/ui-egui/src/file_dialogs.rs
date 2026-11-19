@@ -130,6 +130,9 @@ impl WordApp {
         let id = self.file_dialog.as_ref()?.id;
         let picked = self.host.files().take_answer(id)?;
         let d = self.file_dialog.take()?;
+        if matches!(d.after, AfterPick::Recipients) {
+            self.recipient_list_pending = false;
+        }
         match picked {
             Picked::Cancelled => Some(self.finish_pick(d.after, None)),
             Picked::Unavailable(cause) => {

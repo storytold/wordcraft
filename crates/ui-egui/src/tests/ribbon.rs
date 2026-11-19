@@ -34,11 +34,7 @@ fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
     let frame = |a: &mut WordApp| {
         for _ in 0..4 {
             let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
-            ctx.run_ui(input, |ui| {
-                a.logic(ui.ctx());
-                a.ui(ui);
-            })
-            .drop_without_applying_deltas();
+            crate::test_harness::pass(&ctx, a, input);
         }
         a.canvas.zoom() as f32
     };
@@ -85,7 +81,7 @@ fn picking_a_wordart_style_hands_the_keyboard_back_to_the_page() {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            app.logic(&ctx);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         a,
