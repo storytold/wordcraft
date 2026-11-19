@@ -39,7 +39,7 @@ fn file_page(mut a: WordApp, page: &str) -> egui_kittest::Harness<'static, WordA
 
 /// A recent row by its file name. The framework names a row with its folder after the file name
 /// (`name` then the path), so a row is found by that prefix, not by the exact label.
-fn recent_row<'a>(h: &'a egui_kittest::Harness<'static, WordApp>, name: &str) -> Option<egui_kittest::Node<'a>> {
+fn recent_row<'a>(h: &'a egui_kittest::Harness<'static, WordApp>, name: &'a str) -> Option<egui_kittest::Node<'a>> {
     h.query_all_by_label_contains(name).next()
 }
 
