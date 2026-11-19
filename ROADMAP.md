@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **CLI operand update:** 2026-11-19 · **Change:** trivial (missing option values are rejected before commands run; recognized value options consume literal `-h` operands while standalone help remains available, #7033). No ranked gap or readiness estimate changes.
+> **CLI operand update:** 2026-11-19 · **Change:** trivial (missing option values are rejected before commands run or MCP root extraction; recognized value options consume literal `-h` operands while standalone help remains available, #7033). No ranked gap or readiness estimate changes.
 
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
@@ -153,7 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-19: CLI value-taking options require an operand before commands run: `run --save` reports a missing path instead of succeeding without saving, and `mcp --connect` reports a missing address instead of starting a headless server. An option immediately afterward is reported as a missing value too. Recognized value-taking options, including MCP automation roots, consume literal `-h` operands; a standalone `-h` or `--help` still requests usage (#7033). No ranked gap or readiness estimate changes.
+- 2026-11-19: CLI value-taking options require an operand before commands run: `run --save` reports a missing path instead of succeeding without saving, and `mcp --connect` reports a missing address instead of starting a headless server. An option immediately afterward is reported as a missing value too, before MCP automation roots are removed from the original arguments. Help detection distinguishes literal `-h` operands from standalone `-h` or `--help` (#7033); MCP roots keep their existing folder syntax. No ranked gap or readiness estimate changes.
 
 - 2026-10-30: Home › Paste is named "Paste" for screen readers: its hint adds the key as the platform writes it ("Paste (Ctrl+V)" on Windows and Linux), where the name carried macOS's "⌘V" on every platform. The status bar's page count hints Go To with the platform's key too. Readiness estimates unchanged.
 
@@ -941,7 +941,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-19 | trivial | CLI missing option values are rejected before commands run; recognized value options consume literal `-h` operands while standalone help remains available (#7033). Regressions cover omitted values, a following option and literal help operands. |
+| 2026-11-19 | trivial | CLI missing option values are rejected before commands run or MCP root extraction; recognized value options consume literal `-h` operands while standalone help remains available (#7033). Regressions cover omitted values, a following option and literal help operands. |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-11-18 | trivial | Progress log: border boxes close their corners |
 | 2026-10-30 | trivial | Progress log: under Track Changes a list item deleted whole shows its number as deleted text, in the deletion's colour and mark (#4828); readiness unchanged |
