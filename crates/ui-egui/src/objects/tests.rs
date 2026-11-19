@@ -209,12 +209,14 @@ fn ctrl_shift_drag_keeps_its_document_axis_after_a_scroll() {
     h.run_steps(1);
     let offset = h.state().canvas.view.offset.1;
     // A wheel scroll with the primary button held, in points so the distance does not depend on the platform's line size.
+    // The canvas's wheel is the document scheme (the framework's): Ctrl/Cmd + wheel steps the zoom and Shift + wheel
+    // scrolls sideways, so the wheel event itself carries no modifier (the held keys stay down through `mods`).
     for _ in 0..16 {
         h.event(Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -60.0),
             phase: egui::TouchPhase::Move,
-            modifiers: mods,
+            modifiers: Modifiers::NONE,
             source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(1);
@@ -504,6 +506,23 @@ fn floating_rect(w: f32, h: f32) -> InlineObject {
     }
 }
 
+/// The bars in `shape`, as (top end, bottom end, width): a line segment, a stroked path from its
+/// first to its last point, and a filled rectangle from the middle of its top to the middle of its
+/// bottom. The framework draws a caret as a path and the app draws the insertion cursor as a
+/// rectangle, so a test of either looks at all three.
+fn vertical_bars(shape: &egui::Shape) -> Vec<(egui::Pos2, egui::Pos2, f32)> {
+    match shape {
+        egui::Shape::LineSegment { points: [a, b], stroke } => vec![(*a, *b, stroke.width)],
+        egui::Shape::Path(path) => match (path.points.first(), path.points.last()) {
+            (Some(a), Some(b)) if path.points.len() >= 2 => vec![(*a, *b, path.stroke.width)],
+            _ => Vec::new(),
+        },
+        egui::Shape::Rect(rect) => vec![(rect.rect.center_top(), rect.rect.center_bottom(), rect.rect.width())],
+        egui::Shape::Vec(shapes) => shapes.iter().flat_map(vertical_bars).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// A floating line `w` wide and `h` tall (0: level, as Word files often store a rule).
 fn floating_line(w: f32, h: f32, flip_v: bool) -> InlineObject {
     InlineObject::Shape {
@@ -737,14 +756,16 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     h.state_mut().run("select.range", json!({"anchor": target, "focus": target})).unwrap();
     let (caret_top, caret_bottom) = (at(&mut h, c.x, c.top), at(&mut h, c.x, c.top + c.height));
     let mut caret_width: Option<f32> = None;
+    // The framework draws the caret as a stroked path and focus decides whether it shows at all.
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
     for _ in 0..8 {
         h.step();
         for s in &h.output().shapes {
-            if let egui::Shape::LineSegment { points: [a, b], stroke } = &s.shape
-                && a.distance(caret_top) < 1.5
-                && b.distance(caret_bottom) < 1.5
-            {
-                caret_width = Some(caret_width.map_or(stroke.width, |w: f32| w.max(stroke.width)));
+            for (a, b, width) in vertical_bars(&s.shape) {
+                if a.distance(caret_top) < 1.5 && b.distance(caret_bottom) < 1.5 {
+                    caret_width = Some(caret_width.map_or(width, |w: f32| w.max(width)));
+                }
             }
         }
     }
@@ -760,10 +781,12 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     assert!(h.state().canvas.object_gesture().is_some(), "dragging");
     // #4195: solid and twice the caret's width, so it can be seen, as in Word.
     let (top, bottom) = (at(&mut h, c.x, c.top), at(&mut h, c.x, c.top + c.height));
-    let bold = h.output().shapes.iter().any(|s| {
-        matches!(&s.shape, egui::Shape::LineSegment { points: [a, b], stroke }
-            if a.distance(top) < 0.5 && b.distance(bottom) < 0.5 && stroke.width > caret_width)
-    });
+    let bold = h
+        .output()
+        .shapes
+        .iter()
+        .flat_map(|s| vertical_bars(&s.shape))
+        .any(|(a, b, width)| a.distance(top) < 0.5 && b.distance(bottom) < 0.5 && width > caret_width);
     assert!(bold, "a bold insertion cursor from the line's top to its bottom, wider than the text caret");
     button(&h, end, false);
     steps(&mut h, 3);

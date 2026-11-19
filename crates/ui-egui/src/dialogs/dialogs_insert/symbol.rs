@@ -527,6 +527,8 @@ fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
     let ctx = ui.ctx().clone();
     let events = Table::<usize>::new(word("Special Characters"), columns)
         .select(SelectMode::Single)
+        // The dialog body scrolls, and a collection owns its own scroll: the table shows this many rows.
+        .max_rows(10)
         .selection(Bind::bound(&mut selection))
         .show_items(ui, &source, &mut |at, icx| {
             let Some((label, c, command)) = SPECIAL.get(*at) else { return ListRow::new(Label::Empty) };
@@ -609,6 +611,7 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
             .select(SelectMode::Single)
             .caption(CaptionPlace::None)
             .card_columns(RECENT_SYMBOLS)
+            .natural_height(true)
             .selection(Bind::given(Selection::default()))
             .show_items(ui, &source, &mut |at, _| {
                 let r = recent.get(*at).cloned().unwrap_or_default();
@@ -647,7 +650,10 @@ fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
     let font = form.shown_font().to_string();
     let events = {
         let chars = &form.chars;
-        let mut grid = TileGrid::new(word("Symbols")).select(SelectMode::Single).caption(CaptionPlace::None).selection(Bind::bound(&mut selection));
+        // The dialog body scrolls, and a collection owns its own scroll: the grid shows this many rows of
+        // symbols and scrolls the rest itself.
+        let mut grid =
+            TileGrid::new(word("Symbols")).select(SelectMode::Single).caption(CaptionPlace::None).max_rows(8).selection(Bind::bound(&mut selection));
         if let Some(at) = reveal {
             grid = grid.reveal(at);
         }

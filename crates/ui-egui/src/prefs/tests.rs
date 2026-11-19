@@ -169,11 +169,19 @@ fn interface_theme_migrates_and_survives_a_restart() {
 /// absolute once the first frame says the display's scale.
 #[test]
 fn interface_size_from_before_822_migrates() {
+    // The migration runs where the runtime hands the app each frame's input (`frame_input`, called from
+    // `before_input`), once the app has the context: the first frame gives it the context, the second
+    // reads the display's scale.
     let frame = |a: &mut WordApp, native: f32| {
         let ctx = egui::Context::default();
-        let mut input = egui::RawInput::default();
-        input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native);
-        ctx.run_ui(input, |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+        craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN))
+            .expect("the craft runtime installs on a fresh test context");
+        for _ in 0..2 {
+            craft::ui::shell::embed::before_input(&ctx, |out| a.frame_input(out));
+            let mut input = egui::RawInput::default();
+            input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native);
+            ctx.run_ui(input, |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+        }
     };
     for (json, native, want) in [
         (r#"{"interfaceSize": 100}"#, 2.0, None),

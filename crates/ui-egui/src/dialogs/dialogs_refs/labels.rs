@@ -13,6 +13,19 @@ pub(crate) const NUMBER_FORMATS: [(&str, &str); 5] =
 pub(crate) const SEPARATORS: [(&str, &str); 5] =
     [("-", "- (hyphen)"), (".", ". (period)"), (":", ": (colon)"), ("\u{2014}", "\u{2014} (em dash)"), ("\u{2013}", "\u{2013} (en dash)")];
 
+/// The labels the Caption dialog offers: the built-in ones and the person's own, kept with the
+/// preferences. A label only a document's captions use is not the person's to delete, so it is not
+/// here (the cross-reference and table-of-figures dialogs add it through [`caption_labels`]).
+pub(crate) fn own_labels(app: &WordApp) -> Vec<String> {
+    let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(ToString::to_string).collect();
+    for l in &app.ui.caption_labels {
+        if !labels.contains(l) {
+            labels.push(l.clone());
+        }
+    }
+    labels
+}
+
 /// The caption labels to offer: the built-in ones, the person's own (kept with the preferences) and
 /// those the document's captions already use, each once.
 pub(crate) fn caption_labels(app: &WordApp) -> Vec<String> {

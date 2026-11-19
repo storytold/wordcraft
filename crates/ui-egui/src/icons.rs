@@ -421,9 +421,11 @@ impl Glyph for LibraryGlyph<'_> {
 mod tests {
     use super::*;
 
-    /// The numbers of the first path's `d` attribute, in order (the arrow's path is only M, L, Z).
+    /// The numbers of the outline path's `d` attribute, in order (the arrow's paths are only M, L, Z). The
+    /// icon fills the tail and the head as two translucent paths and ends with the stroked outline of the
+    /// whole arrow, which is the last.
     fn path_points(svg: &str) -> Vec<(f32, f32)> {
-        let d = svg.split(" d=\"").nth(1).and_then(|rest| rest.split('"').next()).expect("the arrow has a path");
+        let d = svg.split(" d=\"").last().and_then(|rest| rest.split('"').next()).expect("the arrow has a path");
         let nums: Vec<f32> = d
             .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
             .filter(|t| !t.is_empty())
