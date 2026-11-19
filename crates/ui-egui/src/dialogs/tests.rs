@@ -206,12 +206,17 @@ fn the_table_grid_previews_the_hovered_table_until_the_click() {
         .center();
     h.event(egui::Event::PointerMoved(at));
     h.run_steps(2);
-    assert_eq!(h.state().canvas.table_preview, Some((3, 4)), "three rows of four columns");
+    // The page takes the grid's request in the frame it is made (`canvas::shown_layout`), so the preview is read from
+    // what the page shows: the previewed copy of the document.
+    let previewed = |h: &egui_kittest::Harness<'_, WordApp>| {
+        crate::canvas::page_doc(h.state()).body.iter().find_map(|b| b.as_table()).map(|t| (t.rows.len(), t.cols()))
+    };
+    assert_eq!(previewed(&h), Some((3, 4)), "three rows of four columns");
     assert!(h.query_all(egui_kittest::kittest::By::new().label_contains("3 × 4")).next().is_some(), "the label reads rows × columns");
     assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()) && !h.state().session.can_undo());
     h.event(egui::Event::PointerMoved(egui::pos2(1400.0, 880.0)));
     h.run_steps(3);
-    assert_eq!(h.state().canvas.table_preview, None, "off the grid nothing is previewed");
+    assert_eq!(previewed(&h), None, "off the grid nothing is previewed");
     h.event(egui::Event::PointerMoved(at));
     h.run_steps(2);
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
@@ -274,13 +279,19 @@ fn the_bookmark_dialog_goes_to_and_deletes_bookmarks() {
     assert!(is_open(h.state(), "bookmark"), "Delete leaves the dialog open");
     assert_eq!(fields_of(h.state(), "bookmark").get("name").and_then(Value::as_str), Some(""), "Delete clears the name box");
     assert_eq!(h.state().session.selected_text(), "beta", "the text stays selected");
-    press(&mut h, "Close");
+    // Cancel now reads Close. The title bar's × carries that name too, so take the footer's: the lower of the two.
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Close")
+        .filter(|n| !n.accesskit_node().is_hidden())
+        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("the footer's Close button")
+        .click();
+    h.run_steps(3);
     assert!(!is_open(h.state(), "bookmark"));
     let _ = h.state_mut().run("edit.undo", json!({}));
     assert_eq!(h.state().session.doc.bookmarks().len(), 3, "one undo step");
     // Add inserts the typed name at the selection.
     open_named(&mut h, "bookmark", json!({}));
-    set_field(&mut h, "bookmark", "name", json!("Fresh"));
+    set_text_field(&mut h, "Bookmark name:", "Fresh");
     press(&mut h, "Add");
     assert!(h.state().session.doc.bookmarks().iter().any(|(n, _)| n == "Fresh"), "Add inserts the typed bookmark");
 }
@@ -329,7 +340,10 @@ fn the_macros_button_opens_a_dialog_that_runs_deletes_and_records() {
 
     // Record starts a recording under the typed name.
     open_named(&mut h, "macros", json!({}));
-    set_field(&mut h, "macros", "name", json!("Fresh"));
+    // Typed as a user does: the framework's name box holds its own draft while it has the keyboard, so a value set
+    // through the JSON field under it is not what the next press reads.
+    set_text_field(&mut h, "Macro name:", "Fresh");
+    assert_eq!(fields_of(h.state(), "macros").get("name").and_then(Value::as_str), Some("Fresh"), "the box's text reaches the dialog");
     press(&mut h, "Record…");
     assert_eq!(h.state().session.recording.as_ref().map(|(n, _)| n.as_str()), Some("Fresh"));
     assert!(!is_open(h.state(), "macros"));
@@ -349,36 +363,39 @@ fn shortcut_text_is_swallowed_once() {
         modifiers: egui::Modifiers { alt, ..Default::default() },
     };
     let query = |h: &egui_kittest::Harness<'_, WordApp>| focused_text(h);
+    // Frames as the app's driver runs them: a shortcut becomes a fired command only through the input hook
+    // (`test_harness::frame`), which `run_steps` skips.
+    let frames = crate::test_harness::frames;
     let fresh = || {
         let mut h = app_harness(app_in_focus("Text"));
-        h.run_steps(4);
+        frames(&mut h, 4);
         h
     };
     // The shortcut and its text in one frame.
     let mut h = fresh();
     h.event(key(egui::Key::Q, true));
     h.event(egui::Event::Text("q".into()));
-    h.run_steps(3);
+    frames(&mut h, 3);
     assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
     assert_eq!(query(&h), "", "Alt+Q's q, same frame");
     // The text a frame late; then typing.
     let mut h = fresh();
     h.event(key(egui::Key::Q, true));
-    h.step();
+    frames(&mut h, 1);
     h.event(egui::Event::Text("q".into()));
-    h.step();
+    frames(&mut h, 1);
     assert_eq!(query(&h), "", "the q a frame late");
     h.event(key(egui::Key::B, false));
     h.event(egui::Event::Text("b".into()));
-    h.run_steps(2);
+    frames(&mut h, 2);
     assert_eq!(query(&h), "b", "then typing lands");
     // A palette opened by a click takes typing.
     let mut h = fresh();
     open_named(&mut h, "commands", json!({}));
-    h.run_steps(3);
+    frames(&mut h, 3);
     h.event(key(egui::Key::B, false));
     h.event(egui::Event::Text("b".into()));
-    h.run_steps(2);
+    frames(&mut h, 2);
     assert_eq!(query(&h), "b", "a click-opened box takes typing");
 }
 
@@ -389,16 +406,17 @@ fn screen_paper_color_search_result_opens_general_options() {
     use wordcraft_engine::cmd::view::PaperColor;
 
     let mut h = app_harness(app_in_focus("Unchanged document"));
-    h.run_steps(3);
+    // Frames as the app's driver runs them: the picked result's command reaches the app through the input hook.
+    crate::test_harness::frames(&mut h, 3);
     open_named(&mut h, "commands", json!({}));
     // The palette keeps its query to itself: type it, as a user does.
     h.event(egui::Event::Text("screen paper color".into()));
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     // The palette's results are a list of options, not buttons.
     h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::ListBoxOption).label_contains("Screen Paper Color"))
         .expect("the paper-colour command is a search result")
         .click();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
 
     assert!(h.state().ui.backstage);
     assert_eq!(h.state().ui.backstage_page, "options");
@@ -466,6 +484,20 @@ fn boxes_that_keep_focus_do_not_interrupt_ime_every_frame() {
         for frame in 0..4 {
             h.step();
             assert!(!reset(&h, &mut on), "{name}: frame {frame} after Tab resets the input method");
+        }
+        if keeps_tab {
+            // The palette and picker are the framework's: where Tab sends the keyboard from their field is theirs to
+            // say (a dialog's next stop). A user takes the box back by clicking it, which is what happens here; the
+            // text typed so far is still there.
+            if let Some(field) = [egui::accesskit::Role::TextInput, egui::accesskit::Role::SearchInput]
+                .into_iter()
+                .find_map(|role| h.query_all(egui_kittest::kittest::By::new().role(role)).find(|n| n.value().as_deref() == Some("ab")))
+            {
+                field.click();
+                for _ in 0..3 {
+                    h.step();
+                }
+            }
         }
         h.event(key(egui::Key::C));
         h.event(egui::Event::Text("c".into()));
@@ -1356,6 +1388,9 @@ fn modal_dialogs_block_the_window_behind_them() {
     assert_eq!(body_of(h.state()), "Kilns");
 
     super::open(h.state_mut(), "font", &json!({})).expect("font opens");
+    // The dialog shows from the next pass and takes the input from then on; keys that arrive with the very frame that
+    // opens it were read by the page beneath before it ran, as the framework documents (`DialogHost::open`).
+    h.run_steps(2);
     h.event(egui::Event::Text("x".into()));
     h.event(egui::Event::Key { key: egui::Key::O, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     h.run_steps(2);
@@ -1478,6 +1513,8 @@ fn every_dialog_name_opens_its_dialog_or_none() {
         let keys = open_keys(&a);
         let expect = match name {
             "goto" => "find",
+            // The framework's About dialog keys itself `help.about` whichever tab it opens on.
+            "about" | "contributors" | "models" | "languageData" => "help.about",
             "pageBorders" | "shading" => "borders",
             // Type a New List is the Recipient List dialog started on an empty list.
             "newRecipientList" => "recipientList",
