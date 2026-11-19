@@ -419,13 +419,10 @@ fn the_source_manager_imports_a_word_sources_file() {
         },
         a,
     );
-    for _ in 0..4 {
-        h.step();
-    }
+    // Frames as the app's driver runs them: a clicked control's command reaches the app through the frame hook.
+    crate::test_harness::frames(&mut h, 4);
     h.get_by_label("Import…").click();
-    for _ in 0..4 {
-        h.step();
-    }
+    crate::test_harness::frames(&mut h, 4);
     let asked: Vec<String> = files.requests().into_iter().map(|r| r.purpose).collect();
     assert_eq!(asked, ["sources"], "the host can offer Word sources files");
     assert_eq!(h.state().session.doc.sources.len(), 2);

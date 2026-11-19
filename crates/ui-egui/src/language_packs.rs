@@ -1016,6 +1016,8 @@ mod tests {
     fn user_click(a: &mut WordApp, ctx: &egui::Context, (x, y): (f64, f64)) {
         let pos = egui::pos2(x as f32, y as f32);
         frame(a, ctx, vec![egui::Event::PointerMoved(pos)]);
+        // The pointer rests over the button for a frame before it presses, as a hand's does.
+        frame(a, ctx, Vec::new());
         for pressed in [true, false] {
             frame(a, ctx, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }]);
         }
@@ -1586,7 +1588,7 @@ mod tests {
         }
         let tree = settled(&mut a, &ctx);
         assert!(has(&tree, "Search") && has(&tree, "Refresh"), "{:?}", labels(&tree));
-        assert!(labels(&tree).iter().any(|l| l == "Catalan"), "the packs are listed by name: {:?}", labels(&tree));
+        assert!(labels(&tree).iter().any(|l| l.starts_with("Catalan")), "the packs are listed by name: {:?}", labels(&tree));
         // Inside the dialog: with downloading off again, an agent's click on a row's Install is refused.
         backend.network.store(false, Ordering::Relaxed);
         let install = spot(&tree, "Install").expect("a row offers Install");

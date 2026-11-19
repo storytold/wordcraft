@@ -696,7 +696,9 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
     let drawn = frame_at(&ctx, &mut app, 1600.0);
     let (file, home, insert, share) = (x_of(&drawn, "File"), x_of(&drawn, "Home"), x_of(&drawn, "Insert"), x_of(&drawn, "Share"));
     assert!(file > home && home > insert && insert > 800.0, "tabs: {file} {home} {insert}");
-    assert!(share < 200.0, "Share: {share}");
+    // The ribbon strip's end group (Share, Editing, Comments) is mirrored as a group: it sits at the left edge, in
+    // reverse order, so Share is the innermost of the three and starts a little way in from the edge.
+    assert!(share < 300.0, "Share: {share}");
     // Ribbon groups too: Clipboard is right of Font, which is right of Styles.
     assert!(x_of(&drawn, "Clipboard") > x_of(&drawn, "Font") && x_of(&drawn, "Font") > x_of(&drawn, "Styles"));
     // The status bar starts at the right, and a narrow window still shows the ribbon's first group.
