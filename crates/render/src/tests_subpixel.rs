@@ -195,7 +195,15 @@ fn subpixel_text_in_a_clip_stays_inside_it() {
             x > edge && y < (28.0 * SCALE) as usize && p[..3].iter().any(|c| *c < 250)
         });
         assert_eq!(inked_right.count(), 0, "{subpixel:?}: nothing right of the clip but the fill after it");
-        assert!(ink(&img) > 0, "{subpixel:?}");
+        // The clipped glyphs are drawn: ink left of the clip's edge on the text's rows.
+        let inked_left = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(i, p)| {
+            let (x, y) = (i % w as usize, i / w as usize);
+            x < edge && y < (28.0 * SCALE) as usize && p[..3].iter().any(|c| *c < 128)
+        });
+        assert!(inked_left.count() > 50, "{subpixel:?}: the text inside the clip");
+        // The clip is closed for the fill after it, which is drawn where it lies.
+        let at = |x: f32, y: f32| ((y * SCALE) as usize * w as usize + (x * SCALE) as usize) * 4;
+        assert!(img.pixels[at(102.0, 30.5)..at(102.0, 30.5) + 3].iter().all(|c| *c < 50), "{subpixel:?}: the fill after the clip");
     }
 }
 
@@ -229,4 +237,103 @@ fn hostile_glyph_runs_never_panic() {
     }
     let img = render_draws(&d, &runs, 200, 60, view, &opts(true, Some(Subpixel::Rgb)));
     assert_eq!(img.pixels.len(), 200 * 60 * 4);
+}
+
+/// A run of "H"s at 11 pt from `x` (page points) on baseline `y`, 8 points apart.
+fn run_at(x: f32, y: f32, count: usize, color: Rgb) -> Draw {
+    let mut r = run(y, color);
+    if let Draw::Glyphs { glyphs, .. } = &mut r {
+        let gid = glyphs.first().map_or(0, |g| g.0);
+        *glyphs = (0..count).map(|i| (gid, x + i as f32 * 8.0, y)).collect();
+    }
+    r
+}
+
+#[test]
+fn a_triple_lines_bounds_hold_its_outer_strokes() {
+    // A triple line's outer strokes sit 1.8 widths off it and are 0.6 widths thick: they reach
+    // 2.1 widths. Text that waits under only an outer stroke is blended before it.
+    let line = |stroke| Draw::Line { x0: 10.0, y0: 30.0, x1: 100.0, y1: 30.0, width: 12.0, color: Rgb::BLACK, stroke, alpha: 1.0, text_bg: None };
+    for (stroke, reach) in [(Stroke::Triple, 2.1), (Stroke::Double, 1.2), (Stroke::Solid, 0.5)] {
+        let Some(b) = item_bounds(&line(stroke)) else { panic!("{stroke:?}: no bounds") };
+        let r = 12.0 * reach - 1e-3;
+        assert!(b.y0 <= 30.0 - r && b.y1 >= 30.0 + r, "{stroke:?}: {b:?}");
+    }
+}
+
+#[test]
+fn stretched_letters_drawn_over_text_cover_it() {
+    // A white "H" stretched ten times its width (`w:w`), drawn greyscale over black subpixel
+    // text that lies only past its unstretched width: the text is blended first, then covered.
+    let d = Document::new();
+    let view = Affine::scale(f64::from(SCALE));
+    let mut wide = run_at(10.0, 20.0, 1, Rgb::WHITE);
+    if let Draw::Glyphs { x_scale, .. } = &mut wide {
+        *x_scale = 10.0;
+    }
+    let draws = [run_at(60.0, 20.0, 3, Rgb::BLACK), wide];
+    let grey = render_draws(&d, &draws, 220, 60, view, &opts(true, None));
+    let rgb = render_draws(&d, &draws, 220, 60, view, &opts(true, Some(Subpixel::Rgb)));
+    // Where the white letter covers the text in greyscale, it covers the subpixel text too.
+    let showing = grey
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(rgb.pixels.as_chunks::<4>().0)
+        .filter(|(g, s)| g[..3] == [255; 3] && s[..3].iter().any(|c| *c < 128))
+        .count();
+    assert!(ink(&grey) > 0);
+    assert_eq!(showing, 0, "dark subpixel text shows where the stretched letter covers it");
+}
+
+#[test]
+fn translucent_lines_and_fills_over_text_keep_their_shade() {
+    // Drawn after text they meet, these wait with it and are filled by the subpixel path; away
+    // from the text they must come out as vello_cpu draws them alone (the same 8-bit opacity).
+    let d = Document::new();
+    let view = Affine::scale(f64::from(SCALE));
+    let blue = Rgb(0x20, 0x40, 0xC0);
+    for alpha in [0.5, 0.3, 0.75] {
+        let line = Draw::Line { x0: 0.0, y0: 17.0, x1: 200.0, y1: 17.0, width: 2.0, color: blue, stroke: Stroke::Solid, alpha, text_bg: None };
+        let fill = Draw::Fill { rect: wordcraft_geom::Rect::new(0.0, 22.0, 200.0, 6.0), color: blue, alpha, text_bg: false };
+        let draws = [run(20.0, Rgb::BLACK), line, fill];
+        let w = 420;
+        let grey = render_draws(&d, &draws, w, 60, view, &opts(true, None));
+        let rgb = render_draws(&d, &draws, w, 60, view, &opts(true, Some(Subpixel::Rgb)));
+        // Columns right of the text (it ends before x = 110 points), where the line and fill are.
+        let right = (120.0 * SCALE) as usize;
+        let shaded = grey.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(i, p)| i % w as usize >= right && p[..3] != [255; 3]).count();
+        assert!(shaded > 1000, "the line and fill past the text: {shaded} pixels");
+        let differ = grey
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(rgb.pixels.as_chunks::<4>().0)
+            .enumerate()
+            .filter(|(i, (g, s))| i % w as usize >= right && g != s)
+            .count();
+        assert_eq!(differ, 0, "alpha {alpha}: the line and fill differ from vello_cpu's past the text");
+    }
+}
+
+#[test]
+fn tiny_glyphs_at_an_extreme_view_scale_never_panic() {
+    // A glyph small enough for a mask at a huge but finite scale: its device origin is past what
+    // an i64 holds, so the pixel arithmetic saturates.
+    let d = Document::new();
+    for (scale, size, x, y) in [(5e16, 1e-15, -10.0, 199.0), (2e17, 2.5e-16, -90.0, 190.0), (1e18, 5e-17, -99.0, 199.9)] {
+        // Letters reaching below the baseline, so a mask's bottom lies past its origin row.
+        let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+        let mut r = run_at(x, y, 3, Rgb::BLACK);
+        if let Draw::Glyphs { size: s, glyphs, .. } = &mut r {
+            *s = size;
+            for (g, ch) in glyphs.iter_mut().zip(['p', 'g', 'y']) {
+                g.0 = face.glyph_for(ch);
+            }
+        }
+        let img = render_draws(&d, &[r], 50, 50, Affine::scale(scale), &opts(true, Some(Subpixel::Rgb)));
+        assert_eq!(img.pixels.len(), 50 * 50 * 4);
+    }
 }

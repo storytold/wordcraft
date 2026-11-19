@@ -151,7 +151,13 @@ fn set_paint_inked(ctx: &mut RenderContext, p: &Paint, ink: impl Fn(Rgb) -> Rgb)
 }
 
 fn color(c: Rgb, alpha: f32) -> peniko::Color {
-    peniko::Color::from_rgba8(c.0, c.1, c.2, (alpha.clamp(0.0, 1.0) * 255.0) as u8)
+    peniko::Color::from_rgba8(c.0, c.1, c.2, alpha8(alpha))
+}
+
+/// An opacity (0–1) as the 8 bits vello_cpu is given (truncated); subpixel text and the lines
+/// drawn after it take the same, so their shade matches what vello_cpu draws.
+fn alpha8(alpha: f32) -> u8 {
+    (alpha.clamp(0.0, 1.0) * 255.0) as u8
 }
 
 /// Options for a page raster.
@@ -506,10 +512,12 @@ fn item_bounds(it: &Draw) -> Option<kurbo::Rect> {
         Draw::Fill { rect: r, .. } | Draw::Image { rect: r, .. } => finite(rect(r)),
         Draw::Line { x0, y0, x1, y1, width, stroke, .. } => {
             // How far the stroke reaches off the line, as drawn: half its width; a double line's
-            // two strokes sit 0.9 widths off it, a wave's crests 1.2 widths (at least 0.8).
+            // two strokes sit 0.9 widths off it and a triple's outer two 1.8 (each 0.6 wide), a
+            // wave's crests 1.2 widths (at least 0.8).
             let w = f64::from(*width).abs();
             let reach = match stroke {
                 Stroke::Double => w * 1.2,
+                Stroke::Triple => w * 2.1,
                 Stroke::Wave => (w * 1.2).max(0.8) + w * 0.5,
                 _ => w / 2.0,
             };
@@ -551,13 +559,15 @@ fn line_rect(x0: f32, y0: f32, x1: f32, y1: f32, width: f32) -> Option<kurbo::Re
 
 /// Where a glyph run drawn by vello_cpu may put ink (page points), generously: from the first
 /// glyph's origin to past the last one, a size above the baseline and below.
-fn glyph_run_bounds(glyphs: &[(u32, f32, f32)], size: f32) -> Option<kurbo::Rect> {
+fn glyph_run_bounds(glyphs: &[(u32, f32, f32)], size: f32, x_scale: f64) -> Option<kurbo::Rect> {
     let s = f64::from(size).abs().max(1.0) * 1.5;
+    // Scaled letters (`w:w`) stretch right from each pen position.
+    let stretch = if x_scale.is_finite() { x_scale.max(1.0) } else { 1.0 };
     let b = glyphs.iter().fold(None::<kurbo::Rect>, |b, (_, x, y)| {
         let p = kurbo::Rect::from_points((f64::from(*x), f64::from(*y)), (f64::from(*x), f64::from(*y)));
         Some(b.map_or(p, |b| b.union(p)))
     })?;
-    let r = kurbo::Rect::new(b.x0 - s, b.y0 - s, b.x1 + s * 2.0, b.y1 + s);
+    let r = kurbo::Rect::new(b.x0 - s, b.y0 - s, b.x1 + s * 2.0 * stretch, b.y1 + s);
     r.is_finite().then_some(r)
 }
 
@@ -689,7 +699,7 @@ fn draw(ctx: &mut Painter, doc: &Document, it: &Draw, view: Affine, visible: &ku
             | Draw::Turned { .. }
             | Draw::Rotated { .. }
     ) {
-        ctx.note(item_bounds(it).map(|b| view.transform_rect_bbox(b).inflate(1.0, 1.0)));
+        ctx.note(|| item_bounds(it).map(|b| view.transform_rect_bbox(b).inflate(1.0, 1.0)));
     }
     match it {
         Draw::Figure { draws, .. } => {
@@ -748,7 +758,7 @@ fn draw_fill(ctx: &mut Painter, fr: &Frame, it: &Draw) {
     if is_upright(fr.view) && ctx.rect_over_text(fr.view.transform_rect_bbox(r), ink, *alpha) {
         return;
     }
-    ctx.note(Some(fr.view.transform_rect_bbox(r).inflate(1.0, 1.0)));
+    ctx.note(|| Some(fr.view.transform_rect_bbox(r).inflate(1.0, 1.0)));
     ctx.set_transform(fr.view);
     ctx.set_paint(color(ink, *alpha));
     ctx.fill_rect(&r);
@@ -767,7 +777,7 @@ fn draw_line(ctx: &mut Painter, fr: &Frame, it: &Draw) {
     {
         return;
     }
-    ctx.note(item_bounds(it).map(|b| fr.view.transform_rect_bbox(b).inflate(1.0, 1.0)));
+    ctx.note(|| item_bounds(it).map(|b| fr.view.transform_rect_bbox(b).inflate(1.0, 1.0)));
     ctx.set_transform(fr.view);
     ctx.set_paint(color(fr.opts.ink_text(*c, *text_bg), *alpha));
     let w = *width as f64;
@@ -895,7 +905,7 @@ fn draw_glyphs(ctx: &mut Painter, fr: &Frame, it: &Draw) {
     {
         return;
     }
-    ctx.note(glyph_run_bounds(glyphs, *size).map(|b| view.transform_rect_bbox(b).inflate(2.0, 2.0)));
+    ctx.note(|| glyph_run_bounds(glyphs, *size, sx).map(|b| view.transform_rect_bbox(b).inflate(2.0, 2.0)));
     ctx.set_paint(color(opts.ink_text(*c, *text_bg), *alpha));
     if outline_stroke > 0.0 {
         ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));

@@ -88,17 +88,7 @@ struct Waiting {
 impl Waiting {
     /// Does device rectangle `d` meet it (any of a run's glyphs)?
     fn meets(&self, d: kurbo::Rect) -> bool {
-        self.bounds.overlaps(d)
-            && (self.rect.is_some()
-                || self.placed.iter().any(|(m, x, y)| {
-                    let r = kurbo::Rect::new(
-                        (x + m.left) as f64,
-                        (y + m.top) as f64,
-                        (x + m.left + i64::from(m.width)) as f64,
-                        (y + m.top + i64::from(m.height)) as f64,
-                    );
-                    r.overlaps(d)
-                }))
+        self.bounds.overlaps(d) && (self.rect.is_some() || self.placed.iter().any(|(m, x, y)| m.rect_at(*x, *y).overlaps(d)))
     }
 }
 
@@ -142,9 +132,11 @@ impl Painter {
 
     /// Note where the next thing drawn through vello_cpu lands on the raster (device pixels;
     /// `None`: anywhere): text that waits under it is blended first.
-    pub(crate) fn note(&mut self, device: Option<kurbo::Rect>) {
+    /// `device` is only asked with subpixel text, so a page without it doesn't work out bounds
+    /// no one reads.
+    pub(crate) fn note(&mut self, device: impl FnOnce() -> Option<kurbo::Rect>) {
         if let Some(lcd) = &mut self.lcd {
-            let over = match device {
+            let over = match device() {
                 Some(d) if d.is_finite() => lcd.runs.iter().any(|r| r.meets(d)),
                 _ => !lcd.runs.is_empty(),
             };
@@ -256,17 +248,12 @@ impl Painter {
         }
         let Some(lcd) = &mut self.lcd else { return false };
         let bounds = placed.iter().fold(None::<kurbo::Rect>, |b, (m, x, y)| {
-            let r = kurbo::Rect::new(
-                (x + m.left) as f64,
-                (y + m.top) as f64,
-                (x + m.left + i64::from(m.width)) as f64,
-                (y + m.top + i64::from(m.height)) as f64,
-            );
+            let r = m.rect_at(*x, *y);
             Some(b.map_or(r, |b| b.union(r)))
         });
         if let Some(bounds) = bounds {
             let rgb = [color.0, color.1, color.2];
-            let alpha = (alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+            let alpha = u32::from(crate::alpha8(alpha));
             lcd.runs.push(Waiting { placed, rect: None, rgb, alpha, clip: lcd.clip_bounds(), bounds });
         }
         true
@@ -285,7 +272,12 @@ impl Painter {
         if !lcd.runs.iter().any(|w| w.meets(reach)) {
             return false;
         }
-        let alpha = (alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+        // vello_cpu gives a pixel that a clip's edge cuts through its share of the fill; it is
+        // filled here only within whole pixels, so inside such a clip it is left to vello_cpu.
+        if lcd.clips.iter().any(|(_, _, c)| !lcd.on_pixel_edges(*c)) {
+            return false;
+        }
+        let alpha = u32::from(crate::alpha8(alpha));
         lcd.runs.push(Waiting {
             placed: Vec::new(),
             rect: Some(rect),
@@ -332,6 +324,13 @@ fn flush(ctx: &mut RenderContext, lcd: &mut Lcd) {
 type PixelRect = (i64, i64, i64, i64);
 
 impl Lcd {
+    /// Does clip rectangle `c` (device pixels) have every edge inside the raster on a whole pixel?
+    fn on_pixel_edges(&self, c: kurbo::Rect) -> bool {
+        let (w, h) = (f64::from(self.width), f64::from(self.height));
+        let whole = |v: f64, end: f64| v <= 0.0 || v >= end || (v - v.round()).abs() < 1e-6;
+        c.is_finite() && whole(c.x0, w) && whole(c.x1, w) && whole(c.y0, h) && whole(c.y1, h)
+    }
+
     /// The pixels subpixel text may touch: the raster within every open clip (a pixel counts when
     /// its centre is inside).
     fn clip_bounds(&self) -> PixelRect {
@@ -408,12 +407,9 @@ impl Lcd {
             let at = (py * width + x0) as usize * 4;
             let Some(row) = self.pixels.get_mut(at..at + (x1 - x0) as usize * 4) else { continue };
             let last = (x1 - x0 - 1) as usize;
-            // Coverage to 8 bits as vello_cpu takes it, then the opacity; a row's inner pixels
-            // share one coverage, only its two ends differ.
-            let cov = |cx: f32| {
-                let m = (cy * cx * 255.0).round() as u32;
-                if alpha >= 255 { m } else { (m * alpha + 255) >> 8 }
-            };
+            // Coverage to 8 bits as vello_cpu takes it; a row's inner pixels share one coverage,
+            // only its two ends differ.
+            let cov = |cx: f32| (cy * cx * 255.0).round() as u32;
             let (first, inner, end) = (cov(cx0), cov(1.0), cov(cx1));
             for (i, d) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let c = if i == 0 {
@@ -423,7 +419,14 @@ impl Lcd {
                 } else {
                     inner
                 };
-                over(d, rgb, c);
+                if alpha >= 255 {
+                    over(d, rgb, c);
+                } else {
+                    // vello_cpu fills a 4×4 tile no edge crosses as a span, rounded a little
+                    // differently from the tiles along the edges.
+                    let px = x0 + i as i64;
+                    over_translucent(d, rgb, alpha, c, span_tile(px, py, (rx0, ry0, rx1, ry1), (self.width, self.height)));
+                }
             }
         }
     }
@@ -447,6 +450,42 @@ fn over(d: &mut [u8; 4], rgb: [u8; 3], cov: u32) {
     }
 }
 
+/// Pixel `d` (premultiplied) with `rgb` at opacity `alpha` (0–254) laid over it at `cov`/255, as
+/// vello_cpu's 8-bit pipeline composites a translucent solid colour: premultiplied by the opacity
+/// first (rounded in f32, as `peniko` converts it), then `(d·(255 − a·cov) + src·cov) / 255`.
+///
+/// In a span (`span`: a tile no edge crosses, fully covered) it is `d·(255 − a) / 255 + src`.
+fn over_translucent(d: &mut [u8; 4], rgb: [u8; 3], alpha: u32, cov: u32, span: bool) {
+    if cov == 0 {
+        return;
+    }
+    let (alpha, cov) = (alpha.min(255), cov.min(255));
+    let a = alpha as f32 / 255.0;
+    let premul = |c: u8| ((f32::from(c) / 255.0 * a * 255.0) + 0.5) as u32;
+    let src = [premul(rgb[0]), premul(rgb[1]), premul(rgb[2]), alpha];
+    for (dst, s) in d.iter_mut().zip(src) {
+        let v = u32::from(*dst);
+        *dst = if span { div_255(v * (255 - alpha)) + s } else { div_255(v * (255 - div_255(alpha * cov)) + s * cov) } as u8;
+    }
+}
+
+/// Does pixel (`x`, `y`) lie in one of vello_cpu's 4×4 tiles that the rectangle covers whole,
+/// with none of its edges inside, where vello_cpu fills a span rather than through coverage masks?
+/// On a `width`×`height` raster: an edge left of it is pinned to its left side, and the
+/// rectangle is cut at its right and bottom sides, so tiles there are crossed by an edge too.
+/// (Measured against vello_cpu: `translucent_rectangles_drawn_over_text_match_vello_to_the_bit`.)
+fn span_tile(x: i64, y: i64, (x0, y0, x1, y1): (f32, f32, f32, f32), (width, height): (u16, u16)) -> bool {
+    let (tx, ty) = ((x.div_euclid(4) * 4) as f32, (y.div_euclid(4) * 4) as f32);
+    let (x1, y1) = (x1.min(f32::from(width)), y1.min(f32::from(height)));
+    let left = if x0 < 0.0 { tx > 0.0 } else { x0 < tx };
+    left && tx + 4.0 <= x1 && y0 <= ty && ty + 4.0 <= y1
+}
+
+/// `v / 255` rounded as vello_cpu's 8-bit pipeline does (exact below 65 280).
+fn div_255(v: u32) -> u32 {
+    (v + 255) >> 8
+}
+
 /// `dst` moved towards `src` by `cov`/255, rounded as vello_cpu's 8-bit pipeline composites a
 /// solid colour at partial coverage (`(dst·(255−cov) + src·cov + 255) >> 8`; full coverage is
 /// the colour), so what is drawn here and what vello_cpu draws agree to the bit.
@@ -466,6 +505,15 @@ pub(crate) struct Mask {
     width: u32,
     height: u32,
     cov: Vec<[u8; 3]>,
+}
+
+impl Mask {
+    /// The pixels the mask covers with the glyph's origin at pixel (`x`, `y`), end exclusive.
+    /// Saturating: an origin at an extreme view scale lies at the edge of what an i64 holds.
+    fn rect_at(&self, x: i64, y: i64) -> kurbo::Rect {
+        let (x0, y0) = (x.saturating_add(self.left), y.saturating_add(self.top));
+        kurbo::Rect::new(x0 as f64, y0 as f64, x0.saturating_add(i64::from(self.width)) as f64, y0.saturating_add(i64::from(self.height)) as f64)
+    }
 }
 
 type MaskKey = (u32, u32, u32, u8, bool, u64);
@@ -663,11 +711,15 @@ mod tests {
 
     /// `rect` (device pixels) in `rgb` over a `bg` raster, by vello_cpu and by [`Lcd::fill`].
     fn both_fills(rect: kurbo::Rect, rgb: [u8; 3], bg: [u8; 3]) -> (Vec<u8>, Vec<u8>) {
-        let (w, h) = (16u16, 10u16);
+        both_fills_at(rect, rgb, 1.0, bg, (16, 10))
+    }
+
+    /// [`both_fills`] at opacity `alpha` on a `w`×`h` raster.
+    fn both_fills_at(rect: kurbo::Rect, rgb: [u8; 3], alpha: f32, bg: [u8; 3], (w, h): (u16, u16)) -> (Vec<u8>, Vec<u8>) {
         let mut ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
         ctx.set_paint(peniko::Color::from_rgba8(bg[0], bg[1], bg[2], 255));
         ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, f64::from(w), f64::from(h)));
-        ctx.set_paint(peniko::Color::from_rgba8(rgb[0], rgb[1], rgb[2], 255));
+        ctx.set_paint(crate::color(Rgb(rgb[0], rgb[1], rgb[2]), alpha));
         ctx.fill_rect(&rect);
         ctx.flush();
         let mut vello = vec![0u8; usize::from(w) * usize::from(h) * 4];
@@ -686,8 +738,48 @@ mod tests {
             armed: false,
             faded: 0,
         };
-        lcd.fill(rect, rgb, 255, (0, 0, i64::from(w), i64::from(h)));
+        lcd.fill(rect, rgb, u32::from(crate::alpha8(alpha)), (0, 0, i64::from(w), i64::from(h)));
         (vello, lcd.pixels)
+    }
+
+    #[test]
+    fn bounds_are_only_worked_out_with_subpixel_text() {
+        // Without subpixel text nothing reads where an item lands, so it isn't worked out.
+        for (subpixel, asked) in [(None, false), (Some(Subpixel::Rgb), true)] {
+            let ctx = RenderContext::new_with(8, 8, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+            let mut p = Painter::new(ctx, 8, 8, subpixel);
+            let mut was = false;
+            p.note(|| {
+                was = true;
+                None
+            });
+            assert_eq!(was, asked, "{subpixel:?}");
+        }
+    }
+
+    #[test]
+    fn rectangles_over_text_in_a_fractional_clip_are_drawn_by_vello() {
+        // vello_cpu gives a pixel a clip edge cuts through its share of the fill; the subpixel
+        // path clips to whole pixels. So a rectangle over text waits with it (drawn after it in
+        // order) only where every open clip's edges inside the raster are on whole pixels.
+        let (w, h) = (64u16, 32u16);
+        for (clip, waits) in [
+            (kurbo::Rect::new(0.0, 0.0, 40.0, 32.0), true),
+            (kurbo::Rect::new(-3.5, -1.25, 70.5, 40.75), true),
+            (kurbo::Rect::new(0.0, 0.0, 40.25, 32.0), false),
+            (kurbo::Rect::new(0.0, 4.5, 64.0, 32.0), false),
+        ] {
+            let ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+            let mut p = Painter::new(ctx, w, h, Some(Subpixel::Rgb));
+            p.push_clip(&clip.to_path(0.1), Affine::IDENTITY, clip);
+            let all = kurbo::Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
+            if let Some(lcd) = &mut p.lcd {
+                // Something that waits under the whole raster.
+                lcd.runs.push(Waiting { placed: Vec::new(), rect: Some(all), rgb: [0; 3], alpha: 255, clip: (0, 0, 64, 32), bounds: all });
+            }
+            let over = p.rect_over_text(kurbo::Rect::new(2.0, 10.0, 60.0, 12.0), Rgb::BLACK, 1.0);
+            assert_eq!(over, waits, "{clip:?}");
+        }
     }
 
     #[test]
@@ -706,6 +798,36 @@ mod tests {
             for (rgb, bg) in [([193, 228, 245], [255, 255, 255]), ([0, 0, 0], [193, 228, 245]), ([21, 96, 130], [240, 10, 99])] {
                 let (vello, ours) = both_fills(kurbo::Rect::new(x0, y0, x1, y1), rgb, bg);
                 assert!(vello == ours, "({x0}, {y0})–({x1}, {y1}) {rgb:?} over {bg:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn translucent_rectangles_drawn_over_text_match_vello_to_the_bit() {
+        // A translucent cell shading or border drawn after text: the same 8-bit opacity and the
+        // same rounding as vello_cpu, which fills a tile no edge crosses a little differently.
+        let rects = [
+            (2.06, 1.3, 9.94, 7.5),
+            (0.5, 0.25, 15.75, 0.96),
+            (4.2, 3.1, 4.7, 3.9),
+            (3.0, 2.0, 11.0, 8.0),
+            (-2.0, -1.0, 7.333, 4.667),
+            (12.9, 8.6, 20.0, 12.0),
+            (0.0, 0.0, 16.0, 10.0),
+            (1.0, 4.0, 15.0, 6.0),
+            (4.0, 4.0, 12.0, 8.0),
+            (8.0, 0.0, 16.0, 8.0),
+            (3.5, 0.0, 12.0, 10.0),
+            (-4.0, -4.0, 20.0, 14.0),
+        ];
+        for size in [(16, 10), (18, 13)] {
+            for alpha in [0.5, 0.3, 0.75, 0.1, 0.9, 0.66] {
+                for (x0, y0, x1, y1) in rects {
+                    for (rgb, bg) in [([0x20, 0x40, 0xC0], [255, 255, 255]), ([0, 0, 0], [193, 228, 245]), ([21, 96, 130], [240, 10, 99])] {
+                        let (vello, ours) = both_fills_at(kurbo::Rect::new(x0, y0, x1, y1), rgb, alpha, bg, size);
+                        assert!(vello == ours, "({x0}, {y0})–({x1}, {y1}) {rgb:?} at {alpha} over {bg:?} on {size:?}");
+                    }
+                }
             }
         }
     }
