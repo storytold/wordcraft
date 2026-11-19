@@ -122,6 +122,56 @@ fn help_or_h_after_a_subcommand_asks_for_the_usage() {
 }
 
 #[test]
+fn help_flags_are_not_option_values() {
+    for (cmd, specs) in [
+        ("convert", CONVERT_OPTIONS),
+        ("info", PASSWORD_OPTIONS),
+        ("text", PASSWORD_OPTIONS),
+        ("inspect", PASSWORD_OPTIONS),
+        ("render", RENDER_OPTIONS),
+        ("run", RUN_OPTIONS),
+        ("commands", COMMANDS_OPTIONS),
+        ("parity", PARITY_OPTIONS),
+        ("mcp", MCP_OPTIONS),
+        ("zotero", ZOTERO_OPTIONS),
+    ] {
+        for spec in specs {
+            if spec.takes_value {
+                assert!(!wants_help(cmd, &args(&[spec.name, "-h"])), "{cmd} {} -h", spec.name);
+                assert!(wants_help(cmd, &args(&[spec.name, "-h", "--help"])), "{cmd} {} -h --help", spec.name);
+                assert!(wants_help(cmd, &args(&[spec.name, "--help"])), "{cmd} {} --help", spec.name);
+            } else {
+                assert!(wants_help(cmd, &args(&[spec.name, "-h"])), "{cmd} {} -h", spec.name);
+            }
+        }
+        assert!(wants_help(cmd, &args(&["--unsupported", "-h"])), "{cmd}");
+    }
+    for root in ["--automation-read-root", "--automation-write-root"] {
+        assert!(!wants_help("mcp", &args(&[root, "-h"])), "{root}");
+        assert!(wants_help("mcp", &args(&[root, "-h", "-h"])), "{root}");
+        assert!(wants_help("mcp", &args(&[root, "--help"])), "{root}");
+        // A root is not a recognized option for other subcommands.
+        assert!(wants_help("run", &args(&[root, "-h"])), "{root}");
+    }
+    assert!(!wants_help("run", &args(&["--password", "-h", "--script", "-h"])));
+    assert!(wants_help("run", &args(&["--password", "-h", "--script", "-h", "-h"])));
+}
+
+#[test]
+fn literal_help_operands_reach_the_command() {
+    let missing = std::env::temp_dir().join(format!(
+        "wc-cli-literal-help-{}-{}.docx",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    ));
+    assert!(!missing.exists());
+    let missing = missing.to_string_lossy();
+    let error = run(&args(&["info", &missing, "--password", "-h"])).unwrap_err().to_string();
+    assert!(error.starts_with(missing.as_ref()), "{error}");
+    assert_eq!(run(&args(&["run", "--scale", "-h"])), Err("run: invalid --scale `-h`: not a number".into()));
+}
+
+#[test]
 fn usage_lists_exactly_the_subcommands() {
     let listed: Vec<&str> = USAGE
         .lines()
