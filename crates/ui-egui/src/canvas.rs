@@ -739,6 +739,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                 let anchor_rects =
                     if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, body.pages) } else { screen_rects(&selected, body.pages) };
                 app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, ui.clip_rect());
+                crate::mini_toolbar::show(app, ui, body);
             }
         });
     let caret = caret_after.or(caret);
@@ -800,7 +801,6 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     dismiss_balloon_on_canvas_click(app, &out);
     balloons::balloons(app, ui, &out, layout);
     rulers::page_rulers(app, ui, &out, layout);
-    crate::mini_toolbar::show(app, ui, &out);
     // The one context-menu ask of the pass: Shift+F10 or `ui.contextMenu` (below the caret), a click on the equation
     // frame's options strip, then the tool host's own request by how it was asked for.
     let ask = app.canvas.context_request.take().or_else(|| strip_click.map(ContextAsk::AtPointer));
