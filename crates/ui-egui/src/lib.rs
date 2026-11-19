@@ -380,6 +380,9 @@ pub struct WordApp {
     /// The app's commands as the keymap knows them, and the registry they were built from
     /// ([`WordApp::catalog`]).
     pub(crate) command_catalog: Option<(std::sync::Arc<wordcraft_engine::Registry>, craft::ui::runtime::commands::AppCatalog)>,
+    /// Whether the window's operating system was macOS when the catalog was built: the interface
+    /// chords differ per platform, so the catalog is rebuilt when it changes.
+    pub(crate) command_catalog_mac: bool,
     /// The session's key overrides, kept as one `Arc` while they do not change: the runtime
     /// rebuilds its keymap when the `Arc` it is handed changes ([`WordApp::overrides`]).
     pub(crate) key_overrides: std::sync::Arc<craft::keymap::Overrides>,

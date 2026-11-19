@@ -87,6 +87,7 @@ impl WordApp {
             settings: None,
             settings_notices: Default::default(),
             command_catalog: None,
+            command_catalog_mac: cfg!(target_os = "macos"),
             key_overrides: Default::default(),
             fonts_frames: 0,
             clipboard_published: false,
