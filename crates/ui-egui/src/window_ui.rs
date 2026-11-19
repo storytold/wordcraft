@@ -315,6 +315,11 @@ impl WordApp {
             backstage_page,
             nav_collapsed,
         );
+        // The comment panel's state (the selected card and the comment and reply drafts) is the shown document's, not the
+        // window's: it stays through the swap, and `carry_document_state` parks it with its document and brings back the
+        // arriving one's, as production did with its app-wide drafts. Swapped with the canvas, the switch would park the
+        // arriving window's state under the document that left.
+        std::mem::swap(&mut canvas.comments, &mut w.canvas.comments);
     }
 }
 
