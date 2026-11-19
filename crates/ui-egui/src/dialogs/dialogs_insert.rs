@@ -12,11 +12,16 @@ use crate::options::MeasureExt;
 use crate::theme::{Tokens, regular, semibold};
 
 mod columns;
+mod date_time;
 mod field;
 mod symbol;
 
 pub use columns::{ColumnsForm, DropCapForm};
 use columns::{columns_ui, drop_cap_ui};
+pub use date_time::DateTimeForm;
+#[cfg(test)]
+pub(crate) use date_time::date_time_preview_matches;
+use date_time::date_time_ui;
 use field::field_ui;
 pub use field::{DATE_FORMATS, FIELD_CATEGORIES, FIELDS, FieldForm, FieldKind, NUMBER_FORMATS, STYLEREF_SWITCHES, field_kind};
 use symbol::symbol_ui;
@@ -25,18 +30,23 @@ pub use symbol::{RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, rem
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "form", rename_all = "camelCase")]
 pub enum InsertDialog {
+    /// Date & Time insertion dialog.
+    DateTime(DateTimeForm),
     Columns(ColumnsForm),
     Symbol(SymbolForm),
     Field(FieldForm),
     SmartArt(crate::dialogs_smart_art::SmartArtForm),
     ChartType(crate::dialogs_chart::ChartTypeForm),
     ChartData(crate::dialogs_chart::ChartDataForm),
+    DefineBullet(crate::dialogs_bullet::DefineBulletForm),
     DropCap(DropCapForm),
 }
 
 impl InsertDialog {
+    /// The dialog name used in command dispatch and UI state.
     pub fn name(&self) -> &'static str {
         match self {
+            InsertDialog::DateTime(_) => "dateTime",
             InsertDialog::Columns(_) => "columns",
             InsertDialog::Symbol(_) => "symbol",
             InsertDialog::Field(_) => "field",
@@ -44,6 +54,7 @@ impl InsertDialog {
             InsertDialog::ChartType(f) if f.change => "changeChartType",
             InsertDialog::ChartType(_) => "insertChart",
             InsertDialog::ChartData(_) => "chartData",
+            InsertDialog::DefineBullet(_) => "defineBullet",
             InsertDialog::DropCap(_) => "dropCap",
         }
     }
@@ -51,23 +62,27 @@ impl InsertDialog {
     /// The window title (English; the caller translates it).
     pub fn title(&self) -> &'static str {
         match self {
+            InsertDialog::DateTime(_) => "Date and Time",
             InsertDialog::Columns(_) => "Columns",
             InsertDialog::Symbol(_) => "Symbol",
             InsertDialog::Field(_) => "Field",
-            InsertDialog::SmartArt(_) => "Insert SmartArt",
+            InsertDialog::SmartArt(_) => "Insert Diagram",
             InsertDialog::ChartType(f) if f.change => "Change Chart Type",
             InsertDialog::ChartType(_) => "Insert Chart",
             InsertDialog::ChartData(_) => "Edit Data",
+            InsertDialog::DefineBullet(_) => "Define New Bullet",
             InsertDialog::DropCap(_) => "Drop Cap",
         }
     }
 }
 
 /// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters`, `field`,
-/// `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart), or
-/// `insertSmartArt`, or `dropCap` (Drop Cap Options…, where the paragraph can take one).
+/// `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart),
+/// `insertSmartArt`, `defineBullet` (Home › Bullets › Define New Bullet…), or `dropCap` (Drop Cap
+/// Options…, where the paragraph can take one).
 pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
     Some(match name {
+        "dateTime" => InsertDialog::DateTime(DateTimeForm::new(app)),
         "columns" => InsertDialog::Columns(ColumnsForm::read(app)),
         "symbol" => InsertDialog::Symbol(SymbolForm::new(app, 0)),
         "specialCharacters" => InsertDialog::Symbol(SymbolForm::new(app, 1)),
@@ -76,6 +91,7 @@ pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
         "insertChart" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, false)?),
         "changeChartType" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, true)?),
         "chartData" => InsertDialog::ChartData(crate::dialogs_chart::ChartDataForm::new(app)?),
+        "defineBullet" => InsertDialog::DefineBullet(crate::dialogs_bullet::DefineBulletForm::new(app)),
         "dropCap" => InsertDialog::DropCap(DropCapForm::read(app)?),
         _ => return None,
     })
@@ -84,12 +100,14 @@ pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
 /// Draws the dialog; returns true to close it.
 pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut InsertDialog) -> bool {
     match d {
+        InsertDialog::DateTime(f) => date_time_ui(app, ui, f),
         InsertDialog::Columns(f) => columns_ui(app, ui, f),
         InsertDialog::Symbol(f) => symbol_ui(app, ui, f),
         InsertDialog::Field(f) => field_ui(app, ui, f),
         InsertDialog::SmartArt(f) => crate::dialogs_smart_art::picker_ui(app, ui, f),
         InsertDialog::ChartType(f) => crate::dialogs_chart::type_ui(app, ui, f),
         InsertDialog::ChartData(f) => crate::dialogs_chart::data_ui(app, ui, f),
+        InsertDialog::DefineBullet(f) => crate::dialogs_bullet::body(app, ui, f),
         InsertDialog::DropCap(f) => drop_cap_ui(app, ui, f),
     }
 }
