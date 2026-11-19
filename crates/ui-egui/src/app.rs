@@ -227,6 +227,7 @@ impl WordApp {
     pub fn frame_input(&mut self, out: FrameOutput) -> FrameInput {
         if let Some(ctx) = self.ctx.clone() {
             self.run_fired(&ctx, &out);
+            self.canvas.take_focus_after_pass(&ctx);
             self.native_scale = theme::usable_scale(ctx.native_pixels_per_point().unwrap_or(1.0));
             if let Some(native) = ctx.native_pixels_per_point()
                 && let Some(old) = self.legacy_interface_size.take()

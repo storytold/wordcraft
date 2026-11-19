@@ -103,6 +103,9 @@ pub struct CanvasState {
     /// `want_focus` started on). Kept until a real run takes it, because a measuring run moves no focus
     /// (`focus::request` is `false` there).
     pub(crate) focus_pending: bool,
+    /// The page asks for the keyboard between this pass and the next ([`CanvasState::focus_page_after_pass`]): always
+    /// (no ids), or only while focus is still on one of the ids.
+    focus_after_pass: Option<Vec<egui::Id>>,
     /// How many page pictures the page view kept resident after the last pass (S-L352).
     pub(crate) resident_pictures: usize,
     /// The caret's glide and blink.
@@ -284,6 +287,32 @@ impl CanvasState {
         taken
     }
 
+    /// Asks for the page's keyboard focus once this pass is over, for a control whose press moves focus at the
+    /// pass's end (a ribbon tab: the framework's press focus would override a request made in the pass).
+    pub(crate) fn focus_page_after_pass(&mut self) {
+        self.focus_after_pass = Some(Vec::new());
+    }
+
+    /// [`focus_page_after_pass`](Self::focus_page_after_pass) for a menu that closed this pass, opened by `opener`:
+    /// only while focus is still in the menu or back on its opener then. The press that closed it may have given a
+    /// field the focus, which keeps it.
+    pub(crate) fn focus_page_after_menu(&mut self, ctx: &egui::Context, opener: egui::Id) {
+        if self.focus_after_pass.is_none() {
+            let held = ctx.memory(|m| m.focused());
+            self.focus_after_pass = Some(std::iter::once(opener).chain(held).collect());
+        }
+    }
+
+    /// Makes the request [`focus_page_after_pass`](Self::focus_page_after_pass) kept, between passes: the framework
+    /// takes it at the next pass's begin.
+    pub(crate) fn take_focus_after_pass(&mut self, ctx: &egui::Context) {
+        let Some(ids) = self.focus_after_pass.take() else { return };
+        let focused = ctx.memory(|m| m.focused());
+        if ids.is_empty() || ids.iter().any(|id| focused == Some(*id) || focus::has(ctx, *id)) {
+            self.focus_page(ctx);
+        }
+    }
+
     /// The canvas body on screen, once a pass has shown it.
     pub fn canvas_rect(&self) -> Option<Rect> {
         self.shown.canvas.map(|_| self.shown.rect)
@@ -344,6 +373,7 @@ impl Default for CanvasState {
             reading: ReadingState::default(),
             shown: ShownPages::default(),
             focus_pending: true,
+            focus_after_pass: None,
             resident_pictures: 0,
             glide: crate::caret_glide::CaretGlide::default(),
             comments: Default::default(),

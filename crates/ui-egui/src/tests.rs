@@ -2116,7 +2116,9 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     h.get_by_label(&lang_label).click();
     h.step();
     h.step();
-    assert!(egui::Popup::is_any_open(&h.ctx), "the language menu opened");
+    // The framework's menus are its overlay layers, not egui popups.
+    let menu_open = |ctx: &egui::Context| craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Any);
+    assert!(menu_open(&h.ctx), "the language menu opened");
     // Bare status bar: past the language item, and past the missing-fonts item after it when the
     // document's fonts aren't installed (Aptos Display for Heading 1, on most machines without
     // Office), however many there are.
@@ -2127,7 +2129,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
         h.event(egui::Event::PointerButton { pos: elsewhere, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
     h.step();
-    assert!(!egui::Popup::is_any_open(&h.ctx), "the click closed the language menu");
+    assert!(!menu_open(&h.ctx), "the click closed the language menu");
     type_after_click(&mut h, "language menu cancelled", " lang");
 
     // Back on Home, a text field still takes the focus: the font size box.
