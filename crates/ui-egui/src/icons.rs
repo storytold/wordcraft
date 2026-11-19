@@ -1645,9 +1645,19 @@ fn shape(pen: &Pen, kind: &str) -> bool {
         "triangle" => solid(&[(10.0, 3.5), (17.0, 16.5), (3.0, 16.5)]),
         "diamond" => solid(&[(10.0, 3.0), (17.0, 10.0), (10.0, 17.0), (3.0, 10.0)]),
         "line" => pen.line(&[(4.0, 16.0), (16.0, 4.0)]),
+        // The block arrow the tile inserts (#6768), from the outline the document draws it with.
         "arrow" => {
-            pen.line(&[(4.0, 16.0), (14.5, 5.5)]);
-            head((16.5, 3.5), (4.0, 16.0));
+            let (x0, y0, w, h) = (3.0, 5.0, 14.0, 10.0);
+            let pts: Vec<(f32, f32)> = wordcraft_doc::wrap::arrow_outline(wordcraft_doc::para::ShapeKind::Arrow, w, h)
+                .iter()
+                .map(|&(u, v)| (x0 + u * w, y0 + v * h))
+                .collect();
+            // Concave: the shaft and the head are tinted apart, then the outline.
+            if let [tail_top, neck_top, barb_top, tip, barb_bottom, neck_bottom, tail_bottom] = pts[..] {
+                pen.fill(&[tail_top, neck_top, neck_bottom, tail_bottom], tint);
+                pen.fill(&[barb_top, tip, barb_bottom], tint);
+            }
+            pen.closed(&pts, c);
         }
         "star" => {
             let pts: Vec<(f32, f32)> = (0..10)
@@ -1743,6 +1753,32 @@ mod tests {
     fn the_shading_button_icon_has_no_bar_of_its_own() {
         assert!(has_default_highlight_bar("shading"));
         assert!(!has_default_highlight_bar("shadingNoBar"));
+    }
+
+    /// #6768: the Insert › Shapes Arrow tile is the block arrow that tile inserts, outlined as the
+    /// document draws it, not a thin line with a head.
+    #[test]
+    fn the_arrow_tile_is_the_block_arrow_it_inserts() {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), "shape.arrow", Color32::BLACK, Color32::BLUE);
+        });
+        let outline: Vec<Pos2> = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                // The outline, not the tinted fills (closed too, but without a stroke).
+                Shape::Path(path) if path.closed && path.stroke.width > 0.0 => Some(path.points.clone()),
+                _ => None,
+            })
+            .expect("the arrow is outlined");
+        output.drop_without_applying_deltas();
+        let want = wordcraft_doc::wrap::arrow_outline(wordcraft_doc::para::ShapeKind::Arrow, 14.0, 10.0);
+        assert_eq!(outline.len(), want.len(), "{outline:?}");
+        for (got, (u, v)) in outline.iter().zip(want) {
+            let expected = pos2(3.0 + u * 14.0, 5.0 + v * 10.0);
+            assert!(got.distance(expected) < 0.01, "{got:?} vs {expected:?}");
+        }
     }
 
     /// Verify that the fitOnePage vector icon renders without panics and emits shapes.
