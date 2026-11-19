@@ -4070,7 +4070,7 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         collections: "access.missing*1,field.bytes*1,field.content_types*1,field.entries*1,type.Vec*1";
         scope: "existing media candidates and signatures; prove non-consumption from drawing-reference coverage or verify alternate raster bytes with the shared bounded decoder";
         loss: "incomplete relationship or reference discovery, unsupported alternate encoding, or decode budget";
-        fallback: "retain the signature Error when neither basis for a Warning is established and explain decoder budget loss, incomplete TIFF directories, or an unavailable decoder for a recognized encoding";
+        fallback: "retain the signature Error when neither basis for a Warning is established and explain decoder budget loss, incomplete TIFF directories, or skipped assessment of a recognized encoding";
         package_loss: "independent";
     }
 
@@ -4101,6 +4101,10 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                 Some(format) => match decode_alternate_image(format, bytes, acc.limits.part_bytes, &mut decode_bytes) {
                     Ok(AlternateAssessment::Usable) => true,
                     Ok(AlternateAssessment::Unusable) => false,
+                    Ok(AlternateAssessment::Unassessed) => {
+                        acc.note(format!("MEDIA-MAGIC: {} encoding in {} was not assessed by the validator", format.name(), e.name));
+                        false
+                    }
                     Ok(AlternateAssessment::IncompleteTiffDirectory) => {
                         tiff_directory_incomplete_at.get_or_insert(&e.name);
                         false
@@ -4192,14 +4196,12 @@ const TIFF_PREFLIGHT_FACTOR: usize = 16;
 enum AlternateAssessment {
     Usable,
     Unusable,
+    Unassessed,
     IncompleteTiffDirectory,
 }
 
 /// Verify the raster with a bounded decoder and charge the assessment even on failure.
 fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining: &mut u64) -> Result<AlternateAssessment, CodecError> {
-    if !matches!(format, Format::Png | Format::Jpeg | Format::Gif | Format::Bmp | Format::WebP | Format::Tiff) {
-        return Ok(AlternateAssessment::Unusable);
-    }
     let budget = per_part.min(*remaining);
     let over_budget = || CodecError::LimitExceeded("alternate image decode budget".into());
     let encoded = bytes.len() as u64;
@@ -4208,7 +4210,8 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     let header_factor = match format {
         Format::Tiff => TIFF_PREFLIGHT_FACTOR as u64,
         Format::Jpeg => 4,
-        _ => 2,
+        Format::Png | Format::Gif | Format::Bmp | Format::WebP => 2,
+        _ => return Ok(AlternateAssessment::Unassessed),
     };
     let preflight = encoded.saturating_mul(header_factor).max(8192);
     if preflight > budget {
@@ -4240,7 +4243,7 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
             };
             (width, height, 0)
         }
-        _ => return Ok(AlternateAssessment::Unusable),
+        _ => return Ok(AlternateAssessment::Unassessed),
     };
     let pixels = u64::from(width) * u64::from(height);
     // Allow one output buffer plus decoder working space, encoded metadata and JPEG coefficients.
@@ -4589,6 +4592,20 @@ mod budget_tests {
             if unassessed {
                 assert!(report.coverage_notes[0].contains("JPEG XL") && report.coverage_notes[0].contains("was not assessed"));
             }
+        }
+    }
+
+    #[test]
+    fn media_magic_explains_formats_skipped_by_the_validator() {
+        for (bytes, format) in [(b"P6\n1 1\n255\n\xc8((".as_slice(), Format::Pnm), (b"qoif".as_slice(), Format::Qoi)] {
+            assert_eq!(codecs::detect(bytes), Some(format));
+            assert!(format.caps().read);
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
+            assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+            assert_eq!(report.findings.len(), 1);
+            assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Error));
+            assert_eq!(report.coverage_notes.len(), 1, "{report:?}");
+            assert!(report.coverage_notes[0].contains(format.name()) && report.coverage_notes[0].contains("was not assessed"));
         }
     }
 
