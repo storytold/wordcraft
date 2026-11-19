@@ -164,6 +164,8 @@ fn a_column_marker_on_the_ruler_moves_the_columns_right_of_it() {
     let start = ruler_marker(&h, "Table Column Width", near).center();
     assert!((start.x - near.x).abs() < 0.5, "a marker over the first column border");
     let end = start + egui::vec2(screen(&mut h, a.right() + 30.0, a.y).x - near.x, 0.0);
+    // The framework ruler snaps a dragged marker to its step; Alt drags it free, so the border lands where the pointer is.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
     h.event(egui::Event::PointerMoved(start));
     h.app_frame();
     button(&h, start, true);
@@ -176,6 +178,7 @@ fn a_column_marker_on_the_ruler_moves_the_columns_right_of_it() {
     assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while dragging");
     button(&h, end, false);
     steps(&mut h, 3);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
     let (a1, b1, c1) = (cell(&mut h, 0, 0), cell(&mut h, 0, 1), cell(&mut h, 0, 2));
     assert!((a1.w - (a.w + 30.0)).abs() < 1.0, "{a:?} → {a1:?}");
@@ -212,7 +215,10 @@ fn a_row_marker_on_the_ruler_sets_the_row_height() {
     let start = ruler_marker(&h, "Table Row Border", near).center();
     assert!((start.y - near.y).abs() < 0.5, "a marker at the first row's bottom");
     let end = start + egui::vec2(0.0, screen(&mut h, a.x, a.bottom() + 20.0).y - near.y);
+    // Alt drags the grip free of the ruler's snap step, so the row grows by exactly the drag.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
     drag(&mut h, start, end);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
     let a1 = cell(&mut h, 0, 0);
     assert!((a1.h - (a.h + 20.0)).abs() < 1.0, "{a:?} → {a1:?}");

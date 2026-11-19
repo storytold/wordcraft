@@ -34,21 +34,22 @@ impl Rig {
         self.kit.ctx.clone()
     }
 
-    fn info(&self, viewport: ViewportId) -> ViewportInfo {
-        let events = if self.closing.contains(&viewport) { vec![ViewportEvent::Close] } else { Vec::new() };
+    /// The facts of the root (`child` false) or of the kit's one child, which the kit reports for whichever child
+    /// viewport the app opens: a request made for any non-root viewport (`close`, `focus`) is the child's.
+    fn info(&self, child: bool) -> ViewportInfo {
+        let is_it = |v: &ViewportId| (*v != ViewportId::ROOT) == child;
+        let events = if self.closing.iter().any(is_it) { vec![ViewportEvent::Close] } else { Vec::new() };
         // The window host reads a window's facts (focus included) only once it has reported its inner rect.
-        let size = if viewport == ViewportId::ROOT { egui::vec2(800.0, 600.0) } else { egui::vec2(400.0, 300.0) };
+        let size = if child { egui::vec2(400.0, 300.0) } else { egui::vec2(800.0, 600.0) };
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
-        ViewportInfo { focused: Some(self.focused == Some(viewport)), events, inner_rect: Some(rect), outer_rect: Some(rect), ..Default::default() }
+        ViewportInfo { focused: Some(self.focused.iter().any(is_it)), events, inner_rect: Some(rect), outer_rect: Some(rect), ..Default::default() }
     }
 
     /// One frame of every window.
     fn frame(&mut self, a: &mut WordApp) {
-        let child = a.active_viewport();
-        self.kit.root_info(self.info(ViewportId::ROOT));
-        // The kit has one child: the one the app's active window is in.
-        let child = if child == ViewportId::ROOT { self.kit_child() } else { child };
-        self.kit.child_info(self.info(child));
+        self.kit.root_info(self.info(false));
+        // The kit has one child, whichever viewport the app opens it in.
+        self.kit.child_info(self.info(true));
         // PLAN: assumed `embed::before_input(ctx, |out| app.frame_input(out))` (sh.A2) from app-hub.
         craft::ui::shell::embed::before_input(&self.kit.ctx, |out| a.frame_input(out));
         let out = self.kit.frame(Vec::new(), Vec::new(), |ui| {
@@ -60,11 +61,6 @@ impl Rig {
         self.commands = out.commands;
         self.drawn = out.trees.iter().map(|(v, _)| *v).collect();
         self.closing.clear();
-    }
-
-    /// The child viewport the kit reports on when the app has none open yet.
-    fn kit_child(&self) -> ViewportId {
-        ViewportId::from_hash_of("wordcraft.test.child")
     }
 
     fn frames(&mut self, a: &mut WordApp, n: usize) {
@@ -327,8 +323,10 @@ fn quitting_asks_about_each_document_in_its_window() {
     a.run("file.new", json!({})).unwrap();
     a.run("text.insert", json!({"text": "Two"})).unwrap();
     let two = a.session.document_id();
-    let child = a.active_viewport();
     rig.frames(&mut a, 2);
+    // Read once the window has drawn: before that it has no viewport and the root stands in.
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
 
     assert!(!a.quit());
     assert_eq!((a.session.document_id(), prompt(&a).as_deref()), (two, Some("saveChanges")), "the active window asks first");
