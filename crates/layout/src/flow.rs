@@ -489,11 +489,17 @@ impl<'a> Flow<'a> {
         }
         let (Some(first), Some(last)) = (self.pl.lines.get(l0), self.pl.lines.last()) else { return fit.l1 };
         let tail = last.top + last.height - first.top + rooms.bottom;
-        let need = tail + next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone());
+        let need =
+            tail + gap_after(ctx, self.block, rp, self.label.is_some()) + next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone());
         if pb.y + need <= pb.bottom + 0.01 {
             return fit.l1;
         }
-        n.saturating_sub(if rp.widow_control { 2 } else { 1 }).max(l0)
+        let mut l1 = n.saturating_sub(if rp.widow_control { 2 } else { 1 }).max(l0);
+        // A row (text both sides of a floating object) stays together (`settled_end`).
+        while l1 > l0 && self.pl.lines.get(l1).is_some_and(|l| l.beside) {
+            l1 -= 1;
+        }
+        l1
     }
 
     /// The end of the lines on this page after widow/orphan control, and keeping the rows beside
@@ -1021,6 +1027,24 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
         }
     }
     after
+}
+
+/// The room the space after body paragraph `block` adds between it and the paragraph after it,
+/// beyond that paragraph's own space before (which [`next_first_line`] counts): the merged gap
+/// (the larger of the two, ISO/IEC 29500-1 §17.3.1.9), or both when they are summed. Nothing when
+/// contextual spacing or automatic spacing between list items drops it.
+fn gap_after(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool) -> f32 {
+    let after = space_after_kept(ctx, block, rp, listed);
+    if after <= 0.0 {
+        return 0.0;
+    }
+    let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) else { return after };
+    let nrp = ctx.doc.styles.resolve_para(&next.props);
+    // The next paragraph's contextual spacing, and automatic spacing between two list items,
+    // drop its own space before.
+    let dropped = (nrp.style == rp.style && nrp.contextual_spacing) || (listed && nrp.before_auto && ctx.has_label(next));
+    let before = if dropped { 0.0 } else { nrp.space_before.max(0.0) };
+    if ctx.doc.settings.sum_paragraph_spacing { after } else { (after - before).max(0.0) }
 }
 
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
