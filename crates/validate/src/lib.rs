@@ -910,7 +910,7 @@ pub fn validate_path(path: &Path) -> std::io::Result<Report> {
 fn check_content_types(pkg: &Package, acc: &mut Acc) {
     observation_contract! {
         rules: "CT-DUP-DEFAULT,CT-DUP-MAIN,CT-DUP-OVERRIDE,CT-MAIN-TYPE,CT-UNDECLARED";
-        collections: "field.content_types*7,field.dup_defaults*1,field.dup_overrides*1,field.entries*1,field.incomplete*2,lookup.content_unavailable*1";
+        collections: "access.missing*1,field.bytes*1,field.content_types*7,field.dup_defaults*1,field.dup_overrides*1,field.entries*1,field.incomplete*2,lookup.content_unavailable*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -931,13 +931,24 @@ fn check_content_types(pkg: &Package, acc: &mut Acc) {
         return;
     }
     acc.ran("CT-UNDECLARED");
+    let mut internal_targets = None;
     for e in pkg.entries.iter().filter(|e| !e.is_dir) {
         let l = e.name.to_ascii_lowercase();
         if l == "[content_types].xml" || l.ends_with(".rels") {
             continue;
         }
         if !pkg.content_types.incomplete && pkg.content_types.of(&e.name).is_none() {
-            acc.add("CT-UNDECLARED", Some(e.name.clone()), format!("part {} has no effective content type", e.name));
+            let message = format!("part {} has no effective content type", e.name);
+            if is_tombstone_name(&e.name)
+                && e.bytes.as_deref().is_some_and(|bytes| bytes.starts_with(&[0xff; 4]))
+                && internal_targets.get_or_insert_with(|| complete_internal_targets(pkg)).as_ref().is_some_and(|targets| targets.missing(&l))
+            {
+                if !acc.absence_suppressed("CT-UNDECLARED", Severity::Error) {
+                    acc.note(format!("CT-UNDECLARED: {message}"));
+                }
+            } else {
+                acc.add("CT-UNDECLARED", Some(e.name.clone()), message);
+            }
         }
     }
     acc.ran("CT-MAIN-TYPE");
@@ -966,6 +977,32 @@ fn check_content_types(pkg: &Package, acc: &mut Acc) {
             format!("[Content_Types].xml declares two Override entries for part {part}"),
         );
     }
+}
+
+fn is_tombstone_name(name: &str) -> bool {
+    name.strip_prefix("[trash]/")
+        .and_then(|name| name.strip_suffix(".dat"))
+        .is_some_and(|digits| digits.len() == 4 && digits.as_bytes().iter().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+}
+
+/// Inventory every internal target only after complete relationship discovery. A `w:contentPart`
+/// can consume a part only through a relationship. Inspect every declaration, including those
+/// outside root reachability and those that do not win first-ID binding.
+fn complete_internal_targets(pkg: &Package) -> Option<CompleteSet<String>> {
+    observation_contract! {
+        rules: "-";
+        collections: "access.into_complete_set*1,field.collapsed_names*1,field.rels*2,type.CompleteSet*1,type.Observed*1";
+        scope: "all package relationship declarations; conservative superset of explicit and implicit consumers";
+        loss: "entry discovery incomplete, collapsed relationship records, or an incomplete relationship source";
+        fallback: "withhold all non-consumption conclusions";
+        package_loss: "independent";
+    }
+
+    if !ownership_discovery_complete(pkg) || !pkg.collapsed_names.is_empty() {
+        return None;
+    }
+    let targets = pkg.rels.iter().flat_map(|rp| &rp.rels).filter_map(|rel| rel.target_abs.as_deref().map(str::to_ascii_lowercase));
+    Observed::complete(targets.collect()).into_complete_set()
 }
 
 /// Whether `name`'s effective content type is one of the package's main-document content types
@@ -4144,6 +4181,94 @@ mod budget_tests {
             ("word/document.xml", document()),
             ("word/_rels/document.xml.rels", doc_rels()),
         ])
+    }
+
+    #[test]
+    fn undeclared_tombstone_requires_the_exact_shape_and_complete_relationships() {
+        let binary = vec![0xff; 4];
+        let content_part = format!(
+            r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p><w:r><w:contentPart r:id="cp"/></w:r></w:p></w:body></w:document>"#
+        );
+        let consumed = rels(
+            r#"<Relationship Id="cp" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../%5Btrash%5D/00af.dat"/>"#,
+        );
+        for (name, bytes, owner, doc, note) in [
+            ("[trash]/00af.dat", binary.clone(), doc_rels(), document(), true),
+            ("[trash]/00AF.dat", binary.clone(), doc_rels(), document(), false),
+            ("[trash]/0af.dat", binary.clone(), doc_rels(), document(), false),
+            ("word/00af.dat", binary.clone(), doc_rels(), document(), false),
+            ("[trash]/00af.dat", b"text".to_vec(), doc_rels(), document(), false),
+            ("[trash]/00af.dat", vec![0xff; 3], doc_rels(), document(), false),
+            ("[trash]/00af.dat", binary.clone(), consumed, content_part.into_bytes(), false),
+            ("[trash]/00af.dat", binary, b"<broken".to_vec(), document(), false),
+        ] {
+            let zip = tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", doc),
+                ("word/_rels/document.xml.rels", owner),
+                (name, bytes),
+            ]);
+            let report = validate_bytes(&zip);
+            let finding = report.findings.iter().find(|f| f.rule == "CT-UNDECLARED");
+            assert_eq!(finding.map(|f| (f.part.as_deref(), f.severity)), (!note).then_some((Some(name), Severity::Error)), "{report:?}");
+            assert_eq!(report.coverage_notes.iter().any(|n| n.starts_with("CT-UNDECLARED:")), note, "{report:?}");
+            assert_eq!(report.verdict, if note { Verdict::Pass } else { Verdict::Fail });
+        }
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types_with_override("[trash]/00af.dat", "application/octet-stream")),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document()),
+            ("[trash]/00af.dat", b"text".to_vec()),
+        ]);
+        assert_eq!(validate_bytes(&zip).verdict, Verdict::Pass);
+
+        let zip = tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document()),
+            ("[trash]/00af.dat", vec![0xff; 1024]),
+        ]);
+        let report = validate_bytes_limited(&zip, Limits { part_bytes: 512, ..Limits::default() });
+        assert_eq!(report.verdict, Verdict::Fail);
+        assert!(report.findings.iter().any(|f| f.rule == "CT-UNDECLARED" && f.severity == Severity::Error));
+    }
+
+    #[test]
+    fn undeclared_tombstone_note_obeys_identity_suppression_and_shared_budget() {
+        let entries = [
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document()),
+            ("[trash]/beef.dat", vec![0xff; 4]),
+        ];
+        let zip = tiny_zip(&entries);
+        let pkg = package::load(&zip, &mut Acc::default()).unwrap();
+        let mut control = Acc::default();
+        check_content_types(&pkg, &mut control);
+        assert_eq!(control.coverage, ["CT-UNDECLARED: part [trash]/beef.dat has no effective content type"]);
+
+        let mut unknown = Acc::default();
+        unknown.set_unknown_unreadable();
+        check_content_types(&pkg, &mut unknown);
+        assert!(unknown.coverage.is_empty() && unknown.findings.is_empty());
+        assert_eq!(unknown.checks, control.checks);
+
+        let limits = Limits { notes: 1, ..Limits::default() };
+        let report = validate_bytes_limited(&zip, limits);
+        assert_eq!(report.verdict, Verdict::Incomplete);
+        assert_eq!(report.coverage_notes, ["coverage-note budget exhausted; additional explanations omitted"]);
+        let mut mixed = Vec::from(entries);
+        mixed.push(("undeclared.bin", vec![0]));
+        let zip = tiny_zip(&mixed);
+        let report = validate_bytes(&zip);
+        assert_eq!(report.coverage_notes[0], control.coverage[0]);
+        assert!(report.coverage_notes[1].contains("has no relationships part"));
+        let capped = validate_bytes_limited(&zip, limits);
+        assert_eq!(capped.verdict, Verdict::Fail);
+        assert_eq!(capped.findings.len(), 1);
+        assert_eq!(capped.findings[0].part.as_deref(), Some("undeclared.bin"));
+        assert_eq!(capped.findings[0].severity, Severity::Error);
     }
 
     #[test]
