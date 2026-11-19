@@ -520,7 +520,12 @@ fn main() -> eframe::Result {
             let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
             let (file_service, panels) = FileService::new(Wake::new(wake.clone()));
             let host = Arc::new(
-                Host::builder(wordcraft_ui_egui::APP).files(Arc::new(file_service)).settings(Arc::new(settings.clone())).lang(lang.craft_lang()).build(),
+                Host::builder(wordcraft_ui_egui::APP)
+                    .i18n(wordcraft_ui_egui::i18n::catalogs())
+                    .files(Arc::new(file_service))
+                    .settings(Arc::new(settings.clone()))
+                    .lang(lang.craft_lang())
+                    .build(),
             );
             let shell = ShellInfo::current().backend(if x11 { Backend::X11 } else { Backend::from_env() });
             let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
@@ -777,8 +782,14 @@ mod smoke {
             let (files, panels) = FileService::new(Wake::new(|| {}));
             let (settings, _) = prefs::open(false, &mut Store::in_memory());
             let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
-            let host =
-                Arc::new(Host::builder(wordcraft_ui_egui::APP).files(Arc::new(files)).settings(Arc::new(settings.clone())).lang(lang.craft_lang()).build());
+            let host = Arc::new(
+                Host::builder(wordcraft_ui_egui::APP)
+                    .i18n(wordcraft_ui_egui::i18n::catalogs())
+                    .files(Arc::new(files))
+                    .settings(Arc::new(settings.clone()))
+                    .lang(lang.craft_lang())
+                    .build(),
+            );
             let spec = InstallSpec::new(ShellInfo::current(), Arc::new(SystemWindows))
                 .app_id("ai.storyteller.wordcraft")
                 .placement(Arc::new(Mutex::new(Store::in_memory())));

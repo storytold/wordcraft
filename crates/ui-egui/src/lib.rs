@@ -390,6 +390,8 @@ pub struct WordApp {
     /// Whether the window's operating system was macOS when the catalog was built: the interface
     /// chords differ per platform, so the catalog is rebuilt when it changes.
     pub(crate) command_catalog_mac: bool,
+    /// The interface language the catalog's labels were translated into: rebuilt when it changes.
+    pub(crate) command_catalog_lang: &'static str,
     /// The session's key overrides, kept as one `Arc` while they do not change: the runtime
     /// rebuilds its keymap when the `Arc` it is handed changes ([`WordApp::overrides`]).
     pub(crate) key_overrides: std::sync::Arc<craft::keymap::Overrides>,

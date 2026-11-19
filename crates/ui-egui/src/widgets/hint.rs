@@ -4,10 +4,12 @@
 /// parts are left out; an empty `reason` falls back to a generic line. `None` when nothing is left.
 pub(crate) fn command_hint(group: &str, description: &str, reason: Option<&str>) -> Option<String> {
     let mut lines: Vec<String> = Vec::new();
-    for part in [group, description] {
-        if !part.is_empty() {
-            lines.push(part.to_string());
-        }
+    // Both are the engine's English: the group a ribbon location (`Home › Font`), translated a segment at a time.
+    if !group.is_empty() {
+        lines.push(crate::i18n::location(group));
+    }
+    if !description.is_empty() {
+        lines.push(tl!(description).to_string());
     }
     if let Some(reason) = reason {
         lines.push(if reason.is_empty() { tl!("Not available right now").to_string() } else { capitalised(tl!(reason)) });
