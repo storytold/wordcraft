@@ -18,12 +18,14 @@ fn walk(dir: &Path, c: &mut Counts) {
         let p = e.path();
         let name = e.file_name();
         let name = name.to_string_lossy();
-        if p.is_dir() {
+        // A symlink is never followed: several links to an ancestor would multiply the walk.
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
             // Nested fuzz workspaces and build output are not part of the crate.
             if name != "target" && name != "fuzz" && !name.starts_with('.') {
                 walk(&p, c);
             }
         } else if name.ends_with(".rs")
+            && e.file_type().is_ok_and(|t| t.is_file())
             && let Ok(s) = std::fs::read_to_string(&p)
         {
             c.files += 1;
@@ -108,11 +110,25 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::count_tests;
+    use super::{Counts, count_tests, walk};
 
     #[test]
     fn counts_attributes_and_proptest_blocks() {
         let src = "#[test]\nfn a() {}\n// #[test] commented\n    #[test]\nfn b() {}\nproptest! {\n}\n";
         assert_eq!(count_tests(src), (2, 1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_walk_does_not_follow_directory_links() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+        let dir = std::env::temp_dir().join(format!("wordcraft-xtask-stats-{}-{nanos}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "#[test]\n").unwrap();
+        std::os::unix::fs::symlink(&dir, dir.join("loop")).unwrap();
+        let mut c = Counts::default();
+        walk(&dir, &mut c);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((c.files, c.tests), (1, 1));
     }
 }

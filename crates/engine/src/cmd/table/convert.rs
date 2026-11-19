@@ -9,11 +9,18 @@ use wordcraft_doc::props::VMerge;
 /// Sort the table's rows by a column. Numbers are read in each cell's language (`1,5` is one and
 /// a half in Polish) and sort first, numerically; other text sorts in the column's language.
 pub(super) fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
-    let col = p::u64(v, "column").unwrap_or(0) as usize;
+    let column = match v.get("column") {
+        None => 0,
+        Some(value) => value.as_u64().ok_or_else(|| CmdError::Params("`column` must be a non-negative JSON integer".into()))?,
+    };
     let desc = p::bool(v, "descending").unwrap_or(false);
     let header = p::bool(v, "header");
     let (tp, _, _) = cell(s)?;
     let t = s.doc.table(s.sel.focus.story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
+    let col = usize::try_from(column)
+        .ok()
+        .filter(|&col| t.rows.iter().any(|row| col < row.cells.len()))
+        .ok_or_else(|| CmdError::Params("`column` is outside the table".into()))?;
     // Moving a continuation separately from its start would break the merged cell.
     if t.rows.iter().flat_map(|row| &row.cells).any(|cell| cell.props.vmerge != VMerge::None) {
         return Err(CmdError::Failed("a table with vertically merged cells cannot be sorted".into()));
