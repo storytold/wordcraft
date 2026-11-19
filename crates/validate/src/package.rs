@@ -1683,7 +1683,7 @@ fn parse_opc_children(
                     return (false, false);
                 }
                 let res = reader.resolver();
-                let ns = res.resolve_element(e.name()).0;
+                let ns = crate::xml::resolve_element(res, e.name()).0;
                 let local = e.local_name();
                 let recognized = matches!(&ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace);
                 if inventory_complete {

@@ -850,13 +850,21 @@ fn owner_roots_supported(pkg: &Package, acc: &mut Acc) -> bool {
         for _ in 0..acc.limits.events {
             match reader.read_resolved_event_into(&mut buf) {
                 Ok((namespace, Event::Start(element) | Event::Empty(element))) => {
+                    let unresolved = matches!(namespace, ResolveResult::Unknown(_));
                     let ns = match namespace {
                         ResolveResult::Bound(ns) => String::from_utf8_lossy(ns.as_ref()).into_owned(),
-                        ResolveResult::Unbound => String::new(),
-                        ResolveResult::Unknown(prefix) => format!("unresolved prefix {}", String::from_utf8_lossy(&prefix)),
+                        ResolveResult::Unbound | ResolveResult::Unknown(_) => String::new(),
                     };
                     let local = element.local_name();
-                    if ns != NS_W || local.as_ref() != expected.as_bytes() {
+                    if unresolved {
+                        // An unresolved namespace neither satisfies nor fails the owner check.
+                        acc.note(format!(
+                            "{} has a root in a namespace that is not resolved (an undeclared prefix or a declaration that cannot be expanded); its ownership is unknown and document checks were not run",
+                            entry.name
+                        ));
+                        acc.set_incomplete();
+                        supported = false;
+                    } else if ns != NS_W || local.as_ref() != expected.as_bytes() {
                         let actual = format!("{{{ns}}}{}", String::from_utf8_lossy(local.as_ref()));
                         let profile =
                             if ns == "http://purl.oclc.org/ooxml/wordprocessingml/main" { "the Strict OOXML profile is unsupported; " } else { "" };
@@ -4965,6 +4973,81 @@ mod budget_tests {
             let escaped = doc.replace(ns, &ns.replace("2006", "2&#48;06"));
             assert_eq!(serde_json::to_value(validate(&escaped)).unwrap(), serde_json::to_value(&plain).unwrap(), "{ns}");
         }
+    }
+
+    #[test]
+    fn unresolved_namespace_declarations_are_never_bindings() {
+        // Every namespace the drawing report depends on is declared with a value that cannot be
+        // expanded, spelled several ways. An unresolved value is unknown: it must neither refute a
+        // drawing reference (the drawn image stays an Error) nor satisfy or fail the owner root.
+        let doc = |declarations: &str, body: &str, doctype: &str| {
+            format!(r#"{doctype}<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"{declarations}><w:body>{body}</w:body></w:document>"#)
+        };
+        let validate = |document: &str| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types_with_override("word/media/drawn.png", "image/png")),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.as_bytes().to_vec()),
+                ("word/_rels/document.xml.rels", rels(&format!(r#"<Relationship Id="rImg" Type="{NS_R}/image" Target="media/drawn.png"/>"#))),
+                ("word/media/drawn.png", b"text".to_vec()),
+            ]))
+        };
+        let a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let pic = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+        let plain = validate(&doc("", DRAWN, ""));
+        assert_eq!((plain.verdict, plain.findings.len()), (Verdict::Fail, 1), "{plain:?}");
+        let year = "<!DOCTYPE w:document [<!ENTITY year \"2006\">]>";
+        let declared = validate(&doc("", DRAWN, year));
+        assert_eq!((declared.verdict, declared.findings.len()), (Verdict::Fail, 1), "{declared:?}");
+        for spelling in ["&year;", "&undefined;", "&#xZZ;", "&#x110000;", "2&year;06"] {
+            for (uri, owner) in [(NS_W, true), (NS_R, false), (NS_WP, false), (a, false), (pic, false)] {
+                let body = DRAWN.replace(&format!(r#"xmlns:a="{a}""#), &format!(r#"xmlns:a="{}""#, if uri == a { spelling } else { a }));
+                let body = body.replace(&format!(r#"xmlns:pic="{pic}""#), &format!(r#"xmlns:pic="{}""#, if uri == pic { spelling } else { pic }));
+                let mut document = doc("", &body, year);
+                if matches!(uri, NS_W | NS_R | NS_WP) {
+                    document = document.replace(&format!("=\"{uri}\""), &format!("=\"{spelling}\""));
+                }
+                let report = validate(&document);
+                let context = format!("{uri} as {spelling}: {report:?}");
+                // The prefix is declared, only unresolved: it is not reported as undeclared.
+                assert!(!report.findings.iter().any(|f| f.rule == "XML-UNDECLARED-PREFIX"), "{context}");
+                if owner {
+                    assert_eq!(report.verdict, Verdict::Incomplete, "{context}");
+                    assert!(
+                        report.coverage_notes.iter().any(|note| note.contains("not resolved") && note.contains("ownership is unknown")),
+                        "{context}"
+                    );
+                } else {
+                    assert_eq!(report.verdict, Verdict::Fail, "{context}");
+                    assert!(report.findings.iter().any(|f| (f.rule, f.severity) == ("MEDIA-MAGIC", Severity::Error)), "{context}");
+                }
+            }
+            // An inner unresolved declaration shadows the real outer binding, and an unresolved
+            // default namespace never becomes "no namespace".
+            let shadow = doc("", &DRAWN.replace(r#"<a:blip r:embed"#, &format!(r#"<a:blip xmlns:r="{spelling}" r:embed"#)), year);
+            let report = validate(&shadow);
+            assert!(report.findings.iter().any(|f| (f.rule, f.severity) == ("MEDIA-MAGIC", Severity::Error)), "shadow {spelling}: {report:?}");
+            let report = validate(&doc("", &DRAWN.replace(r#"<a:blip r:embed"#, &format!(r#"<a:blip xmlns:r="{spelling}" r:embed"#)), year));
+            assert!(!report.findings.iter().any(|f| f.rule == "XML-UNDECLARED-PREFIX"), "shadow {spelling}: {report:?}");
+            // An unprefixed root in an unresolved default namespace has unknown ownership.
+            let unprefixed = format!(r#"{year}<document xmlns="{spelling}"><body/></document>"#);
+            let report = validate(&unprefixed);
+            assert_eq!(report.verdict, Verdict::Incomplete, "unprefixed {spelling}: {report:?}");
+            assert!(report.coverage_notes.iter().any(|note| note.contains("not resolved") && note.contains("ownership is unknown")), "{report:?}");
+            let report = validate(&doc(&format!(r#" xmlns="{spelling}""#), DRAWN, year));
+            assert!(report.findings.iter().any(|f| (f.rule, f.severity) == ("MEDIA-MAGIC", Severity::Error)), "default {spelling}: {report:?}");
+        }
+    }
+
+    #[test]
+    fn undeclared_prefixes_are_still_reported_beside_unresolved_ones() {
+        let document = format!(r#"<w:document xmlns:w="{NS_W}"><w:body><x:p/></w:body></w:document>"#);
+        let report = validate_bytes(&tiny_zip(&[
+            ("[Content_Types].xml", content_types()),
+            ("_rels/.rels", package_rels()),
+            ("word/document.xml", document.into_bytes()),
+        ]));
+        assert!(report.findings.iter().any(|f| f.rule == "XML-UNDECLARED-PREFIX" && f.message.contains("`x`")), "{report:?}");
     }
 
     #[test]

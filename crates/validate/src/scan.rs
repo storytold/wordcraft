@@ -839,7 +839,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "-";
-        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*4,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2,field.unknown_prefixes*4,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -908,16 +908,17 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     break;
                 }
                 let id = resolve_elem(reader.resolver(), e.name());
-                if let Some(p) = &id.unknown {
-                    out.unknown_prefixes.push(p.clone());
-                }
-                let Some(attrs) = open_attributes(&e, &mut out) else { break };
+                let Some(attrs) = open_attributes(&e, &mut out) else {
+                    push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
+                    break;
+                };
                 scan_attr_refs(part, &attrs, acc);
                 let was_suppressed = state.alt_depth > 0;
                 let is_alt = enter_alt(&mut state, &id, part, acc);
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
                 state.declared.push(decls);
+                push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
@@ -949,15 +950,16 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     root_count += 1;
                 }
                 let id = resolve_elem(reader.resolver(), e.name());
-                if let Some(p) = &id.unknown {
-                    out.unknown_prefixes.push(p.clone());
-                }
-                let Some(attrs) = open_attributes(&e, &mut out) else { break };
+                let Some(attrs) = open_attributes(&e, &mut out) else {
+                    push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
+                    break;
+                };
                 scan_attr_refs(part, &attrs, acc);
                 let was_suppressed = state.alt_depth > 0;
                 let is_alt = enter_alt(&mut state, &id, part, acc);
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
+                push_unknown_prefix(&mut out, &state.declared, &decls, id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
@@ -2253,8 +2255,14 @@ fn collect_refs(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: 
         let key = a.key;
         let local = key.local_name();
         let l = local.as_ref();
-        let ResolveResult::Bound(namespace) = res.resolve_attribute(key).0 else {
-            continue;
+        let namespace = match res.resolve_attribute(key).0 {
+            ResolveResult::Bound(namespace) => namespace,
+            // An unknown prefix cannot show this attribute is not a drawing reference.
+            ResolveResult::Unknown(_) => {
+                out.drawing_refs_complete = false;
+                continue;
+            }
+            ResolveResult::Unbound => continue,
         };
         if namespace.as_ref() != NS_R.as_bytes() {
             // Legacy VML and Strict relationship attributes do not participate in the
@@ -2500,7 +2508,7 @@ fn completion_dependent_pending(state: &State) -> bool {
 fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &NamespaceResolver, extra: &[String], out: &mut PartScan) {
     observation_contract! {
         rules: "-";
-        collections: "field.unknown_prefixes*2,type.Vec*1";
+        collections: "field.unknown_prefixes*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2509,7 +2517,7 @@ fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &Namespace
 
     for a in attrs {
         match res.resolve_attribute(a.key).0 {
-            ResolveResult::Unknown(p) => out.unknown_prefixes.push(lossy(&p)),
+            ResolveResult::Unknown(p) => push_unknown_prefix(out, declared, extra, Some(&lossy(&p))),
             ResolveResult::Bound(Namespace(ns)) if ns == NS_MC.as_bytes() && a.key.local_name().as_ref() == b"Ignorable" => {
                 if let Ok(v) = a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
                     for pfx in v.split_whitespace() {
@@ -2555,14 +2563,40 @@ fn declarations(attrs: &[Attribute]) -> Vec<String> {
             && !p.is_empty()
         {
             v.push(lossy(p));
+            // The declaration exists but its value cannot be expanded. It is unknown, not undeclared.
+            if a.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_err() {
+                v.push(format!("{UNRESOLVED_MARK}{}", lossy(p)));
+            }
         }
     }
     v
 }
 
+/// Marks a prefix, among a scope's declarations, whose declared value could not be resolved.
+const UNRESOLVED_MARK: &str = "?";
+
+/// Record a prefix the resolver reports as unknown, unless the scope declares it with a value that
+/// cannot be resolved: that declaration is present, so the prefix is not "not declared".
+fn push_unknown_prefix(out: &mut PartScan, declared: &[Vec<String>], extra: &[String], prefix: Option<&str>) {
+    observation_contract! {
+        rules: "-";
+        collections: "field.unknown_prefixes*1,type.Vec*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    if let Some(prefix) = prefix
+        && !declared_has(declared, extra, &format!("{UNRESOLVED_MARK}{prefix}"))
+    {
+        out.unknown_prefixes.push(prefix.to_string());
+    }
+}
+
 /// Resolve a qualified XML element name against the namespace resolver into an [`ElemId`].
 fn resolve_elem<'a>(res: &'a NamespaceResolver, name: QName<'_>) -> ElemId<'a> {
-    let (r, local) = res.resolve_element(name);
+    let (r, local) = crate::xml::resolve_element(res, name);
     let local = lossy(local.as_ref());
     match r {
         ResolveResult::Unknown(p) => ElemId { ns: None, local, unknown: Some(lossy(&p)) },
