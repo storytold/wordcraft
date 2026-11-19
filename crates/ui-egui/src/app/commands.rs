@@ -33,6 +33,11 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Undo and Redo act on whole steps: a SmartArt typing run still open is folded into its one step first,
+        // or Undo would take back only the last keystroke of it.
+        if matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
+            crate::dialogs_smart_art::close_typing_run(self);
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
