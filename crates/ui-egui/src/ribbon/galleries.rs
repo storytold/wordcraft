@@ -307,6 +307,8 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
     if let Some((id, _)) = picked(&out.response.events).and_then(|at| styles.get(at)) {
         if app.run(command, json!({"style": id})).is_ok() {
             cx.request_close();
+            // The WordArt's text is selected: the page takes the keyboard so typing replaces it at once (#4061).
+            app.canvas.focus_page(ui.ctx());
         }
     }
 }

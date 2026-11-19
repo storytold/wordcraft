@@ -139,7 +139,13 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     };
     let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
     let out = item(ui, shown, Some(tip));
-    Menu::new(tl!("Language").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| crate::ribbon::language_menu(ui, app));
+    let menu = Menu::new(tl!("Language").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| crate::ribbon::language_menu(ui, app));
+    // Dismissed, the menu hands focus back to this item; the page takes the keyboard back, so typing goes on in the
+    // document (#1093). A press that closed it on a field leaves the field its focus.
+    use craft::ui::runtime::overlay::CloseReason;
+    if matches!(menu.closed, Some(CloseReason::Outside | CloseReason::Escape)) {
+        app.canvas.focus_page_after_menu(ui.ctx(), out.response.id);
+    }
 }
 
 /// Fonts the document uses that aren't installed: they're drawn in other fonts, so the text can wrap and

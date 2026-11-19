@@ -152,6 +152,11 @@ impl StackDialog for ZoomDialog {
         Some("zoom")
     }
 
+    /// OK answers with the percent the dialog shows, as its OK button does; it holds nothing.
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<Value> {
+        Some(json!(self.percent))
+    }
+
     fn show(&mut self, ui: &mut Ui, _stack: &DialogStack) -> Option<DialogResult<Value>> {
         let fit = &mut self.fit;
         let out = FormDialog::new(tl!("Zoom").to_string(), Bind::bound(&mut self.percent)).show(ui, |ui, cx, percent| {

@@ -195,6 +195,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
         && tab != app.ui.tab
     {
         let _ = app.run("ui.tab", json!({"tab": tab}));
+        // A click on a tab name keeps typing in the document (#1093): the press moves focus off the page when the pass
+        // ends, so the page takes the keyboard back after it. A tab reached with the keys keeps it, and File's page has
+        // its own focus.
+        let by_key = ui.ctx().input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
+        if !by_key && !app.ui.backstage {
+            app.canvas.focus_page_after_pass();
+        }
     }
     out
 }

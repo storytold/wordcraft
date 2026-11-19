@@ -706,7 +706,8 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
     for _ in 0..3 {
         frame(&mut a, Vec::new());
     }
-    let pointer = a.canvas.canvas_rect().unwrap().center();
+    // The centre of the area the pages show in (inside the rulers), as production's `canvas_rect` was.
+    let pointer = a.canvas.view_rect().unwrap().center();
     frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
     let wheel = |y: f32, modifiers| egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Line,
@@ -738,8 +739,7 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
         // fit the window side by side and there is nothing to scroll sideways.
         // Within a couple of screen pixels.
         let off = (now - at) * page_scale(&a);
-        let across = columns(&page_rects(&a)) > cols || off.x.abs() < 2.0;
-        assert!(across && off.y.abs() < 2.0, "frame {n} at {:.0}%: {now:?} on page {page}, was {at:?}", a.canvas.zoom() * 100.0);
+        let across = columns(&page_rects(&a)) > cols || off.x.abs() < 2.0;        assert!(across && off.y.abs() < 2.0, "frame {n} at {:.0}%: {now:?} on page {page}, was {at:?}", a.canvas.zoom() * 100.0);
     }
     assert!(page_scale(&a) < before * 0.6, "zoomed out: {before} -> {}", page_scale(&a));
     assert!(columns(&page_rects(&a)) > cols, "the pages reflowed into rows on the way");
@@ -1351,14 +1351,15 @@ fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
     for _ in 0..3 {
         frame(&mut a);
     }
-    let rects = page_rects(&a);
+    // The whole layout, as production's `page_rects` held it: the canvas places only the pages in view.
+    let rects = a.canvas.laid_page_rects().to_vec();
     assert_eq!(rects.len(), 4);
     assert!(rects[1].top() > rects[0].bottom(), "100%: one page per row");
     a.run("view.zoom", json!({"value": 30})).unwrap();
     for _ in 0..3 {
         frame(&mut a);
     }
-    let rects = page_rects(&a);
+    let rects = a.canvas.laid_page_rects().to_vec();
     assert_eq!(columns(&rects), 4, "30%: all four pages fit across: {rects:?}");
     assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
     // A click inside the last page's text puts the caret on that page.
@@ -2041,6 +2042,8 @@ fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
         [("Align Left", Align::Left, " left"), ("Center", Align::Center, " center"), ("Align Right", Align::Right, " right")]
     {
         h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+        // The click fires the button's command in that pass; the app runs it when the next pass begins (`driver_logic`).
+        h.step();
         h.step();
 
         assert!(h.state().canvas.focused(&h.ctx), "{label}: the canvas keeps keyboard focus");
@@ -2131,7 +2134,9 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     h.get_by_label(&lang_label).click();
     h.step();
     h.step();
-    assert!(egui::Popup::is_any_open(&h.ctx), "the language menu opened");
+    // The framework's menus are its overlay layers, not egui popups.
+    let menu_open = |ctx: &egui::Context| craft::ui::runtime::overlay::any_open(ctx, craft::ui::runtime::overlay::OpenFilter::Any);
+    assert!(menu_open(&h.ctx), "the language menu opened");
     // Bare status bar: past the language item, and past the missing-fonts item after it when the
     // document's fonts aren't installed (Aptos Display for Heading 1, on most machines without
     // Office), however many there are.
@@ -2142,7 +2147,7 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
         h.event(egui::Event::PointerButton { pos: elsewhere, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
     h.step();
-    assert!(!egui::Popup::is_any_open(&h.ctx), "the click closed the language menu");
+    assert!(!menu_open(&h.ctx), "the click closed the language menu");
     type_after_click(&mut h, "language menu cancelled", " lang");
 
     // Back on Home, a text field still takes the focus: the font size box.

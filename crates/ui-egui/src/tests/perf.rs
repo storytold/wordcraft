@@ -32,12 +32,15 @@ fn harness(doc: Document) -> egui_kittest::Harness<'static, WordApp> {
     )
 }
 
-/// Queues a pointer move to (720, 500) and a vertical point-unit wheel event.
+/// Queues a pointer move to (720, 500) and a vertical point-unit wheel event that scrolls the view `dy` points.
+/// The framework applies the touchpad speed to point scrolling (`WordApp::root_env`), as production's desktop host did
+/// before egui read the input (4× at Normal off macOS and the web), so the event carries `dy` over that factor.
 fn wheel(h: &mut egui_kittest::Harness<'static, WordApp>, dy: f32) {
+    let factor = h.state().ui.touchpad_scroll_speed.touchpad_factor();
     h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(720.0, 500.0)));
     h.input_mut().events.push(egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
-        delta: egui::vec2(0.0, dy),
+        delta: egui::vec2(0.0, dy / factor),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
         source: egui::MouseWheelSource::Unknown,
@@ -66,8 +69,7 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     for _ in 0..60 {
         wheel(&mut h, -400.0);
         h.step();
-        max_textures = max_textures.max(h.state().canvas.resident_pictures);
-    }
+        max_textures = max_textures.max(h.state().canvas.resident_pictures);    }
     let offset = h.state().canvas.view.offset.1;
     assert!(offset > 20_000.0, "scrolled through many pages: {offset}");
     let after = std::sync::Arc::clone(&h.state_mut().session.layout());

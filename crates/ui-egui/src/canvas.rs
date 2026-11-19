@@ -79,13 +79,17 @@ pub(crate) struct ShownPages {
     pub rect: Rect,
     /// The pages on screen.
     pub pages: Vec<PlacedPage>,
+    /// Every page of the view's layout, on screen or not, at its screen position this pass.
+    pub laid: Vec<Rect>,
+    /// The area the pages show in: the body inside the rulers while they show.
+    pub view: Rect,
     /// The canvas widget's id; `None` until a pass has shown it.
     pub canvas: Option<egui::Id>,
 }
 
 impl Default for ShownPages {
     fn default() -> Self {
-        ShownPages { rect: Rect::NOTHING, pages: Vec::new(), canvas: None }
+        ShownPages { rect: Rect::NOTHING, pages: Vec::new(), laid: Vec::new(), view: Rect::NOTHING, canvas: None }
     }
 }
 
@@ -101,6 +105,9 @@ pub struct CanvasState {
     /// `want_focus` started on). Kept until a real run takes it, because a measuring run moves no focus
     /// (`focus::request` is `false` there).
     pub(crate) focus_pending: bool,
+    /// The page asks for the keyboard between this pass and the next ([`CanvasState::focus_page_after_pass`]): always
+    /// (no ids), or only while focus is still on one of the ids.
+    focus_after_pass: Option<Vec<egui::Id>>,
     /// How many page pictures the page view kept resident after the last pass (S-L352).
     pub(crate) resident_pictures: usize,
     /// The caret's glide and blink.
@@ -282,6 +289,32 @@ impl CanvasState {
         taken
     }
 
+    /// Asks for the page's keyboard focus once this pass is over, for a control whose press moves focus at the
+    /// pass's end (a ribbon tab: the framework's press focus would override a request made in the pass).
+    pub(crate) fn focus_page_after_pass(&mut self) {
+        self.focus_after_pass = Some(Vec::new());
+    }
+
+    /// [`focus_page_after_pass`](Self::focus_page_after_pass) for a menu that closed this pass, opened by `opener`:
+    /// only while focus is still in the menu or back on its opener then. The press that closed it may have given a
+    /// field the focus, which keeps it.
+    pub(crate) fn focus_page_after_menu(&mut self, ctx: &egui::Context, opener: egui::Id) {
+        if self.focus_after_pass.is_none() {
+            let held = ctx.memory(|m| m.focused());
+            self.focus_after_pass = Some(std::iter::once(opener).chain(held).collect());
+        }
+    }
+
+    /// Makes the request [`focus_page_after_pass`](Self::focus_page_after_pass) kept, between passes: the framework
+    /// takes it at the next pass's begin.
+    pub(crate) fn take_focus_after_pass(&mut self, ctx: &egui::Context) {
+        let Some(ids) = self.focus_after_pass.take() else { return };
+        let focused = ctx.memory(|m| m.focused());
+        if ids.is_empty() || ids.iter().any(|id| focused == Some(*id) || focus::has(ctx, *id)) {
+            self.focus_page(ctx);
+        }
+    }
+
     /// The canvas body on screen, once a pass has shown it.
     pub fn canvas_rect(&self) -> Option<Rect> {
         self.shown.canvas.map(|_| self.shown.rect)
@@ -295,6 +328,16 @@ impl CanvasState {
     /// The pages on screen in the last pass: page index and screen rectangle.
     pub fn page_rects(&self) -> impl Iterator<Item = (usize, Rect)> + '_ {
         self.shown.pages.iter().map(|p| (p.page, p.rect))
+    }
+
+    /// The area the pages show in, once a pass has shown them: the canvas body inside the rulers while they show.
+    pub fn view_rect(&self) -> Option<Rect> {
+        self.shown.canvas.map(|_| self.shown.view)
+    }
+
+    /// Every page's rectangle on screen in the last pass, in page order, including pages scrolled out of view.
+    pub fn laid_page_rects(&self) -> &[Rect] {
+        &self.shown.laid
     }
 
     /// The canvas widget's id, once a pass has shown it.
@@ -337,6 +380,7 @@ impl Default for CanvasState {
             reading: ReadingState::default(),
             shown: ShownPages::default(),
             focus_pending: true,
+            focus_after_pass: None,
             resident_pictures: 0,
             glide: crate::caret_glide::CaretGlide::default(),
             comments: Default::default(),
@@ -598,6 +642,18 @@ fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
     state.hide_white_space = v.hide_white_space && v.mode == wordcraft_layout::ViewMode::Print && !editing_part;
 }
 
+/// Every page of the pass's layout on screen: the layout's content rects moved by where a placed page shows.
+fn laid_rects(out: &craft::pages::ui::PageViewOutput) -> Vec<Rect> {
+    let Some(shift) = out.pages.iter().find_map(|placed| {
+        let r = out.layout.rects.get(placed.page)?;
+        Some(placed.rect.min - pos2(r.x0 as f32, r.y0 as f32))
+    }) else {
+        return Vec::new();
+    };
+    let at = |x: f64, y: f64| pos2(x as f32, y as f32) + shift;
+    out.layout.rects.iter().map(|r| Rect::from_min_max(at(r.x0, r.y0), at(r.x1, r.y1))).collect()
+}
+
 /// What the page body decided about the scroll position, applied after the pass.
 #[derive(Clone, Copy, Debug, Default)]
 struct ScrollFix {
@@ -656,7 +712,7 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
         .inner;
     app.canvas.page_keys = source.into_keys();
     app.canvas.reading = state;
-    app.canvas.shown = ShownPages { rect: columns, pages: Vec::new(), canvas: Some(out.response.id) };
+    app.canvas.shown = ShownPages { rect: columns, pages: Vec::new(), laid: Vec::new(), view: columns, canvas: Some(out.response.id) };
     app.canvas.viewed_page = None;
     app.canvas.read_first_visible = reading_page_start(layout, app.canvas.reading.column);
     app.canvas.scroll_to_caret = false;
@@ -739,6 +795,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let mut body_view = None;
     let mut ran = false;
     let mut fix = ScrollFix::default();
+    // The caret the follow wants whose page the pass did not place: its page, the page's height and the caret.
+    let mut unplaced = None;
     let out = PageView::new(tl!("Document"), &source, &mut state, paper)
         .options(options)
         .navigation(navigation_options())
@@ -784,6 +842,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                         None => {
                             let h = fresh.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
                             fix.go_to = Some((c.page, f64::from(c.top / h)));
+                            unplaced = Some((c.page, h, *c));
                         }
                     }
                 }
@@ -798,9 +857,26 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         });
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
-    // A jump to a page that was not placed (`go_to`) puts the caret's line at the view's top edge: the follow stays on
-    // for the next pass, where the page is placed, so the caret ends with the same margin as any other follow.
-    if ran && fix.go_to.is_none() {
+    // The caret's page was not placed this pass: the whole layout says where it lies on screen, so the follow moves the
+    // view by the same margin rule as for a placed page, from whichever side the caret is on.
+    if let Some((page, page_h, c)) = unplaced
+        && let Some(rect) = laid_rects(&out).get(page).copied()
+    {
+        let s = rect.height() / page_h;
+        let top_left = rect.min + vec2(c.x * s, c.top * s);
+        let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s)).expand2(vec2(40.0, 60.0));
+        fix.delta = (overshoot((r.min.x, r.max.x), (body_rect.min.x, body_rect.max.x)), overshoot((r.min.y, r.max.y), (body_rect.min.y, body_rect.max.y)));
+        fix.go_to = None;
+    }
+    // A jump to a page that was not placed at all (`go_to`) puts the caret's line at the view's top edge: the follow
+    // stays on for the next pass, where the page is placed, so the caret ends with the same margin as any other follow.
+    // While the body's rect is still settling (the chrome around the page is measured over the first passes) the follow
+    // waits, and moves the view once against the rect the page keeps: a move made against a passing rect would leave the
+    // caret where that rect put it.
+    if ran && app.canvas.shown.rect != body_rect {
+        fix = ScrollFix::default();
+        ui.ctx().request_repaint();
+    } else if ran && fix.go_to.is_none() {
         app.canvas.scroll_to_caret = false;
     }
 
@@ -850,7 +926,9 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     app.canvas.viewed_page = Some(viewed_page(caret_span, &state, &out.layout, f64::from(body_rect.height())));
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
-    app.canvas.shown = ShownPages { rect: body_rect, pages: out.pages.clone(), canvas: Some(out.canvas.response.id) };
+    let view_rect = body_view.map_or(body_rect, |v| v.rect);
+    app.canvas.shown =
+        ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), view: view_rect, canvas: Some(out.canvas.response.id) };
     if app.canvas.focus_pending && !app.modal_open() {
         let ctx = ui.ctx().clone();
         app.canvas.focus_page(&ctx);
