@@ -2448,6 +2448,61 @@ fn private_use_bullet_no_font_draws_shows_the_levels_default_bullet() {
 }
 
 #[test]
+fn a_private_use_bullet_its_installed_font_lacks_draws_that_fonts_missing_glyph() {
+    crate::test_fonts();
+    // Word draws such a bullet as the level font's missing glyph (a box; authors use it as a
+    // check box, U+F080 in Symbol for instance), not as the level's default bullet. That
+    // replacement is only for a font that isn't installed (#1683).
+    let font = "Source Serif 4".to_string(); // bundled, so always installed
+    let r = wordcraft_fonts::word::resolve(&font, false, false);
+    assert!(!r.substituted);
+    let pua = '\u{F0A7}'; // Wingdings' square bullet
+    assert!(!r.face.covers(pua));
+    let mut d = Document::from_text("one");
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
+        if let Some(l) = a.levels.get_mut(0) {
+            l.text = pua.to_string();
+            l.chr.font = Some(font.clone());
+        }
+    }
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    let l = lay(&d);
+    let label = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { para.label.clone() } else { None }).unwrap();
+    assert_eq!(label.text, pua.to_string(), "{:#X} in {font}", u32::from(pua));
+    assert_eq!(label.glyphs.len(), 1);
+    assert_eq!(label.glyphs[0].gid, 0, "the font's missing glyph");
+}
+
+#[test]
+fn a_private_use_character_its_font_lacks_is_not_drawn_from_another_face() {
+    crate::test_fonts();
+    // Private-use codes mean something different in every font: Word draws one the run's font
+    // doesn't have as that font's missing glyph (a box), never another face's icon at that code.
+    // A Wingdings bullet pasted as plain text keeps U+F0A7 in Times New Roman, for instance.
+    let primary = wordcraft_fonts::word::resolve(&Document::default().settings.minor_font, false, false).face;
+    let db = wordcraft_fonts::FontDb::global();
+    let pua = ('\u{F020}'..='\u{F0FF}')
+        .chain('\u{E000}'..='\u{F8FF}')
+        .find(|c| !primary.covers(*c) && db.fallback_styled(*c, primary.id(), false, false).is_some());
+    let Some(pua) = pua else { return }; // no installed face has any private-use glyph
+    let d = Document::from_text(&format!("ab{pua}cd"));
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let face_of = |want: char| {
+        items.iter().find_map(|i| match i {
+            display::Draw::Glyphs { face, glyphs, text, .. } if text.contains(want) => Some((*face, glyphs.clone())),
+            _ => None,
+        })
+    };
+    let (text_face, _) = face_of('a').expect("the text is drawn");
+    let (face, glyphs) = face_of(pua).expect("the private-use character is drawn");
+    assert_eq!(face.id(), text_face.id(), "{:#X} drawn from another face", u32::from(pua));
+    assert!(glyphs.iter().any(|g| g.0 == 0), "{:#X} draws as the font's missing glyph", u32::from(pua));
+    assert_eq!(d.plain_text(StoryRef::Body), format!("ab{pua}cd"));
+}
+
+#[test]
 fn wingdings_text_draws_and_reads_as_its_unicode_symbols() {
     crate::test_fonts();
     // Word stores symbol-font text both ways: plain codes ("J" = smiley) and private-use codes
