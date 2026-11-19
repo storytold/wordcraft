@@ -74,7 +74,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
             menu_button(
                 ui,
-                Button::new(crate::tl!("Thickness")).icon(IconId::new("thickness")).tooltip(crate::tl!("Thickness")).icon_only(),
+                Button::new(crate::tl!("Thickness")).icon(IconId::new("thickness")).tooltip(crate::tl!("Thickness")),
                 crate::tl!("Thickness"),
                 Some(pen_command(tool)),
                 |ui, _| {
