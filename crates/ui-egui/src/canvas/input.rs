@@ -31,6 +31,16 @@ pub(crate) fn hold_document_selection(app: &mut WordApp, clicks: u8) {
     app.canvas.dragging = true;
 }
 
+/// The release of a press that [`hold_document_selection`] held: the hold ends. A table's selection part takes
+/// that press and its release (the page's text tool sees neither), so without this the hold would stay and the next
+/// click would be read as part of it.
+pub(crate) fn release_document_selection(app: &mut WordApp) {
+    if app.canvas.unit_drag.as_ref().is_some_and(|d| d.unit == "document") {
+        app.canvas.unit_drag = None;
+        app.canvas.dragging = false;
+    }
+}
+
 impl CanvasState {
     /// True while a mouse drag-select is in progress (the mini toolbar waits for mouse-up).
     pub fn drag_selecting(&self) -> bool {

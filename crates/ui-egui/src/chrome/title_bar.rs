@@ -126,6 +126,9 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) {
     qat_menu(app, ui);
 }
 
+/// How many steps the undo list shows before it scrolls.
+const UNDO_ROWS_SHOWN: u16 = 8;
+
 /// The small arrow beside Undo: a list of steps to undo several at once, with a footer that names how many a pick
 /// undoes, or Cancel while none is marked (#1903).
 fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) {
@@ -139,7 +142,9 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) {
     let mut picked = None;
     Popover::new(tl!("Undo History").to_string(), Bind::bound(&mut open)).opened_by(&out.response).show(ui, |ui, cx| {
         let rows = UndoRows::new(&labels);
+        // A collection owns its scroll: the popover's body scrolls, so the list caps its rows and scrolls the rest.
         let events = UndoList::new(tl!("Undo History").to_string())
+            .max_rows(UNDO_ROWS_SHOWN)
             .selection(Bind::bound(&mut mark))
             .show_items(ui, &rows, &mut |key, _| rows.row(*key))
             .events;

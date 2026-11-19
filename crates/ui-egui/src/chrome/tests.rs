@@ -4,16 +4,38 @@ use serde_json::json;
 
 /// The whole app in the shared harness, past the frames the fonts need.
 fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = crate::dialogs::host::testing::harness(a);
-    h.run_steps(6);
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(app_frame, a);
+    crate::test_harness::frames(&mut h, 6);
     h
+}
+
+/// Like [`harness`], in the integrated frame the desktop app draws on Windows and Linux (S-L417): the title bar draws
+/// the caption buttons. The shared test spec has no decided frame, so the bar draws none.
+fn integrated_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+    use craft::ui::shell::{Caption, CaptionFamily, Captions, Frame};
+    use craft::window::policy::{Decision, Desktop, DesktopKind};
+    let spec = || {
+        let layout = craft::window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        craft::ui::testing::install_spec().frame(Decision { frame, overridden: None, desktop })
+    };
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(app_frame, a);
+    crate::test_harness::frames(&mut h, 6);
+    h
+}
+
+fn app_frame(ui: &mut egui::Ui, app: &mut WordApp) {
+    let ctx = ui.ctx().clone();
+    app.logic(&ctx);
+    app.ui(ui);
 }
 
 /// The viewport commands the next `steps` passes send.
 fn commands_over(h: &mut egui_kittest::Harness<'static, WordApp>, steps: usize) -> Vec<egui::ViewportCommand> {
     let mut sent = Vec::new();
     for _ in 0..steps {
-        h.step();
+        crate::test_harness::step(h);
         sent.extend(h.output().viewport_output.values().flat_map(|v| v.commands.iter().cloned()));
     }
     sent
@@ -54,10 +76,10 @@ fn undo_list_matches_the_session_and_undoes_up_to_the_clicked_row() {
 
     let mut h = harness(a);
     h.get_by_label("Undo History").click();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 4, "one row per step");
     h.get_by_role_and_label(Role::ListBoxOption, "Bold").click();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(h.state().session.undo_history(), ["Typing"], "three steps undone in one go");
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello");
     assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "the list closes");
@@ -72,7 +94,7 @@ fn status_bar_controls_hold_still_across_zoom_levels() {
     let mut seen: Vec<(f64, Vec<f32>)> = Vec::new();
     for zoom in [10.0_f64, 9.0, 100.0, 500.0] {
         h.state_mut().run("view.zoom", json!({"value": zoom})).unwrap();
-        h.run_steps(3);
+        crate::test_harness::frames(&mut h, 3);
         let xs = names.iter().map(|name| h.get_by_label(name).rect().min.x).collect();
         seen.push((zoom, xs));
     }
@@ -115,13 +137,13 @@ fn the_status_bar_actions_run_their_commands() {
     let mut h = harness(a);
     assert_eq!(h.state().ui.status_count, StatusCount::Words);
     h.get_by_label("4 words").click_secondary();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     h.get_by_label("Characters (with spaces)").click();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(h.state().ui.status_count, StatusCount::Characters, "the menu's choice is taken");
     assert!(h.query_by_label("23 characters").is_some(), "the count changes at once");
     h.get_by_label("Overtype").click();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert!(!h.state().session.prefs.overtype, "back to inserting");
     // The choice comes back after a restart.
     let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
@@ -142,10 +164,10 @@ fn status_bar_names_the_actual_part_being_edited() {
     assert!(h.query_by_label("Editing footnote").is_some());
     h.state_mut().run("caret.docEnd", json!({})).unwrap();
     h.state_mut().run("references.endnote", json!({})).unwrap();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert!(h.query_by_label("Editing endnote").is_some());
     h.state_mut().run("insert.createHeader", json!({})).unwrap();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert!(h.query_by_label("Editing header/footer").is_some());
 }
 
@@ -155,9 +177,7 @@ fn status_bar_names_the_actual_part_being_edited() {
 #[test]
 fn the_integrated_title_bar_moves_and_closes_the_window() {
     use egui::accesskit::Role;
-    // PLAN: assumed the shared harness shows the integrated frame (the title bar draws the caption buttons), as the
-    // desktop app does on Windows and Linux (S-L417).
-    let mut h = harness(new_app());
+    let mut h = integrated_harness(new_app());
     let title = h.query_by_label_contains("Not saved").expect("the title").rect();
     assert!(h.query_by_role_and_label(Role::Button, "Close").is_some(), "the caption buttons are drawn");
     for caption in ["Minimize", "Maximize", "Restore", "Close"] {
@@ -169,9 +189,9 @@ fn the_integrated_title_bar_moves_and_closes_the_window() {
     let at = egui::pos2(title.max.x + 8.0, title.center().y);
 
     for (command, params) in [("ui.dialog", json!({"name": "font"})), ("ui.backstage", json!({"value": true}))] {
-        let mut h = harness(new_app());
+        let mut h = integrated_harness(new_app());
         h.state_mut().run(command, params).unwrap();
-        h.run_steps(4);
+        crate::test_harness::frames(&mut h, 4);
         assert!(drag_moves_the_window(&mut h, at), "{command}: the window still moves by its title bar");
     }
 
@@ -189,15 +209,15 @@ fn hide_quick_access_toolbar_takes_the_toolbar_out_of_the_title_bar() {
     let mut h = harness(new_app());
     assert!(h.query_by_label("Customize Quick Access Toolbar").is_some(), "the … button is drawn");
     h.get_by_label("Customize Quick Access Toolbar").click();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     h.get_by_label("Hide Quick Access Toolbar").click();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert!(!h.state().ui.quick_access_toolbar, "the menu's last item hides the toolbar");
     assert!(h.query_by_label("Hide Quick Access Toolbar").is_none(), "and closes the menu");
     assert!(h.query_by_label("Customize Quick Access Toolbar").is_none(), "so is the … button");
     assert!(h.query_by_label_contains("Not saved").is_some(), "the title is still drawn");
     h.state_mut().run("ui.quickAccessToolbar", json!({"value": true})).unwrap();
-    h.run_steps(3);
+    crate::test_harness::frames(&mut h, 3);
     assert!(h.query_by_label("Customize Quick Access Toolbar").is_some(), "the … button is back");
 }
 

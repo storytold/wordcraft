@@ -28,3 +28,33 @@ pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> H
         craft::ui::shell::embed::install(ctx, spec(), &crate::ui_fonts(Lang::EN)).expect("the craft runtime installs on a fresh test context");
     })
 }
+
+/// One frame of `h`, given first the input the app hands the runtime, as eframe's raw-input hook does in the app
+/// (`embed::before_input`). `Harness::step` and `run_steps` skip the hook, so the app's command catalog never reaches
+/// the runtime and a command-bound control is named by its command id (`view.printLayout`, not "Print Layout"). A test
+/// that finds such a control by its label steps with this.
+pub(crate) fn step(h: &mut egui_kittest::Harness<'_, crate::WordApp>) {
+    let ctx = h.ctx.clone();
+    craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+    h.step();
+}
+
+/// [`step`] as a method, for tests that step a harness by `h.app_frame()` where they would `h.step()`; it works on a
+/// `Harness` and a `&mut Harness` alike.
+pub(crate) trait AppFrames {
+    /// One frame as [`step`] runs it.
+    fn app_frame(&mut self);
+}
+
+impl AppFrames for egui_kittest::Harness<'_, crate::WordApp> {
+    fn app_frame(&mut self) {
+        step(self);
+    }
+}
+
+/// `n` frames of `h`, each as [`step`] runs it.
+pub(crate) fn frames(h: &mut egui_kittest::Harness<'_, crate::WordApp>, n: usize) {
+    for _ in 0..n {
+        step(h);
+    }
+}

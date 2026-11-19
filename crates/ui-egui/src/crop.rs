@@ -298,6 +298,7 @@ mod tests {
     use super::*;
     use crate::WordApp;
     use crate::table_resize::tests::{H, button, screen, steps};
+    use crate::test_harness::AppFrames as _;
 
     fn close(a: Cropped, b: Cropped) -> bool {
         let n = |x: f32, y: f32| (x - y).abs() < 1e-4;
@@ -359,8 +360,9 @@ mod tests {
         assert_eq!((r.dx, r.dy, r.crop), (0.0, 0.0, [0.0; 4]));
         let r = crop_of(rect(0.0, 0.0, f32::NAN, 100.0), src(), [0.0; 4], (false, false));
         assert_eq!((r.dx, r.dy, r.crop), (0.0, 0.0, [0.0; 4]));
-        // A junk crop reads as uncropped / at most 0.95 a side.
-        let r = crop_of(src(), src(), [f32::NAN, -1.0, 0.7, 0.0], (false, false));
+        // A junk crop reads as uncropped / at most 0.95 a side; a frame where the cleaned crop has it (no drag) leaves
+        // that be. (A frame over the whole source says the crop was dragged out, which restores it.)
+        let r = crop_of(src(), rect(0.0, 0.0, 60.0, 100.0), [f32::NAN, -1.0, 0.7, 0.0], (false, false));
         assert_eq!(r.crop, [0.0, 0.0, 0.7, 0.0]);
     }
 
@@ -509,12 +511,12 @@ mod tests {
     /// Press at `from` and move to `to` in a few steps, still holding the button.
     fn drag(h: &mut H, from: egui::Pos2, to: egui::Pos2) {
         h.event(egui::Event::PointerMoved(from));
-        h.step();
+        h.app_frame();
         button(h, from, true);
-        h.step();
+        h.app_frame();
         for i in 1..=4 {
             h.event(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 4.0)));
-            h.step();
+            h.app_frame();
         }
     }
 
@@ -549,9 +551,9 @@ mod tests {
         let r = rect_of(&mut h, 0);
         let out = screen(&mut h, r.right() + 150.0, r.bottom() + 150.0);
         h.event(egui::Event::PointerMoved(out));
-        h.step();
+        h.app_frame();
         button(&h, out, true);
-        h.step();
+        h.app_frame();
         button(&h, out, false);
         steps(&mut h, 3);
         assert!(active(h.state()).is_none(), "crop mode is off");

@@ -174,7 +174,11 @@ mod tests {
         a.run("tools.customizeKeyboard", json!({"assign": {"command": "format.italic", "key": "Mod+B"}})).unwrap();
         assert_eq!(chords(&a, "format.bold"), Some(Vec::new()), "bold lost its built-in chord");
         let italic = chords(&a, "format.italic").expect("italic has an override");
-        assert_eq!(italic.len(), 1, "italic holds the chord taken from bold");
+        // The framework keymap adds a chord to the command's keys (a command may hold several, as in Word), so Italic
+        // keeps its own chord and holds the one taken from Bold besides it.
+        assert!(italic.contains(&Binding::parse("Mod+B").unwrap()), "italic holds the chord taken from bold");
+        assert!(italic.contains(&Binding::parse("Mod+I").unwrap()), "and keeps its own");
+        assert_eq!(italic.len(), 2, "and nothing else");
         let saved = serde_json::to_string(&a.prefs()).unwrap();
         let mut b = app();
         b.apply_prefs(serde_json::from_str(&saved).unwrap());
