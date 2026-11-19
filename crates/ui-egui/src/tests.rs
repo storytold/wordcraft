@@ -2024,6 +2024,8 @@ fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
         [("Align Left", Align::Left, " left"), ("Center", Align::Center, " center"), ("Align Right", Align::Right, " right")]
     {
         h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+        // The click fires the button's command in that pass; the app runs it when the next pass begins (`driver_logic`).
+        h.step();
         h.step();
 
         assert!(h.state().canvas.focused(&h.ctx), "{label}: the canvas keeps keyboard focus");
