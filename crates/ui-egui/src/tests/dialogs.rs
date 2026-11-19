@@ -56,8 +56,12 @@ fn table_properties_dialog_sets_every_selected_row() {
     let before = rows_breaking(&a);
     let depth = a.session.undo_depth();
     let id = a.dialog_host.open_dialogs().first().map(|d| d.id).expect("the dialog is open");
-    assert!(a.dialog_host.confirm_by_id(&ctx, id));
-    pump(&mut a, &ctx);
+    // The held OK files on the first confirm after a shown pass and finishes on a later one (S-L291): the
+    // return says nothing, the passes and the document do.
+    let _ = a.dialog_host.confirm_by_id(&ctx, id);
+    for _ in 0..3 {
+        pump(&mut a, &ctx);
+    }
     assert!(a.dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     assert_eq!(rows_breaking(&a), before, "a mixed box left alone changes nothing");
     assert_eq!(a.session.undo_depth(), depth, "and records no edit");
@@ -114,8 +118,11 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
     let side = |k: &str| fields.get(k).and_then(Value::as_f64);
     assert_eq!((side("top"), side("left"), side("bottom"), side("right")), (Some(3.0), Some(6.0), Some(9.0), Some(12.0)));
     let depth = a.session.undo_depth();
-    assert!(a.dialog_host.confirm_by_id(&ctx, id));
-    frame(&mut a);
+    // The return of `confirm_by_id` is not asserted (S-L291): the held OK finishes on a later pass.
+    let _ = a.dialog_host.confirm_by_id(&ctx, id);
+    for _ in 0..3 {
+        frame(&mut a);
+    }
     let table = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
     assert_eq!(table.props.cell_margins, Some([3.0, 6.0, 9.0, 12.0]), "an untouched dialog does not reset margins");
     assert_eq!(a.session.undo_depth(), depth, "an untouched dialog writes no table props");
@@ -124,8 +131,10 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
     frame(&mut a);
     a.dialog_host.set_json_field(&ctx, id, "right", json!(18.0)).unwrap();
     frame(&mut a);
-    assert!(a.dialog_host.confirm_by_id(&ctx, id));
-    frame(&mut a);
+    let _ = a.dialog_host.confirm_by_id(&ctx, id);
+    for _ in 0..3 {
+        frame(&mut a);
+    }
     let table = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
     assert_eq!(table.props.cell_margins, Some([3.0, 6.0, 9.0, 18.0]));
     assert_eq!(table.rows[0].cells[0].props.margins, Some([1.0, 2.0, 3.0, 4.0]), "cell-specific margins remain intact");
@@ -141,8 +150,10 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
     let id = dialogs::open(&mut b, "tableCellMargins", &json!({})).expect("the dialog opens");
     pump(&mut b, &ctx);
     let depth = b.session.undo_depth();
-    assert!(b.dialog_host.confirm_by_id(&ctx, id));
-    pump(&mut b, &ctx);
+    let _ = b.dialog_host.confirm_by_id(&ctx, id);
+    for _ in 0..3 {
+        pump(&mut b, &ctx);
+    }
     assert_eq!(b.session.doc.table(b.session.sel.focus.story, &tp).unwrap().props.cell_margins, None, "untouched, no direct margins appear");
     assert_eq!(b.session.undo_depth(), depth);
 }

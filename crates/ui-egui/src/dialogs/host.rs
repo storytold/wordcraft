@@ -685,7 +685,7 @@ pub(crate) mod testing {
         crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
-                app.logic(&ctx);
+                crate::test_harness::driver_logic(&ctx, app);
                 app.ui(ui);
             },
             app,

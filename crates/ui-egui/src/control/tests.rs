@@ -231,6 +231,9 @@ fn ui_closewindow_asks_the_close_guard_like_the_os_button() {
     let mut h = harness(typed());
     let r = send(&mut h, "ui.closeWindow", json!({}));
     assert_eq!(r["ok"], true, "{r}");
+    // The window host turns the request into a viewport Close command; a kittest harness has no OS window to
+    // answer it, so the answer is delivered as eframe delivers it: the root viewport reports a close request.
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
     frames(&mut h, 6);
     assert_eq!(prompt(h.state()), Some("saveChanges"), "the guard holds the close");
     assert!(h.state().has_document() && !h.state().quit_requested);

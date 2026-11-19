@@ -539,7 +539,7 @@ fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
-            crate::test_harness::logic(&ctx, app);
+            crate::test_harness::driver_logic(&ctx, app);
             app.ui(ui);
         },
         a,
@@ -1365,7 +1365,9 @@ fn copying_a_picture_replaces_the_clipboards_old_text() {
     let last_copied = |ctx: &egui::Context| -> Option<String> {
         craft::ui::runtime::commands::ClipboardHandle::of(ctx).read_text().ok().flatten().filter(|t| !t.is_empty())
     };
-    let ctx = crate::test_harness::context();
+    // The default test spec has no readable clipboard: install a memory one.
+    use craft::platform::clipboard::{Clipboard, MemoryClipboard};
+    let ctx = crate::test_harness::context_with(|| craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
     let mut a = typed();
     a.ctx = Some(ctx.clone());
     a.run("select.all", json!({})).unwrap();
@@ -1390,21 +1392,14 @@ fn copying_a_picture_replaces_the_clipboards_old_text() {
 /// and a real Cmd/Ctrl+X key event, not only the generic command dispatch the sink sits behind.
 #[test]
 fn every_cut_entry_point_publishes_to_the_clipboard() {
-    let copied = |ctx: &egui::Context| -> Vec<String> {
-        ctx.output(|o| {
-            o.commands
-                .iter()
-                .filter_map(|c| match c {
-                    egui::OutputCommand::CopyText(t) => Some(t.clone()),
-                    _ => None,
-                })
-                .collect()
-        })
-    };
+    // The sink is the runtime's clipboard (a memory one here), not egui's `CopyText` output.
+    use craft::platform::clipboard::{Clipboard, MemoryClipboard};
+    let spec = || craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
+    let copied =
+        |ctx: &egui::Context| -> Vec<String> { craft::ui::runtime::commands::ClipboardHandle::of(ctx).read_text().ok().flatten().into_iter().collect() };
 
     // The ribbon's Cut button runs the command like every ribbon control.
-    // PLAN(platform-w10): pf.C-P10 the `copied` reads below read the installed `MemoryClipboard`.
-    let ctx = crate::test_harness::context();
+    let ctx = crate::test_harness::context_with(spec);
     let mut a = typed();
     a.ctx = Some(ctx.clone());
     a.run("select.all", json!({})).unwrap();
@@ -1414,7 +1409,7 @@ fn every_cut_entry_point_publishes_to_the_clipboard() {
     assert!(copied(&ctx).contains(&text), "ribbon Cut published {text:?}: {:?}", copied(&ctx));
 
     // A real Cut key event through the app's key handling.
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             crate::test_harness::driver_logic(&ctx, app);
@@ -1431,16 +1426,8 @@ fn every_cut_entry_point_publishes_to_the_clipboard() {
     h.step();
     h.event(egui::Event::Cut);
     h.step();
-    let via_key: Vec<String> = h
-        .output()
-        .platform_output
-        .commands
-        .iter()
-        .filter_map(|c| match c {
-            egui::OutputCommand::CopyText(t) => Some(t.clone()),
-            _ => None,
-        })
-        .collect();
+    h.step();
+    let via_key = copied(&h.ctx);
     assert!(via_key.iter().any(|t| t.contains("My unsaved novel")), "key event Cut: {via_key:?} body={:?}", body_text(h.state()));
 }
 
@@ -1908,6 +1895,9 @@ fn a_prompt_is_dropped_when_its_document_is_replaced() {
         let (req, _reply) = ControlRequest::new("engine.execute", command);
         control::handle(&mut a, &ctx, &req);
     }
+    // The control path runs the commands; the window's next frame (`logic` shows the active document) notices the
+    // replacement and drops the question.
+    crate::test_harness::pass(&ctx, &mut a, egui::RawInput::default());
     assert_eq!(prompt(&a), None, "the question was about a document that is gone");
 
     // An answer that arrives anyway (a click in that frame, an agent) doesn't touch B.
@@ -2567,11 +2557,22 @@ fn web_picker_save_ending_after_the_document_changed_leaves_the_new_one_alone() 
         a.execute("file.new", json!({})).unwrap();
         a.execute("text.insert", json!({"text": "Second document"})).unwrap();
         a.session.dirty = false;
+        let second = a.session.document_id();
         saves.finish(saves.last(), outcome.clone());
         a.settle_saves();
-        assert!(body_text(&a).contains("Second document"), "{outcome:?}: the held-back Close didn't run on it");
-        assert!(!a.session.dirty, "{outcome:?}: the new document isn't marked unsaved");
-        assert_eq!(prompt(&a), None, "{outcome:?}");
+        if matches!(outcome, Ended::Saved) {
+            assert!(body_text(&a).contains("Second document"), "{outcome:?}: the held-back Close didn't run on it");
+            assert!(!a.session.dirty, "{outcome:?}: the new document isn't marked unsaved");
+            assert_eq!(prompt(&a), None, "{outcome:?}");
+        } else {
+            // The close operation still waits on the first document, which stays open: the guard shows it and asks
+            // again with the reason (`ask_prompt`). The new document is only left alone: it is open, unchanged and
+            // not marked unsaved, and no Close ran on it.
+            assert!(a.session.is_open(second), "{outcome:?}: the held-back Close didn't run on it");
+            let (text, dirty) = a.session.with_document(second, |s| (s.doc.plain_text(wordcraft_doc::StoryRef::Body), s.dirty)).unwrap();
+            assert!(text.contains("Second document"), "{outcome:?}: the new document keeps its text");
+            assert!(!dirty, "{outcome:?}: the new document isn't marked unsaved");
+        }
     }
 }
 
@@ -2962,15 +2963,22 @@ fn web_save_keeps_the_opened_word_format() {
 #[test]
 fn task_panes_share_an_edge_close_and_keep_the_styles_place() {
     use egui_kittest::kittest::Queryable;
+    // The framework's pane frame is a group named by the pane's title (a tall one: the ribbon has a Styles group
+    // too); its title bar is the group's top row, with the action buttons and the options menu on it.
     let bars = |h: &egui_kittest::Harness<'_, WordApp>| {
-        let mut bars: Vec<egui::Rect> = h.get_all_by_label_contains("Move Pane: ").map(|n| n.rect()).collect();
+        let mut bars: Vec<egui::Rect> = ["Comments", "Styles"]
+            .into_iter()
+            .flat_map(|title| h.query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Group).label(title)))
+            .map(|n| n.rect())
+            .filter(|r| r.height() > 300.0)
+            .collect();
         bars.sort_by(|a, b| a.left().total_cmp(&b.left()));
         bars
     };
-    // A title bar's ▾ and × sit right of the bar, on its row.
+    // A title bar's options menu and × sit on the pane's top row.
     fn click_button(h: &egui_kittest::Harness<'_, WordApp>, bar: egui::Rect, label: &str) {
-        let on_row = |r: egui::Rect| r.center().y > bar.top() && r.center().y < bar.bottom() && r.left() >= bar.right() - 1.0;
-        let node = h.get_all_by_label(label).filter(|n| on_row(n.rect())).min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()));
+        let on_row = |r: egui::Rect| bar.contains_rect(r) && r.center().y < bar.top() + 48.0;
+        let node = h.get_all_by_label(label).filter(|n| on_row(n.rect())).min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()));
         node.unwrap_or_else(|| panic!("no {label} beside the title bar")).click();
     }
     let mut a = app();
@@ -2993,7 +3001,7 @@ fn task_panes_share_an_edge_close_and_keep_the_styles_place() {
     h.state_mut().run("view.stylesPane", json!({"value": true})).unwrap();
     h.run_steps(3);
     let styles = *bars(&h).last().unwrap();
-    click_button(&h, styles, "Pane Options");
+    click_button(&h, styles, "Pane options");
     h.run_steps(2);
     h.get_by_label("Float").click();
     h.run_steps(3);

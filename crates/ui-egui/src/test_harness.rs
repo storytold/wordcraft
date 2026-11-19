@@ -25,8 +25,33 @@ pub(crate) fn builder<S>() -> HarnessBuilder<S> {
 /// Like [`builder`], with the install spec `spec` makes (called when the context is set up).
 pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> HarnessBuilder<S> {
     egui_kittest::Harness::builder().with_context_setup(move |ctx| {
+        // Before the runtime's plugin: egui runs input hooks in registration order, and the runtime's key stage reads
+        // the input this hands it.
+        ctx.add_plugin(HandOver);
         craft::ui::shell::embed::install(ctx, spec(), &crate::ui_fonts(Lang::EN)).expect("the craft runtime installs on a fresh test context");
     })
+}
+
+thread_local! {
+    /// The input the app made in the last pass ([`driver_logic`]), waiting for the next pass to start.
+    static PENDING: std::cell::RefCell<Option<craft::ui::runtime::frame::FrameInput>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Hands the runtime the input [`driver_logic`] left, before the next pass begins (egui's input hook runs
+/// before `begin_pass`). The runtime refuses input during a pass, and a kittest harness has no eframe
+/// `raw_input_hook` to give it at the right time.
+struct HandOver;
+
+impl egui::Plugin for HandOver {
+    fn debug_name(&self) -> &'static str {
+        "wordcraft::test_harness::HandOver"
+    }
+
+    fn input_hook(&mut self, ctx: &egui::Context, _input: &mut egui::RawInput) {
+        if let Some(input) = PENDING.with(|p| p.borrow_mut().take()) {
+            craft::ui::runtime::frame::set_input(ctx, input);
+        }
+    }
 }
 
 /// A bare egui context with the craft runtime installed (the framework's test spec), for a test that
@@ -119,12 +144,13 @@ pub(crate) fn logic(ctx: &egui::Context, app: &mut crate::WordApp) {
     craft::ui::shell::embed::logic(ctx, || app.close_decision());
 }
 
-/// [`logic`] for a kittest closure, where the harness's `step` and `run_steps` skip eframe's input hook: the
-/// runtime is handed the app's input first (as `embed::before_input` does before a frame), at the head of the
-/// pass, so what the app made reaches the passes after it. A harness that cannot run the hook before its pass
-/// runs it here, one frame behind, instead of leaving command states, fired commands and focus requests out.
+/// [`logic`] for a kittest closure, where the harness's `step` and `run_steps` skip eframe's input hook: the app
+/// makes its input (`WordApp::frame_input`) at the head of the pass, and the runtime takes it when the next pass
+/// begins (it refuses input during a pass), so command states, fired commands and focus requests reach the
+/// passes after it, one frame behind. Needs a harness from [`builder`] or [`builder_with`].
 pub(crate) fn driver_logic(ctx: &egui::Context, app: &mut crate::WordApp) {
-    craft::ui::shell::embed::before_input(ctx, |out| app.frame_input(out));
+    let input = app.frame_input(craft::ui::runtime::frame::take_output(ctx));
+    PENDING.with(|p| *p.borrow_mut() = Some(input));
     logic(ctx, app);
 }
 

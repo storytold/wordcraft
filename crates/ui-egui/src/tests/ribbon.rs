@@ -61,7 +61,9 @@ fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
         let open = a.dialog_host.open_dialogs();
         let zoom = open.iter().find(|d| d.key.as_deref() == Some("zoom")).expect("the Zoom dialog is open");
         // Accepting it as it opened applies the percent it opened at: the shown zoom.
-        assert!(a.dialog_host.confirm_by_id(&ctx, zoom.id), "the Zoom dialog accepts as opened");
+        // The held OK files on the first confirm after a shown pass and finishes on a later one (S-L291): the
+        // return says nothing, the zoom and the open dialogs do.
+        let _ = a.dialog_host.confirm_by_id(&ctx, zoom.id);
         frame(&mut a);
         assert!((a.session.view.zoom - fitted).abs() < 0.01, "{fit}: the Zoom dialog opens at the shown zoom");
         assert!(a.dialog_host.open_dialogs().is_empty(), "the Zoom dialog closed");
