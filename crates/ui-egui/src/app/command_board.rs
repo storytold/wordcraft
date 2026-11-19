@@ -64,7 +64,10 @@ impl WordApp {
     /// from. `None` only when the registry's rows cannot form a catalog (logged).
     pub(crate) fn catalog(&mut self) -> Option<AppCatalog> {
         let registry = self.session.registry.clone();
-        if !self.command_catalog.as_ref().is_some_and(|(built_from, _)| Arc::ptr_eq(built_from, &registry)) {
+        // The interface chords are per platform: the window's own, which tests set.
+        let mac = self.ctx.as_ref().map_or(cfg!(target_os = "macos"), |ctx| craft::ui::runtime::windows::os_of(ctx) == craft::host::target::Os::Mac);
+        let os_changed = std::mem::replace(&mut self.command_catalog_mac, mac) != mac;
+        if os_changed || !self.command_catalog.as_ref().is_some_and(|(built_from, _)| Arc::ptr_eq(built_from, &registry)) {
             let generation = self.command_catalog.as_ref().map_or(0, |(_, catalog)| catalog.generation().wrapping_add(1));
             let mut seen = HashSet::new();
             let mut defs = Vec::with_capacity(registry.all().len() + 3);
@@ -82,7 +85,7 @@ impl WordApp {
                 }
                 defs.push(def);
             };
-            if !cfg!(target_os = "macos") {
+            if !mac {
                 interface(CommandRef::with_params("ui.dialog", json!({"name": "commands"})), "Search Commands", "Alt+Q");
                 interface(CommandRef::new("ui.collapseRibbon"), "Collapse the Ribbon", "Ctrl+F1");
             } else {
