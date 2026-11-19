@@ -467,6 +467,8 @@ fn ime_commit(app: &mut WordApp, text: String) {
 fn key_press(app: &mut WordApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
     if key == Key::Escape && app.session.painter.is_some() {
         app.session.painter = None;
+        // The painter and highlighter mode can both be on; one Escape puts both down (#6461).
+        app.canvas.highlighter = None;
         return;
     }
     // Escape turns highlighter mode off (#6461).

@@ -1554,6 +1554,43 @@ fn the_highlight_button_turns_highlighter_mode_on_and_off() {
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text);
 }
 
+/// #6461: the Format Painter and highlighter mode can both be on; one Escape turns off both,
+/// rather than leaving highlighter mode on for a second press.
+#[test]
+fn one_escape_turns_off_the_format_painter_and_highlighter() {
+    use egui::{Event, Key, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Mark these words"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    // A click on the page gives the canvas the keyboard.
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 2)).expect("caret");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(Event::PointerMoved(at));
+    h.step();
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.state_mut().run("ui.highlighter", json!({"value": true})).unwrap();
+    h.state_mut().run("edit.formatPainter", json!({})).unwrap();
+    assert!(h.state().canvas.highlighter.is_some() && h.state().session.painter.is_some(), "both modes are on");
+    h.key_press(Key::Escape);
+    h.step();
+    assert!(h.state().session.painter.is_none(), "the painter is off");
+    assert_eq!(h.state().canvas.highlighter, None, "one Escape turns highlighter mode off too");
+}
+
 /// #6461: with text selected the button highlights it and stays out of highlighter mode;
 /// `value` sets the mode; an unknown colour is refused and changes nothing.
 #[test]
