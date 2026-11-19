@@ -10,12 +10,13 @@ use std::sync::Arc;
 use craft::theme::Variant;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
+use craft::ui::contract::{Bind, Entry, FieldLayout, Gap, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft::ui::display::Text;
 use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::patterns::form_dialogs::PreviewView;
 use craft::ui::pickers::Select;
+use craft::ui::primitives::HAlign;
 use craft::ui::runtime::memory::Remember as _;
 use craft::ui::sections::Panel;
 use craft::ui::text::{NumberField, TextField};
@@ -169,7 +170,8 @@ fn layout_of(app: &WordApp, cache: &mut Option<(LayoutKey, Arc<DocLayout>)>) -> 
 fn choice(ui: &mut Ui, label: &str, salt: &str, current: &mut String, items: &[(&str, &str)]) -> bool {
     let entries: Vec<Entry<String>> = items.iter().map(|(id, name)| Entry::new((*id).to_owned(), tl!(name).to_owned())).collect();
     let mut changed = false;
-    Field::new(label.to_owned()).id_salt(salt).show(ui, |ui, _| {
+    // The name above its list, as production's settings column.
+    Field::new(label.to_owned()).id_salt(salt).layout(FieldLayout::Above).show(ui, |ui, _| {
         let picked = Select::new(label.to_owned(), Bind::given(current.clone()), &entries).id_salt(salt).show(ui);
         if let Some(value) = picked.value()
             && value != current
@@ -214,7 +216,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.print.said = result(&message).then_some(generation);
         }
         let ready = !chooses || app.printing.ready();
-        Row::new().show(ui, |ui, _| {
+        // The row takes the page, so the preview beside the settings column fills the room left (production: the
+        // preview takes the page's height beside a 380 pt column).
+        Row::new().fill().gap(Gap::Section).show(ui, |ui, _| {
             Panel::new(tl!("Print")).sizing(Sizing::Content).show(ui, |ui, _| settings(app, ui, &lay, hide_message, chooses, can_print, ready));
             preview::show(app, ui, &lay);
         });
@@ -258,7 +262,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
     } else {
         Text::new(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer.")).show(ui);
     }
-    if clicked(&Button::new(tl!("Save these pages as PDF…")).id_salt("save-pdf").show(ui)) {
+    if clicked(&Button::new(tl!("Save these pages as PDF…")).id_salt("save-pdf").sizing(Sizing::FillWidth).show(ui)) {
         app.print_pdf_dialog();
     }
 
@@ -268,7 +272,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
             collate(ui, &mut print.settings.collate, !app.printing.busy());
         }
     } else {
-        Field::new(tl!("Copies")).id_salt("copies").show(ui, |ui, _| {
+        Field::new(tl!("Copies")).id_salt("copies").layout(FieldLayout::Above).show(ui, |ui, _| {
             let field = NumberField::new(tl!("Copies"), Bind::given(Some(f64::from(print.settings.copies))))
                 .step(1.0)
                 .range(1.0..=f64::from(wordcraft_engine::print::MAX_COPIES))
@@ -300,7 +304,7 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
     }
     let sheet = &mut print.settings;
     if sheet.pages_per_sheet == "2" || sheet.pages_per_sheet.starts_with("booklet") {
-        Field::new(tl!("Orientation")).id_salt("print_orientation").show(ui, |ui, _| {
+        Field::new(tl!("Orientation")).id_salt("print_orientation").layout(FieldLayout::Above).show(ui, |ui, _| {
             Text::new(tl!("Landscape")).show(ui);
         });
     } else {
@@ -391,15 +395,16 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
     if !app.export_error.is_empty() {
         Text::new(app.export_error.clone()).show(ui);
     }
+    // Each format is a button across the column, its name at the reading start, as production's 320 pt rows.
     for &(label, ext) in EXPORT_FORMATS {
-        if clicked(&Button::new(tl!(label)).id_salt(ext).show(ui)) {
+        if clicked(&Button::new(tl!(label)).id_salt(ext).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
             app.export_dialog(ext);
         }
     }
     // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     {
-        if clicked(&Button::new(tl!("Browse in WordCraft…")).id_salt("browse").show(ui)) {
+        if clicked(&Button::new(tl!("Browse in WordCraft…")).id_salt("browse").sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
             let _ = app.run("ui.fileBrowser", json!({"purpose": "export"}));
         }
     }
