@@ -283,12 +283,29 @@ fn text_darkening_adds_ink_on_screen_only() {
     let d = Document::from_text("Marketing analytics lead with twelve years of measurement work.");
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let plain = render_page(&d, &l.pages[0], 2.0, &RenderOptions::default());
-    let dark = render_page(&d, &l.pages[0], 2.0, &RenderOptions { text_darkening: true, ..Default::default() });
+    let dark = render_page(&d, &l.pages[0], 2.0, &RenderOptions { text_darkening: 1.0, ..Default::default() });
     let (a, b) = (ink(&plain), ink(&dark));
     // About 0.3 px more on every edge of an 11 pt line at 2x: clearly more ink, not bold.
     assert!(b as f64 > a as f64 * 1.08 && (b as f64) < a as f64 * 1.6, "plain {a}, darkened {b}");
     // Off by default: exports and thumbnails are untouched.
-    assert!(!RenderOptions::default().text_darkening);
+    assert_eq!(RenderOptions::default().text_darkening, 0.0);
+}
+
+#[test]
+fn text_darkening_is_a_strength() {
+    let d = Document::from_text("Marketing analytics lead with twelve years of measurement work.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let at = |strength: f32| ink(&render_page(&d, &l.pages[0], 2.0, &RenderOptions { text_darkening: strength, ..Default::default() }));
+    // The system's lighter, default and stronger steps each add ink.
+    let (none, light, default, strong) = (at(0.0), at(0.5), at(1.0), at(1.5));
+    assert!(none < light && light < default && default < strong, "{none} {light} {default} {strong}");
+    assert_eq!(none, ink(&render_page(&d, &l.pages[0], 2.0, &RenderOptions::default())));
+    // No more than twice the default, and junk is no darkening at all.
+    assert_eq!(at(2.0), at(50.0));
+    assert_eq!(at(2.0), at(f32::INFINITY.min(f32::MAX)));
+    for junk in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+        assert_eq!(at(junk), none, "{junk}");
+    }
 }
 
 /// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
@@ -366,7 +383,7 @@ fn rotated_views_keep_their_baselines() {
 fn darkening_thickens_stems_and_leaves_the_tops_and_feet_of_letters_alone() {
     let (d, l) = flat_capitals();
     let snap = RenderOptions { baseline_snap: true, ..Default::default() };
-    let dark = RenderOptions { text_darkening: true, ..snap.clone() };
+    let dark = RenderOptions { text_darkening: 1.0, ..snap.clone() };
     for scale in [1.0, 1.45, 2.0] {
         let plain = render_page(&d, &l.pages[0], scale, &snap);
         let darkened = render_page(&d, &l.pages[0], scale, &dark);

@@ -28,6 +28,7 @@ mod portal_save;
 mod prefs_merge;
 mod print;
 mod region;
+mod screen_text;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 
@@ -728,6 +729,9 @@ fn main() -> eframe::Result {
                 app.replace_startup_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
+            // Page text follows the system's own text settings from here on (tests and headless
+            // screenshots never get here, so they keep the platform's defaults).
+            screen_text::watch(&cc.egui_ctx);
             app.tell_about_font_downloads();
             if prefs_enabled()
                 && let Some(dir) = wordcraft_control_key::settings_dir()

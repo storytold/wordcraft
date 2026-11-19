@@ -7358,6 +7358,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows",
+ "windows-registry",
  "winit",
  "winresource",
  "wl-clipboard-rs",

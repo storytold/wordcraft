@@ -8,6 +8,8 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hint
     let mut h = std::collections::hash_map::DefaultHasher::new();
     // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]).
     hinted.hash(&mut h);
+    // Nor a page drawn under the system's earlier text settings for one drawn under these.
+    crate::screen_text::current().key().hash(&mut h);
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
@@ -352,16 +354,14 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
 }
 
 /// Render options for page rasters shown on screen, so a page looks as text does in the
-/// platform's other apps (exports never change): on macOS, text is darkened the way the system
-/// draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight` draws it
-/// there (not darkened: hinted text already has FreeType's weight, and darkening made it
-/// look semi-bold) Everywhere, baselines sit on whole device pixels (hinting does that
-/// on Linux and the BSDs; macOS and Windows text is drawn unhinted and is moved there).
+/// platform's other apps (exports never change). How follows the system's own text settings
+/// once the app has asked for them ([`crate::screen_text`]), and until then what each platform
+/// does by default: on macOS, text is darkened the way the system draws it; on Linux and the
+/// BSDs it is hinted lightly, as FreeType's `hintslight` draws it there (not darkened: hinted
+/// text already has FreeType's weight, and darkening made it look semi-bold). Everywhere,
+/// baselines sit on whole device pixels (hinting does that; unhinted text is moved there).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
-    wordcraft_render::RenderOptions {
-        text_darkening: cfg!(target_os = "macos"),
-        baseline_snap: true,
-        hinting: cfg!(all(unix, not(target_os = "macos"))),
-        ..Default::default()
-    }
+    let mut opts = wordcraft_render::RenderOptions { baseline_snap: true, ..Default::default() };
+    crate::screen_text::current().apply(&mut opts);
+    opts
 }

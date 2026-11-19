@@ -46,8 +46,9 @@ objc2 = "0.6"
 # A copied equation's MathML goes on the pasteboard as `public.mathml.presentation` beside
 # arboard's HTML and text (#1297), through NSPasteboard's safe `setString:forType:`. Already in
 # the build through arboard, at this version; this adds only the NSString bindings, and NSData
-# for the clipboard's RTF (`public.rtf`).
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData"] }
+# for the clipboard's RTF (`public.rtf`), and NSUserDefaults for the system's font smoothing
+# setting (`screen_text.rs`), read through its safe `stringForKey:`.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData", "NSUserDefaults"] }
 # Closing the window must quit through NSApplication rather than by dropping the NSWindow
 # inside the AppKit run loop (see `schedule_macos_terminate`).
 dispatch2 = "0.3"
@@ -79,6 +80,11 @@ open = "5"
 # only the `UI_ViewManagement` bindings, and `System_UserProfile` for the home region new
 # documents take their paper and units from (#838).
 windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfile"] }
+# The system's ClearType setting (`screen_text.rs`): three values under `HKCU\Control Panel\Desktop`,
+# read through this crate's safe API (the Win32 call that reports them needs unsafe, which our
+# workspace forbids). Already in the build through craft-font-catalog, at this version.
+# MIT OR Apache-2.0.
+windows-registry = "0.6"
 # The clipboard's "Rich Text Format" and the names of its formats (#687, #833), which arboard
 # doesn't read. Already in the build through arboard, at this version.
 clipboard-win = { version = "5.4", features = ["std"] }

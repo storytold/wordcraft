@@ -159,8 +159,11 @@ pub struct RenderOptions {
     /// Colour for formatting marks.
     pub mark_color: Rgb,
     /// Thicken glyphs slightly the way macOS draws text on screen ("font smoothing"), so pages
-    /// look like they do in other Mac apps. For on-screen rasters only: exports stay exact.
-    pub text_darkening: bool,
+    /// look like they do in other Mac apps: 0 is none, 1 the system's default strength
+    /// ([`stem_darkening`]), and other values scale it, up to twice (the system's own setting
+    /// has a lighter and a stronger step). A value that isn't a number is none. For on-screen
+    /// rasters only: exports stay exact.
+    pub text_darkening: f32,
     /// Put every glyph's baseline on a whole device pixel, for text that is neither rotated nor
     /// mirrored. A baseline between two pixel rows spreads the feet of the letters (serifs, the
     /// bottoms of stems) over both rows as two grey rows instead of one solid one, which reads as
@@ -273,7 +276,7 @@ impl Default for RenderOptions {
             display: DisplayOptions::default(),
             paper: Rgb::WHITE,
             mark_color: Rgb(0x2B, 0x57, 0x9A),
-            text_darkening: false,
+            text_darkening: 0.0,
             baseline_snap: false,
             hinting: false,
             dark: false,
@@ -783,7 +786,8 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let ppem = *size as f64 * px_per_pt;
     // On-screen stem darkening: each outline is widened along its own x axis, in one piece (see
     // [`stem_darkening`] and [`widened`]). Skipped for translucent text, as it always was.
-    let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(ppem) } else { 0.0 };
+    let strength = if opts.text_darkening.is_finite() { f64::from(opts.text_darkening).clamp(0.0, 2.0) } else { 0.0 };
+    let darken_px = if *alpha >= 1.0 { stem_darkening(ppem) * strength } else { 0.0 };
     // Hinted outlines are in device pixels, and a snapped baseline is a row of them: only for an
     // upright, unmirrored, evenly scaled view (not rotated text boxes), where the pixel grid
     // lines up with the glyphs.
