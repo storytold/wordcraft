@@ -779,6 +779,9 @@ mod smoke {
         /// frame, a desktop host with a file service and a print spool, one blank document.
         fn new() -> Run {
             let ctx = egui::Context::default();
+            // The test finds the prompt's button in the AccessKit tree, which egui builds only once AccessKit is on
+            // (a screen reader turns it on in the app; `Frames::over` keeps the context's own options).
+            ctx.enable_accesskit();
             let (files, panels) = FileService::new(Wake::new(|| {}));
             let (settings, _) = prefs::open(false, &mut Store::in_memory());
             let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
