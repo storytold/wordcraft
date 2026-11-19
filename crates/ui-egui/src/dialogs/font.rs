@@ -300,8 +300,9 @@ fn sample_key(props: &CharProps, mark: Option<VertAlign>, paper: Rgb, dark: bool
 /// The columns of the font rows: the labels, then the controls filling the rest.
 const FONT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
-/// The Effects check boxes, two to a line.
-const EFFECT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
+/// The Effects check boxes, two to a line, each column as wide as its widest box and label (the old dialog's
+/// table: Italic starts just past Superscript, not halfway across the box).
+const EFFECT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::Content];
 
 /// One font box over `family` as two grid cells, its label and the box; the action rows (Add Font…, Load System
 /// Installed Fonts…) file a run.
