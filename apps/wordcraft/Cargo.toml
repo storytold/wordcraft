@@ -33,7 +33,7 @@ craft = { workspace = true, features = [
     "ui-app",
     "dialogs",
     "automation",
-    "gpu",
+    "gpu-startup",
     "print",
     "settings",
     "window",
