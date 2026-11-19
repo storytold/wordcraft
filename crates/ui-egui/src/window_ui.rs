@@ -13,7 +13,7 @@
 //! `swap_window` names every field, so a new field doesn't compile until it is classified.
 
 use crate::prefs::Prefs;
-use crate::{Status, WordApp, backstage, canvas, chrome, colors, dialogs, file_dialogs, format_shape, keytips, previews, print_page};
+use crate::{Status, WordApp, backstage, canvas, chrome, colors, dialogs, file_dialogs, format_shape, previews, print_page};
 
 /// A window's state while another window is drawn. Fields mirror their namesakes in [`WordApp`]
 /// and, for the ribbon tab and Backstage, in [`Prefs`].
@@ -50,7 +50,6 @@ pub(crate) struct WindowUi {
     pub(crate) dialog_answers: Vec<(craft::ui::dialog::DialogId, String, serde_json::Value)>,
     pub(crate) edits: craft::ui::edit::GestureHost<WordApp>,
     pub(crate) keytips_active: bool,
-    pub(crate) keytip_places: Vec<keytips::Place>,
     pub(crate) options_state: craft::ui::patterns::preferences::PreferencesState,
     pub(crate) print: print_page::PrintPage,
     pub(crate) shape_variation: Option<format_shape::Variation>,
@@ -101,7 +100,6 @@ impl WindowUi {
             dialog_answers: Default::default(),
             edits: Default::default(),
             keytips_active: false,
-            keytip_places: Vec::new(),
             options_state: Default::default(),
             print: Default::default(),
             shape_variation: None,
@@ -207,7 +205,6 @@ impl WordApp {
             dialog_answers,
             edits,
             keytips_active,
-            keytip_places,
             options_state,
             print,
             shape_variation,
@@ -312,7 +309,6 @@ impl WordApp {
             dialog_answers,
             edits,
             keytips_active,
-            keytip_places,
             options_state,
             print,
             shape_variation,

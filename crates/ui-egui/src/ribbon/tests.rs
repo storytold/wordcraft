@@ -361,7 +361,7 @@ fn contextual_tabs_follow_the_selection() {
 /// control lies inside its group's access node.
 #[test]
 fn ribbon_groups_fit_above_their_labels() {
-    fn rects(node: &egui_kittest::kittest::Node<'_>, out: &mut Vec<egui::Rect>) {
+    fn rects(node: &egui_kittest::Node<'_>, out: &mut Vec<egui::Rect>) {
         for child in node.children() {
             out.push(child.rect());
             rects(&child, out);

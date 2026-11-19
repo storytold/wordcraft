@@ -3,14 +3,17 @@ use std::ops::RangeInclusive;
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
-use craft::ui::contract::{Bind, BodyCx, Label, Props as _, Show as _, ShowContainer as _, Trigger};
-use craft::ui::controls::DisclosureGlyph;
+use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::{Menu, MenuItem, MenuOutput};
+use craft::ui::runtime::env::Label;
 use craft::ui::text::NumberField;
 
-use super::{Ui, Value, WordApp, json};
+use serde_json::Value;
+
+use super::{Ui, WordApp, json};
 use crate::icons;
 use crate::undo_marks::apply_edits;
 

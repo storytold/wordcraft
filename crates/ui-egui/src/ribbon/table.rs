@@ -9,7 +9,8 @@ use craft::ui::menu::MenuItem;
 use craft::ui::text::NumberField;
 
 use super::common::menu_button;
-use super::{Remember, Target, Ui, WordApp, json};
+use super::{Ui, WordApp, json};
+use crate::colors::{Remember, Target};
 use crate::table_pen::TableTool;
 use crate::undo_marks::apply_edits;
 

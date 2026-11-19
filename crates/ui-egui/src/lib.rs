@@ -511,8 +511,6 @@ pub struct WordApp {
     pub(crate) md_source_visit: u64,
     /// Keytips are showing (set from the keytips' output each pass).
     pub(crate) keytips_active: bool,
-    /// The keytip places this pass recorded.
-    pub(crate) keytip_places: Vec<keytips::Place>,
     /// The dialogs this window has open.
     pub dialog_host: craft::ui::dialog::DialogHost,
     /// What the window's dialogs ask of the app, by dialog.

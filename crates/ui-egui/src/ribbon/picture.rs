@@ -13,7 +13,8 @@ use craft::ui::text::{NumberField, TextField};
 use super::arrange::{align_menu, group_menu, rotate_menu, rotation_field, wrap_menu};
 use super::common::{menu_button, size_field};
 use super::shape::alt_text_group;
-use super::{Target, WordApp, json};
+use super::{WordApp, json};
+use crate::colors::Target;
 use crate::undo_marks::apply_edits;
 
 /// Fills the Picture Format tab's Adjust, Picture Styles, Accessibility (Alt Text), Arrange and Size groups.

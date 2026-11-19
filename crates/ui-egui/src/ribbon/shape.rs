@@ -11,7 +11,8 @@ use craft::ui::runtime::overlay::close_popups;
 
 use super::arrange::{align_menu, rotate_menu, rotation_field, wrap_menu};
 use super::common::{menu_button, size_field, weight_menu};
-use super::{Target, Ui, WordApp, json};
+use super::{Ui, WordApp, json};
+use crate::colors::Target;
 
 /// The variation grids' columns: five tiles per row, each as wide as its tile.
 const VARIATION_GRID: [ColumnWidth; 5] = [ColumnWidth::Content; 5];
