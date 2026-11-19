@@ -845,6 +845,15 @@ impl WordApp {
                 }
                 json!({"alignmentGuides": self.ui.alignment_guides})
             }
+            "ui.citations.provider" => {
+                // Citations › Provider: the citation provider. Zotero is the only one for now, so
+                // choosing it changes nothing (no setting is stored, no undo step); when a second
+                // provider arrives its choice goes in the preferences.
+                match p.get("value").and_then(Value::as_str) {
+                    Some("zotero") => json!({"provider": "zotero"}),
+                    _ => return Some(Err("`value` must be \"zotero\", the only citation provider".into())),
+                }
+            }
             "ui.startScreen" => {
                 // File › Options › General › Start-up (#766): `value` true or false turns showing
                 // File › Home at start-up on or off; no value reads it.
@@ -1224,6 +1233,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.citations.provider"
             | "ui.recentRemove"
             | "ui.recentClear"
             | "ui.displayServer"

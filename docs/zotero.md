@@ -4,7 +4,9 @@ WordCraft works with the [Zotero](https://www.zotero.org) desktop app the way Wo
 own citation dialog, all of its citation styles, automatic bibliography and refresh. Nothing to
 install in Zotero; it only has to be running. The **Citations** tab in the ribbon (Zotero is the citation provider) has the buttons:
 Add/Edit Citation, Add Note, Add/Edit Bibliography, Refresh, Document Preferences and Unlink
-Citations (each runs one of the commands below).
+Citations (each runs one of the commands below). The tab's first group, **Provider**, is a menu
+with one checked item, Zotero, the only citation provider for now (`ui.citations.provider` with
+`{"value": "zotero"}`; any other value is an error, and choosing Zotero changes nothing).
 
 ## Commands
 

@@ -135,3 +135,34 @@ fn ribbon_tab_click_does_not_follow_the_caret() {
     a.run("text.insert", json!({"text": "x"})).unwrap();
     assert!(a.canvas.scroll_to_caret, "typing still brings the caret into view");
 }
+
+/// Citations › Provider: the command takes only "zotero"; anything else is an error, never a
+/// panic; it changes nothing and adds no undo step. The tab's Provider menu has one item, Zotero,
+/// marked as chosen.
+#[test]
+fn citations_provider_menu_has_zotero_checked() {
+    use egui_kittest::kittest::{By, Queryable};
+    let mut a = app();
+    let depth = a.session.undo_depth();
+    assert_eq!(a.run("ui.citations.provider", json!({"value": "zotero"})).unwrap(), json!({"provider": "zotero"}));
+    for junk in [json!({}), json!({"value": "mendeley"}), json!({"value": 7}), json!({"value": null}), json!({"value": ""}), json!({"value": ["zotero"]})] {
+        assert!(a.run("ui.citations.provider", junk).is_err());
+    }
+    assert_eq!(a.session.undo_depth(), depth, "not an undo step");
+    a.run("ui.tab", json!({"tab": "Citations"})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            crate::test_harness::driver_logic(&ctx, app);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Provider").click();
+    h.run_steps(3);
+    let items: Vec<_> = h.query_all(By::new().label_contains("Zotero")).collect();
+    assert_eq!(items.len(), 1, "the menu has exactly one item, Zotero");
+    let checked = items.first().map(|n| n.accesskit_node().toggled().is_some() || n.accesskit_node().is_selected().is_some());
+    assert_eq!(checked, Some(true), "and it is marked as the chosen one");
+}
