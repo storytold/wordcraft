@@ -697,8 +697,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         Vec::new()
     } else {
         let ea = installed_east_asian_fonts(&cx, rp.auto_space_de || rp.auto_space_dn);
+        // Runs come in order, so their ends rise: the run holding `at` is a binary search away.
         let ea_lacks = |at: usize, c: char| {
-            ea.iter().find(|(end, _)| at < *end).and_then(|(_, face)| *face).is_some_and(|f: wordcraft_fonts::FaceRef| !f.covers(c))
+            ea.get(ea.partition_point(|(end, _)| *end <= at)).and_then(|(_, face)| *face).is_some_and(|f: wordcraft_fonts::FaceRef| !f.covers(c))
         };
         auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn, ea_lacks)
     };
