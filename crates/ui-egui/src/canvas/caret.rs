@@ -121,7 +121,14 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     let keys = !pass.editor_input.is_empty();
     // PLAN: assumed `ToolPass::press.phase` readable here (`PressPhase::Idle` when no button is involved).
     let pointer = !matches!(pass.press.phase, craft::behavior::press::PressPhase::Idle);
-    let view_changed = pass.view.is_some();
+    // The view this pass shows: the page view reports its view on every pass, changed or not, so the glide compares
+    // where the document lies on screen and at what zoom with the last pass's.
+    let view = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (zoom_key, content_origin.x.to_bits(), content_origin.y.to_bits()).hash(&mut h);
+        h.finish()
+    };
     let request = |target: Bar, shown: bool| LookRequest {
         content_origin,
         target,
@@ -134,7 +141,7 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
         keys,
         pointer,
         motion,
-        view_changed,
+        view,
     };
     let ink = |app: &mut WordApp| caret_color_at(app, &doc, pl.page, pl.probe.0, pl.probe.1, zoom_key, dim_body);
 
