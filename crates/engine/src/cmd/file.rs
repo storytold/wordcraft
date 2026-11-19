@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport), "copy"?: bool (write a copy, as File › Export does: the document keeps its own file, unsaved changes and save stamps; not with `password`)}"#)
+            .params(r#"{"path"?: string (required with `copy`), "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport), "copy"?: bool (write a copy at `path`, as File › Export does: the document keeps its own file, unsaved changes and save stamps; not with `password`)}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save), "copy"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
@@ -393,21 +393,22 @@ fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
 /// Executes `file.save`: writes the document or text to disk, preserving exact file text for
 /// unedited Markdown files, and updating session path and dirty state.
 fn save(s: &mut Session, v: &Value) -> CmdResult {
+    // A copy (File › Export, #6131) is written and nothing else: the document keeps its own file,
+    // its unsaved changes and its save stamps, so the next Save still goes to the original.
+    // It never falls back to the document's own file or opens the Save As picker (whose answer is
+    // an ordinary save that adopts the file).
+    let as_copy = p::bool(v, "copy") == Some(true);
+    if as_copy && p::str(v, "path").is_none() {
+        return Err(CmdError::Params("`copy` needs a `path`: the copy has to go somewhere".into()));
+    }
     let path = match p::str(v, "path").map(std::path::PathBuf::from).or_else(|| s.path.clone()) {
         Some(p) => p,
         None => {
-            // The picker's answer would run an ordinary save, which adopts the file.
-            if p::bool(v, "copy") == Some(true) {
-                return Err(CmdError::Params("`copy` needs a `path`: the copy has to go somewhere".into()));
-            }
             s.push_ui_request(json!({"open": "saveAs"}));
             return Ok(json!({"saved": false}));
         }
     };
     check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
-    // A copy (File › Export, #6131) is written and nothing else: the document keeps its own file,
-    // its unsaved changes and its save stamps, so the next Save still goes to the original.
-    let as_copy = p::bool(v, "copy") == Some(true);
     if as_copy && v.get("password").is_some_and(|pw| !pw.is_null()) {
         return Err(CmdError::Params("`password` changes the document's own saves, so it can't come with `copy` (use file.encrypt)".into()));
     }

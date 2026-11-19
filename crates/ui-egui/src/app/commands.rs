@@ -123,7 +123,9 @@ impl WordApp {
         }
         if self.services.host_save.is_some() {
             let opened = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
-            if opened.as_deref() == Some(name) {
+            // Compare file names only: a copy given as a path still lands on the opened file's name.
+            let copy_name = std::path::Path::new(name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| name.to_string());
+            if opened.as_deref() == Some(copy_name.as_str()) {
                 return Err("a copy can't have the same name as the open document: choose another name".into());
             }
         }

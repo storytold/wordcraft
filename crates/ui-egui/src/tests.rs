@@ -5260,13 +5260,16 @@ fn host_save_as_a_copy_format_is_not_save_as() {
 }
 
 /// A copy named like the opened file can't go to the host page, whose Save would overwrite the
-/// opened file with it (#6131 review).
+/// opened file with it (#6131 review). The bridge strips any directory from `path`, so a path
+/// whose file name matches the opened document is refused too.
 #[test]
 fn host_copy_with_the_opened_name_is_refused() {
     let (mut a, got) = host_app(false);
     host_open(&mut a, "report.docx");
-    let e = a.execute("file.saveAs", json!({"path": "report.docx", "copy": true})).unwrap_err();
-    assert!(e.contains("same name"), "{e}");
+    for path in ["report.docx", "./report.docx", "/tmp/report.docx"] {
+        let e = a.execute("file.saveAs", json!({"path": path, "copy": true})).unwrap_err();
+        assert!(e.contains("same name"), "{path}: {e}");
+    }
     assert!(got.borrow().is_empty(), "nothing reached the host");
     assert!(a.session.dirty);
     a.execute("file.saveAs", json!({"path": "other.docx", "copy": true})).unwrap();
