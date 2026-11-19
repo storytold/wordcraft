@@ -2269,6 +2269,36 @@ fn a_numbered_heading_opening_with_a_page_break_takes_its_number_along() {
     assert_eq!(label_pages, [1]);
 }
 
+/// #7057: the same with a column break. In two columns, a numbered paragraph whose text opens with
+/// a column break has its number drawn beside its text in the next column, as Word draws it, not
+/// alone on the break's line at the bottom of the column before.
+#[test]
+fn a_numbered_paragraph_opening_with_a_column_break_takes_its_number_along() {
+    crate::test_fonts();
+    let mut d = Document::from_text(&format!("Before\n{}Right", wordcraft_doc::para::COLUMN_BREAK));
+    d.last_section.columns.count = 2;
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    // The first glyph (x, baseline y) of the runs drawn for `want`.
+    let draws = flat(display::page_display(&d, &l.pages[0], &Default::default()));
+    let at = |want: &str| {
+        let found: Vec<(f32, f32)> = draws
+            .iter()
+            .filter_map(|x| match x {
+                display::Draw::Glyphs { text, glyphs, .. } if text.contains(want) => glyphs.first().map(|g| (g.1, g.2)),
+                _ => None,
+            })
+            .collect();
+        let [one] = found[..] else { panic!("{want:?} drawn once: {found:?}") };
+        one
+    };
+    let (before, label, right) = (at("Before"), at("1."), at("Right"));
+    assert!(label.0 > before.0 + 100.0, "the number in the second column: {label:?}, Before at {before:?}");
+    assert!(label.0 < right.0 && (label.1 - right.1).abs() < 0.5, "beside Right: number {label:?}, Right {right:?}");
+}
+
 #[test]
 fn russian_letter_list_labels_draw_cyrillic() {
     crate::test_fonts();
