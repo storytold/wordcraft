@@ -706,16 +706,16 @@ impl<'a> Flow<'a> {
         }
     }
 
-    /// Late floats placed for lines that went on after all (past `l1`) wait for the next piece;
-    /// one whose own wrap pushed its line on stays, as before. Whether the lines from `l0` are to
-    /// be broken again without them. Does nothing once the wrap relays are used up
+    /// Late floats placed for lines past `l1` wait for the next piece. An overflow line keeps
+    /// its floats because it is still emitted here. Whether the lines from `l0` are to be broken
+    /// again without the released floats. Does nothing once the wrap relays are used up
     /// ([`MAX_WRAP_RELAYS`]).
-    fn settle_late(&mut self, pb: &mut PageBuilder, l1: usize) -> bool {
+    fn settle_late(&mut self, pb: &mut PageBuilder, l1: usize, overflow: bool) -> bool {
         let l0 = self.l0;
         if l0 == 0 || pb.web || self.late.placed.is_empty() || self.wrap_relays >= MAX_WRAP_RELAYS {
             return false;
         }
-        let end = if l1 == l0 && pb.fresh() { l0 + 1 } else { l1 }; // what the overflow keeps
+        let end = l1 + usize::from(overflow);
         let moved = self.late.release(self.p, &self.pl, end, &mut pb.excl) || self.late.keep_back(self.p, &self.pl, l0..end);
         moved && l1 > l0
     }
@@ -913,7 +913,10 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
         let (end, widowed) = f.settled_end(ctx, pb, &fit);
         fit.l1 = end;
-        if f.settle_late(pb, fit.l1) {
+        // On a fresh column an unfitting line can overflow. Strict widow control instead moves
+        // the lines on without emitting anything and must release their late floats as well.
+        let overflow = end == f.l0 && pb.fresh() && !widowed;
+        if f.settle_late(pb, end, overflow) {
             continue;
         }
         if fit.l1 == f.l0 {
@@ -921,7 +924,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // (or, short of room, the page after, which fails the try), where the lines of a
             // column's first paragraph would otherwise overflow it. Lines pushed back for a row
             // beside a floating object keep the overflow as before.
-            if !pb.fresh() || widowed {
+            if !overflow {
                 f.move_on(ctx, pb);
                 continue;
             }
@@ -1121,5 +1124,55 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
         }
         Some(Block::Table(_)) => 24.0,
         None => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::Pos;
+    use wordcraft_doc::para::{Anchor, Float, LINE_BREAK, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+
+    #[test]
+    fn strict_widow_control_releases_a_late_float_when_no_line_is_emitted() {
+        crate::test_fonts();
+        let mut doc = Document::new();
+        doc.settings.compat_mode = 15;
+        doc.last_section.columns.count = 2;
+        let mut p = Paragraph::with_text(&format!("First{LINE_BREAK}Second{LINE_BREAK}Third"), Default::default());
+        p.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+        p.props.widow_control = Some(true);
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let anchor = Pos::body(0, "First".len() + LINE_BREAK.len_utf8());
+        let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        doc.insert_object(&anchor, crate::tests::rect_shape(20.0, 20.0, float), &Default::default()).unwrap();
+        let p = doc.body[0].as_para().unwrap();
+
+        crate::pass::with_flow_page(&doc, |ctx, pb| {
+            let top = pb.top;
+            let height = 14.1;
+            pb.advance(0, top); // start in the last column of the previous page
+            pb.bottom = top + height;
+            pb.balance = Some((1, height));
+            let mut flow = Flow::new(ctx, pb, p, (0, top));
+            assert!(pb.excl.is_empty(), "the float waits for its anchor line");
+
+            // Continue after the first line. The balance attempt can fit only one of the two lines left.
+            flow.l0 = 1;
+            pb.advance(0, top);
+            assert!(pb.fresh());
+            assert!((pb.bottom - pb.top - height).abs() < 0.01);
+            flow.place_due_late(ctx, pb);
+            assert_eq!(pb.excl.len(), 1, "the anchor line fits before widow control");
+
+            let fit = flow.fit_lines(ctx, pb, &[], 0.0);
+            assert_eq!(fit.l1, 2);
+            let (end, widowed) = flow.settled_end(ctx, pb, &fit);
+            assert_eq!((end, widowed), (1, true));
+            let overflow = end == flow.l0 && pb.fresh() && !widowed;
+            assert!(!flow.settle_late(pb, end, overflow));
+            assert!(pb.excl.is_empty(), "no text is emitted here, so no wrap area may remain here");
+        });
     }
 }

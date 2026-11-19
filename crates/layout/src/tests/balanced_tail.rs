@@ -4,10 +4,10 @@
 //! in two columns, one case per document, saved as compatibility mode 15 and as 14: from mode 15
 //! Word keeps such lines together in the first column that can hold them (the later columns may be
 //! left short or empty), keeps a paragraph with "keep lines together" or "keep with next" whole
-//! there, and does the same beside a footnote or a floating picture and for a section that
-//! starts and ends on one page; in mode 14 it splits two lines one per column. Not matched, and
-//! not tested: mode 14's other layouts (a three-line tail, two and one; the text after the
-//! section), and keep with next on the last lines of a paragraph that began on the page before.
+//! there when those rules fit, including in a section that starts and ends on one page. In mode
+//! 14 Word splits two lines one per column. Synthetic tests also cover a footnote and a floating
+//! picture. Mode 14's other layouts (a three-line tail, two and one; the text after the section)
+//! and keep with next on the last lines of a paragraph that began on the page before remain open.
 use crate::*;
 use wordcraft_doc::para::{Anchor, Float, InlineObject, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{LineSpacing, ParaProps};

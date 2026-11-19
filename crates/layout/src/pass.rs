@@ -237,6 +237,18 @@ fn new_page_builder<'p>(
     }
 }
 
+#[cfg(test)]
+pub(super) fn with_flow_page(doc: &Document, test: impl FnOnce(&mut Ctx<'_>, &mut PageBuilder<'_>)) {
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions::default();
+    let mut ctx = new_ctx(doc, &mut cache, &opts, (&HashMap::new(), None, &Totals::first_guess(1)));
+    let sect = &doc.last_section;
+    let early = EarlyFloats::new();
+    let mut page = new_page_builder(sect, sect.page_num_format, &early, false, false);
+    page.new_page(0, sect.margin_top);
+    test(&mut ctx, &mut page);
+}
+
 /// Endnotes in document order, with the section of their reference; placed at the end of a
 /// section that keeps them there, else at the end of the document.
 fn endnote_queue(ctx: &Ctx) -> VecDeque<(u32, usize)> {
