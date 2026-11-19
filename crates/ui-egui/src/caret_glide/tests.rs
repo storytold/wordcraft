@@ -385,8 +385,13 @@ fn the_canvas_caret_glides_after_a_key() {
     // Home: the caret glides to the start of the line.
     // (The canvas reads the key at the end of its frame; the caret sets off in the next.)
     h.event(key(egui::Key::Home));
-    for _ in 0..3 {
+    // The framework hands the app a key as a fired command at the head of a later pass, so the caret sets off a
+    // frame or two after the key; the glide lasts several frames, so it is caught on its way.
+    for _ in 0..8 {
         crate::test_harness::frames(&mut h, 1);
+        if gliding(&h) {
+            break;
+        }
     }
     assert!(gliding(&h), "the caret is on its way");
     let x = drawn(&h).unwrap()[0].x;

@@ -1040,6 +1040,28 @@ mod tests {
         Some(((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0))
     }
 
+    /// [`spot`] once the widget has stopped moving: a notice that gains a line eases to its new height, and a
+    /// press aimed at a button on its way misses it.
+    fn settled_spot(a: &mut WordApp, ctx: &egui::Context, label: &str) -> Option<(f64, f64)> {
+        let mut at: Option<(f64, f64)> = None;
+        let mut still = 0;
+        for _ in 0..60 {
+            let tree = frame(a, ctx, Vec::new());
+            if let Some(now) = spot(&tree, label) {
+                if at == Some(now) {
+                    still += 1;
+                } else {
+                    at = Some(now);
+                    still = 0;
+                }
+            }
+            if still >= 5 {
+                break;
+            }
+        }
+        at
+    }
+
     /// craft-proof calls Swiss German and Portugal's Portuguese pack languages (`de-ch`,
     /// `pt-pt`); the status bar and the pack list still name them as German and Portuguese.
     #[test]
@@ -1385,11 +1407,7 @@ mod tests {
         assert!(packs::installing().is_empty() && !packs::is_installed("pl"));
         assert!(a.packs_rt.errors.get("pl").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
         // The reason now sits in the notice, which moves the button: find it again.
-        let mut tree = frame(&mut a, &ctx, Vec::new());
-        for _ in 0..4 {
-            tree = frame(&mut a, &ctx, Vec::new());
-        }
-        let install = spot(&tree, "Install (").expect("the bar still offers Polish");
+        let install = settled_spot(&mut a, &ctx, "Install (").expect("the bar still offers Polish");
         user_click(&mut a, &ctx, install);
         assert!(backend.network.load(Ordering::Relaxed), "the person's click turns it on");
         for _ in 0..500 {
@@ -1728,11 +1746,7 @@ mod tests {
         assert!(!packs::fetched() && !packs::is_installed("kl"));
         assert!(a.packs_rt.errors.get("").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
         // The reason now sits in the notice, which moves the button: find it again.
-        let mut tree = frame(&mut a, &ctx, Vec::new());
-        for _ in 0..4 {
-            tree = frame(&mut a, &ctx, Vec::new());
-        }
-        let install = spot(&tree, "Install").expect("the bar still offers Greenlandic");
+        let install = settled_spot(&mut a, &ctx, "Install").expect("the bar still offers Greenlandic");
         user_click(&mut a, &ctx, install);
         assert!(backend.0.network.load(Ordering::Relaxed), "the person's click turns it on");
         for _ in 0..500 {
