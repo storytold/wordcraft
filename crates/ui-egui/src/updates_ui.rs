@@ -5,7 +5,7 @@ use crate::WordApp;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::ui::dialog::DialogResult;
 #[cfg(not(target_arch = "wasm32"))]
-use craft::update::stack_dialogs::{CheckChoice, UpdateCheckDialog, UpdateWords};
+use craft::update::stack_dialogs::{CheckChoice, UpdateCheckDialog};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::update::updater::{Action, Status, Updater};
 
@@ -114,19 +114,12 @@ pub(crate) fn run(app: &mut WordApp) {
             Action::Close => {
                 let _ = app.ask_before_quit();
             }
-            Action::None => {}
+            _ => {}
         }
         sync_check_dialog(app, can_start);
     }
     #[cfg(target_arch = "wasm32")]
     let _ = app;
-}
-
-/// The check dialog's words in the interface language.
-#[cfg(not(target_arch = "wasm32"))]
-fn words() -> UpdateWords {
-    // PLAN: assumed `UpdateWords::translated(lookup: impl Fn(&str) -> String) -> UpdateWords` (the `words!` macro's constructor over each English key).
-    UpdateWords::translated(|text| crate::i18n::t(text).to_string())
 }
 
 /// Shows the check-result dialog while the updater has a status (a manual check, or what the last
@@ -150,8 +143,8 @@ fn sync_check_dialog(app: &mut WordApp, can_start: bool) {
             DialogResult::Ok(CheckChoice::Update) => {
                 rt.updater.request_install(can_start);
             }
-            // Only offered with a release set on the dialog, which the app never sets: the prompt shows releases.
-            DialogResult::Ok(CheckChoice::Download) => {}
+            // Download is only offered with a release set on the dialog, which the app never sets: the prompt shows releases.
+            _ => {}
         }
     }
     let status = rt.updater.status().clone();
@@ -164,7 +157,7 @@ fn sync_check_dialog(app: &mut WordApp, can_start: bool) {
         return;
     }
     if !host.is_open::<UpdateCheckDialog>() {
-        host.open(UpdateCheckDialog::new(env!("CARGO_PKG_VERSION")).words(words()));
+        host.open(UpdateCheckDialog::new(env!("CARGO_PKG_VERSION")));
     }
     if let Some(dialog) = host.get_mut::<UpdateCheckDialog>() {
         dialog.set_status(status);

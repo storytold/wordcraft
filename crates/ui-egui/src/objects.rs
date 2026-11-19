@@ -392,6 +392,11 @@ impl ObjectGesture {
         })
     }
 
+    /// The press began on a Behind Text object that has not become a drag: the text under it gets the press as well.
+    pub(crate) fn pending_behind(&self) -> bool {
+        self.pending_behind
+    }
+
     /// A press at `p` on the page tool's canvas: on an object it selects it and, where it can
     /// move, starts a move; `None` where the press is not about an object, so the text gets it.
     /// A gesture with nothing to drag stands for a press taken as a click (a link followed, an

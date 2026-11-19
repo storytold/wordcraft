@@ -166,7 +166,7 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     if !has_document && !works_without_document(&app.ui.backstage_page) {
         app.ui.backstage_page = "home".into();
     }
-    while let Some(command) = cx.take_command::<BackstagePageCommand>() {
+    while let Some((command, _)) = cx.take_command::<BackstagePageCommand>() {
         match command {
             BackstagePageCommand::Back => {
                 let _ = app.run("ui.backstage", json!({"value": false}));

@@ -15,6 +15,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::sync::Arc;
 
 use egui::Rect;
 use wordcraft_doc::para::InlineObject;
@@ -30,9 +31,9 @@ use craft::pages::ui::access::{AccessBuilder, AccessDescriber, AccessNode, Acces
 type Pictures = HashMap<(Vec<u32>, usize), Rect>;
 
 /// Describes the document the pages are drawn from, and its selection.
-pub(crate) struct DocumentDescriber<'a> {
-    doc: &'a Document,
-    layout: &'a DocLayout,
+pub(crate) struct DocumentDescriber {
+    doc: Arc<Document>,
+    layout: Arc<DocLayout>,
     /// The anchor and focus the caret is drawn from.
     sel: (Pos, Pos),
     /// The caret and the selection's other end, found while describing: a run's handle exists only once
@@ -40,21 +41,19 @@ pub(crate) struct DocumentDescriber<'a> {
     selection: Cell<Option<(AccessPosition, AccessPosition)>>,
 }
 
-impl<'a> DocumentDescriber<'a> {
-    /// A describer of `layout`. While Insert › Table's preview shows (#3931) the pages and caret are
-    /// drawn from the preview copy, so that copy's document and selection are described, not the real
-    /// document that the preview's layout does not belong to.
-    pub(crate) fn new(app: &'a crate::WordApp, layout: &'a DocLayout) -> Self {
-        let doc = crate::canvas::page_doc(app);
-        let sel = crate::canvas::preview_sel(app)
-            .map_or_else(|| (app.session.sel.anchor.clone(), app.session.sel.focus.clone()), |sel| (sel.anchor.clone(), sel.focus.clone()));
+impl DocumentDescriber {
+    /// A describer of `layout`, laid out from `doc`, with the caret and the selection's other end in `sel`. It owns
+    /// its snapshot, as the page source does, so the page view can hold it while the body edits the app. While
+    /// Insert › Table's preview shows (#3931) the pages and caret are drawn from the preview copy, so the caller
+    /// passes that copy's document and selection, not the real document the preview's layout does not belong to.
+    pub(crate) fn new(doc: Arc<Document>, layout: Arc<DocLayout>, sel: (Pos, Pos)) -> Self {
         DocumentDescriber { doc, layout, sel, selection: Cell::new(None) }
     }
 }
 
-impl AccessDescriber for DocumentDescriber<'_> {
+impl AccessDescriber for DocumentDescriber {
     fn describe(&self, placed: &[PlacedPage], out: &mut AccessBuilder) {
-        let mut walk = Walk::new(self.doc, out);
+        let mut walk = Walk::new(&self.doc, out);
         'pages: for pp in placed {
             let Some(page) = self.layout.pages.get(pp.page) else { continue };
             let scale = crate::canvas::page_screen_scale(pp.rect, page, 1.0);
@@ -450,8 +449,10 @@ mod tests {
     /// The document's selection as the describer reports it for `app`'s whole layout: the character
     /// offsets of the caret and of the other end.
     fn selection_offsets(app: &crate::WordApp) -> Option<(usize, usize)> {
-        let layout = wordcraft_layout::layout(crate::canvas::page_doc(app), &mut wordcraft_layout::LayoutCache::new(), &Default::default());
-        let describer = DocumentDescriber::new(app, &layout);
+        let doc = crate::canvas::page_doc(app);
+        let layout = Arc::new(wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &Default::default()));
+        let sel = crate::canvas::preview_sel(app).unwrap_or(app.session.sel_ends());
+        let describer = DocumentDescriber::new(Arc::new(doc.clone()), layout.clone(), (sel.anchor.clone(), sel.focus.clone()));
         let placed: Vec<PlacedPage> = layout
             .pages
             .iter()
@@ -577,7 +578,7 @@ mod tests {
         let layout = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
         let n = layout.pages.len();
         let p = Pos::body(0, 1_000_000);
-        let describer = DocumentDescriber { doc: &doc, layout: &layout, sel: (p.clone(), p), selection: Cell::new(None) };
+        let describer = DocumentDescriber::new(Arc::new(doc), Arc::new(layout), (p.clone(), p));
         let rect = Rect::from_min_size(egui::pos2(f32::NAN, 0.0), egui::vec2(f32::INFINITY, 1.0));
         let placed: Vec<PlacedPage> = (0..n + 5).map(|i| PlacedPage::new(i, rect, f64::NAN, (f32::NAN, f32::INFINITY))).collect();
         let mut out = AccessBuilder::new();

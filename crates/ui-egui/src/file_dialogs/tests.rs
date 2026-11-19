@@ -74,8 +74,7 @@ fn request(files: &ScriptedFiles, n: usize) -> PickRequest {
 
 /// The status line's text.
 fn status_text(a: &WordApp) -> String {
-    // PLAN: assumed `Status::text(&self) -> &str` (sh.A3)
-    a.status.text().to_string()
+    a.status.as_ref().map(|s| s.text.clone()).unwrap_or_default()
 }
 
 /// #2445: Save on an imported binary Word file asks for DOCX, preserving the import on Cancel.
@@ -849,8 +848,8 @@ fn only_add_font_asks_for_several_files() {
 #[test]
 fn a_huge_font_selection_is_capped() {
     let (mut a, _) = async_app();
-    let paths: Vec<String> = (0..MAX_FONTS_PER_PICK + 50).map(|i| format!("/nonexistent/f{i}.ttf")).collect();
-    let r = a.add_fonts(paths).unwrap();
+    let fonts: Vec<(String, Value)> = (0..MAX_FONTS_PER_PICK + 50).map(|i| format!("/nonexistent/f{i}.ttf")).map(|p| (p.clone(), json!({"path": p}))).collect();
+    let r = a.add_fonts(fonts).unwrap();
     assert_eq!(r["added"], 0);
     assert_eq!(r["failed"].as_array().map(Vec::len), Some(MAX_FONTS_PER_PICK));
     assert_eq!(r["skipped"], 50);
@@ -861,7 +860,7 @@ fn a_huge_font_selection_is_capped() {
 #[test]
 fn many_failed_fonts_end_with_a_count() {
     let (mut a, _) = async_app();
-    let paths: Vec<String> = (0..5).map(|i| format!("/nonexistent/f{i}.ttf")).collect();
-    a.add_fonts(paths).unwrap();
+    let fonts: Vec<(String, Value)> = (0..5).map(|i| format!("/nonexistent/f{i}.ttf")).map(|p| (p.clone(), json!({"path": p}))).collect();
+    a.add_fonts(fonts).unwrap();
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }

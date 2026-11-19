@@ -115,7 +115,7 @@ impl Component for EquationFrameControl<'_> {
         EquationFrameStyle {
             metrics: Metrics::new(),
             sizes: FrameSizes { pad: t.space.gap.tight, strip: t.size.handle.md, grip: vec2(t.size.handle.sm, t.size.control.sm) },
-            radius: t.radius.sm,
+            radius: t.shape.radius.sm,
             chevron: t.size.handle.sm,
             dot: t.stroke.medium,
             line: cx.color(t.color.overlay.line),
