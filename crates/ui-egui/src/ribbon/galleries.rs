@@ -152,8 +152,12 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
         let doc = &app.session.doc;
         let makers: Vec<Maker<'_>> = entries.iter().map(|(id, _)| Box::new(move || style_tile_image(doc, id, ppp, dark_page, dark)) as Maker<'_>).collect();
         let items = image_items("style", &entries, &makers, ppp, revision);
+        // Each tile shows the sample's first letters at their size, as wide as `STYLE_TILE_W` crops them (twice the
+        // tile's height), with the style's name under it.
         Gallery::new(tl!("Styles"), &items, Some(&current))
             .tiles(6, 3)
+            .aspect(ThumbAspect::new(2, 1))
+            .caption(CaptionPlace::Below)
             .more(GalleryMore::Command(CommandRef::with_params("view.stylesPane", json!({"value": true}))))
             .show(ui)
     };
