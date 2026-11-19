@@ -561,27 +561,40 @@ pub struct CompositionFaces {
     pub east_asian: Option<wordcraft_fonts::FaceRef>,
 }
 
-/// Bind window `window`'s [`composition_family`] to its `faces`, the font's and then the East
-/// Asian font's, followed by the interface fonts, so a composition looks like the text around
-/// it, as in Word: kana and Han the font lacks are drawn in the East Asian font. A face larger
-/// than the composition borrows (see [`faces_for_preedit`]) is left out: the interface fonts draw
-/// what it would have.
+/// The font family window `window`'s composition draws its Chinese, Japanese and Korean
+/// characters in: [`composition_family`] with the East Asian face first.
+pub fn composition_family_east_asian(window: u64) -> FontFamily {
+    FontFamily::Name(format!("composition {window} east asian").into())
+}
+
+/// Bind window `window`'s composition families to its `faces`, followed by the interface fonts,
+/// so a composition looks like the text around it, as in Word: [`composition_family`] to the
+/// font's face and then the East Asian font's, [`composition_family_east_asian`] the other way
+/// round, as committed Chinese, Japanese and Korean characters are drawn in the East Asian font
+/// whenever it has them. A face larger than the composition borrows (see [`faces_for_preedit`])
+/// is left out: the interface fonts draw what it would have.
 pub fn set_composition_face(fonts: &mut FontDefinitions, window: u64, faces: CompositionFaces) {
-    let mut family = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    let mut first = 0;
-    for f in [faces.face, faces.east_asian].into_iter().flatten().filter(|f| f.data().len() <= 16 << 20) {
-        let f = f.get();
-        let name = format!("composition {} {} {}", f.family, f.style, f.id());
-        if family.iter().take(first).any(|n| *n == name) {
-            continue;
+    let interface = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let mut bind = |order: [Option<wordcraft_fonts::FaceRef>; 2]| {
+        let mut family: Vec<String> = Vec::new();
+        for f in order.into_iter().flatten().filter(|f| f.data().len() <= 16 << 20) {
+            let f = f.get();
+            let name = format!("composition {} {} {}", f.family, f.style, f.id());
+            if family.contains(&name) {
+                continue;
+            }
+            let mut data = FontData::from_static(f.data());
+            data.index = f.index();
+            fonts.font_data.insert(name.clone(), Arc::new(data));
+            family.push(name);
         }
-        let mut data = FontData::from_static(f.data());
-        data.index = f.index();
-        fonts.font_data.insert(name.clone(), Arc::new(data));
-        family.insert(first, name);
-        first += 1;
-    }
-    fonts.families.insert(composition_family(window), family);
+        family.extend(interface.iter().cloned());
+        family
+    };
+    let latin = bind([faces.face, faces.east_asian]);
+    let east_asian = bind([faces.east_asian, faces.face]);
+    fonts.families.insert(composition_family(window), latin);
+    fonts.families.insert(composition_family_east_asian(window), east_asian);
 }
 
 /// Add `faces` after every other font of the interface families.

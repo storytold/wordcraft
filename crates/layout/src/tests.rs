@@ -10779,15 +10779,16 @@ fn typing_at_resolves_formatting_as_laid_out_text_is() {
     let l = lay(&d);
     let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
     let run_at = |off: usize| para.clusters.iter().find(|c| c.start == off).and_then(|c| para.styles.get(c.style as usize)).unwrap();
-    let (plain, line) = l.typing_at(&d, &Pos::body(0, 1), &props(&d, &Pos::body(0, 1)), 0).expect("after the x");
-    let (raised, base) = l.typing_at(&d, &Pos::body(0, 2), &props(&d, &Pos::body(0, 2)), 0).expect("after the superscript 2");
+    let (plain, line) = l.typing_at(&d, &Pos::body(0, 1), &l_typed(&props(&d, &Pos::body(0, 1)), &Pos::body(0, 1)), 0).expect("after the x");
+    let (raised, base) =
+        l.typing_at(&d, &Pos::body(0, 2), &l_typed(&props(&d, &Pos::body(0, 2)), &Pos::body(0, 2)), 0).expect("after the superscript 2");
     assert!(plain.face == run_at(0).requested_face && plain.size == run_at(0).size && plain.shift == 0.0);
     assert!(raised.face == run_at(1).requested_face && raised.size == run_at(1).size && raised.shift == run_at(1).shift);
     assert!(raised.shift > 0.0, "a superscript is raised: {}", raised.shift);
     assert!((line - raised.shift - base).abs() < 0.01, "line {line}, shift {}, baseline {base}", raised.shift);
     // Formatting the text there doesn't have (picked at the caret): its own font, size and shift.
     let picked = CharProps { font: Some("Source Serif 4".into()), size: Some(30.0), bold: Some(true), ..Default::default() };
-    let (t, at) = l.typing_at(&d, &Pos::body(0, 2), &picked, 0).expect("after the superscript 2");
+    let (t, at) = l.typing_at(&d, &Pos::body(0, 2), &l_typed(&picked, &Pos::body(0, 2)), 0).expect("after the superscript 2");
     assert_eq!(t.face.get().family, "Source Serif 4");
     assert!(t.face.get().weight >= 600.0, "bold: {}", t.face.get().style);
     assert_eq!((t.size, t.shift, at), (30.0, 0.0, line));
@@ -10805,7 +10806,7 @@ fn typing_at_resolves_formatting_as_laid_out_text_is() {
     });
     let l = lay(&d);
     let pos = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 2 };
-    let (t, _) = l.typing_at(&d, &pos, &props(&d, &pos), 0).expect("in the header cell");
+    let (t, _) = l.typing_at(&d, &pos, &l_typed(&props(&d, &pos), &pos), 0).expect("in the header cell");
     let head = cell_para(&l, 0, 0);
     let run = head.styles.first().unwrap();
     assert!(run.rc.bold && run.size == 30.0, "{:?}", run.rc);
@@ -10821,13 +10822,72 @@ fn typing_at_has_the_east_asian_fonts_face() {
     let l = lay(&d);
     let with = |ea: &str| {
         let props = CharProps { font: Some("Source Serif 4".into()), font_ea: Some(ea.into()), ..Default::default() };
-        let (t, _) = l.typing_at(&d, &Pos::body(0, 1), &props, 0).expect("after the x");
+        let typed = crate::hit::Typed { props: &props, into: &Pos::body(0, 1), text: "x" };
+        let (t, _) = l.typing_at(&d, &Pos::body(0, 1), &typed, 0).expect("after the x");
         assert_eq!(t.face.get().family, "Source Serif 4");
         t.east_asian.map(|f| f.get().family.clone())
     };
     assert_eq!(with("JetBrains Mono").as_deref(), Some("JetBrains Mono"));
     assert_eq!(with("Source Serif 4"), None, "the run's own font");
     assert_eq!(with("No Such East Asian Font 4140"), None, "not installed");
+}
+
+/// [`crate::hit::Typed`] for Latin text with `props` going in at `into`.
+fn l_typed<'a>(props: &'a CharProps, into: &'a Pos) -> crate::hit::Typed<'a> {
+    crate::hit::Typed { props, into, text: "x" }
+}
+
+/// Arabic, Hebrew and other complex-script text is drawn in the run's complex-script font and
+/// size (`w:cs`, `w:szCs`), so text typed in it is too: an input method's composition of Arabic
+/// after Arabic text in a run whose complex-script size differs.
+#[test]
+fn typing_at_takes_the_complex_script_formatting_for_complex_script_text() {
+    crate::test_fonts();
+    let d = Document::from_text("x");
+    let l = lay(&d);
+    let props = CharProps {
+        font: Some("Source Serif 4".into()),
+        size: Some(20.0),
+        font_cs: Some("JetBrains Mono".into()),
+        size_cs: Some(30.0),
+        font_ea: Some("Inter".into()),
+        ..Default::default()
+    };
+    let at = |text: &str| {
+        let typed = crate::hit::Typed { props: &props, into: &Pos::body(0, 1), text };
+        l.typing_at(&d, &Pos::body(0, 1), &typed, 0).expect("after the x").0
+    };
+    let latin = at("salaam");
+    assert_eq!((latin.face.get().family.as_str(), latin.size), ("Source Serif 4", 20.0));
+    assert!(latin.east_asian.is_some_and(|f| f.get().family == "Inter"));
+    let arabic = at("\u{0633}\u{0644}\u{0627}\u{0645}");
+    assert_eq!((arabic.face.get().family.as_str(), arabic.size), ("JetBrains Mono", 30.0));
+    assert!(arabic.east_asian.is_none(), "complex-script text takes no East Asian font");
+}
+
+/// Text typed over a selection goes in at the selection's start: it takes the style of that
+/// paragraph, not of the one the selection ends in, where the caret is drawn.
+#[test]
+fn typing_at_resolves_in_the_paragraph_the_text_goes_into() {
+    crate::test_fonts();
+    let mut d = Document::from_text("small\nlarge");
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "Large".into(),
+        name: "Large".into(),
+        based_on: Some("Normal".into()),
+        chr: CharProps { size: Some(24.0), ..Default::default() },
+        ..Default::default()
+    });
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.style = Some("Large".into())).unwrap();
+    let l = lay(&d);
+    let props = CharProps::default();
+    let size = |into: Pos| {
+        let typed = crate::hit::Typed { props: &props, into: &into, text: "x" };
+        l.typing_at(&d, &Pos::body(1, 3), &typed, 0).expect("in the second paragraph").0.size
+    };
+    assert_eq!(size(Pos::body(1, 0)), 24.0);
+    let small = size(Pos::body(0, 2));
+    assert!(small < 24.0, "in the first paragraph's style: {small}");
 }
 
 #[test]

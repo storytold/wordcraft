@@ -36,6 +36,12 @@ pub(crate) use chars::{caps_char, push_caps};
 #[cfg(test)]
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
+
+/// Whether `c` is drawn in its run's East Asian font (`w:eastAsia`) when that font has it, as the
+/// paragraph builder decides: Chinese, Japanese and Korean characters.
+pub fn takes_east_asian_font(c: char) -> bool {
+    grid::east_asian(c)
+}
 #[cfg(test)]
 use lines::break_lines;
 pub(crate) use lines::takes_room;

@@ -492,10 +492,14 @@ address are checked (`address_after_a_wide_space_is_an_internet_token`, in craft
 - The marked text is drawn as the text will be once committed: in the font, size and baseline of
   the formatting typing takes at the caret, not the interface font (#3022). That is the
   formatting picked with nothing selected, the first selected character's when typing over a
-  selection, and body text after a footnote or endnote number (#4140). Its kana and Han are
-  drawn in the text's East Asian font (`w:eastAsia`) when the font lacks them and that font is
-  installed (`canvas::tests::the_composition_takes_the_formatting_picked_at_the_caret` and the
-  tests after it).
+  selection, and body text after a footnote or endnote number, resolved in the paragraph the
+  text goes into (#4140). Its Chinese, Japanese and Korean characters are drawn in the text's
+  East Asian font (`w:eastAsia`), as committed text is, when that font is installed and its file
+  is 16 MB or smaller (the limit on document faces the interface borrows); otherwise in the
+  font, then the interface's CJK font, still at the text's size and baseline. Arabic, Hebrew and
+  other complex-script text takes the complex-script font and size
+  (`canvas::tests::the_composition_takes_the_formatting_picked_at_the_caret` and the tests after
+  it).
 - A composition belongs to the text it was started on. When a command replaces the body under
   the same document id — Replace Document Text, a version restore, Compare, Undo/Redo — or opens
   a new document, the body's replacement epoch advances, the platform clears the composition, and
@@ -628,7 +632,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-19 | trivial | Input methods: the composition is drawn in the formatting typing takes at the caret (picked there, the first selected character's, body text after a note number) and in the text's East Asian font (#4140) |
+| 2026-11-19 | trivial | Input methods: the composition is drawn in the formatting typing takes at the caret (picked there, the first selected character's, body text after a note number), its Chinese, Japanese and Korean characters in the text's East Asian font up to 16 MB, and complex-script text in the complex-script font and size (#4140) |
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |

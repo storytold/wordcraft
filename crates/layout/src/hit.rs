@@ -10,6 +10,17 @@ use wordcraft_geom::{Point, Rect};
 use crate::para::{PARA_MARK_WIDTH, ParaLayout, TypingFace};
 use crate::{DocLayout, Page, Placed};
 
+/// Text about to be typed ([`DocLayout::typing_at`]).
+pub struct Typed<'a> {
+    /// Its run formatting (`Session::typing_props`: the formatting picked at the caret, or the
+    /// first selected character's).
+    pub props: &'a CharProps,
+    /// Where it goes in: the caret, or the start of the selection it replaces.
+    pub into: &'a Pos,
+    /// The text, as far as it is known (an input method's composition).
+    pub text: &'a str,
+}
+
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
 /// upright (`width` 0) except in turned text (a table cell's text direction), where it lies
 /// across the page (`height` 0).
@@ -727,14 +738,13 @@ impl DocLayout {
         None
     }
 
-    /// How text typed at `pos` with the run formatting `props` (`Session::typing_props`: the
-    /// formatting picked at the caret, or the first selected character's) is drawn, and the
-    /// baseline it sits on, on the page: `pos`'s line's, raised or lowered by its shift
-    /// (superscript, `w:position`). Resolved in the paragraph's style and table cell as laid-out
-    /// text is ([`crate::para::typing_face`]). An input method's composition is drawn with them, as
-    /// Word draws it in the font and size the text will have. `None` in turned text, whose lines
+    /// How the text `typed` is drawn at `pos`, and the baseline it sits on, on the page: `pos`'s
+    /// line's, raised or lowered by its shift (superscript, `w:position`). Its formatting is
+    /// resolved in the style and table cell of the paragraph it goes into, as laid-out text is
+    /// ([`crate::para::typing_face`]). An input method's composition is drawn with them, as Word
+    /// draws it in the font and size the text will have. `None` in turned text, whose lines
     /// aren't horizontal.
-    pub fn typing_at(&self, doc: &Document, pos: &Pos, props: &CharProps, page_hint: usize) -> Option<(TypingFace, f32)> {
+    pub fn typing_at(&self, doc: &Document, pos: &Pos, typed: &Typed<'_>, page_hint: usize) -> Option<(TypingFace, f32)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, y, turn, .. } = it else { continue };
             let li = para.line_of(pos.off);
@@ -746,11 +756,19 @@ impl DocLayout {
             }
             let first = para.lines.get(*l0)?;
             let line = para.lines.get(li)?;
-            let style = doc.para_at(pos).and_then(|p| p.props.style.as_deref());
-            let face = crate::para::typing_face(doc, style, para.cell_chr.as_ref(), props);
+            let style = doc.para_at(typed.into).and_then(|p| p.props.style.as_deref());
+            let cell = self.laid_out_para(typed.into, page_hint).and_then(|p| p.cell_chr.as_ref());
+            let face = crate::para::typing_face(doc, style, cell, typed.props, typed.text);
             return Some((face, y + line.baseline - first.top - face.shift));
         }
         None
+    }
+
+    /// The laid-out paragraph `pos` is in.
+    fn laid_out_para(&self, pos: &Pos, page_hint: usize) -> Option<&ParaLayout> {
+        self.pieces(pos.story, &pos.path, page_hint)
+            .into_iter()
+            .find_map(|(_, it)| if let Placed::Lines { para, .. } = it { Some(&**para) } else { None })
     }
 
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).

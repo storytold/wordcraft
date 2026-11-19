@@ -4389,7 +4389,9 @@ fn the_composition_takes_the_documents_font_and_size() {
     }
     let layout = h.state_mut().session.layout();
     let props = h.state().session.typing_props();
-    let (typing, base) = layout.typing_at(&h.state().session.doc, &h.state().session.sel.focus, &props, 0).expect("how text typed here is drawn");
+    let focus = h.state().session.sel.focus.clone();
+    let typed = wordcraft_layout::hit::Typed { props: &props, into: &focus, text: "tottori" };
+    let (typing, base) = layout.typing_at(&h.state().session.doc, &focus, &typed, 0).expect("how text typed here is drawn");
     assert_eq!(typing.size, 20.0, "the size of the text before the caret");
     let caret = layout.caret(&h.state().session.sel.focus).expect("a caret");
     assert!(base > caret.top && base < caret.top + caret.height, "the baseline lies within the caret: {base} in {caret:?}");
@@ -4424,7 +4426,7 @@ fn the_composition_takes_the_documents_font_and_size() {
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hello");
 }
 
-/// `app` in a window, composing `text` at its caret.
+/// `app` in a window, composing `text` at its caret (kana through [`kana_test_glyphs`]).
 fn composing(app: WordApp, text: &str) -> egui_kittest::Harness<'static, WordApp> {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -4434,6 +4436,7 @@ fn composing(app: WordApp, text: &str) -> egui_kittest::Harness<'static, WordApp
         },
         app,
     );
+    kana_test_glyphs(&h.ctx);
     for _ in 0..8 {
         h.step();
     }
@@ -4510,9 +4513,14 @@ fn the_composition_after_a_footnote_number_is_body_text() {
     let layout = app.session.layout();
     let focus = app.session.sel.focus.clone();
     let props = app.session.doc.para_at(&focus).map(|p| p.props_at(focus.off).clone()).unwrap_or_default();
-    let (number, _) = layout.typing_at(&app.session.doc, &focus, &props, 0).expect("after the number");
+    let (number, _) = layout
+        .typing_at(&app.session.doc, &focus, &wordcraft_layout::hit::Typed { props: &props, into: &focus, text: "tottori" }, 0)
+        .expect("after the number");
     assert!(number.shift > 0.0, "the number is raised: {}", number.shift);
-    let (body, base) = layout.typing_at(&app.session.doc, &focus, &app.session.typing_props(), 0).expect("after the number");
+    let typing = app.session.typing_props();
+    let (body, base) = layout
+        .typing_at(&app.session.doc, &focus, &wordcraft_layout::hit::Typed { props: &typing, into: &focus, text: "tottori" }, 0)
+        .expect("after the number");
     assert_eq!(body.shift, 0.0);
     let caret = layout.caret(&focus).expect("a caret");
     let mut h = composing(app, "tottori");
@@ -4521,23 +4529,46 @@ fn the_composition_after_a_footnote_number_is_body_text() {
     assert!((baseline - (base - caret.top)).abs() < 0.5, "drawn baseline {baseline}, the line's {}", base - caret.top);
 }
 
-/// A composition's kana and Han are drawn in the text's East Asian font (`w:eastAsia`): its face
-/// comes second in the window's composition family, after the font's (#4140).
+/// A composition's Chinese, Japanese and Korean characters are drawn in the text's East Asian
+/// font (`w:eastAsia`), as committed text is, also where the font has them; its other characters
+/// in the font (#4140). Each piece of the composition takes the family that puts its face first.
 #[test]
-fn the_composition_has_the_east_asian_fonts_face_second() {
+fn the_composition_draws_east_asian_text_in_the_east_asian_font() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("document.setText", json!({"text": "Hello"})).unwrap();
     app.run("select.all", json!({})).unwrap();
     app.run("format.font", json!({"name": "Source Serif 4", "eastAsia": "JetBrains Mono"})).unwrap();
     app.run("caret.docEnd", json!({})).unwrap();
-    let h = composing(app, "tottori");
+    let text = "A\u{306B}\u{307B}\u{3093} b";
+    let h = composing(app, text);
     let faces = h.state().canvas.ime_face;
     assert!(faces.face.is_some_and(|f| f.family == "Source Serif 4"));
     assert!(faces.east_asian.is_some_and(|f| f.family == "JetBrains Mono"));
-    let family = crate::theme::composition_family(h.state().windows.shown());
-    let names = h.ctx.fonts(|f| f.definitions().families.get(&family).cloned()).unwrap_or_default();
-    assert!(names.first().is_some_and(|n| n.starts_with("composition Source Serif 4")), "{names:?}");
-    assert!(names.get(1).is_some_and(|n| n.starts_with("composition JetBrains Mono")), "{names:?}");
+    let window = h.state().windows.shown();
+    let (latin, east_asian) = (crate::theme::composition_family(window), crate::theme::composition_family_east_asian(window));
+    let names = |family: &egui::FontFamily| h.ctx.fonts(|f| f.definitions().families.get(family).cloned()).unwrap_or_default();
+    let (latin_names, east_asian_names) = (names(&latin), names(&east_asian));
+    assert!(latin_names.first().is_some_and(|n| n.starts_with("composition Source Serif 4")), "{latin_names:?}");
+    assert!(latin_names.get(1).is_some_and(|n| n.starts_with("composition JetBrains Mono")), "{latin_names:?}");
+    assert!(east_asian_names.first().is_some_and(|n| n.starts_with("composition JetBrains Mono")), "{east_asian_names:?}");
+    assert!(east_asian_names.get(1).is_some_and(|n| n.starts_with("composition Source Serif 4")), "{east_asian_names:?}");
+    let drawn = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|c| match &c.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(t.clone()),
+            _ => None,
+        })
+        .expect("the composition is drawn");
+    let pieces: Vec<(&str, egui::FontFamily)> = drawn
+        .galley
+        .job
+        .sections
+        .iter()
+        .map(|s| (text.get(s.byte_range.start.0..s.byte_range.end.0).unwrap_or_default(), s.format.font_id.family.clone()))
+        .collect();
+    assert_eq!(pieces, vec![("A", latin.clone()), ("\u{306B}\u{307B}\u{3093} ", east_asian), ("b", latin)]);
 }
 
 /// The composition's size never panics egui, which draws each glyph into its font atlas and

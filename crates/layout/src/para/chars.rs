@@ -247,21 +247,26 @@ pub struct TypingFace {
     pub shift: f32,
 }
 
-/// [`TypingFace`] for text with the run formatting `props` in a paragraph of style `style`, in a
+/// [`TypingFace`] for `text` with the run formatting `props` in a paragraph of style `style`, in a
 /// table cell whose table style gives its text the run formatting `cell`: resolved and looked up
-/// as the paragraph builder does a run's.
+/// as the paragraph builder does a run's. Complex-script text (Arabic, Hebrew, or any text of a
+/// right-to-left or `w:cs` run) takes the complex-script font and size, and no East Asian font;
+/// text that is partly complex script takes them all through.
 pub fn typing_face(
     doc: &Document,
     style: Option<&str>,
     cell: Option<&wordcraft_doc::props::CharProps>,
     props: &wordcraft_doc::props::CharProps,
+    text: &str,
 ) -> TypingFace {
     let rc = doc.styles.resolve_char_in(style, cell, props);
+    let complex = text.chars().any(|c| rc.uses_complex(c));
+    let rc = if complex { rc.complex() } else { rc };
     let face = wordcraft_fonts::word::resolve(lookup_family(doc, &rc.font), rc.bold, rc.italic).face;
     let east_asian = rc
         .font_ea
         .as_deref()
-        .filter(|f| !f.eq_ignore_ascii_case(&rc.font))
+        .filter(|f| !complex && !f.eq_ignore_ascii_case(&rc.font))
         .map(|f| wordcraft_fonts::word::resolve(lookup_family(doc, f), rc.bold, rc.italic))
         .filter(|r| !r.substituted)
         .map(|r| r.face);
