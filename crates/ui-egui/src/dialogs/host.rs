@@ -579,7 +579,7 @@ fn form_settle<F: WordForm>(app: &mut WordApp, ctx: &Context, id: DialogId) -> S
                     let hex = Rgb(channel(c.r), channel(c.g), channel(c.b)).hex();
                     answers.push(ChildAnswer::Color { field, hex });
                 }
-                Some(DialogResult::Cancel) => {}
+                Some(_) => {}
                 None => waiting.push(child),
             },
         }
