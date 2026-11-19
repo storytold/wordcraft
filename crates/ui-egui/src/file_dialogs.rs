@@ -459,15 +459,21 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
+        let req = self.export_request(ext);
+        // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
+        let _ = self.ask_file(req, AfterPick::Export { ext: ext.to_string() });
+    }
+
+    /// The request that asks where to save a copy in export format `ext`: the format's name and type,
+    /// so the chooser's type menu shows it. Also what Browse in WordCraft… asks again for a pending export.
+    pub(crate) fn export_request(&self, ext: &str) -> PickRequest {
         let file_ext = crate::print_page::export_file_ext(ext).to_string();
         let name = format!("{}.{}", self.title_stem(), file_ext);
         let mut req = PickRequest::save("export").file_name(name).suggested_extension(file_ext.clone());
-        // The chosen format's type, so the chooser's type menu shows it.
         if let Some(&(label, _)) = crate::print_page::EXPORT_FORMATS.iter().find(|&&(_, e)| e == ext) {
             req = req.filter(tl!(label), &[file_ext.as_str()]);
         }
-        // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
-        let _ = self.ask_file(req, AfterPick::Export { ext: ext.to_string() });
+        req
     }
 
     /// File › Print › Save these pages as PDF: ask where, then write the pages the print

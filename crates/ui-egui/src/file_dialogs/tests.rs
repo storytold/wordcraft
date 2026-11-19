@@ -392,14 +392,24 @@ fn failed_web_saves_restore_the_save_stamps() {
             let core_before = a.session.doc.core.clone();
             let zoom_before = a.session.doc.settings.zoom;
             let undo_before = a.session.undo_depth();
-            assert!(a.run(id, json!({"path": name})).is_err(), "{id}: {name}");
+            // A name no format writes fails at once; a download the host refuses fails on its ticket, which
+            // the next frame's `settle_saves` reads.
+            let started = a.run(id, json!({"path": name}));
+            if name == "draft.unsupported" {
+                assert!(started.is_err(), "{id}: {name}");
+            } else {
+                assert!(started.is_ok_and(|v| v["downloaded"] == name), "{id}: {name}");
+                a.settle_saves();
+                assert!(status_text(&a).contains("host refused"), "{id}: {name}: {}", status_text(&a));
+            }
             assert_eq!(a.session.doc.core, core_before, "{id}: {name}");
             assert_eq!(a.session.doc.settings.zoom, zoom_before, "{id}: {name}");
             assert_eq!(a.session.undo_depth(), undo_before, "{id}: {name}");
             assert_eq!(a.session.dirty, dirty, "{id}: {name}");
             assert_eq!(a.session.path, path_before, "{id}: {name}");
         }
-        let files = Arc::new(ScriptedFiles::new().in_browser());
+        // The browser takes the download: the scripted host files its bytes under the name it answers with.
+        let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![PathBuf::from("draft.docx")])]).in_browser());
         let mut a = app_over(&files, wordcraft_doc::Document::from_text(UNSAVED));
         a.session.dirty = true;
         let revision_before = a.session.doc.core.revision;
@@ -431,6 +441,8 @@ fn web_pdf_export_keeps_an_existing_suffix_in_any_case() {
         ("Report.pdf.", "Report.pdf..pdf"),
         ("Report", "Report.pdf"),
     ] {
+        // The browser takes the download: the scripted host files its bytes under the name it answers with.
+        files.queue(Picked::Paths(vec![PathBuf::from(expected)]));
         let result = a.execute("file.exportPdf", json!({"path": name})).unwrap();
         assert_eq!(result["downloaded"], expected, "{name}");
         assert!(files.file(std::path::Path::new(expected)).is_some_and(|b| b.starts_with(b"%PDF")), "{name}");

@@ -150,6 +150,7 @@ impl WordApp {
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
             // Like a failed native save, a failed serialization or delivery keeps the save stamps.
+            let dirty_before = self.session.dirty;
             let before_stamp = (
                 self.session.doc.settings.zoom,
                 self.session.doc.core.last_modified_by.clone(),
@@ -181,6 +182,15 @@ impl WordApp {
             // An export is a copy, and so is a save in a format that doesn't keep everything (a
             // page image, plain text): the document itself still has unsaved changes.
             let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+            // The ticket's answer may be a failure: what the save stamped is put back then (`settle_saves`).
+            let undo_stamp: Option<Box<dyn FnOnce(&mut wordcraft_engine::Session)>> = matches!(id, "file.save" | "file.saveAs").then(|| {
+                let dirty = dirty_before;
+                Box::new(move |session: &mut wordcraft_engine::Session| {
+                    (session.doc.settings.zoom, session.doc.core.last_modified_by, session.doc.core.created, session.doc.core.modified, session.doc.core.revision) =
+                        before_stamp;
+                    session.dirty = dirty;
+                }) as Box<dyn FnOnce(&mut wordcraft_engine::Session)>
+            });
             // Save As tells the host page the document is now this file, which it only is when the
             // save marks it saved. A Save under a name the page never sent (an untitled document,
             // an imported .doc saved as .docx) is a new file too, never an overwrite.
@@ -199,7 +209,7 @@ impl WordApp {
             let document = self.session.document_id();
             let rev = self.session.rev();
             let pending = ticket.0;
-            self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved, rev });
+            self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved, rev, undo_stamp });
             return Ok(json!({"downloaded": name, "bytes": len, "pendingSave": pending}));
         }
         let document = self.session.document_id();

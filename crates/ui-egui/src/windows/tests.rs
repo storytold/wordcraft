@@ -50,6 +50,8 @@ impl Rig {
         craft::ui::shell::embed::before_input(&self.kit.ctx, |out| a.frame_input(out));
         let out = self.kit.frame(Vec::new(), Vec::new(), |ui| {
             a.logic(ui.ctx());
+            // The root window's close request goes through the app's close decision, as the host's frame runs it.
+            craft::ui::shell::embed::logic(ui.ctx(), || a.close_decision());
             a.ui(ui);
         });
         self.commands = out.commands;

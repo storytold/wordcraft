@@ -143,12 +143,12 @@ pub(crate) fn open_insert_merge_field(app: &mut WordApp, parent: Option<DialogId
 /// Select Table: which sheet of a workbook holds the recipients, and whether its first row names the fields.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelectTableForm {
-    #[serde(skip)]
+    /// The workbook's sheet names: what the dialog is asked about, so they are fields (a skipped field is
+    /// lost in a `set_json_field` round trip, and the control channel could not list the choices).
     sheets: Vec<String>,
     pub selected: usize,
     pub headers: bool,
-    /// The file `mailings.recipients` loads.
-    #[serde(skip)]
+    /// The file `mailings.recipients` loads; kept through a round trip for the same reason.
     params: Value,
 }
 

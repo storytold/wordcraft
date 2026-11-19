@@ -234,7 +234,18 @@ fn settle_columns(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Sett
         None => Ok(()),
         Some(cols) => {
             let apply = cols.apply.unwrap_or(ColumnsApply::Document);
-            app.run("layout.columns", columns_params(&cols, apply)).map(|_| ()).map_err(|e| Label::from(e.to_string()))
+            let mut params = columns_params(&cols, apply);
+            // `layout.columns` sets every field the section has and takes a missing one as its default (36 pt
+            // spacing, no separator), so what the dialog left alone is the section's own value, sent back.
+            let section = wordcraft_engine::cmd::page::sect(&app.session).columns;
+            if let Some(m) = params.as_object_mut() {
+                m.entry("separator").or_insert(json!(section.separator));
+                if !m.contains_key("widths") {
+                    m.entry("count").or_insert(json!(section.count));
+                    m.entry("space").or_insert(json!(section.space));
+                }
+            }
+            app.run("layout.columns", params).map(|_| ()).map_err(|e| Label::from(e.to_string()))
         }
     };
     if let Some(k) = app.dialog_host.get_mut_by_id::<Keyed<TextColumnsDialog>>(id) {

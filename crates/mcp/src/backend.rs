@@ -322,6 +322,17 @@ mod tests {
         c.to_string().repeat(64)
     }
 
+    /// Writes a token file as the app does: readable by its owner alone (the control-key reader refuses
+    /// a file that group or others can read).
+    fn write_token_file(path: &std::path::Path, contents: impl AsRef<[u8]>) {
+        std::fs::write(path, contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+
     fn fixed_token(t: String) -> TokenFinder {
         Box::new(move |_| Ok(Token { value: t.clone(), from_file: false }))
     }
@@ -338,7 +349,7 @@ mod tests {
         };
         assert!(e.contains("WORDCRAFT_CONTROL_TOKEN") && e.contains(&path.display().to_string()), "{e}");
         // The token file, trimmed; an empty variable does not count.
-        std::fs::write(&path, format!("  {}\n", tok('a'))).unwrap();
+        write_token_file(&path, format!("  {}\n", tok('a')));
         let file = Token { value: tok('a'), from_file: true };
         assert_eq!(lookup_token(None, Some(&dir), Some(7981)).unwrap(), file);
         assert_eq!(lookup_token(Some(" ".into()), Some(&dir), Some(7981)).unwrap(), file);
@@ -347,7 +358,7 @@ mod tests {
         assert_eq!(lookup_token(Some(format!(" {} ", tok('b'))), Some(&dir), Some(7981)).unwrap(), env);
         assert_eq!(lookup_token(Some(tok('b')), None, None).unwrap(), env);
         // Read again every time: the app writes a new token at every start.
-        std::fs::write(&path, tok('c')).unwrap();
+        write_token_file(&path, tok('c'));
         assert_eq!(lookup_token(None, Some(&dir), Some(7981)).unwrap().value, tok('c'));
         // Another port, another file.
         assert!(lookup_token(None, Some(&dir), Some(7982)).is_err());
@@ -479,7 +490,7 @@ mod tests {
         assert!(r.describe().contains("will connect to"));
         // The app opens later and writes its token file: the next call connects and answers.
         let app = fake_app(|_| true, |_| ok(7));
-        std::fs::write(wordcraft_control_key::key_path(&dir, app.port), tok('1')).unwrap();
+        write_token_file(&wordcraft_control_key::key_path(&dir, app.port), tok('1'));
         r.addr = format!("127.0.0.1:{}", app.port);
         assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(7));
         assert!(r.key_warning().is_none());

@@ -91,6 +91,9 @@ pub struct Windows {
     shown: WindowId,
     /// View › Window: Side by Side and Synchronous Scrolling (#322).
     arranged: arrange::State,
+    /// Whether the root OS window had focus in the last pass; a [`DocumentWindow`] reports its own gain
+    /// (`focus_gained`), the root's is read from the window host's facts.
+    root_focused: bool,
 }
 
 impl Windows {
@@ -98,7 +101,7 @@ impl Windows {
     pub(crate) fn new(doc: u64) -> Windows {
         let mut list = WindowList::new();
         let id = list.open(Window::new(doc, None, None, false));
-        Windows { native: cfg!(not(target_arch = "wasm32")), list, root: id, shown: id, arranged: arrange::State::default() }
+        Windows { native: cfg!(not(target_arch = "wasm32")), list, root: id, shown: id, arranged: arrange::State::default(), root_focused: false }
     }
 
     /// Whether documents get native windows of their own.
@@ -115,6 +118,11 @@ impl Windows {
     /// The key of the window whose state is in [`WordApp`]'s fields.
     pub(crate) fn shown(&self) -> u64 {
         self.shown.get()
+    }
+
+    /// The key of the entry the root OS window shows.
+    pub(crate) fn root_key(&self) -> u64 {
+        self.root.get()
     }
 
     /// The key of the window that has focus (the one focused last), if any.
@@ -514,6 +522,12 @@ impl WordApp {
         }
         self.draw_entry(ui, self.windows.root.get());
         let root = self.windows.root;
+        // The root window gaining OS focus makes its entry the active one, as a child's `focus_gained` does.
+        let root_focused = WindowHost::of(&ctx).facts(ViewportId::ROOT).is_some_and(|facts| facts.focused);
+        if root_focused && !std::mem::replace(&mut self.windows.root_focused, root_focused) {
+            self.windows.list.focus(root);
+        }
+        self.windows.root_focused = root_focused;
         let menu = self.window_menu();
         let step = StyleCx::with_root(&ctx, |cx| cx.tokens.size.window.cascade);
         let ids: Vec<WindowId> = self.windows.list.ids().filter(|&id| id != root).collect();
