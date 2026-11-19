@@ -229,7 +229,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         Row::new().fill().gap(Gap::Section).show(ui, |ui, _| {
             // Production's settings column is 380 pt with its paragraphs wrapped inside it: the column's wrap width
             // keeps the long notes from widening it over the preview.
-            Panel::new(tl!("Print")).sizing(Sizing::Content).show(ui, |ui, _| {
+            Panel::new(tl!("Print")).sizing(Sizing::FillHeight).show(ui, |ui, _| {
                 Stack::new()
                     .wrap_width(WrapWidth::Column)
                     .gap(Gap::Stack)
