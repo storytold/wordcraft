@@ -613,7 +613,11 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                     index: i,
                     tab: field.tab,
                     submitted: field.submitted,
-                    focused: field.response.has_focus() || field.response.gained_focus(),
+                    // A text part's egui widget is not its component's id, so the response's own focus flag stays
+                    // false: ask the framework's focus which stop holds the keyboard.
+                    focused: field.response.has_focus()
+                        || field.response.gained_focus()
+                        || focus::focused_rec(ui.ctx()).is_some_and(|rec| rec.stop.id == row_id(i)),
                     events: field.events,
                     color,
                 });

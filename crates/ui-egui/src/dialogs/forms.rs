@@ -7,7 +7,7 @@ use craft::behavior::{Mixed, Selection, keyed};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Politeness, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow};
@@ -277,7 +277,8 @@ impl WordForm for CustomPropertiesForm {
             self.value = text;
         }
         if !self.message.is_empty() {
-            Notice::new(Tone::Bad, Label::from(self.message.clone())).layout(NoticeLayout::Inline).show(ui);
+            // A refusal is announced to a screen reader as it appears (an Alert node).
+            Notice::new(Tone::Bad, Label::from(self.message.clone())).layout(NoticeLayout::Inline).announce(Politeness::Assertive).show(ui);
         }
         note(ui, tl!("Text properties only: Word's number, date and yes-no types aren't offered.").to_string());
         true
