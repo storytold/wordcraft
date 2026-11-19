@@ -27,7 +27,7 @@ fn empty_window_ribbon_tabs_reach_the_start_screen() {
 /// stepped from the stale manual 100% to 110%.
 #[test]
 fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.run("ui.tab", json!({"tab": "View"})).unwrap();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));

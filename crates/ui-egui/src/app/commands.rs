@@ -1069,6 +1069,8 @@ fn input_dialog_mailings(id: &str, params: &Value) -> Option<&'static str> {
 fn input_dialog_insert(id: &str, params: &Value) -> Option<&'static str> {
     match id {
         "insert.symbol" if !has_value(params, "char") => Some("symbol"),
+        // Insert › Icons without an icon opens the picker (#309); a script gets the library list.
+        "insert.icon" if !has_value(params, "id") => Some("icons"),
         "insert.field" if !has_value(params, "instr") => Some("field"),
         "insert.smartArt" if !has_value(params, "layout") && !has_value(params, "items") => Some("insertSmartArt"),
         "insert.chart" if !has_value(params, "type") && !has_value(params, "data") => Some("insertChart"),

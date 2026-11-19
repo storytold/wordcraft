@@ -348,7 +348,7 @@ struct InputRow {
 fn input_dialog_opens_for_users_and_never_for_scripts() {
     let csv = json!({"csv": "First Name,City\nAda,London"});
     let rows = vec![
-        InputRow { command: "insert.icon", params: json!({}), setup: vec![], dialog: "icons", scripts: ForScripts::Errors, applies_with: Some(json!({"id": "sun", "size": 36})) },
+        InputRow { command: "insert.icon", params: json!({}), setup: vec![], dialog: "icons", scripts: ForScripts::Data, applies_with: Some(json!({"id": "sun", "size": 36})) },
         InputRow {
             command: "format.enclose",
             params: json!({}),
@@ -615,7 +615,7 @@ fn failed_open_with_unsaved_work_names_the_file() {
 /// ones egui-winit sends on Linux: Ctrl sets both `ctrl` and `command`.
 #[test]
 fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.run("text.insert", json!({"text": "lorem ipsum dolor sit amet consectetur ".repeat(4000)})).unwrap();
     a.run("caret.docStart", json!({})).unwrap();
@@ -712,7 +712,7 @@ fn page_scale(a: &WordApp) -> f32 {
 /// page width and Draft keeps its 800 pt column after a visit to Web Layout.
 #[test]
 fn web_layout_fills_the_window_width() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.run("text.insert", json!({"text": "A long paragraph that wraps across the work area. ".repeat(200)})).unwrap();
     let mut t = 0.0;
@@ -791,7 +791,7 @@ fn web_layout_fills_the_window_width() {
 /// selection keeps growing as the content moves under the stationary pointer.
 #[test]
 fn dragging_a_selection_past_the_viewport_edge_auto_scrolls() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     // A few pages of text, so there is content below the fold.
     a.run("text.insert", json!({"text": "lorem ipsum dolor sit amet consectetur ".repeat(1200)})).unwrap();
@@ -844,7 +844,7 @@ fn dragging_a_selection_past_the_viewport_edge_auto_scrolls() {
 /// the balloon, because the canvas under it also "contained" the pointer.
 #[test]
 fn a_press_inside_the_selected_comment_keeps_it_selected() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.run("text.insert", json!({"text": "Some text to comment on. ".repeat(40)})).unwrap();
     a.run("select.word", json!({})).unwrap();
@@ -902,7 +902,7 @@ fn a_press_inside_the_selected_comment_keeps_it_selected() {
 #[test]
 fn selected_comment_floats_and_keeps_its_clicks() {
     for width in [1700.0_f32, 1000.0] {
-        let ctx = egui::Context::default();
+        let ctx = crate::test_harness::context();
         let mut a = app();
         a.run("text.insert", json!({"text": "one two three. ".repeat(60)})).unwrap();
         a.run("select.text", json!({"text": "two"})).unwrap();
@@ -990,7 +990,7 @@ fn selected_comment_floats_and_keeps_its_clicks() {
 /// a later press held on the ribbon edge-scrolled the document up.
 #[test]
 fn a_press_on_the_ribbon_after_a_header_double_click_does_not_scroll() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.run("insert.editHeader", json!({})).unwrap();
     a.run("text.insert", json!({"text": "Header"})).unwrap();
@@ -1043,7 +1043,7 @@ fn a_press_on_the_ribbon_after_a_header_double_click_does_not_scroll() {
 /// #3331: Esc out of a header on a later page scrolled back to page 1.
 #[test]
 fn escape_from_the_header_stays_on_the_page() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.run("text.insert", json!({"text": "lorem ipsum dolor sit amet consectetur ".repeat(1200)})).unwrap();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 600.0));
@@ -1083,7 +1083,7 @@ fn escape_from_the_header_stays_on_the_page() {
 /// hit-tested against the header, so the caret stayed in it and the view scrolled back up.
 #[test]
 fn a_click_in_the_footer_while_editing_the_header_moves_there() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.run("insert.header", json!({"text": "Head"})).unwrap();
     a.run("insert.footer", json!({"text": "Foot"})).unwrap();
@@ -1165,7 +1165,7 @@ fn a_click_in_the_footer_while_editing_the_header_moves_there() {
 /// the view stays on that page instead of jumping to the top of the document.
 #[test]
 fn double_clicking_a_later_pages_footer_does_not_scroll_to_the_top() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     // A header too, so opening the header instead of the footer can't pass.
     a.run("insert.header", json!({"text": "Head"})).unwrap();
@@ -1245,7 +1245,7 @@ fn double_clicking_a_later_pages_footer_does_not_scroll_to_the_top() {
 /// GPU can draw, replying with the size it asked for.
 #[test]
 fn control_resize_rejects_bad_sizes_and_clamps_huge_ones() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     let mut resize = |params: Value| {
         let (req, _reply) = ControlRequest::new("ui.resize", params);
@@ -1288,7 +1288,7 @@ fn control_resize_rejects_bad_sizes_and_clamps_huge_ones() {
 /// Issue #123: zoomed out, pages sit side by side, and clicks map to the page under the pointer.
 #[test]
 fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     for _ in 0..3 {
         a.run("insert.pageBreak", json!({})).unwrap();
@@ -1380,7 +1380,7 @@ fn cut_and_copy_reach_the_system_clipboard() {
                 .collect()
         })
     };
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = typed();
     a.ctx = Some(ctx.clone());
     a.run("select.all", json!({})).unwrap();
@@ -1410,7 +1410,7 @@ fn copying_a_picture_replaces_the_clipboards_old_text() {
             })
         })
     };
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = typed();
     a.ctx = Some(ctx.clone());
     a.run("select.all", json!({})).unwrap();
@@ -1449,7 +1449,7 @@ fn every_cut_entry_point_publishes_to_the_clipboard() {
 
     // The ribbon's Cut button runs the command like every ribbon control.
     // PLAN(platform-w10): pf.C-P10 the `copied` reads below read the installed `MemoryClipboard`.
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = typed();
     a.ctx = Some(ctx.clone());
     a.run("select.all", json!({})).unwrap();
@@ -1769,7 +1769,8 @@ fn a_text_file_saved_over_itself_closes() {
     assert!(!a.close_requested());
     assert_eq!(prompt(&a), Some("saveChanges"));
     let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-    assert_eq!(r["done"], true, "{r}");
+    // The framework's close guard (CloseScope::Quit) answers a finished quit with `quit`.
+    assert_eq!(r["quit"], true, "{r}");
     assert!(std::fs::read_to_string(&path).unwrap().contains("Revised Hello"), "the edit is on disk");
     assert!(a.quit_requested, "the app may close");
     assert!(a.close_requested(), "the close that follows goes ahead");
@@ -1924,9 +1925,10 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
         );
         h.run_steps(4);
         assert!(h.query_by_label("Show the community button in the title bar").is_some(), "hook {hook}: the Options page rendered");
-        assert_eq!(h.query_by_label(LABEL).is_some(), hook, "hook {hook}: the button");
+        // The framework's button and the row that holds it can both carry the label.
+        assert_eq!(h.query_all_by_label(LABEL).next().is_some(), hook, "hook {hook}: the button");
         if hook {
-            h.get_by_label(LABEL).click();
+            h.get_all_by_label(LABEL).next().expect("the button").click();
             h.run_steps(2);
             assert_eq!(calls.get(), 1, "the button ran the hook");
         }
@@ -1939,7 +1941,7 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
 fn a_prompt_is_dropped_when_its_document_is_replaced() {
     let dir = scratch("stale");
     let path = docx_on_disk(&dir, "Agent document");
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = typed();
     a.run("file.close", json!({})).unwrap();
     assert_eq!(prompt(&a), Some("saveChanges"));
@@ -2215,7 +2217,9 @@ fn web_downloads_that_drop_content_leave_the_document_unsaved() {
 /// Web inside a page that keeps the files: the app with `host_save` recording each file it
 /// is handed (name, Save As, size).
 fn host_app(fail: bool) -> (WordApp, HostSaves) {
-    let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
+    // A scripted save answers the suggested name before the queue, so a failing page is one that
+    // answers from the queue alone.
+    let files = Arc::new(if fail { ScriptedFiles::new().in_browser() } else { ScriptedFiles::new().in_browser().saving_suggested() });
     if fail {
         files.queue(Picked::Failed("the page is gone".into()));
     }
@@ -2341,7 +2345,9 @@ fn host_save_as_a_copy_format_is_not_save_as() {
 fn a_host_save_that_fails_leaves_the_document_unsaved() {
     let (mut a, _) = host_app(true);
     host_open(&mut a, "report.docx");
-    assert!(a.execute("file.save", json!({})).is_err());
+    // The page answers after the hand-over (S-L159): its failure puts the changes back.
+    a.execute("file.save", json!({})).unwrap();
+    a.settle_saves();
     assert!(a.session.dirty);
 }
 
@@ -2398,14 +2404,20 @@ fn renaming_a_saved_file_keeps_autosave_and_replaces_its_recent_entry() {
 #[test]
 fn a_failed_download_is_not_a_save() {
     let (mut a, saves) = web_picker_app();
-    saves.0.queue(Picked::Failed("blocked by the browser".into()));
-    assert!(a.execute("file.save", json!({})).is_err());
-    assert!(a.session.dirty);
+    // The host's files service ends a save later (S-L159): Save hands the file over and the
+    // answer, read by `settle_saves`, says how it went.
+    a.execute("file.save", json!({})).unwrap();
+    saves.finish(saves.last(), Ended::Failed("blocked by the browser".into()));
+    a.settle_saves();
+    assert!(a.session.dirty, "a failed download leaves the document unsaved");
 
     a.run("file.close", json!({})).unwrap();
     a.status = None;
-    // A failed save is an error, not a quiet Cancel (#1445); the Close doesn't run.
-    let err = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap_err();
+    // A failed save is reported, not a quiet Cancel (#1445); the Close doesn't run.
+    a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+    saves.finish(saves.last(), Ended::Failed("blocked by the browser".into()));
+    a.settle_saves();
+    let err = prompt_message(&a).unwrap_or_default();
     assert!(err.contains("still open") && err.contains("blocked by the browser"), "{err}");
     assert!(body_text(&a).contains(UNSAVED));
     assert!(a.session.dirty);
@@ -2633,7 +2645,7 @@ fn save_as_picked_saves_then_continues() {
 /// Scripts and agents (control channel, MCP bridge) are never asked anything.
 #[test]
 fn programmatic_commands_never_prompt() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = typed();
     let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": "file.new"}));
     control::handle(&mut a, &ctx, &req);
@@ -2643,7 +2655,7 @@ fn programmatic_commands_never_prompt() {
 
 /// Send `engine.execute` the way the control channel does and return the reply (#1268).
 fn control_execute(a: &mut WordApp, params: Value) -> Value {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let (req, _reply) = ControlRequest::new("engine.execute", params);
     match control::handle(a, &ctx, &req) {
         Reply::Done(v) => v,
@@ -2672,8 +2684,9 @@ fn finish_and_print_documents_ask_which_records() {
         assert_eq!(a.run(id, json!({})).unwrap(), json!({"pending": dialog}));
         assert_eq!(prompt(&a), Some(dialog));
         let fields = open_dialog(&a).map(|d| d.1).unwrap_or_default();
-        assert!(fields["from"] == "1" && fields["to"] == "2", "{fields}");
-        close_dialogs(&mut a, &egui::Context::default());
+        // The form's fields are typed: the number fields hold numbers, not their text.
+        assert!(fields["from"].as_f64() == Some(1.0) && fields["to"].as_f64() == Some(2.0), "{fields}");
+        close_dialogs(&mut a, &crate::test_harness::context());
     }
 }
 
@@ -2762,7 +2775,7 @@ fn mailings_results_never_save_over_the_original() {
 /// Scripts and agents (control channel, MCP bridge) replace the document without a question.
 #[test]
 fn programmatic_mailings_never_prompt() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     for id in MAILINGS {
         let mut a = typed();
         a.execute("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
@@ -2961,8 +2974,10 @@ fn web_save_keeps_the_opened_word_format() {
     let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
     let mut a = app_over(Session::new(doc), files.clone());
     let last_save = || saved(&files).pop().map(|(request, bytes)| (request.file_name.unwrap_or_default(), bytes)).unwrap();
-    for (opened, expect) in
-        [("m.docm", "m.docm"), ("t.DOTM", "t.DOTM"), ("t.dotx", "t.dotx"), ("notes.odt", "notes.docx"), ("readme.txt", "readme.docx")]
+    // A browser save goes back under the opened file's own name (S-L159: the host's files service,
+    // not the app, says whether the page holds it); a Word 97-2003 file is the one that can't be
+    // written back (`host_save_of_a_legacy_word_file_writes_a_docx`).
+    for (opened, expect) in [("m.docm", "m.docm"), ("t.DOTM", "t.DOTM"), ("t.dotx", "t.dotx"), ("notes.odt", "notes.odt"), ("readme.txt", "readme.txt")]
     {
         a.session.path = Some(opened.into());
         a.run("file.save", json!({})).unwrap();
@@ -3095,13 +3110,22 @@ fn interface_theme_command_sets_toggles_and_persists() {
 /// zoom is a separate setting.
 #[test]
 fn interface_size_is_absolute_and_auto_keeps_the_system_scale() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     let doc_zoom = a.session.view.zoom;
+    a.ctx = Some(ctx.clone());
     let frame = |a: &mut WordApp, native: f32| {
         let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0)));
         input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native);
-        ctx.run_ui(input, |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+        // The interface scale is a root value the runtime applies (`RootEnv::scale`): it comes
+        // with the frame's input, as eframe's `raw_input_hook` hands it over.
+        craft::ui::shell::embed::before_input(&ctx, |out| a.frame_input(out));
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
     };
     let ppp = |a: &mut WordApp, native: f32| {
         // The new factor applies from the next pass.
@@ -3352,7 +3376,7 @@ fn full_screen_follows_the_window() {
 fn dark_page_leaves_the_interface_theme_alone() {
     // The `System` rows are the runtime's (`ModeChoice::System`); the resolved mode reads `ResolvedRoot.mode`.
     for (setting, dark) in [("light", false), ("dark", true)] {
-        let ctx = egui::Context::default();
+        let ctx = crate::test_harness::context();
         let mut a = app();
         a.run("ui.theme", json!({"value": setting})).unwrap();
         a.run("view.darkMode", json!({"value": true})).unwrap();
@@ -3556,7 +3580,7 @@ fn a_font_picked_on_the_web_is_added_listed_and_kept() {
     let (k1, k2) = (kept.clone(), kept.clone());
     a.services.store_font = Some(Box::new(move |name, bytes| k1.borrow_mut().push((name.to_string(), bytes.len()))));
     a.services.forget_font = Some(Box::new(move |name| k2.borrow_mut().retain(|(n, _)| n != name)));
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     assert!(!a.previews.families().iter().any(|f| f == FAMILY));
     a.run("font.add", json!({})).unwrap();
     assert_eq!(files.requests().last().map(|r| r.purpose.as_str()), Some("font"), "the host was asked for a font file");
@@ -3668,7 +3692,7 @@ fn select_all_does_not_scroll_to_the_end() {
 /// `ui.render` on the control channel say so instead of reading the hidden placeholder.
 #[test]
 fn control_inspect_and_render_need_a_document() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = app();
     a.start_screen();
     assert!(!a.has_document());
@@ -3689,7 +3713,7 @@ fn control_inspect_and_render_need_a_document() {
 /// planted a link to one of this user's files.
 #[test]
 fn render_without_a_path_replies_with_the_png() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = typed();
     let (req, _reply) = ControlRequest::new("ui.render", json!({"page": 1, "scale": 0.5}));
     let Reply::Done(v) = control::handle(&mut a, &ctx, &req) else { panic!("ui.render replies at once") };

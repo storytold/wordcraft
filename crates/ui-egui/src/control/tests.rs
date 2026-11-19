@@ -6,7 +6,7 @@ use craft::automation::control::{ControlChannel, ControlRequest, Reply};
 
 /// A context with the framework runtime installed, as the app's host installs it.
 fn installed() -> egui::Context {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(crate::i18n::Lang::EN));
     ctx
 }
@@ -130,7 +130,7 @@ fn closing(form: &str, force: Option<&Value>, target: u64, background: bool) -> 
 /// boolean true, for the active document and for one in the background (#1268, #3274).
 #[test]
 fn programmatic_close_guard_covers_every_form() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let forces: [(Option<Value>, bool); 4] = [(None, false), (Some(json!("yes")), false), (Some(json!(1)), false), (Some(json!(true)), true)];
     let forms = ["engine.execute", "command", "file.close", "engine.execute:closeDocument", "file.closeDocument", "app.quit"];
     for form in forms {
@@ -167,7 +167,7 @@ fn programmatic_close_guard_covers_every_form() {
 /// quitting over the control channel still keeps it.
 #[test]
 fn programmatic_close_keeps_a_save_the_picker_hasnt_finished() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     for (method, params) in [("engine.execute", json!({"command": "file.close"})), ("file.close", json!({})), ("app.quit", json!({}))] {
         let (mut a, saves) = web_picker_app();
         a.run("file.close", json!({})).unwrap();
@@ -249,7 +249,7 @@ fn ui_closewindow_asks_the_close_guard_like_the_os_button() {
 fn ui_clipboard_sets_each_flavour_it_is_given() {
     use craft::platform::clipboard::{Clipboard, MemoryClipboard};
     use craft::ui::runtime::commands::ClipboardHandle;
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let spec = craft::ui::testing::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
     craft::ui::shell::embed::install(&ctx, spec, &crate::ui_fonts(crate::i18n::Lang::EN));
     let mut a = app();

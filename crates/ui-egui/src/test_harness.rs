@@ -28,3 +28,14 @@ pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> H
         craft::ui::shell::embed::install(ctx, spec(), &crate::ui_fonts(Lang::EN)).expect("the craft runtime installs on a fresh test context");
     })
 }
+
+/// A bare egui context with the craft runtime installed (the framework's test spec), for a test that
+/// runs frames by hand (`ctx.run_ui`) instead of through a kittest harness. A frame on a context
+/// without the runtime has no command registry, so the canvas's publish of its view commands
+/// asserts. Install before the first frame.
+pub(crate) fn context() -> egui::Context {
+    let ctx = egui::Context::default();
+    craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(Lang::EN))
+        .expect("the craft runtime installs on a fresh test context");
+    ctx
+}

@@ -14,7 +14,7 @@ fn app() -> WordApp {
 
 /// Send one request the way the control channel does and return the reply.
 fn send(a: &mut WordApp, method: &str, params: Value) -> Value {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let (req, _reply) = ControlRequest::new(method, params);
     match handle(a, &ctx, &req) {
         Reply::Done(v) => v,

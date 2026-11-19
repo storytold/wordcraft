@@ -47,7 +47,7 @@ fn table_properties_dialog_sets_every_selected_row() {
     a.run("table.properties", json!({"allowBreak": false})).unwrap();
     a.run("table.selectTable", json!({})).unwrap();
     a.run("table.properties", json!({})).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     pump(&mut a, &ctx);
     let Some(host) = a.dialog_host.get::<FormHost<dialogs::TableProperties>>() else { panic!("no table dialog: {:?}", open_key(&a)) };
     let mixed = &host.form().form.mixed;
@@ -108,7 +108,7 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
     table.props.cell_margins = Some([3.0, 6.0, 9.0, 12.0]);
     table.rows[0].cells[0].props.margins = Some([1.0, 2.0, 3.0, 4.0]);
 
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let frame = |a: &mut WordApp| pump(a, &ctx);
     let id = dialogs::open(&mut a, "tableCellMargins", &json!({})).expect("the dialog opens");
     frame(&mut a);
@@ -138,7 +138,7 @@ fn cell_margins_button_preserves_existing_values_until_confirmed() {
     b.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
     let (tp, _, _) = b.session.sel.focus.path.cell().unwrap();
     assert_eq!(b.session.doc.table(b.session.sel.focus.story, &tp).unwrap().props.cell_margins, None);
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let id = dialogs::open(&mut b, "tableCellMargins", &json!({})).expect("the dialog opens");
     pump(&mut b, &ctx);
     let depth = b.session.undo_depth();
@@ -157,7 +157,7 @@ fn password_protected_documents_ask_for_the_password() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Locked away"));
     s.run("file.save", &json!({"path": path.to_string_lossy(), "password": "sesame"})).unwrap();
 
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let mut a = typed();
     assert!(a.execute("file.open", json!({"path": path.to_string_lossy()})).is_err(), "a script gets the error");
     assert_eq!(open_key(&a), None);
@@ -191,7 +191,7 @@ fn recipient_list_dialog_carries_the_filter() {
     )
     .unwrap();
     a.run("mailings.editRecipients", json!({})).unwrap();
-    pump(&mut a, &egui::Context::default());
+    pump(&mut a, &crate::test_harness::context());
     let Some(RecipientListDialog { draft: RecipientDraft { rows, filter, fields }, .. }) =
         a.dialog_host.get::<RecipientListDialog>()
     else {
@@ -372,7 +372,7 @@ fn an_existing_list_picked_on_the_desktop_loads_recipients() {
     let mut a = app_over(&files, wordcraft_doc::Document::new());
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     a.run("ui.openRecipientList", json!({})).unwrap();
-    pump(&mut a, &egui::Context::default());
+    pump(&mut a, &crate::test_harness::context());
     assert_eq!(files.requests().first().map(|r| r.purpose.as_str()), Some("recipients"), "the host can offer CSV files");
     assert_eq!(a.session.merge.headers, vec!["First Name", "City"]);
     assert_eq!(a.session.merge.rows.len(), 2);
@@ -396,7 +396,7 @@ fn an_existing_list_picked_on_the_web_loads_recipients() {
     );
     let mut a = app_over(&files, wordcraft_doc::Document::new());
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     assert_eq!(a.run("ui.openRecipientList", json!({})).unwrap(), json!({"pending": true}));
     assert_eq!(files.requests().first().map(|r| r.purpose.as_str()), Some("recipients"));
     pump(&mut a, &ctx);

@@ -1108,7 +1108,7 @@ fn kana_test_glyphs(ctx: &egui::Context) {
 /// strict missing-glyph policy, and the kana stand-in.
 #[test]
 fn the_ime_fixture_draws_kana_without_a_japanese_font() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
     let mut fonts = egui::FontDefinitions::empty();
     fonts

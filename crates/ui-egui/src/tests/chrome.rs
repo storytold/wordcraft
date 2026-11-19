@@ -113,6 +113,27 @@ impl SpoolBackend for Recorder {
     }
 }
 
+/// Lets the spooler's printers arrive, as the Print page's first drawing does: a spool that
+/// chooses its printer refuses `ui.print` until one is discovered and selected.
+fn discover_printers(a: &mut WordApp) {
+    let ctx = crate::test_harness::context();
+    a.run("ui.printSettings", json!({"refresh": true})).unwrap();
+    for _ in 0..40 {
+        a.poll_printing(&ctx);
+        if a.printing.ready() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Discovery runs on native hosts only: where the test host isn't one, the app has found the
+    // recorder's printer and chosen it, as `native_print.rs` sets its own up.
+    let name = if a.printing.settings.printer.is_empty() { "Test queue".to_string() } else { a.printing.settings.printer.clone() };
+    if !a.printing.printers.iter().any(|p| p.name == name) {
+        a.printing.printers.push(crate::printing::Printer::new(name.clone()).is_default(true));
+    }
+    a.run("ui.printSettings", json!({"printer": name})).unwrap();
+}
+
 /// The status line's text.
 fn said(a: &WordApp) -> String {
     a.status.as_ref().map(|s| s.text.clone()).unwrap_or_default()
@@ -277,7 +298,8 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     let mut h = harness(a);
     h.run_steps(4);
     assert!(h.query_by_label("Blank document").is_some(), "Home lists Blank document and the templates");
-    assert!(h.query_by_label("Recent").is_some(), "and the Recent list");
+    // The Recent heading and the Recent side-menu entry both carry the label.
+    assert!(h.query_all_by_label("Recent").next().is_some(), "and the Recent list");
     h.key_press(egui::Key::Escape);
     h.run_steps(4);
     let ctx = h.ctx.clone();
@@ -379,6 +401,7 @@ fn ui_print_needs_the_hosts_print_hook() {
 
     let rec = Recorder::new(Reply::Sent);
     a.services.print = Some(rec.spool());
+    discover_printers(&mut a);
     let r = a.run("ui.print", json!({})).unwrap();
     assert_eq!(r["printing"], true);
     assert_eq!(rec.sent_count(), 1, "printed once");
@@ -387,6 +410,7 @@ fn ui_print_needs_the_hosts_print_hook() {
 
     let mut b = typed();
     b.services.print = Some(Recorder::new(Reply::Fail("blocked by the browser")).spool());
+    discover_printers(&mut b);
     b.run("ui.print", json!({})).unwrap();
     let mut h = harness(b);
     h.run_steps(4);
@@ -399,6 +423,7 @@ fn ui_print_honours_the_print_settings() {
     let mut a = typed();
     let rec = Recorder::new(Reply::Sent);
     a.services.print = Some(rec.spool());
+    discover_printers(&mut a);
     assert!(a.run("ui.print", json!({"pages": "7-9"})).is_err(), "page 7 doesn't exist");
     assert!(a.run("ui.print", json!({"range": "nope"})).is_err());
     assert_eq!(rec.sent_count(), 0, "nothing was sent");
@@ -562,6 +587,7 @@ fn return_on_the_print_page_prints() {
     let rec = Recorder::new(Reply::Fail("no paper"));
     let mut a = app().with_fallback_chooser(true);
     a.services.print = Some(rec.spool());
+    discover_printers(&mut a);
     let before = body_text(&a);
     a.run("file.print", json!({})).unwrap();
     let mut h = harness(a);
@@ -600,6 +626,7 @@ fn a_successful_native_print_returns_to_the_document() {
         let mut a = app();
         a.printing.settings.printer = "Test Printer".into();
         a.services.print = Some(Recorder::new(if ok { Reply::Sent } else { Reply::Fail("no paper") }).with_printers(["Test Printer"]).spool());
+        discover_printers(&mut a);
         a.run("file.print", json!({})).unwrap();
         let mut h = harness(a);
         h.run_steps(3);
@@ -634,6 +661,7 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
         // The worker never answers, as when the driver doesn't.
         let rec = Recorder::cancelling(Reply::Hold, never_sent).with_printers(["Office"]);
         a.services.print = Some(rec.spool());
+        discover_printers(&mut a);
         for junk in [json!({}), json!(null), json!("all"), json!([1, 2]), json!({"cancel": -1, "job": "x"})] {
             assert!(a.run("ui.printCancel", junk).is_err(), "nothing to cancel before a job is submitted");
         }

@@ -34,7 +34,9 @@ fn a_legacy_ui_json_is_imported_with_its_junk_reset_to_defaults() {
     assert!(ui.editing.marks.spaces && !ui.editing.marks.tabs);
     assert_eq!(ui.font_picker.recent, ["Arial", "Georgia"], "the old recent fonts join the picker's list");
     let sections: Vec<&str> = errors.iter().map(|e| e.section.as_str()).collect();
-    for wrong in ["recentCount", "printBackgrounds", "optionsPane", "statusCount"] {
+    // `statusCount` is not among them: `StatusCount` reads any unknown code as Words (#2797), so
+    // that value is never a read error (its default is asserted above).
+    for wrong in ["recentCount", "printBackgrounds", "optionsPane"] {
         assert!(sections.contains(&wrong), "{wrong} is reported: {sections:?}");
     }
     assert!(legacy_ui_json(b"[1, 2]").is_err() && legacy_ui_json(b"not json").is_err());
@@ -169,11 +171,17 @@ fn interface_theme_migrates_and_survives_a_restart() {
 /// absolute once the first frame says the display's scale.
 #[test]
 fn interface_size_from_before_822_migrates() {
+    // The migration runs in `frame_input` (what eframe's `raw_input_hook` asks for before each
+    // frame), which reads the display's scale the previous pass reported: two frames.
     let frame = |a: &mut WordApp, native: f32| {
-        let ctx = egui::Context::default();
-        let mut input = egui::RawInput::default();
-        input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native);
-        ctx.run_ui(input, |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+        let ctx = crate::test_harness::context();
+        a.ctx = Some(ctx.clone());
+        for _ in 0..2 {
+            let mut input = egui::RawInput::default();
+            input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native);
+            craft::ui::shell::embed::before_input(&ctx, |out| a.frame_input(out));
+            ctx.run_ui(input, |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+        }
     };
     for (json, native, want) in [
         (r#"{"interfaceSize": 100}"#, 2.0, None),

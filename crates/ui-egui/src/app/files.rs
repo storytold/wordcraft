@@ -322,6 +322,18 @@ impl WordApp {
             // A download the browser accepted is a finished save too: the page holds no file of it.
             if matches!(picked, Picked::Paths(_) | Picked::Downloaded(_)) {
                 log::info!("saved {} through the save picker", save.name);
+                // The page now holds the document as that file (a hosted Save As or first Save, S-L159):
+                // the next Save goes back to it. A download names nothing the app could reopen.
+                if save.marked_saved
+                    && picked.records_file()
+                    && let Some(path) = picked.first_path()
+                {
+                    if save.document == current {
+                        self.session.path = Some(path);
+                    } else {
+                        let _ = self.session.with_document(save.document, |s| s.path = Some(path));
+                    }
+                }
             } else if save.marked_saved && save.document == current {
                 self.session.dirty = true;
             } else if save.marked_saved {
