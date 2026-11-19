@@ -13015,6 +13015,56 @@ fn caps_draw_sharp_s_as_two_capitals_in_one_cluster() {
     assert_eq!(cl.iter().map(|c| c.2.len()).sum::<usize>(), 6, "{cl:?}");
 }
 
+/// `text` laid out with `f` applied to all of it: its paragraph's layout.
+fn para_with(text: &str, f: &dyn Fn(&mut wordcraft_doc::props::CharProps)) -> ParaLayout {
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), f).unwrap();
+    let l = lay(&d);
+    l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some((**para).clone()) } else { None }).expect("a laid-out line")
+}
+
+/// Small Caps draws a space (U+0020) at the small-caps size, like a lowercase letter, as Word
+/// does (measured: 40 spaces in Times New Roman Bold 10 pt are 80% as wide in Small Caps); a
+/// no-break space keeps its full width, and with All Caps as well the space keeps its full width,
+/// as All Caps wins (#7062).
+#[test]
+fn a_space_in_small_caps_is_as_wide_as_at_the_small_caps_size() {
+    crate::test_fonts();
+    // The gap between the first and the last letter of `text`.
+    let gap = |text: &str, f: &dyn Fn(&mut wordcraft_doc::props::CharProps)| {
+        let pl = para_with(text, f);
+        let line = &pl.lines[0];
+        let x = |start: usize| (line.c0..line.c1).find(|&k| pl.clusters[k].start == start).and_then(|k| line.cl_left(k)).unwrap();
+        x(text.len() - 1) - x(1)
+    };
+    let plain: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| c.bold = Some(false);
+    let small: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| c.small_caps = Some(true);
+    let both: &dyn Fn(&mut wordcraft_doc::props::CharProps) = &|c| {
+        c.caps = Some(true);
+        c.small_caps = Some(true);
+    };
+    let spaces = format!("a{}a", " ".repeat(10));
+    let ratio = gap(&spaces, small) / gap(&spaces, plain);
+    assert!((ratio - 0.8).abs() < 0.01, "Small Caps spaces are 80% as wide: {ratio}");
+    assert!((gap(&spaces, both) - gap(&spaces, plain)).abs() < 0.01, "All Caps wins: full-width spaces");
+    let nbsp = format!("a{}a", "\u{a0}".repeat(10));
+    assert!((gap(&nbsp, small) - gap(&nbsp, plain)).abs() < 0.01, "a no-break space keeps its width");
+}
+
+/// A Small Caps line of lowercase letters is as tall as the same line without Small Caps: the
+/// small capitals are drawn at 80% of the size, but the line is measured at the full size, as in
+/// Word (#7063).
+#[test]
+fn a_small_caps_line_of_lowercase_is_as_tall_as_without_small_caps() {
+    crate::test_fonts();
+    let text = "only lowercase letters here";
+    let line = |f: &dyn Fn(&mut wordcraft_doc::props::CharProps)| para_with(text, f).lines[0].clone();
+    let plain = line(&|c| c.bold = Some(false));
+    let small = line(&|c| c.small_caps = Some(true));
+    assert!((small.height - plain.height).abs() < 0.01, "line height: Small Caps {} vs plain {}", small.height, plain.height);
+    assert!((small.baseline - plain.baseline).abs() < 0.01, "baseline: Small Caps {} vs plain {}", small.baseline, plain.baseline);
+}
+
 /// A caps run in a symbol font draws each code as its symbol: ß never becomes two glyphs (#1581).
 #[test]
 fn caps_in_a_symbol_font_never_expand_characters() {
