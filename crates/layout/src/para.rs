@@ -506,6 +506,36 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_font_named_after_a_core_font_is_drawn_in_that_font() {
+        // Measured in Word for Windows 16.0.20625: a missing font whose name starts with Arial or
+        // Helv is drawn in Arial, with Times in Times New Roman, with Courier in Courier New, with
+        // Segoe UI in Segoe UI, whatever its family class; its font table alternate still comes
+        // first. Other names (Verdana MT, Georgia Foo, Foo Arial) are drawn in Calibri.
+        crate::test_fonts();
+        let mut d = Document::new();
+        d.settings.roman_fonts = vec!["Arial Foo".into(), "Times MT Missing".into()];
+        d.settings.modern_fonts = vec!["Helvetica Foo".into()];
+        for (font, drawn) in [
+            ("Arial MT", "Arial"),
+            ("ArialFoo", "Arial"),
+            ("Arial Foo", "Arial"),
+            ("Helvetica Foo", "Arial"),
+            ("Helv Foo", "Arial"),
+            ("Times MT Missing", "Times New Roman"),
+            ("Times New Roman Foo", "Times New Roman"),
+            ("Courier Foo", "Courier New"),
+            ("Segoe UI Foo", "Segoe UI"),
+            ("Verdana MT", MISSING_SANS_FONT),
+            ("Georgia Foo", MISSING_SANS_FONT),
+            ("Foo Arial", MISSING_SANS_FONT),
+        ] {
+            assert_eq!(lookup_family(&d, font), drawn, "{font}");
+        }
+        d.settings.font_alt_names = vec![("Arial Foo".into(), "Courier New".into())];
+        assert_eq!(lookup_family(&d, "Arial Foo"), "Courier New");
+    }
+
+    #[test]
     fn a_missing_east_asian_or_complex_script_font_keeps_its_name() {
         // Calibri has no CJK, Arabic or Hebrew: a missing East Asian or complex-script font with no
         // alternate keeps its name, so the script's own fallback draws it (Word: MS Mincho for
