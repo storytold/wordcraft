@@ -249,7 +249,7 @@ fn hovering_a_bar_member_previews_its_command() {
                 open_list_of(&mut h, b);
                 // The framework's font list is a tree of families (depth rows), so its rows are tree items.
                 h.query_all_by_role(Role::TreeItem)
-                    .filter(|n| n.rect().min.y > b.max.y && n.accesskit_node().label().as_deref() != Some(font.as_str()))
+                    .filter(|n| (n.rect().min.y >= b.max.y || n.rect().max.y <= b.min.y) && n.accesskit_node().label().as_deref() != Some(font.as_str()))
                     .filter(|n| n.accesskit_node().label().as_deref().is_some_and(|name| !name.ends_with('…')))
                     .map(|n| n.rect().center())
                     .next()
@@ -368,11 +368,14 @@ fn context_menu_toolbar_opens_at_a_caret_from_the_keyboard_and_dismisses() {
     assert_eq!(h.state().session.sel, caret);
     // The framework's Escape closes the top layer first: the bar (where the click on Bold left the keyboard), then the
     // menu under it.
-    press_key(&mut h, egui::Key::Escape, Default::default());
-    if h.state().canvas.context_menu_open {
+    // Each Escape closes one layer (the bar's own popups, the bar, the menu): press until the menu is gone.
+    for _ in 0..4 {
         press_key(&mut h, egui::Key::Escape, Default::default());
+        if !h.state().canvas.context_menu_open {
+            break;
+        }
     }
-    assert!(!h.state().canvas.context_menu_open);
+    assert!(!h.state().canvas.context_menu_open, "Escape dismisses the keyboard-opened menu");
     h.event(egui::Event::Text(" typed".into()));
     steps(&mut h);
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(" typed"), "typing resumes in the document");
