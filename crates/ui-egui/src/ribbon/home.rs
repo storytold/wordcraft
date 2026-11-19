@@ -113,14 +113,14 @@ fn paint_bullet(cx: &craft::ui::primitives::ContentPainterCx<'_>, r: egui::Rect,
         cx.painter.add(egui::Shape::convex_polygon(vec![pts[3], pts[1], pts[2]], ink, egui::Stroke::NONE));
     } else {
         cx.with_draw(|d| {
-            d.text(r, &TextRun { role: craft::theme::TypeRole::Body, align: HAlign::Center, ..TextRun::new(c) });
+            d.text(r, &TextRun::new(c).role(craft::theme::TypeRole::Body).align(HAlign::Center));
         });
     }
 }
 
 /// The Text Effects and Typography menu.
-fn text_effects_menu(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
-    super::galleries::wordart(ui, app, "format.textEffects");
+fn text_effects_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
+    super::galleries::wordart(ui, cx, app,"format.textEffects");
     Divider::horizontal().show(ui);
     let theme = app.session.doc.settings.theme_colors.clone();
     Menu::submenu_row(ui, tl!("Text Fill").to_string(), |ui, cx| crate::wordart_menus::fill_menu(ui, cx, app, &theme));

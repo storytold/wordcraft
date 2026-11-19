@@ -116,7 +116,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     }
     row.group(RibbonGroup::new("shape.wordart", tl!("Decorative Text Styles"), IconId::new("more").into()), |ui| {
         let styles = Button::new(tl!("Styles")).icon(IconId::new("wordArt")).tooltip(tl!("Decorative Text Styles")).arrangement(Arrangement::Stacked);
-        menu_button(ui, styles, tl!("Decorative Text Styles"), None, |ui, _| super::galleries::wordart(ui, app, "wordArt.style"));
+        menu_button(ui, styles, tl!("Decorative Text Styles"), None, |ui, cx| super::galleries::wordart(ui, cx, app, "wordArt.style"));
         let outline = crate::wordart_menus::current_outline(app);
         Stack::new().show(ui, |ui, _| {
             menu_button(ui, Button::new(tl!("Text Fill")).icon(IconId::new("textFill")), tl!("Text Fill"), None, |ui, cx| {

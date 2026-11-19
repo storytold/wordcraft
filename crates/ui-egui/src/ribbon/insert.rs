@@ -10,7 +10,7 @@ use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::{Menu, MenuItem};
-use craft::ui::primitives::{IconSpec, TextRun};
+use craft::ui::primitives::{HAlign, IconSpec, TextRun};
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use egui::Ui;
 
@@ -108,7 +108,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             crate::tl!("Shapes"),
             Some("insert.shape"),
             |ui, cx| {
-                super::galleries::shapes(ui, app);
+                super::galleries::shapes(ui, cx, app);
                 Divider::horizontal().show(ui);
                 MenuItem::command(CommandRef::with_params("insert.canvas", json!({})))
                     .label(crate::tl!("New Drawing Canvas"))
@@ -240,8 +240,8 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 Button::new(crate::tl!("Decorative Text")).icon(IconId::new("wordArt")).tooltip(crate::tl!("Decorative Text")),
                 crate::tl!("Decorative Text"),
                 Some("insert.wordArt"),
-                |ui, _| {
-                    super::galleries::wordart(ui, app, "insert.wordArt");
+                |ui, cx| {
+                    super::galleries::wordart(ui, cx, app, "insert.wordArt");
                 },
             );
             menu_button(
@@ -305,11 +305,9 @@ fn symbol_grid(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
             let (c, font) = items.get(*key).cloned().unwrap_or_default();
             let glyph = c.clone();
             let tile = Tile::new(c).thumb(ThumbAspect::SQUARE, move |cx, rect| {
-                let run = TextRun::new(glyph.as_str());
-                let size = cx.layout(&run).size();
-                let at = egui::Rect::from_center_size(rect.center(), size);
+                let run = TextRun::new(glyph.as_str()).align(HAlign::Center);
                 cx.with_draw(|d| {
-                    d.text_on_centre_line(at, &run);
+                    d.text_on_centre_line(rect, &run);
                 });
             });
             if font.is_empty() { tile } else { tile.tooltip(font) }
