@@ -93,10 +93,15 @@ fn imported_word_save_asks_for_docx_and_preserves_the_original() {
         let revision = a.session.rev();
         let result = a.run("file.save", json!({})).unwrap();
         assert_eq!(result["pending"], "saveAs");
+<<<<<<< HEAD
         let asked = request(&files, 0);
         assert_eq!(asked.kind, PickKind::Save);
         assert_eq!(asked.file_name.as_deref(), Some("contract.docx"));
         answer(&files, None);
+=======
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
+        answer(&shown, None);
+>>>>>>> up/main
         assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], false);
         assert_eq!(a.session.doc, draft);
         assert_eq!(a.session.rev(), revision);
@@ -224,6 +229,102 @@ fn imported_word_programmatic_and_explicit_saves_never_open_dialogs() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+<<<<<<< HEAD
+=======
+#[test]
+fn imported_word_save_controls_ask_for_docx() {
+    use egui_kittest::kittest::Queryable;
+    let dir = scratch("imported-entry-points");
+    let original = dir.join("contract.doc");
+    let bytes = legacy_word_bytes();
+    std::fs::write(&original, &bytes).unwrap();
+    let (mut a, shown) = async_app();
+    a.run("ui.language", json!({"value": "en"})).unwrap();
+    a.run("file.open", json!({"path": original})).unwrap();
+    typed(&mut a);
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert!(h.state().file_dialog_open(), "the Save button asks for a supported target");
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
+    answer(&shown, None);
+    h.run_steps(3);
+
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.state_mut().canvas.want_focus = true;
+    h.run_steps(6);
+    assert!(h.state().canvas.focused, "Mod+S starts in the editor");
+    h.event(egui::Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(3);
+    assert!(h.state().file_dialog_open(), "the focused editor's Mod+S asks too");
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
+    answer(&shown, None);
+    h.run_steps(3);
+    assert!(h.state().session.dirty);
+    assert_eq!(h.state().session.path.as_deref(), Some(original.as_path()));
+    assert_eq!(std::fs::read(&original).unwrap(), bytes);
+}
+
+/// Dialogs the fake host was asked to show, each with the channel its answer goes through.
+type Shown = Rc<RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>>;
+
+/// An app whose host shows dialogs asynchronously: nothing is answered until the test does.
+fn async_app() -> (WordApp, Shown) {
+    let shown: Shown = Rc::default();
+    let log = shown.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |req| {
+            let (tx, rx) = channel();
+            log.borrow_mut().push((req, tx));
+            rx
+        })),
+        ..Default::default()
+    };
+    (WordApp::new(Session::new(wordcraft_doc::Document::new()), services), shown)
+}
+
+/// Answer the dialog the host is showing (the last one asked for).
+fn answer(shown: &Shown, picked: Option<&str>) {
+    answer_all(shown, picked.as_slice());
+}
+
+/// Answer the dialog with several picked paths (none: cancelled).
+fn answer_all(shown: &Shown, picked: &[&str]) {
+    let (_, tx) = shown.borrow_mut().pop().unwrap();
+    tx.send(Ok(picked.iter().map(|p| p.to_string()).collect())).unwrap();
+}
+
+/// Giving the system dialog up (File › Open › Browse in WordCraft…) tells the host to cancel its
+/// waiting request, so a portal that stopped answering cannot keep Save As stuck.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn giving_up_a_file_dialog_cancels_the_host_request() {
+    let cancelled = Rc::new(std::cell::Cell::new(false));
+    let flag = cancelled.clone();
+    let services = Services { cancel_file_dialog: Some(Box::new(move || flag.set(true))), ..Default::default() };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    let (tx, rx) = channel();
+    a.file_dialog = Some(PendingDialog {
+        rx,
+        req: FileDialogRequest::Save { name: "Document1.docx".into(), dir: None },
+        after: AfterPick::Export { ext: "pdf".into() },
+    });
+    a.give_up_file_dialog();
+    assert!(cancelled.get(), "the host is told to stop waiting");
+    assert!(a.file_dialog.is_none(), "the pending dialog is taken as cancelled");
+    drop(tx);
+}
+
+>>>>>>> up/main
 fn typed(a: &mut WordApp) {
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     assert!(a.session.dirty);
@@ -234,7 +335,7 @@ fn body_text(a: &WordApp) -> String {
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("wordcraft-ui-dialogs-{name}-{}", std::process::id()));
+    let dir = std::path::absolute(std::env::temp_dir().join(format!("wordcraft-ui-dialogs-{name}-{}", std::process::id()))).expect("temp dir");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -275,10 +376,75 @@ fn save_as_template_starts_in_the_templates_folder() {
     a.run("file.options", json!({"userTemplatesFolder": chosen.to_string_lossy()})).unwrap();
     assert_eq!(a.user_templates_dir(), Some(chosen.clone()));
     a.run("ui.saveAsTemplate", json!({})).unwrap();
+<<<<<<< HEAD
     let asked = request(&files, 1);
     assert_eq!(asked.file_name.as_deref(), Some("Memo.dotx"));
     assert_eq!(asked.directory.as_deref(), Some(chosen.as_path()));
     answer(&files, None);
+=======
+    assert!(matches!(&shown.borrow()[0].0, FileDialogRequest::Save { name, dir: Some(d) } if name == "Memo.dotx" && *d == chosen.to_string_lossy()));
+    answer(&shown, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #4143: Save As starts in the folder of the open file, not in the home folder; a document
+/// that was never saved has no folder to offer.
+#[test]
+fn save_as_starts_in_the_folder_of_the_open_file() {
+    let dir = scratch("save-as-folder");
+    let opened = dir.join("one.docx");
+    wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("original"))
+        .run("file.save", &json!({"path": opened.to_string_lossy()}))
+        .unwrap();
+    let (mut a, shown) = async_app();
+    a.services.templates_dir = Some(dir.join("Templates"));
+    a.run("file.open", json!({"path": opened.to_string_lossy()})).unwrap();
+    a.save_as_dialog();
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "one.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
+    answer(&shown, None);
+
+    let (mut fresh, shown) = async_app();
+    typed(&mut fresh);
+    fresh.save_as_dialog();
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{UNSAVED}.docx"), dir: None });
+    answer(&shown, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file opened by a relative path (`wordcraft one.docx`) has an empty parent: Save As starts
+/// in the working folder, not with an empty folder the dialog would drop.
+#[test]
+fn save_as_starts_in_the_working_folder_for_a_relative_path() {
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    a.session.path = Some(std::path::PathBuf::from("one.docx"));
+    a.save_as_dialog();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "one.docx".into(), dir: Some(cwd) });
+    answer(&shown, None);
+}
+
+/// Save As returns at once (the UI keeps running); the frame loop saves once the answer arrives.
+#[test]
+fn save_as_answer_arriving_later_is_saved() {
+    let dir = scratch("later");
+    let path = dir.join("novel.docx");
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    a.save_as_dialog();
+    assert!(a.file_dialog_open());
+    // A new document is offered its first words as its name, as in Word (#5793).
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{UNSAVED}.docx"), dir: None });
+    let ctx = egui::Context::default();
+    let frame = |a: &mut WordApp| ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+    frame(&mut a);
+    assert!(a.session.dirty, "nothing saved before the user answers");
+    answer(&shown, Some(&path.to_string_lossy()));
+    frame(&mut a);
+    assert!(!a.file_dialog_open());
+    assert!(!a.session.dirty);
+    assert!(saved_text(&path).contains(UNSAVED));
+>>>>>>> up/main
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -307,7 +473,11 @@ fn save_as_with_a_new_filename_saves_under_it() {
     let r = a.run("file.saveAs", json!({})).unwrap();
     assert_eq!(r, json!({"saved": false}));
     assert!(a.file_dialog_open(), "F12's saveAs request opens the dialog");
+<<<<<<< HEAD
     assert_eq!(request(&files, 1).file_name.as_deref(), Some("two.docx"));
+=======
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into(), dir: Some(dir.join("sub").to_string_lossy().into_owned()) });
+>>>>>>> up/main
     let _ = std::fs::remove_dir_all(&dir);
 }
 

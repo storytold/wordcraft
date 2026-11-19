@@ -100,8 +100,30 @@ impl Windows {
     /// One window, showing document `doc`.
     pub(crate) fn new(doc: u64) -> Windows {
         let mut list = WindowList::new();
+<<<<<<< HEAD
         let id = list.open(Window::new(doc, None, None, false));
         Windows { native: cfg!(not(target_arch = "wasm32")), list, root: id, shown: id, arranged: arrange::State::default(), root_focused: false }
+=======
+        let id = list.open(1);
+        let mut viewports = Viewports::new(Frame::Desktop);
+        viewports.set_root(Some(id));
+        Windows {
+            native: cfg!(not(target_arch = "wasm32")),
+            list,
+            viewports: Some(viewports),
+            open: vec![Window { key: 1, id: Some(id), doc, ui: None, requests: Vec::new(), title: String::new(), view: None }],
+            shown: 1,
+            next_key: 2,
+            showing: false,
+            recent: vec![1],
+            focus: None,
+            menu: WindowMenu::default(),
+            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size(crate::window_geometry::MIN_SIZE),
+            input_plugin: false,
+            driven: false,
+            arranged: arrange::State::default(),
+        }
+>>>>>>> up/main
     }
 
     /// Whether documents get native windows of their own.
@@ -638,6 +660,12 @@ impl WordApp {
     /// borrowed for the interface).
     pub(crate) fn other_windows(&self) -> impl Iterator<Item = &WindowUi> {
         self.windows.list.iter().filter_map(|(_, w)| w.ui.as_deref())
+    }
+
+    /// [`WordApp::other_windows`] with each window's key, for each window's composition face
+    /// ([`crate::theme::composition_family`]).
+    pub(crate) fn other_windows_by_key(&self) -> impl Iterator<Item = (u64, &WindowUi)> {
+        self.windows.open.iter().filter_map(|w| w.ui.as_deref().map(|ui| (w.key, ui)))
     }
 }
 

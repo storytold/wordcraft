@@ -1910,6 +1910,139 @@ fn save_prompt_shows_why_the_save_failed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+<<<<<<< HEAD
+=======
+/// #3172: the font name box and the font size box say what they are, and the arrows beside
+/// them say whose options they open: without a name a screen reader has only "edit" or
+/// "button" to say.
+#[test]
+fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    for (role, name) in [
+        (Role::TextInput, "Font"),
+        (Role::TextInput, "Font Size"),
+        (Role::Button, "Font options"),
+        (Role::Button, "Font Size options"),
+        (Role::Button, "Font Color options"),
+    ] {
+        assert!(h.query_by_role_and_label(role, name).is_some(), "nothing on the ribbon is called {name:?}");
+    }
+}
+
+/// The Paste button is named "Paste": its hint adds the key as the platform writes it, so its
+/// name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
+#[test]
+fn the_paste_button_is_named_without_a_mac_key() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    assert!(h.query_by_role_and_label(Role::Button, "Paste").is_some(), "the Paste button is called \"Paste\"");
+    assert!(h.query_by_role_and_label(Role::Button, "Paste (⌘V)").is_none(), "no Mac key in its name");
+}
+
+/// #1015: focusing Save is not enough: its dialog must expose the question and any failed
+/// save's explanation, so assistive technology has context for the three choices.
+#[test]
+fn save_prompt_exposes_its_context_to_accessibility() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, NodeT, Queryable};
+    let dir = scratch("save-accessibility");
+    let path = docx_on_disk(&dir, "Draft");
+    let mut a = app();
+    a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    a.run("text.insert", json!({"text": "Revised "})).unwrap();
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    assert!(h.state().canvas.focused);
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    let save = h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().as_deref() == Some("Save") && n.is_focused()).unwrap();
+    let mut ancestor = save.parent();
+    let mut roles = Vec::new();
+    while let Some(node) = ancestor {
+        roles.push(node.accesskit_node().role());
+        ancestor = node.parent();
+    }
+    assert!(roles.contains(&Role::AlertDialog), "Save has no alert-dialog ancestor: {roles:?}");
+    let dialog = h.get(By::new().predicate(|n| n.role() == Role::AlertDialog));
+    let node = dialog.accesskit_node();
+    assert!(node.label().is_some_and(|s| s.contains("contract.docx") && s.contains("save changes")));
+    assert!(node.description().is_some_and(|s| s.contains("Your changes will be lost")));
+    for label in ["Save", "Don't Save", "Cancel"] {
+        assert!(dialog.query_by_role_and_label(Role::Button, label).is_some(), "missing {label}");
+    }
+    let reason = "Couldn't save contract.docx: disk full";
+    if let Some(dialogs::Dialog::SaveChanges { message, .. }) = &mut h.state_mut().dialog {
+        *message = reason.into();
+    }
+    h.run_steps(2);
+    let dialog = h.get(By::new().predicate(|n| n.role() == Role::AlertDialog));
+    assert!(dialog.accesskit_node().description().is_some_and(|s| s.contains(reason)));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().canvas.focused && h.state().session.dirty);
+    assert!(body_text(h.state()).contains("Revised Draft"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `ui.print` hands the document's PDF to the host's print hook, and is an error (with
+/// nothing printed) when the host has none.
+#[test]
+fn ui_print_needs_the_hosts_print_hook() {
+    let mut a = typed();
+    assert!(a.run("ui.print", json!({})).is_err(), "no print hook: an error");
+
+    let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = got.clone();
+    a.services.print = Some(Box::new(move |bytes| {
+        seen.borrow_mut().push(bytes.to_vec());
+        Ok(())
+    }));
+    let r = a.run("ui.print", json!({})).unwrap();
+    assert_eq!(r["printing"], true);
+    assert_eq!(got.borrow().len(), 1, "printed once");
+    assert!(got.borrow().first().is_some_and(|b| b.starts_with(b"%PDF")), "the hook got a PDF");
+    assert!(a.session.dirty, "printing is not a save");
+
+    a.services.print = Some(Box::new(|_| Err("blocked by the browser".into())));
+    a.status_msg = None;
+    let e = a.run("ui.print", json!({})).unwrap_err();
+    assert!(e.contains("blocked by the browser"), "{e}");
+    assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("blocked by the browser")), "the status bar says why");
+}
+
+>>>>>>> up/main
 /// Make WordCraft the default… (#295) goes through the host's hook and reports the outcome in
 /// the status bar; without a hook (web, macOS) it's an error and nothing runs.
 #[test]

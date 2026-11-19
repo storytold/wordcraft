@@ -237,6 +237,7 @@ fn fields(f: &ParagraphFormat) -> Map<String, Value> {
     m
 }
 
+<<<<<<< HEAD
 /// OK as one `para.set`, so one undo step: the fields that differ from what every selected paragraph had when the
 /// dialog opened. The alignment and indents are as seen on the page, so a new direction sends them again to keep them
 /// where the dialog shows them. Nothing changed runs nothing.
@@ -244,6 +245,89 @@ fn apply_paragraph(app: &mut WordApp, new: &ParagraphFormat, start: &ParagraphFo
     let (fields, start) = (fields(new), fields(start));
     let turned = matches!((fields.get("bidi"), start.get("bidi")), (Some(a), Some(b)) if a != b);
     let (mut props, mut page) = (Map::new(), Map::new());
+=======
+/// The Paragraph dialog's Special box and its By value, as in Word: the first-line indent
+/// `first` (in the measurement unit) is a First line indent when above 0 and a Hanging one when
+/// below. Picking First line or Hanging from (none), or while the selected paragraphs differ,
+/// starts it at half an inch as Word does; switching between the two keeps By.
+pub(super) fn para_special(r: &mut crate::rtl::Cells, first: &mut f32, mixed: &mut BTreeSet<String>) {
+    const SPECIAL: [&str; 3] = ["(none)", "First line", "Hanging"];
+    let unit = crate::options::unit();
+    let kind_of = |first: f32| {
+        if first > 0.0 {
+            1
+        } else if first < 0.0 {
+            2
+        } else {
+            0
+        }
+    };
+    let blank = mixed.contains("indentFirst");
+    let kind = kind_of(*first);
+    let special_label = r.cell(|ui| ui.label(tl!("Special:")));
+    let shown = if blank { "" } else { tl!(SPECIAL[kind]) };
+    r.cell(|ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("para_special").selected_text(shown).show_ui(ui, |ui| {
+            for (k, l) in SPECIAL.into_iter().enumerate() {
+                if ui.selectable_label(!blank && k == kind, tl!(l)).clicked() && (blank || k != kind) {
+                    let by = if blank || kind == 0 { 36.0 / unit.pt_per_unit() } else { first.abs() };
+                    *first = [0.0, by, -by][k];
+                    mixed.remove("indentFirst");
+                }
+            }
+        });
+        combo.response.labelled_by(special_label.id);
+    });
+    // A kind just picked counts from this frame on.
+    let (blank, kind) = (mixed.contains("indentFirst"), kind_of(*first));
+    let by_label = r.cell(|ui| ui.label(tl!("By:")));
+    r.cell(|ui| {
+        if blank || kind == 0 {
+            // Nothing to set until Special says which way.
+            let mut none = 0.0;
+            ui.add_enabled(false, egui::DragValue::new(&mut none).measure_blank(unit)).labelled_by(by_label.id);
+        } else {
+            // Typed values count once committed: the 0 of "0.25" would otherwise turn Special
+            // to (none) and disable the box mid-typing.
+            let mut by = first.abs();
+            // By stops at 0 when dragged down instead of turning negative for a frame (which the
+            // `abs` below would flip back), and at Word's 22".
+            let field = egui::DragValue::new(&mut by)
+                .speed(3.6 / unit.pt_per_unit())
+                .range(0.0..=1584.0 / unit.pt_per_unit())
+                .clamp_existing_to_range(false)
+                .max_decimals(2)
+                .update_while_editing(false)
+                .measure(unit);
+            if ui.add(field).labelled_by(by_label.id).changed() {
+                mixed.remove("indentFirst");
+            }
+            *first = if kind == 2 { -by.abs() } else { by.abs() };
+        }
+    });
+}
+
+/// A Paragraph dialog check box for the field `key`. While the selected paragraphs differ in
+/// it, it shows as neither on nor off, and a click turns it on for all of them.
+pub(super) fn para_check(ui: &mut Ui, on: &mut bool, text: &str, key: &str, mixed: &mut BTreeSet<String>) {
+    if !mixed.contains(key) {
+        ui.checkbox(on, text);
+    } else if ui.add(egui::Checkbox::new(&mut false, text).indeterminate(true)).clicked() {
+        *on = true;
+        mixed.remove(key);
+    }
+}
+
+/// The Paragraph dialog's OK, as one `para.set` and so one undo step (#1346): the fields that
+/// differ from what every selected paragraph had when it opened, not the blank ones, which
+/// stay as each paragraph has them. The alignment and indents are as seen on the page, so a
+/// new direction keeps them where the dialog shows them.
+pub(super) fn apply_paragraph(app: &mut WordApp, d: &Dialog) {
+    let Dialog::Paragraph { start, mixed, .. } = d else { return };
+    let fields = para_fields(d);
+    let turned = !mixed.contains("bidi") && fields.get("bidi") != start.get("bidi");
+    let (mut props, mut page) = (serde_json::Map::new(), serde_json::Map::new());
+>>>>>>> up/main
     for (k, v) in fields {
         let on_page = ON_PAGE.contains(&k.as_str());
         if start.get(&k) == Some(&v) && !(turned && on_page) {

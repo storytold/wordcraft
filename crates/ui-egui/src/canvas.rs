@@ -180,6 +180,16 @@ pub struct CanvasState {
     /// The chars of `ime_preedit` the input method marks as its cursor or selection, as it reports
     /// them (unchecked).
     pub(crate) ime_preedit_range: Option<std::ops::Range<usize>>,
+<<<<<<< HEAD
+=======
+    /// Document faces added to the interface fonts so the input method's composition (#565) and a
+    /// file name in the window caption can be drawn.
+    pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
+    /// The document face this window's composition is drawn in, as the fonts were last installed
+    /// (its [`crate::theme::composition_family`]).
+    pub(crate) ime_face: Option<wordcraft_fonts::FaceRef>,
+    pub want_focus: bool,
+>>>>>>> up/main
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
@@ -413,6 +423,12 @@ impl Default for CanvasState {
             viewed_page: None,
             ime_preedit: String::new(),
             ime_preedit_range: None,
+<<<<<<< HEAD
+=======
+            ime_faces: Vec::new(),
+            ime_face: None,
+            want_focus: true,
+>>>>>>> up/main
             context_issue: None,
             context_synonyms: None,
             context_menu_open: false,
@@ -577,6 +593,7 @@ fn screen_rects(rects: &[(usize, wordcraft_geom::Rect)], pages: &[PlacedPage]) -
         .collect()
 }
 
+<<<<<<< HEAD
 /// A page-point rect as a mark area.
 fn mark_area(page: usize, r: &wordcraft_geom::Rect, kind: MarkKind) -> MarkArea {
     let rect = craft::behavior::kurbo::Rect::new(f64::from(r.x), f64::from(r.y), f64::from(r.x + r.w), f64::from(r.y + r.h));
@@ -960,3 +977,382 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     });
     context_menu::show(app, ui, &out.canvas.response, ask);
 }
+=======
+/// Render the document canvas, pages, scroll bars, rulers, and interactive controls for the current frame.
+pub fn show(app: &mut WordApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let full = ui.available_rect_before_wrap();
+    let layout = prepare_layout(app, ui, full);
+    let view = prepare_view(app, ui, full, &layout);
+    let scroll_target = if hold_scroll_for_preview(app) { None } else { update_caret_scroll(app, &view) };
+    let motion = scroll_motion(app, ui, full, &view);
+    let (scroll_area, scroll_base) = configure_scroll_area(app, ui, &view, motion);
+    let CanvasView { area, hruler, vruler, paper, zooming, hinted, geo, dim_body, grid_story, caret, rescaled, .. } = view;
+    let mut origin = area.min;
+    let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
+    // The bars are drawn with `ui_area`'s style; what the pages draw gets the inherited one back.
+    let inherited = std::sync::Arc::clone(ui_area.style());
+    if ui.spacing().scroll == egui::style::ScrollStyle::floating() {
+        ui_area.spacing_mut().scroll = canvas_scroll_style();
+    }
+    canvas_scroll_thumb(ui_area.visuals_mut(), &t);
+    let mut ime_geometry: Option<(Rect, Rect)> = None;
+    let mut ime_interrupt = false;
+    let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
+        ui.set_style(inherited);
+        origin = ui.min_rect().min - viewport.min.to_vec2();
+        let content = Rect::from_min_size(ui.min_rect().min, geo.size);
+        let resp = canvas_response(ui, content, scroll_target);
+        // Read Mode's neighbouring columns end right at the viewport's edges: keep their
+        // shadows from showing there as hairlines.
+        let clip = if app.session.view.read_mode { ui.clip_rect().shrink2(vec2(3.0, 0.0)) } else { ui.clip_rect() };
+        let painter = ui.painter_at(clip);
+        let ppp = ui.ctx().pixels_per_point();
+        let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
+        let content_origin = ui.min_rect().min;
+        let hidden = app.canvas.dragged_off_page();
+        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted);
+        // The view without the hinting, which a stretched raster may differ in (see `stretched`).
+        let shown_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), true);
+        let t0 = crate::now_ms();
+        let PagePaintOutput { rects, visible_tile_keys, rendered } = paint_pages(PagePaint {
+            app,
+            ui,
+            layout: &layout,
+            geo: &geo,
+            t: &t,
+            painter: &painter,
+            dim_body,
+            paper,
+            hidden,
+            view: page_view,
+            shown_view,
+            zooming,
+            hinted,
+            content_origin,
+            ppp,
+            max_tex,
+            grid_story,
+        });
+        paint_white_space_seams(&painter, &rects, &geo, &t);
+        if rendered > 0 {
+            app.canvas.render_ms = crate::now_ms() - t0;
+        }
+        // Drop textures of pages that no longer exist, and of pages scrolled well out of view
+        // (#811): scrolling through a long document kept every page it had shown in memory.
+        let n = layout.pages.len();
+        let clip = ui.clip_rect();
+        let near = clip.expand2(vec2(clip.width(), clip.height() * TEXTURE_KEEP_SCREENS));
+        app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
+        app.canvas.tiles.retain(|id, _| visible_tile_keys.contains(id));
+        app.canvas.page_rects = rects.clone();
+        let view_rect = ui.clip_rect();
+        if floating_comments(app) {
+            // Its own layer, so presses on the card never reach the canvas under it.
+            let ctx = ui.ctx().clone();
+            egui::Area::new(egui::Id::unique("floating_comment"))
+                .order(egui::Order::Foreground)
+                .interactable(!app.modal_open())
+                .fixed_pos(Pos2::ZERO)
+                .sense(Sense::hover())
+                .show(&ctx, |aui| {
+                    aui.set_clip_rect(view_rect);
+                    let ap = aui.painter().clone();
+                    balloons(app, aui, &ap, &rects, &layout, geo.scale, view_rect);
+                });
+        } else {
+            balloons(app, ui, &painter, &rects, &layout, geo.scale, view_rect);
+        }
+        // Find › Reading Highlight. Its places are the document's, not the preview's.
+        let marks: Vec<(Pos, Pos)> =
+            if preview_sel(app).is_some() { Vec::new() } else { app.session.find_highlights().iter().take(5000).cloned().collect() };
+        for (a, b) in &marks {
+            for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
+                if let Some(pr) = rects.get(pi) {
+                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                    let hr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                    painter.rect_filled(hr, 0.0, t.find_highlight);
+                }
+            }
+        }
+        // Selection (a selected object shows its frame instead): whole table cells shade the
+        // cells (an empty one too), a column selection each row's piece, text running into or
+        // across a table the whole cells of the rows it takes.
+        let selected: Vec<_> = if let Some(sel) = preview_sel(app) {
+            let (a, b) = sel.ordered();
+            if a == b {
+                Vec::new()
+            } else {
+                wordcraft_engine::cmd::table_mouse::selection_rects(&layout, page_doc(app), &a, &b, app.session.page_hint)
+            }
+        } else if crate::objects::selected(app).is_some() {
+            Vec::new()
+        } else if let Some(range) = app.session.cell_range() {
+            wordcraft_engine::cmd::table_mouse::cell_rects(&layout, &app.session.doc, range)
+        } else if !app.session.sel.is_collapsed() {
+            match app.session.column_segments() {
+                Some(segs) => segs.iter().flat_map(|(a, b)| layout.selection_rects(&app.session.doc, a, b, app.session.page_hint)).collect(),
+                None => {
+                    let (a, b) = app.session.sel.ordered();
+                    wordcraft_engine::cmd::table_mouse::selection_rects(&layout, &app.session.doc, &a, &b, app.session.page_hint)
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        let visible_clip = ui.clip_rect();
+        let mut screen_rects: Vec<Rect> = Vec::with_capacity(selected.len());
+        for (pi, r) in selected {
+            if let Some(pr) = rects.get(pi) {
+                let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                painter.rect_filled(sr, 0.0, t.selection);
+                screen_rects.push(sr);
+            }
+        }
+        // Anchor only to visible selection geometry. A selection can span pages, and its
+        // document-first line may be scrolled offscreen; using it would pin the toolbar to an
+        // old screen position unrelated to the visible selection.
+        // Alignment previews can move the selected text while the pointer is still over a mini
+        // toolbar button. Keep the bar anchored to the live selection until the preview ends, or
+        // it can move out from under the pointer and flicker between preview and live layouts.
+        let anchor_rects = if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, &rects, geo.scale) } else { screen_rects };
+        app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, visible_clip);
+        // Content controls: the frame of the one the caret is in (all of them in Design Mode).
+        crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);
+        // Caret.
+        let focused = resp.has_focus() || app.canvas.focused;
+        // After an automatic change the web's text agent starts afresh
+        // (`keys::note_automatic_change`) — only there, because on X11 an interrupt recreates the
+        // input context and fcitx drops later keys (#1169). A body replacement interrupts on every
+        // platform: the composition belonged to the text that was swapped out.
+        let ime_reset = std::mem::take(&mut app.canvas.ime_reset) && cfg!(target_arch = "wasm32") && app.canvas.ime_preedit.is_empty();
+        let replaced = std::mem::take(&mut app.canvas.ime_interrupt_now);
+        ime_interrupt = ime_reset || replaced;
+        // Editing an equation: frame it as Word does (a box as tall as its line, a grip at its
+        // top left, an options strip at its right) and draw the caret inside it.
+        let mut math_caret = false;
+        app.canvas.eq_options = None;
+        if let Some(m) = app.session.math.clone()
+            && let Some(bx) = layout.equation_box(&m.at, app.session.page_hint)
+            && let Some(pr) = rects.get(bx.page)
+        {
+            math_caret = true;
+            let (pi, ex, base, ml) = (bx.page, bx.x, bx.base, bx.math.clone());
+            let s = geo.scale;
+            let frame = equation_frame(*pr, &bx, s);
+            // The argument the caret is in (a numerator, a radicand…) is shaded.
+            if !m.pos.path.is_empty()
+                && let Some((x0, x1, up, down)) = ml.arg_extent(&m.pos.path)
+            {
+                let arg = Rect::from_min_max(
+                    pos2(pr.min.x + (ex + x0) * s, pr.min.y + (base - up) * s),
+                    pos2(pr.min.x + (ex + x1) * s, pr.min.y + (base + down) * s),
+                );
+                painter.rect_filled(arg.expand(1.0), 0.0, Color32::from_black_alpha(26));
+            }
+            painter.rect_filled(frame.strip, 0.0, t.equation_box.gamma_multiply(0.35));
+            let (c, w) = (frame.strip.center(), frame.strip.width() * 0.3);
+            painter.add(egui::Shape::convex_polygon(
+                vec![pos2(c.x - w, c.y - w * 0.6), pos2(c.x + w, c.y - w * 0.6), pos2(c.x, c.y + w * 0.6)],
+                t.equation_box,
+                Stroke::NONE,
+            ));
+            painter.rect_stroke(frame.outline, 2.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
+            painter.rect_filled(frame.grip, 1.0, Color32::WHITE);
+            painter.rect_stroke(frame.grip, 1.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
+            for k in 0..3 {
+                painter.circle_filled(
+                    pos2(frame.grip.center().x, frame.grip.min.y + frame.grip.height() * (k as f32 + 1.0) / 4.0),
+                    0.9,
+                    t.equation_box,
+                );
+            }
+            app.canvas.eq_options = Some(frame);
+            if let Some(slot) = ml.slot(&m.pos.path, m.pos.off) {
+                let x = (pr.min.x + (ex + slot.x) * s).round() + 0.5;
+                let y0 = pr.min.y + (base - slot.y - slot.a) * s;
+                let y1 = pr.min.y + (base - slot.y + slot.d) * s;
+                let since = crate::now_ms() - app.canvas.caret_visible_since;
+                // The caret glides and fades like Word's (`caret_glide`).
+                let on = ((since / 530.0) as u64).is_multiple_of(2);
+                let look = crate::caret_glide::look(
+                    app,
+                    ui,
+                    crate::caret_glide::LookRequest {
+                        content_origin,
+                        geometry: &geo,
+                        target: [pos2(x, y0), pos2(x, y1)],
+                        shown: focused,
+                        since_ms: since,
+                        on,
+                    },
+                );
+                if look.opacity > 0.0 && focused {
+                    let caret_color = caret_color_at(app, &layout, pi, ex + slot.x, base - slot.y + (slot.d - slot.a) / 2.0, page_view, dim_body);
+                    painter.line_segment(look.bar, Stroke::new(1.5, caret_color.gamma_multiply(look.opacity)));
+                }
+                if focused {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
+                    let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+                    ime_geometry = Some((cr, cr));
+                }
+            }
+        }
+        if !math_caret
+            && let Some(c) = layout.caret_on(&preview_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)
+            && let Some(pr) = rects.get(c.page)
+        {
+            let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+            let x = pr.min.x + c.x * scale;
+            let y0 = pr.min.y + c.top * scale;
+            let y1 = y0 + c.height * scale;
+            let since = crate::now_ms() - app.canvas.caret_visible_since;
+            let on = ((since / 530.0) as u64).is_multiple_of(2);
+            // The caret contrasts with what lies under it, like Word's inverted caret (#299):
+            // worked out only when something is drawn in it.
+            let caret_color =
+                |app: &mut WordApp| caret_color_at(app, &layout, c.page, c.x + c.width / 2.0, c.top + c.height / 2.0, page_view, dim_body);
+            // An input method's composition is drawn from the caret, and the caret and the candidate
+            // window move to the input method's cursor inside it.
+            let mut preedit_color = None;
+            let mut ime_dx = 0.0;
+            if focused && !app.canvas.ime_preedit.is_empty() {
+                let color = caret_color(app);
+                let at = CompositionAt { pr: *pr, scale, x, y1, height: c.height, turned: c.width > 0.0, color, max_tex, ppp };
+                ime_dx = paint_composition(app, ui.ctx(), &painter, &layout, &at);
+                preedit_color = Some(color);
+            }
+            let x = x + ime_dx;
+            let bar = if c.width > 0.0 {
+                // Turned text (a table cell's text direction): the caret lies across the page.
+                [pos2(x, y0.round() + 0.5), pos2(x + c.width * scale, y0.round() + 0.5)]
+            } else {
+                [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)]
+            };
+            // The caret glides and fades like Word's (`caret_glide`).
+            let shown = preview_sel(app).unwrap_or(&app.session.sel).is_collapsed() && focused;
+            let look = crate::caret_glide::look(
+                app,
+                ui,
+                crate::caret_glide::LookRequest { content_origin, geometry: &geo, target: bar, shown, since_ms: since, on },
+            );
+            if shown && look.opacity > 0.0 {
+                let color = preedit_color.unwrap_or_else(|| caret_color(app));
+                painter.line_segment(look.bar, Stroke::new(1.5, color.gamma_multiply(look.opacity)));
+            }
+            if focused {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
+            }
+            // IME candidate window placement.
+            let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+            if focused {
+                ime_geometry = Some((cr, cr));
+            }
+        }
+        crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        crate::dialogs_smart_art::frame_button(app, ui.ctx(), &layout, &rects, geo.scale, ui.clip_rect());
+        crate::ink::paint(app, &painter, &rects, &layout, geo.scale);
+        crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        crate::table_mouse::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        (resp, rects)
+    });
+    let scroll_style = ui_area.spacing().scroll;
+    finish_canvas_frame(
+        CanvasFinish {
+            app,
+            ui,
+            layout: &layout,
+            geo: &geo,
+            caret,
+            ime_geometry,
+            ime_interrupt,
+            area,
+            dim_body,
+            hruler,
+            vruler,
+            scroll_base,
+            rescaled,
+            scroll_style,
+        },
+        out,
+    );
+}
+
+/// Where [`paint_composition`] draws an input method's composition: from the caret at `x` on the
+/// page drawn at `pr` (`scale` screen points to the point), whose bottom is at `y1` and whose
+/// height is `height` points, across the page in turned text. `max_tex` and `ppp` are the
+/// texture side and pixels per point the composition's glyphs must fit.
+struct CompositionAt {
+    pr: Rect,
+    scale: f32,
+    x: f32,
+    y1: f32,
+    height: f32,
+    turned: bool,
+    color: Color32,
+    max_tex: f32,
+    ppp: f32,
+}
+
+/// Draw the input method's composition and return how far into it the input method's cursor
+/// lies, in screen points.
+fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Painter, layout: &DocLayout, at: &CompositionAt) -> f32 {
+    // The composition is interface text, but it may be in a script the interface fonts lack
+    // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
+    // CJK uses the CJK UI font, as the window caption does: the faces a document falls back
+    // to for it are mostly too large to borrow (Microsoft YaHei on Windows is 19 MB), and a
+    // build without craft-fonts has no CJK interface face of its own.
+    if !app.want_system_cjk && app.canvas.ime_preedit.chars().any(wordcraft_fonts::is_cjk) {
+        app.want_system_cjk = true;
+        ctx.request_repaint();
+    }
+    let new = crate::theme::faces_for_preedit(&app.canvas.ime_preedit, &app.canvas.ime_faces, crate::theme::caption_char_covered, |c| {
+        wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+    });
+    // Word draws the composition in the font and size of the text it goes into: take the
+    // face, size and baseline the layout gives text typed here (not in turned text). The
+    // face is the one the run's font asks for, not a fallback face that drew the
+    // character before the caret (a Chinese character in a Latin font).
+    let typing = if at.turned { None } else { layout.typing_style(&app.session.sel.focus, app.session.page_hint) };
+    let face = typing.as_ref().map(|(run, _)| run.requested_face);
+    if !new.is_empty() || face != app.canvas.ime_face {
+        app.canvas.ime_faces.extend(new);
+        app.canvas.ime_face = face;
+        // With every other window's faces too: the fonts are the app's.
+        app.apply_ui_fonts(ctx);
+        ctx.request_repaint();
+    }
+    // New fonts apply from the next frame; until the window's composition family is bound (or
+    // without a style run) the composition is drawn as before, in the interface font.
+    let family = crate::theme::composition_family(app.windows.shown());
+    let bound = ctx.fonts(|f| f.definitions().families.contains_key(&family));
+    // egui draws each glyph into its font atlas and panics on one wider than the atlas
+    // (1,638-point text at 500% is about 11,000 points): keep the composition's glyphs
+    // within a quarter of the atlas side, and at most 1,024 pixels, as each glyph stays
+    // in the atlas. Larger text gets a smaller composition.
+    let most = (at.max_tex / 4.0).min(1024.0) / at.ppp;
+    let size = |s: f32| s.min(most).max(1.0);
+    let (font, base) = match &typing {
+        Some((run, base)) if bound && run.size.is_finite() && run.size > 0.0 => {
+            (egui::FontId::new(size(run.size * at.scale), family), Some(at.pr.min.y + base * at.scale))
+        }
+        _ => (regular(size(at.height * at.scale * 0.8)), None),
+    };
+    let g = painter.layout_no_wrap(app.canvas.ime_preedit.clone(), font, Color32::PLACEHOLDER);
+    let cursor = preedit_cursor_chars(&app.canvas.ime_preedit, app.canvas.ime_preedit_range.as_ref());
+    let dx = g.pos_from_cursor(egui::text::CCursor::new(cursor)).min.x;
+    // The galley's first baseline sits on the line's baseline, as typed text would.
+    let baseline = g.rows.first().and_then(|r| r.glyphs.first().map(|gl| r.pos.y + gl.pos.y)).unwrap_or(g.size().y);
+    let top = base.map_or(at.y1 - g.size().y, |b| b - baseline);
+    let r = Rect::from_min_size(pos2(at.x, top), g.size());
+    painter.galley(r.min, g, at.color);
+    painter.line_segment([pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, at.color));
+    dx
+}
+
+#[cfg(test)]
+mod tests;
+>>>>>>> up/main

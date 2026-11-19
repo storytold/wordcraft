@@ -124,6 +124,7 @@ mod tests {
             if file.ends_with("tests.rs") || file.contains("/tests/") {
                 continue;
             }
+<<<<<<< HEAD
             let production = code.split("#[cfg(test)]").next().unwrap_or_default();
             // Characters inside string literals, line by line (good enough for this code base).
             for line in production.lines().filter(|l| !l.trim_start().starts_with("//")) {
@@ -133,6 +134,53 @@ mod tests {
                     }
                 }
             }
+=======
+        }
+        if text.chars().any(wordcraft_fonts::is_cjk) {
+            self.want_system_cjk = true;
+        }
+        let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
+            wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+        });
+        if !new.is_empty() {
+            self.canvas.ime_faces.extend(new);
+            self.styled = false;
+        }
+    }
+
+    /// Install the interface fonts when the language, the CJK fallback, or a caption fallback
+    /// face has changed since the last install.
+    pub(super) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
+        let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
+        // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
+        // another interface language, asks for an installed Arabic font when none is embedded.
+        let system_arabic = lang.rtl() || self.want_system_arabic;
+        if !self.styled
+            || lang.prefers_hans() != self.fonts_hans
+            || lang.prefers_korean() != self.fonts_korean
+            || lang.prefers_hant() != self.fonts_hant
+            || system_cjk != self.fonts_system_cjk
+            || system_arabic != self.fonts_system_arabic
+        {
+            self.fonts_hans = lang.prefers_hans();
+            self.fonts_korean = lang.prefers_korean();
+            self.fonts_hant = lang.prefers_hant();
+            self.fonts_system_cjk = system_cjk;
+            self.fonts_system_arabic = system_arabic;
+            self.apply_ui_fonts(ctx);
+            // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
+            // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
+            // egui quits on Command-Q, which is Ctrl+Q off the Mac: Word's Reset Paragraph
+            // Formatting there (#1218). Keep ⌘Q, which only the Mac sends. egui would close only the
+            // window it was pressed in, so with native windows the app quits itself
+            // ([`WordApp::window_logic_before`]).
+            let quit = (!self.windows.native()).then_some(QUIT).into_iter().collect();
+            ctx.options_mut(|o| {
+                o.zoom_with_keyboard = false;
+                o.quit_shortcuts = quit;
+            });
+            self.styled = true;
+>>>>>>> up/main
         }
         // Equation gallery templates are UnicodeMath input that the math renderer draws with
         // document fonts, not interface text. The ➢ bullet is a value for `para.bullets`; its
@@ -148,5 +196,34 @@ mod tests {
         let samples = texts.iter().map(|(t, f)| Sample::new("en", f, t));
         let missing = missing_glyphs(&stack, &FontRef::proportional(), samples, false);
         assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
+    }
+
+    /// Install the interface fonts [`Self::install_ui_fonts`] chose, with every window's borrowed
+    /// faces and each window's composition face. The fonts are the app's, one set for every
+    /// window: fonts made from one window's faces would draw another window's caption or
+    /// comments as boxes, and its composition in the wrong face.
+    pub(crate) fn apply_ui_fonts(&self, ctx: &egui::Context) {
+        let mut fonts = theme::font_definitions_language_arabic(
+            self.fonts_hans,
+            self.fonts_korean,
+            self.fonts_hant,
+            self.fonts_system_cjk,
+            self.fonts_system_arabic,
+        );
+        // Every window's borrowed faces: the fonts are the app's.
+        let mut faces = self.canvas.ime_faces.clone();
+        for w in self.other_windows() {
+            for face in &w.canvas.ime_faces {
+                if !faces.iter().any(|f| f.id() == face.id()) {
+                    faces.push(face.clone());
+                }
+            }
+        }
+        theme::add_fallback_faces(&mut fonts, &faces);
+        theme::set_composition_face(&mut fonts, self.windows.shown(), self.canvas.ime_face);
+        for (window, w) in self.other_windows_by_key() {
+            theme::set_composition_face(&mut fonts, window, w.canvas.ime_face);
+        }
+        ctx.set_fonts(fonts);
     }
 }

@@ -142,6 +142,7 @@ impl WordForm for CompareForm {
         Label::from(if self.combine { tl!("Combine Documents").to_string() } else { tl!("Compare Documents").to_string() })
     }
 
+<<<<<<< HEAD
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let can = Env::of(ui).view().host().is_some_and(|h| h.files().can_pick());
         let reason = (!can).then(|| Label::from(tl!("Comparing with another file needs the desktop app.").to_string()));
@@ -157,6 +158,62 @@ impl WordForm for CompareForm {
                         Stack::new().show(ui, |ui, _| {
                             Radio::new(true).label(Label::from(tl!("This document").to_string())).show(ui);
                             Radio::new(false).label(Label::from(tl!("Another file").to_string())).show(ui);
+=======
+fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
+    let browse = can_browse(app);
+    let mut pick: Option<bool> = None;
+    if !browse {
+        ui.label(egui::RichText::new(tl!("Comparing with another file needs the desktop app.")).small().weak());
+    }
+    crate::rtl::Table::new("compare_files").columns(2).spacing(vec2(16.0, 4.0)).top().show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Original document");
+                    ui.radio_value(&mut f.original_current, true, tl!("This document"));
+                    ui.horizontal(|ui| {
+                        // Empty visible label (the path field carries "Another file"); name the radio for the a11y check.
+                        ui.radio_value(&mut f.original_current, false, "").on_hover_text(tl!("Another file"));
+                        ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.original).desired_width(170.0).hint_text(tl!("Another file")));
+                        if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
+                            pick = Some(false);
+                        }
+                    });
+                });
+            });
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Revised document");
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.revised).desired_width(170.0))
+                            .on_hover_text(tl!("Revised document"));
+                        if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
+                            pick = Some(true);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let lab = ui.label(tl!("Label changes with:"));
+                        ui.add(egui::TextEdit::singleline(&mut f.author).desired_width(120.0)).labelled_by(lab.id);
+                    });
+                });
+            });
+        });
+    });
+    ui.add_space(4.0);
+    if ui.button(crate::rtl::arrows(if f.more { tl!("<< Less") } else { tl!("More >>") })).clicked() {
+        f.more = !f.more;
+    }
+    if f.more {
+        heading(ui, "Comparison settings");
+        crate::rtl::Table::new("compare_settings").columns(2).spacing(vec2(16.0, 2.0)).show(ui, |t| {
+            for (pair, labels) in COMPARE_SETTINGS.chunks(2).enumerate() {
+                t.row(|r| {
+                    for (j, (_, label)) in labels.iter().enumerate() {
+                        r.cell(|ui| {
+                            if let Some(on) = f.settings.get_mut(pair * 2 + j) {
+                                ui.checkbox(on, tl!(label));
+                            }
+>>>>>>> up/main
                         });
                     });
                 });
