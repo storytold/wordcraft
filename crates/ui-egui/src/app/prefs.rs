@@ -12,6 +12,7 @@ impl WordApp {
     /// preferences.
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
+        ui.autosave = self.autosave;
         ui.author = Some(self.session.author.clone());
         ui.initials = self.session.initials.clone();
         ui.dictionary = wordcraft_engine::proof::user_dictionary();
@@ -31,6 +32,9 @@ impl WordApp {
     /// Restore preferences saved by [`WordApp::prefs`].
     pub fn apply_prefs(&mut self, ui: UiState) {
         self.ui = ui;
+        // The browser still cannot keep writing to a file, even with a saved desktop choice.
+        self.autosave = self.ui.autosave && self.services.download.is_none();
+        self.session.autosave = self.autosave;
         self.ui.backstage = false;
         // Word opens on Home every launch, so the tab `ui.json` holds is not restored. Going File
         // and back to the editor within the run still returns to the tab that was showing.
@@ -143,5 +147,96 @@ impl WordApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(want));
             self.sent_full_screen = want;
         }
+    }
+}
+
+#[cfg(test)]
+mod autosave_preference_tests {
+    use crate::{Services, UiState, WordApp};
+    use serde_json::json;
+
+    fn app(services: Services) -> WordApp {
+        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services)
+    }
+
+    #[test]
+    fn autosave_defaults_off_and_remembers_the_raw_choice() {
+        let legacy: UiState = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.autosave);
+        let mut a = app(Services::default());
+        assert!(!a.autosave && !a.session.autosave);
+        for on in [true, false] {
+            // File > Options > Save changes this raw choice, even before a file is eligible.
+            a.autosave = on;
+            a.session.autosave = on;
+            let stored = serde_json::to_string(&a.prefs()).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&stored).unwrap()["autoSave"], on);
+            let mut back = app(Services::default());
+            back.apply_prefs(serde_json::from_str(&stored).unwrap());
+            assert_eq!(back.autosave, on);
+            assert_eq!(back.session.autosave, on);
+            assert!(!back.autosaves(), "remembering On grants no consent to rewrite a file");
+            assert!(back.autosave_path.is_none());
+        }
+    }
+
+    #[test]
+    fn browser_restore_keeps_autosave_off() {
+        let mut a = app(Services { download: Some(Box::new(|_, _| Ok(()))), ..Default::default() });
+        a.apply_prefs(UiState { autosave: true, ..Default::default() });
+        assert!(!a.autosave && !a.session.autosave && !a.autosaves());
+        assert!(a.autosave_path.is_none());
+    }
+
+    #[test]
+    fn switching_documents_keeps_the_app_autosave_choice() {
+        let mut a = app(Services::default());
+        let first = a.session.document_id();
+        a.run("file.new", json!({})).unwrap();
+        assert!(!a.autosave && !a.session.autosave);
+        a.apply_prefs(UiState { autosave: true, ..Default::default() });
+        a.session.switch_document(first).unwrap();
+        a.sync_document();
+        assert!(a.autosave && a.session.autosave);
+        a.run("file.new", json!({})).unwrap();
+        a.apply_prefs(UiState { autosave: false, ..Default::default() });
+        a.session.switch_document(first).unwrap();
+        a.sync_document();
+        assert!(!a.autosave && !a.session.autosave);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn manual_save_does_not_opt_in_to_automatic_writes() {
+        struct SavedFile(std::path::PathBuf);
+        impl Drop for SavedFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "wordcraft-autosave-opt-in-{}-{}.docx",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+        ));
+        assert!(!path.exists());
+        let _cleanup = SavedFile(path.clone());
+        wordcraft_engine::io::save_path(&path, &wordcraft_doc::Document::new()).unwrap();
+        let mut a = app(Services::default());
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Explicitly saved"})).unwrap();
+        a.run("file.save", json!({})).unwrap();
+        let saved = std::fs::read(&path).unwrap();
+        a.run("text.insert", json!({"text": "Still unsaved"})).unwrap();
+        a.last_autosave = 0.0;
+        a.canvas.caret_visible_since = 0.0;
+        a.autosave_tick(10_000.0);
+        assert_eq!(std::fs::read(&path).unwrap(), saved, "manual Save must not permit later automatic writes");
+        assert!(a.session.dirty && !a.autosave && !a.session.autosave);
+        a.run("file.autosave", json!({"value": true})).unwrap();
+        a.canvas.caret_visible_since = 0.0;
+        a.autosave_tick(20_000.0);
+        assert_ne!(std::fs::read(&path).unwrap(), saved, "explicit On covers the same saved file");
+        assert!(!a.session.dirty && a.autosaves());
     }
 }
