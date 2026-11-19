@@ -106,19 +106,30 @@ pub fn files_say(kdeglobals: Option<&str>, gtk_settings: [Option<&str>; 2]) -> O
     combine(std::iter::once(kde).chain(gtk))
 }
 
+/// The user's desktop settings directory. Relative environment paths must not select files
+/// from the working directory instead of the user's KDE and GTK settings.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn config_dir(config_home: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    config_home
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| home.map(PathBuf::from).filter(|home| home.is_absolute()).map(|home| home.join(".config")))
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 pub use watching::watch;
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod watching {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU8, Ordering};
 
     use zbus::blocking::{Connection, Proxy};
     use zbus::zvariant::{OwnedValue, Value};
 
-    use super::{KEYS, Reading, combine, files_say, says};
+    use super::{KEYS, Reading, combine, config_dir, files_say, says};
 
     // The latest answer, as one byte the UI thread reads without waiting.
     const UNKNOWN: u8 = 0;
@@ -217,10 +228,7 @@ mod watching {
 
     /// What the user's settings files say (see [`files_say`]).
     fn read_files() -> Option<bool> {
-        let config = std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|dir| !dir.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+        let config = config_dir(std::env::var_os("XDG_CONFIG_HOME"), std::env::var_os("HOME"))?;
         let text = |file: &str| read_capped(&config.join(file));
         let (kdeglobals, gtk4, gtk3) = (text("kdeglobals"), text("gtk-4.0/settings.ini"), text("gtk-3.0/settings.ini"));
         files_say(kdeglobals.as_deref(), [gtk4.as_deref(), gtk3.as_deref()])
@@ -241,6 +249,28 @@ mod tests {
 
     fn text(s: &str) -> Reading {
         Reading::Text(s.to_string())
+    }
+
+    #[test]
+    fn settings_directory_falls_back_from_invalid_xdg_paths() {
+        let base = std::env::current_dir().unwrap().join("animation-config-test");
+        let xdg = base.join("xdg");
+        let home = base.join("home");
+        let expected = home.join(".config");
+        assert_eq!(config_dir(Some(xdg.clone().into_os_string()), Some(home.clone().into_os_string())), Some(xdg.clone()));
+        assert_eq!(config_dir(Some(xdg.clone().into_os_string()), None), Some(xdg));
+        for config in [None, Some("".into()), Some("relative-config".into())] {
+            assert_eq!(config_dir(config, Some(home.clone().into_os_string())), Some(expected.clone()));
+        }
+    }
+
+    #[test]
+    fn settings_directory_requires_an_absolute_home_fallback() {
+        for home in [Some("".into()), None, Some("relative-home".into())] {
+            for config in [None, Some("".into()), Some("relative-config".into())] {
+                assert_eq!(config_dir(config.clone(), home.clone()), None, "{config:?} {home:?}");
+            }
+        }
     }
 
     /// Each desktop's setting, as the portal hands it over, comes to animations on or off.
