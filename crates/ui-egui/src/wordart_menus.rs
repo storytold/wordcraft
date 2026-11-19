@@ -246,8 +246,8 @@ mod tests {
                 let current = current_outline(app);
                 Menu::inline("Text Outline").show(ui, |ui, _| outline_menu(ui, app, current));
                 // Kit command rows fire through the command board; the app runs what a pass fired.
-                // PLAN: assumed crate::app::command_board::run_fired(&mut WordApp, &egui::Context) (shell set), as app/command_board.rs does
-                crate::app::command_board::run_fired(app, ui.ctx());
+                let fired = craft::ui::runtime::frame::take_output(ui.ctx());
+                app.run_fired(ui.ctx(), &fired);
             },
             a,
         );

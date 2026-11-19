@@ -31,7 +31,7 @@ use crate::WordApp;
 mod balloons;
 mod caret;
 mod column_ruler;
-mod context_menu;
+pub(crate) mod context_menu;
 #[cfg(test)]
 pub(crate) use context_menu::issue_heading;
 mod cursor;
