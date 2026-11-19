@@ -4849,6 +4849,78 @@ mod budget_tests {
         assert_eq!(media_boundary::coded_image(Format::Gif, &gif[..end - 1]).len(), end - 1);
     }
 
+    /// A 1×`rows` uncompressed grayscale TIFF with one row per strip.
+    fn strips_tiff(rows: u32) -> Vec<u8> {
+        let table = 4 * rows;
+        let offsets_at = 8 + 2 + 12 * 9 + 4;
+        let counts_at = offsets_at + table;
+        let pixels = counts_at + table;
+        let mut bytes = b"II*\0\x08\0\0\0\x09\0".to_vec();
+        for (tag, count, value) in [
+            (256u16, 1u32, 1u32),
+            (257, 1, rows),
+            (258, 1, 8),
+            (259, 1, 1),
+            (262, 1, 1),
+            (273, rows, offsets_at),
+            (277, 1, 1),
+            (278, 1, 1),
+            (279, rows, counts_at),
+        ] {
+            bytes.extend(tag.to_le_bytes());
+            bytes.extend(4u16.to_le_bytes());
+            bytes.extend(count.to_le_bytes());
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend((0..rows).flat_map(|row| (pixels + row).to_le_bytes()));
+        bytes.extend((0..rows).flat_map(|_| 1u32.to_le_bytes()));
+        bytes.extend((0..rows).map(|_| 0x7f));
+        bytes
+    }
+
+    #[test]
+    fn media_magic_tiff_workspace_charges_each_worker_its_decoder_state() {
+        // The codec opens one `tiff` decoder per band worker, and each rebuilds the directory and
+        // both strip tables (and expands them through 32-byte values on the way). The debit must
+        // grow with every worker by at least those tables, at every concurrency the pool allows.
+        for rows in [1u32, 100, 10_000] {
+            let bytes = strips_tiff(rows);
+            let page = probe_alternate_tiff(&bytes).unwrap().unwrap();
+            assert_eq!((page.width, page.height), (1, rows));
+            let in_pool =
+                |threads: usize, work: &(dyn Fn() -> u64 + Sync)| rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(work);
+            let debit = |threads: usize| in_pool(threads, &|| media_workspace::decode(Format::Tiff, &bytes, 1, rows, Some(&page)));
+            let workers = |threads: usize| threads.min(rows as usize) as u64;
+            let one = debit(1);
+            for threads in [2usize, 4, 16] {
+                let extra = workers(threads) - 1;
+                let grown = debit(threads) - one;
+                if extra == 0 {
+                    assert_eq!(grown, 0);
+                    continue;
+                }
+                assert_eq!(grown % extra, 0, "{rows} rows, {threads} threads: the debit is linear in the worker count");
+                // Offsets and byte counts are 8 bytes a strip each, and expand through 32-byte values.
+                assert!(grown / extra >= 48 * u64::from(rows), "{rows} rows, {threads} threads: {} bytes per added worker", grown / extra);
+            }
+            // The report follows the debit: a budget one byte short of it refuses, and the debit passes.
+            let exact = in_pool(16, &|| {
+                let mut remaining = 1u64 << 32;
+                decode_alternate_image(Format::Tiff, &bytes, 1 << 32, &mut remaining).map_or(0, |_| (1u64 << 32) - remaining)
+            });
+            assert!(exact >= debit(16), "{exact} charged against a {} byte workspace", debit(16));
+            let attempt = |budget: u64| {
+                in_pool(16, &|| {
+                    let mut remaining = budget;
+                    u64::from(decode_alternate_image(Format::Tiff, &bytes, budget, &mut remaining).is_ok())
+                })
+            };
+            assert_eq!(attempt(exact - 1), 0, "{rows} rows");
+            assert_eq!(attempt(exact), 1, "{rows} rows");
+        }
+    }
+
     #[test]
     fn media_magic_shared_tiff_values_ignore_padding() {
         let mut description = [b'A'; 256];

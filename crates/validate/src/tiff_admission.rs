@@ -291,3 +291,42 @@ pub(crate) fn chunk_dimensions(bytes: &[u8], page: &craft_image_codecs::TiffPage
     }
     (width, height)
 }
+
+/// Bytes one band-decoder worker holds while it opens the selected page, beyond its scratch
+/// buffers. The codec builds a `tiff` decoder per worker (`bands.rs` `decode_bands`, through
+/// `Prepared::open`), and that decoder re-reads the directory:
+/// - the whole directory as a `BTreeMap` of entries, kept for the decoder's lifetime
+///   (`Decoder::read_ifd`, about 64 bytes per entry with node overhead);
+/// - every multi-valued tag it interprets as a `Vec<Value>` of 32-byte values that is then
+///   narrowed into a vector of the final type (`Value::into_*_vec`), so the strip or tile offset
+///   and byte-count tables peak at 8 + (32 + 8) bytes per chunk once both are read, and the other
+///   lists at 32 + 8 bytes per value (`Image::from_reader`);
+/// - a fixed reader, cycle-tracking maps and one-entry vectors.
+pub(crate) fn worker_open_bytes(bytes: &[u8], page: &craft_image_codecs::TiffPage) -> u64 {
+    observation_contract! {
+        rules: "-";
+        collections: "field.declared*1";
+        scope: "the selected TIFF directory's entry table and value counts";
+        loss: "unreadable directory";
+        fallback: "charge only the fixed decoder state";
+        package_loss: "independent";
+    }
+
+    const VALUE: u64 = 32;
+    let fixed = 4096;
+    let Some((order, big)) = Tiff::sniff(bytes) else { return fixed };
+    let Ok(dir) = directory_entries(bytes, page.ifd_offset, order, big, ParseOptions::default().max_entries) else { return fixed };
+    let mut total = fixed.saturating_add(dir.declared().min(1 << 20).saturating_mul(64));
+    for pos in dir.positions() {
+        let Some(span) = entry_span(bytes, pos, order, big, 0) else { continue };
+        let values = span.count;
+        total = total.saturating_add(match span.tag {
+            // Offsets are retained while the byte counts expand.
+            tags::STRIP_OFFSETS | tags::TILE_OFFSETS => values.saturating_mul(8 + VALUE + 8),
+            // BitsPerSample, ExtraSamples, SampleFormat, JPEGTables, ChromaSubsampling.
+            258 | 338 | 339 | 347 | 530 if values > 1 => values.saturating_mul(VALUE + 8),
+            _ => 0,
+        });
+    }
+    total
+}

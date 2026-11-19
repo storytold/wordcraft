@@ -51,7 +51,9 @@ fn tiff_workspace(bytes: &[u8], page: &TiffPage) -> u64 {
     // Converted or planar strips and padded edge tiles can have more stored
     // samples than their output. Charge each simultaneous reader's scratch.
     let chunk = chunk_width.saturating_mul(chunk_height).saturating_mul(samples).saturating_mul(sample_bytes);
-    let per_worker = compression.saturating_add(chunk.saturating_mul(2));
+    // Each worker also opens its own `tiff` decoder, which rebuilds the page's directory and tables.
+    let opened = crate::tiff_admission::worker_open_bytes(bytes, page);
+    let per_worker = compression.saturating_add(chunk.saturating_mul(2)).saturating_add(opened);
     let palette = if page.photometric == Some(3) { 6u64 << page.bits_per_sample.min(16) } else { 0 };
     let extra_planes =
         u64::from(page.width).saturating_mul(u64::from(page.height)).saturating_mul(samples.saturating_sub(1)).saturating_mul(sample_bytes);
