@@ -1,9 +1,10 @@
 use craft::behavior::{ColumnWidth, IconId};
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::theme::ControlSize;
 use craft::ui::buttons::{Arrangement, Button};
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::{Divider, Text};
-use craft::ui::layout_components::{Grid, Stack};
+use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::runtime::commands::CommandRef;
 use craft::ui::runtime::env::UnitKind;
@@ -15,8 +16,8 @@ use super::common::{menu_button, size_menu};
 use super::{Ui, WordApp, json};
 use crate::undo_marks::apply_edits;
 
-/// The Paragraph group's columns: Indent label, its field, Spacing label, its field.
-const PARAGRAPH_GRID: [ColumnWidth; 4] = [ColumnWidth::Content; 4];
+/// The columns of each half of the Paragraph group: a label and its field.
+const PARAGRAPH_GRID: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
 
 // Layout › Margins, Orientation, Size and Columns: the caret section's setting is marked, as
 // Text Direction's is (#1206).
@@ -147,40 +148,48 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let mut before = Some(f64::from(rp.space_before));
         let mut after = Some(f64::from(rp.space_after));
         let caption = |label: &'static str| Text::new(tl!(label)).role(TypeRole::Caption);
-        Grid::new(&PARAGRAPH_GRID).show(ui, |ui, _| {
-            caption("Indent").show(ui);
-            Text::new("").show(ui);
-            caption("Spacing").show(ui);
-            Text::new("").show(ui);
-
-            caption("Left:").show(ui);
-            let out = NumberField::length(tl!("Left"), Bind::bound(&mut left), lengths).range(-792.0..=1584.0).show(ui);
-            apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                if let Some(pt) = v {
-                    let _ = app.run("para.indents", json!({"left": pt}));
-                }
+        // As the old ribbon: two columns of small fields (a header over each label column), labels close to their
+        // fields, rows close together, and a wider gap before the Spacing column. Indents show two decimals ("0.00").
+        Row::new().gap(Gap::Section).show(ui, |ui, _| {
+            Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                caption("Indent").show(ui);
+                Text::new("").show(ui);
+                caption("Left:").show(ui);
+                let field = NumberField::length(tl!("Left"), Bind::bound(&mut left), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                let out = field.size(ControlSize::Sm).show(ui);
+                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                    if let Some(pt) = v {
+                        let _ = app.run("para.indents", json!({"left": pt}));
+                    }
+                });
+                caption("Right:").show(ui);
+                let field = NumberField::length(tl!("Right"), Bind::bound(&mut right), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                let out = field.size(ControlSize::Sm).show(ui);
+                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                    if let Some(pt) = v {
+                        let _ = app.run("para.indents", json!({"right": pt}));
+                    }
+                });
             });
-            caption("Before:").show(ui);
-            let out = NumberField::new(tl!("Before"), Bind::bound(&mut before)).unit_kind(UnitKind::Points).range(0.0..=1584.0).show(ui);
-            apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                if let Some(pt) = v {
-                    let _ = app.run("para.spacing", json!({"before": pt}));
-                }
-            });
-
-            caption("Right:").show(ui);
-            let out = NumberField::length(tl!("Right"), Bind::bound(&mut right), lengths).range(-792.0..=1584.0).show(ui);
-            apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                if let Some(pt) = v {
-                    let _ = app.run("para.indents", json!({"right": pt}));
-                }
-            });
-            caption("After:").show(ui);
-            let out = NumberField::new(tl!("After"), Bind::bound(&mut after)).unit_kind(UnitKind::Points).range(0.0..=1584.0).show(ui);
-            apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                if let Some(pt) = v {
-                    let _ = app.run("para.spacing", json!({"after": pt}));
-                }
+            Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                caption("Spacing").show(ui);
+                Text::new("").show(ui);
+                caption("Before:").show(ui);
+                let field = NumberField::new(tl!("Before"), Bind::bound(&mut before)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                let out = field.size(ControlSize::Sm).show(ui);
+                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                    if let Some(pt) = v {
+                        let _ = app.run("para.spacing", json!({"before": pt}));
+                    }
+                });
+                caption("After:").show(ui);
+                let field = NumberField::new(tl!("After"), Bind::bound(&mut after)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                let out = field.size(ControlSize::Sm).show(ui);
+                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                    if let Some(pt) = v {
+                        let _ = app.run("para.spacing", json!({"after": pt}));
+                    }
+                });
             });
         });
     });
