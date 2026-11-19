@@ -108,7 +108,8 @@ fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
     crate::test_harness::frame(&mut h);
     h.input_mut().events.push(key_event(egui::Key::Num1, true, egui::Modifiers::NONE));
-    crate::test_harness::frame(&mut h);
+    // The keytip asks for its command in this frame; the runtime runs it at the start of the next.
+    crate::test_harness::frames(&mut h, 3);
     assert!(bold(&mut h), "Alt, 1 runs the first button");
 
     // Bold, then the disabled Undo, then Italic: the digit of Italic among the enabled buttons runs Italic.
@@ -130,7 +131,7 @@ fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
     crate::test_harness::frame(&mut h);
     h.input_mut().events.push(key_event(key, true, egui::Modifiers::NONE));
-    crate::test_harness::frame(&mut h);
+    crate::test_harness::frames(&mut h, 3);
     assert_eq!(h.state_mut().session.run("format.state", &serde_json::json!({})).unwrap()["italic"], true, "the disabled Undo takes no digit");
 }
 

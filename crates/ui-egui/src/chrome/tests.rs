@@ -40,7 +40,8 @@ fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2, but
     h.event(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: egui::Modifiers::NONE });
     crate::test_harness::frames(h, 1);
     h.event(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: egui::Modifiers::NONE });
-    crate::test_harness::frames(h, 2);
+    // The menu opens in the pass after the release and settles over the passes after that.
+    crate::test_harness::frames(h, 6);
 }
 
 /// The title bar's title: its button (the bar also names a group of the same text).

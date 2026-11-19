@@ -366,6 +366,13 @@ fn the_canvas_caret_glides_after_a_key() {
     // as a click on the page does.
     let ctx = h.ctx.clone();
     h.state_mut().canvas.focus_page(&ctx);
+    for _ in 0..8 {
+        crate::test_harness::frames(&mut h, 1);
+        if h.state().canvas.focused(&ctx) {
+            break;
+        }
+    }
+    assert!(h.state().canvas.focused(&ctx), "the canvas takes the focus it asked for");
     for _ in 0..30 {
         crate::test_harness::frames(&mut h, 1);
     }
