@@ -407,6 +407,9 @@ fn ribbon_groups_fit_above_their_labels() {
     // The ribbon names languages in their own script; a CI runner has no CJK font.
     crate::test_harness::cjk_stand_in(&h.ctx);
     let mut outside = Vec::new();
+    // Menu and popup bodies the framework measures in a hidden layer below the window carry access nodes under the
+    // app's groups; they are never drawn, so they cannot run into a label. Only what lies on screen is checked.
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(2560.0, 900.0));
     for lang in crate::i18n::Lang::all() {
         h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
         for tab in super::TABS.iter().filter(|t| **t != "File") {
@@ -416,7 +419,7 @@ fn ribbon_groups_fit_above_their_labels() {
                 let frame = group.rect();
                 let mut inner = Vec::new();
                 rects(&group, &mut inner);
-                for r in inner.into_iter().filter(|r| r.width() > 0.0 && r.height() > 0.0) {
+                for r in inner.into_iter().filter(|r| r.width() > 0.0 && r.height() > 0.0 && screen.contains_rect(*r)) {
                     if !frame.contains_rect(r) {
                         outside.push(format!("{} {tab} › {:?}: {r:?} outside {frame:?}", lang.code(), group.accesskit_node().label()));
                     }

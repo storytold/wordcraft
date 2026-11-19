@@ -296,6 +296,7 @@ fn category_list(ui: &mut Ui, form: &mut SmartArtForm) {
     let current = CATEGORIES.iter().position(|c| *c == form.category).unwrap_or(0);
     let out = List::<usize>::new(tl!("Categories").to_string())
         .select(SelectMode::Single)
+        .natural_height(true)
         .selection(Bind::given(Selection::single(current)))
         .show_items(ui, &keyed(&positions, |i| *i), &mut |key, _| ListRow::new(tl!(CATEGORIES.get(*key).copied().unwrap_or("All")).to_string()));
     for event in out.events {
