@@ -29,7 +29,9 @@ impl WordApp {
     /// Creates the app: adopts the system locale, then initializes the document session, UI state,
     /// services, printing, canvas, dialogs, previews, control and screenshot state, font and theme
     /// tracking.
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, services: Services) -> Self {
+        // A manual save grants a file target; automatic writes still need an explicit opt-in.
+        session.autosave = false;
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {
             wordcraft_engine::set_system_locale(&tag);
@@ -147,7 +149,7 @@ impl WordApp {
             applied_animations: None,
             frame_ms: 0.0,
             quit_requested: false,
-            autosave: true,
+            autosave: false,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             ime_origin: false,
