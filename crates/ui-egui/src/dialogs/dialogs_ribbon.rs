@@ -848,16 +848,17 @@ mod tests {
         let ruler = a.session.view.ruler;
         a.ui.tab = "Home".into();
         let mut h = harness(a);
-        h.run_steps(4);
+        // The custom button is named by its command and runs through the app's command input.
+        crate::test_harness::frames(&mut h, 4);
         let shown = h.state().ui.tab.clone();
         assert_ne!(shown, "Home", "a hidden tab isn't shown");
         assert!(h.state().session.ribbon.tabs().iter().any(|t| t.name == shown && !t.hidden), "the ribbon falls back to a visible tab");
 
         h.get_by_label("Mine").click();
-        h.run_steps(3);
+        crate::test_harness::frames(&mut h, 3);
         assert_eq!(h.state().ui.tab, "Mine");
         h.get_by_label("Ruler").click();
-        h.run_steps(3);
+        crate::test_harness::frames(&mut h, 3);
         assert_ne!(h.state().session.view.ruler, ruler, "the custom group's button runs its command");
     }
 }

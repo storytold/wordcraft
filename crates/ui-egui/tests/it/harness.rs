@@ -15,3 +15,13 @@ pub fn builder<S>() -> HarnessBuilder<S> {
             .expect("the craft runtime installs on a fresh test context");
     })
 }
+
+/// One frame of `h` as the app's driver runs it: the runtime is first handed the input the app
+/// makes (`WordApp::frame_input`: the command catalog, each command's state and the commands the
+/// last frame fired, which the app runs), then the frame runs. `Harness::step` alone leaves a
+/// fired command unrun and a command-bound control unnamed.
+pub fn frame(h: &mut egui_kittest::Harness<'_, wordcraft_ui_egui::WordApp>) {
+    let ctx = h.ctx.clone();
+    craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+    h.step();
+}

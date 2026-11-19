@@ -254,7 +254,9 @@ mod tests {
         h.run_steps(2);
         h.get_by_label("Weight").hover();
         h.run();
-        h.get_by_label("Weight").click();
+        // Hovering opened the submenu, whose panel is named for its row too: click the row, the
+        // first of the two in tree order.
+        h.query_all_by_label("Weight").next().expect("the Weight row").click();
         h.run();
         assert_eq!(h.get_by_label("3 pt").accesskit_node().toggled(), Some(Toggled::True), "the selected text's weight");
         assert_eq!(h.get_by_label("1 pt").accesskit_node().toggled(), Some(Toggled::False));

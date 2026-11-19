@@ -18,11 +18,11 @@ fn layout_tab() -> egui_kittest::Harness<'static, WordApp> {
         app,
     );
     for _ in 0..6 {
-        h.step();
+        crate::harness::frame(&mut h);
     }
     h.state_mut().run("ui.tab", json!({"tab": "Layout"})).unwrap();
     for _ in 0..3 {
-        h.step();
+        crate::harness::frame(&mut h);
     }
     h
 }
@@ -32,15 +32,16 @@ fn click_break(h: &mut egui_kittest::Harness<'static, WordApp>, item: &str) {
     use egui_kittest::kittest::{NodeT, Queryable};
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Breaks").click();
     for _ in 0..3 {
-        h.step();
+        crate::harness::frame(h);
     }
     // Menu rows are framework rows, not buttons: match on the name alone.
     h.query_all(egui_kittest::kittest::By::new().label_contains(item))
         .find(|n| n.accesskit_node().label().as_deref().map(str::trim) == Some(item))
         .unwrap_or_else(|| panic!("the {item} item is in the Breaks menu"))
         .click();
+    // The frame after the click hands the app the command the menu row fired, which it runs.
     for _ in 0..3 {
-        h.step();
+        crate::harness::frame(h);
     }
 }
 

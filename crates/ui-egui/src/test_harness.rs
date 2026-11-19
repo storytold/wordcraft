@@ -28,3 +28,31 @@ pub(crate) fn builder_with<S>(spec: impl FnOnce() -> InstallSpec + 'static) -> H
         craft::ui::shell::embed::install(ctx, spec(), &crate::ui_fonts(Lang::EN)).expect("the craft runtime installs on a fresh test context");
     })
 }
+
+/// A bare egui context with the craft runtime installed (the framework's test spec), for tests
+/// that drive frames with `Context::run_ui` instead of a kittest harness. Frames on it are given
+/// the app's input with `embed::before_input(ctx, |out| app.frame_input(out))`.
+pub(crate) fn context() -> egui::Context {
+    let ctx = egui::Context::default();
+    craft::ui::shell::embed::install(&ctx, craft::ui::testing::install_spec(), &crate::ui_fonts(Lang::EN))
+        .expect("the craft runtime installs on a fresh test context");
+    ctx
+}
+
+/// One frame of `h` as the app's driver runs it: the runtime is first handed the input the app
+/// makes (`WordApp::frame_input`: the command catalog, each command's state, the fired commands),
+/// then the frame runs. A frame stepped with `Harness::step` alone has no command state, so a
+/// control bound to a command (an icon-only button named by its command's label) resolves no
+/// name. Tests that look for such controls, or that need the app's commands to run, step here.
+pub(crate) fn frame(h: &mut egui_kittest::Harness<'_, crate::WordApp>) {
+    let ctx = h.ctx.clone();
+    craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+    h.step();
+}
+
+/// `n` frames of [`frame`].
+pub(crate) fn frames(h: &mut egui_kittest::Harness<'_, crate::WordApp>, n: usize) {
+    for _ in 0..n {
+        frame(h);
+    }
+}

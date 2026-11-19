@@ -62,6 +62,8 @@ fn frames(ctx: &egui::Context, app: &mut WordApp, steps: Vec<Vec<egui::Event>>) 
         let input =
             egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), events: steps.next().unwrap_or_default(), ..Default::default() };
         note_global_names();
+        // The runtime is handed the app's command input before each frame, as the driver does.
+        craft::ui::shell::embed::before_input(ctx, |out| app.frame_input(out));
         let mut out = ctx.run_ui(input, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -282,7 +284,7 @@ fn math_placeholders_are_exact_math_input_only() {
 /// starts a speech thread, and process-wide names other tests change are gathered every frame.
 #[test]
 fn untranslated_interface_text() {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     super::embedded_host(&ctx);
     let mut app = pseudo_app(&ctx);
     let math_placeholders = math_placeholders(&ctx);
@@ -402,7 +404,7 @@ fn untranslated_interface_text() {
     // (Escape, for one, leaves an equation and takes the Equation tab with it).
     let contextual = ["Table Design", "Table Layout", "Equation", "Chart Design", "SmartArt Design"];
     let open = |tab: &str| {
-        let ctx = egui::Context::default();
+        let ctx = crate::test_harness::context();
         let mut app = pseudo_app(&ctx);
         match tab {
             "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
@@ -650,6 +652,7 @@ fn frame_at(ctx: &egui::Context, app: &mut WordApp, width: f32) -> Vec<(String, 
     for _ in 0..4 {
         TIME.set(TIME.get() + 0.1);
         let input = egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), ..Default::default() };
+        craft::ui::shell::embed::before_input(ctx, |out| app.frame_input(out));
         let mut out = ctx.run_ui(input, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -679,7 +682,7 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
         frame(ctx, &mut app);
         app
     };
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     super::embedded_host(&ctx);
     super::apply_language(ar);
     let mut app = start(&ctx);
@@ -709,7 +712,7 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
     let _ = app.run("view.navigationPane", json!({"value": false}));
     // English stays as it was.
     {
-        let ctx = egui::Context::default();
+        let ctx = crate::test_harness::context();
         let mut app = fresh_app(&ctx);
         let drawn = frame_at(&ctx, &mut app, 1600.0);
         let x = |label: &str| drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap();
@@ -846,7 +849,7 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
     // Every ribbon control on every tab, hovered and clicked: its tooltip, menu or dialog.
     let contextual = ["Table Design", "Table Layout", "Equation"];
     let open = |tab: &str| {
-        let ctx = egui::Context::default();
+        let ctx = crate::test_harness::context();
         let mut app = start(&ctx);
         match tab {
             "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
