@@ -272,9 +272,12 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         let on_screen = Rect::from_two_pos(at(source.min), at(source.max));
         CropSource::new(tl!("Picture source").to_string(), on_screen, texture, (pic.flip_h, pic.flip_v)).show_at(ui, body.rect);
     }
-    let mut crop_box = CropBox::upright(to_doc_rect(placed, &body.view, frame));
+    let crop_box = CropBox::upright(to_doc_rect(placed, &body.view, frame));
     let scope = CropScope::Object { source: to_doc_rect(placed, &body.view, source) };
-    let out = CropOverlay::new(tl!("Crop").to_string(), Bind::bound(&mut crop_box)).scope(scope).show_at(ui, body.rect);
+    // Given, not bound: the box is made from the document each pass and only the drop's Commit changes the document, so
+    // the box stays at its pass-start value while a drag runs; a bound value that differs from the drag's last update
+    // reads as the document moving under the gesture, which cancels it.
+    let out = CropOverlay::new(tl!("Crop").to_string(), Bind::given(crop_box)).scope(scope).show_at(ui, body.rect);
     for event in out.edit.events {
         if let EditEvent::Commit { after, .. } = event {
             let c = crop_of(source, from_doc_rect(placed, &body.view, after.rect), pic.crop, (pic.flip_h, pic.flip_v));
