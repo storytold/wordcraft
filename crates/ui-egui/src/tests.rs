@@ -3047,6 +3047,7 @@ fn autosave_failures_are_reported_once() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut a = typed();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    a.run("file.autosave", json!({"value": true})).unwrap();
     // The folder disappears (unplugged drive, network share gone).
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     a.run("text.insert", json!({"text": "More "})).unwrap();
