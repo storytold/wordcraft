@@ -64,6 +64,21 @@ fn f6_past_the_last_pane_types_into_the_document() {
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "typed");
 }
 
+/// The Navigation pane's views use the shared dialog tabs and each click selects that view.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn navigation_tabs_switch_the_view() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Open it")), crate::Services::default());
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    let mut h = pane_harness(app);
+    for (label, key) in [("Pages", "pages"), ("Results", "results"), ("Headings", "headings")] {
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.nav_tab, key, "{label} tab");
+    }
+}
+
 fn pane_harness(app: crate::WordApp) -> egui_kittest::Harness<'static, crate::WordApp> {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut crate::WordApp| {
