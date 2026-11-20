@@ -643,8 +643,6 @@ struct Frame {
     /// Which ancestor roles this frame could play if its namespace is unresolved (`U_*`): decided by its LOCAL name,
     /// so an unresolved `q:vendor` is no unknown ancestor of anything (see `unresolved_roles`).
     unresolved: u8,
-    /// An `AlternateContent`, `Choice` or `Fallback` of unresolved namespace: the branches below it are unknown.
-    unresolved_mc: bool,
     is_tc: bool,
     /// A `w:p` frame: math placement is judged against paragraph ancestry.
     is_p: bool,
@@ -1012,7 +1010,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let is_alt = enter_alt(&mut state, &id, part, acc);
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
-                check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
+                check_prefixes(&state.declared, &attrs, reader.resolver(), (&[], complete_entities.as_ref().map(|_| &entity_decls)), &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);
@@ -1054,7 +1052,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let is_alt = enter_alt(&mut state, &id, part, acc);
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 push_unknown_prefix(&mut out, &state.declared, &decls, id.unknown.as_deref());
-                check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
+                check_prefixes(&state.declared, &attrs, reader.resolver(), (&decls, complete_entities.as_ref().map(|_| &entity_decls)), &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts, &mut state.refs_capped);
@@ -1343,7 +1341,6 @@ fn frame_for(id: &ElemId) -> Frame {
     let local = id.local.as_str();
     Frame {
         unresolved: unresolved_roles(id),
-        unresolved_mc: id.unresolved && matches!(local, "AlternateContent" | "Choice" | "Fallback"),
         is_tc: w && local == "tc",
         is_p: w && local == "p",
         is_footnote_pr: w && local == "footnotePr",
@@ -1789,28 +1786,55 @@ fn check_header_source(state: &mut State, id: &ElemId, role: PartRole, part: &st
 /// inside the block but inside none of its branch elements.
 type ParaPath = Vec<(u32, u32)>;
 
+/// A branch instance whose element is an `mc:Choice` / `mc:Fallback` of unresolved namespace carries this bit: it
+/// is a branch only if the element is the markup-compatibility one.
+const BRANCH_UNKNOWN: u32 = 1 << 31;
+
+/// How two occurrences of one paraId relate.
+#[derive(PartialEq)]
+enum Coexistence {
+    /// Some enclosing block holds them in two different known branch instances: only one is ever selected.
+    Excused,
+    /// Nothing excuses them: both are in the content a reader selects.
+    Coexist,
+    /// They are excused only if an element of unresolved namespace is a branch element.
+    Undecided,
+}
+
 /// Whether two occurrences can coexist in the content a reader
 /// selects. They cannot — and the repeat is excused — exactly when
 /// some block enclosing both holds them in two different branch
 /// instances (two Choices, or a Choice and the Fallback): only one
 /// branch of a block is ever selected. A branch instance of 0 (the
-/// occurrence sits directly under the block) excuses nothing.
-fn paths_conflict(a: &ParaPath, b: &ParaPath) -> bool {
+/// occurrence sits directly under the block) excuses nothing. Only the
+/// established part of each path decides: a branch element of unresolved
+/// namespace excuses nothing by itself and leaves the pair undecided
+/// unless an established branch pair excuses it.
+fn paths_relation(a: &ParaPath, b: &ParaPath) -> Coexistence {
     let (mut i, mut j) = (0usize, 0usize);
+    let mut undecided = false;
     while let (Some(&(seq_a, branch_a)), Some(&(seq_b, branch_b))) = (a.get(i), b.get(j)) {
         match seq_a.cmp(&seq_b) {
             std::cmp::Ordering::Less => i += 1,
             std::cmp::Ordering::Greater => j += 1,
             std::cmp::Ordering::Equal => {
                 if branch_a != 0 && branch_b != 0 && branch_a != branch_b {
-                    return false;
+                    if (branch_a | branch_b) & BRANCH_UNKNOWN == 0 {
+                        return Coexistence::Excused;
+                    }
+                    undecided = true;
                 }
                 i += 1;
                 j += 1;
             }
         }
     }
-    true
+    if undecided { Coexistence::Undecided } else { Coexistence::Coexist }
+}
+
+#[cfg(test)]
+fn paths_conflict(a: &ParaPath, b: &ParaPath) -> bool {
+    paths_relation(a, b) == Coexistence::Coexist
 }
 
 /// How many mutually excused occurrences of one value are retained.
@@ -1830,20 +1854,18 @@ struct ParaOcc {
     /// More mutually excused occurrences arrived than are retained;
     /// uniqueness is unprovable for this value.
     overflow: bool,
-    /// An occurrence inside content whose branch structure is unknown was seen (never recorded as a path: it may be
-    /// mutually exclusive with any other).
-    unknown_seen: bool,
-    /// Such an occurrence met another of the value: whether they can coexist is undecided.
+    /// A pair was excused only if a branch element of unresolved namespace is a branch: whether they can coexist is
+    /// undecided.
     undecided: bool,
 }
 
 impl ParaOcc {
-    /// Record one occurrence at the given ancestry path. An occurrence whose branches are `unknown` is never counted
-    /// as a repeat; meeting another occurrence of the value leaves the repeat undecided.
-    fn record(&mut self, path: ParaPath, unknown: bool) {
+    /// Record one occurrence at the given ancestry path (the established branches are in the path, unresolved ones
+    /// marked `BRANCH_UNKNOWN`).
+    fn record(&mut self, path: ParaPath) {
         observation_contract! {
             rules: "-";
-            collections: "field.reps*4";
+            collections: "field.reps*3";
             scope: "source-local bounded extraction; no implicit document owner";
             loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
             fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1853,15 +1875,15 @@ impl ParaOcc {
         if self.conflict {
             return;
         }
-        if unknown {
-            self.undecided |= self.unknown_seen || !self.reps.is_empty();
-            self.unknown_seen = true;
-            return;
-        }
-        self.undecided |= self.unknown_seen;
-        if self.reps.iter().any(|r| paths_conflict(r, &path)) {
-            self.conflict = true;
-            return;
+        for rep in &self.reps {
+            match paths_relation(rep, &path) {
+                Coexistence::Coexist => {
+                    self.conflict = true;
+                    return;
+                }
+                Coexistence::Undecided => self.undecided = true,
+                Coexistence::Excused => {}
+            }
         }
         if self.reps.len() < PARA_OCC_RETAINED {
             self.reps.push(path);
@@ -1898,7 +1920,7 @@ struct AltCtx {
 fn check_para_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "PARAID-VALUE";
-        collections: "field.alt_stack*1,field.frames*1,field.para_ids*3";
+        collections: "field.alt_stack*1,field.para_ids*3";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1922,15 +1944,12 @@ fn check_para_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Nam
             );
         }
         let key = raw.clone();
-        // Inside an `AlternateContent`, `Choice` or `Fallback` of unresolved namespace the branches are unknown.
-        let unknown_branches = (id.unresolved && matches!(id.local.as_str(), "AlternateContent" | "Choice" | "Fallback"))
-            || state.frames.iter().any(|f| f.unresolved_mc);
         if state.para_ids.len() >= state.fact_cap && !state.para_ids.contains_key(&key) {
             state.fact_capped = true;
         } else {
             let path: ParaPath = state.alt_stack.iter().map(|ctx| (ctx.seq, ctx.branch)).collect();
             let occ = state.para_ids.entry(key).or_default();
-            occ.record(path, unknown_branches);
+            occ.record(path);
             if occ.overflow {
                 state.fact_capped = true;
             }
@@ -1980,7 +1999,10 @@ fn assign_alt_branch(state: &mut State, id: &ElemId) -> Option<u32> {
         package_loss: "independent";
     }
 
-    if id.ns != Some(NS_MC.as_bytes()) || (id.local != "Choice" && id.local != "Fallback") {
+    // A branch element of unresolved namespace is a branch only if it is the markup-compatibility one: its instance
+    // is marked, and decides nothing by itself.
+    let unresolved = id.unresolved;
+    if !(id.ns == Some(NS_MC.as_bytes()) || id.unresolved) || (id.local != "Choice" && id.local != "Fallback") {
         return None;
     }
     if !state.frames.last().is_some_and(|f| f.alt) {
@@ -1989,7 +2011,7 @@ fn assign_alt_branch(state: &mut State, id: &ElemId) -> Option<u32> {
     let ctx = state.alt_stack.last_mut()?;
     let prev = ctx.branch;
     state.alt_branch_seq += 1;
-    ctx.branch = state.alt_branch_seq;
+    ctx.branch = state.alt_branch_seq | if unresolved { BRANCH_UNKNOWN } else { 0 };
     Some(prev)
 }
 
@@ -2991,11 +3013,65 @@ fn unresolved_roles(id: &ElemId) -> u8 {
     }
 }
 
-/// Detect attribute prefixes that are undeclared or referenced in `mc:Ignorable` without a namespace declaration.
-fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &NamespaceResolver, extra: &[String], out: &mut PartScan) {
+/// The value of an attribute as a parser delivers it, when it holds references only to predefined entities, characters
+/// and plain-text internal entities of a resolved DOCTYPE subset (a bounded, non-recursive expansion); `None` otherwise.
+fn delivered_attribute_value(raw: &[u8], decls: &BTreeMap<String, String>) -> Option<String> {
     observation_contract! {
         rules: "-";
-        collections: "field.unknown_prefixes*1,type.Vec*1";
+        collections: "type.BTreeMap*1";
+        scope: "one attribute value and the declarations of a resolved internal subset";
+        loss: "a reference to anything but a predefined, character or plain internal entity; output bound";
+        fallback: "return no value";
+        package_loss: "independent";
+    }
+
+    let text = std::str::from_utf8(raw).ok()?;
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(rest.get(..at)?);
+        let after = rest.get(at + 1..)?;
+        let semi = after.find(';')?;
+        let name = after.get(..semi)?;
+        match name {
+            "lt" => out.push('<'),
+            "gt" => out.push('>'),
+            "amp" => out.push('&'),
+            "apos" => out.push('\''),
+            "quot" => out.push('"'),
+            _ => {
+                let expansion = if let Some(number) = name.strip_prefix('#') {
+                    let code = match number.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                        None => number.parse().ok()?,
+                    };
+                    char::from_u32(code)?.to_string()
+                } else {
+                    decls.get(name).filter(|text| text.find(['&', '<']).is_none())?.clone()
+                };
+                out.push_str(&expansion);
+            }
+        }
+        if out.len() > 8192 {
+            return None;
+        }
+        rest = after.get(semi + 1..)?;
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// Detect attribute prefixes that are undeclared or referenced in `mc:Ignorable` without a namespace declaration.
+fn check_prefixes(
+    declared: &[Vec<String>],
+    attrs: &[Attribute],
+    res: &NamespaceResolver,
+    (extra, entities): (&[String], Option<&BTreeMap<String, String>>),
+    out: &mut PartScan,
+) {
+    observation_contract! {
+        rules: "-";
+        collections: "field.unknown_prefixes*1,type.BTreeMap*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -3006,7 +3082,13 @@ fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &Namespace
         match res.resolve_attribute(a.key).0 {
             ResolveResult::Unknown(p) => push_unknown_prefix(out, declared, extra, Some(&lossy(&p))),
             ResolveResult::Bound(Namespace(ns)) if ns == NS_MC.as_bytes() && a.key.local_name().as_ref() == b"Ignorable" => {
-                if let Ok(v) = a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
+                // The value is what the parser delivers: an entity of a resolved subset is read as its replacement text.
+                let delivered = a
+                    .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                    .ok()
+                    .map(|v| v.into_owned())
+                    .or_else(|| entities.and_then(|decls| delivered_attribute_value(&a.value, decls)));
+                if let Some(v) = delivered {
                     for pfx in v.split_whitespace() {
                         if pfx != "xml" && nearest_binding(declared, extra, pfx) == Binding::Undeclared {
                             out.unknown_prefixes.push(pfx.to_string());

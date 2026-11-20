@@ -6202,6 +6202,51 @@ mod budget_tests {
     }
 
     #[test]
+    fn branch_bookkeeping_keeps_the_established_portion_and_delivered_values_are_values() {
+        let ns = format!(
+            r#"xmlns:w="{NS_W}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#
+        );
+        let dtd = r#"<!DOCTYPE w:document [<!ENTITY mcns "http://schemas.openxmlformats.org/markup-compatibility/2006"><!ENTITY u "w14">]>"#;
+        let story = |attrs: &str, body: &str| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                (
+                    "word/document.xml",
+                    format!("<?xml version=\"1.0\"?>{dtd}<w:document {ns} {attrs}><w:body>{body}</w:body></w:document>").into_bytes(),
+                ),
+                ("word/_rels/document.xml.rels", doc_rels()),
+            ]))
+        };
+        let (id, q) = (r#"<w:p w14:paraId="00000012"/>"#, r#"xmlns:q="&mcns;""#);
+        let rules = |report: &Report| report.findings.iter().map(|f| f.rule).collect::<Vec<_>>();
+        // Outer literal branches prove the copies exclusive whatever an inner wrapper's spelling is.
+        let wrapped = story(
+            "",
+            &format!(
+                r#"<mc:AlternateContent><mc:Choice Requires="w14"><q:Choice {q}>{id}</q:Choice></mc:Choice><mc:Fallback>{id}</mc:Fallback></mc:AlternateContent>"#
+            ),
+        );
+        assert_eq!((rules(&wrapped), wrapped.verdict), (vec![], Verdict::Pass), "{wrapped:?}");
+        // Two copies in one literal Choice coexist, beneath an unresolved AlternateContent as beneath a literal one.
+        let same = story(
+            "",
+            &format!(r#"<mc:AlternateContent xmlns:mc="&mcns;"><mc:Choice Requires="w14">{id}{id}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#),
+        );
+        assert_eq!(rules(&same), ["PARAID-DUP"], "{same:?}");
+        // A branch element of unresolved namespace excuses nothing by itself: undecided, not a duplicate.
+        let unknown =
+            story("", &format!(r#"<mc:AlternateContent><q:Choice {q}>{id}</q:Choice><mc:Fallback>{id}</mc:Fallback></mc:AlternateContent>"#));
+        assert_eq!((rules(&unknown), unknown.verdict), (vec![], Verdict::Incomplete), "{unknown:?}");
+        // `mc:Ignorable="&u;"` is delivered as `w14`, a declared prefix: established, not unread. A delivered value
+        // naming an undeclared prefix is reported as such.
+        let ignorable = story(r#"mc:Ignorable="&u;""#, "<w:p/>");
+        assert_eq!((rules(&ignorable), ignorable.verdict), (vec![], Verdict::Pass), "{ignorable:?}");
+        let undeclared = story(r#"mc:Ignorable="&u; zz""#, "<w:p/>");
+        assert_eq!(rules(&undeclared), ["XML-UNDECLARED-PREFIX"], "{undeclared:?}");
+    }
+
+    #[test]
     fn diagnostics_are_never_made_from_unknowns() {
         // `q` is bound to a namespace spelled through an entity this part cannot expand; `mc` to the markup
         // compatibility namespace through another. A diagnostic that needs the unknown value is not made.
@@ -6221,9 +6266,9 @@ mod budget_tests {
         // The element's own declaration scopes its own name even though collecting its attributes failed.
         let broken = run("", r#"<w:p/><q:vendor xmlns:q="urn:&year;" a="1" a="2"/>"#);
         assert_eq!(rules(&broken), ["XML-MALFORMED"], "{broken:?}");
-        // An `mc:Ignorable` value that cannot be read is undecided, never a silent pass or a false failure.
-        let ignorable = run(r#"mc:Ignorable="&u;""#, "<w:p/>");
-        assert!(rules(&ignorable).is_empty() && ignorable.verdict == Verdict::Incomplete, "{ignorable:?}");
+        // An `mc:Ignorable` value is read as the parser delivers it (`&u;` is `zz`, an undeclared prefix); one it cannot
+        // deliver (a replacement with a character reference) is undecided, never a silent pass or a false failure.
+        assert_eq!(rules(&run(r#"mc:Ignorable="&u;""#, "<w:p/>")), ["XML-UNDECLARED-PREFIX"]);
         assert_eq!(rules(&run(r#"mc:Ignorable="zz""#, "<w:p/>")), ["XML-UNDECLARED-PREFIX"]);
         // A repeated paraId in a Choice and its Fallback is excused under every spelling of the markup
         // compatibility namespace (undecided where the spelling is unknown), and a repeat in one branch is not.
