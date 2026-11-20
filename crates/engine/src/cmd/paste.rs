@@ -338,14 +338,14 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.props = para.clone();
             for run in &mut p.runs {
                 let src = std::mem::replace(&mut run.props, base.clone());
-                // Emphasis in either script is kept for both, as the Bold and Italic buttons set
-                // it: text pasted into a run marked `w:cs` (Thai from a WPS or Word file) is drawn
-                // with the complex-script bold and italic.
-                if src.bold == Some(true) || src.bold_cs == Some(true) {
+                // Emphasis the source shows in either script is kept for both, as the Bold and
+                // Italic buttons set it: text pasted into a run marked `w:cs` (Thai from a WPS or
+                // Word file) is drawn with the complex-script bold and italic.
+                if shown(src.bold, src.bold_cs, &src) {
                     run.props.bold = Some(true);
                     run.props.bold_cs = Some(true);
                 }
-                if src.italic == Some(true) || src.italic_cs == Some(true) {
+                if shown(src.italic, src.italic_cs, &src) {
                     run.props.italic = Some(true);
                     run.props.italic_cs = Some(true);
                 }
@@ -363,6 +363,16 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.touch();
         });
     }
+}
+
+/// Whether a run with these Latin and complex-script values of a toggle (bold or italic) shows
+/// it anywhere, as the resolved formatting draws it: a run marked `w:cs` or `w:rtl` draws all
+/// its text with the complex-script value, which borrows the Latin one unless the run is marked
+/// `w:cs`; other runs draw their Latin text with the Latin value.
+fn shown(latin: Option<bool>, complex: Option<bool>, run: &wordcraft_doc::CharProps) -> bool {
+    let complex_shown = complex.or(latin.filter(|_| run.cs != Some(true))) == Some(true);
+    let all_complex = run.cs == Some(true) || run.rtl == Some(true);
+    complex_shown || (!all_complex && latin == Some(true))
 }
 
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.

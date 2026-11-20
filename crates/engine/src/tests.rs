@@ -1896,6 +1896,38 @@ fn paste_merge_formatting_keeps_bold_and_italic_in_a_complex_script_run() {
 }
 
 #[test]
+fn paste_merge_formatting_leaves_plain_what_the_source_draws_plain() {
+    // #4852 review: a run marked `w:cs` is bold and italic only by `w:bCs` and `w:iCs`, so one
+    // with `w:b` and `w:i` alone is drawn plain and pastes plain; one with `w:bCs` pastes bold.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let pasted = |s: &Session, props: wordcraft_doc::CharProps| {
+        let mut frag = wordcraft_doc::edit::Fragment::from_text("ไทย");
+        for b in &mut frag.blocks {
+            crate::cmd::paste::each_para(b, 0, &mut |p| p.runs.iter_mut().for_each(|r| r.props = props.clone()));
+        }
+        crate::cmd::paste::merge_formatting(s, &mut frag);
+        let mut out = Vec::new();
+        for b in &mut frag.blocks {
+            crate::cmd::paste::each_para(b, 0, &mut |p| out.extend(p.runs.iter().map(|r| s.doc.styles.resolve_char(None, &r.props))));
+        }
+        out
+    };
+    let cs = wordcraft_doc::CharProps { cs: Some(true), bold: Some(true), italic: Some(true), ..Default::default() };
+    for r in pasted(&s, cs.clone()) {
+        assert!(!r.bold && !r.bold_cs && !r.italic && !r.italic_cs, "{r:?}");
+    }
+    for r in pasted(&s, wordcraft_doc::CharProps { bold_cs: Some(true), ..cs }) {
+        assert!(r.bold && r.bold_cs && !r.italic_cs, "{r:?}");
+    }
+    // An unmarked run shows `w:b` in both scripts.
+    for r in pasted(&s, wordcraft_doc::CharProps { bold: Some(true), ..Default::default() }) {
+        assert!(r.bold && r.bold_cs, "{r:?}");
+    }
+}
+
+#[test]
 fn pasted_rtf_sections_link_their_headers_to_the_previous() {
     // #1378: the RTF's own header part ids mean nothing in this document; a pasted section
     // break keeps its page but links its headers and footers to the previous section.
