@@ -185,6 +185,7 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
             .thumb(ThumbSize::Large)
             .aspect(ThumbAspect::new(17, 12))
             .caption(CaptionPlace::Below)
+            .framed()
             .more(GalleryMore::Command(CommandRef::with_params("view.stylesPane", json!({"value": true}))))
             .show(ui)
     };
@@ -222,8 +223,10 @@ pub(crate) fn style_sets(ui: &mut Ui, app: &mut WordApp) {
     let makers: Vec<Maker<'_>> = entries.iter().map(|(name, _)| Box::new(move || style_set_image(name, ppp, dark)) as Maker<'_>).collect();
     let items = image_items("set", &entries, &makers, ppp, revision);
     // Each tile is a small page (title, heading, paragraph) at the large thumbnail size, about as wide as high as the
-    // image `style_set_image` renders, so the title and heading read as they did in the old ribbon.
-    let out = Gallery::new(tl!("Style Sets"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).show(ui);
+    // image `style_set_image` renders, so the title and heading read as they did in the old ribbon. All seven show at
+    // full width, so no buttons stand beside them, as in the old ribbon.
+    let out =
+        Gallery::new(tl!("Style Sets"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).spare_buttons().show(ui);
     if let Some(name) = out.picked {
         let _ = app.run("design.styleSet", json!({"name": name}));
     }
