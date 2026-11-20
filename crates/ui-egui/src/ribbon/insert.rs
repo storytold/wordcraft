@@ -5,7 +5,7 @@ use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::pages::ui::TableSizePicker;
 use craft::ui::buttons::{Arrangement, Button, IconButton};
-use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
@@ -42,7 +42,7 @@ impl ItemSource<usize> for SymbolCells {
 // PLAN: each menu button's `about` is the command its menu runs; the base's `MenuButtonOptions` ids were not in the bundle.
 pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("Pages", crate::tl!("Pages"), IconId::new("coverPage").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(
                 ui,
                 Button::new(crate::tl!("Cover Page")).icon(IconId::new("coverPage")).tooltip(crate::tl!("Cover Page")),
@@ -131,7 +131,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 let _ = cx;
             },
         );
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (key, label, id) in
                 [("icons", "Icons", "insert.icon"), ("smartArt", "Diagram", "insert.smartArt"), ("chart", "Chart", "insert.chart")]
             {
@@ -140,7 +140,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     row.group(RibbonGroup::new("Links", crate::tl!("Links"), IconId::new("wordcraft.link").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::with_params("ui.dialog", json!({"name": "link"})))
                 .label(crate::tl!("Link"))
                 .icon(IconId::new("wordcraft.link"))
@@ -222,7 +222,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("textBox"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(
                 ui,
                 Button::new(crate::tl!("Quick Parts")).icon(IconId::new("quickParts")).tooltip(crate::tl!("Quick Parts")),
@@ -257,7 +257,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 |ui, _| drop_cap_items(ui, app),
             );
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (key, tip, id, params) in [
                 ("signature", "Signature Line", "insert.signatureLine", json!({})),
                 ("dateTime", "Date & Time", "ui.dialog", json!({"name": "dateTime"})),

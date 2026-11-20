@@ -2,7 +2,7 @@ use craft::behavior::{ColumnWidth, IconId};
 use craft::draw::ui::gradient::GradientSwatch;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, ToggleButton};
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::menu::{Menu, MenuItem};
@@ -79,7 +79,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     };
     let theme = app.session.doc.settings.theme_colors.clone();
     row.group(RibbonGroup::new("shape.styles", tl!("Shape Styles"), IconId::new("wordcraft.more").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(ui, Button::new(tl!("Shape Fill")).icon(IconId::new("shading")), tl!("Shape Fill"), Some("shape.fill"), |ui, _| {
                 MenuItem::command(CommandRef::with_params("shape.fill", json!({"color": null}))).label(tl!("No Color")).show(ui);
                 crate::colors::menu(ui, app, Target::cmd("shape.fill"));
@@ -119,7 +119,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let styles = Button::new(tl!("Styles")).icon(IconId::new("wordArt")).tooltip(tl!("Decorative Text Styles")).arrangement(Arrangement::Stacked);
         menu_button(ui, styles, tl!("Decorative Text Styles"), None, |ui, cx| super::galleries::wordart(ui, cx, app, "wordArt.style"));
         let outline = crate::wordart_menus::current_outline(app);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(ui, Button::new(tl!("Text Fill")).icon(IconId::new("textFill")), tl!("Text Fill"), None, |ui, cx| {
                 crate::wordart_menus::fill_menu(ui, cx, app, &theme)
             });
@@ -135,7 +135,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("shape.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             rotate_menu(ui);
             align_menu(ui);
         });
@@ -144,7 +144,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
         // As Picture Format › Size, each side on its own.
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 size_field(ui, app, "W:", "width", w0, false, 1.0..=4000.0);
                 size_field(ui, app, "H:", "height", h0, false, 1.0..=4000.0);
@@ -161,7 +161,7 @@ fn shape_text_group(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let target = wordcraft_engine::cmd::objects::text_box_target(&app.session);
     let body = target.and_then(|(_, id)| app.session.doc.parts.get(&id).map(|p| p.body)).unwrap_or_default();
     row.group(RibbonGroup::new("shape.text", tl!("Text"), IconId::new("wordcraft.more").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(ui, Button::new(tl!("Text Direction")).icon(IconId::new("textDirection")), tl!("Text Direction"), None, |ui, _| {
                 for (label, vert) in [
                     ("Horizontal", TextVert::Horz),

@@ -1,7 +1,7 @@
 use craft::behavior::IconId;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, ToggleButton};
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::{Divider, Text};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
@@ -66,7 +66,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 }
             });
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("ui.changePicture"))
                 .label(tl!("Change"))
                 .icon(IconId::new("picture"))
@@ -99,7 +99,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("picture.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             rotate_menu(ui);
             align_menu(ui);
             group_menu(ui, app);
@@ -111,7 +111,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             Some((_, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, w, h, crop, alt),
             _ => (String::new(), 0.0, 0.0, [0.0; 4], String::new()),
         };
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 // `picture.size` locks the aspect ratio, so one side is enough and the other follows.
                 size_field(ui, app, "W:", "width", w0, true, 1.0..=4000.0);

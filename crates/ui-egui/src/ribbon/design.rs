@@ -5,7 +5,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::MenuItem;
@@ -26,7 +26,7 @@ pub(super) fn design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(RibbonGroup::new("Document Formatting", crate::tl!("Document Formatting"), IconId::new("colors").into()), |ui| {
         super::galleries::style_sets(ui, app);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(
                 ui,
                 Button::new(crate::tl!("Colors")).icon(IconId::new("colors")).tooltip(crate::tl!("Theme Colors")),
@@ -51,7 +51,7 @@ pub(super) fn design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 },
             );
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(
                 ui,
                 Button::new(crate::tl!("Paragraph Spacing")).icon(IconId::new("paraSpacing")).tooltip(crate::tl!("Paragraph Spacing")),

@@ -2,7 +2,7 @@
 
 use craft::behavior::IconId;
 use craft::keymap::CommandRef;
-use craft::menu::ribbon::RibbonIcons;
+use craft::menu::ribbon::RibbonLook;
 use craft::menu::{Ribbon, RibbonOutput, RibbonRow, RibbonTab};
 use craft::theme::Variant;
 use craft::ui::contract::{Bind, Entry};
@@ -73,9 +73,10 @@ fn no_ribbon() -> RibbonOutput<String> {
     RibbonOutput { shown: None, picked: None, controls: None, tabs: None, tab_ids: Default::default() }
 }
 
-/// The icon sides of the ribbon buttons, in points: the old ribbon drew its large icons 32
-/// points square and the rest 17, and its menu arrows as filled triangles in 10 points.
-const RIBBON_ICONS: RibbonIcons = RibbonIcons::new(32, 17).arrow(10);
+/// How the ribbon buttons look, in points: the old ribbon drew its large icons 32
+/// points square and the rest 17, its menu arrows as filled triangles in 10 points, and its small
+/// rows 22 points apart (20-point buttons a tight gap apart).
+const RIBBON_LOOK: RibbonLook = RibbonLook::new(32, 17).arrow(10).row(20);
 
 /// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
 /// Outlining tabs and showing the available tab strip. The output carries the record of the ribbon's
@@ -171,7 +172,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
         .context_menu(&mut |ui, request, _| context_menu::rows(ui, request, &qat, qat_shown))
         // The old ribbon drew its large icons 32 points square and every other icon 17, and its
         // dialog launcher as a small corner arrow.
-        .icons(RIBBON_ICONS)
+        .look(RIBBON_LOOK)
         .launcher_icon(IconId::new("launcher"))
         .show(ui, |row, key| {
             let entry = user_tabs.iter().find(|e| e.name == *key);

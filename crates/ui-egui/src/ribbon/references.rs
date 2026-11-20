@@ -4,7 +4,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::MenuItem;
@@ -33,7 +33,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 MenuItem::command(CommandRef::with_params("references.removeToc", json!({}))).label(crate::tl!("Remove Table of Contents")).show(ui);
             },
         );
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(
                 ui,
                 Button::new(crate::tl!("Add Text")).icon(IconId::new("addText")).tooltip(crate::tl!("Add Text")),
@@ -63,7 +63,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("footnote"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (key, label, id) in [
                 ("endnote", "Insert Endnote", "references.endnote"),
                 ("nextFootnote", "Next Footnote", "references.nextFootnote"),
@@ -104,7 +104,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             },
         );
         let current = app.session.bib_style.clone();
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::with_params("references.sources", json!({})))
                 .label(crate::tl!("Manage Sources"))
                 .icon(IconId::new("sources"))
@@ -136,7 +136,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("caption"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (key, label, tip, id) in [
                 ("tableOfFigures", "Insert Table of Figures", "Insert Table of Figures", "references.tableOfFigures"),
                 ("update", "Update Table", "Update Table of Figures", "references.updateFigures"),
@@ -156,7 +156,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("markEntry"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (key, label, id) in [("index", "Insert Index", "references.index"), ("update", "Update Index", "references.updateIndex")] {
                 Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
             }
@@ -168,7 +168,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("markCitation"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (key, label, id) in [
                 ("tableOfAuthorities", "Insert Table of Authorities", "references.tableOfAuthorities"),
                 ("update", "Update Table", "references.updateAuthorities"),

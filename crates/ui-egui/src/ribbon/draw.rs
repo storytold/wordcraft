@@ -5,7 +5,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, SplitButton, SplitMenu, ToggleButton};
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::Stack;
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::{IconMark, IconSpec};
@@ -61,7 +61,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 }
             },
         );
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             // With ink lasso-selected the colour goes to the selection, else to the pen.
             let target = if lasso_on { "draw.lassoColor" } else { pen_command(tool) };
             let ink = egui::Color32::from_rgb(set.color.0, set.color.1, set.color.2);

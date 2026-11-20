@@ -3,7 +3,7 @@ use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::text::NumberField;
@@ -27,7 +27,7 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             [("Banded Rows", "bandedRows", l.banded_rows), ("Banded Columns", "bandedColumns", l.banded_columns)],
         ];
         row.group(RibbonGroup::new("tableStyleOptions", tl!("Table Style Options").to_string(), IconId::new("tableStyleOptions").into()), |ui| {
-            Stack::new().show(ui, |ui, _| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
                 for line in options {
                     Row::new().show(ui, |ui, _| {
                         for (label, key, value) in line {
@@ -56,7 +56,7 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let can_delete = current == Some(false);
     row.group(RibbonGroup::new("tableStyles", tl!("Table Styles").to_string(), IconId::new("tableStyles").into()), |ui| {
         super::galleries::table_styles(ui, app);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             let _ = menu_button(ui, Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")), tl!("Styles").to_string(), None, |ui, _| {
                 MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
                     .label(tl!("New Table Style…").to_string())
@@ -127,7 +127,7 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
     let exact = row.height_rule == wordcraft_doc::props::HeightRule::Exact;
     let (height_units, width_units) = (crate::options::lengths(app.session.units()), crate::options::lengths(app.session.units()));
-    Stack::new().show(ui, |ui, _| {
+    Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
         let out = NumberField::length(tl!("Height:").to_string(), Bind::given(Some(f64::from(h0))), height_units).range(CELL_SIZE_RANGE).show(ui);
         apply_edits(app, out.edit.events, |app, v| {
             if let Some(h) = v {
@@ -145,7 +145,7 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
 
 pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("table", tl!("Table").to_string(), IconId::new("table").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             let _ =
                 menu_button(ui, Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")), tl!("Select").to_string(), None, |ui, _| {
                     for (label, id) in [
@@ -196,7 +196,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("insertAbove"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("table.insertRowBelow")).label(tl!("Insert Below").to_string()).icon(IconId::new("insertBelow")).show(ui);
             Button::command(CommandRef::new("table.insertColumnLeft")).label(tl!("Insert Left").to_string()).icon(IconId::new("insertLeft")).show(ui);
             Button::command(CommandRef::new("table.insertColumnRight"))
@@ -206,7 +206,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     row.group(RibbonGroup::new("merge", tl!("Merge").to_string(), IconId::new("merge").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("table.merge")).label(tl!("Merge Cells").to_string()).icon(IconId::new("merge")).show(ui);
             Button::command(CommandRef::new("table.split")).label(tl!("Split Cells").to_string()).icon(IconId::new("splitCells")).show(ui);
             Button::command(CommandRef::new("table.splitTable")).label(tl!("Split Table").to_string()).icon(IconId::new("splitTable")).show(ui);
@@ -220,7 +220,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             }
         });
         cell_size_boxes(ui, app);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("table.distributeRows"))
                 .label(tl!("Distribute Rows").to_string())
                 .icon(IconId::new("distributeRows"))
@@ -232,7 +232,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     row.group(RibbonGroup::new("alignment", tl!("Alignment").to_string(), IconId::new("cellAlign").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for line in [
                 [("topLeft", "Align Top Left"), ("topCenter", "Align Top Center"), ("topRight", "Align Top Right")],
                 [("centerLeft", "Align Center Left"), ("center", "Align Center"), ("centerRight", "Align Center Right")],
@@ -265,7 +265,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("sort"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("table.repeatHeader"))
                 .label(tl!("Repeat Header Rows").to_string())
                 .icon(IconId::new("repeatHeader"))

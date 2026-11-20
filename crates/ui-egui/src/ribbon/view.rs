@@ -3,7 +3,7 @@ use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow}; // PLAN: assumed ribbon-w8 adds the craft-menu dependency and passes the `RibbonRow`
 use craft::ui::buttons::{Arrangement, Button, IconButton, SplitButton, SplitMenu, ToggleButton};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::pickers::Select;
@@ -32,7 +32,7 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("webLayout"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("view.outline")).label(tl!("Outline").to_string()).icon(IconId::new("outline")).show(ui);
             Button::command(CommandRef::new("view.draft")).label(tl!("Draft").to_string()).icon(IconId::new("draft")).show(ui);
             ToggleButton::command(CommandRef::new("view.markdownSource"))
@@ -69,12 +69,12 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(RibbonGroup::new("view.show", tl!("Show").to_string(), IconId::new("wordcraft.ruler").into()), |ui| {
         // Three rows fill the group's height; a fourth check box would run into its label.
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             show_check(ui, app, "Ruler", "view.ruler", v.ruler);
             show_check(ui, app, "Gridlines", "view.gridlines", v.gridlines);
             show_check(ui, app, "Navigation Pane", "view.navigationPane", v.nav_pane);
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             show_check(ui, app, "Hide White Space", "view.hideWhiteSpace", v.hide_white_space);
         });
     });
@@ -90,11 +90,11 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
         // Step the zoom up and down by 10% (issue #67), from whatever the page shows now.
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("view.zoomIn")).label(tl!("Zoom In").to_string()).icon(IconId::new("zoomIn")).show(ui);
             Button::command(CommandRef::new("view.zoomOut")).label(tl!("Zoom Out").to_string()).icon(IconId::new("zoomOut")).show(ui);
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::new("view.onePage"))
                 .label(tl!("One Page").to_string())
                 .icon(IconId::new("onePage"))
@@ -146,7 +146,7 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         // Across the app's windows (#322; `windows`), read in this pass.
         let w = app.session.windows.clone();
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             if w.side_by_side.is_none() && w.others.len() > 1 {
                 SplitButton::<u8>::command(
                     CommandRef::new("view.sideBySide"),
@@ -219,7 +219,7 @@ pub(super) fn outlining(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let mut shown: Vec<Entry<u8>> = vec![Entry::new(0u8, tl!("All Levels").to_string())];
     shown.extend((1..BODY).map(|l| Entry::new(l, name(l))));
     row.group(RibbonGroup::new("outlining.tools", tl!("Outline Tools").to_string(), IconId::new("outlinePromote").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 IconButton::command(IconId::new("outlineTop"), CommandRef::new("outline.promoteToHeading1")).show(ui);
                 IconButton::command(IconId::new("outlinePromote"), CommandRef::new("outline.promote")).show(ui);

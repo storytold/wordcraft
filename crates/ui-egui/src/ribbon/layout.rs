@@ -95,7 +95,7 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             });
             menu_button(ui, stacked("Size", "size"), tl!("Size"), Some("layout.size"), |ui, _| size_menu(ui, app));
             menu_button(ui, stacked("Columns", "columns"), tl!("Columns"), Some("layout.columns"), |ui, _| columns_items(ui, app));
-            Stack::new().show(ui, |ui, _| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
                 let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon));
                 menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| {
                     MenuItem::heading(tl!("Page Breaks")).show(ui);
@@ -207,12 +207,12 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("layout.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("arrange.bringForward")).icon(IconId::new("bringForward")).show(ui);
             Button::command(CommandRef::new("arrange.sendBackward")).icon(IconId::new("sendBackward")).show(ui);
             Button::command(CommandRef::new("arrange.selectionPane")).icon(IconId::new("selectionPane")).show(ui);
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             align_menu(ui);
             group_menu(ui, app);
             rotate_menu(ui);

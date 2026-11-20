@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button};
-use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::contract::{Bind, BodyCx, Gap, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
@@ -49,7 +49,7 @@ pub(super) fn custom_groups(row: &mut RibbonRow<'_>, app: &mut WordApp, groups: 
         let group = RibbonGroup::new(&g.name, g.name.clone(), icons::for_command(first));
         row.group(group, |ui| {
             if ids.len() <= 3 {
-                Stack::new().show(ui, |ui, _| {
+                Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
                     for id in &ids {
                         Button::command(CommandRef::new(*id)).icon(icons::for_command(id)).arrangement(Arrangement::Stacked).show(ui);
                     }
@@ -58,7 +58,7 @@ pub(super) fn custom_groups(row: &mut RibbonRow<'_>, app: &mut WordApp, groups: 
             }
             Row::new().show(ui, |ui, _| {
                 for column in ids.chunks(3) {
-                    Stack::new().show(ui, |ui, _| {
+                    Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
                         for id in column {
                             Button::command(CommandRef::new(*id)).icon(icons::for_command(id)).show(ui);
                         }

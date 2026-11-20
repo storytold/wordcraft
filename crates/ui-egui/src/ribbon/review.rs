@@ -2,7 +2,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow}; // PLAN: assumed ribbon-w8 adds the craft-menu dependency and passes the `RibbonRow`
 use craft::ui::buttons::{Arrangement, Button, IconButton, SplitButton, SplitMenu, ToggleButton};
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
 
@@ -18,7 +18,7 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("spelling"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("review.thesaurus")).label(tl!("Thesaurus").to_string()).icon(IconId::new("thesaurus")).show(ui);
             Button::command(CommandRef::with_params("ui.dialog", json!({"name": "wordCount"})))
                 .label(tl!("Word Count").to_string())
@@ -55,7 +55,7 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("newComment"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("review.deleteComment"))
                 .label(tl!("Delete").to_string())
                 .tooltip(tl!("Delete Comment").to_string())
@@ -89,7 +89,7 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 .selected(app.session.doc.settings.track_changes)
                 .show(ui);
             let all = app.session.view.show_markup;
-            Stack::new().show(ui, |ui, _| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
                 let face = Button::new(if all { tl!("All Markup").to_string() } else { tl!("No Markup").to_string() }).icon(IconId::new("markup"));
                 menu_button(ui, face, tl!("Display for Review").to_string(), Some("review.markup"), |ui, _| {
                     MenuItem::command(CommandRef::with_params("review.markup", json!({"value": "all"})))
@@ -143,7 +143,7 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         .icon(IconId::new("reject"))
         .arrangement(Arrangement::Stacked)
         .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("review.previousChange"))
                 .label(tl!("Previous").to_string())
                 .tooltip(tl!("Previous Change").to_string())
@@ -195,7 +195,7 @@ pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             [("ccDropDown", "developer.dropDown"), ("ccDate", "developer.datePicker"), ("ccRepeat", "developer.repeatingSection")],
         ];
         // Three rows of icon-only buttons fill the group's height; each tooltip is its command's label.
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for cells in rows {
                 Row::new().show(ui, |ui, _| {
                     for (icon_name, id) in cells {
@@ -204,7 +204,7 @@ pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 });
             }
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::new("developer.designMode"))
                 .label(tl!("Design Mode").to_string())
                 .icon(IconId::new("designMode"))

@@ -8,7 +8,9 @@ use craft::behavior::{DisplayOrder, IconId, ItemSource, Selection};
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{Gallery, GalleryFace, GalleryItem, GalleryMore, RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, SplitButton, SplitMenu, ToggleButton};
-use craft::ui::contract::{ActivateOn, Bind, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{
+    ActivateOn, Bind, BodyCx, CollectionEvent, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::runtime::env::Label;
@@ -279,7 +281,7 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let normal_text = app.session.math_normal_text;
     row.group(RibbonGroup::new("tools", tl!("Tools").to_string(), IconId::new("equation").into()), |ui| {
         math_menu_button(ui, EQUATION_PICTURE, "Equation", |ui, cx| builtin_menu(ui, cx, app));
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::with_params("equation.inputFormat", json!({"format": "unicode"})))
                 .label(tl!("Unicode").to_string())
                 .icon(IconId::new("equation"))
@@ -306,7 +308,7 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 }
             });
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::new("equation.normalText"))
                 .label(tl!("Normal Text").to_string())
                 .icon(IconId::new("case"))
@@ -323,7 +325,7 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         }
     });
     row.group(RibbonGroup::new("equationOptions", tl!("Equation Options").to_string(), IconId::new("equation").into()), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             ToggleButton::command(CommandRef::with_params("equation.display", json!({"value": true})))
                 .label(tl!("Display").to_string())
                 .icon(IconId::new("alignCenter"))
@@ -343,7 +345,7 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 .selected(numbered)
                 .show(ui);
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             let face = Button::new(tl!("Justification").to_string()).icon(IconId::new("justify"));
             let _ = menu_button(ui, face, tl!("Justification").to_string(), None, |ui, _| {
                 for (label, jc) in [("Left", "left"), ("Right", "right"), ("Centered", "center"), ("Centered as Group", "centerGroup")] {

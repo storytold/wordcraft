@@ -2,7 +2,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, ToggleButton};
-use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::MenuItem;
@@ -18,7 +18,7 @@ fn graphic_size(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("size", tl!("Size").to_string(), IconId::new("size").into()), |ui| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (label, key, v0) in [("H:", "height", h0), ("W:", "width", w0)] {
                 size_field(ui, app, label, key, v0, false, 36.0..=2000.0);
             }
@@ -41,7 +41,7 @@ pub(super) fn smart_art_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("addShape"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             let idx = current.map_or(json!({}), |i| json!({"index": i}));
             Button::command(CommandRef::with_params("smartArt.promote", idx.clone()))
                 .label(tl!("Promote").to_string())

@@ -162,7 +162,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
             }
         });
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (icon, label, id) in [("cut", "Cut", "edit.cut"), ("copy", "Copy", "edit.copy")] {
                 Button::command(CommandRef::new(id))
                     .icon(crate::icons::id(icon))
@@ -175,7 +175,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(ribbon_group("font", "Font", "font", Some("format.fontDialog")), |ui| {
         // The Font and Paragraph groups' small buttons sit side by side with no gap, as the old ribbon's (1 pt apart).
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Row::new().gap(Gap::None).show(ui, |ui, _| {
                 let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                 let out = crate::widgets::font_box(ui, app, tl!("Font").to_string(), &mut family);
@@ -266,7 +266,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         // Alignment is shown as it reads on the page, so Left and Right swap in a right-to-left paragraph.
         let (align, rtl) = rp.as_ref().map_or((Align::Left, false), |r| (r.align.visual(r.bidi), r.bidi));
         let marks = app.session.view.marks;
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Row::new().gap(Gap::None).show(ui, |ui, _| {
                 SplitButton::<String>::command(
                     CommandRef::with_params("para.bullets", json!({})),
@@ -446,7 +446,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         super::galleries::styles(ui, app, st.get("style").and_then(Value::as_str));
     });
     row.group(ribbon_group("editing", "Editing", "find", None), |ui| {
-        Stack::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             let face = Button::new(tl!("Find").to_string()).icon(IconId::new("find")).tooltip(tl!("Find").to_string());
             menu_button(ui, face, tl!("Find").to_string(), Some("edit.find"), |ui, _| {
                 // As in Word: Find searches in the Navigation pane; Advanced Find is the dialog (#712).
