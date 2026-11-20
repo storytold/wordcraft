@@ -541,6 +541,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
 /// A small button with a drawn icon and a tooltip; true when clicked.
 fn icon_button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str, enabled: bool) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(28.0, 24.0), if enabled { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled() && enabled, tip));
     if enabled && resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
@@ -556,6 +557,33 @@ mod tests {
     use serde_json::json;
     use std::sync::mpsc::channel;
     use wordcraft_engine::Session;
+
+    /// Folder navigation icons have names and expose both local and inherited disabled state.
+    #[test]
+    fn navigation_icons_expose_names_disabled_state_and_clicks() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(200.0, 120.0)).build_ui_state(
+            |ui, clicks: &mut usize| {
+                let t = Tokens::get(ui.ctx());
+                if icon_button(ui, &t, "homeFolder", "Home folder", true) {
+                    *clicks += 1;
+                }
+                icon_button(ui, &t, "chevronUp", "Up one level", false);
+                ui.add_enabled_ui(false, |ui| {
+                    icon_button(ui, &t, "homeFolder", "Unavailable", true);
+                });
+            },
+            0usize,
+        );
+        h.run_steps(2);
+        assert!(!h.get_by_role_and_label(Role::Button, "Home folder").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(Role::Button, "Up one level").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(Role::Button, "Unavailable").accesskit_node().is_disabled());
+        h.get_by_role_and_label(Role::Button, "Home folder").click();
+        h.run_steps(2);
+        assert_eq!(*h.state(), 1);
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("wordcraft-ui-browser-{name}-{}", std::process::id()));

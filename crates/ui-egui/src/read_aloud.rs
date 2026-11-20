@@ -175,6 +175,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
 /// An icon button; returns whether it was clicked.
 fn button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str, enabled: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), if enabled { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled() && enabled, tip));
     let resp = resp.on_hover_text(tip);
     if enabled && resp.hovered() {
         ui.painter().rect_filled(rect, 4.0, if resp.is_pointer_button_down_on() { t.pressed } else { t.hover });
@@ -187,7 +188,34 @@ fn button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str, enabled: bool) -> bool
 
 #[cfg(test)]
 mod tests {
-    use super::error_notice;
+    use super::{button, error_notice};
+
+    /// Playback actions have names and preserve local and inherited disabled state.
+    #[test]
+    fn playback_buttons_expose_names_disabled_state_and_clicks() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(200.0, 140.0)).build_ui_state(
+            |ui, clicks: &mut usize| {
+                let t = crate::theme::Tokens::get(ui.ctx());
+                if button(ui, &t, "mediaPlay", "Play", true) {
+                    *clicks += 1;
+                }
+                button(ui, &t, "mediaPrev", "Previous sentence", false);
+                ui.add_enabled_ui(false, |ui| {
+                    button(ui, &t, "mediaStop", "Stop", true);
+                });
+            },
+            0usize,
+        );
+        h.run_steps(2);
+        assert!(!h.get_by_role_and_label(Role::Button, "Play").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(Role::Button, "Previous sentence").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(Role::Button, "Stop").accesskit_node().is_disabled());
+        h.get_by_role_and_label(Role::Button, "Play").click();
+        h.run_steps(2);
+        assert_eq!(*h.state(), 1);
+    }
 
     #[test]
     fn the_same_error_after_play_is_shown_again() {

@@ -258,6 +258,30 @@ fn drawn_buttons_fade_in_on_hover_and_darken_while_pressed() {
     assert_eq!(settle().3, t.pressed);
 }
 
+/// Icon-only actions expose their tooltip as a button name, keep disabled state, and activate.
+#[test]
+fn icon_buttons_expose_names_disabled_state_and_clicks() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(200.0, 100.0)).build_ui_state(
+        |ui, clicks: &mut usize| {
+            if icon_button(ui, "close", "Close").clicked() {
+                *clicks += 1;
+            }
+            ui.add_enabled_ui(false, |ui| {
+                icon_button(ui, "close", "Unavailable");
+            });
+        },
+        0usize,
+    );
+    h.run_steps(2);
+    assert!(!h.get_by_role_and_label(Role::Button, "Close").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::Button, "Unavailable").accesskit_node().is_disabled());
+    h.get_by_role_and_label(Role::Button, "Close").click();
+    h.run_steps(2);
+    assert_eq!(*h.state(), 1);
+}
+
 #[test]
 fn font_matches_puts_exact_and_prefix_before_substring() {
     let items: Vec<String> = ["Arial Black", "Arial", "Courier New", "Times New Roman", "Roman Serif"].map(String::from).to_vec();
