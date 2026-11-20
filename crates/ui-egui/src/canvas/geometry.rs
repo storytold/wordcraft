@@ -134,9 +134,11 @@ pub(super) fn columns_for(avail_w: f32, slot_px: f32, pages: usize, min_cols: us
 }
 
 /// Place pages (sizes in points) in rows of `cols`, left to right then top to bottom, each in a slot
-/// as wide as the widest page plus `markup` and centred in `avail_w`. Returns the screen-space rects
+/// as wide as the widest page plus `markup` and centred in `avail_w`. With `rtl` the rows run right
+/// to left (the first page in the right-hand slot), as Word's right-to-left document view lays them
+/// out; each slot keeps its page and markup area as they are. Returns the screen-space rects
 /// (relative to the content's top-left) and the content size.
-pub(super) fn place_pages(sizes: &[(f32, f32)], markup: f32, scale: f32, cols: usize, avail: egui::Vec2) -> (Vec<Rect>, egui::Vec2) {
+pub(super) fn place_pages(sizes: &[(f32, f32)], markup: f32, scale: f32, cols: usize, avail: egui::Vec2, rtl: bool) -> (Vec<Rect>, egui::Vec2) {
     let cols = cols.max(1);
     let scale = if scale.is_finite() { scale.clamp(0.01, 10.0) } else { PX_PER_PT };
     let markup = if markup.is_finite() { markup.clamp(0.0, 10_000.0) } else { 0.0 };
@@ -147,16 +149,18 @@ pub(super) fn place_pages(sizes: &[(f32, f32)], markup: f32, scale: f32, cols: u
     let content_w = (row_w + 2.0 * GAP).max(avail.x);
     let mut rects = Vec::with_capacity(sizes.len());
     let mut y = GAP;
+    let left = (content_w - row_w) / 2.0;
     for row in sizes.chunks(cols) {
-        let mut x = (content_w - row_w) / 2.0;
         let mut h = 0.0f32;
-        for &(w, ph) in row {
+        for (i, &(w, ph)) in row.iter().enumerate() {
             let (w, ph) = (sane_dim(w, 1e5), sane_dim(ph, 1e6));
+            // A short last row keeps the columns above it, starting from the first one.
+            let col = if rtl { cols.saturating_sub(i + 1) } else { i };
+            let x = left + col as f32 * (slot + GAP);
             // Pages narrower than the widest keep their markup area beside them.
             let px = x + (maxw - markup - w).max(0.0) * scale / 2.0;
             rects.push(Rect::from_min_size(pos2(px, y), vec2(w * scale, ph * scale)));
             h = h.max(ph * scale);
-            x += slot + GAP;
         }
         y += h + GAP;
     }
@@ -215,7 +219,10 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
         let bands = rects.iter().map(|r| (0.0, r.height())).collect();
         return Geometry { rects, size, scale, cols: 1, bands };
     }
-    let (mut rects, mut size) = place_pages(&sizes, markup, scale, cols, avail);
+    // Word's page order across a row follows its document view direction, not the document's
+    // (a right-to-left section still starts at the left in a left-to-right view). WordCraft has no
+    // separate setting: the view runs the way the interface does (#5586).
+    let (mut rects, mut size) = place_pages(&sizes, markup, scale, cols, avail, crate::rtl::on());
     let mut bands: Vec<(f32, f32)> = rects.iter().map(|r| (0.0, r.height())).collect();
     let editing_part = matches!(app.session.sel.focus.story, StoryRef::Part(_));
     if v.hide_white_space && v.mode == wordcraft_layout::ViewMode::Print && !v.read_mode && cols == 1 && !editing_part && rects.len() > 1 {
