@@ -11,7 +11,7 @@
 //! to right inside, because everything here follows the enclosing layout rather than the language.
 //! The document itself is never mirrored: its direction belongs to the document.
 
-use egui::{Align, Align2, InnerResponse, Layout, Rect, Ui, UiBuilder, pos2};
+use egui::{Align, Align2, InnerResponse, Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
 use craft_ui::direction::{self, Direction};
 
@@ -161,9 +161,11 @@ pub fn island<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     if !flows(ui) {
         return add(ui);
     }
-    // The island gets all the room there is, so its content takes its natural width; it starts
+    // The island gets all the room there is, so its content takes its natural width. It starts
     // where content of last frame's width would end at the leading edge. A change of width shows
-    // one frame late, so that frame asks for another.
+    // one pass late, so that pass is discarded when passes remain (or repainted on the next frame).
+    // If an inner widget such as `Grid` discarded this pass for its own invisible sizing pass, wait
+    // until a visible pass before recording the width.
     let key = ui.next_auto_id().with("rtl_island_width");
     let known = ui.data(|d| d.get_temp::<f32>(key));
     let room = ui.available_rect_before_wrap();
@@ -174,13 +176,54 @@ pub fn island<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         return add(ui);
     }
     let max_rect = Rect::from_min_max(pos2(left, room.min.y), pos2(left + available.max(width), room.max.y));
+    let discard_before = ui.ctx().will_discard();
     let shown = ui.scope_builder(UiBuilder::new().max_rect(max_rect).layout(Layout::top_down(Align::Min)), add);
+    let child_discarded = !discard_before && ui.ctx().will_discard();
     let now = shown.response.rect.width();
-    if now.is_finite() && known.is_none_or(|w| (w - now).abs() > 0.5) {
+    if !child_discarded && now.is_finite() && known.is_none_or(|w| (w - now).abs() > 0.5) {
         ui.data_mut(|d| d.insert_temp(key, now));
-        ui.ctx().request_repaint();
+        ui.ctx().request_discard("rtl island width changed");
+        if !ui.ctx().will_discard() {
+            ui.ctx().request_repaint();
+        }
     }
     shown.inner
+}
+
+/// A scroll area in both directions that fills `ui`, for content wider than it. Right-to-left
+/// content runs from the right, so what doesn't fit lands left of the area, where no scroll offset
+/// reaches: egui's offsets only move content further left. So the content is set as far to the
+/// right as it overflowed last frame, and the area keeps its distance from the right end, which
+/// shows the content's start first. A change of overflow shows one frame late, so that frame is
+/// done again. Left-to-right content doesn't overflow on its left, so this is a plain scroll area.
+/// `page` names the content, which keeps its own place when another page takes the area.
+pub fn scroll_both(ui: &mut Ui, page: &str, add: impl FnOnce(&mut Ui)) {
+    let key = ui.scope_id().with(("rtl_scroll_overflow", page));
+    let (known, offset): (f32, Option<f32>) = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+    let mut area = egui::ScrollArea::both().id_salt(page).auto_shrink([false, false]);
+    if let Some(offset) = offset {
+        area = area.horizontal_scroll_offset(offset);
+    }
+    let shown = area.show(ui, |ui| {
+        let room = ui.max_rect().translate(vec2(known, 0.0));
+        let page = ui.scope_builder(UiBuilder::new().max_rect(room), add);
+        room.left() - page.response.rect.left()
+    });
+    let now = shown.inner.max(0.0);
+    if !now.is_finite() {
+        return;
+    }
+    if (now - known).abs() > 0.5 {
+        let end = (shown.content_size.x - shown.inner_rect.width()).max(0.0);
+        let offset = (shown.state.clamped_offset().x + now - known).clamp(0.0, end);
+        ui.data_mut(|d| d.insert_temp(key, (now, Some(offset))));
+        ui.ctx().request_discard("right-to-left overflow changed");
+        if !ui.ctx().will_discard() {
+            ui.ctx().request_repaint();
+        }
+    } else if offset.is_some() {
+        ui.data_mut(|d| d.insert_temp(key, (known, None::<f32>)));
+    }
 }
 
 /// `grid.show(ui, add)`. egui's `Grid` cannot be laid out from the right (it places cells from a
@@ -388,5 +431,42 @@ mod tests {
         let (label, field) = row_centres();
         set_current(Lang::EN);
         assert!(label > field, "right to left: label {label}, field {field}");
+    }
+
+    /// #5396: when an RTL child (`island` / `grid`) already overflows inside `scroll_both` and
+    /// widens so it spends pass 0's single discard before `scroll_both` sees the larger overflow
+    /// on pass 1 (`max_passes = 2`), `scroll_both` asks for a repaint rather than leaving the
+    /// widened left edge clipped until an unrelated event.
+    #[test]
+    fn scroll_both_requests_repaint_when_child_discard_exhausts_passes() {
+        set_current(fixture_lang("ar", "\tHome\tHome\n"));
+        let ctx = egui::Context::default();
+        sync(&ctx);
+        let screen = |frame_width: f32, wide: bool| {
+            let mut raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(frame_width, 200.0))), ..Default::default() };
+            raw.focused = true;
+            let mut out = ctx.run_ui(raw, |ui| {
+                ui.scope_builder(UiBuilder::new().max_rect(Rect::from_min_size(egui::Pos2::ZERO, vec2(frame_width, 200.0))), |ui| {
+                    scroll_both(ui, "rtl_repaint_test", |ui| {
+                        root(ui, |ui| {
+                            grid(ui, egui::Grid::new("widening_rtl_grid"), |ui| {
+                                let label = if wide { "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM" } else { "MMMMMMMMMMMMMMMM" };
+                                ui.label(label);
+                                ui.end_row();
+                            });
+                        });
+                    });
+                });
+            });
+            out.textures_delta.clear();
+            out
+        };
+        for _ in 0..4 {
+            screen(100.0, false);
+        }
+        let out = screen(100.0, true);
+        set_current(Lang::EN);
+        let delay = out.viewport_output.values().next().expect("root viewport output").repaint_delay;
+        assert!(delay.is_zero(), "scroll_both must request immediate repaint when discard is exhausted (repaint_delay={delay:?})");
     }
 }
