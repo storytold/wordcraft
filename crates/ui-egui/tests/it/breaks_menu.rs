@@ -53,5 +53,3 @@ fn page_break_from_the_menu_adds_a_page() {
     let after = h.state_mut().session.layout().pages.len();
     assert!(after > before, "the menu Page break added a page (was {before}, now {after})");
 }
-
-

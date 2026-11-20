@@ -131,10 +131,12 @@ pub(crate) fn put_result(app: &mut WordApp, ctx: &egui::Context, r: &Value) {
             app.status(format!("Couldn't copy the picture: {e}"));
             return;
         }
-        None => [item(ClipItem::Text, s("text")), item(ClipItem::Html, s("html")), item(ClipItem::Rtf, s("rtf")), item(ClipItem::MathMl, s("mathml"))]
-            .into_iter()
-            .flatten()
-            .collect(),
+        None => {
+            [item(ClipItem::Text, s("text")), item(ClipItem::Html, s("html")), item(ClipItem::Rtf, s("rtf")), item(ClipItem::MathMl, s("mathml"))]
+                .into_iter()
+                .flatten()
+                .collect()
+        }
     };
     let result = ClipboardHandle::of(ctx).offer(&items);
     if let Err(e) = &result {

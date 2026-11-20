@@ -433,7 +433,15 @@ impl WordForm for TextToTableForm {
                 });
             });
             let mut width = if self.width <= 0.0 { NamedOr::Named(Auto::Auto) } else { NamedOr::Number(f64::from(self.width)) };
-            named_field(ui, &tl!("Initial column width:"), &mut width, (Auto::Auto, &tl!("Auto")), Some(lengths), 0.0..=22.0 * 72.0, self.autofit == "initial");
+            named_field(
+                ui,
+                &tl!("Initial column width:"),
+                &mut width,
+                (Auto::Auto, &tl!("Auto")),
+                Some(lengths),
+                0.0..=22.0 * 72.0,
+                self.autofit == "initial",
+            );
             self.width = number_or_zero(&width).clamp(0.0, 22.0 * 72.0) as f32;
         });
         Section::new(tl!("Separate text at").to_string()).show(ui, |ui, _| {

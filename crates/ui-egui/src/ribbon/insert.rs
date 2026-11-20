@@ -132,7 +132,9 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             },
         );
         Stack::new().show(ui, |ui, _| {
-            for (key, label, id) in [("icons", "Icons", "insert.icon"), ("smartArt", "Diagram", "insert.smartArt"), ("chart", "Chart", "insert.chart")] {
+            for (key, label, id) in
+                [("icons", "Icons", "insert.icon"), ("smartArt", "Diagram", "insert.smartArt"), ("chart", "Chart", "insert.chart")]
+            {
                 Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(IconId::new(key)).show(ui);
             }
         });
@@ -193,7 +195,10 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         );
         menu_button(
             ui,
-            Button::new(crate::tl!("Page\nNumber")).icon(IconId::new("pageNumber")).tooltip(crate::tl!("Page Number")).arrangement(Arrangement::Stacked),
+            Button::new(crate::tl!("Page\nNumber"))
+                .icon(IconId::new("pageNumber"))
+                .tooltip(crate::tl!("Page Number"))
+                .arrangement(Arrangement::Stacked),
             crate::tl!("Page Number"),
             Some("insert.pageNumber"),
             |ui, _| {
@@ -287,8 +292,8 @@ fn symbol_grid(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     // Recently used symbols first (their font on hover), then common ones.
     let mut items: Vec<(String, String)> = app.ui.recent_symbols.iter().map(|r| (r.ch.clone(), r.font.clone())).collect();
     for c in [
-        "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓", "★", "♥", "—",
-        "…",
+        "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓", "★", "♥",
+        "—", "…",
     ] {
         if !items.iter().any(|(ch, f)| ch == c && f.is_empty()) {
             items.push((c.to_string(), String::new()));
@@ -338,7 +343,10 @@ pub(super) fn drop_cap_payload(position: &str) -> serde_json::Value {
 fn drop_cap_items(ui: &mut Ui, app: &mut WordApp) {
     let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
     for (label, v) in [("None", "none"), ("Dropped", "dropped"), ("In margin", "margin")] {
-        MenuItem::command(CommandRef::with_params("insert.dropCap", drop_cap_payload(v))).label(crate::tl!(label)).radio_mark(state.position == v).show(ui);
+        MenuItem::command(CommandRef::with_params("insert.dropCap", drop_cap_payload(v)))
+            .label(crate::tl!(label))
+            .radio_mark(state.position == v)
+            .show(ui);
     }
     Divider::horizontal().show(ui);
     MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "dropCap"}))).label(crate::tl!("Drop Cap Options…")).show(ui);

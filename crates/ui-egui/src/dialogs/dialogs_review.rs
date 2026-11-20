@@ -9,9 +9,7 @@ use craft::host::PickRequest;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{
-    Bind, CollectionEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked,
-};
+use craft::ui::contract::{Bind, CollectionEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Text;
 use craft::ui::form::Field;
@@ -206,12 +204,15 @@ impl WordForm for CompareForm {
                 });
                 Row::new().show(ui, |ui, _| {
                     Field::new(Label::from(tl!("Show changes at:").to_string())).show(ui, |ui, _| {
-                        RadioGroup::new(Label::from(tl!("Show changes at:").to_string()), Bind::bound(&mut self.character_level)).show(ui, |ui, _| {
-                            Stack::new().show(ui, |ui, _| {
-                                Radio::new(false).label(Label::from(tl!("Word level").to_string())).show(ui);
-                                Radio::new(true).label(Label::from(tl!("Character level").to_string())).show(ui);
-                            });
-                        });
+                        RadioGroup::new(Label::from(tl!("Show changes at:").to_string()), Bind::bound(&mut self.character_level)).show(
+                            ui,
+                            |ui, _| {
+                                Stack::new().show(ui, |ui, _| {
+                                    Radio::new(false).label(Label::from(tl!("Word level").to_string())).show(ui);
+                                    Radio::new(true).label(Label::from(tl!("Character level").to_string())).show(ui);
+                                });
+                            },
+                        );
                     });
                     Field::new(Label::from(tl!("Show changes in:").to_string())).show(ui, |ui, _| {
                         RadioGroup::new(Label::from(tl!("Show changes in:").to_string()), Bind::bound(&mut self.show_in)).show(ui, |ui, _| {
@@ -414,16 +415,22 @@ impl AutoCorrectForm {
     /// Replace / With list.
     fn autocorrect_tab(&mut self, ui: &mut Ui) {
         Checkbox::new(Bind::bound(&mut self.options.two_initial_caps)).label(Label::from(tl!("Correct TWo INitial CApitals").to_string())).show(ui);
-        Checkbox::new(Bind::bound(&mut self.options.cap_sentences)).label(Label::from(tl!("Capitalize first letter of sentences").to_string())).show(ui);
+        Checkbox::new(Bind::bound(&mut self.options.cap_sentences))
+            .label(Label::from(tl!("Capitalize first letter of sentences").to_string()))
+            .show(ui);
         if clicked(&Button::new(Label::from(tl!("Exceptions…").to_string())).show(ui)) {
             self.show_exceptions = !self.show_exceptions;
         }
         if self.show_exceptions {
             self.exceptions(ui);
         }
-        Checkbox::new(Bind::bound(&mut self.options.cap_cells)).label(Label::from(tl!("Capitalize first letter of table cells").to_string())).show(ui);
+        Checkbox::new(Bind::bound(&mut self.options.cap_cells))
+            .label(Label::from(tl!("Capitalize first letter of table cells").to_string()))
+            .show(ui);
         Checkbox::new(Bind::bound(&mut self.options.cap_days)).label(Label::from(tl!("Capitalize names of days").to_string())).show(ui);
-        Checkbox::new(Bind::bound(&mut self.options.caps_lock)).label(Label::from(tl!("Correct accidental usage of cAPS LOCK key").to_string())).show(ui);
+        Checkbox::new(Bind::bound(&mut self.options.caps_lock))
+            .label(Label::from(tl!("Correct accidental usage of cAPS LOCK key").to_string()))
+            .show(ui);
         Checkbox::new(Bind::bound(&mut self.options.replace_text)).label(Label::from(tl!("Replace text as you type").to_string())).show(ui);
         Row::new().show(ui, |ui, _| {
             Field::new(Label::from(tl!("Replace:").to_string())).show(ui, |ui, _| {

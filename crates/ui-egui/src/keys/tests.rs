@@ -165,10 +165,30 @@ fn user_assignments_become_overrides() {
             (None, "Mod+F1", if mac { None } else { command("ui.collapseRibbon") }),
             // The engine binds Mod+Alt+R to the Registered Sign off macOS (decided when it is built, not by the
             // window's platform), so a build for macOS is the only one where the Mac window's chord is the ribbon's.
-            (None, "Mod+Alt+R", if !cfg!(target_os = "macos") { command("text.registered") } else if mac { command("ui.collapseRibbon") } else { None }),
+            (
+                None,
+                "Mod+Alt+R",
+                if !cfg!(target_os = "macos") {
+                    command("text.registered")
+                } else if mac {
+                    command("ui.collapseRibbon")
+                } else {
+                    None
+                },
+            ),
             // Likewise the engine binds Alt+Q to Search off macOS when it is built, so a Mac window on such a build
             // still finds it held; only a build for macOS leaves the chord free.
-            (None, "Alt+Q", if !mac { tell_me.clone() } else if !cfg!(target_os = "macos") { command("tools.search") } else { None }),
+            (
+                None,
+                "Alt+Q",
+                if !mac {
+                    tell_me.clone()
+                } else if !cfg!(target_os = "macos") {
+                    command("tools.search")
+                } else {
+                    None
+                },
+            ),
             (Some(("Mod+F1", "view.focus")), "Mod+F1", command("view.focus")),
             (Some(("Alt+Q", "view.focus")), "Alt+Q", if mac { command("view.focus") } else { tell_me.clone() }),
         ];
@@ -366,7 +386,10 @@ fn altgr_types_its_characters_without_keytips() {
     assert_eq!(body(h.state()), "śłż");
     assert!(!h.state().keytips_active);
     // All in one frame.
-    alt_frame(&mut h, [altgr_down(), vec![key_event(Key::A, true, none), egui::Event::Text("ą".into()), key_event(Key::A, false, none)], altgr_up()].concat());
+    alt_frame(
+        &mut h,
+        [altgr_down(), vec![key_event(Key::A, true, none), egui::Event::Text("ą".into()), key_event(Key::A, false, none)], altgr_up()].concat(),
+    );
     assert_eq!(body(h.state()), "śłżą");
     assert!(!h.state().keytips_active);
     // A bare AltGr tap, in two frames or one.

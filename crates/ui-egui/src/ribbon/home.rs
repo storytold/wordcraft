@@ -73,9 +73,7 @@ fn bullet_list_items(ui: &mut Ui, app: &mut WordApp) {
             MenuItem::command(CommandRef::with_params("para.listLevel", json!({"level": level}))).label(label).show(ui);
         }
     });
-    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "defineBullet"})))
-        .label(tl!("Define New Bullet…").to_string())
-        .show(ui);
+    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "defineBullet"}))).label(tl!("Define New Bullet…").to_string()).show(ui);
 }
 
 /// The Bullets drop-down: the Bullet Library as tiles, None, and the list-level rows.
@@ -122,7 +120,7 @@ fn paint_bullet(cx: &craft::ui::primitives::ContentPainterCx<'_>, r: egui::Rect,
 
 /// The Text Effects and Typography menu.
 fn text_effects_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
-    super::galleries::wordart(ui, cx, app,"format.textEffects");
+    super::galleries::wordart(ui, cx, app, "format.textEffects");
     Divider::horizontal().show(ui);
     let theme = app.session.doc.settings.theme_colors.clone();
     Menu::submenu_row(ui, tl!("Text Fill").to_string(), |ui, cx| crate::wordart_menus::fill_menu(ui, cx, app, &theme));
@@ -155,9 +153,12 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         };
         let face = Button::new(tl!("Paste").to_string()).icon(IconId::new("paste")).tooltip(paste_tip).arrangement(Arrangement::Stacked);
         menu_button(ui, face, tl!("Paste").to_string(), Some("edit.paste"), |ui, _| {
-            for (label, id) in
-                [("Paste", "edit.paste"), ("Keep Text Only", "edit.pasteText"), ("Merge Formatting", "edit.pasteMerge"), ("Paste Special…", "edit.pasteSpecial")]
-            {
+            for (label, id) in [
+                ("Paste", "edit.paste"),
+                ("Keep Text Only", "edit.pasteText"),
+                ("Merge Formatting", "edit.pasteMerge"),
+                ("Paste Special…", "edit.pasteSpecial"),
+            ] {
                 MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
             }
         });
@@ -199,9 +200,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         ("Capitalize Each Word", "title"),
                         ("tOGGLE cASE", "toggle"),
                     ] {
-                        MenuItem::command(CommandRef::with_params("format.changeCase", json!({"mode": mode})))
-                            .label(tl!(label).to_string())
-                            .show(ui);
+                        MenuItem::command(CommandRef::with_params("format.changeCase", json!({"mode": mode}))).label(tl!(label).to_string()).show(ui);
                     }
                 });
                 for (icon, tip, id) in [("clear", "Clear All Formatting", "format.clear"), ("phonetic", "Phonetic Guide", "format.phonetic")] {
@@ -209,11 +208,13 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 }
             });
             Row::new().gap(Gap::None).show(ui, |ui, _| {
-                for (icon, tip, id, on) in [
-                    ("bold", "Bold", "format.bold", flag("bold")),
-                    ("italic", "Italic", "format.italic", flag("italic")),
-                ] {
-                    ToggleButton::command(CommandRef::new(id)).icon(IconId::new(icon)).icon_only().selected(on).tooltip(tl!(tip).to_string()).show(ui);
+                for (icon, tip, id, on) in [("bold", "Bold", "format.bold", flag("bold")), ("italic", "Italic", "format.italic", flag("italic"))] {
+                    ToggleButton::command(CommandRef::new(id))
+                        .icon(IconId::new(icon))
+                        .icon_only()
+                        .selected(on)
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
                 }
                 SplitButton::<String>::command(
                     CommandRef::with_params("format.underline", json!({})),
@@ -229,7 +230,12 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     ("superscript", "Superscript", "format.superscript", flag("superscript")),
                     ("charborder", "Character Border", "format.border", flag("border")),
                 ] {
-                    ToggleButton::command(CommandRef::new(id)).icon(IconId::new(icon)).icon_only().selected(on).tooltip(tl!(tip).to_string()).show(ui);
+                    ToggleButton::command(CommandRef::new(id))
+                        .icon(IconId::new(icon))
+                        .icon_only()
+                        .selected(on)
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
                 }
                 IconButton::command(IconId::new("enclose"), CommandRef::new("format.enclose"))
                     .label(tl!("Enclose Characters").to_string())
@@ -340,7 +346,12 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     ("textLtr", "Left-to-Right Text Direction", "para.ltr", !rtl),
                     ("textRtl", "Right-to-Left Text Direction", "para.rtl", rtl),
                 ] {
-                    ToggleButton::command(CommandRef::new(id)).icon(IconId::new(icon)).icon_only().selected(on).tooltip(tl!(tip).to_string()).show(ui);
+                    ToggleButton::command(CommandRef::new(id))
+                        .icon(IconId::new(icon))
+                        .icon_only()
+                        .selected(on)
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
                 }
                 let face = Button::new(tl!("Line and Paragraph Spacing").to_string())
                     .icon(IconId::new("lineSpacing"))

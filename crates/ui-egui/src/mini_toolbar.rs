@@ -8,9 +8,9 @@ use craft::pages::ui::PageBody;
 use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::canvas_controls::TaskBar;
 use craft::ui::contract::{Bind, Entry, Hover, Props, Show as _};
-use craft::ui::runtime::env::Label;
 use craft::ui::display::Divider;
 use craft::ui::pickers::ComboBox;
+use craft::ui::runtime::env::Label;
 use egui::{Rect, Ui};
 use serde_json::{Value, json};
 
@@ -238,7 +238,10 @@ fn follow_list<T>(app: &mut WordApp, preview: bool, event: &Preview<T>, command:
 /// An icon toggle running command `id` and drawn `on`; while hovered it previews the command. The
 /// command carries no checked state, so the value is bound here and only draws the button.
 fn toggle(ui: &mut Ui, app: &mut WordApp, id: &str, icon: &'static str, on: bool, preview: bool) {
-    let r = <ToggleButton as Props>::command(ToggleButton::new(Label::Empty, Bind::given(on)), CommandRef::new(id)).icon(IconId::new(icon)).icon_only().show(ui);
+    let r = <ToggleButton as Props>::command(ToggleButton::new(Label::Empty, Bind::given(on)), CommandRef::new(id))
+        .icon(IconId::new(icon))
+        .icon_only()
+        .show(ui);
     preview_on_hover(app, r.hover, r.response.enabled(), id, json!({}), preview);
 }
 

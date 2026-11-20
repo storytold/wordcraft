@@ -15,8 +15,8 @@ use craft::theme::Srgba;
 use craft::ui::buttons::{SplitButton, SplitMenu};
 use craft::ui::choice::SwatchTable;
 use craft::ui::contract::{BodyCx, Entry as _, Hover, NoValue, Outcome as _, Props as _, Show as _, clicked};
-use craft::ui::menu::{MenuItem, MenuItemOutput};
 use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::menu::{MenuItem, MenuItemOutput};
 use craft::ui::primitives::{IconMark, IconSpec};
 use craft::ui::runtime::env::Label;
 use craft::ui::style::DataColor;
@@ -295,7 +295,13 @@ pub struct ColorPick {
 }
 
 /// One swatch table's picks: a click's colour and the pass's preview.
-fn swatch_table(ui: &mut Ui, name: &str, colors: &[Rgb], per_row: usize, current: Option<Rgb>) -> (Option<Rgb>, craft::behavior::Preview<Rgb>, egui::Response) {
+fn swatch_table(
+    ui: &mut Ui,
+    name: &str,
+    colors: &[Rgb],
+    per_row: usize,
+    current: Option<Rgb>,
+) -> (Option<Rgb>, craft::behavior::Preview<Rgb>, egui::Response) {
     use craft::behavior::Preview;
     let swatches: Vec<(Label, Srgba)> = colors.iter().map(|c| (Label::from(c.hex()), srgba(*c))).collect();
     let out = SwatchTable::new(name.to_string(), &swatches)
@@ -625,12 +631,13 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
         (Some(c), _) => (Some(srgba(c)), Label::from(c.hex())),
         (None, ColorFieldEmpty::NoColor) => (None, Label::from(tl!("No Color").to_string())),
         // PLAN: framework gap: `IconSpec` has no multi-share swatch face, so `AutoFace::Several` shows its first colour until `IconSource` can paint `SwatchFace` shares (ribbon-w2).
-        (None, ColorFieldEmpty::Automatic { label, face, .. }) => {
-            (match face {
+        (None, ColorFieldEmpty::Automatic { label, face, .. }) => (
+            match face {
                 AutoFace::One(c) => Some(*c),
                 AutoFace::Several(v) => v.first().copied(),
-            }, label.clone())
-        }
+            },
+            label.clone(),
+        ),
     };
     let icon = shown.map_or_else(IconSpec::empty_swatch, IconSpec::swatch);
     SplitButton::<NoValue>::body(text, |ui: &mut Ui, cx: &mut BodyCx<'_>| {

@@ -26,8 +26,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
     match name {
         "insertMergeField" => Some(open_insert_merge_field(app, parent)),
         "selectTable" => {
-            let sheets: Vec<String> =
-                params.get("sheets").and_then(Value::as_array)?.iter().filter_map(Value::as_str).map(str::to_string).collect();
+            let sheets: Vec<String> = params.get("sheets").and_then(Value::as_array)?.iter().filter_map(Value::as_str).map(str::to_string).collect();
             if sheets.is_empty() {
                 return None;
             }
@@ -53,11 +52,12 @@ pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
 /// (Enter or a double click).
 fn pick_name(ui: &mut egui::Ui, label: &str, names: &[String], current: &str) -> (Option<String>, bool) {
     let idx: Vec<usize> = (0..names.len()).collect();
-    let response = List::<usize>::new(Label::from(label.to_owned())).select(SelectMode::Single).show_items(ui, &keyed(&idx, |i| *i), &mut |key, _| {
-        let name = names.get(*key).cloned().unwrap_or_default();
-        let on = name == current;
-        ListRow::new(name).selected(on)
-    });
+    let response =
+        List::<usize>::new(Label::from(label.to_owned())).select(SelectMode::Single).show_items(ui, &keyed(&idx, |i| *i), &mut |key, _| {
+            let name = names.get(*key).cloned().unwrap_or_default();
+            let on = name == current;
+            ListRow::new(name).selected(on)
+        });
     let mut picked = None;
     let mut activated = false;
     for e in response.events {
@@ -366,7 +366,12 @@ impl WordForm for MergeRuleForm {
 /// Opens Merge Rule (`skip`: Skip Record If) on the list's first field.
 pub(crate) fn open_merge_rule(app: &mut WordApp, parent: Option<DialogId>, skip: bool) -> DialogId {
     let fields = app.session.merge.headers.clone();
-    let form = MergeRuleForm { rule: if skip { "SKIPIF" } else { "IF" }.into(), field: fields.first().cloned().unwrap_or_default(), fields, ..Default::default() };
+    let form = MergeRuleForm {
+        rule: if skip { "SKIPIF" } else { "IF" }.into(),
+        field: fields.first().cloned().unwrap_or_default(),
+        fields,
+        ..Default::default()
+    };
     open_form(app, parent, form)
 }
 
@@ -402,10 +407,8 @@ impl WordForm for MatchFieldsForm {
         Text::new(tl!("The recipient-list field that fills each part of an address block and greeting line.")).show(ui);
         const PART: ColumnKey = ColumnKey::new("part");
         const FIELD: ColumnKey = ColumnKey::new("field");
-        let columns = vec![
-            ColumnSpec::new(PART, tl!("Address part"), ColumnWidth::Content),
-            ColumnSpec::new(FIELD, tl!("Field"), ColumnWidth::fill(1.0)),
-        ];
+        let columns =
+            vec![ColumnSpec::new(PART, tl!("Address part"), ColumnWidth::Content), ColumnSpec::new(FIELD, tl!("Field"), ColumnWidth::fill(1.0))];
         let parts: Vec<usize> = (0..ADDRESS_PARTS.len()).collect();
         let address = &self.address;
         Table::<usize>::new(tl!("Address parts"), columns).striped(true).show_items(ui, &keyed(&parts, |i| *i), &mut |key, icx| {

@@ -47,10 +47,12 @@ fn read_listing(app: &WordApp) -> PersonalListing {
     let key = (app.session.prefs.user_templates_folder.clone(), app.services.templates_dir.clone());
     let folder = app.user_templates_dir();
     let templates = match &folder {
-        Some(f) if f.is_dir() => wordcraft_engine::cmd::user_templates::list_templates(&f.to_string_lossy()).map(|l| l.templates).unwrap_or_else(|e| {
-            log::debug!("personal templates: {e}");
-            Vec::new()
-        }),
+        Some(f) if f.is_dir() => {
+            wordcraft_engine::cmd::user_templates::list_templates(&f.to_string_lossy()).map(|l| l.templates).unwrap_or_else(|e| {
+                log::debug!("personal templates: {e}");
+                Vec::new()
+            })
+        }
         _ => Vec::new(),
     };
     PersonalListing { key, folder, templates }

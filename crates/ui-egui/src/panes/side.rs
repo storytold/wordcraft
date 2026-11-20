@@ -49,7 +49,14 @@ pub(super) fn clipboard(app: &mut WordApp, ui: &mut Ui) {
 
 /// The row menu of a list: opened by the row's context request, kept open across passes in `id`'s temp slot until
 /// the menu closes. Returns the row and the value of the entry that ran.
-fn row_menu(ui: &mut Ui, label: &str, opener: &egui::Response, asked: Option<usize>, id: egui::Id, entries: impl Fn(usize) -> Vec<Entry<String>>) -> Option<(usize, String)> {
+fn row_menu(
+    ui: &mut Ui,
+    label: &str,
+    opener: &egui::Response,
+    asked: Option<usize>,
+    id: egui::Id,
+    entries: impl Fn(usize) -> Vec<Entry<String>>,
+) -> Option<(usize, String)> {
     let row = asked.or_else(|| ui.data(|d| d.get_temp::<usize>(id)))?;
     let menu = Menu::context(label.to_owned(), opener).pick(ui, &entries(row));
     if menu.closed.is_some() {

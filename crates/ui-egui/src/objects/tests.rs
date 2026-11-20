@@ -1204,7 +1204,6 @@ fn rotation_drag_keeps_text_boxes_outline_only_until_their_text_can_rotate() {
     assert_eq!(h.state().session.undo_depth(), depth + 1);
 }
 
-
 /// A large picture's drag preview remains a legal device texture.
 #[test]
 fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {

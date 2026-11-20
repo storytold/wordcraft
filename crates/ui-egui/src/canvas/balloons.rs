@@ -3,12 +3,11 @@
 //! and its drafts are `CanvasState::comments`, the one copy the Comments pane shares.
 
 use craft::review::ui::{BalloonItem, BalloonPlace, CommentBalloons, CommentEdit};
-use craft::review::{CommentAnchor, CommentMessage, CommentThread, Revision, RevisionKind, ReviewStatus, ThreadId};
+use craft::review::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, Revision, RevisionKind, ThreadId};
 use craft::ui::contract::{Props, Show as _};
 
 use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
 use super::{Color32, CommentDisplay, DocLayout, Env, Pos, Pos2, StoryRef, Ui, WordApp, json};
-
 
 /// The most revision cards of each kind shown.
 const MAX_REVISIONS: usize = 500;
@@ -57,17 +56,10 @@ pub(crate) fn balloons(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::P
         })
         .collect();
     let scale = out.pages.first().map_or(1.0, |p| p.scale as f32);
-    let (place, width) = if mw > 0.0 {
-        (BalloonPlace::Column, mw * scale)
-    } else {
-        (BalloonPlace::Floating, FLOAT_WIDTH * scale)
-    };
+    let (place, width) = if mw > 0.0 { (BalloonPlace::Column, mw * scale) } else { (BalloonPlace::Floating, FLOAT_WIDTH * scale) };
     let editable = crate::app::command_board::command_enabled(app, "review.editComment");
-    let shown = CommentBalloons::new(tl!("Comments"), &out.pages, &items, &mut app.canvas.comments)
-        .place(place)
-        .width(width)
-        .read_only(!editable)
-        .show(ui);
+    let shown =
+        CommentBalloons::new(tl!("Comments"), &out.pages, &items, &mut app.canvas.comments).place(place).width(width).read_only(!editable).show(ui);
     app.canvas.balloon_rects = shown.cards.iter().filter_map(|(t, r)| Some((app_id(*t)?, *r))).collect();
     for edit in shown.edits {
         apply(app, &cards, edit);

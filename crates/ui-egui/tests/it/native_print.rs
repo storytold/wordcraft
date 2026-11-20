@@ -1,4 +1,5 @@
 //! Native print onboarding preserves engine PDF generation and submits the selected settings.
+use craft::automation::control::{ControlRequest, Reply};
 use craft::host::InlineJobs;
 use craft::print;
 use craft::print::spool::{Pending, Spool, SpoolBackend};
@@ -6,7 +7,6 @@ use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use wordcraft_engine::Session;
-use craft::automation::control::{ControlRequest, Reply};
 use wordcraft_ui_egui::control::handle;
 use wordcraft_ui_egui::printing::{Feedback, Printer};
 use wordcraft_ui_egui::{Services, WordApp};
@@ -72,11 +72,7 @@ impl SpoolBackend for Fake {
     fn prepare(&self, pdf: Vec<u8>, job: print::Job) -> Pending {
         self.sent.lock().unwrap().push((pdf, job));
         let outcome = self.outcome.clone();
-        Pending {
-            cancel: Box::new(|| true),
-            run: Box::new(move || outcome.map_err(print::Error::Spool)),
-            waits_after_cancel: false,
-        }
+        Pending { cancel: Box::new(|| true), run: Box::new(move || outcome.map_err(print::Error::Spool)), waits_after_cancel: false }
     }
 }
 
@@ -240,7 +236,9 @@ fn invalid_print_settings_are_rejected_without_partial_changes() {
         assert_eq!(app.run("ui.printSettings", json!({})).unwrap(), before, "no partial update: {params}");
     }
     let page_before = app.run("ui.printPage", json!({})).unwrap();
-    for params in [json!({"range":"all","parity":"bad"}), json!({"zoom":9.0}), json!({"pagesPerSheet":3}), json!({"extra":1}), json!({"paper":"Quarto"})] {
+    for params in
+        [json!({"range":"all","parity":"bad"}), json!({"zoom":9.0}), json!({"pagesPerSheet":3}), json!({"extra":1}), json!({"paper":"Quarto"})]
+    {
         assert!(app.run("ui.printPage", params.clone()).is_err(), "{params}");
         assert_eq!(app.run("ui.printPage", json!({})).unwrap(), page_before, "no partial update: {params}");
     }
@@ -426,9 +424,7 @@ fn print_booklet_choice_updates_sheet_preview() {
 #[test]
 fn print_range_changes_start_at_the_first_planned_sheet() {
     use egui_kittest::kittest::{By, Queryable};
-    for (range, selection, per_sheet, sheets) in
-        [("selection", "3\u{c}4\u{c}5", "1", 3), ("custom", "9", "2", 5), ("custom", "9", "4", 3)]
-    {
+    for (range, selection, per_sheet, sheets) in [("selection", "3\u{c}4\u{c}5", "1", 3), ("custom", "9", "2", 5), ("custom", "9", "4", 3)] {
         let mut app = WordApp::new(
             Session::new(wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5\u{c}6\u{c}7\u{c}8\u{c}9\u{c}10")),
             Services::default(),

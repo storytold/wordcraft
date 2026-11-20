@@ -49,7 +49,12 @@ fn settle_with(app: &mut WordApp, id: DialogId, run: impl FnOnce(&mut WordApp, &
     Settle::Keep
 }
 
-fn open_hosted(app: &mut WordApp, parent: Option<DialogId>, dialog: HostedParamDialog, settle: fn(&mut WordApp, &Context, DialogId) -> Settle) -> DialogId {
+fn open_hosted(
+    app: &mut WordApp,
+    parent: Option<DialogId>,
+    dialog: HostedParamDialog,
+    settle: fn(&mut WordApp, &Context, DialogId) -> Settle,
+) -> DialogId {
     open_with(app, parent, dialog.held_ok(), DialogHooks { prepare: None, settle })
 }
 

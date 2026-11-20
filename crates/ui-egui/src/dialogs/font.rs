@@ -31,7 +31,6 @@ use crate::widgets::font_box::{CatalogRef, font_picker};
 const SAMPLE_WIDTH: f32 = 300.0;
 const SAMPLE_HEIGHT: f32 = 56.0;
 
-
 /// The Font dialog's fields.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

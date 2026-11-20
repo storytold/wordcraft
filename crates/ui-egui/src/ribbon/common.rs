@@ -24,7 +24,13 @@ pub(super) fn about_enabled(ctx: &egui::Context, about: &str) -> bool {
 
 /// A button that opens a menu, greyed out (and not opening) while the command the menu is about cannot run.
 /// `face` is the caller's button; `about` is that command's id, `None` for a menu about no command.
-pub(crate) fn menu_button(ui: &mut Ui, face: Button<'_>, name: impl Into<Label>, about: Option<&str>, body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) -> MenuOutput {
+pub(crate) fn menu_button(
+    ui: &mut Ui,
+    face: Button<'_>,
+    name: impl Into<Label>,
+    about: Option<&str>,
+    body: impl FnMut(&mut Ui, &mut BodyCx<'_>),
+) -> MenuOutput {
     let enabled = about_enabled(ui.ctx(), about.unwrap_or(""));
     let opener = face.trailing_icon(DisclosureGlyph::menu_button()).enabled(enabled).show(ui);
     Menu::new(name).opened_by(&opener.response, Trigger::Click).show(ui, body).output

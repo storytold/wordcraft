@@ -56,11 +56,7 @@ fn options() -> Options {
         o.sort_by_label = true;
         o.title = Some(tl!("Customize Keyboard").to_string());
         o.accept = Some(Box::new(|_: &CommandDef, binding: &Binding| {
-            if assignable(binding) {
-                Ok(())
-            } else {
-                Err(tl!("Use a key combination with Ctrl, Alt or a function key.").to_string())
-            }
+            if assignable(binding) { Ok(()) } else { Err(tl!("Use a key combination with Ctrl, Alt or a function key.").to_string()) }
         }));
     })
 }

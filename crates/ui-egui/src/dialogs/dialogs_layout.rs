@@ -96,10 +96,7 @@ pub(crate) fn points() -> LengthUnits {
 pub(crate) fn count_field(ui: &mut Ui, label: &str, value: &mut u32, range: RangeInclusive<u32>, enabled: bool) -> bool {
     let was = f64::from(*value);
     let mut shown = Some(was);
-    NumberField::new(label.to_string(), Bind::bound(&mut shown))
-        .range(f64::from(*range.start())..=f64::from(*range.end()))
-        .enabled(enabled)
-        .show(ui);
+    NumberField::new(label.to_string(), Bind::bound(&mut shown)).range(f64::from(*range.start())..=f64::from(*range.end())).enabled(enabled).show(ui);
     match shown {
         Some(n) if n != was => {
             *value = (n.round().max(0.0) as u32).clamp(*range.start(), *range.end());

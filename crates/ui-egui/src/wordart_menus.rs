@@ -5,9 +5,7 @@
 use craft::behavior::keyed;
 use craft::draw::ui::GradientSwatch;
 use craft::menu::CommandRef;
-use craft::ui::contract::{
-    ActivateOn, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-};
+use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Row;
 use craft::ui::list::ThumbAspect;
@@ -179,9 +177,7 @@ pub fn effects_menu(ui: &mut Ui, app: &mut WordApp, transform: bool) {
 
 /// Text Effects › Transform: the warps WordCraft bends text along, as previews.
 pub fn transform_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
-    MenuItem::command(CommandRef::with_params("wordArt.transform", json!({"preset": "none"})))
-        .label(crate::tl!("No Transform").to_string())
-        .show(ui);
+    MenuItem::command(CommandRef::with_params("wordArt.transform", json!({"preset": "none"}))).label(crate::tl!("No Transform").to_string()).show(ui);
     let source = keyed(&DRAWN_WARPS, |(id, _)| *id);
     let out = TileGrid::new(crate::tl!("Transform").to_string())
         .caption(CaptionPlace::None)
@@ -193,7 +189,8 @@ pub fn transform_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .show_items(ui, &source, &mut |id, _| {
             let id: &'static str = id;
             let label = DRAWN_WARPS.iter().find(|(warp, _)| *warp == id).map_or(id, |(_, label)| *label);
-            Tile::new(crate::tl!(label).to_string()).thumb(ThumbAspect::new(46, 32), move |cx, r| paint_warp(&cx.painter, r.shrink(2.0), id, cx.ink()))
+            Tile::new(crate::tl!(label).to_string())
+                .thumb(ThumbAspect::new(46, 32), move |cx, r| paint_warp(&cx.painter, r.shrink(2.0), id, cx.ink()))
         });
     for event in &out.response.events {
         if let CollectionEvent::Activate(id) = event {

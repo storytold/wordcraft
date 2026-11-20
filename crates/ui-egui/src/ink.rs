@@ -21,7 +21,7 @@ use craft::ui::contract::{
     Common, Component, Container, ContainerProps, Cx, MeasureCx, Mount, NoValue, Outcome, Pad, PaintUi, Props, Role, Show as _, ShowContainer as _,
     Sizing,
 };
-use craft::ui::primitives::{Draw, DataStrokeWidth, DataWidth, PaintShape, StrokeColor};
+use craft::ui::primitives::{DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor};
 use craft::ui::runtime::motion::Animate;
 use craft::ui::style::{ComponentStyle, DataColor, StyleCx, SurfaceKind};
 use egui::{Align2, Color32, Pos2, Rect, Response, Ui, Vec2};
@@ -109,11 +109,7 @@ pub(crate) fn placed(pages: &[PlacedPage], page: usize) -> Option<&PlacedPage> {
 /// cuts: the one whose middle is nearer wins.
 pub(crate) fn page_under(pages: &[PlacedPage], p: Pos2) -> Option<&PlacedPage> {
     let key = |pg: &PlacedPage| {
-        if pg.rect.contains(p) {
-            (0.0, (pg.rect.center().y - p.y).abs())
-        } else {
-            (pg.rect.distance_to_pos(p), 0.0)
-        }
+        if pg.rect.contains(p) { (0.0, (pg.rect.center().y - p.y).abs()) } else { (pg.rect.distance_to_pos(p), 0.0) }
     };
     pages.iter().filter(|pg| pg.scale > 0.0).min_by(|a, b| {
         let (ka, kb) = (key(a), key(b));
@@ -183,7 +179,11 @@ impl CanvasTool for InkCanvasTool<'_> {
                 // A press on the selection drags it; anywhere else starts a new loop.
                 let layout = self.app.session.layout();
                 let grab = wordcraft_engine::cmd::draw::lasso_bounds(&self.app.session, &layout).is_some_and(|(bp, r)| {
-                    bp == page && at[0] >= r.x - GRAB_SLOP && at[0] <= r.right() + GRAB_SLOP && at[1] >= r.y - GRAB_SLOP && at[1] <= r.bottom() + GRAB_SLOP
+                    bp == page
+                        && at[0] >= r.x - GRAB_SLOP
+                        && at[0] <= r.right() + GRAB_SLOP
+                        && at[1] >= r.y - GRAB_SLOP
+                        && at[1] <= r.bottom() + GRAB_SLOP
                 });
                 self.app.canvas.ink_ui.lasso =
                     Some(if grab { LassoDrag::Move { page, from: at, to: at } } else { LassoDrag::Loop { page, pts: vec![at] } });
@@ -261,7 +261,11 @@ impl CanvasTool for InkCanvasTool<'_> {
 
     fn claims(&self) -> ToolClaims {
         // Delete is the tool's only while a lasso selection exists to delete.
-        if wordcraft_engine::cmd::draw::lasso_selection(&self.app.session).is_some() { ToolClaims::default().deletes() } else { ToolClaims::default() }
+        if wordcraft_engine::cmd::draw::lasso_selection(&self.app.session).is_some() {
+            ToolClaims::default().deletes()
+        } else {
+            ToolClaims::default()
+        }
     }
 
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
@@ -461,11 +465,7 @@ fn show_replay(app: &mut WordApp, ui: &mut Ui, body: &PageBody) {
         return;
     }
     let Some(r) = app.canvas.ink_ui.replay.as_mut() else { return };
-    let overlay = Overlay::floating().modeless().place(Place::anchored(
-        Anchor::Corner(body.rect, Align2::CENTER_BOTTOM),
-        Side::Above,
-        Align::Center,
-    ));
+    let overlay = Overlay::floating().modeless().place(Place::anchored(Anchor::Corner(body.rect, Align2::CENTER_BOTTOM), Side::Above, Align::Center));
     let mut close = false;
     // A pass whose layer body does not run (a settled layer) keeps the held position; a playing
     // replay wakes its body every frame.
@@ -476,10 +476,8 @@ fn show_replay(app: &mut WordApp, ui: &mut Ui, body: &PageBody) {
         if r.playing_from.is_none() && r.paused_at.is_none() {
             r.playing_from = Some(now);
         }
-        let label = crate::i18n::fmt(
-            tl!("Stroke {n} of {total}"),
-            &[("n", &r.started(r.at(now)).to_string()), ("total", &r.strokes.len().to_string())],
-        );
+        let label =
+            crate::i18n::fmt(tl!("Stroke {n} of {total}"), &[("n", &r.started(r.at(now)).to_string()), ("total", &r.strokes.len().to_string())]);
         let _ = Bar::new(tl!("Ink Replay").to_string(), BarKind::Tool).show(ui, |ui, _| {
             if IconButton::new(IconId::new("replayRewind")).label(tl!("Rewind").to_string()).show(ui).clicks > 0 {
                 // Rewind keeps the play state: a playing replay starts again from the first stroke.

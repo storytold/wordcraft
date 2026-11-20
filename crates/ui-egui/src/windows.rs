@@ -461,11 +461,7 @@ impl WordApp {
     /// ([`WordApp::show_window`]).
     pub(crate) fn switch_windows_entries(&self) -> Vec<(u64, String, bool)> {
         let shown = self.windows.shown;
-        self.window_menu()
-            .entries()
-            .iter()
-            .map(|e| (e.id.get(), format!("{}{}", e.title, if e.dirty { " •" } else { "" }), e.id == shown))
-            .collect()
+        self.window_menu().entries().iter().map(|e| (e.id.get(), format!("{}{}", e.title, if e.dirty { " •" } else { "" }), e.id == shown)).collect()
     }
 
     /// Bring window `key` to the front and make it the active one, with its document.

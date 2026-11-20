@@ -93,7 +93,8 @@ impl WordApp {
             // (the engine reserves it, `engine/src/keymap.rs`). A tie in the application scope goes to the first
             // command in catalog order, so this one entry comes first; the other interface commands come last.
             if !mac {
-                let mut def = CommandDef::new(CommandRef::with_params("ui.dialog", json!({"name": "commands"})), tl!("Search Commands"), Scope::app());
+                let mut def =
+                    CommandDef::new(CommandRef::with_params("ui.dialog", json!({"name": "commands"})), tl!("Search Commands"), Scope::app());
                 if let Ok(binding) = Binding::parse("Alt+Q") {
                     def = def.with_default(binding);
                 }
@@ -157,7 +158,7 @@ impl WordApp {
             input = input.catalog(catalog);
         }
         for spec in registry.all() {
-            let (enabled, reason) = gate(self, spec.id);            // A toggle's checked state is bound at its ribbon button, not here.
+            let (enabled, reason) = gate(self, spec.id); // A toggle's checked state is bound at its ribbon button, not here.
             let mut state = CommandState::new().enabled(enabled);
             if let Some(hint) = crate::widgets::command_hint(spec.location, spec.label, reason) {
                 state = state.hint(hint);
@@ -166,7 +167,9 @@ impl WordApp {
         }
         // Print acts on the document, so with none open it is off like the engine's commands (#1129); a command with
         // no state here resolves as enabled.
-        let ids = ["ui.collapseRibbon", "ui.resetInterfaceSize", "ui.print", "ui.printSubmit"].into_iter().chain(GATED_UI_COMMANDS.iter().map(|(id, _)| *id));
+        let ids = ["ui.collapseRibbon", "ui.resetInterfaceSize", "ui.print", "ui.printSubmit"]
+            .into_iter()
+            .chain(GATED_UI_COMMANDS.iter().map(|(id, _)| *id));
         for id in ids {
             input = input.state(CommandRef::new(id), CommandState::new().enabled(command_enabled(self, id)));
         }
@@ -183,7 +186,8 @@ impl WordApp {
             if let Some(window) = self.windows.active() {
                 self.enter_window(window);
             }
-            let id = fired.command.id.as_str();            let params = if fired.command.params.is_null() { json!({}) } else { fired.command.params.clone() };
+            let id = fired.command.id.as_str();
+            let params = if fired.command.params.is_null() { json!({}) } else { fired.command.params.clone() };
             let from_key = fired.source == FireSource::Key;
 
             let (id, params) = if id == "edit.pasteFormat" && from_key { self.paste_format_command(ctx, params) } else { (id, params) };

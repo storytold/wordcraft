@@ -183,7 +183,21 @@ impl Strings {
             crate::chrome::dictionary_problem(&lang, &unreadable, crate::ribbon::caret_missing_dictionary(app))
                 .unwrap_or_else(|| crate::i18n::fmt(tl!("Spelling and grammar are checked in {language}."), &[("language", &lang)]))
         };
-        Strings { sizes, size_id, languages, units, unit_id, regions, region_id, paper, paper_id, numerals, numeral_id, proofing_language, autosave_reason: crate::AutoSaveBlock::Browser.reason().to_string() }
+        Strings {
+            sizes,
+            size_id,
+            languages,
+            units,
+            unit_id,
+            regions,
+            region_id,
+            paper,
+            paper_id,
+            numerals,
+            numeral_id,
+            proofing_language,
+            autosave_reason: crate::AutoSaveBlock::Browser.reason().to_string(),
+        }
     }
 }
 
@@ -255,10 +269,7 @@ impl<'a> OptionsModel<'a> {
                 ("proofing.markGrammar", Bool(prefs.mark_grammar)),
             ],
             "save" => vec![("save.removePersonalInfo", Bool(false)), ("save.removeDateTime", Bool(false))],
-            "language" => vec![
-                ("language.interface", Choice(crate::i18n::AUTO.to_string())),
-                ("language.dictionariesFolder", Text(String::new())),
-            ],
+            "language" => vec![("language.interface", Choice(crate::i18n::AUTO.to_string())), ("language.dictionariesFolder", Text(String::new()))],
             "accessibility" => vec![
                 ("accessibility.animations", Choice(ui.animations.code().to_string())),
                 ("accessibility.readAloudSpeed", Float(f64::from(default_of(&self.app.session.read_aloud).rate()))),
@@ -497,9 +508,9 @@ impl PreferencesModel for OptionsModel<'_> {
             tl!("Animation effects:"),
             RowKind::choice(app.ui.animations.code(), entries(Animations::ALL.iter().map(|a| (a.code(), tl!(a.label()))))),
         );
-        animations = animations.help(animations_help.unwrap_or(tl!(
-            "Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once."
-        )));
+        animations = animations.help(
+            animations_help.unwrap_or(tl!("Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.")),
+        );
         let accessibility = page_of(
             "accessibility",
             tl!("Accessibility"),
@@ -521,7 +532,11 @@ impl PreferencesModel for OptionsModel<'_> {
         );
 
         let display_group = vec![
-            RowSpec::new("advanced.recentCount", tl!("Recent documents to show:"), RowKind::int(app.ui.recent_shown() as i64, 0..=(crate::MAX_RECENT as i64))),
+            RowSpec::new(
+                "advanced.recentCount",
+                tl!("Recent documents to show:"),
+                RowKind::int(app.ui.recent_shown() as i64, 0..=(crate::MAX_RECENT as i64)),
+            ),
             RowSpec::new("advanced.units", tl!("Measurement units:"), RowKind::choice(&s.unit_id, owned(&s.units))),
             RowSpec::new("advanced.region", tl!("Region:"), RowKind::choice(&s.region_id, owned(&s.regions))),
             b("advanced.keytips", tl!("Show KeyTips (Alt or F10)"), app.ui.keytips_enabled),
@@ -740,10 +755,7 @@ impl OptionsModel<'_> {
     fn custom_dictionary(&mut self, ui: &mut Ui) {
         let words = wordcraft_engine::proof::user_dictionary();
         if words.is_empty() {
-            Text::new(tl!("No words yet. Add to Dictionary on a misspelled word puts it here."))
-                .role(TypeRole::Caption)
-                .shade(Shade::Faint)
-                .show(ui);
+            Text::new(tl!("No words yet. Add to Dictionary on a misspelled word puts it here.")).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
         }
         let removed = std::cell::Cell::new(None::<String>);
         let removed_ref = &removed;

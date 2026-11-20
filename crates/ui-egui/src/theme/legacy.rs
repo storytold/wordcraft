@@ -531,7 +531,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 }
 
 /// The interface fonts: Inter, Source Sans and JetBrains Mono, behind egui's default fallbacks.
-pub fn font_definitions()-> FontDefinitions {
+pub fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));

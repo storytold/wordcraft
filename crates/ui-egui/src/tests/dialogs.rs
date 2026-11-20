@@ -202,9 +202,7 @@ fn recipient_list_dialog_carries_the_filter() {
     .unwrap();
     a.run("mailings.editRecipients", json!({})).unwrap();
     pump(&mut a, &crate::test_harness::context());
-    let Some(RecipientListDialog { draft: RecipientDraft { rows, filter, fields }, .. }) =
-        a.dialog_host.get::<RecipientListDialog>()
-    else {
+    let Some(RecipientListDialog { draft: RecipientDraft { rows, filter, fields }, .. }) = a.dialog_host.get::<RecipientListDialog>() else {
         panic!("no recipient dialog")
     };
     assert_eq!(rows.len(), 3, "every record, not only the filtered ones");
@@ -326,9 +324,7 @@ fn recipient_grid_edits_the_right_record_through_the_ui() {
     // A macro, as the node it finds borrows the harness for as long as the caller keeps it.
     macro_rules! cell_of {
         ($h:expr, $text:expr) => {
-            $h.query_all_by_role(egui::accesskit::Role::TextInput)
-                .find(|n| n.value().as_deref() == Some($text))
-                .expect("the record's cell is shown")
+            $h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.value().as_deref() == Some($text)).expect("the record's cell is shown")
         };
     }
     let names = |h: &egui_kittest::Harness<'_, State>| dlg(h).0.iter().map(|r| r[0].clone()).collect::<Vec<_>>();

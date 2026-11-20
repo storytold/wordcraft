@@ -513,7 +513,6 @@ impl WordApp {
 
     /// Request loading local system installed fonts (web: queryLocalFonts).
     pub(crate) fn load_system_fonts(&mut self) {
-
         if let Some(f) = &self.services.load_system_fonts {
             f();
         } else {

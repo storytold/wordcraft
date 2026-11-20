@@ -155,10 +155,8 @@ pub fn auto_scale_limit(screen_px: Option<(f32, f32)>) -> f32 {
 /// so the allowed zoom is worked out per monitor and the smallest one is shared. Unlimited when no
 /// monitor is known.
 pub fn auto_scale_limit_over(monitors: impl IntoIterator<Item = ([u32; 2], f32)>, native: f32) -> f32 {
-    let shared_zoom = monitors
-        .into_iter()
-        .map(|([w, h], scale)| auto_scale_limit(Some((w as f32, h as f32))) / usable_scale(scale))
-        .fold(f32::INFINITY, f32::min);
+    let shared_zoom =
+        monitors.into_iter().map(|([w, h], scale)| auto_scale_limit(Some((w as f32, h as f32))) / usable_scale(scale)).fold(f32::INFINITY, f32::min);
     shared_zoom * usable_scale(native)
 }
 

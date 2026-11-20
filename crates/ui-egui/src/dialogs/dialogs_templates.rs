@@ -98,9 +98,7 @@ impl WordForm for TemplatesForm {
     fn body(&mut self, ui: &mut Ui, _: &mut FormCx<'_, '_>, _: &mut Vec<Asks>) -> bool {
         let reason = browse_reason(ui);
         let picked = Field::new(label(tl!("Document template:")))
-            .show(ui, |ui, _| {
-                template_row(label(tl!("Document template:")), Bind::bound(&mut self.path), reason.clone()).show(ui).picked
-            })
+            .show(ui, |ui, _| template_row(label(tl!("Document template:")), Bind::bound(&mut self.path), reason.clone()).show(ui).picked)
             .inner
             .flatten();
         if let Some(path) = picked {
@@ -246,7 +244,9 @@ impl OrganizerDialog {
                 .select(SelectMode::Single)
                 .selection(Bind::bound(&mut selection))
                 .rename(true)
-                .can_rename(|key: &String| mine.iter().find(|x| text_of(x, "id") == *key).is_some_and(|x| !x.get("builtIn").and_then(Value::as_bool).unwrap_or(true)))
+                .can_rename(|key: &String| {
+                    mine.iter().find(|x| text_of(x, "id") == *key).is_some_and(|x| !x.get("builtIn").and_then(Value::as_bool).unwrap_or(true))
+                })
                 .id_salt("mine")
                 .show_items(ui, &source, &mut |_, icx| {
                     let Some(st) = mine.get(icx.at) else { return ListRow::spacer() };

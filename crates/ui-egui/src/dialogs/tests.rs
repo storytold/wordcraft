@@ -9,9 +9,9 @@ use wordcraft_engine::Session;
 use super::bookmarks::bookmark_names;
 use super::find::goto_page;
 use super::host::{FormHost, close_all};
-use craft::text::ui::character::ParagraphFormat;
-use crate::dialogs::paragraph::ParagraphHost; // PLAN: assumed (dialogs-w15): `ParagraphHost = FormHost<ParagraphForm>`, `ParagraphForm { pub format: ParagraphFormat }`
 use crate::dialogs::font::FontForm;
+use crate::dialogs::paragraph::ParagraphHost; // PLAN: assumed (dialogs-w15): `ParagraphHost = FormHost<ParagraphForm>`, `ParagraphForm { pub format: ParagraphFormat }`
+use craft::text::ui::character::ParagraphFormat;
 
 /// The Font dialog on the host, as `open_form` opens it.
 type FontHost = FormHost<FontForm>;
@@ -1459,7 +1459,8 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
 fn modal_dialogs_block_the_window_behind_them() {
     // Every pick the app asks for is recorded, none answered.
     let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
-    let host = craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+    let host =
+        craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
     let a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default()).with_host(std::sync::Arc::new(host));
     let mut h = app_harness(a);
     h.run_steps(6);

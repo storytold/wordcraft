@@ -78,12 +78,9 @@ pub(super) fn wrap_menu(ui: &mut Ui, app: &mut WordApp) {
 pub(super) fn rotate_menu(ui: &mut Ui) {
     let face = Button::new(tl!("Rotate")).icon(IconId::new("rotate"));
     menu_button(ui, face, tl!("Rotate"), Some("arrange.rotate"), |ui, _| {
-        for (l, d) in [
-            ("Rotate Right 90°", "right"),
-            ("Rotate Left 90°", "left"),
-            ("Flip Vertical", "flipVertical"),
-            ("Flip Horizontal", "flipHorizontal"),
-        ] {
+        for (l, d) in
+            [("Rotate Right 90°", "right"), ("Rotate Left 90°", "left"), ("Flip Vertical", "flipVertical"), ("Flip Horizontal", "flipHorizontal")]
+        {
             MenuItem::command(CommandRef::with_params("arrange.rotate", json!({"direction": d}))).label(tl!(l)).show(ui);
         }
     });
@@ -94,11 +91,7 @@ pub(super) fn rotate_menu(ui: &mut Ui) {
 pub(super) fn rotation_field(ui: &mut Ui, app: &mut WordApp) {
     let mut deg: Option<f64> =
         wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| f64::from(f.spin().deg)));
-    let out = NumberField::new(tl!("Rotation"), Bind::bound(&mut deg))
-        .unit_kind(UnitKind::Degrees)
-        .range(-360.0..=360.0)
-        .commit_decimals(1)
-        .show(ui);
+    let out = NumberField::new(tl!("Rotation"), Bind::bound(&mut deg)).unit_kind(UnitKind::Degrees).range(-360.0..=360.0).commit_decimals(1).show(ui);
     apply_edits(app, out.edit.events, |app, v: Option<f64>| {
         if let Some(degrees) = v {
             let _ = app.run("arrange.rotation", json!({"degrees": degrees}));

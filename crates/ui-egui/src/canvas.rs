@@ -63,13 +63,12 @@ use navigation::viewed_page;
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{page_render_options, shown_layout};
 use reading::{reading_anchor_page, reading_page_start, web_layout_width};
-pub use story::{editing_header_footer, in_text_box};
 use story::dims_body;
+pub use story::{editing_header_footer, in_text_box};
 pub(crate) use story::{part_kind, text_box_host};
 
 /// Points on screen per document point at 100% (96 px per inch, like a word processor).
 pub const PX_PER_PT: f32 = SCREEN_POINTS_PER_POINT as f32;
-
 
 /// The pages the canvas showed in its last pass, for readers outside the pass (the control channel, the status bar,
 /// tests).
@@ -524,11 +523,7 @@ fn hold_scroll_for_preview(app: &mut WordApp, offset: &mut (f64, f64)) -> bool {
 fn selection_page_rects(app: &mut WordApp, layout: &DocLayout) -> Vec<(usize, wordcraft_geom::Rect)> {
     if let Some(sel) = preview_sel(app) {
         let (a, b) = sel.ordered();
-        if a == b {
-            Vec::new()
-        } else {
-            wordcraft_engine::cmd::table_mouse::selection_rects(layout, page_doc(app), &a, &b, app.session.page_hint)
-        }
+        if a == b { Vec::new() } else { wordcraft_engine::cmd::table_mouse::selection_rects(layout, page_doc(app), &a, &b, app.session.page_hint) }
     } else if crate::objects::selected(app).is_some() {
         Vec::new()
     } else if let Some(range) = app.session.cell_range() {
@@ -783,11 +778,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let show_rulers = app.session.view.ruler
         && app.session.view.mode == wordcraft_layout::ViewMode::Print
         && crate::chrome::Screen::of(&app.session.view) == crate::chrome::Screen::Normal;
-    let options = LayoutOptions {
-        markup: f64::from(markup_width(app)),
-        min_columns: if app.session.view.multi_page { 2 } else { 1 },
-        ..LayoutOptions::WORD
-    };
+    let options =
+        LayoutOptions { markup: f64::from(markup_width(app)), min_columns: if app.session.view.multi_page { 2 } else { 1 }, ..LayoutOptions::WORD };
     let paper = DataColor::new(paper_color(app));
     let source = source::WordPages::new(app, layout, dim_body, hidden);
     // The describer owns its snapshot, as the source does, so the page view can hold it while the body edits the app.
@@ -852,7 +844,10 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                             let s = placed.scale as f32;
                             let top_left = placed.to_screen(Point::new(f64::from(c.x), f64::from(c.top)));
                             let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s)).expand2(vec2(40.0, 60.0));
-                            fix.delta = (overshoot((r.min.x, r.max.x), (body.rect.min.x, body.rect.max.x)), overshoot((r.min.y, r.max.y), (body.rect.min.y, body.rect.max.y)));
+                            fix.delta = (
+                                overshoot((r.min.x, r.max.x), (body.rect.min.x, body.rect.max.x)),
+                                overshoot((r.min.y, r.max.y), (body.rect.min.y, body.rect.max.y)),
+                            );
                         }
                         None => {
                             let h = fresh.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
@@ -863,8 +858,11 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                 }
                 // The mini toolbar's anchor is settled in the pass that shows it. Anchor only to visible
                 // selection geometry, and to the live selection while a preview moves the text.
-                let anchor_rects =
-                    if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, body.pages) } else { screen_rects(&selected, body.pages) };
+                let anchor_rects = if app.canvas.command_previewed.is_some() {
+                    live_selection_screen_rects(app, body.pages)
+                } else {
+                    screen_rects(&selected, body.pages)
+                };
                 app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, body.view.rect);
                 // The bar is its own floating layer: shown after the host, it keeps its buttons' presses (S-L410).
                 crate::mini_toolbar::show(app, ui, body);
@@ -885,7 +883,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         let s = rect.height() / page_h;
         let top_left = rect.min + vec2(c.x * s, c.top * s);
         let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s)).expand2(vec2(40.0, 60.0));
-        fix.delta = (overshoot((r.min.x, r.max.x), (body_rect.min.x, body_rect.max.x)), overshoot((r.min.y, r.max.y), (body_rect.min.y, body_rect.max.y)));
+        fix.delta =
+            (overshoot((r.min.x, r.max.x), (body_rect.min.x, body_rect.max.x)), overshoot((r.min.y, r.max.y), (body_rect.min.y, body_rect.max.y)));
         fix.go_to = None;
     }
     // A jump to a page that was not placed at all (`go_to`) puts the caret's line at the view's top edge: the follow
@@ -946,11 +945,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     // The layout's y at the top edge of the area the pages show in (inside the rulers), from where a placed page lands:
     // the view's offset is not that edge, and a page whose last points lie above it is out of view.
     let view_area = body_view.map_or(body_rect, |v| v.rect);
-    let top = out
-        .pages
-        .first()
-        .and_then(|p| Some(out.layout.rects.get(p.page)?.y0 - f64::from(p.rect.min.y - view_area.min.y)))
-        .unwrap_or(state.offset.1);
+    let top =
+        out.pages.first().and_then(|p| Some(out.layout.rects.get(p.page)?.y0 - f64::from(p.rect.min.y - view_area.min.y))).unwrap_or(state.offset.1);
     app.canvas.viewed_page = Some(viewed_page(caret_span, top, &out.layout, f64::from(view_area.height())));
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.

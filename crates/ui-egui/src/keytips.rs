@@ -9,8 +9,8 @@ use craft::keymap::CommandRef;
 use craft::menu::{KeytipControl, Keytips, RibbonOutput};
 use craft::ui::contract::Bind;
 use craft::ui::contract::overlay::Anchor;
-use craft::ui::display::Text;
 use craft::ui::contract::{Show as _, ShowContainer as _};
+use craft::ui::display::Text;
 use craft::ui::popover::Popover;
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::inspect::{self, Recorded};
@@ -151,7 +151,8 @@ struct Control {
 fn controls(tab: &str) -> Vec<Control> {
     let c = |tip: &'static str, id: &'static str| Control { tip, command: CommandRef::new(id) };
     let m = c;
-    let d = |tip: &'static str, name: &'static str| Control { tip, command: CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name })) };
+    let d =
+        |tip: &'static str, name: &'static str| Control { tip, command: CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name })) };
     let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, command: CommandRef::with_params(id, params) };
     match tab {
         "Home" => vec![
@@ -415,7 +416,6 @@ fn backstage_rows() -> Vec<Row> {
         })
         .collect()
 }
-
 
 /// Shows the keytips after the ribbon and the regions they place badges on, and acts on what the keys chose.
 pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>) {

@@ -77,7 +77,8 @@ pub(crate) fn check(app: &mut WordApp) {
     app.updates_rt.updater.check_now();
     #[cfg(target_arch = "wasm32")]
     {
-        let alert = craft::ui::dialog::Alert::new(tl!("Check for Updates").to_string(), tl!("Update check is not supported in the web browser.").to_string());
+        let alert =
+            craft::ui::dialog::Alert::new(tl!("Check for Updates").to_string(), tl!("Update check is not supported in the web browser.").to_string());
         app.dialog_host.open(craft::ui::dialog::HostedAlert::new(alert));
     }
 }
@@ -127,7 +128,6 @@ pub(crate) fn run(app: &mut WordApp) {
 /// replaces it.
 #[cfg(not(target_arch = "wasm32"))]
 fn sync_check_dialog(app: &mut WordApp, can_start: bool) {
-
     let ctx = app.ctx.clone();
     let rt = &mut app.updates_rt;
     let host = &mut app.dialog_host;

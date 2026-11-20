@@ -36,10 +36,7 @@ pub(super) fn underline_menu(ui: &mut Ui, app: &mut WordApp) {
     }
     MenuItem::command(CommandRef::new("format.wordUnderline")).label(tl!("Words only").to_string()).show(ui);
     // Ctrl+U beside None would read as its shortcut, but Ctrl+U toggles a single underline.
-    MenuItem::command(CommandRef::with_params("format.underline", json!({"value": false})))
-        .label(tl!("None").to_string())
-        .hide_shortcut()
-        .show(ui);
+    MenuItem::command(CommandRef::with_params("format.underline", json!({"value": false}))).label(tl!("None").to_string()).hide_shortcut().show(ui);
     Divider::horizontal().show(ui);
     MenuItem::command(CommandRef::new("format.fontDialog")).label(tl!("More Underlines…").to_string()).show(ui);
     Menu::submenu_row(ui, tl!("Underline Color").to_string(), |ui, _| {

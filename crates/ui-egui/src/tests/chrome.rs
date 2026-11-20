@@ -1,7 +1,7 @@
 use super::*;
 use egui_kittest::kittest::{By, Queryable};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 use craft::print::spool::{Pending, Spool, SpoolBackend};
 use craft::print::ui::Feedback;

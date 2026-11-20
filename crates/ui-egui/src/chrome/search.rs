@@ -23,11 +23,8 @@ pub(crate) fn help_entries(app: &WordApp) -> Vec<HelpEntry> {
         .iter()
         .filter(|c| !crate::dialogs::NOT_IN_SEARCH.contains(&c.id))
         .map(|c| {
-            let command = if c.id == "view.paperColor" {
-                CommandRef::with_params("file.options", json!({"pane": "general"}))
-            } else {
-                CommandRef::new(c.id)
-            };
+            let command =
+                if c.id == "view.paperColor" { CommandRef::with_params("file.options", json!({"pane": "general"})) } else { CommandRef::new(c.id) };
             HelpEntry::new(command, tl!(c.label).to_string()).with_english(c.label.to_string())
         })
         .collect()

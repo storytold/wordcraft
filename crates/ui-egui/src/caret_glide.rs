@@ -367,7 +367,6 @@ fn cause_key(app: &WordApp) -> u64 {
     h.finish()
 }
 
-
 /// Steps `glide` for this pass: where and how strongly to draw the caret. With the caret
 /// animation off, or any motion mode but the full one, the caret jumps and blinks on and off.
 pub fn look(glide: &mut CaretGlide, app: &WordApp, request: LookRequest) -> Look {

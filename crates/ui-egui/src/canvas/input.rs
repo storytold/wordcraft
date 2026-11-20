@@ -80,7 +80,6 @@ struct PagePointer<'a> {
     clicks: u8,
 }
 
-
 /// The page under `p` and the point on it. With Hide White Space the pages' rects overlap in the margins it hides: a
 /// point there belongs to the page whose shown band is nearest, so a click just past one page's text is still on it.
 fn page_of(pages: &[PlacedPage], p: Pos2) -> Option<(usize, f32, f32)> {

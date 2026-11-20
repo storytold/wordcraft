@@ -113,7 +113,8 @@ impl WordForm for IndexForm {
         if let Some(kind) = kind.output.value().cloned() {
             self.kind = kind;
         }
-        let columns = NumberField::new(Label::from(tl!("Columns:").to_string()), Bind::given(Some(f64::from(self.columns)))).range(1.0..=4.0).show(ui);
+        let columns =
+            NumberField::new(Label::from(tl!("Columns:").to_string()), Bind::given(Some(f64::from(self.columns)))).range(1.0..=4.0).show(ui);
         if let Some(Some(n)) = columns.edit.value().cloned() {
             self.columns = n.round().clamp(1.0, 4.0) as u32;
         }
@@ -122,7 +123,11 @@ impl WordForm for IndexForm {
         let entries = leaders();
         let leader = Field::new(title.clone())
             .show(ui, |ui, _| {
-                Select::new(title.clone(), Bind::given(Mixed::Same(self.leader.clone())), &entries).enabled(self.right_align).show(ui).value().cloned()
+                Select::new(title.clone(), Bind::given(Mixed::Same(self.leader.clone())), &entries)
+                    .enabled(self.right_align)
+                    .show(ui)
+                    .value()
+                    .cloned()
             })
             .inner
             .flatten();
@@ -246,7 +251,8 @@ impl WordForm for MarkForm {
             }
         });
         Section::fixed(Label::from(tl!("Options").to_string())).id_salt("options").show(ui, |ui, _| {
-            let options = [("see", "Cross-reference:", true), ("page", "This page", true), ("range", "Pages of bookmark:", !self.bookmarks.is_empty())];
+            let options =
+                [("see", "Cross-reference:", true), ("page", "This page", true), ("range", "Pages of bookmark:", !self.bookmarks.is_empty())];
             let group = RadioGroup::new(Label::from(tl!("Options").to_string()), Bind::given(self.option.clone())).show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| {
                     for (id, label, enabled) in options {

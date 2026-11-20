@@ -49,7 +49,15 @@ pub(super) fn srgba(c: Rgb) -> Srgba {
 
 /// A colour row of a dialog form: the framework's colour field, and a request for the More Colors dialog when the
 /// field asks for it. The answer comes back to the form's `answer` under `key`.
-pub(super) fn color_row(ui: &mut Ui, key: &'static str, label: &Label, value: &mut String, empty: &ColorFieldEmpty, palette: &Palette, asks: &mut Vec<Asks>) {
+pub(super) fn color_row(
+    ui: &mut Ui,
+    key: &'static str,
+    label: &Label,
+    value: &mut String,
+    empty: &ColorFieldEmpty,
+    palette: &Palette,
+    asks: &mut Vec<Asks>,
+) {
     if color_field(ui, label, value, empty, palette).more_colors {
         asks.push(Asks::Color { field: key, current: Rgb::parse(value), tab: ColorPickerTab::Standard });
     }
@@ -159,7 +167,8 @@ fn doc_leader(l: UiLeader) -> TabLeader {
 /// are the stops and the default interval the dialog opened with, points; the framework dialog keeps its result in
 /// points whatever unit it shows.
 pub(crate) fn tabs_params(basis: &[TabStop], default_basis: f32, result: &TabStopsResult) -> Option<Value> {
-    let stops: Vec<TabStop> = result.stops.iter().map(|s| TabStop { pos: s.position, align: doc_align(s.align), leader: doc_leader(s.leader) }).collect();
+    let stops: Vec<TabStop> =
+        result.stops.iter().map(|s| TabStop { pos: s.position, align: doc_align(s.align), leader: doc_leader(s.leader) }).collect();
     let mut v = Map::new();
     if stops.is_empty() && !basis.is_empty() {
         // Clear All removes the inherited stops too.
@@ -433,12 +442,12 @@ impl BordersForm {
         out
     }
 
-
     fn tab_strip(&mut self, ui: &mut Ui) {
         let tabs = [(0u8, tl!("Borders").to_string()), (1, tl!("Page Border").to_string()), (2, tl!("Shading").to_string())];
         let source = keyed(&tabs[..], |tab: &(u8, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let strip = TabStrip::new(word(tl!("Borders and Shading"))).kind(TabKind::Text).shown(self.tab).natural_height(true);
-        let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone())));
+        let out = strip
+            .show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone())));
         for event in out.response.events {
             if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                 && let Some(chosen) = keys.last()

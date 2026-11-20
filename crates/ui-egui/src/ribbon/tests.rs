@@ -67,9 +67,7 @@ fn click_row(h: &mut Harness, name: &str) {
 
 /// The names of the checked rows and buttons now shown.
 fn checked(h: &Harness) -> Vec<String> {
-    h.query_all(By::new().predicate(|n| n.toggled() == Some(egui::accesskit::Toggled::True)))
-        .filter_map(|n| n.accesskit_node().label())
-        .collect()
+    h.query_all(By::new().predicate(|n| n.toggled() == Some(egui::accesskit::Toggled::True))).filter_map(|n| n.accesskit_node().label()).collect()
 }
 
 /// The size of the selected object, in points.
@@ -553,7 +551,9 @@ fn shape_size_fields_use_the_interface_unit() {
     };
     // The unit is the field's own adornment (drawn after the number, not part of its text), so it
     // shows in the number the field holds: the size in points scaled to the interface unit.
-    for (units, per_pt) in [("centimeters", 2.54 / 72.0), ("inches", 1.0 / 72.0), ("millimeters", 25.4 / 72.0), ("points", 1.0), ("picas", 1.0 / 12.0)] {
+    for (units, per_pt) in
+        [("centimeters", 2.54 / 72.0), ("inches", 1.0 / 72.0), ("millimeters", 25.4 / 72.0), ("points", 1.0), ("picas", 1.0 / 12.0)]
+    {
         let h = harness(units, None, None);
         let (w, ht) = object_size(h.state()).unwrap();
         for (side, pt) in [("W:", w), ("H:", ht)] {

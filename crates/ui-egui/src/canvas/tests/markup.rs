@@ -152,7 +152,7 @@ fn the_rulers_span_the_caret_page_in_multiple_pages() {
     };
     // Every page of the layout on screen, those scrolled out of view too (production's `page_rects`).
     let rects: Vec<Rect> = h.state().canvas.laid_page_rects().to_vec();
-    assert!(rects.len() == 4 &&(rects[0].min.y - rects[1].min.y).abs() < 1.0 && rects[1].min.x > rects[0].min.x, "pages side by side: {rects:?}");
+    assert!(rects.len() == 4 && (rects[0].min.y - rects[1].min.y).abs() < 1.0 && rects[1].min.x > rects[0].min.x, "pages side by side: {rects:?}");
     assert!(within_x(&h, rects[0]) && within_y(&h, rects[0]), "the rulers span page 1");
     assert!(!within_x(&h, rects[1]), "and not page 2, which sits beside it");
 
@@ -160,7 +160,7 @@ fn the_rulers_span_the_caret_page_in_multiple_pages() {
     h.state_mut().run("edit.goto", json!({"page": 2})).unwrap();
     h.run_steps(4);
     let rects: Vec<Rect> = h.state().canvas.laid_page_rects().to_vec();
-    assert!(within_x(&h, rects[1]),"the horizontal ruler follows the caret to page 2");
+    assert!(within_x(&h, rects[1]), "the horizontal ruler follows the caret to page 2");
     assert!(within_y(&h, rects[1]));
     assert!(!within_x(&h, rects[0]));
 
@@ -588,7 +588,8 @@ fn toc_window() -> (H, usize) {
     a.run("caret.docStart", json!({})).unwrap();
     a.run("references.toc", json!({})).unwrap();
     let h = window(a);
-    let entry = h.state().session.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("TOC1"))).expect("a TOC entry");
+    let entry =
+        h.state().session.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("TOC1"))).expect("a TOC entry");
     (h, entry)
 }
 
@@ -687,7 +688,10 @@ fn nothing(_: &H) {}
 /// #1500: a shape's Format Shape… row opens a pane, but the pane is closed until it is
 /// picked, and Shape Fill applies to the selected shape.
 fn shape_commands_ready(h: &H) {
-    assert!(craft::ui::runtime::commands::resolve(&h.ctx, craft::keymap::CommandRef::new("shape.fill")).enabled, "Shape Fill applies to the selected shape");
+    assert!(
+        craft::ui::runtime::commands::resolve(&h.ctx, craft::keymap::CommandRef::new("shape.fill")).enabled,
+        "Shape Fill applies to the selected shape"
+    );
     assert!(!h.state().session.view.format_shape_pane, "the pane starts closed");
 }
 
@@ -703,7 +707,13 @@ fn the_context_menu_rows_follow_the_target() {
     let targets = [
         Target { name: "picture", make: picture_target, before: nothing, present: &["Wrap Text", "Insert Caption…"], absent: &["Update Field"] },
         // A selected shape is an object like a picture: Wrap Text is its row too (#513).
-        Target { name: "shape", make: shape_target, before: shape_commands_ready, present: &["Format Shape…", "Wrap Text"], absent: &["Update Field"] },
+        Target {
+            name: "shape",
+            make: shape_target,
+            before: shape_commands_ready,
+            present: &["Format Shape…", "Wrap Text"],
+            absent: &["Update Field"],
+        },
         Target {
             name: "TOC entry",
             make: toc_target,

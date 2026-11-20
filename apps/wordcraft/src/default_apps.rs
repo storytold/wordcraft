@@ -50,7 +50,6 @@ pub fn identity() -> AppIdentity {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

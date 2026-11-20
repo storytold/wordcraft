@@ -404,12 +404,36 @@ fn move_command(mv: NavMove, by: Granularity) -> Option<&'static str> {
             Granularity::Document => "caret.docEnd",
             _ => "caret.right",
         },
-        NavMove::Up => if by == Granularity::Paragraph { "caret.paraUp" } else { "caret.up" },
-        NavMove::Down => if by == Granularity::Paragraph { "caret.paraDown" } else { "caret.down" },
+        NavMove::Up => {
+            if by == Granularity::Paragraph {
+                "caret.paraUp"
+            } else {
+                "caret.up"
+            }
+        }
+        NavMove::Down => {
+            if by == Granularity::Paragraph {
+                "caret.paraDown"
+            } else {
+                "caret.down"
+            }
+        }
         NavMove::PageUp => "caret.pageUp",
         NavMove::PageDown => "caret.pageDown",
-        NavMove::Start => if by == Granularity::Document { "caret.docStart" } else { "caret.home" },
-        NavMove::End => if by == Granularity::Document { "caret.docEnd" } else { "caret.end" },
+        NavMove::Start => {
+            if by == Granularity::Document {
+                "caret.docStart"
+            } else {
+                "caret.home"
+            }
+        }
+        NavMove::End => {
+            if by == Granularity::Document {
+                "caret.docEnd"
+            } else {
+                "caret.end"
+            }
+        }
         _ => return None,
     })
 }

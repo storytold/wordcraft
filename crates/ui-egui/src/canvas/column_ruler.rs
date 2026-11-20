@@ -95,7 +95,6 @@ fn gaps_of(s: &SectionProps) -> Vec<(f32, f32)> {
         .collect()
 }
 
-
 /// The `layout.columns` parameters after dragging `grip` of the space after column `gap` (in
 /// reading order) to `at` points from the text area's start edge (its right edge in a
 /// right-to-left section). Equal columns stay equal, so every space changes, as in Word for Mac;

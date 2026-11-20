@@ -239,21 +239,24 @@ impl<'a> Exempt<'a> {
     fn allows(&self, app: &WordApp, text: &str) -> bool {
         let plain = unmarked(text);
         let plain = plain.trim().trim_end_matches(" —").trim();
-        let chord =
-            |s: &str| s.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter" | "Space") || k.chars().count() <= 3);
+        let chord = |s: &str| {
+            s.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter" | "Space") || k.chars().count() <= 3)
+        };
         let is_shortcut = || chord(plain);
         // A command's hover hint, drawn as one text: its marked label, name and location, so what is left is the
         // shortcut after the title, `(Ctrl+B)`, and the location's separators.
-        let hint_frame =
-            || plain.split_whitespace().all(|w| matches!(w, "›" | "‹") || chord(w.trim_start_matches('(').trim_end_matches(')')));
+        let hint_frame = || plain.split_whitespace().all(|w| matches!(w, "›" | "‹") || chord(w.trim_start_matches('(').trim_end_matches(')')));
         // Known names as a list (`Aptos, Aptos Display`), or cut short to fit (`Ant…`).
         let names_listed = || plain.contains(", ") && plain.split(", ").all(|n| self.names.contains(n));
-        let name_cut = || {
-            plain.strip_suffix('…').is_some_and(|start| start.chars().count() >= 2 && self.names.iter().any(|n| n.starts_with(start)))
-        };
+        let name_cut = || plain.strip_suffix('…').is_some_and(|start| start.chars().count() >= 2 && self.names.iter().any(|n| n.starts_with(start)));
         // A command's error message in the status bar: commands answer scripts and MCP too, so
         // their messages stay English for now.
-        let status = app.status.iter().map(|s| s.text.as_str()).chain(app.read_aloud_error.iter().map(String::as_str)).any(|m| !m.is_empty() && text.contains(m));
+        let status = app
+            .status
+            .iter()
+            .map(|s| s.text.as_str())
+            .chain(app.read_aloud_error.iter().map(String::as_str))
+            .any(|m| !m.is_empty() && text.contains(m));
         // A theme's fonts after its (translated) name: `Studio: Georgia / Georgia`.
         let theme_fonts = plain.strip_prefix(": ").is_some_and(|f| f.split(" / ").count() == 2);
         let icon_lettering = matches!(plain, "Aa" | "ab" | "abc" | "ac" | "cd" | "ab-" | "fx" | "ABC");

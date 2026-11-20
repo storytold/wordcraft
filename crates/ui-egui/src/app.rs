@@ -1,9 +1,9 @@
 use super::services::Services;
 use super::state::{AutoSaveBlock, PromptSave, keeps_everything};
 use super::{
-    DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, backstage, canvas, chrome, content_controls,
-    crop, dialogs, documents, file_dialogs, i18n, json, keys, options, panes, paste_picture, printing, push_recent_font, read_aloud,
-    recent_fonts_from, ribbon, scroll, system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
+    DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, backstage, canvas, chrome,
+    content_controls, crop, dialogs, documents, file_dialogs, i18n, json, keys, options, panes, paste_picture, printing, push_recent_font,
+    read_aloud, recent_fonts_from, ribbon, scroll, system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
 };
 use craft::platform::clock::monotonic_ms;
 use craft::ui::runtime::commands::CommandInput;
@@ -15,9 +15,9 @@ pub(crate) mod command_board;
 mod commands;
 mod control;
 mod files;
+pub(crate) use files::Closing;
 #[cfg(test)]
 pub(crate) use files::suggested_stem;
-pub(crate) use files::Closing;
 pub(crate) mod fonts;
 mod frame;
 mod input;

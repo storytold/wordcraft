@@ -273,11 +273,9 @@ fn drawing_grid_starts_at_the_margins_and_stays_inside_them() {
     page.body = body;
     // The page hands the framework's `CanvasGrid` its origin, bounds and steps; the grid draws the lines from the
     // origin inside the bounds, one step apart (its own tests).
-    for (h, v, want_x, want_y) in [
-        (HALF_CM, HALF_CM, HALF_CM, HALF_CM),
-        (9.0, 18.0, 9.0, 18.0),
-        (0.0, f32::NAN, wordcraft_doc::DEFAULT_GRID, wordcraft_doc::DEFAULT_GRID),
-    ] {
+    for (h, v, want_x, want_y) in
+        [(HALF_CM, HALF_CM, HALF_CM, HALF_CM), (9.0, 18.0, 9.0, 18.0), (0.0, f32::NAN, wordcraft_doc::DEFAULT_GRID, wordcraft_doc::DEFAULT_GRID)]
+    {
         app.session.doc.settings.grid_h = h;
         app.session.doc.settings.grid_v = v;
         let grid = gridlines::page_grid(&app, &page).expect("the grid shows in Print Layout");
@@ -372,7 +370,10 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
         app,
     );
     steps(&mut h, 6);
-    assert!(!craft::ui::runtime::commands::resolve(&h.ctx, craft::keymap::CommandRef::new("ui.crop")).enabled, "the command state of ui.crop is disabled");
+    assert!(
+        !craft::ui::runtime::commands::resolve(&h.ctx, craft::keymap::CommandRef::new("ui.crop")).enabled,
+        "the command state of ui.crop is disabled"
+    );
 }
 
 /// A Behind Text header picture: while editing the header a click on it selects it wherever no

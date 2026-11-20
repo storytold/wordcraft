@@ -20,8 +20,7 @@ pub struct Services {
     /// Default apps page (apps can't set defaults themselves); Linux and BSD set it with
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
-    pub make_default_app:
-        Option<Box<dyn Fn() -> Result<craft::platform::default_app::DefaultApp, craft::platform::default_app::DefaultAppError>>>,
+    pub make_default_app: Option<Box<dyn Fn() -> Result<craft::platform::default_app::DefaultApp, craft::platform::default_app::DefaultAppError>>>,
     /// Desktop: the app's own user templates folder (`Templates` in the settings folder, #2852),
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.

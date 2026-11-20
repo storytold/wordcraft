@@ -151,7 +151,9 @@ fn citations_provider_menu_has_zotero_checked() {
     let mut a = app();
     let depth = a.session.undo_depth();
     assert_eq!(a.run("ui.citations.provider", json!({"value": "zotero"})).unwrap(), json!({"provider": "zotero"}));
-    for junk in [json!({}), json!({"value": "mendeley"}), json!({"value": 7}), json!({"value": null}), json!({"value": ""}), json!({"value": ["zotero"]})] {
+    for junk in
+        [json!({}), json!({"value": "mendeley"}), json!({"value": 7}), json!({"value": null}), json!({"value": ""}), json!({"value": ["zotero"]})]
+    {
         assert!(a.run("ui.citations.provider", junk).is_err());
     }
     assert_eq!(a.session.undo_depth(), depth, "not an undo step");

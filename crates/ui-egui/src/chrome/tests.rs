@@ -363,7 +363,9 @@ fn controls_on_row_of(h: &egui_kittest::Harness<'static, WordApp>, anchor: egui:
     let y = anchor.center().y;
     roles
         .into_iter()
-        .flat_map(|role| h.query_all_by_role(role).map(|n| (n.accesskit_node().label().unwrap_or_default().to_string(), n.rect())).collect::<Vec<_>>())
+        .flat_map(|role| {
+            h.query_all_by_role(role).map(|n| (n.accesskit_node().label().unwrap_or_default().to_string(), n.rect())).collect::<Vec<_>>()
+        })
         // A field's editor is an unnamed text input inside the named field (Search, the combo boxes): a part of the
         // control, not another control.
         .filter(|(l, r)| !l.is_empty() && r.width() > 0.0 && r.min.y <= y && y <= r.max.y)

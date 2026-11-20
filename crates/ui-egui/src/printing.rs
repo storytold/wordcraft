@@ -263,7 +263,8 @@ pub fn submit(app: &mut crate::WordApp, params: &Value) -> Result<Value, String>
     }
     let mut pdf_params = params.clone();
     let mut settings = app.printing.settings.clone();
-    let collate = params.get("collate").map(|value| value.as_bool().ok_or("collate must be a boolean")).transpose()?.unwrap_or(app.print.settings.collate);
+    let collate =
+        params.get("collate").map(|value| value.as_bool().ok_or("collate must be a boolean")).transpose()?.unwrap_or(app.print.settings.collate);
     if chooses {
         let object = pdf_params.as_object_mut().ok_or("print settings must be an object")?;
         if let Some(copies) = object.get("copies") {

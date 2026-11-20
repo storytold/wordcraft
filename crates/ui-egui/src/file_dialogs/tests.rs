@@ -42,7 +42,8 @@ fn legacy_word_bytes() -> Vec<u8> {
 /// An app over `files`.
 fn app_over(files: &Arc<ScriptedFiles>, document: wordcraft_doc::Document) -> WordApp {
     // PLAN: assumed `WordApp::with_host(Arc<Host>) -> Self` (app.H1, S-L103)
-    let host = craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+    let host =
+        craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
     WordApp::new(Session::new(document), Services::default()).with_host(Arc::new(host))
 }
 
@@ -905,7 +906,8 @@ fn only_add_font_asks_for_several_files() {
 #[test]
 fn a_huge_font_selection_is_capped() {
     let (mut a, _) = async_app();
-    let fonts: Vec<(String, Value)> = (0..MAX_FONTS_PER_PICK + 50).map(|i| format!("/nonexistent/f{i}.ttf")).map(|p| (p.clone(), json!({"path": p}))).collect();
+    let fonts: Vec<(String, Value)> =
+        (0..MAX_FONTS_PER_PICK + 50).map(|i| format!("/nonexistent/f{i}.ttf")).map(|p| (p.clone(), json!({"path": p}))).collect();
     let r = a.add_fonts(fonts).unwrap();
     assert_eq!(r["added"], 0);
     assert_eq!(r["failed"].as_array().map(Vec::len), Some(MAX_FONTS_PER_PICK));

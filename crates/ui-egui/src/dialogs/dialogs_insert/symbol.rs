@@ -3,9 +3,7 @@ use std::sync::Arc;
 use craft::behavior::{ColumnWidth, Selection, SelectionChange, keyed};
 use craft::font_manager::Catalog;
 use craft::font_manager::picker::FontPickerSettings;
-use craft::ui::contract::{
-    Bind, CollectionEvent, ColumnKey, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-};
+use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft::ui::display::{Kbd, Text};
 use craft::ui::form::Field;
@@ -195,14 +193,8 @@ impl SymbolForm {
         let recent = app.ui.recent_symbols.first().cloned();
         let font = recent.as_ref().map(|r| r.font.clone()).unwrap_or_default();
         let selected = recent.and_then(|r| r.ch.chars().next());
-        let mut f = SymbolForm {
-            tab,
-            font,
-            selected,
-            text_font: Self::text_font_of(app),
-            recent: app.ui.recent_symbols.clone(),
-            ..SymbolForm::default()
-        };
+        let mut f =
+            SymbolForm { tab, font, selected, text_font: Self::text_font_of(app), recent: app.ui.recent_symbols.clone(), ..SymbolForm::default() };
         f.sync_code();
         f
     }
@@ -503,9 +495,11 @@ fn symbol_body(
             form.tab = 0;
         } else {
             let pages = [0u8, 1u8];
-            let out = TabStrip::new(word("Symbol pages")).kind(TabKind::Text).shown(form.tab).natural_height(true).show_items(ui, &keyed(&pages, |t: &u8| *t), &mut |t, _| {
-                Tab::new(word(if *t == 0 { "Symbols" } else { "Special Characters" }))
-            });
+            let out = TabStrip::new(word("Symbol pages")).kind(TabKind::Text).shown(form.tab).natural_height(true).show_items(
+                ui,
+                &keyed(&pages, |t: &u8| *t),
+                &mut |t, _| Tab::new(word(if *t == 0 { "Symbols" } else { "Special Characters" })),
+            );
             for event in out.response.events {
                 if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                     && let Some(t) = keys.last()
@@ -606,8 +600,13 @@ fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>
             form.load();
         }
     }
-    let available: Vec<usize> =
-        (0..SUBSETS.len()).filter(|i| SUBSETS.get(*i).is_some_and(|(_, a, b)| form.chars.get(form.chars.partition_point(|c| (*c as u32) < *a)).is_some_and(|c| (*c as u32) <= *b))).collect();
+    let available: Vec<usize> = (0..SUBSETS.len())
+        .filter(|i| {
+            SUBSETS
+                .get(*i)
+                .is_some_and(|(_, a, b)| form.chars.get(form.chars.partition_point(|c| (*c as u32) < *a)).is_some_and(|c| (*c as u32) <= *b))
+        })
+        .collect();
     let rows: Vec<Label> = available.iter().filter_map(|i| SUBSETS.get(*i)).map(|(name, _, _)| Label::from(*name)).collect();
     let current = form.selected.and_then(subset_of).and_then(|s| available.iter().position(|i| SUBSETS.get(*i).is_some_and(|(n, _, _)| *n == s)));
     if let Some(at) = select_index(ui, &word("Subset:"), &rows, current)
@@ -682,7 +681,8 @@ fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
     let font = form.shown_font().to_string();
     let events = {
         let chars = &form.chars;
-        let mut grid = TileGrid::new(word("Symbols")).select(SelectMode::Single).max_rows(8).caption(CaptionPlace::None).selection(Bind::bound(&mut selection));
+        let mut grid =
+            TileGrid::new(word("Symbols")).select(SelectMode::Single).max_rows(8).caption(CaptionPlace::None).selection(Bind::bound(&mut selection));
         if let Some(at) = reveal {
             grid = grid.reveal(at);
         }

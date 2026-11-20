@@ -10,7 +10,6 @@ pub(crate) enum PromptSave {
     Later(craft::host::PickId),
 }
 
-
 /// Why AutoSave can't cover the document ([`WordApp::autosave_block`]); the switch is greyed out
 /// and its tooltip gives [`AutoSaveBlock::reason`].
 #[derive(Clone, Debug, PartialEq, Eq)]

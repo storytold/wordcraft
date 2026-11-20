@@ -134,10 +134,8 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
             let out = button.show(ui);
             rects.push(out.response.rect);
             // The ribbon's command menu: on or off the toolbar, and the customize rows.
-            let request =
-                RibbonMenuRequest { command: Some(CommandRef::new(id.as_str())), at: out.response.rect.left_bottom() };
-            Menu::context(tl!("Quick Access Toolbar").to_string(), &out.response)
-                .show(ui, |ui, _| crate::ribbon::command_menu(ui, app, &request));
+            let request = RibbonMenuRequest { command: Some(CommandRef::new(id.as_str())), at: out.response.rect.left_bottom() };
+            Menu::context(tl!("Quick Access Toolbar").to_string(), &out.response).show(ui, |ui, _| crate::ribbon::command_menu(ui, app, &request));
             if id == "edit.undo" {
                 // The list is the document's steps, not the Markdown Source pane's typing.
                 rects.push(undo_arrow(app, ui, enabled && app.session.md_source.is_none()));
@@ -207,24 +205,22 @@ fn qat_menu(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
         })
         .collect();
     // No `open` binding: with one the framework leaves the opening to the app, without it the opener opens the menu.
-    Menu::new(tl!("Customize Quick Access Toolbar").to_string())
-        .opened_by(&out.response, Trigger::Click)
-        .show(ui, |ui, _| {
-            MenuItem::heading(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
-            for (id, label, on) in &shown {
-                let key = if *on { "qatRemove" } else { "qatAdd" };
-                MenuItem::command(CommandRef::with_params("tools.customizeRibbon", json!({ key: *id }))).label(label.clone()).check(*on).show(ui);
-            }
-            Divider::horizontal().show(ui);
-            MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "customizeQuickAccess"})))
-                .label(tl!("More Commands…").to_string())
-                .show(ui);
-            // Last, as in Word (#1945); the ribbon's right-click menu brings the toolbar back.
-            Divider::horizontal().show(ui);
-            MenuItem::command(CommandRef::with_params("ui.quickAccessToolbar", json!({"value": false})))
-                .label(tl!("Hide Quick Access Toolbar").to_string())
-                .show(ui);
-        });
+    Menu::new(tl!("Customize Quick Access Toolbar").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| {
+        MenuItem::heading(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
+        for (id, label, on) in &shown {
+            let key = if *on { "qatRemove" } else { "qatAdd" };
+            MenuItem::command(CommandRef::with_params("tools.customizeRibbon", json!({ key: *id }))).label(label.clone()).check(*on).show(ui);
+        }
+        Divider::horizontal().show(ui);
+        MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "customizeQuickAccess"})))
+            .label(tl!("More Commands…").to_string())
+            .show(ui);
+        // Last, as in Word (#1945); the ribbon's right-click menu brings the toolbar back.
+        Divider::horizontal().show(ui);
+        MenuItem::command(CommandRef::with_params("ui.quickAccessToolbar", json!({"value": false})))
+            .label(tl!("Hide Quick Access Toolbar").to_string())
+            .show(ui);
+    });
     out.response.rect
 }
 

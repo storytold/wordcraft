@@ -105,7 +105,8 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
         Checkbox::new(Bind::bound(&mut st.editing)).label(tl!("Only allow this kind of editing:")).show(ui);
         let entries: Vec<Entry<String>> = EDIT_MODES.iter().map(|(id, label)| Entry::new((*id).to_string(), tl!(label))).collect();
         let current = EDIT_MODES.get(st.mode).map_or("readOnly", |m| m.0).to_string();
-        let picked = Select::new(tl!("Only allow this kind of editing:"), Bind::given(current), &entries).enabled(st.editing).show(ui).value().cloned();
+        let picked =
+            Select::new(tl!("Only allow this kind of editing:"), Bind::given(current), &entries).enabled(st.editing).show(ui).value().cloned();
         if let Some(id) = picked
             && let Some(at) = EDIT_MODES.iter().position(|m| m.0 == id)
         {
@@ -188,7 +189,8 @@ fn style_list(ui: &mut Ui, st: &mut RestrictPane, styles: &[(String, String)]) {
 
 /// OK and Cancel in the platform's order: `Some(true)` for OK, `Some(false)` for Cancel.
 fn confirm_buttons(ui: &mut Ui) -> Option<bool> {
-    let out = FooterBar::buttons([FooterButton::new(tl!("OK"), DialogRole::Accept), FooterButton::new(tl!("Cancel"), DialogRole::Cancel)]).show_footer(ui);
+    let out =
+        FooterBar::buttons([FooterButton::new(tl!("OK"), DialogRole::Accept), FooterButton::new(tl!("Cancel"), DialogRole::Cancel)]).show_footer(ui);
     out.picked.map(|i| i == 0)
 }
 

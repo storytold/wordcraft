@@ -41,8 +41,7 @@ fn query(app: &WordApp) -> String {
 
 /// The Go To kinds; bookmark names starting with `_` are hidden ones.
 fn kinds(app: &WordApp) -> Vec<GoToKind> {
-    let bookmarks: Vec<String> =
-        app.session.doc.bookmarks().into_iter().map(|(n, _)| n).filter(|n| !n.starts_with('_')).collect();
+    let bookmarks: Vec<String> = app.session.doc.bookmarks().into_iter().map(|(n, _)| n).filter(|n| !n.starts_with('_')).collect();
     vec![
         GoToKind::typed(tl!("Page"), tl!("Type +2 or -1 to move from the page you are on."), true),
         GoToKind::named(tl!("Bookmark"), bookmarks, tl!("This document has no bookmarks.")),

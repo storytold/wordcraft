@@ -1,4 +1,4 @@
-use super::{WordApp, Status, chrome, canvas, documents, panes, read_aloud, ribbon, updates_ui, zotero};
+use super::{Status, WordApp, canvas, chrome, documents, panes, read_aloud, ribbon, updates_ui, zotero};
 use craft::platform::clock::monotonic_ms;
 use craft::theme::variant::Tone;
 use craft::ui::bars::StatusMessage;

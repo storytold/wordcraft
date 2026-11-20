@@ -278,7 +278,6 @@ fn paint_strip(cx: &ContentPainterCx, r: Rect, cells: Vec<DataColor>) {
     });
 }
 
-
 /// The picker's three columns: categories, the layouts of the category and the picked layout's preview. True when a
 /// layout was activated (double click or Enter).
 fn picker(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
@@ -427,11 +426,10 @@ pub fn frame_button(app: &mut WordApp, ui: &mut Ui, pages: &[PlacedPage], layout
         page.to_doc(&space.view, Point::new(f64::from(r.x), f64::from(r.bottom()))),
     ];
     let area = ui.max_rect();
-    let shown = TaskBar::selection(tl!("Text Pane").to_string(), &corners).side(Side::Start).dismiss(TaskBarDismiss::Keep).show(
-        ui,
-        area,
-        |ui, _| IconButton::new(IconId::new("textPane")).label(tl!("Text Pane").to_string()).show(ui).clicked(),
-    );
+    let shown = TaskBar::selection(tl!("Text Pane").to_string(), &corners)
+        .side(Side::Start)
+        .dismiss(TaskBarDismiss::Keep)
+        .show(ui, area, |ui, _| IconButton::new(IconId::new("textPane")).label(tl!("Text Pane").to_string()).show(ui).clicked());
     if shown.inner == Some(true) {
         let _ = app.run("smartArt.textPane", json!({"value": true}));
     }
@@ -525,8 +523,8 @@ pub(crate) fn type_into(app: &mut WordApp, ctx: &egui::Context, typed: &str) -> 
 pub(crate) fn end_typing_run(app: &mut WordApp, canvas_focused: bool) {
     let Some(run) = &app.canvas.smart_art_run else { return };
     let item = run.item;
-    let inside = canvas_focused
-        && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some_and(|g| current_item(app, &g) == Some(item));
+    let inside =
+        canvas_focused && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some_and(|g| current_item(app, &g) == Some(item));
     if !inside {
         close_typing_run(app);
     }
@@ -593,7 +591,11 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
         reports.borrow_mut().clear();
         for (i, it) in g.items.iter().enumerate() {
             Row::new().indent(u8::try_from(it.level).unwrap_or(u8::MAX)).show(ui, |ui, _| {
-                let field = TextField::new(format!("{} {}", tl!("Text Pane"), i + 1), Bind::given(it.text.clone())).id(row_id(i)).tab_reports().submits().show(ui);
+                let field = TextField::new(format!("{} {}", tl!("Text Pane"), i + 1), Bind::given(it.text.clone()))
+                    .id(row_id(i))
+                    .tab_reports()
+                    .submits()
+                    .show(ui);
                 let color = g.style_accent(i).and_then(|n| {
                     let own = it.color.map(|c| c.hex()).unwrap_or_default();
                     let mut value = own.clone();

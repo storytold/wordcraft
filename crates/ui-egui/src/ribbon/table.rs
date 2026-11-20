@@ -58,12 +58,17 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         super::galleries::table_styles(ui, app);
         Stack::new().show(ui, |ui, _| {
             let _ = menu_button(ui, Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")), tl!("Styles").to_string(), None, |ui, _| {
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"}))).label(tl!("New Table Style…").to_string()).show(ui);
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
+                    .label(tl!("New Table Style…").to_string())
+                    .show(ui);
                 MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
                     .label(tl!("Modify Table Style…").to_string())
                     .enabled(can_modify)
                     .show(ui);
-                MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({}))).label(tl!("Delete Table Style").to_string()).enabled(can_delete).show(ui);
+                MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
+                    .label(tl!("Delete Table Style").to_string())
+                    .enabled(can_delete)
+                    .show(ui);
             });
             let _ = crate::colors::shading_split(ui, app, tl!("Shading").to_string(), Target::cmd("table.shading").remember(Remember::Shading));
         });
@@ -82,7 +87,11 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 MenuItem::command(CommandRef::with_params("table.borders", json!({"kind": kind}))).label(tl!(label).to_string()).show(ui);
             }
         });
-        Button::command(CommandRef::new("table.borderPainter")).label(tl!("Border\nPainter").to_string()).icon(IconId::new("borderPainter")).arrangement(Arrangement::Stacked).show(ui);
+        Button::command(CommandRef::new("table.borderPainter"))
+            .label(tl!("Border\nPainter").to_string())
+            .icon(IconId::new("borderPainter"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
 }
 
@@ -137,16 +146,17 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
 pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("table", tl!("Table").to_string(), IconId::new("table").into()), |ui| {
         Stack::new().show(ui, |ui, _| {
-            let _ = menu_button(ui, Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")), tl!("Select").to_string(), None, |ui, _| {
-                for (label, id) in [
-                    ("Select Cell", "table.selectCell"),
-                    ("Select Column", "table.selectColumn"),
-                    ("Select Row", "table.selectRow"),
-                    ("Select Table", "table.selectTable"),
-                ] {
-                    MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
-                }
-            });
+            let _ =
+                menu_button(ui, Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")), tl!("Select").to_string(), None, |ui, _| {
+                    for (label, id) in [
+                        ("Select Cell", "table.selectCell"),
+                        ("Select Column", "table.selectColumn"),
+                        ("Select Row", "table.selectRow"),
+                        ("Select Table", "table.selectTable"),
+                    ] {
+                        MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+                    }
+                });
             ToggleButton::command(CommandRef::new("table.viewGridlines"))
                 .label(tl!("View Gridlines").to_string())
                 .icon(IconId::new("gridlines"))
@@ -189,7 +199,10 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         Stack::new().show(ui, |ui, _| {
             Button::command(CommandRef::new("table.insertRowBelow")).label(tl!("Insert Below").to_string()).icon(IconId::new("insertBelow")).show(ui);
             Button::command(CommandRef::new("table.insertColumnLeft")).label(tl!("Insert Left").to_string()).icon(IconId::new("insertLeft")).show(ui);
-            Button::command(CommandRef::new("table.insertColumnRight")).label(tl!("Insert Right").to_string()).icon(IconId::new("insertRight")).show(ui);
+            Button::command(CommandRef::new("table.insertColumnRight"))
+                .label(tl!("Insert Right").to_string())
+                .icon(IconId::new("insertRight"))
+                .show(ui);
         });
     });
     row.group(RibbonGroup::new("merge", tl!("Merge").to_string(), IconId::new("merge").into()), |ui| {
@@ -208,8 +221,14 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
         cell_size_boxes(ui, app);
         Stack::new().show(ui, |ui, _| {
-            Button::command(CommandRef::new("table.distributeRows")).label(tl!("Distribute Rows").to_string()).icon(IconId::new("distributeRows")).show(ui);
-            Button::command(CommandRef::new("table.distributeColumns")).label(tl!("Distribute Columns").to_string()).icon(IconId::new("distributeCols")).show(ui);
+            Button::command(CommandRef::new("table.distributeRows"))
+                .label(tl!("Distribute Rows").to_string())
+                .icon(IconId::new("distributeRows"))
+                .show(ui);
+            Button::command(CommandRef::new("table.distributeColumns"))
+                .label(tl!("Distribute Columns").to_string())
+                .icon(IconId::new("distributeCols"))
+                .show(ui);
         });
     });
     row.group(RibbonGroup::new("alignment", tl!("Alignment").to_string(), IconId::new("cellAlign").into()), |ui| {
@@ -241,9 +260,16 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
     });
     row.group(RibbonGroup::new("data", tl!("Data").to_string(), IconId::new("sort").into()), |ui| {
-        Button::command(CommandRef::new("table.sort")).label(tl!("Sort").to_string()).icon(IconId::new("sort")).arrangement(Arrangement::Stacked).show(ui);
+        Button::command(CommandRef::new("table.sort"))
+            .label(tl!("Sort").to_string())
+            .icon(IconId::new("sort"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
         Stack::new().show(ui, |ui, _| {
-            Button::command(CommandRef::new("table.repeatHeader")).label(tl!("Repeat Header Rows").to_string()).icon(IconId::new("repeatHeader")).show(ui);
+            Button::command(CommandRef::new("table.repeatHeader"))
+                .label(tl!("Repeat Header Rows").to_string())
+                .icon(IconId::new("repeatHeader"))
+                .show(ui);
             Button::command(CommandRef::new("table.toText")).label(tl!("Convert to Text").to_string()).icon(IconId::new("toText")).show(ui);
             Button::command(CommandRef::new("table.formula")).label(tl!("Formula").to_string()).icon(IconId::new("formula")).show(ui);
         });

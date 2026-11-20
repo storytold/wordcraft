@@ -47,7 +47,6 @@ fn wheel(h: &mut egui_kittest::Harness<'static, WordApp>, dy: f32) {
     });
 }
 
-
 /// #811: scrolling through one very large table was slow because every frame fingerprinted every
 /// item of every page (thousands of cell borders a page) for the page texture cache, and every
 /// page ever shown kept its texture. Now a frame lays nothing out again, fingerprints a page once
@@ -69,7 +68,8 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     for _ in 0..60 {
         wheel(&mut h, -400.0);
         h.step();
-        max_textures = max_textures.max(h.state().canvas.resident_pictures);    }
+        max_textures = max_textures.max(h.state().canvas.resident_pictures);
+    }
     let offset = h.state().canvas.view.offset.1;
     assert!(offset > 20_000.0, "scrolled through many pages: {offset}");
     let after = std::sync::Arc::clone(&h.state_mut().session.layout());

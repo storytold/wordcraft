@@ -1,6 +1,7 @@
 //! Manage Styles: every style with its preview and description; modify, create, delete and show or hide them.
 
 use craft::behavior::{ColumnKey, ColumnWidth, Selection, SelectionChange, item_source::keyed};
+use craft::theme::Mode;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{
@@ -12,7 +13,6 @@ use craft::ui::form::Field;
 use craft::ui::list::{List, ListRow};
 use craft::ui::pickers::Select;
 use craft::ui::primitives::textures::Revision;
-use craft::theme::Mode;
 use craft::ui::runtime::env::{Env, Label};
 use craft::ui::sections::{DialogRole, FooterButton};
 use egui::{ColorImage, Context, Ui, Vec2, vec2};
@@ -56,7 +56,11 @@ pub(super) fn action(ui: &mut Ui, salt: &str, text: Label, enabled: bool, reason
 /// What the dialog asks the app to do; the settle hook runs them, since the dialog holds no app.
 enum Request {
     /// `styles.setVisibility` with the one flag that changed.
-    Visibility { style: String, gallery: Option<bool>, hidden: Option<bool> },
+    Visibility {
+        style: String,
+        gallery: Option<bool>,
+        hidden: Option<bool>,
+    },
     Delete(String),
     Modify(String),
     /// New Style, based on the style of this name.
@@ -145,16 +149,16 @@ impl ManageStylesDialog {
             list = list.reveal(key);
         }
         let out = list.show_items(ui, &source, &mut |_, icx| {
-                let Some(st) = styles.get(icx.at) else { return ListRow::spacer() };
-                let glyph = match st.get("type").and_then(Value::as_str) {
-                    Some("character") => "a",
-                    Some("linked") => "¶a",
-                    Some("table") => "#",
-                    _ => "¶",
-                };
-                let row = ListRow::new(label(text_of(st, "name"))).lead_text(label(glyph), label("¶a"));
-                if flag(st, "hidden", false) { row.cell_muted(NAME) } else { row }
-            });
+            let Some(st) = styles.get(icx.at) else { return ListRow::spacer() };
+            let glyph = match st.get("type").and_then(Value::as_str) {
+                Some("character") => "a",
+                Some("linked") => "¶a",
+                Some("table") => "#",
+                _ => "¶",
+            };
+            let row = ListRow::new(label(text_of(st, "name"))).lead_text(label(glyph), label("¶a"));
+            if flag(st, "hidden", false) { row.cell_muted(NAME) } else { row }
+        });
         for event in out.events {
             match event {
                 CollectionEvent::Selection(SelectionChange::Set(keys)) => {
@@ -185,7 +189,9 @@ impl ManageStylesDialog {
         let style = self.selected.clone();
         if ty != "table" {
             let gallery = flag(&cur, "inGallery", false);
-            if let Some(on) = Checkbox::new(Bind::given(gallery)).label(label(tl!("Show in the Styles gallery"))).id_salt("gallery").show(ui).value().copied() {
+            if let Some(on) =
+                Checkbox::new(Bind::given(gallery)).label(label(tl!("Show in the Styles gallery"))).id_salt("gallery").show(ui).value().copied()
+            {
                 self.requests.push(Request::Visibility { style: style.clone(), gallery: Some(on), hidden: None });
             }
         }

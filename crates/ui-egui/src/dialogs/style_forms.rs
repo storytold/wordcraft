@@ -138,16 +138,16 @@ fn body(ui: &mut Ui, form: &mut ModifyStyleForm, catalog: &Arc<Catalog>, setting
     Field::new(label(tl!("Name:"))).show(ui, |ui, _| TextField::new(label(tl!("Name:")), Bind::bound(&mut form.name)).show(ui));
     let actions = [label(tl!("Add Font…"))];
     Field::new(label(tl!("Font:"))).show(ui, |ui, _| {
-        let out = crate::widgets::font_picker(label(tl!("Font:")), Bind::bound(&mut form.font), catalog, Bind::bound(settings), &actions, None).show(ui);
+        let out =
+            crate::widgets::font_picker(label(tl!("Font:")), Bind::bound(&mut form.font), catalog, Bind::bound(settings), &actions, None).show(ui);
         if out.action == Some(0) {
             requests.push(Request::AddFont);
         }
     });
     // The form keeps a number; a cleared box leaves the value as it was.
     let (mut size, mut before, mut after) = (Some(form.size), Some(form.before), Some(form.after));
-    Field::new(label(tl!("Size:"))).show(ui, |ui, _| {
-        NumberField::new(label(tl!("Size:")), Bind::bound(&mut size)).range(1.0..=1638.0).step(0.5).show(ui)
-    });
+    Field::new(label(tl!("Size:")))
+        .show(ui, |ui, _| NumberField::new(label(tl!("Size:")), Bind::bound(&mut size)).range(1.0..=1638.0).step(0.5).show(ui));
     Field::new(label(tl!("Color:"))).show(ui, |ui, _| TextField::new(label(tl!("Color:")), Bind::bound(&mut form.color)).show(ui));
     Field::new(label(tl!("Space before/after:"))).show(ui, |ui, _| {
         Row::new().show(ui, |ui, _| {
@@ -217,7 +217,9 @@ impl StackDialog for ModifyStyleDialog {
 
     fn json_fields(&self) -> Option<Value> {
         let f = &self.form;
-        Some(json!({"name": f.name, "font": f.font, "size": f.size, "color": f.color, "bold": f.bold, "italic": f.italic, "before": f.before, "after": f.after}))
+        Some(
+            json!({"name": f.name, "font": f.font, "size": f.size, "color": f.color, "bold": f.bold, "italic": f.italic, "before": f.before, "after": f.after}),
+        )
     }
 }
 

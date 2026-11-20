@@ -308,7 +308,9 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
         .map_err(|e| tl!(e).to_string())
         .and_then(|params| app.load_recipients(params))
         // A new list starts unfiltered; the dialog's filter and sort apply to it.
-        .and_then(|_| if draft.filter.is_empty() { Ok(Value::Null) } else { app.run("mailings.filterRecipients", draft.filter.params(&draft.fields)) });
+        .and_then(
+            |_| if draft.filter.is_empty() { Ok(Value::Null) } else { app.run("mailings.filterRecipients", draft.filter.params(&draft.fields)) },
+        );
     if let Some(d) = app.dialog_host.get_mut_by_id::<RecipientListDialog>(id) {
         d.held.answer(result.map(|_| ()).map_err(Into::into));
     }
@@ -552,11 +554,7 @@ impl StackDialog for RecipientListDialog {
     fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<()>> {
         let RecipientListDialog { draft, editing, pick, held } = self;
         let out = FormDialog::new(tl!("Recipient List"), Bind::bound(draft)).held(held).show(ui, |ui, _cx, d| recipient_body(ui, d, editing, pick));
-        if out.accepted.is_some() {
-            Some(DialogResult::Ok(()))
-        } else {
-            out.closed.map(|_| DialogResult::Cancel)
-        }
+        if out.accepted.is_some() { Some(DialogResult::Ok(())) } else { out.closed.map(|_| DialogResult::Cancel) }
     }
 
     fn held_state(&self) -> Option<HeldOk> {

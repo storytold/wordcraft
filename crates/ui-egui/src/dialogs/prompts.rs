@@ -16,7 +16,11 @@ pub(super) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
     let text = |key: &str| params.get(key).and_then(Value::as_str).unwrap_or("");
     match name {
         "password" => {
-            let ask = Ask::Open { name: text("name").to_owned(), then: text("then").to_owned(), params: params.get("params").cloned().unwrap_or(Value::Null) };
+            let ask = Ask::Open {
+                name: text("name").to_owned(),
+                then: text("then").to_owned(),
+                params: params.get("params").cloned().unwrap_or(Value::Null),
+            };
             Some(open_prompt(app, parent, ask, None))
         }
         "encryptPassword" => Some(open_prompt(app, parent, Ask::Encrypt, None)),

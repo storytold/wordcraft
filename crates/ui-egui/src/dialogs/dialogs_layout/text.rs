@@ -1,7 +1,9 @@
 use craft::behavior::{Selection, SelectionChange, keyed};
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup, Segmented};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, FieldLayout, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SideLabel};
+use craft::ui::contract::{
+    Bind, CollectionEvent, Entry, FieldLayout, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SideLabel,
+};
 use craft::ui::display::Text;
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow};
@@ -235,7 +237,6 @@ impl ManualForm {
     fn byte_of(&self, ch: usize) -> usize {
         self.word.char_indices().nth(ch).map_or(self.word.len(), |(i, _)| i)
     }
-
 }
 
 /// A position (`{"story", "path", "off"}`) at another offset in the same paragraph.
@@ -301,10 +302,7 @@ impl WordForm for ManualForm {
     /// Yes puts an optional hyphen at the chosen point; No changes nothing.
     fn extra(&mut self, at: usize) -> Vec<(String, Value)> {
         match at {
-            0 => vec![
-                ("caret.set".to_string(), json!({"pos": self.at(self.byte_of(self.choice))})),
-                ("text.optionalHyphen".to_string(), json!({})),
-            ],
+            0 => vec![("caret.set".to_string(), json!({"pos": self.at(self.byte_of(self.choice))})), ("text.optionalHyphen".to_string(), json!({}))],
             _ => Vec::new(),
         }
     }

@@ -50,7 +50,6 @@ pub struct ZoteroLink {
     methods: Vec<String>,
 }
 
-
 /// Focus requests from the bridge.
 struct AppHost<'a> {
     ctx: &'a egui::Context,

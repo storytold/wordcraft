@@ -950,7 +950,12 @@ fn behind_drag_at(app: &WordApp, layout: &DocLayout, body: &PageBody, at: Pos2) 
     let (pp, x, y) = page_at(body, layout, at)?;
     let (page, edge) = (pp.page, edge_of(pp));
     layout.find_object(page, |o| {
-        o.page == page && o.story == story && o.behind() && movable(app, o) && behind_draggable(app, o) && o.rect.expand(edge).contains(o.unspin(x, y))
+        o.page == page
+            && o.story == story
+            && o.behind()
+            && movable(app, o)
+            && behind_draggable(app, o)
+            && o.rect.expand(edge).contains(o.unspin(x, y))
     })
 }
 
@@ -1099,10 +1104,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
     let state = BoxState::new(quad, pivot);
     let start = DocRect::from_points(pp.to_doc(view, pt(o.rect.x, o.rect.y)), pp.to_doc(view, pt(o.rect.right(), o.rect.bottom())));
     let scale = if picture { ScaleRule::Corners } else { ScaleRule::Free };
-    let rules = BoxRules::default()
-        .with_scale(scale)
-        .with_allow(BoxAllow::new(!size_only, false, false))
-        .with_min_side(doc_len(pp, view, min));
+    let rules = BoxRules::default().with_scale(scale).with_allow(BoxAllow::new(!size_only, false, false)).with_min_side(doc_len(pp, view, min));
     let mut tbox =
         TransformBox::new(tl!("Object frame").to_string(), Bind::given(state), start, 0.0).rules(rules).inside_moves(false).reference_point(false);
     if !size_only {

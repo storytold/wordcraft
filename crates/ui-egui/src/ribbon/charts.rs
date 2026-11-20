@@ -43,7 +43,10 @@ pub(super) fn smart_art_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         Stack::new().show(ui, |ui, _| {
             let idx = current.map_or(json!({}), |i| json!({"index": i}));
-            Button::command(CommandRef::with_params("smartArt.promote", idx.clone())).label(tl!("Promote").to_string()).icon(IconId::new("promote")).show(ui);
+            Button::command(CommandRef::with_params("smartArt.promote", idx.clone()))
+                .label(tl!("Promote").to_string())
+                .icon(IconId::new("promote"))
+                .show(ui);
             Button::command(CommandRef::with_params("smartArt.demote", idx)).label(tl!("Demote").to_string()).icon(IconId::new("demote")).show(ui);
             ToggleButton::command(CommandRef::new("smartArt.textPane"))
                 .label(tl!("Text Pane").to_string())
@@ -111,10 +114,9 @@ pub(super) fn chart_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         let face = Button::new(tl!("Chart Title").to_string()).icon(IconId::new("chartTitle")).arrangement(Arrangement::Stacked);
         let _ = menu_button(ui, face, tl!("Chart Title").to_string(), None, |ui, _| {
             let text = chart.title.clone().unwrap_or_else(|| tl!("Chart Title").to_string());
-            for (label, on, params) in [
-                ("None", chart.title.is_none(), json!({"text": null})),
-                ("Above Chart", chart.title.is_some(), json!({"text": text})),
-            ] {
+            for (label, on, params) in
+                [("None", chart.title.is_none(), json!({"text": null})), ("Above Chart", chart.title.is_some(), json!({"text": text}))]
+            {
                 MenuItem::command(CommandRef::with_params("chart.title", params)).label(tl!(label).to_string()).radio_mark(on).show(ui);
             }
         });

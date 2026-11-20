@@ -80,7 +80,6 @@ fn reads_shown_document(app: &WordApp) -> bool {
     app.session.read_aloud.document == Some(app.session.document_id())
 }
 
-
 /// The player: a modeless dialog shown each pass from the body of the window it belongs to, while
 /// the reading is open. It borrows the app, so the dialog host cannot own it.
 // PLAN: assumed caller (app-hub, `app/frame.rs:142`) passes the window body's Ui.
@@ -101,10 +100,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui) {
     let mut run: Option<(&str, serde_json::Value)> = None;
     // PLAN: assumed a public `Ui` -> panel padding accessor (`space.pad.regular`); until it exists the theme's window margin stands in.
     let pad = f32::from(ui.style().spacing.window_margin.left);
-    let at = app
-        .canvas
-        .canvas_rect()
-        .map_or(ui.ctx().content_rect().right_top() + vec2(-pad, pad), |r| r.right_top() + vec2(-pad, pad));
+    let at = app.canvas.canvas_rect().map_or(ui.ctx().content_rect().right_top() + vec2(-pad, pad), |r| r.right_top() + vec2(-pad, pad));
     let mut open = true;
     let dialog = Dialog::new(tl!("Read Aloud")).modeless().first_place(at, Align2::RIGHT_TOP).opened(Bind::bound(&mut open));
     dialog.show(ui, |ui, _| {

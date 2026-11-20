@@ -102,7 +102,11 @@ fn with_stops(g: &Gradient, stops: &GradientStops) -> Fill {
         g.stops = stops
             .color
             .iter()
-            .map(|s| GradStop { pos: (s.location * 100.0).clamp(0.0, 100.0), color: rgb_of(s.color), transparency: ((1.0 - s.color.a) * 100.0).clamp(0.0, 100.0) })
+            .map(|s| GradStop {
+                pos: (s.location * 100.0).clamp(0.0, 100.0),
+                color: rgb_of(s.color),
+                transparency: ((1.0 - s.color.a) * 100.0).clamp(0.0, 100.0),
+            })
             .collect();
     })
 }

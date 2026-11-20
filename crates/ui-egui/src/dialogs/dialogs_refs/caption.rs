@@ -143,7 +143,9 @@ impl WordForm for CaptionForm {
             Entry::new("above".to_string(), Label::from(tl!("Above the item").to_string())),
         ];
         if let Some(position) = Field::new(position_title.clone())
-            .show(ui, |ui, _| Select::new(position_title.clone(), Bind::given(Mixed::Same(self.position.clone())), &positions).show(ui).value().cloned())
+            .show(ui, |ui, _| {
+                Select::new(position_title.clone(), Bind::given(Mixed::Same(self.position.clone())), &positions).show(ui).value().cloned()
+            })
             .inner
             .flatten()
         {
@@ -299,7 +301,11 @@ impl WordForm for NumberingForm {
             (1..=9u8).map(|l| Entry::new(l.to_string(), Label::from(crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())])))).collect();
         if let Some(level) = Field::new(level_title.clone())
             .show(ui, |ui, _| {
-                Select::new(level_title.clone(), Bind::given(Mixed::Same(f.chapter_level.to_string())), &levels).enabled(f.chapter).show(ui).value().cloned()
+                Select::new(level_title.clone(), Bind::given(Mixed::Same(f.chapter_level.to_string())), &levels)
+                    .enabled(f.chapter)
+                    .show(ui)
+                    .value()
+                    .cloned()
             })
             .inner
             .flatten()
@@ -311,7 +317,11 @@ impl WordForm for NumberingForm {
         let separators: Vec<Entry<String>> = SEPARATORS.iter().map(|(v, l)| Entry::new(v.to_string(), Label::from(l.to_string()))).collect();
         if let Some(separator) = Field::new(separator_title.clone())
             .show(ui, |ui, _| {
-                Select::new(separator_title.clone(), Bind::given(Mixed::Same(f.separator.clone())), &separators).enabled(f.chapter).show(ui).value().cloned()
+                Select::new(separator_title.clone(), Bind::given(Mixed::Same(f.separator.clone())), &separators)
+                    .enabled(f.chapter)
+                    .show(ui)
+                    .value()
+                    .cloned()
             })
             .inner
             .flatten()

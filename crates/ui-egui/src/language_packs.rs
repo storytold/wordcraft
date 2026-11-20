@@ -14,7 +14,7 @@ use std::sync::Arc;
 use craft::behavior::{ColumnKey, ColumnWidth, keyed};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
-use craft::ui::contract::{BodyCx, Bind, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, BodyCx, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::{Progress, Shade, Spinner, Text};
 use craft::ui::layout::RowAlign;
@@ -397,8 +397,8 @@ pub(crate) fn pack_bar(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
             let message = crate::i18n::fmt(tl!("{language} proofing isn't installed."), &[("language", &language)]);
             let running = progress(&pack.locale);
             let error = error_of(app, &pack.locale);
-            let install = (running.is_none())
-                .then(|| crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size_text(pack.size, &format))]).to_string());
+            let install =
+                (running.is_none()).then(|| crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size_text(pack.size, &format))]).to_string());
             // The body can run twice in a pass (measuring, then drawing): the notice is built in it each time.
             let shown_bar = Row::new().show(ui, |ui, _| {
                 let mut notice = Notice::new(if error.is_some() { Tone::Bad } else { Tone::Info }, message.to_string()).dismiss().id_salt("pack");
@@ -720,11 +720,12 @@ pub(crate) fn your_languages(app: &mut WordApp, ui: &mut Ui) {
             {
                 let chosen = &chosen;
                 let locale = locale.clone();
-                list_row = list_row.cell_field(ColumnKey::new("remove"), Button::new(tl!("Remove")).enabled(!busy).id_salt(("remove", at)), move |out| {
-                    if clicked(&out) {
-                        chosen.borrow_mut().removal = Some(locale);
-                    }
-                });
+                list_row =
+                    list_row.cell_field(ColumnKey::new("remove"), Button::new(tl!("Remove")).enabled(!busy).id_salt(("remove", at)), move |out| {
+                        if clicked(&out) {
+                            chosen.borrow_mut().removal = Some(locale);
+                        }
+                    });
             }
             if let Some(Some(e)) = errors.get(at) {
                 list_row = list_row.below(Notice::new(Tone::Bad, e.clone()).id_salt(("row_error", at)), |_| {});
@@ -865,40 +866,44 @@ impl StackDialog for AddLanguage {
                 }
                 let order: Vec<usize> = (0..list.len()).collect();
                 let source = keyed(&order[..], |at: &usize| *at).with_text(|at| Cow::Owned(list[*at].0.clone()));
-                let _ = List::new(tl!("Languages")).id_salt("packs").select(SelectMode::None).max_rows(PICKER_ROWS).show_items(ui, &source, &mut |key, _| {
-                    let at = *key;
-                    let (name, pack) = &list[at];
-                    let endonym = shown(&pack.name, MAX_BAR_NAME);
-                    let detail = if endonym == *name { pack.locale.clone() } else { format!("{endonym} · {}", pack.locale) };
-                    let wants = &wants;
-                    let mut row = ListRow::new(format!("{name} · {detail}"));
-                    match progress(&pack.locale) {
-                        Some((done, total)) => {
-                            let locale = pack.locale.clone();
-                            row = row
-                                .below(Progress::new(done.min(total) as f32 / total as f32).id_salt(("progress", at)), |_| {})
-                                .trailing_field(Button::new(tl!("Cancel")).id_salt(("cancel", at)), move |out| {
+                let _ = List::new(tl!("Languages")).id_salt("packs").select(SelectMode::None).max_rows(PICKER_ROWS).show_items(
+                    ui,
+                    &source,
+                    &mut |key, _| {
+                        let at = *key;
+                        let (name, pack) = &list[at];
+                        let endonym = shown(&pack.name, MAX_BAR_NAME);
+                        let detail = if endonym == *name { pack.locale.clone() } else { format!("{endonym} · {}", pack.locale) };
+                        let wants = &wants;
+                        let mut row = ListRow::new(format!("{name} · {detail}"));
+                        match progress(&pack.locale) {
+                            Some((done, total)) => {
+                                let locale = pack.locale.clone();
+                                row = row
+                                    .below(Progress::new(done.min(total) as f32 / total as f32).id_salt(("progress", at)), |_| {})
+                                    .trailing_field(Button::new(tl!("Cancel")).id_salt(("cancel", at)), move |out| {
+                                        if clicked(&out) {
+                                            wants.borrow_mut().push(Want::Cancel(locale));
+                                        }
+                                    });
+                            }
+                            None => {
+                                let size = if pack.size > 0 { format!(" ({})", size_text(pack.size, &format)) } else { String::new() };
+                                let pack = pack.clone();
+                                row = row.trailing_field(Button::new(format!("{}{size}", tl!("Install"))).id_salt(("install", at)), move |out| {
                                     if clicked(&out) {
-                                        wants.borrow_mut().push(Want::Cancel(locale));
+                                        wants.borrow_mut().push(Want::Install(pack, injected));
                                     }
                                 });
+                            }
                         }
-                        None => {
-                            let size = if pack.size > 0 { format!(" ({})", size_text(pack.size, &format)) } else { String::new() };
-                            let pack = pack.clone();
-                            row = row.trailing_field(Button::new(format!("{}{size}", tl!("Install"))).id_salt(("install", at)), move |out| {
-                                if clicked(&out) {
-                                    wants.borrow_mut().push(Want::Install(pack, injected));
-                                }
-                            });
+                        row = row.below(Text::new(licence_hover(pack)).shade(Shade::Faint), |_| {});
+                        if let Some(e) = error_in(errors, &pack.locale) {
+                            row = row.below(Notice::new(Tone::Bad, e).id_salt(("row_error", at)), |_| {});
                         }
-                    }
-                    row = row.below(Text::new(licence_hover(pack)).shade(Shade::Faint), |_| {});
-                    if let Some(e) = error_in(errors, &pack.locale) {
-                        row = row.below(Notice::new(Tone::Bad, e).id_salt(("row_error", at)), |_| {});
-                    }
-                    row
-                });
+                        row
+                    },
+                );
             });
         });
         self.asks.extend(wants.into_inner());

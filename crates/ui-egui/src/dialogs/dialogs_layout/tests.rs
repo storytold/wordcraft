@@ -539,7 +539,6 @@ fn split_cells_defaults_follow_the_selection() {
     assert_eq!(f.check(), None);
 }
 
-
 /// The envelope sizes go through the interface language's catalog and use the region's
 /// decimal separator (#1128; the untranslated-text audit found `#10   4.13 × 9.5 in` drawn in
 /// English).

@@ -4,9 +4,11 @@
 use craft::behavior::{DisplayOrder, IconId, ItemSource};
 use craft::keymap::CommandRef;
 use craft::menu::{Gallery, GalleryFace, GalleryItem, GalleryMore};
-use craft::ui::contract::overlay::Anchor;
 use craft::theme::Mode;
-use craft::ui::contract::{ActivateOn, Bind, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger};
+use craft::ui::contract::overlay::Anchor;
+use craft::ui::contract::{
+    ActivateOn, Bind, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger,
+};
 use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::IconSpec;
@@ -150,7 +152,8 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
     let current = current.unwrap_or("Normal").to_string();
     let out = {
         let doc = &app.session.doc;
-        let makers: Vec<Maker<'_>> = entries.iter().map(|(id, _)| Box::new(move || style_tile_image(doc, id, ppp, dark_page, dark)) as Maker<'_>).collect();
+        let makers: Vec<Maker<'_>> =
+            entries.iter().map(|(id, _)| Box::new(move || style_tile_image(doc, id, ppp, dark_page, dark)) as Maker<'_>).collect();
         let items = image_items("style", &entries, &makers, ppp, revision);
         // Each tile shows the sample's first letters at their size: a large thumbnail as wide as `STYLE_TILE_W` crops
         // them (68 by 48 points), so the sample is not scaled down, with the style's name under it.
@@ -173,11 +176,8 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
     let Some((style, at)) = ui.data(|d| d.get_temp::<(String, Pos2)>(menu_id)) else { return };
     let mut open = true;
     let (mut updated, mut modify) = (false, false);
-    let _ = Menu::new(tl!("Style"))
-        .opened_by(&out.response, Trigger::Manual)
-        .anchor(Anchor::Point(at))
-        .open(Bind::bound(&mut open))
-        .show(ui, |ui, _| {
+    let _ =
+        Menu::new(tl!("Style")).opened_by(&out.response, Trigger::Manual).anchor(Anchor::Point(at)).open(Bind::bound(&mut open)).show(ui, |ui, _| {
             updated = MenuItem::command(CommandRef::with_params("styles.updateToMatch", json!({"style": style}))).show(ui).ran;
             modify = MenuItem::new(tl!("Modify…")).show(ui).ran;
         });
@@ -325,7 +325,8 @@ mod tests {
     #[test]
     fn a_hanging_indent_style_previews_from_the_tile_edge() {
         let mut doc = Document::new();
-        let mut style = wordcraft_doc::styles::Style { id: "Hanging".into(), name: "Hanging".into(), quick: true, priority: Some(0), ..Default::default() };
+        let mut style =
+            wordcraft_doc::styles::Style { id: "Hanging".into(), name: "Hanging".into(), quick: true, priority: Some(0), ..Default::default() };
         style.para.indent_left = Some(0.0);
         style.para.indent_first = Some(-36.0);
         Arc::make_mut(&mut doc.styles).upsert(style);

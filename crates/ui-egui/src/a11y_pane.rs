@@ -4,6 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, CollectionEvent, Show as _, ShowCollection as _, ShowContainer as _, WordSetCx as _};
 use craft::ui::layout_components::Stack;
@@ -11,7 +12,6 @@ use craft::ui::list::{Finding, Findings, FindingsList, FindingsSummary, Findings
 use craft::ui::notices::Notice;
 use craft::ui::text::{AltText, AltTextField, TextField};
 use egui::Ui;
-use craft::theme::variant::Tone;
 use serde_json::{Value, json};
 use wordcraft_doc::Pos;
 

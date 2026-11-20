@@ -99,7 +99,8 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     alt_text_group(row);
     if wordcraft_engine::cmd::canvas::selected_canvas(&app.session).is_some() {
         row.group(RibbonGroup::new("shape.canvas", tl!("Drawing Canvas"), IconId::new("more").into()), |ui| {
-            let face = Button::new(tl!("Drawing\nCanvas")).icon(IconId::new("canvas")).tooltip(tl!("Drawing Canvas")).arrangement(Arrangement::Stacked);
+            let face =
+                Button::new(tl!("Drawing\nCanvas")).icon(IconId::new("canvas")).tooltip(tl!("Drawing Canvas")).arrangement(Arrangement::Stacked);
             menu_button(ui, face, tl!("Drawing Canvas"), None, |ui, _| {
                 MenuItem::command(CommandRef::new("canvas.fit")).label(tl!("Fit")).show(ui);
                 MenuItem::command(CommandRef::new("canvas.expand")).label(tl!("Expand")).show(ui);

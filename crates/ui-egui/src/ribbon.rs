@@ -37,10 +37,10 @@ mod view;
 use arrange::align_menu;
 pub(crate) use arrange::wrap_text_items;
 use charts::{chart_design, smart_art_design};
+use common::custom_groups;
 #[cfg(test)]
 pub(crate) use common::size_menu;
 pub(crate) use common::weight_menu;
-use common::custom_groups;
 pub(crate) use context_menu::command_menu;
 use design::design;
 use draw::draw;
@@ -73,7 +73,9 @@ pub(crate) use shape::gradient_menu;
 use shape::shape_format;
 use table::{table_design, table_layout};
 use tabs::reading_toolbar;
-pub use tabs::{TABS, contextual_tabs, has_chart_selected, has_picture_selected, has_shape_selected, has_smart_art_selected, in_table_public, resolve_tab};
+pub use tabs::{
+    TABS, contextual_tabs, has_chart_selected, has_picture_selected, has_shape_selected, has_smart_art_selected, in_table_public, resolve_tab,
+};
 use view::{outlining, view};
 
 /// What a pass with no ribbon reports.

@@ -99,14 +99,17 @@ pub fn start() {
                     {
                         log::error!("no unsaved-changes guard: {e}");
                     }
-                    let files: Arc<dyn Files> = if app_bridge.is_some() {
-                        Arc::new(crate::host::HostedFiles::new(browser.clone()))
-                    } else {
-                        browser.clone()
-                    };
+                    let files: Arc<dyn Files> =
+                        if app_bridge.is_some() { Arc::new(crate::host::HostedFiles::new(browser.clone())) } else { browser.clone() };
 
-                    let host =
-                        Arc::new(Host::builder(wordcraft_ui_egui::APP).i18n(wordcraft_ui_egui::i18n::catalogs()).files(files).settings(Arc::new(settings.clone())).lang(lang.lang).build());
+                    let host = Arc::new(
+                        Host::builder(wordcraft_ui_egui::APP)
+                            .i18n(wordcraft_ui_egui::i18n::catalogs())
+                            .files(files)
+                            .settings(Arc::new(settings.clone()))
+                            .lang(lang.lang)
+                            .build(),
+                    );
 
                     let (intake, sender) = FileIntake::new(Wake::new(waker(&ctx)));
 
@@ -121,10 +124,8 @@ pub fn start() {
                         bridge.connect(&mut services, sender.clone());
                     }
                     let requests = crate::api::install(ctx.clone());
-                    let mut app = WordApp::new(session, services)
-                        .with_host(host)
-                        .with_settings(settings.clone())
-                        .with_control(ControlChannel::new(requests));
+                    let mut app =
+                        WordApp::new(session, services).with_host(host).with_settings(settings.clone()).with_control(ControlChannel::new(requests));
                     app.autosave = false;
                     app.tell_about_font_downloads();
                     // A region chosen in File › Options replaces the browser's for the first blank

@@ -11,16 +11,17 @@
 use std::borrow::Cow;
 
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, ItemSource, Selection, SelectionChange, keyed};
+use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{
-    Bind, CollectionEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, clicked, request_rename,
+    Bind, CollectionEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, clicked,
+    request_rename,
 };
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, PromptChoice, StackDialog, StandardPrompt, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow, ToggleCell, ToggleState};
-use craft::theme::variant::Tone;
 use craft::ui::notices::Notice;
 use craft::ui::runtime::env::Label;
 use craft::ui::sections::{DialogRole, FooterButton};
@@ -183,9 +184,11 @@ impl RibbonDialog {
     fn page_tabs(&mut self, ui: &mut Ui) {
         let tabs = [(Page::Ribbon, tl!("Ribbon").to_string()), (Page::QuickAccess, tl!("Quick Access Toolbar").to_string())];
         let source = keyed(&tabs[..], |tab: &(Page, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
-        let out = TabStrip::new(word("Customize Ribbon")).kind(TabKind::Text).shown(self.page).natural_height(true).show_items(ui, &source, &mut |page, _| {
-            Tab::new(tabs.iter().find(|tab| tab.0 == *page).map_or_else(String::new, |tab| tab.1.clone()))
-        });
+        let out = TabStrip::new(word("Customize Ribbon")).kind(TabKind::Text).shown(self.page).natural_height(true).show_items(
+            ui,
+            &source,
+            &mut |page, _| Tab::new(tabs.iter().find(|tab| tab.0 == *page).map_or_else(String::new, |tab| tab.1.clone())),
+        );
         for event in out.response.events {
             if let CollectionEvent::Selection(SelectionChange::Set(pages)) = event
                 && let Some(page) = pages.last()
@@ -711,12 +714,7 @@ fn prepare(app: &mut WordApp, id: DialogId) {
         can_reset: [!app.session.ribbon.ribbon_is_default(), app.session.ribbon.qat.is_some()],
     };
     let wanted = app.dialog_host.get_by_id::<RibbonDialog>(id).map(|d| select_in(&snapshot.commands, &d.command)).unwrap_or_default();
-    let detail = app
-        .session
-        .registry
-        .get(&wanted)
-        .map(|spec| format!("{} · {}", crate::i18n::location(spec.location), spec.id))
-        .unwrap_or_default();
+    let detail = app.session.registry.get(&wanted).map(|spec| format!("{} · {}", crate::i18n::location(spec.location), spec.id)).unwrap_or_default();
     if let Some(dialog) = app.dialog_host.get_mut_by_id::<RibbonDialog>(id) {
         dialog.refresh(Snapshot { detail, ..snapshot });
     }

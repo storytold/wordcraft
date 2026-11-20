@@ -1,6 +1,6 @@
 use super::*;
-use crate::test_harness::AppFrames as _;
 use crate::table_resize::tests::{H, button, cell, screen, steps, table_window, table_window_stepping};
+use crate::test_harness::AppFrames as _;
 
 /// The direction of the painted selection arrow the last pass settled on, `None` for any other cursor.
 fn arrow_toward(h: &H) -> Option<Vec2> {

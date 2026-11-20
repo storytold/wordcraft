@@ -111,7 +111,6 @@ fn on_handle(geom: &ResizeTarget, x: f32, y: f32, reach: f32) -> bool {
     starts_here(geom) && x >= h.x - reach / 2.0 && x <= h.right() + reach / 2.0 && y >= h.y - reach / 2.0 && y <= h.bottom() + reach / 2.0
 }
 
-
 /// The grid column at page x `x` (the first or the last beyond the table); a right-to-left
 /// table's count from the right.
 fn column_at(geom: &ResizeTarget, x: f32) -> usize {

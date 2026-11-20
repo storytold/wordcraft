@@ -79,32 +79,35 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
-    row.group(RibbonGroup::new("review.tracking", tl!("Tracking").to_string(), IconId::new("trackChanges").into()).launcher("review.trackingOptions"), |ui| {
-        ToggleButton::command(CommandRef::new("review.trackChanges"))
-            .label(tl!("Track\nChanges").to_string())
-            .icon(IconId::new("trackChanges"))
-            .arrangement(Arrangement::Stacked)
-            .selected(app.session.doc.settings.track_changes)
-            .show(ui);
-        let all = app.session.view.show_markup;
-        Stack::new().show(ui, |ui, _| {
-            let face = Button::new(if all { tl!("All Markup").to_string() } else { tl!("No Markup").to_string() }).icon(IconId::new("markup"));
-            menu_button(ui, face, tl!("Display for Review").to_string(), Some("review.markup"), |ui, _| {
-                MenuItem::command(CommandRef::with_params("review.markup", json!({"value": "all"})))
-                    .label(tl!("All Markup").to_string())
-                    .radio_mark(all)
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("review.markup", json!({"value": "noMarkup"})))
-                    .label(tl!("No Markup").to_string())
-                    .radio_mark(!all)
+    row.group(
+        RibbonGroup::new("review.tracking", tl!("Tracking").to_string(), IconId::new("trackChanges").into()).launcher("review.trackingOptions"),
+        |ui| {
+            ToggleButton::command(CommandRef::new("review.trackChanges"))
+                .label(tl!("Track\nChanges").to_string())
+                .icon(IconId::new("trackChanges"))
+                .arrangement(Arrangement::Stacked)
+                .selected(app.session.doc.settings.track_changes)
+                .show(ui);
+            let all = app.session.view.show_markup;
+            Stack::new().show(ui, |ui, _| {
+                let face = Button::new(if all { tl!("All Markup").to_string() } else { tl!("No Markup").to_string() }).icon(IconId::new("markup"));
+                menu_button(ui, face, tl!("Display for Review").to_string(), Some("review.markup"), |ui, _| {
+                    MenuItem::command(CommandRef::with_params("review.markup", json!({"value": "all"})))
+                        .label(tl!("All Markup").to_string())
+                        .radio_mark(all)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("review.markup", json!({"value": "noMarkup"})))
+                        .label(tl!("No Markup").to_string())
+                        .radio_mark(!all)
+                        .show(ui);
+                });
+                Button::command(CommandRef::new("review.changes"))
+                    .label(tl!("Reviewing Pane").to_string())
+                    .icon(IconId::new("reviewingPane"))
                     .show(ui);
             });
-            Button::command(CommandRef::new("review.changes"))
-                .label(tl!("Reviewing Pane").to_string())
-                .icon(IconId::new("reviewingPane"))
-                .show(ui);
-        });
-    });
+        },
+    );
     row.group(RibbonGroup::new("review.changes", tl!("Changes").to_string(), IconId::new("accept").into()), |ui| {
         SplitButton::<u8>::command(
             CommandRef::new("review.accept"),
@@ -207,10 +210,7 @@ pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 .icon(IconId::new("designMode"))
                 .selected(design)
                 .show(ui);
-            Button::command(CommandRef::new("developer.properties"))
-                .label(tl!("Properties").to_string())
-                .icon(IconId::new("properties"))
-                .show(ui);
+            Button::command(CommandRef::new("developer.properties")).label(tl!("Properties").to_string()).icon(IconId::new("properties")).show(ui);
         });
     });
 }

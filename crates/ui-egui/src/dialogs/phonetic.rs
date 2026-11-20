@@ -82,7 +82,10 @@ impl WordForm for PhoneticForm {
             }
         });
         Field::new(Label::from(tl!("Offset (pt):"))).show(ui, |ui, _| {
-            NumberField::new(Label::from(tl!("Offset (pt):")), Bind::bound(&mut self.offset)).unit_kind(UnitKind::Points).range(-100.0..=100.0).show(ui);
+            NumberField::new(Label::from(tl!("Offset (pt):")), Bind::bound(&mut self.offset))
+                .unit_kind(UnitKind::Points)
+                .range(-100.0..=100.0)
+                .show(ui);
         });
         Field::new(Label::from(tl!("Size (pt):"))).show(ui, |ui, _| {
             NumberField::new(Label::from(tl!("Size (pt):")), Bind::bound(&mut self.size)).unit_kind(UnitKind::Points).range(1.0..=200.0).show(ui);
@@ -92,7 +95,10 @@ impl WordForm for PhoneticForm {
 
     fn commands(&self) -> Vec<(String, Value)> {
         let align = if self.align.is_empty() { "center" } else { self.align.as_str() };
-        vec![("format.phonetic".into(), json!({"ruby": self.ruby, "align": align, "size": self.size.unwrap_or(12.0), "offset": self.offset.unwrap_or(0.0)}))]
+        vec![(
+            "format.phonetic".into(),
+            json!({"ruby": self.ruby, "align": align, "size": self.size.unwrap_or(12.0), "offset": self.offset.unwrap_or(0.0)}),
+        )]
     }
 
     fn extra_buttons(&self) -> Vec<FooterButton> {

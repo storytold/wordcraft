@@ -313,7 +313,6 @@ fn date_time_dialog_normalizes_portuguese_language_tags() {
     assert_eq!(f.language, "pt-BR");
 }
 
-
 /// One table form to `insert.dateTime`: pt-BR fixed text carries its language on the run; `update`
 /// inserts a refreshable field.
 #[test]

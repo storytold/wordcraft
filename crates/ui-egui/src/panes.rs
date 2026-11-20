@@ -27,8 +27,8 @@ pub(crate) use comments::{COMMENT_ROWS, commit_comment, commit_reply, flush_comm
 use host::Content;
 #[cfg(test)]
 pub(crate) use host::apply;
-pub use host::show;
 pub(crate) use host::dock_command;
+pub use host::show;
 pub(crate) use inspector::describe_props;
 use inspector::inspector;
 use nav::nav;
@@ -38,7 +38,6 @@ pub(crate) use state::float_rect;
 use state::pane_state;
 pub use state::{SavedDock, SavedPane, open};
 pub(crate) use state::{lenient_order, lenient_places};
-
 
 /// The task panes, in their default order: each edge's first pane is outermost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

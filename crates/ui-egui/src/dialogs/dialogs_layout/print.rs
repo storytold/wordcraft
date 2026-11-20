@@ -216,13 +216,21 @@ impl WordForm for LabelsForm {
                 Radio::new(1u8).label(tl!("Single label")).show(ui);
             });
             single = mode == 1;
-            if let Some(Some(v)) =
-                NumberField::new(tl!("Row:"), Bind::given(Some(row as f64))).range(1.0..=rows.max(1) as f64).enabled(single_on).show(ui).value().copied()
+            if let Some(Some(v)) = NumberField::new(tl!("Row:"), Bind::given(Some(row as f64)))
+                .range(1.0..=rows.max(1) as f64)
+                .enabled(single_on)
+                .show(ui)
+                .value()
+                .copied()
             {
                 row = v as usize;
             }
-            if let Some(Some(v)) =
-                NumberField::new(tl!("Column:"), Bind::given(Some(col as f64))).range(1.0..=cols.max(1) as f64).enabled(single_on).show(ui).value().copied()
+            if let Some(Some(v)) = NumberField::new(tl!("Column:"), Bind::given(Some(col as f64)))
+                .range(1.0..=cols.max(1) as f64)
+                .enabled(single_on)
+                .show(ui)
+                .value()
+                .copied()
             {
                 col = v as usize;
             }

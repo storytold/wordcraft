@@ -68,12 +68,12 @@ pub mod ribbon;
 mod save_types;
 pub mod scroll;
 pub use scroll::ScrollSpeed;
+pub mod desktop_theme; // owed by ribbon batch 2 (S-L348)
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
 pub mod table_resize;
 pub mod theme;
-pub mod desktop_theme; // owed by ribbon batch 2 (S-L348)
 mod undo_marks;
 pub mod updates_ui;
 pub mod widgets;
@@ -107,8 +107,8 @@ mod state;
 
 pub(crate) use app::works_without_document;
 // PLAN: assumed shell-w13 leaves `HostSaveFn` and `Inbox` out of `services` (sh.A14 removes `host_save` and `inbox`).
-pub use services::Services;
 pub use app::fonts::ui_fonts;
+pub use services::Services;
 pub use state::{AutoSaveBlock, keeps_everything};
 
 /// A status-bar message and when it stops showing.

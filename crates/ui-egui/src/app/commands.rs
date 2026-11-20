@@ -3,11 +3,11 @@ use craft::platform::default_app::{DefaultApp, DefaultAppError};
 use craft::quit::{CloseAnswer, CloseScope};
 
 use super::command_board::command_enabled;
-use crate::colors;
 use super::{
-    MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
-    paste_picture, printing, push_recent_font, system_clipboard, table_pen, theme, zotero,
+    MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes, paste_picture,
+    printing, push_recent_font, system_clipboard, table_pen, theme, zotero,
 };
+use crate::colors;
 
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -193,8 +193,13 @@ impl WordApp {
             let undo_stamp: Option<Box<dyn FnOnce(&mut wordcraft_engine::Session)>> = matches!(id, "file.save" | "file.saveAs").then(|| {
                 let dirty = dirty_before;
                 Box::new(move |session: &mut wordcraft_engine::Session| {
-                    (session.doc.settings.zoom, session.doc.core.last_modified_by, session.doc.core.created, session.doc.core.modified, session.doc.core.revision) =
-                        before_stamp;
+                    (
+                        session.doc.settings.zoom,
+                        session.doc.core.last_modified_by,
+                        session.doc.core.created,
+                        session.doc.core.modified,
+                        session.doc.core.revision,
+                    ) = before_stamp;
                     session.dirty = dirty;
                 }) as Box<dyn FnOnce(&mut wordcraft_engine::Session)>
             });
@@ -761,9 +766,7 @@ impl WordApp {
                             self.dialog_host.cancel_by_id(&ctx, id);
                         }
                         "discard" => {
-                            if let Some(prompt) =
-                                self.dialog_host.get_mut_by_id::<dialogs::host::Keyed<craft::ui::dialog::StandardPrompt>>(id)
-                            {
+                            if let Some(prompt) = self.dialog_host.get_mut_by_id::<dialogs::host::Keyed<craft::ui::dialog::StandardPrompt>>(id) {
                                 prompt.inner_mut().set_choice(craft::ui::dialog::PromptChoice::Proceed);
                             }
                             self.dialog_host.confirm_by_id(&ctx, id);

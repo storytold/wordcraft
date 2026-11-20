@@ -3,9 +3,9 @@
 //! from the session, not from `tools.macros`, which would ask to open this dialog again. Run and Record close the
 //! dialog; Delete leaves it open.
 
+use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft::ui::patterns::form_dialogs::{ActionEnabled, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerWords};
-use craft::ui::contract::Bind;
 use craft::ui::runtime::env::{Env, Label};
 use egui::{Context, Ui};
 use serde_json::{Value, json};

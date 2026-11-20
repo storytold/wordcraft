@@ -81,7 +81,8 @@ fn register(app: &mut WordApp, id: DialogId, entries: &[DialogHooks]) {
 
 /// Runs every `prepare` hook; once per window pass, before `DialogHost::run`.
 pub(crate) fn prepare(app: &mut WordApp) {
-    let todo: Vec<(DialogId, fn(&mut WordApp, DialogId))> = app.dialog_hooks.iter().filter_map(|(id, hooks)| hooks.prepare.map(|run| (*id, run))).collect();
+    let todo: Vec<(DialogId, fn(&mut WordApp, DialogId))> =
+        app.dialog_hooks.iter().filter_map(|(id, hooks)| hooks.prepare.map(|run| (*id, run))).collect();
     for (id, run) in todo {
         run(app, id);
     }
@@ -99,7 +100,8 @@ pub(crate) fn settle(app: &mut WordApp, ctx: &Context) {
     }
     let added = app.dialog_hooks.split_off(snapshot.len().min(app.dialog_hooks.len()));
     let open: Vec<DialogId> = app.dialog_host.open_dialogs().into_iter().map(|dialog| dialog.id).collect();
-    app.dialog_hooks = snapshot.into_iter().zip(done).filter(|((id, _), finished)| !*finished && open.contains(id)).map(|(entry, _)| entry).chain(added).collect();
+    app.dialog_hooks =
+        snapshot.into_iter().zip(done).filter(|((id, _), finished)| !*finished && open.contains(id)).map(|(entry, _)| entry).chain(added).collect();
 }
 
 /// Cancels every open dialog, the top one first, lets their hooks take the cancelled results and forgets the ribbon's
@@ -299,7 +301,16 @@ pub(crate) struct FormHost<F: WordForm> {
 
 impl<F: WordForm> FormHost<F> {
     fn new(form: F, parent: Option<DialogId>) -> Self {
-        FormHost { id: dialog_id(form.key()), form, held: HeldAnswer::new(), parent, accepts: false, pending: Vec::new(), asks: Vec::new(), children: Vec::new() }
+        FormHost {
+            id: dialog_id(form.key()),
+            form,
+            held: HeldAnswer::new(),
+            parent,
+            accepts: false,
+            pending: Vec::new(),
+            asks: Vec::new(),
+            children: Vec::new(),
+        }
     }
 
     /// The form as it stands.

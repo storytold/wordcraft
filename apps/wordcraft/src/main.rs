@@ -204,9 +204,8 @@ type MakeDefault = Box<dyn Fn() -> Result<DefaultApp, DefaultAppError>>;
 /// WordCraft the default app for Word documents (#295; macOS has no way to, so no button there).
 fn services(spool: Spool, intake: FileIntake) -> Services {
     #[cfg(any(unix, windows))]
-    let make_default_app = (!cfg!(target_os = "macos")).then(|| -> MakeDefault {
-        Box::new(|| craft::platform::default_app::make_default(&default_apps::identity()))
-    });
+    let make_default_app =
+        (!cfg!(target_os = "macos")).then(|| -> MakeDefault { Box::new(|| craft::platform::default_app::make_default(&default_apps::identity())) });
     #[cfg(not(any(unix, windows)))]
     let make_default_app: Option<MakeDefault> = None;
     Services {
@@ -579,7 +578,8 @@ fn main() -> eframe::Result {
             }
             let mut control_server = None;
             if let Some(port) = control.port
-                && let Some((rx, started)) = control_server::start(&control, port, WindowHost::of(&ctx), wordcraft_control_key::settings_dir().as_deref())
+                && let Some((rx, started)) =
+                    control_server::start(&control, port, WindowHost::of(&ctx), wordcraft_control_key::settings_dir().as_deref())
             {
                 app = app.with_control(ControlChannel::new(rx));
                 control_server = Some(started);
@@ -835,7 +835,8 @@ mod smoke {
         fn close_request_is_let_through(&mut self) -> bool {
             let Run { app, ctx, .. } = self;
             embed::before_input(ctx, |out| app.app.frame_input(out));
-            let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0))), ..Default::default() };
+            let mut input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0))), ..Default::default() };
             input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
             let mut first = true;
             let mut output = ctx.run_ui(input, |ui| {
@@ -886,9 +887,7 @@ mod smoke {
         let button = tree
             .keys()
             .into_iter()
-            .find(|key| {
-                craft::ui::testing::access::name(&tree, *key) == Some(dont_save) && craft::ui::testing::access::is_interactive(&tree, *key)
-            })
+            .find(|key| craft::ui::testing::access::name(&tree, *key) == Some(dont_save) && craft::ui::testing::access::is_interactive(&tree, *key))
             .expect("the prompt has a button for Don't Save");
         let press = egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
             action: egui::accesskit::Action::Click,

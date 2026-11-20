@@ -28,8 +28,8 @@ pub use date_time::DateTimeForm;
 #[cfg(test)]
 pub(crate) use date_time::date_time_preview_matches;
 pub use field::{DATE_FORMATS, FIELD_CATEGORIES, FIELDS, FieldForm, FieldKind, NUMBER_FORMATS, STYLEREF_SWITCHES, field_kind};
-pub(crate) use symbol::{SymbolDialog, SymbolPick, SymbolRequest};
 pub use symbol::{RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, remember_symbol, subset_of};
+pub(crate) use symbol::{SymbolDialog, SymbolPick, SymbolRequest};
 
 /// The dialog `ui.dialog` opens by `name`: `dateTime`, `columns`, `symbol`, `specialCharacters`,
 /// `field`, `dropCap` (where the paragraph can take one), and the chart, diagram and bullet names

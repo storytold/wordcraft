@@ -10,12 +10,7 @@ use super::{Pos2, WordApp};
 pub(super) fn viewed_page(caret: Option<(usize, f64, f64)>, top: f64, layout: &PagedLayout, height: f64) -> usize {
     match caret {
         Some((page, from, to)) if to >= top && from <= top + height => page,
-        _ => layout
-            .rects
-            .iter()
-            .zip(&layout.bands)
-            .position(|(r, band)| r.y0 + band.1 > top)
-            .unwrap_or(layout.rects.len().saturating_sub(1)),
+        _ => layout.rects.iter().zip(&layout.bands).position(|(r, band)| r.y0 + band.1 > top).unwrap_or(layout.rects.len().saturating_sub(1)),
     }
 }
 

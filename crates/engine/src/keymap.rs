@@ -164,7 +164,10 @@ mod tests {
         assert!(s.run("tools.customizeKeyboard", &json!({"assign": {"command": "no.such.command", "key": "Mod+Q"}})).is_err());
         assert!(s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.bold", "key": "Hyper+Q"}})).is_err());
         if !cfg!(target_os = "macos") {
-            assert!(s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.bold", "key": "Alt+Q"}})).is_err(), "Alt+Q is the command search");
+            assert!(
+                s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.bold", "key": "Alt+Q"}})).is_err(),
+                "Alt+Q is the command search"
+            );
         }
 
         s.run("tools.customizeKeyboard", &json!({"reset": true})).unwrap();

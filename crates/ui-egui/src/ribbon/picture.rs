@@ -24,7 +24,9 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             Button::new(tl!(label)).icon(IconId::new("picture")).tooltip(tl!(tip)).arrangement(Arrangement::Stacked)
         };
         menu_button(ui, stacked("Corrections", "Brightness, contrast and sharpness"), tl!("Corrections"), Some("picture.corrections"), |ui, _| {
-            for (l, b, c) in [("Brighter +20%", 20.0, 0.0), ("Darker −20%", -20.0, 0.0), ("More Contrast +20%", 0.0, 20.0), ("Less Contrast −20%", 0.0, -20.0)] {
+            for (l, b, c) in
+                [("Brighter +20%", 20.0, 0.0), ("Darker −20%", -20.0, 0.0), ("More Contrast +20%", 0.0, 20.0), ("Less Contrast −20%", 0.0, -20.0)]
+            {
                 MenuItem::command(CommandRef::with_params("picture.corrections", json!({"brightness": b, "contrast": c}))).label(tl!(l)).show(ui);
             }
             Divider::horizontal().show(ui);
@@ -50,7 +52,9 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         menu_button(ui, stacked("Transparency", "Picture transparency"), tl!("Transparency"), Some("picture.transparency"), |ui, _| {
             for v in [0.0, 15.0, 30.0, 50.0, 65.0, 80.0, 95.0] {
                 let label = format!("{v:.0}%");
-                MenuItem::command(CommandRef::with_params("picture.transparency", json!({"percent": v}))).label(tl!(label.as_str()).to_string()).show(ui);
+                MenuItem::command(CommandRef::with_params("picture.transparency", json!({"percent": v})))
+                    .label(tl!(label.as_str()).to_string())
+                    .show(ui);
             }
             Divider::horizontal().show(ui);
             // The engine has no transparency read, so the exact field starts empty each time the menu opens.
@@ -63,14 +67,24 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             });
         });
         Stack::new().show(ui, |ui, _| {
-            Button::command(CommandRef::new("ui.changePicture")).label(tl!("Change")).icon(IconId::new("picture")).tooltip(tl!("Change Picture")).show(ui);
+            Button::command(CommandRef::new("ui.changePicture"))
+                .label(tl!("Change"))
+                .icon(IconId::new("picture"))
+                .tooltip(tl!("Change Picture"))
+                .show(ui);
             Button::command(CommandRef::new("picture.reset")).label(tl!("Reset")).icon(IconId::new("picture")).tooltip(tl!("Reset Picture")).show(ui);
         });
     });
     row.group(RibbonGroup::new("picture.styles", tl!("Picture Styles"), IconId::new("more").into()), |ui| {
         let styles = Button::new(tl!("Styles")).icon(IconId::new("picture")).tooltip(tl!("Frames and effects")).arrangement(Arrangement::Stacked);
         menu_button(ui, styles, tl!("Styles"), Some("picture.style"), |ui, _| {
-            for (l, s) in [("Simple Frame", "simpleFrame"), ("Thick Frame", "thickFrame"), ("Rounded", "rounded"), ("Soft Edge", "softEdge"), ("Shadow", "shadow")] {
+            for (l, s) in [
+                ("Simple Frame", "simpleFrame"),
+                ("Thick Frame", "thickFrame"),
+                ("Rounded", "rounded"),
+                ("Soft Edge", "softEdge"),
+                ("Shadow", "shadow"),
+            ] {
                 MenuItem::command(CommandRef::with_params("picture.style", json!({"style": s}))).label(tl!(l)).show(ui);
             }
         });

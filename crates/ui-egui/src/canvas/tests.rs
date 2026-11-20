@@ -1,6 +1,6 @@
-use super::*;
 use super::cursor::caret_color_at;
 use super::pages::view_key;
+use super::*;
 use crate::table_resize::tests::{H, screen, steps};
 // Frames go through the app's input hook (`embed::before_input`) as in the app: command states, fired commands and
 // focus requests reach the runtime only that way (`test_harness::frame`).
@@ -16,7 +16,6 @@ fn rest_for_tip(h: &mut H) {
 
 mod markup;
 mod overlays;
-
 
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
@@ -590,11 +589,7 @@ fn an_armed_format_painter_changes_the_pointer() {
         let shell = env.view().shell();
         shell.os == craft::host::target::Os::Windows && shell.runtime == craft::host::target::Runtime::Native
     };
-    let text = if painted {
-        Cursor::Painted(PaintedCursor::IBeam)
-    } else {
-        Cursor::System(CursorIcon::Text)
-    };
+    let text = if painted { Cursor::Painted(PaintedCursor::IBeam) } else { Cursor::System(CursorIcon::Text) };
     assert_eq!(cursor_after(&mut h, None, over_text), Some(text.clone()), "no painter yet");
     assert_eq!(cursor_after(&mut h, Some("edit.formatPainter"), over_text), Some(Cursor::System(CursorIcon::Copy)), "armed");
     assert_eq!(cursor_after(&mut h, Some("edit.formatPainter"), over_text), Some(text), "turned off");
@@ -1143,17 +1138,14 @@ fn the_ime_fixture_draws_kana_without_a_japanese_font() {
 fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     app.run("document.setText", json!({"text": "The"})).unwrap();
-    let mut h = crate::test_harness::builder()
-        .with_size(egui::vec2(1440.0, 900.0))
-        .with_step_dt(1.0 / 60.0)
-        .build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     // Added to the harness's context, not as the builder's context setup, which would replace the one that installs
     // the craft runtime.
     kana_test_glyphs(&h.ctx);
@@ -1184,17 +1176,14 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
 
 /// A harness of `app` for the composition tests, past the frames the canvas needs to take focus.
 fn composing_harness(app: WordApp) -> H {
-    let mut h = crate::test_harness::builder()
-        .with_size(egui::vec2(1440.0, 900.0))
-        .with_step_dt(1.0 / 60.0)
-        .build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     for _ in 0..8 {
         h.app_frame();
     }
@@ -1312,17 +1301,14 @@ fn a_composition_at_the_largest_size_and_zoom_is_drawn_smaller() {
 fn ime_descriptor_reports_visible_logical_text_and_exact_cause() {
     use egui::ImeChangeCause;
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("ab")), Default::default());
-    let mut h = crate::test_harness::builder()
-        .with_size(egui::vec2(1440.0, 900.0))
-        .with_step_dt(1.0 / 60.0)
-        .build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     // Added to the harness's context, not as the builder's context setup, which would replace the one that installs
     // the craft runtime.
     kana_test_glyphs(&h.ctx);
@@ -1612,17 +1598,14 @@ fn exhausted_ime_revisions_never_certify_equation_or_wide_body_edits() {
 #[test]
 fn ime_generation_changes_on_body_replacement_with_the_same_text() {
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hello")), Default::default());
-    let mut h = crate::test_harness::builder()
-        .with_size(egui::vec2(1440.0, 900.0))
-        .with_step_dt(1.0 / 60.0)
-        .build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     // Added to the harness's context, not as the builder's context setup, which would replace the one that installs
     // the craft runtime.
     kana_test_glyphs(&h.ctx);

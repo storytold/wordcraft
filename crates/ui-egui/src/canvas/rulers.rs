@@ -184,7 +184,10 @@ fn table_drag(app: &mut WordApp, layout: &DocLayout, page: usize, drag: BorderDr
             if phase == GesturePhase::Commit {
                 app.canvas.table_resize = None;
                 let moved = (to.0 - at.0).abs() >= 0.5 || (to.1 - at.1).abs() >= 0.5;
-                if moved && let Some(p) = params && let Err(e) = app.run_keep_view("table.resizeDrag", p) {
+                if moved
+                    && let Some(p) = params
+                    && let Err(e) = app.run_keep_view("table.resizeDrag", p)
+                {
                     app.status(e);
                 }
             }

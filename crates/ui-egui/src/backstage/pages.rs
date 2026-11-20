@@ -1,5 +1,6 @@
 //! The File pages with a form or a list of their own: Info, Save As, Export (and Print) and Recover.
 
+use craft::i18n::Direction;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
@@ -7,7 +8,6 @@ use craft::ui::display::Text;
 use craft::ui::form::{Field, FieldGroup};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::text::TextField;
-use craft::i18n::Direction;
 use egui::Ui;
 use serde_json::json;
 

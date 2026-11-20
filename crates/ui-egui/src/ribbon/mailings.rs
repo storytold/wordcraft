@@ -41,7 +41,10 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     ("Normal Word Document", "normal"),
                 ] {
                     let current = kind == k || (k == "normal" && kind.is_empty());
-                    MenuItem::command(CommandRef::with_params("mailings.start", json!({"kind": k}))).label(crate::tl!(label)).radio_mark(current).show(ui);
+                    MenuItem::command(CommandRef::with_params("mailings.start", json!({"kind": k})))
+                        .label(crate::tl!(label))
+                        .radio_mark(current)
+                        .show(ui);
                 }
             },
         );
@@ -134,7 +137,10 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("Finish", crate::tl!("Finish"), IconId::new("finish").into()), |ui| {
         menu_button(
             ui,
-            Button::new(crate::tl!("Finish &\nMerge")).icon(IconId::new("finish")).tooltip(crate::tl!("Finish & Merge")).arrangement(Arrangement::Stacked),
+            Button::new(crate::tl!("Finish &\nMerge"))
+                .icon(IconId::new("finish"))
+                .tooltip(crate::tl!("Finish & Merge"))
+                .arrangement(Arrangement::Stacked),
             crate::tl!("Finish & Merge"),
             Some("mailings.finish"),
             |ui, _| {

@@ -7,7 +7,7 @@ use craft::ui::shell::{RecentFile, RecentList, RecentSort, RecentView, StartActi
 use egui::Ui;
 use serde_json::json;
 
-use super::{TEMPLATES, HOME_TEMPLATES, TemplateThumbs, error_line, heading, label, open_recent, thumbs};
+use super::{HOME_TEMPLATES, TEMPLATES, TemplateThumbs, error_line, heading, label, open_recent, thumbs};
 use crate::WordApp;
 
 /// The recent documents as the framework lists them: the app's paths, each named by its file name.
@@ -114,6 +114,10 @@ pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
     let recent = recent_files(app);
     let store = thumbs::store(&ctx);
     let source = TemplateThumbs { region: app.session.region() };
-    let out = RecentList::new(&recent).max_recent(app.ui.recent_shown()).empty(label("Documents you open will show up here.")).thumbnails(&store, &source).show(ui);
+    let out = RecentList::new(&recent)
+        .max_recent(app.ui.recent_shown())
+        .empty(label("Documents you open will show up here."))
+        .thumbnails(&store, &source)
+        .show(ui);
     run_actions(app, &ctx, out.actions);
 }

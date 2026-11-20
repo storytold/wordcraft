@@ -135,7 +135,8 @@ impl WordForm for NoteForm {
                             Radio::new(false).label(Label::from(tl!("Footnotes").to_string())).show(ui);
                             if let Some(pos) = self.pos.get_mut(0) {
                                 let options = [("pageBottom", "Bottom of Page"), ("beneathText", "Below text")];
-                                let entries: Vec<Entry<String>> = options.iter().map(|(v, l)| Entry::new(v.to_string(), tl!(l).to_string())).collect();
+                                let entries: Vec<Entry<String>> =
+                                    options.iter().map(|(v, l)| Entry::new(v.to_string(), tl!(l).to_string())).collect();
                                 Select::new(Label::from(tl!("Footnotes").to_string()), Bind::bound(pos), &entries).enabled(!endnote).show(ui);
                             }
                         });
@@ -143,7 +144,8 @@ impl WordForm for NoteForm {
                             Radio::new(true).label(Label::from(tl!("Endnotes").to_string())).show(ui);
                             if let Some(pos) = self.pos.get_mut(1) {
                                 let options = [("sectEnd", "End of section"), ("docEnd", "End of document")];
-                                let entries: Vec<Entry<String>> = options.iter().map(|(v, l)| Entry::new(v.to_string(), tl!(l).to_string())).collect();
+                                let entries: Vec<Entry<String>> =
+                                    options.iter().map(|(v, l)| Entry::new(v.to_string(), tl!(l).to_string())).collect();
                                 Select::new(Label::from(tl!("Endnotes").to_string()), Bind::bound(pos), &entries).enabled(endnote).show(ui);
                             }
                         });
@@ -151,7 +153,9 @@ impl WordForm for NoteForm {
                 });
                 let opener = Button::new(Label::from(format!("{}…", tl!("Convert")))).show(ui);
                 Menu::new(Label::from(tl!("Convert").to_string())).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
-                    for (to, l) in [("endnote", "Footnotes to endnotes"), ("footnote", "Endnotes to footnotes"), ("swap", "Swap footnotes and endnotes")] {
+                    for (to, l) in
+                        [("endnote", "Footnotes to endnotes"), ("footnote", "Endnotes to footnotes"), ("swap", "Swap footnotes and endnotes")]
+                    {
                         if MenuItem::new(Label::from(tl!(l).to_string())).show(ui).ran {
                             asks.push(Asks::Run("references.convertNotes".to_string(), json!({ "to": to })));
                         }
@@ -203,10 +207,7 @@ impl WordForm for NoteForm {
 
     fn commands(&self) -> Vec<(String, Value)> {
         let insert = if self.endnote { "references.endnote" } else { "references.footnote" };
-        vec![
-            ("references.noteOptions".to_string(), self.params()),
-            (insert.to_string(), json!({ "mark": self.mark.trim() })),
-        ]
+        vec![("references.noteOptions".to_string(), self.params()), (insert.to_string(), json!({ "mark": self.mark.trim() }))]
     }
 
     /// Apply keeps the dialog open and sets the options only.

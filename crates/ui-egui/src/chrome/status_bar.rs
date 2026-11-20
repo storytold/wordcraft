@@ -157,7 +157,8 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     // The tooltip names the language in full: in a narrow window the item's text is shortened (#5886).
     let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| shown.clone());
     let out = item(ui, shown, Some(tip));
-    let menu = Menu::new(tl!("Language").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| crate::ribbon::language_menu(ui, app));
+    let menu =
+        Menu::new(tl!("Language").to_string()).opened_by(&out.response, Trigger::Click).show(ui, |ui, _| crate::ribbon::language_menu(ui, app));
     // Dismissed, the menu hands focus back to this item; the page takes the keyboard back, so typing goes on in the
     // document (#1093). A press that closed it on a field leaves the field its focus.
     use craft::ui::runtime::overlay::CloseReason;

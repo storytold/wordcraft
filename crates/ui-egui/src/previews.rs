@@ -142,7 +142,13 @@ pub(crate) fn style_revision(app: &mut WordApp, mode: Mode) -> Revision {
     // document revision too would draw every tile again on each keystroke.
     let rev = app.session.rev();
     let styles = app.previews.styles_key(&app.session.doc, rev);
-    preview_revision(styles, wordcraft_fonts::FontDb::global().generation(), crate::i18n::current().code(), app.session.view.dark_mode, mode == Mode::Dark)
+    preview_revision(
+        styles,
+        wordcraft_fonts::FontDb::global().generation(),
+        crate::i18n::current().code(),
+        app.session.view.dark_mode,
+        mode == Mode::Dark,
+    )
 }
 
 /// Dims an opaque white page picture in the dark theme so it is not the brightest thing on screen (#663).
@@ -193,7 +199,8 @@ impl ThumbSource<u64> for MathSource {
     }
 
     fn render(&self, _key: &u64, request: &ThumbRequest) -> ThumbRender {
-        let (nodes, display, pt, size, ink, ppp) = (Arc::clone(&self.nodes), self.display, self.pt, self.size_for(request), self.ink, request.pixels_per_point);
+        let (nodes, display, pt, size, ink, ppp) =
+            (Arc::clone(&self.nodes), self.display, self.pt, self.size_for(request), self.ink, request.pixels_per_point);
         ThumbRender::Later(Box::new(move |_| {
             Ok(match math_image(&nodes, display, pt, size.x, size.y, ppp) {
                 Some(mut img) => {
@@ -353,7 +360,11 @@ pub fn glyph_image(ch: &str, chr: &CharProps, (w, h, ppp): (f32, f32, f32), dark
     p.props.align = Some(wordcraft_doc::props::Align::Center);
     p.props.space_before = Some(0.0);
     p.props.space_after = Some(0.0);
-    snippet_blocks(&Document::new(), vec![Block::Para(p)], SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin: 0.0, paper: None, dark })
+    snippet_blocks(
+        &Document::new(),
+        vec![Block::Para(p)],
+        SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin: 0.0, paper: None, dark },
+    )
 }
 
 /// Manage Styles' preview of one style (`ty`: the `styles.manage` type) in `size` points: a line of sample
@@ -388,7 +399,11 @@ pub fn style_preview_image(app: &mut WordApp, id: &str, ty: &str, size: Vec2, pp
         }
     };
     let dark_page = app.session.view.dark_mode;
-    let mut img = snippet_blocks(&app.session.doc, vec![block], SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin: 4.0, paper: None, dark: dark_page })?;
+    let mut img = snippet_blocks(
+        &app.session.doc,
+        vec![block],
+        SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin: 4.0, paper: None, dark: dark_page },
+    )?;
     if mode == Mode::Dark && !dark_page {
         dim(&mut img);
     }

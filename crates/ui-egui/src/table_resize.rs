@@ -120,7 +120,11 @@ pub(crate) fn available(app: &WordApp) -> bool {
 pub(crate) fn page_at(pages: &[PlacedPage], p: Pos2) -> Option<&PlacedPage> {
     pages.iter().find(|placed| {
         let (top, bottom) = placed.band;
-        placed.scale.is_finite() && placed.scale > 0.0 && placed.rect.contains(p) && p.y >= placed.rect.min.y + top && p.y <= placed.rect.min.y + bottom
+        placed.scale.is_finite()
+            && placed.scale > 0.0
+            && placed.rect.contains(p)
+            && p.y >= placed.rect.min.y + top
+            && p.y <= placed.rect.min.y + bottom
     })
 }
 
@@ -296,7 +300,12 @@ impl Component for TableBorders<'_> {
 
     fn style(cx: &StyleCx<'_>, _: TableBordersStyleKey) -> TableBordersStyle {
         let overlay = &cx.tokens.color.overlay;
-        TableBordersStyle { metrics: Metrics::new(), preview: cx.color(overlay.stroke), face: cx.color(overlay.handle_fill), edge: cx.color(overlay.handle_stroke) }
+        TableBordersStyle {
+            metrics: Metrics::new(),
+            preview: cx.color(overlay.stroke),
+            face: cx.color(overlay.handle_fill),
+            edge: cx.color(overlay.handle_stroke),
+        }
     }
 
     fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
@@ -373,7 +382,8 @@ impl Component for TableBorders<'_> {
             let plan = d.plan(self.mods);
             let (left, top) = (tg.left(), tg.top());
             let right = plan.widths.as_ref().map_or(tg.right(), |w| left + w.iter().sum::<f32>());
-            let bottom = top + tg.rows.iter().map(|r| plan.heights.iter().find(|(i, _)| *i == r.row).map_or(r.bottom - r.top, |(_, h)| *h)).sum::<f32>();
+            let bottom =
+                top + tg.rows.iter().map(|r| plan.heights.iter().find(|(i, _)| *i == r.row).map_or(r.bottom - r.top, |(_, h)| *h)).sum::<f32>();
             let line = |a: Option<Pos2>, b: Option<Pos2>| {
                 if let (Some(a), Some(b)) = (a, b) {
                     draw.dashed(&[a, b], draw.dashes(), StrokeWidth::Thin, style.preview);
@@ -385,10 +395,8 @@ impl Component for TableBorders<'_> {
                 Edge::Column(_) => {
                     // Down the rows it moves in (the selected cells'), else the whole table.
                     let rows: Vec<_> = tg.rows.iter().filter(|r| plan.cells.is_empty() || plan.cells.iter().any(|(c, _)| *c == r.row)).collect();
-                    let (y0, y1) = (
-                        rows.iter().map(|r| r.top).fold(f32::INFINITY, f32::min),
-                        rows.iter().map(|r| r.bottom).fold(f32::NEG_INFINITY, f32::max),
-                    );
+                    let (y0, y1) =
+                        (rows.iter().map(|r| r.top).fold(f32::INFINITY, f32::min), rows.iter().map(|r| r.bottom).fold(f32::NEG_INFINITY, f32::max));
                     if y0 <= y1 {
                         line(s(d.page, at, y0), s(d.page, at, y1));
                     }
@@ -419,7 +427,9 @@ impl Component for TableBorders<'_> {
         let Some(p) = self.pointer else { return };
         let Some(placed) = page_at(self.pages, p) else { return };
         let (x, y) = page_point(placed, p);
-        let Some(tg) = table_resize::table_under(self.layout, &self.app.session.doc, placed.page, x, y, REACH_PX / placed.scale as f32) else { return };
+        let Some(tg) = table_resize::table_under(self.layout, &self.app.session.doc, placed.page, x, y, REACH_PX / placed.scale as f32) else {
+            return;
+        };
         let h = tg.handle();
         resize_handle(&draw, Rect::from_two_pos(screen_of(placed, h.x, h.y), screen_of(placed, h.right(), h.bottom())), style);
     }
@@ -442,7 +452,15 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
 /// `CanvasState::table_resize` so the page shows the same dashed preview, and takes its share from `mods`
 /// (a ruler's Shift works the other way round). `None` when the layout has no such border at `at`.
 /// The ruler clears the slot when its drag ends.
-pub(crate) fn ruler_params(app: &mut WordApp, layout: &DocLayout, page: usize, edge: Edge, at: (f32, f32), to: (f32, f32), mods: Mods) -> Option<Value> {
+pub(crate) fn ruler_params(
+    app: &mut WordApp,
+    layout: &DocLayout,
+    page: usize,
+    edge: Edge,
+    at: (f32, f32),
+    to: (f32, f32),
+    mods: Mods,
+) -> Option<Value> {
     let mut target = table_resize::resize_target(layout, &app.session.doc, page, at.0, at.1, 1.0)?;
     if target.edge != edge {
         return None;

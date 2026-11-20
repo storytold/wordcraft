@@ -211,7 +211,8 @@ impl<'a> TableMouse<'a> {
     /// table: the caret logic extends the selection into the row, as the body's own presses do.
     fn extend_into(&mut self, target: &Target, row: usize) {
         let story = target.geom.story;
-        let Some(last) = self.app.session.doc.table(story, &target.geom.table).and_then(|t| t.rows.get(row)).and_then(|r| r.cells.len().checked_sub(1))
+        let Some(last) =
+            self.app.session.doc.table(story, &target.geom.table).and_then(|t| t.rows.get(row)).and_then(|r| r.cells.len().checked_sub(1))
         else {
             return;
         };
@@ -282,8 +283,18 @@ impl<'a> TableMouse<'a> {
                 {
                     self.app.status(e);
                 }
-                *cx.press_slot::<TableDrag>() =
-                    Some(TableDrag { page: placed.page, from: (x, y), to: (x, y), sent: (x, y), reach, target, extend, anchor, index, document: false });
+                *cx.press_slot::<TableDrag>() = Some(TableDrag {
+                    page: placed.page,
+                    from: (x, y),
+                    to: (x, y),
+                    sent: (x, y),
+                    reach,
+                    target,
+                    extend,
+                    anchor,
+                    index,
+                    document: false,
+                });
             }
         }
     }

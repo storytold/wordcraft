@@ -38,21 +38,18 @@ pub(super) fn margins_items(ui: &mut Ui, app: &mut WordApp) {
         };
         // Mirrored margins come from the document as well as from the preset (#1181).
         let on = current == Some(k) || (k == "mirrored" && app.session.doc.settings.mirror_margins);
-        MenuItem::command(CommandRef::with_params("layout.margins", json!({"preset": k}))).label(tl!(label.as_str()).to_string()).radio_mark(on).show(ui);
+        MenuItem::command(CommandRef::with_params("layout.margins", json!({"preset": k})))
+            .label(tl!(label.as_str()).to_string())
+            .radio_mark(on)
+            .show(ui);
     }
     MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "pageSetup"}))).label(tl!("Custom Margins…")).show(ui);
 }
 
 pub(super) fn orientation_items(ui: &mut Ui, app: &mut WordApp) {
     let land = wordcraft_engine::cmd::page::sect(&app.session).landscape;
-    MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "portrait"})))
-        .label(tl!("Portrait"))
-        .radio_mark(!land)
-        .show(ui);
-    MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "landscape"})))
-        .label(tl!("Landscape"))
-        .radio_mark(land)
-        .show(ui);
+    MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "portrait"}))).label(tl!("Portrait")).radio_mark(!land).show(ui);
+    MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "landscape"}))).label(tl!("Landscape")).radio_mark(land).show(ui);
 }
 
 pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
@@ -72,127 +69,140 @@ pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
 
 /// Fills the Layout ribbon tab (Page Setup, Paragraph, Arrange).
 pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
-    row.group(RibbonGroup::new("layout.pageSetup", tl!("Page Setup"), IconId::new("more").into()).launcher(CommandRef::new("layout.pageSetup")), |ui| {
-        // Text Direction works on what the caret is in: table cells, a text box, else the section.
-        let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
-        let stacked = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(IconId::new(icon)).arrangement(Arrangement::Stacked);
-        menu_button(ui, stacked("Text\nDirection", "textDirection"), tl!("Text Direction"), Some("layout.textDirection"), |ui, _| {
-            use wordcraft_doc::props::TextDirection;
-            for (label, d) in [
-                ("Horizontal", TextDirection::Horizontal),
-                ("Rotate all text 90°", TextDirection::Down),
-                ("Rotate all text 270°", TextDirection::Up),
-            ] {
-                MenuItem::command(CommandRef::with_params("layout.textDirection", json!({"value": d.ooxml()})))
-                    .label(tl!(label))
-                    .radio_mark(dir == d)
-                    .show(ui);
+    row.group(
+        RibbonGroup::new("layout.pageSetup", tl!("Page Setup"), IconId::new("more").into()).launcher(CommandRef::new("layout.pageSetup")),
+        |ui| {
+            // Text Direction works on what the caret is in: table cells, a text box, else the section.
+            let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
+            let stacked = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(IconId::new(icon)).arrangement(Arrangement::Stacked);
+            menu_button(ui, stacked("Text\nDirection", "textDirection"), tl!("Text Direction"), Some("layout.textDirection"), |ui, _| {
+                use wordcraft_doc::props::TextDirection;
+                for (label, d) in [
+                    ("Horizontal", TextDirection::Horizontal),
+                    ("Rotate all text 90°", TextDirection::Down),
+                    ("Rotate all text 270°", TextDirection::Up),
+                ] {
+                    MenuItem::command(CommandRef::with_params("layout.textDirection", json!({"value": d.ooxml()})))
+                        .label(tl!(label))
+                        .radio_mark(dir == d)
+                        .show(ui);
+                }
+            });
+            menu_button(ui, stacked("Margins", "margins"), tl!("Margins"), Some("layout.margins"), |ui, _| margins_items(ui, app));
+            menu_button(ui, stacked("Orientation", "orientation"), tl!("Orientation"), Some("layout.orientation"), |ui, _| {
+                orientation_items(ui, app)
+            });
+            menu_button(ui, stacked("Size", "size"), tl!("Size"), Some("layout.size"), |ui, _| size_menu(ui, app));
+            menu_button(ui, stacked("Columns", "columns"), tl!("Columns"), Some("layout.columns"), |ui, _| columns_items(ui, app));
+            Stack::new().show(ui, |ui, _| {
+                let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(IconId::new(icon));
+                menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| {
+                    MenuItem::heading(tl!("Page Breaks")).show(ui);
+                    for (l, k) in [("Page", "page"), ("Column", "column"), ("Text Wrapping", "textWrapping")] {
+                        MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
+                    }
+                    MenuItem::heading(tl!("Section Breaks")).show(ui);
+                    for (l, k) in [("Next Page", "nextPage"), ("Continuous", "continuous"), ("Even Page", "evenPage"), ("Odd Page", "oddPage")] {
+                        MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
+                    }
+                });
+                menu_button(ui, inline("Line Numbers", "lineNumbers"), tl!("Line Numbers"), Some("layout.lineNumbers"), |ui, _| {
+                    for (l, v) in [
+                        ("None", "none"),
+                        ("Continuous", "continuous"),
+                        ("Restart Each Page", "restartPage"),
+                        ("Restart Each Section", "restartSection"),
+                    ] {
+                        MenuItem::command(CommandRef::with_params("layout.lineNumbers", json!({"value": v}))).label(tl!(l)).show(ui);
+                    }
+                    Divider::horizontal().show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "lineNumbers"})))
+                        .label(tl!("Line Numbering Options…"))
+                        .show(ui);
+                });
+                let hy = app.session.doc.settings.auto_hyphenation;
+                menu_button(ui, inline("Hyphenation", "hyphenation"), tl!("Hyphenation"), Some("layout.hyphenation"), |ui, _| {
+                    MenuItem::command(CommandRef::with_params("layout.hyphenation", json!({"value": true})))
+                        .label(tl!("Automatic"))
+                        .radio_mark(hy)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("layout.hyphenation", json!({"value": false})))
+                        .label(tl!("None"))
+                        .radio_mark(!hy)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "manualHyphenation"}))).label(tl!("Manual…")).show(ui);
+                    Divider::horizontal().show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "hyphenation"})))
+                        .label(tl!("Hyphenation Options…"))
+                        .show(ui);
+                });
+            });
+            Button::command(CommandRef::new("layout.fitOnePage"))
+                .label(tl!("Fit\nOne Page"))
+                .icon(IconId::new("fitOnePage"))
+                .arrangement(Arrangement::Stacked)
+                .show(ui);
+        },
+    );
+    row.group(
+        RibbonGroup::new("layout.paragraph", tl!("Paragraph"), IconId::new("alignLeft").into()).launcher(CommandRef::new("para.dialog")),
+        |ui| {
+            if app.session.doc.para_at(&app.session.sel.focus).is_none() {
+                return;
             }
-        });
-        menu_button(ui, stacked("Margins", "margins"), tl!("Margins"), Some("layout.margins"), |ui, _| margins_items(ui, app));
-        menu_button(ui, stacked("Orientation", "orientation"), tl!("Orientation"), Some("layout.orientation"), |ui, _| orientation_items(ui, app));
-        menu_button(ui, stacked("Size", "size"), tl!("Size"), Some("layout.size"), |ui, _| size_menu(ui, app));
-        menu_button(ui, stacked("Columns", "columns"), tl!("Columns"), Some("layout.columns"), |ui, _| columns_items(ui, app));
-        Stack::new().show(ui, |ui, _| {
-            let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(IconId::new(icon));
-            menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| {
-                MenuItem::heading(tl!("Page Breaks")).show(ui);
-                for (l, k) in [("Page", "page"), ("Column", "column"), ("Text Wrapping", "textWrapping")] {
-                    MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
-                }
-                MenuItem::heading(tl!("Section Breaks")).show(ui);
-                for (l, k) in [("Next Page", "nextPage"), ("Continuous", "continuous"), ("Even Page", "evenPage"), ("Odd Page", "oddPage")] {
-                    MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
-                }
-            });
-            menu_button(ui, inline("Line Numbers", "lineNumbers"), tl!("Line Numbers"), Some("layout.lineNumbers"), |ui, _| {
-                for (l, v) in [("None", "none"), ("Continuous", "continuous"), ("Restart Each Page", "restartPage"), ("Restart Each Section", "restartSection")] {
-                    MenuItem::command(CommandRef::with_params("layout.lineNumbers", json!({"value": v}))).label(tl!(l)).show(ui);
-                }
-                Divider::horizontal().show(ui);
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "lineNumbers"})))
-                    .label(tl!("Line Numbering Options…"))
-                    .show(ui);
-            });
-            let hy = app.session.doc.settings.auto_hyphenation;
-            menu_button(ui, inline("Hyphenation", "hyphenation"), tl!("Hyphenation"), Some("layout.hyphenation"), |ui, _| {
-                MenuItem::command(CommandRef::with_params("layout.hyphenation", json!({"value": true})))
-                    .label(tl!("Automatic"))
-                    .radio_mark(hy)
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("layout.hyphenation", json!({"value": false})))
-                    .label(tl!("None"))
-                    .radio_mark(!hy)
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "manualHyphenation"}))).label(tl!("Manual…")).show(ui);
-                Divider::horizontal().show(ui);
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "hyphenation"})))
-                    .label(tl!("Hyphenation Options…"))
-                    .show(ui);
-            });
-        });
-        Button::command(CommandRef::new("layout.fitOnePage"))
-            .label(tl!("Fit\nOne Page"))
-            .icon(IconId::new("fitOnePage"))
-            .arrangement(Arrangement::Stacked)
-            .show(ui);
-    });
-    row.group(RibbonGroup::new("layout.paragraph", tl!("Paragraph"), IconId::new("alignLeft").into()).launcher(CommandRef::new("para.dialog")), |ui| {
-        if app.session.doc.para_at(&app.session.sel.focus).is_none() {
-            return;
-        }
-        let rp = wordcraft_engine::cmd::para::selection_para(&app.session);
-        let lengths = crate::options::lengths(app.session.units());
-        let mut left = Some(f64::from(rp.indent_left));
-        let mut right = Some(f64::from(rp.indent_right));
-        let mut before = Some(f64::from(rp.space_before));
-        let mut after = Some(f64::from(rp.space_after));
-        let caption = |label: &'static str| Text::new(tl!(label)).role(TypeRole::Caption);
-        // As the old ribbon: two columns of small fields (a header over each label column), labels close to their
-        // fields, rows close together, and a wider gap before the Spacing column. Indents show two decimals ("0.00").
-        Row::new().gap(Gap::Section).show(ui, |ui, _| {
-            Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
-                caption("Indent").show(ui);
-                Text::new("").show(ui);
-                caption("Left:").show(ui);
-                let field = NumberField::length(tl!("Left"), Bind::bound(&mut left), lengths).range(-792.0..=1584.0).fixed_decimals(2);
-                let out = field.size(ControlSize::Sm).show(ui);
-                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                    if let Some(pt) = v {
-                        let _ = app.run("para.indents", json!({"left": pt}));
-                    }
+            let rp = wordcraft_engine::cmd::para::selection_para(&app.session);
+            let lengths = crate::options::lengths(app.session.units());
+            let mut left = Some(f64::from(rp.indent_left));
+            let mut right = Some(f64::from(rp.indent_right));
+            let mut before = Some(f64::from(rp.space_before));
+            let mut after = Some(f64::from(rp.space_after));
+            let caption = |label: &'static str| Text::new(tl!(label)).role(TypeRole::Caption);
+            // As the old ribbon: two columns of small fields (a header over each label column), labels close to their
+            // fields, rows close together, and a wider gap before the Spacing column. Indents show two decimals ("0.00").
+            Row::new().gap(Gap::Section).show(ui, |ui, _| {
+                Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                    caption("Indent").show(ui);
+                    Text::new("").show(ui);
+                    caption("Left:").show(ui);
+                    let field = NumberField::length(tl!("Left"), Bind::bound(&mut left), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.indents", json!({"left": pt}));
+                        }
+                    });
+                    caption("Right:").show(ui);
+                    let field = NumberField::length(tl!("Right"), Bind::bound(&mut right), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.indents", json!({"right": pt}));
+                        }
+                    });
                 });
-                caption("Right:").show(ui);
-                let field = NumberField::length(tl!("Right"), Bind::bound(&mut right), lengths).range(-792.0..=1584.0).fixed_decimals(2);
-                let out = field.size(ControlSize::Sm).show(ui);
-                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                    if let Some(pt) = v {
-                        let _ = app.run("para.indents", json!({"right": pt}));
-                    }
+                Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                    caption("Spacing").show(ui);
+                    Text::new("").show(ui);
+                    caption("Before:").show(ui);
+                    let field = NumberField::new(tl!("Before"), Bind::bound(&mut before)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.spacing", json!({"before": pt}));
+                        }
+                    });
+                    caption("After:").show(ui);
+                    let field = NumberField::new(tl!("After"), Bind::bound(&mut after)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.spacing", json!({"after": pt}));
+                        }
+                    });
                 });
             });
-            Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
-                caption("Spacing").show(ui);
-                Text::new("").show(ui);
-                caption("Before:").show(ui);
-                let field = NumberField::new(tl!("Before"), Bind::bound(&mut before)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
-                let out = field.size(ControlSize::Sm).show(ui);
-                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                    if let Some(pt) = v {
-                        let _ = app.run("para.spacing", json!({"before": pt}));
-                    }
-                });
-                caption("After:").show(ui);
-                let field = NumberField::new(tl!("After"), Bind::bound(&mut after)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
-                let out = field.size(ControlSize::Sm).show(ui);
-                apply_edits(app, out.edit.events, |app, v: Option<f64>| {
-                    if let Some(pt) = v {
-                        let _ = app.run("para.spacing", json!({"after": pt}));
-                    }
-                });
-            });
-        });
-    });
+        },
+    );
     row.group(RibbonGroup::new("layout.arrange", tl!("Arrange"), IconId::new("more").into()), |ui| {
         Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);

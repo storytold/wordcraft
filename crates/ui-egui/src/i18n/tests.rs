@@ -176,7 +176,10 @@ fn a_system_locale_and_a_saved_preference_pick_the_language_and_leave_the_docume
         assert_eq!(app.ui.language, *code);
         if let Some(name) = name {
             assert_eq!(l.name(), *name);
-            assert!(result["available"].as_array().unwrap().iter().any(|a| a["code"] == *code && a["name"] == *name), "{code} is offered by its name");
+            assert!(
+                result["available"].as_array().unwrap().iter().any(|a| a["code"] == *code && a["name"] == *name),
+                "{code} is offered by its name"
+            );
         }
         assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before, "{code}: the document is untouched");
         assert_eq!(app.session.editing_lang, editing, "{code}: choosing it changes no document");
@@ -201,7 +204,8 @@ fn a_system_locale_and_a_saved_preference_pick_the_language_and_leave_the_docume
 #[test]
 fn the_interface_language_sets_the_language_of_new_documents() {
     needs_catalogs!();
-    let rows = [("pl", Some("pl-PL"), Some("Polish")), ("cs", Some("cs-CZ"), Some("Czech")), ("it", Some("it-IT"), Some("Italian")), ("de", None, None)];
+    let rows =
+        [("pl", Some("pl-PL"), Some("Polish")), ("cs", Some("cs-CZ"), Some("Czech")), ("it", Some("it-IT"), Some("Italian")), ("de", None, None)];
     let ctx = egui::Context::default();
     embedded_host(&ctx);
     for (pref, editing, name) in rows {
@@ -438,11 +442,8 @@ fn diagram_tab_display_keeps_the_legacy_identity() {
     assert_eq!(tr(fx, "SmartArt Design"), "Diagram-FX");
     assert_eq!(trc(fx, "preview", "SmartArt Design"), "Diagram-Preview-FX");
     let ctx = egui::Context::default();
-    let fx = fixture_host(
-        &ctx,
-        "x-fixture",
-        "\tDiagram Design\tDiagram-FX\npreview\tDiagram Design\tDiagram-Preview-FX\n\tDiagram Styles\tStyles-FX\n",
-    );
+    let fx =
+        fixture_host(&ctx, "x-fixture", "\tDiagram Design\tDiagram-FX\npreview\tDiagram Design\tDiagram-Preview-FX\n\tDiagram Styles\tStyles-FX\n");
     assert_eq!(current(), fx);
     assert_eq!(get("preview", "SmartArt Design"), Some("Diagram-Preview-FX"));
     assert_eq!(location("SmartArt Design › Diagram Styles"), "Diagram-FX › Styles-FX");

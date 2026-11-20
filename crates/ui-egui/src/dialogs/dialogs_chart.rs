@@ -8,7 +8,9 @@ use std::cell::RefCell;
 use craft::behavior::{ColumnKey, ColumnWidth, IconId, Selection, SelectionChange, keyed};
 use craft::table::ui::{ChartPrimitive, paint_chart};
 use craft::ui::buttons::{Button, IconButton};
-use craft::ui::contract::{Bind, CollectionEvent, ColumnEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{
+    Bind, CollectionEvent, ColumnEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Text;
 use craft::ui::layout_components::Row;
@@ -308,7 +310,6 @@ fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bo
     activated
 }
 
-
 /// The key of the category column; series `j` is column `j + 1` and the row remove control the column after the series.
 const CATEGORY: ColumnKey = ColumnKey::index(0);
 
@@ -455,7 +456,6 @@ fn data_body(ui: &mut Ui, f: &mut ChartDataForm) {
         }
     });
 }
-
 
 /// Opens the dialog `name` names: `insertChart`, `changeChartType` (the selected chart) or `chartData` (the selected
 /// chart); `None` for another name or without a chart to change.

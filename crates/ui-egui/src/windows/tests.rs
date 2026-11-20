@@ -514,4 +514,3 @@ fn every_open_replaces_an_untouched_blank_document_in_its_window() {
     }
     std::fs::remove_dir_all(second.parent().unwrap()).ok();
 }
-

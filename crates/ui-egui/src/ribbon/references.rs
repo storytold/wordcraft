@@ -27,7 +27,9 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     MenuItem::command(CommandRef::with_params("references.toc", params)).label(crate::tl!(label)).show(ui);
                 }
                 Divider::horizontal().show(ui);
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "toc"}))).label(crate::tl!("Custom Table of Contents…")).show(ui);
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "toc"})))
+                    .label(crate::tl!("Custom Table of Contents…"))
+                    .show(ui);
                 MenuItem::command(CommandRef::with_params("references.removeToc", json!({}))).label(crate::tl!("Remove Table of Contents")).show(ui);
             },
         );
@@ -38,10 +40,14 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 crate::tl!("Add Text"),
                 Some("references.addText"),
                 |ui, _| {
-                    MenuItem::command(CommandRef::with_params("references.addText", json!({"level": 0}))).label(crate::tl!("Do Not Show in TOC")).show(ui);
+                    MenuItem::command(CommandRef::with_params("references.addText", json!({"level": 0})))
+                        .label(crate::tl!("Do Not Show in TOC"))
+                        .show(ui);
                     for l in 1..=3u64 {
                         let label = format!("Level {l}");
-                        MenuItem::command(CommandRef::with_params("references.addText", json!({"level": l}))).label(crate::tl!(&label).to_string()).show(ui);
+                        MenuItem::command(CommandRef::with_params("references.addText", json!({"level": l})))
+                            .label(crate::tl!(&label).to_string())
+                            .show(ui);
                     }
                 },
             );
@@ -92,7 +98,9 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 if !app.session.doc.sources.is_empty() {
                     Divider::horizontal().show(ui);
                 }
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "createSource"}))).label(crate::tl!("Add New Source…")).show(ui);
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "createSource"})))
+                    .label(crate::tl!("Add New Source…"))
+                    .show(ui);
             },
         );
         let current = app.session.bib_style.clone();
@@ -134,7 +142,11 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("update", "Update Table", "Update Table of Figures", "references.updateFigures"),
                 ("crossRef", "Cross-reference", "Cross-reference", "insert.crossReference"),
             ] {
-                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(IconId::new(key)).tooltip(crate::tl!(tip)).show(ui);
+                Button::command(CommandRef::with_params(id, json!({})))
+                    .label(crate::tl!(label))
+                    .icon(IconId::new(key))
+                    .tooltip(crate::tl!(tip))
+                    .show(ui);
             }
         });
     });
@@ -183,7 +195,10 @@ pub(super) fn zotero(row: &mut RibbonRow<'_>, _app: &mut WordApp) {
             crate::tl!("Citation Provider"),
             Some("ui.citations.provider"),
             |ui, _| {
-                MenuItem::command(CommandRef::with_params("ui.citations.provider", json!({"value": "zotero"}))).label(crate::tl!("Zotero")).radio_mark(true).show(ui);
+                MenuItem::command(CommandRef::with_params("ui.citations.provider", json!({"value": "zotero"})))
+                    .label(crate::tl!("Zotero"))
+                    .radio_mark(true)
+                    .show(ui);
             },
         );
     });

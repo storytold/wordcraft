@@ -5,12 +5,12 @@ use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, 
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Text;
 use craft::ui::form::Field;
-use craft::ui::pickers::Select;
-use craft::ui::text::NumberField;
 use craft::ui::layout_components::Row;
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Label;
+use craft::ui::text::NumberField;
 use egui::Ui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -339,9 +339,8 @@ impl WordForm for TocStylesForm {
 
 /// Copies the TOC styles' current names into the form before every run.
 fn prepare_styles(app: &mut WordApp, id: DialogId) {
-    let names: Vec<String> = (1..=9u8)
-        .map(|l| app.session.doc.styles.get(&format!("TOC{l}")).map(|s| s.name.clone()).unwrap_or_else(|| format!("TOC {l}")))
-        .collect();
+    let names: Vec<String> =
+        (1..=9u8).map(|l| app.session.doc.styles.get(&format!("TOC{l}")).map(|s| s.name.clone()).unwrap_or_else(|| format!("TOC {l}"))).collect();
     if let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<TocStylesForm>>(id) {
         host.form_mut().names = names;
     }
@@ -375,7 +374,14 @@ pub struct FiguresForm {
 impl FiguresForm {
     /// Word's defaults for a new table of figures, listing every caption label the user can pick.
     pub fn read(app: &WordApp) -> FiguresForm {
-        FiguresForm { label: "Figure".into(), labels: caption_labels(app), include_label: true, page_numbers: true, right_align: true, leader: "dot".into() }
+        FiguresForm {
+            label: "Figure".into(),
+            labels: caption_labels(app),
+            include_label: true,
+            page_numbers: true,
+            right_align: true,
+            leader: "dot".into(),
+        }
     }
 
     /// `references.tableOfFigures` parameters.

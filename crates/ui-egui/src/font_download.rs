@@ -263,11 +263,14 @@ impl StackDialog for FontBox {
                     Icon::new(IconSpec::svg(IconId::new("fontMissing"))).show(ui);
                     // `fonts` holds only the missing fonts that can be downloaded: the document may
                     // be missing others, so the headline counts downloads, not missing fonts.
-                    Text::new(crate::i18n::tn(fonts.len() as u64, "{n} missing font can be downloaded", "{n} missing fonts can be downloaded")).show(ui);
+                    Text::new(crate::i18n::tn(fonts.len() as u64, "{n} missing font can be downloaded", "{n} missing fonts can be downloaded"))
+                        .show(ui);
                 });
-                Text::new(tl!("Text in a missing font is shown in another font, so it may not look as it was written. The downloads are free of charge."))
-                    .shade(Shade::Faint)
-                    .show(ui);
+                Text::new(tl!(
+                    "Text in a missing font is shown in another font, so it may not look as it was written. The downloads are free of charge."
+                ))
+                .shade(Shade::Faint)
+                .show(ui);
                 for (at, g) in groups(fonts).into_iter().enumerate() {
                     // The names are the document's own words, not interface text.
                     GroupBox::new(g.fonts.join(", "), None).id_salt(("download", at)).show(ui, |ui, _| {

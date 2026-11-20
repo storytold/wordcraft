@@ -45,11 +45,11 @@ fn pane_harness(app: crate::WordApp) -> egui_kittest::Harness<'static, crate::Wo
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn pane_bodies_fit_the_narrowest_pane() {
-
     let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
     app.run("select.all", serde_json::json!({})).unwrap();
     app.run("edit.copy", serde_json::json!({})).unwrap();
-    app.restrict = crate::restrict_pane::RestrictPane { open: true, formatting: true, show_styles: true, editing: true, asking: true, ..Default::default() };
+    app.restrict =
+        crate::restrict_pane::RestrictPane { open: true, formatting: true, show_styles: true, editing: true, asking: true, ..Default::default() };
     let panes = [
         Pane::Navigation,
         Pane::Clipboard,
@@ -120,8 +120,10 @@ fn a_floated_pane_floats_again_after_a_restart() {
 
     let mut junk = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     junk.apply_prefs(
-        serde_json::from_str(r#"{"panePlaces": {"navigation": {"dock": "top", "float": [1, "x", 3, 4]}, "clipboard": 7, "nope": {}}, "navPane": true}"#)
-            .unwrap(),
+        serde_json::from_str(
+            r#"{"panePlaces": {"navigation": {"dock": "top", "float": [1, "x", 3, 4]}, "clipboard": 7, "nope": {}}, "navPane": true}"#,
+        )
+        .unwrap(),
     );
     assert_eq!(super::pane_state(&junk, Pane::Navigation, false), Pane::Navigation.default_state(), "junk reads as the default");
     assert!(junk.session.view.nav_pane, "the rest of the file still loads");
@@ -228,7 +230,13 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
             if h.query_by_label(style).is_some() {
                 break;
             }
-            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -120.0), phase: egui::TouchPhase::Move, modifiers: Default::default(), source: egui::MouseWheelSource::Unknown });
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -120.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Default::default(),
+                source: egui::MouseWheelSource::Unknown,
+            });
             h.run_steps(2);
         }
         h.get_by_label(style).click_secondary();

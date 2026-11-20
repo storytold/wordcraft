@@ -149,10 +149,7 @@ fn split_arrow(h: &H, label: &str) -> Rect {
         .collect();
     // The arrow is its own button, named "<label> options" (`colors::split_with`); the main part keeps the label.
     let arrow_name = format!("{label} options");
-    let named = h
-        .query_all_by_label(arrow_name.as_str())
-        .map(|n| n.rect())
-        .find(|r| c.contains_rect(*r));
+    let named = h.query_all_by_label(arrow_name.as_str()).map(|n| n.rect()).find(|r| c.contains_rect(*r));
     named
         .or_else(|| nodes.iter().find(|(_, popup)| *popup).map(|(r, _)| *r))
         .or_else(|| nodes.iter().max_by(|a, b| a.0.min.x.total_cmp(&b.0.min.x)).map(|(r, _)| *r))
@@ -254,7 +251,9 @@ fn hovering_a_bar_member_previews_its_command() {
                 click_at(&mut h, b.center());
                 // The framework's font list is a tree of families (depth rows), so its rows are tree items.
                 h.query_all_by_role(Role::TreeItem)
-                    .filter(|n| (n.rect().min.y >= b.max.y || n.rect().max.y <= b.min.y) && n.accesskit_node().label().as_deref() != Some(font.as_str()))
+                    .filter(|n| {
+                        (n.rect().min.y >= b.max.y || n.rect().max.y <= b.min.y) && n.accesskit_node().label().as_deref() != Some(font.as_str())
+                    })
                     .filter(|n| n.accesskit_node().label().as_deref().is_some_and(|name| !name.ends_with('…')))
                     .map(|n| n.rect().center())
                     .next()

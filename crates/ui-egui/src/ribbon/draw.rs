@@ -52,9 +52,12 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 for (label, kind) in [("Pen", InkTool::Pen), ("Pencil", InkTool::Pencil), ("Highlighter", InkTool::Highlighter)] {
                     // A new pen starts as that kind's current colour and thickness.
                     let cur = app.session.view.draw.settings(kind);
-                    MenuItem::command(CommandRef::with_params("draw.addPen", json!({"kind": kind.name(), "color": cur.color.hex(), "width": cur.width})))
-                        .label(crate::tl!(label))
-                        .show(ui);
+                    MenuItem::command(CommandRef::with_params(
+                        "draw.addPen",
+                        json!({"kind": kind.name(), "color": cur.color.hex(), "width": cur.width}),
+                    ))
+                    .label(crate::tl!(label))
+                    .show(ui);
                 }
             },
         );

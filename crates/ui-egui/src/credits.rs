@@ -5,7 +5,9 @@
 
 use std::borrow::Cow;
 
-use craft::ui::patterns::form_dialogs::{AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor as ContributorCredit, Credits, HostedAbout, ModelCredit};
+use craft::ui::patterns::form_dialogs::{
+    AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor as ContributorCredit, Credits, HostedAbout, ModelCredit,
+};
 
 use crate::language_packs::language_data_tab;
 

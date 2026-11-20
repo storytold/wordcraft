@@ -55,7 +55,6 @@ const MAX_OPEN_BYTES: u64 = 512 << 20;
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
-
 thread_local! {
     /// The page's bridge, for [`HostedFiles`]: `Files` is `Send + Sync` but the page host is not. The browser
     /// runs everything on one thread, so a save, called in the pass of the user's gesture, reaches it here.

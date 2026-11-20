@@ -54,7 +54,6 @@ pub(super) fn page_layout_commands(
     })
 }
 
-
 /// The dialog's vertical alignment for the section's.
 fn valign_in(v: PageVAlign) -> PageVerticalAlign {
     match v {

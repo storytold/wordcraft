@@ -345,7 +345,11 @@ mod tests {
         let _ = crate::dialogs::open(&mut a, "tabs", &json!({}));
         let is_tabs = |a: &WordApp| a.dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("tabs"));
         assert!(is_tabs(&a), "the dialog is open before the swap");
-        a.status = Some(Status { text: "Saved".into(), until: craft::platform::clock::monotonic_ms() + 60_000.0, tone: craft::theme::variant::Tone::Neutral });
+        a.status = Some(Status {
+            text: "Saved".into(),
+            until: craft::platform::clock::monotonic_ms() + 60_000.0,
+            tone: craft::theme::variant::Tone::Neutral,
+        });
         a.canvas.ime_preedit = "ni".into();
         a.canvas.ime_preedit_range = Some(0..2);
         a.canvas.scroll_to_caret = false;

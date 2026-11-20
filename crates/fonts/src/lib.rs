@@ -52,7 +52,6 @@ pub fn japanese_document_fonts() -> Vec<&'static CraftFont> {
     v
 }
 
-
 /// The bundled serif used when a document asks for nothing better.
 pub const DEFAULT_FAMILY: &str = "Source Serif 4";
 

@@ -60,7 +60,8 @@ impl AccessDescriber for DocumentDescriber {
             // A floating picture's anchor character takes no room on its line: the picture's own rectangle is its bounds.
             let mut pictures = Pictures::new();
             for it in &page.items {
-                if let Placed::Image { rect, story: StoryRef::Body, path, off, .. } | Placed::Graphic { rect, story: StoryRef::Body, path, off, .. } = it
+                if let Placed::Image { rect, story: StoryRef::Body, path, off, .. } | Placed::Graphic { rect, story: StoryRef::Body, path, off, .. } =
+                    it
                 {
                     let min = egui::pos2(pp.rect.min.x + rect.x * scale, pp.rect.min.y + rect.y * scale);
                     pictures.insert((path.0.clone(), *off), Rect::from_min_size(min, egui::vec2(rect.w * scale, rect.h * scale)));

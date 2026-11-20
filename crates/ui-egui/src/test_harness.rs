@@ -71,8 +71,7 @@ impl egui::Plugin for HandOver {
 /// `embed::before_input(ctx, |out| app.frame_input(out))`.
 pub(crate) fn context() -> egui::Context {
     let ctx = egui::Context::default();
-    craft::ui::shell::embed::install(&ctx, install_spec(), &crate::ui_fonts(Lang::EN))
-        .expect("the craft runtime installs on a fresh test context");
+    craft::ui::shell::embed::install(&ctx, install_spec(), &crate::ui_fonts(Lang::EN)).expect("the craft runtime installs on a fresh test context");
     ctx
 }
 

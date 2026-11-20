@@ -71,7 +71,12 @@ fn length_field(ui: &mut Ui, salt: &'static str, label: Label, lengths: LengthUn
     let events = Field::new(label.clone())
         .id_salt(salt)
         .show(ui, |ui, _| {
-            NumberField::length(label.clone(), Bind::given(Some(f64::from(*points))), lengths).range(POSITION_RANGE).enabled(enabled).show(ui).edit.events
+            NumberField::length(label.clone(), Bind::given(Some(f64::from(*points))), lengths)
+                .range(POSITION_RANGE)
+                .enabled(enabled)
+                .show(ui)
+                .edit
+                .events
         })
         .inner
         .unwrap_or_default();
@@ -245,7 +250,13 @@ impl ListForm {
         let rows: Vec<PreviewRow> = (0..LEVELS)
             .filter_map(|k| {
                 let l = self.levels.get(k)?;
-                Some(PreviewRow { sample: self.sample(k), aligned_at: l.aligned_at, indent_at: l.indent_at, align: l.align.clone(), follow: l.follow.clone() })
+                Some(PreviewRow {
+                    sample: self.sample(k),
+                    aligned_at: l.aligned_at,
+                    indent_at: l.indent_at,
+                    align: l.align.clone(),
+                    follow: l.follow.clone(),
+                })
             })
             .collect();
         let level = self.level;
@@ -270,7 +281,9 @@ impl ListForm {
             });
             Stack::new().show(ui, |ui, _| {
                 Text::new(word(tl!("Preview"))).show(ui);
-                Picture::painter(word(tl!("Preview")), ThumbAspect::new(5, 3), preview(rows.clone(), level)).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui);
+                Picture::painter(word(tl!("Preview")), ThumbAspect::new(5, 3), preview(rows.clone(), level))
+                    .extent(PictureSize::Thumb(ThumbSize::Large))
+                    .show(ui);
             });
         });
     }
@@ -509,7 +522,6 @@ impl TrackForm {
             "moveToColor": or(&self.move_to_color, "byAuthor"),
         })
     }
-
 }
 
 /// How insertions (and moved text where it went) can be marked: (value, label).
@@ -659,8 +671,8 @@ mod tests {
     use wordcraft_engine::Session;
 
     use super::super::host::FormHost;
-    use super::{DELETE_MARKS, INSERT_MARKS, ListForm, MOVE_TO_MARKS, TrackForm};
     use super::super::host::testing::{confirm, harness};
+    use super::{DELETE_MARKS, INSERT_MARKS, ListForm, MOVE_TO_MARKS, TrackForm};
     use crate::{Services, WordApp};
 
     fn app() -> WordApp {

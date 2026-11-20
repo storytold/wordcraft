@@ -79,7 +79,11 @@ impl ThumbSource<usize> for WordPages {
         options.display.hide_object = self.hidden.as_ref().filter(|(hidden, _)| *hidden == index).map(|(_, pos)| pos.clone());
         ThumbRender::Later(Box::new(move |_cancel| {
             let Some(page) = layout.pages.get(index) else { return Ok(LoadedPicture::Blank) };
-            let img = if whole { wordcraft_render::render_page(&doc, page, scale, &options) } else { wordcraft_render::render_area(&doc, page, area, scale, &options) };
+            let img = if whole {
+                wordcraft_render::render_page(&doc, page, scale, &options)
+            } else {
+                wordcraft_render::render_area(&doc, page, area, scale, &options)
+            };
             // Both are premultiplied RGBA8, so the pixels go across as they are.
             Ok(LoadedPicture::Image(egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels)))
         }))

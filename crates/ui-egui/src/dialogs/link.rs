@@ -32,10 +32,7 @@ fn link_places(app: &mut WordApp) -> Option<(Vec<LinkPlaceGroup>, Vec<PlaceRef>)
         refs.push(PlaceRef::Bookmark(b.to_string()));
         bookmarks.push(LinkPlace::new(b, 0));
     }
-    let groups = vec![
-        LinkPlaceGroup::new(Label::from(tl!("Headings")), headings),
-        LinkPlaceGroup::new(Label::from(tl!("Bookmarks")), bookmarks),
-    ];
+    let groups = vec![LinkPlaceGroup::new(Label::from(tl!("Headings")), headings), LinkPlaceGroup::new(Label::from(tl!("Bookmarks")), bookmarks)];
     Some((groups, refs))
 }
 
@@ -100,10 +97,8 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
 /// Opens Insert › Link on the selected text.
 pub(crate) fn open(app: &mut WordApp, _name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     let (groups, _) = link_places(app)?;
-    let dialog = HyperlinkDialog::new(CurrentLink::None, Some(app.session.selected_text()))
-        .place_groups(groups)
-        .parts(HyperlinkParts::NoScreenTip)
-        .held_ok();
+    let dialog =
+        HyperlinkDialog::new(CurrentLink::None, Some(app.session.selected_text())).place_groups(groups).parts(HyperlinkParts::NoScreenTip).held_ok();
     Some(open_with(app, parent, Keyed::new("link", dialog), DialogHooks { prepare: None, settle }))
 }
 

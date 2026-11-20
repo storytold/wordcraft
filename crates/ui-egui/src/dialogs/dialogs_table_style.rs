@@ -109,7 +109,6 @@ const EDGES: [(&str, &str); 10] = [
     ("Inside Vertical Border", "insideV"),
 ];
 
-
 /// The alignment picker's cells in the order of [`CELL_ALIGNS`] (row by row from the top left).
 const ANCHORS: [Anchor9; 9] = [
     Anchor9::TopLeft,
@@ -572,11 +571,8 @@ impl TableStyleForm {
                 if let Some((s, _)) = pick_index(ui, "Style:", &styles, current).and_then(|i| LINE_STYLES.get(i)) {
                     pen.style = *s;
                 }
-                let widths: Vec<Entry<usize>> = WIDTHS
-                    .iter()
-                    .enumerate()
-                    .map(|(i, w)| Entry::new(i, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())])))
-                    .collect();
+                let widths: Vec<Entry<usize>> =
+                    WIDTHS.iter().enumerate().map(|(i, w)| Entry::new(i, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]))).collect();
                 let current = WIDTHS.iter().position(|w| *w == pen.width).unwrap_or(usize::MAX);
                 if let Some(w) = pick_index(ui, "Width:", &widths, current).and_then(|i| WIDTHS.get(i)) {
                     pen.width = *w;
@@ -604,7 +600,8 @@ impl TableStyleForm {
                 }
                 // The grid is row by row from the top left, as `CELL_ALIGNS` is.
                 let current = CELL_ALIGNS.iter().position(|(n, _, _)| *n == r.align).and_then(|i| ANCHORS.get(i)).copied();
-                let picked = ReferencePoint::new(lab("Alignment:"), Bind::given(current)).kind(ReferencePointKind::Alignment).show(ui).value().copied();
+                let picked =
+                    ReferencePoint::new(lab("Alignment:"), Bind::given(current)).kind(ReferencePointKind::Alignment).show(ui).value().copied();
                 if let Some(anchor) = picked {
                     // Picking the selected cell again clears the alignment.
                     r.align = anchor
@@ -696,7 +693,6 @@ const LINE_STYLES: [(BorderStyle, &str); 8] = [
 ];
 
 const WIDTHS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
-
 
 /// Opens the dialog for `name` (`newTableStyle` / `modifyTableStyle`), `None` when there's no table
 /// style to modify. `params["part"]` opens it on that part (`"firstRow"`…).

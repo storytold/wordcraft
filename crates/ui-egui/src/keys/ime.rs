@@ -65,9 +65,7 @@ pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Cont
     // The page reports no lines: the page view's describer carries the text and selection.
     // The page draws the marked text itself, so a pass that dropped it (a refused deletion) reports
     // that, and the framework interrupts the composition even in the pre-edit's own pass.
-    let state = EditorState::new(caret, &[], TextPos::new(0, 0))
-        .surrounding(epoch, surrounding)
-        .marked(!app.canvas.ime_preedit.is_empty());
+    let state = EditorState::new(caret, &[], TextPos::new(0, 0)).surrounding(epoch, surrounding).marked(!app.canvas.ime_preedit.is_empty());
     handle.report(ctx, state);
 }
 
@@ -144,14 +142,7 @@ pub(super) fn classify_ime_proof(outcome: ImeEditOutcome, before: &ImeStamp, aft
 
 /// Publish at most one receipt for a successful IME command, or force `Other` when the engine
 /// outcome and the bounded stamps cannot prove a pure content change.
-pub(super) fn ime_report(
-    app: &mut WordApp,
-    pass: &ToolPass,
-    ctx: &egui::Context,
-    before: ImeStamp,
-    after: ImeStamp,
-    outcome: ImeEditOutcome,
-) {
+pub(super) fn ime_report(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, before: ImeStamp, after: ImeStamp, outcome: ImeEditOutcome) {
     // A successful application-origin command since the last observation poisons the frame, even
     // when the available text stamp is unchanged (formatting-only changes).
     if app.session.take_pending_ime_application_change() {

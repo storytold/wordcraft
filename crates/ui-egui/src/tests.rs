@@ -16,14 +16,14 @@ mod perf;
 // inline `mod tests`.
 #[path = "tests/chrome.rs"]
 mod chrome_tests;
-#[path = "tests/dialogs.rs"]
-mod dialogs_tests;
-#[path = "tests/ribbon.rs"]
-mod ribbon_tests;
 #[path = "control/tests.rs"]
 mod control_tests;
+#[path = "tests/dialogs.rs"]
+mod dialogs_tests;
 #[path = "prefs/tests.rs"]
 mod prefs_tests;
+#[path = "tests/ribbon.rs"]
+mod ribbon_tests;
 
 fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
@@ -362,7 +362,14 @@ struct InputRow {
 fn input_dialog_opens_for_users_and_never_for_scripts() {
     let csv = json!({"csv": "First Name,City\nAda,London"});
     let rows = vec![
-        InputRow { command: "insert.icon", params: json!({}), setup: vec![], dialog: "icons", scripts: ForScripts::Data, applies_with: Some(json!({"id": "sun", "size": 36})) },
+        InputRow {
+            command: "insert.icon",
+            params: json!({}),
+            setup: vec![],
+            dialog: "icons",
+            scripts: ForScripts::Data,
+            applies_with: Some(json!({"id": "sun", "size": 36})),
+        },
         InputRow {
             command: "format.enclose",
             params: json!({}),
@@ -372,7 +379,14 @@ fn input_dialog_opens_for_users_and_never_for_scripts() {
             scripts: ForScripts::Errors,
             applies_with: Some(json!({"shape": "square", "style": "enlarge", "text": "字"})),
         },
-        InputRow { command: "insert.field", params: json!({}), setup: vec![], dialog: "field", scripts: ForScripts::Errors, applies_with: Some(json!({"instr": "PAGE"})) },
+        InputRow {
+            command: "insert.field",
+            params: json!({}),
+            setup: vec![],
+            dialog: "field",
+            scripts: ForScripts::Errors,
+            applies_with: Some(json!({"instr": "PAGE"})),
+        },
         InputRow {
             command: "fields.setCode",
             params: json!({}),
@@ -429,7 +443,11 @@ fn input_dialog_opens_for_users_and_never_for_scripts() {
             assert_eq!(pending_of(&reply), None, "{}: a report asks nothing", row.command);
             assert_eq!(reply, script_reply(&row), "{}: the user gets the data a script gets", row.command);
             if row.dialog == "matchFields" {
-                assert!(user.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some(row.dialog)), "{}: its report shows", row.command);
+                assert!(
+                    user.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some(row.dialog)),
+                    "{}: its report shows",
+                    row.command
+                );
             }
         } else {
             assert_eq!(pending_of(&reply), Some(row.dialog), "{}: a user is asked", row.command);
@@ -751,7 +769,13 @@ fn ctrl_wheel_zoom_keeps_the_place_under_the_pointer() {
             // an even number to a row, the gutter at the centre, where there is no place to keep: the pointer moves
             // onto the page right of it first.
             if page_under(&a, pointer).is_none()
-                && let Some(right) = a.canvas.page_rects().map(|(_, r)| r).filter(|r| r.left() > pointer.x && r.y_range().contains(pointer.y)).map(|r| r.left()).reduce(f32::min)
+                && let Some(right) = a
+                    .canvas
+                    .page_rects()
+                    .map(|(_, r)| r)
+                    .filter(|r| r.left() > pointer.x && r.y_range().contains(pointer.y))
+                    .map(|r| r.left())
+                    .reduce(f32::min)
             {
                 pointer.x = right + 20.0;
                 frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
@@ -1508,8 +1532,9 @@ fn every_cut_entry_point_publishes_to_the_clipboard() {
     // The sink is the runtime's clipboard (a memory one here), not egui's `CopyText` output.
     use craft::platform::clipboard::{Clipboard, MemoryClipboard};
     let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
-    let copied =
-        |ctx: &egui::Context| -> Vec<String> { craft::ui::runtime::commands::ClipboardHandle::of(ctx).read_text().ok().flatten().into_iter().collect() };
+    let copied = |ctx: &egui::Context| -> Vec<String> {
+        craft::ui::runtime::commands::ClipboardHandle::of(ctx).read_text().ok().flatten().into_iter().collect()
+    };
 
     // The ribbon's Cut button runs the command like every ribbon control.
     let ctx = crate::test_harness::context_with(spec);
@@ -3071,7 +3096,8 @@ fn web_save_keeps_the_opened_word_format() {
     // A browser save goes back under the opened file's own name (S-L159: the host's files service,
     // not the app, says whether the page holds it); a Word 97-2003 file is the one that can't be
     // written back (`host_save_of_a_legacy_word_file_writes_a_docx`).
-    for (opened, expect) in [("m.docm", "m.docm"), ("t.DOTM", "t.DOTM"), ("t.dotx", "t.dotx"), ("notes.odt", "notes.odt"), ("readme.txt", "readme.txt")]
+    for (opened, expect) in
+        [("m.docm", "m.docm"), ("t.DOTM", "t.DOTM"), ("t.dotx", "t.dotx"), ("notes.odt", "notes.odt"), ("readme.txt", "readme.txt")]
     {
         a.session.path = Some(opened.into());
         a.run("file.save", json!({})).unwrap();
@@ -3359,7 +3385,6 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
     let props = h.state().session.doc.para_at(&pos).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
     assert_eq!(props.vert_align, Some(wordcraft_doc::props::VertAlign::Superscript), "Ctrl+Shift+= runs Superscript");
 }
-
 
 /// #980: F11 and View › Full Screen (`view.fullScreen`) take the window to full screen; a
 /// second F11 or Escape brings it back.
@@ -3824,7 +3849,6 @@ fn render_without_a_path_replies_with_the_png() {
     let png = wordcraft_engine::cmd::insert::base64_decode(v["result"]["png"].as_str().expect("png")).expect("base64");
     assert_eq!(&png[..4], b"\x89PNG", "{v}");
     assert!(v["result"]["width"].as_u64().unwrap() > 0 && v["result"]["pages"].as_u64().unwrap() >= 1, "{v}");
-
 }
 
 /// #821: Shift+F10 opens the page's context menu below the caret, like right-clicking there
@@ -3875,7 +3899,6 @@ fn shift_f10_opens_the_context_menu_at_the_caret() {
     assert!(h.state().canvas.context_menu_open);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns fire");
 }
-
 
 /// A file dropped in the first two font-warm-up passes is taken before the early return;
 /// eframe does not preserve dropped files for a later frame.

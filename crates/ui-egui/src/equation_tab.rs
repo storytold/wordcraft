@@ -300,7 +300,9 @@ pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     ("All - Professional", "professional", true),
                     ("All - Linear", "linear", true),
                 ] {
-                    MenuItem::command(CommandRef::with_params("equation.convert", json!({"to": to, "all": all}))).label(tl!(label).to_string()).show(ui);
+                    MenuItem::command(CommandRef::with_params("equation.convert", json!({"to": to, "all": all})))
+                        .label(tl!(label).to_string())
+                        .show(ui);
                 }
             });
         });

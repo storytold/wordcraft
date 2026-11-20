@@ -162,7 +162,8 @@ impl CanvasTool for TablePenCanvasTool<'_> {
         use craft::theme::variant::Tone;
         let (Some(layout), Some(style), Some(tool)) = (&self.layout, cx.style(), self.app.canvas.table_tool) else { return };
         let accent = StrokeColor::Theme(style.tone(Tone::Accent));
-        let screen = |page: usize, x: f32, y: f32| -> Option<Pos2> { Some(placed(self.body.pages, page)?.to_screen(Point::new(f64::from(x), f64::from(y)))) };
+        let screen =
+            |page: usize, x: f32, y: f32| -> Option<Pos2> { Some(placed(self.body.pages, page)?.to_screen(Point::new(f64::from(x), f64::from(y)))) };
         let line = |a: Option<Pos2>, b: Option<Pos2>, width: StrokeWidth, color: StrokeColor| {
             if let (Some(a), Some(b)) = (a, b) {
                 draw.stroke(&PaintShape::Path(vec![a, b]), width, color);
@@ -194,7 +195,12 @@ impl CanvasTool for TablePenCanvasTool<'_> {
                 {
                     let [x, y] = page_xy(pg, p);
                     if let Some(e) = table_draw::erase_target(layout, pg.page, x, y) {
-                        line(screen(pg.page, e.from.0, e.from.1), screen(pg.page, e.to.0, e.to.1), StrokeWidth::Heavy, StrokeColor::Theme(style.tone(Tone::Bad)));
+                        line(
+                            screen(pg.page, e.from.0, e.from.1),
+                            screen(pg.page, e.to.0, e.to.1),
+                            StrokeWidth::Heavy,
+                            StrokeColor::Theme(style.tone(Tone::Bad)),
+                        );
                     }
                 }
             }

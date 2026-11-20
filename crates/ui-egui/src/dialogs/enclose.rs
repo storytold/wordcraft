@@ -68,7 +68,9 @@ impl EncloseForm {
                 let outline = match (shape.as_str(), box_h > 0.0) {
                     (_, false) => None,
                     ("square", _) => Some(PaintShape::Rect(Rect::from_center_size(c, vec2(box_h, box_h)), CornerRadius::ZERO)),
-                    ("triangle", _) => Some(PaintShape::Polygon(vec![pos2(c.x, c.y - h), pos2(c.x + h * 1.1, c.y + h), pos2(c.x - h * 1.1, c.y + h)])),
+                    ("triangle", _) => {
+                        Some(PaintShape::Polygon(vec![pos2(c.x, c.y - h), pos2(c.x + h * 1.1, c.y + h), pos2(c.x - h * 1.1, c.y + h)]))
+                    }
                     ("diamond", _) => Some(PaintShape::Polygon(vec![pos2(c.x, c.y - h), pos2(c.x + h, c.y), pos2(c.x, c.y + h), pos2(c.x - h, c.y)])),
                     _ => Some(PaintShape::Circle(c, h)),
                 };

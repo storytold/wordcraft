@@ -109,11 +109,17 @@ fn closing(form: &str, force: Option<&Value>, target: u64, background: bool) -> 
         Value::Object(v)
     };
     match form {
-        "engine.execute" => ("engine.execute", doc([("command".to_string(), json!("file.close")), ("params".to_string(), Value::Object(params))].into_iter().collect())),
+        "engine.execute" => (
+            "engine.execute",
+            doc([("command".to_string(), json!("file.close")), ("params".to_string(), Value::Object(params))].into_iter().collect()),
+        ),
         "command" => ("command", doc([("id".to_string(), json!("file.close")), ("params".to_string(), Value::Object(params))].into_iter().collect())),
         "engine.execute:closeDocument" => {
             params.insert("id".into(), json!(target));
-            ("engine.execute", doc([("command".to_string(), json!("file.closeDocument")), ("params".to_string(), Value::Object(params))].into_iter().collect()))
+            (
+                "engine.execute",
+                doc([("command".to_string(), json!("file.closeDocument")), ("params".to_string(), Value::Object(params))].into_iter().collect()),
+            )
         }
         "file.closeDocument" => {
             params.insert("id".into(), json!(target));
@@ -196,7 +202,8 @@ fn control_resize_rejects_bad_sizes_and_clamps_huge_ones() {
     assert!(r["result"]["height"].as_f64().unwrap() <= max_side, "{r}");
 
     let out = ctx.run_ui(egui::RawInput::default(), |_| {});
-    let asked = out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::InnerSize(_))));
+    let asked =
+        out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::InnerSize(_))));
     out.drop_without_applying_deltas();
     assert!(asked, "the window was asked for the size");
 }

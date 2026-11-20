@@ -295,7 +295,9 @@ fn footer_links(ui: &mut Ui, show_discord: bool, choice: &MenuChoice) {
     {
         choice.discord.set(true);
     }
-    if clicked(&Button::new(label("About")).id_salt("backstage-about").variant(Variant::GHOST).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
+    if clicked(
+        &Button::new(label("About")).id_salt("backstage-about").variant(Variant::GHOST).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui),
+    ) {
         choice.about.set(true);
     }
 }

@@ -32,9 +32,9 @@ mod styles;
 
 pub(crate) use find::{NOT_IN_SEARCH, SEARCH_SUGGESTIONS, find_in_navigation_pane};
 pub use forms::{CustomPropertiesForm, TableForm, TableProperties};
+pub(crate) use host::close_all;
 #[cfg(test)]
 pub(crate) use mailings::{FilterRow, RecipientDraft, RecipientFilter, RecipientListDialog, hold_rows, merge_order, visible_recipients};
-pub(crate) use host::close_all;
 pub(crate) use page_setup::PAPER_LABELS;
 
 /// Opens the dialog `name` for a script, a button or a command, with `params`; the module of the name reads what it

@@ -18,8 +18,8 @@ use craft::ui::layout_components::{Row, Stack};
 use craft::ui::patterns::form_dialogs::PreviewView;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::HAlign;
-use craft::ui::runtime::memory::Remember as _;
 use craft::ui::runtime::env::Label;
+use craft::ui::runtime::memory::Remember as _;
 use craft::ui::text::{NumberField, TextField};
 use egui::Ui;
 use serde_json::{Value, json};
@@ -126,7 +126,6 @@ impl Default for PrintPage {
     }
 }
 
-
 pub(crate) const RANGES: [(&str, &str); 4] =
     [("all", "All pages"), ("current", "Current page"), ("selection", "Selected pages"), ("custom", "Custom range")];
 pub(crate) const PARITIES: [(&str, &str); 3] = [("all", "All pages in the range"), ("odd", "Odd pages only"), ("even", "Even pages only")];
@@ -215,7 +214,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.print.opened_in = Some(frame);
         }
         let result = |m: &Option<crate::printing::Feedback>| {
-            matches!(m, Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped))
+            matches!(
+                m,
+                Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped)
+            )
         };
         let message = app.printing.message.clone();
         let generation = app.print_gen;
@@ -226,7 +228,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         if app.print.hidden != Some(generation) {
             app.print.hidden = None;
         }
-        let hide_message = app.print.hidden.is_some();        if !hide_message {
+        let hide_message = app.print.hidden.is_some();
+        if !hide_message {
             // Shown here, so the next opening needn't repeat it.
             app.print.said = result(&message).then_some(generation);
         }
@@ -346,7 +349,8 @@ fn settings(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>, hide_message: 
 
     match wordcraft_engine::print::plan(&app.print.settings.params(), total, current) {
         Ok(plan) => {
-            let msg = crate::i18n::fmt(tl!("{count} of {total} pages will print"), &[("count", &plan.chosen.to_string()), ("total", &total.to_string())]);
+            let msg =
+                crate::i18n::fmt(tl!("{count} of {total} pages will print"), &[("count", &plan.chosen.to_string()), ("total", &total.to_string())]);
             // Production's count is dim, a note under the choices rather than one of them.
             Text::new(msg).shade(Shade::Muted).show(ui);
         }

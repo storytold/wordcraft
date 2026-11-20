@@ -562,5 +562,3 @@ fn same_proofing(a: &str, b: &str) -> bool {
         _ => false,
     }
 }
-
-

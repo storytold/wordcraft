@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::props::Align;
 
+use super::dialogs_insert::symbol::SymbolRequest;
 use super::font::FontRequest;
 use super::host::{Asks, ChildAnswer, WordForm, open_form};
-use super::dialogs_insert::symbol::SymbolRequest;
 use crate::WordApp;
 
 /// The alignments the dialog offers: `para.defineBullet`'s `align` and their names.
@@ -134,51 +134,55 @@ impl DefineBulletForm {
     /// character the page will.
     fn preview(&self) -> Picture<'static> {
         let (ch, align, preview_pt, chr) = (self.ch.clone(), self.align.clone(), self.preview_pt(), self.chr());
-        Picture::painter(Label::from(tl!("Preview")), ThumbAspect::new(PREVIEW_W as u16, PREVIEW_H as u16), move |cx: &ContentPainterCx, rect: Rect| {
-            let k = rect.height() / PREVIEW_H;
-            let row = 17.0 * k;
-            let mut shapes = vec![
-                egui::Shape::rect_filled(rect, 2.0, Color32::WHITE),
-                egui::Shape::rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(160)), egui::StrokeKind::Inside),
-            ];
-            // Positions in points, scaled so 4.5 inches fit, as in Define New Multilevel List.
-            let scale = (rect.width() - 16.0) / 324.0;
-            let left = rect.left() + 8.0;
-            let (aligned_at, text_at) = (left + 18.0 * scale, left + 36.0 * scale);
-            let bar = |shapes: &mut Vec<egui::Shape>, y: f32, from: f32, gray: u8| {
-                let r = Rect::from_min_max(pos2(from, y - 2.0), pos2(rect.right() - 8.0, y + 2.0));
-                shapes.push(egui::Shape::rect_filled(r, 1.0, Color32::from_gray(gray)));
-            };
-            let glyph = preview_pt * scale / 0.7;
-            let sized = wordcraft_doc::props::CharProps { size: Some(preview_pt * scale), ..chr.clone() };
-            let ppp = cx.pixels_per_point();
-            let mut images = Vec::new();
-            for i in 0..7 {
-                let y = rect.top() + 5.0 * k + row * i as f32 + row / 2.0;
-                if !(2..5).contains(&i) {
-                    bar(&mut shapes, y, left, 205);
-                    continue;
-                }
-                let x = match align.as_str() {
-                    "center" => aligned_at - glyph / 2.0,
-                    "right" => aligned_at - glyph,
-                    _ => aligned_at,
+        Picture::painter(
+            Label::from(tl!("Preview")),
+            ThumbAspect::new(PREVIEW_W as u16, PREVIEW_H as u16),
+            move |cx: &ContentPainterCx, rect: Rect| {
+                let k = rect.height() / PREVIEW_H;
+                let row = 17.0 * k;
+                let mut shapes = vec![
+                    egui::Shape::rect_filled(rect, 2.0, Color32::WHITE),
+                    egui::Shape::rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(160)), egui::StrokeKind::Inside),
+                ];
+                // Positions in points, scaled so 4.5 inches fit, as in Define New Multilevel List.
+                let scale = (rect.width() - 16.0) / 324.0;
+                let left = rect.left() + 8.0;
+                let (aligned_at, text_at) = (left + 18.0 * scale, left + 36.0 * scale);
+                let bar = |shapes: &mut Vec<egui::Shape>, y: f32, from: f32, gray: u8| {
+                    let r = Rect::from_min_max(pos2(from, y - 2.0), pos2(rect.right() - 8.0, y + 2.0));
+                    shapes.push(egui::Shape::rect_filled(r, 1.0, Color32::from_gray(gray)));
                 };
-                let r = Rect::from_min_size(pos2(x, y - glyph / 2.0), vec2(glyph, glyph));
-                images.push(r);
-                bar(&mut shapes, y, text_at.max(r.right() + 2.0), 120);
-            }
-            cx.data_shapes(shapes);
-            let key = format!("bullet-glyph:{ch}:{sized:?}:{glyph}:{ppp}");
-            let tex = TextureCache::texture(cx.painter.ctx(), key, || {
-                crate::previews::glyph_image(&ch, &sized, (glyph, glyph, ppp), false)
-                    .unwrap_or_else(|| egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]))
-            });
-            let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-            for r in images {
-                cx.picture(tex, r, full, 0.0);
-            }
-        })
+                let glyph = preview_pt * scale / 0.7;
+                let sized = wordcraft_doc::props::CharProps { size: Some(preview_pt * scale), ..chr.clone() };
+                let ppp = cx.pixels_per_point();
+                let mut images = Vec::new();
+                for i in 0..7 {
+                    let y = rect.top() + 5.0 * k + row * i as f32 + row / 2.0;
+                    if !(2..5).contains(&i) {
+                        bar(&mut shapes, y, left, 205);
+                        continue;
+                    }
+                    let x = match align.as_str() {
+                        "center" => aligned_at - glyph / 2.0,
+                        "right" => aligned_at - glyph,
+                        _ => aligned_at,
+                    };
+                    let r = Rect::from_min_size(pos2(x, y - glyph / 2.0), vec2(glyph, glyph));
+                    images.push(r);
+                    bar(&mut shapes, y, text_at.max(r.right() + 2.0), 120);
+                }
+                cx.data_shapes(shapes);
+                let key = format!("bullet-glyph:{ch}:{sized:?}:{glyph}:{ppp}");
+                let tex = TextureCache::texture(cx.painter.ctx(), key, || {
+                    crate::previews::glyph_image(&ch, &sized, (glyph, glyph, ppp), false)
+                        .unwrap_or_else(|| egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]))
+                });
+                let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                for r in images {
+                    cx.picture(tex, r, full, 0.0);
+                }
+            },
+        )
     }
 }
 
@@ -278,7 +282,6 @@ mod tests {
         let n = doc.para_at(&wordcraft_doc::Pos::body(i, 0)).unwrap().props.numbering.unwrap();
         doc.numbering.level(n.num, n.level).unwrap().clone()
     }
-
 
     fn form_of(h: &egui_kittest::Harness<'static, WordApp>, id: DialogId) -> Option<DefineBulletForm> {
         h.state().dialog_host.get_by_id::<FormHost<DefineBulletForm>>(id).map(|f| f.form().clone())

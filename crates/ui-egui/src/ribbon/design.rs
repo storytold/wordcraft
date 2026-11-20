@@ -96,7 +96,9 @@ pub(super) fn design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 }
                 Divider::horizontal().show(ui);
                 MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "watermark"}))).label(crate::tl!("Custom Watermark…")).show(ui);
-                MenuItem::command(CommandRef::with_params("design.watermark", json!({"remove": true}))).label(crate::tl!("Remove Watermark")).show(ui);
+                MenuItem::command(CommandRef::with_params("design.watermark", json!({"remove": true})))
+                    .label(crate::tl!("Remove Watermark"))
+                    .show(ui);
             },
         );
         menu_button(
