@@ -117,8 +117,9 @@ impl Unit {
     }
 }
 
-/// Maps the digits and decimal separators of other scripts to their ASCII forms: Arabic-Indic
-/// (`٠`–`٩`, `٫`), Extended Arabic-Indic (`۰`–`۹`) and full-width (`０`–`９`, `．`, `，`).
+/// Maps the digits, decimal separators and signs of other scripts to their ASCII forms:
+/// Arabic-Indic (`٠`–`٩`, `٫`), Extended Arabic-Indic (`۰`–`۹`) and full-width
+/// (`０`–`９`, `．`, `，`, `＋`, `－`).
 fn fold_digit(c: char) -> char {
     match c {
         '\u{0660}'..='\u{0669}' => char::from(b'0' + (c as u32 - 0x0660) as u8),
@@ -126,6 +127,8 @@ fn fold_digit(c: char) -> char {
         '\u{FF10}'..='\u{FF19}' => char::from(b'0' + (c as u32 - 0xFF10) as u8),
         '\u{066B}' | '\u{FF0E}' => '.',
         '\u{FF0C}' => ',',
+        '\u{FF0B}' => '+',
+        '\u{FF0D}' => '-',
         other => other,
     }
 }
@@ -480,6 +483,21 @@ mod tests {
         assert_eq!(parse_measure("\u{0662}\u{066B}\u{0665} cm", Unit::Inches), Some(two_and_half)); // ٢٫٥
         assert_eq!(parse_measure("\u{FF12}\u{FF0E}\u{FF15}cm", Unit::Inches), Some(two_and_half)); // ２．５
         assert_eq!(parse_measure("\u{0663}", Unit::Points), Some(3.0));
+    }
+
+    #[test]
+    fn parses_full_width_signs() {
+        for (full_width, ascii, default) in [
+            ("＋２．５ cm", "+2.5 cm", Unit::Inches),
+            ("－２．５ cm", "-2.5 cm", Unit::Inches),
+            ("＋2", "+2", Unit::Inches),
+            ("－2", "-2", Unit::Points),
+        ] {
+            assert_eq!(parse_measure(full_width, default), parse_measure(ascii, default), "{full_width}");
+        }
+        for invalid in ["＋", "－", "＋－２", "２＋３"] {
+            assert_eq!(parse_measure(invalid, Unit::Points), None, "{invalid}");
+        }
     }
 
     #[test]
