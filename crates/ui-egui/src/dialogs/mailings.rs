@@ -1,5 +1,29 @@
-use super::chrome::buttons;
-use super::{Dialog, FilterOp, FilterRule, Sense, Serialize, SortKey, Tokens, Ui, Value, WordApp, json, vec2};
+use std::cell::RefCell;
+
+use craft::behavior::{ColumnWidth, EditEvent, IconId, keyed};
+use craft::table::ui::{
+    Condition, ConditionBuilder, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionLayout, ConditionValue, Join, Match,
+};
+use craft::ui::buttons::{Button, ToggleButton};
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{
+    Bind, CollectionEvent, ColumnEvent, ColumnKey, ColumnSpec, EditResponse, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _,
+};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog};
+use craft::ui::display::Text;
+use craft::ui::list::{ListRow, RowEvent, TrailingFace, TrailingPart};
+use craft::ui::patterns::form_dialogs::FormDialog;
+use craft::ui::pickers::Select;
+use craft::ui::primitives::IconSpec;
+use craft::ui::sections::Section;
+use craft::ui::table::Table;
+use craft::ui::text::TextField;
+use serde::Serialize;
+use serde_json::{Value, json};
+use wordcraft_engine::cmd::mailings::{FilterOp, FilterRule, SortKey};
+
+use super::host::{DialogHooks, Settle, open_with};
+use crate::WordApp;
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
 pub const ADDRESS_PARTS: [(&str, &str); 9] = [
@@ -13,20 +37,6 @@ pub const ADDRESS_PARTS: [(&str, &str); 9] = [
     ("Postal Code", "postal"),
     ("Country", "country"),
 ];
-
-/// The `mailings.rules` parameters a Merge Rule dialog stands for, once it names a field.
-pub fn rule_params(d: &Dialog) -> Option<Value> {
-    let Dialog::MergeRule { rule, field, value, then, els, .. } = d else { return None };
-    let field = field.trim();
-    if field.is_empty() {
-        return None;
-    }
-    Some(if rule == "SKIPIF" {
-        json!({"rule": "SKIPIF", "field": field, "value": value})
-    } else {
-        json!({"rule": "IF", "field": field, "value": value, "then": then, "else": els})
-    })
-}
 
 /// The fields a new recipient list starts with.
 pub const NEW_LIST_FIELDS: [&str; 5] = ["First Name", "Last Name", "Address", "City", "Postal Code"];
@@ -54,7 +64,7 @@ pub fn recipient_table(fields: &[String], rows: &[Vec<String>]) -> Result<Value,
 }
 
 /// The Recipient List dialog's Filter and Sort section (#778).
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct RecipientFilter {
     /// Whether the section is shown.
     pub open: bool,
@@ -69,17 +79,10 @@ pub struct RecipientFilter {
     /// The grid's rows held while one of its cells is edited (see [`hold_rows`]).
     #[serde(skip)]
     pub(crate) held: Option<Vec<usize>>,
-    /// The grid cell that had the keyboard last frame.
-    #[serde(skip)]
-    pub(crate) editing: Option<egui::Id>,
-    /// The last merge order worked out, keyed by a hash of the list, filter and sort, so a long
-    /// list isn't filtered and sorted again on every frame.
-    #[serde(skip)]
-    pub(crate) order_cache: Option<(u64, Vec<Option<usize>>)>,
 }
 
 /// One filter condition row: `field op value`, joined to the row above with And or Or.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FilterRow {
     pub field: String,
     #[serde(serialize_with = "op_id")]
@@ -90,6 +93,36 @@ pub struct FilterRow {
 
 fn op_id<S: serde::Serializer>(op: &FilterOp, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(op.id())
+}
+
+/// Whether the operator `op` compares against a value; blank and not blank do not.
+fn takes_value(op: &str) -> bool {
+    !matches!(op, "blank" | "notBlank")
+}
+
+impl FilterRow {
+    /// The builder's rule for this row.
+    fn condition(&self) -> Condition {
+        let value = if takes_value(self.op.id()) { ConditionValue::Text(self.value.clone()) } else { ConditionValue::None };
+        let mut c = Condition::new(self.field.clone(), self.op.id(), value);
+        c.join = if self.or { Join::Or } else { Join::And };
+        c
+    }
+
+    /// The row a builder rule stands for; `None` for an operator the engine doesn't know.
+    fn of_condition(c: &Condition) -> Option<FilterRow> {
+        let op = FilterOp::ALL.into_iter().find(|o| o.id() == c.operator)?;
+        let value = match &c.value {
+            ConditionValue::Text(t) => t.clone(),
+            _ => String::new(),
+        };
+        Some(FilterRow { field: c.field.clone(), op, value, or: c.join == Join::Or })
+    }
+}
+
+/// Whether `f` names one of `fields` (case-insensitively, trimmed).
+fn known_field(fields: &[String], f: &str) -> bool {
+    !f.trim().is_empty() && fields.iter().any(|h| h.trim().eq_ignore_ascii_case(f.trim()))
 }
 
 impl RecipientFilter {
@@ -105,44 +138,18 @@ impl RecipientFilter {
     }
 
     /// The rules and sort keys on `fields` (a rule on a field renamed or removed in the table
-    /// drops, as the engine drops it when the list is edited).
+    /// drops, as the engine drops it when the list is edited). The first rule has nothing to
+    /// join, so its `or` never counts.
     fn engine(&self, fields: &[String]) -> (Vec<FilterRule>, Vec<SortKey>) {
-        let known = |f: &str| !f.trim().is_empty() && fields.iter().any(|h| h.trim().eq_ignore_ascii_case(f.trim()));
         let rules = self
             .rules
             .iter()
-            .filter(|r| known(&r.field))
-            .map(|r| FilterRule { field: r.field.clone(), op: r.op, value: r.value.clone(), or: r.or })
+            .filter(|r| known_field(fields, &r.field))
+            .enumerate()
+            .map(|(n, r)| FilterRule { field: r.field.clone(), op: r.op, value: r.value.clone(), or: r.or && n > 0 })
             .collect();
-        let sort = self.sort.iter().filter(|(f, _)| known(f)).map(|(f, d)| SortKey { field: f.clone(), descending: *d }).collect();
+        let sort = self.sort.iter().filter(|(f, _)| known_field(fields, f)).map(|(f, d)| SortKey { field: f.clone(), descending: *d }).collect();
         (rules, sort)
-    }
-
-    /// Each record's place in the merge (None: filtered out), from the cache when the list,
-    /// filter and sort haven't changed.
-    fn order(&mut self, fields: &[String], rows: &[Vec<String>]) -> &[Option<usize>] {
-        use std::hash::{Hash, Hasher};
-        let (rules, sort) = self.engine(fields);
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        fields.hash(&mut h);
-        rows.hash(&mut h);
-        for r in &rules {
-            (&r.field, r.op.id(), &r.value, r.or).hash(&mut h);
-        }
-        for k in &sort {
-            (&k.field, k.descending).hash(&mut h);
-        }
-        let key = h.finish();
-        if self.order_cache.as_ref().is_none_or(|(k, _)| *k != key) {
-            let mut order = vec![None; rows.len()];
-            for (n, i) in wordcraft_engine::cmd::mailings::select_records(fields, rows, &rules, &sort).into_iter().enumerate() {
-                if let Some(slot) = order.get_mut(i) {
-                    *slot = Some(n + 1);
-                }
-            }
-            self.order_cache = Some((key, order));
-        }
-        self.order_cache.as_ref().map_or(&[], |(_, o)| o.as_slice())
     }
 
     fn is_empty(&self) -> bool {
@@ -157,10 +164,27 @@ impl RecipientFilter {
             "sort": sort.iter().map(|k| json!({"field": k.field, "descending": k.descending})).collect::<Vec<_>>(),
         })
     }
+
+    /// The rules as the builder's one joined list.
+    fn conditions(&self) -> ConditionGroup {
+        // PLAN: assumed `ConditionItem::Rule(Condition)` and `Match::All`.
+        ConditionGroup::new(Match::All, self.rules.iter().map(|r| ConditionItem::Rule(r.condition())).collect())
+    }
+
+    /// Takes the builder's rules back; a rule on a field the list no longer has drops.
+    fn set_conditions(&mut self, group: &ConditionGroup, fields: &[String]) {
+        self.rules = group
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ConditionItem::Rule(c) if known_field(fields, &c.field) => FilterRow::of_condition(c),
+                _ => None,
+            })
+            .collect();
+    }
 }
 
 /// Each record's place in the merge (None: filtered out), when `filter` filters or sorts.
-#[cfg(test)]
 pub(crate) fn merge_order(fields: &[String], rows: &[Vec<String>], filter: &RecipientFilter) -> Option<Vec<Option<usize>>> {
     (!filter.is_empty()).then(|| {
         let (rules, sort) = filter.engine(fields);
@@ -222,283 +246,380 @@ fn contains_folded(hay: &str, needle: &[char]) -> bool {
     })
 }
 
-/// The Recipient List dialog's body: a file button, the editable table, OK/Cancel. True to close.
-pub(crate) fn recipient_list(
-    app: &mut WordApp,
-    ui: &mut Ui,
-    fields: &mut Vec<String>,
-    rows: &mut Vec<Vec<String>>,
-    message: &mut String,
-    filter: &mut RecipientFilter,
-) -> bool {
-    const CELL_W: f32 = 120.0;
-    const X_W: f32 = 18.0;
-    const ROW_H: f32 = 24.0;
-    const NUM_W: f32 = 34.0;
-    // Each record's place in the merge (None: filtered out), when there is a filter or sort.
-    let order: Option<Vec<Option<usize>>> = (!filter.is_empty()).then(|| filter.order(fields, rows).to_vec());
-    // Wide enough for every field (up to a limit; more scroll sideways).
-    let gap = ui.spacing().item_spacing.x;
-    // Plus the rows' scroll bar, so each row's remove button stays in view (#1576).
-    let scroll = ui.spacing().scroll;
-    let bar = scroll.bar_width + scroll.bar_inner_margin + scroll.bar_outer_margin;
-    let table_w = NUM_W + gap + fields.len() as f32 * (CELL_W + X_W + 2.0 * gap) + X_W + 2.0 * gap + bar + X_W;
-    ui.set_min_width(table_w.clamp(340.0, 720.0));
-    ui.label(tl!("Type the recipients, or load them from a file."));
-    if ui.button(tl!("Use an Existing List…")).clicked() {
-        // The picker takes over; the list it loads replaces this one.
-        let _ = app.run("ui.openRecipientList", json!({}));
-        return true;
+/// What the Recipient List dialog edits: the table and its filter.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecipientDraft {
+    pub fields: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub filter: RecipientFilter,
+}
+
+/// The Recipient List dialog: a typed table of recipients, Find in list, and Filter and Sort. OK
+/// files the draft; the dialog's settle hook loads it and answers.
+pub struct RecipientListDialog {
+    /// The table, its filter and sort.
+    pub draft: RecipientDraft,
+    /// Whether a grid cell's edit session is running (a `Begin` until `Commit` or `Cancel`).
+    editing: bool,
+    /// "Use an Existing List…" was pressed; settle files the pick and closes.
+    pick: bool,
+    held: HeldAnswer<RecipientDraft>,
+}
+
+impl RecipientListDialog {
+    fn new(draft: RecipientDraft) -> Self {
+        RecipientListDialog { draft, editing: false, pick: false, held: HeldAnswer::new() }
     }
-    ui.add_space(6.0);
-    // Find in list and the merged-only view (#1576) hide rows from the grid, never change them.
+}
+
+/// Opens the Recipient List (`recipientList`: the session's list when it has one, else a new
+/// list; `newRecipientList`: always a new one); `None` for any other name.
+pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    if !matches!(name, "recipientList" | "newRecipientList") {
+        return None;
+    }
+    let m = &app.session.merge;
+    let draft = if name == "recipientList" && !m.headers.is_empty() {
+        // Every record (not only the filtered ones), with the filter to edit.
+        RecipientDraft { fields: m.headers.clone(), rows: m.source.clone(), filter: RecipientFilter::from_session(m) }
+    } else {
+        let fields: Vec<String> = NEW_LIST_FIELDS.iter().map(ToString::to_string).collect();
+        let rows = vec![vec![String::new(); fields.len()]];
+        RecipientDraft { fields, rows, filter: RecipientFilter::default() }
+    };
+    Some(open_with(app, parent, RecipientListDialog::new(draft), DialogHooks { prepare: None, settle }))
+}
+
+/// Files the held draft: loads the table, then applies the filter; a refusal is the dialog's.
+/// "Use an Existing List…" hands over to the picker and closes.
+/// Returns `true` only once the dialog is gone and its result is taken: the hook files again after a refusal.
+fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    let Some((filed, pick)) = app.dialog_host.get_mut_by_id::<RecipientListDialog>(id).map(|d| (d.held.take(), std::mem::take(&mut d.pick))) else {
+        let _ = app.dialog_host.take_by_id::<RecipientListDialog>(id);
+        return Settle::Done;
+    };
+    if pick {
+        let _ = app.run("ui.openRecipientList", json!({}));
+        app.dialog_host.close_by_id(id);
+        return Settle::Keep;
+    }
+    let Some(draft) = filed else { return Settle::Keep };
+    let result = recipient_table(&draft.fields, &draft.rows)
+        .map_err(|e| tl!(e).to_string())
+        .and_then(|params| app.load_recipients(params))
+        // A new list starts unfiltered; the dialog's filter and sort apply to it.
+        .and_then(
+            |_| if draft.filter.is_empty() { Ok(Value::Null) } else { app.run("mailings.filterRecipients", draft.filter.params(&draft.fields)) },
+        );
+    if let Some(d) = app.dialog_host.get_mut_by_id::<RecipientListDialog>(id) {
+        d.held.answer(result.map(|_| ()).map_err(Into::into));
+    }
+    Settle::Keep
+}
+
+/// What a grid or header field reported this pass.
+enum Act {
+    Cell(usize, usize, Option<String>, Option<bool>),
+    Field(usize, Option<String>),
+    RemoveField(usize),
+    RemoveRow(usize),
+}
+
+/// The committed text of an edit and where its session stands: `Some(true)` after a `Begin`,
+/// `Some(false)` after a `Commit` or `Cancel` (Tab off a cell commits).
+fn edit_of(out: &EditResponse<String>) -> (Option<String>, Option<bool>) {
+    let mut edge = None;
+    for e in out.events.iter() {
+        match e {
+            EditEvent::Begin { .. } => edge = Some(true),
+            EditEvent::Commit { .. } | EditEvent::Cancel { .. } => edge = Some(false),
+            _ => {}
+        }
+    }
+    (out.value().cloned(), edge)
+}
+
+/// The fields the filter builder offers: the table's, every one text.
+struct RecipientFields {
+    names: Vec<String>,
+}
+
+impl ConditionFields for RecipientFields {
+    fn fields(&self) -> Vec<(String, String, Option<String>)> {
+        self.names.iter().map(|n| (n.clone(), n.clone(), None)).collect()
+    }
+
+    fn kind(&self, _field: &str) -> ConditionKind {
+        ConditionKind::Text
+    }
+
+    fn operators(&self, _field: &str) -> Vec<(String, String)> {
+        FilterOp::ALL.into_iter().map(|op| (op.id().to_string(), tl!(op.label()).to_string())).collect()
+    }
+
+    fn default_value(&self, _field: &str, operator: &str) -> ConditionValue {
+        if takes_value(operator) { ConditionValue::Text(String::new()) } else { ConditionValue::None }
+    }
+}
+
+/// A recipient grid cell's edit and the rows it must hold, in one place.
+fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool, pick: &mut bool) -> bool {
+    let RecipientDraft { fields, rows, filter } = d;
+    Text::new(tl!("Type the recipients, or load them from a file.")).show(ui);
+    if Button::new(tl!("Use an Existing List…")).show(ui).clicked() {
+        *pick = true;
+    }
+    // Each record's place in the merge (None: filtered out), when there is a filter or sort.
+    let order = merge_order(fields, rows, filter);
     // Nothing to leave out without a filter: the box shows unticked.
     if order.is_none() {
         filter.only_merged = false;
     }
-    // A grid cell still has the keyboard: its rows stay put (see `hold_rows`).
-    let editing = filter.editing.is_some_and(|id| ui.memory(|m| m.has_focus(id)));
-    if !editing {
-        filter.editing = None;
+    Checkbox::new(Bind::bound(&mut filter.only_merged)).label(tl!("Show only records that will be merged")).enabled(order.is_some()).show(ui);
+    TextField::search(tl!("Find in list"), Bind::bound(&mut filter.find)).show(ui);
+    // The rows the grid shows, by real index: edits and removes go to the right record.
+    let fresh = visible_recipients(rows, order.as_deref(), &filter.find, filter.only_merged);
+    // A press that ends a cell's edit (one on the row's Remove part) completes its click on release, a pass later: the
+    // rows stay held until then, so the row the press landed on is still there for it.
+    let gesture = filter.held.is_some() && ui.input(|i| i.pointer.any_down() || i.pointer.any_released());
+    let visible = hold_rows(fresh, &mut filter.held, *editing || gesture, rows.len());
+    if !filter.find.trim().is_empty() {
+        let count = visible.len().to_string();
+        Text::new(crate::i18n::fmt(tl!("Matches: {count}"), &[("count", &count)])).show(ui);
     }
-    ui.add_enabled_ui(order.is_some(), |ui| ui.checkbox(&mut filter.only_merged, tl!("Show only records that will be merged")));
-    let visible = ui
-        .horizontal(|ui| {
-            ui.label(tl!("Find in list:"));
-            ui.add(egui::TextEdit::singleline(&mut filter.find).desired_width(180.0).hint_text(tl!("Any field")));
-            // The rows the grid shows, by real index: edits and removes go to the right record.
-            let fresh = visible_recipients(rows, order.as_deref(), &filter.find, filter.only_merged);
-            let visible = hold_rows(fresh, &mut filter.held, editing, rows.len());
-            if !filter.find.trim().is_empty() {
-                let count = visible.len().to_string();
-                ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Matches: {count}"), &[("count", &count)])).weak());
-            }
-            visible
-        })
-        .inner;
-    ui.add_space(4.0);
-    let mut remove_field = None;
+
+    let acts = RefCell::new(Vec::<Act>::new());
+    let acts_ref = &acts;
     let can_remove = fields.len() > 1;
-    let mut remove_row = None;
-    let mut x_w = X_W;
-    let mut focused = None;
-    crate::rtl::island(ui, |ui| {
-        egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
-            crate::rtl::vertical(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
-                    for (i, f) in fields.iter_mut().enumerate() {
-                        ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(f).font(egui::TextStyle::Button).hint_text(tl!("Field name")))
-                            .accessible_name(format!("{} {}", tl!("Field name"), i + 1));
-                        let x =
-                            ui.add_enabled(can_remove, egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove field"));
-                        x_w = x.rect.width();
-                        if x.clicked() {
-                            remove_field = Some(i);
-                        }
-                    }
-                });
-                ui.separator();
-                egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, visible.len(), |ui, range| {
-                    for k in range {
-                        let Some(&r) = visible.get(k) else { continue };
-                        let Some(row) = rows.get_mut(r) else { continue };
-                        // Striped rows, like a data grid: painted under the row once its size is known.
-                        let stripe = ui.painter().add(egui::Shape::Noop);
-                        let line = ui.horizontal(|ui| {
-                            // The record's number in the merge, a dash when the filter leaves it out.
-                            let (num, kept) = match order.as_ref().map(|o| o.get(r).copied().flatten()) {
-                                None => ((r + 1).to_string(), true),
-                                Some(Some(n)) => (n.to_string(), true),
-                                Some(None) => ("–".to_string(), false),
-                            };
-                            let num = egui::RichText::new(num).weak();
-                            let (rect, _) = ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
-                            ui.put(rect, egui::Label::new(if kept { num } else { num.strikethrough() }));
-                            for (j, c) in row.iter_mut().enumerate() {
-                                // Keyed on the record, not its place in the grid: when the view hides
-                                // or moves rows, the keyboard can't land in another record (#1576).
-                                let field_name = fields.get(j).map_or("", String::as_str);
-                                let cell = ui
-                                    .add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j)))
-                                    .accessible_name(crate::i18n::fmt(
-                                        tl!("{field}, record {n}"),
-                                        &[("field", field_name), ("n", &(r + 1).to_string())],
-                                    ));
-                                if cell.has_focus() {
-                                    focused = Some(cell.id);
-                                }
-                                // Under the field's remove button.
-                                ui.allocate_exact_size(vec2(x_w, X_W), Sense::hover());
-                            }
-                            if ui.add(egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove recipient")).clicked() {
-                                remove_row = Some(r);
-                            }
-                        });
-                        if k % 2 == 1 {
-                            let half = ui.spacing().item_spacing.y / 2.0;
-                            let rect = line.response.rect.expand2(vec2(0.0, half));
-                            ui.painter().set(stripe, egui::Shape::rect_filled(rect, 2.0, ui.visuals().faint_bg_color));
-                        }
-                    }
-                });
-            });
+    let columns = fields
+        .iter()
+        .enumerate()
+        .map(|(j, f)| ColumnSpec::new(ColumnKey::index(j as u32), f.clone(), ColumnWidth::fill(1.0)).removable(tl!("Remove field"), can_remove))
+        .collect();
+    // The dialog body scrolls, and a collection owns its own scroll: the grid shows this many records and scrolls
+    // the rest itself.
+    let mut table = Table::<usize>::new(tl!("Recipients"), columns).striped(true).max_rows(10);
+    for (j, name) in fields.iter().enumerate() {
+        table = table.header_field(ColumnKey::index(j as u32), TextField::new(tl!("Field name"), Bind::given(name.clone())), move |out| {
+            acts_ref.borrow_mut().push(Act::Field(j, edit_of(&out).0));
         });
-    });
-    if focused.is_some() {
-        filter.editing = focused;
     }
-    if remove_field.is_some() || remove_row.is_some() {
-        // Row numbers move: hold nothing, and let go of the focused cell (its id names a row).
-        filter.held = None;
-        if let Some(id) = filter.editing.take() {
-            ui.memory_mut(|m| m.surrender_focus(id));
+    let widest = rows.len().to_string();
+    let (fields_ro, rows_ro) = (&*fields, &*rows);
+    let response = table.show_items(ui, &keyed(&visible, |r| *r), &mut |key, icx| {
+        let r = *key;
+        // The record's number in the merge; a filtered-out record reads muted.
+        let (num, kept) = match order.as_ref().map(|o| o.get(r).copied().flatten()) {
+            None => ((r + 1).to_string(), true),
+            Some(Some(n)) => (n.to_string(), true),
+            Some(None) => ("–".to_string(), false),
+        };
+        let mut row = ListRow::new(num.clone()).cells(icx.cells()).lead_text(num, widest.clone());
+        for j in 0..fields_ro.len() {
+            let text = rows_ro.get(r).and_then(|x| x.get(j)).cloned().unwrap_or_default();
+            let field_name = fields_ro.get(j).map_or("", String::as_str);
+            let label = crate::i18n::fmt(tl!("{field}, record {n}"), &[("field", field_name), ("n", &(r + 1).to_string())]);
+            row = row.cell_field(ColumnKey::index(j as u32), TextField::new(label, Bind::given(text)), move |out| {
+                let (value, edge) = edit_of(&out);
+                acts_ref.borrow_mut().push(Act::Cell(r, j, value, edge));
+            });
+            if !kept {
+                row = row.cell_muted(ColumnKey::index(j as u32));
+            }
+        }
+        row.trailing_part(TrailingPart::new(0), TrailingFace::Icon(IconSpec::svg(IconId::new("wordcraft.close"))), tl!("Remove recipient"))
+    });
+    for event in response.events {
+        match event {
+            CollectionEvent::Column(ColumnEvent::Removed { key }) => {
+                if let Some(j) = key.position() {
+                    acts.borrow_mut().push(Act::RemoveField(j as usize));
+                }
+            }
+            CollectionEvent::Item(r, RowEvent::Trailing { .. }) => acts.borrow_mut().push(Act::RemoveRow(r)),
+            _ => {}
         }
     }
-    if let Some(i) = remove_field.filter(|_| fields.len() > 1) {
-        fields.remove(i);
+    for act in acts.into_inner() {
+        match act {
+            Act::Cell(r, j, value, edge) => {
+                if let Some(v) = value
+                    && let Some(cell) = rows.get_mut(r).and_then(|x| x.get_mut(j))
+                {
+                    *cell = v;
+                }
+                match edge {
+                    // The cell's output arrives after `hold_rows` ran, so the rows of this pass are held here.
+                    Some(true) => {
+                        *editing = true;
+                        if filter.held.is_none() {
+                            filter.held = Some(visible.clone());
+                        }
+                    }
+                    Some(false) => *editing = false,
+                    None => {}
+                }
+            }
+            Act::Field(j, value) => {
+                if let Some(v) = value
+                    && let Some(f) = fields.get_mut(j)
+                {
+                    *f = v;
+                }
+            }
+            Act::RemoveField(i) if fields.len() > 1 && i < fields.len() => {
+                fields.remove(i);
+                for r in rows.iter_mut() {
+                    if i < r.len() {
+                        r.remove(i);
+                    }
+                }
+                // The field that held the edit is gone.
+                *editing = false;
+                filter.held = None;
+            }
+            Act::RemoveRow(r) if r < rows.len() => {
+                rows.remove(r);
+                *editing = false;
+                filter.held = None;
+            }
+            Act::RemoveField(_) | Act::RemoveRow(_) => {}
+        }
+    }
+    if Button::new(tl!("New Entry")).show(ui).clicked() {
+        // The view would hide the new, empty entry.
+        filter.show_all();
+        *editing = false;
+        rows.push(vec![String::new(); fields.len()]);
+    }
+    if Button::new(tl!("Add Field")).show(ui).clicked() {
+        fields.push(String::new());
         for r in rows.iter_mut() {
-            if i < r.len() {
-                r.remove(i);
-            }
+            r.push(String::new());
         }
+        *editing = false;
+        filter.held = None;
     }
-    if let Some(r) = remove_row.filter(|r| *r < rows.len()) {
-        rows.remove(r);
-    }
-    ui.horizontal(|ui| {
-        if ui.button(tl!("New Entry")).clicked() {
-            // The view would hide the new, empty entry.
-            filter.show_all();
-            rows.push(vec![String::new(); fields.len()]);
-        }
-        if ui.button(tl!("Add Field")).clicked() {
-            fields.push(String::new());
-            for r in rows.iter_mut() {
-                r.push(String::new());
-            }
-        }
-    });
-    ui.add_space(4.0);
-    let toggle = egui::Button::new(tl!("Filter and Sort")).selected(filter.open);
-    if ui.add(toggle).clicked() {
-        filter.open = !filter.open;
-    }
+    ToggleButton::new(tl!("Filter and Sort"), Bind::bound(&mut filter.open)).show(ui);
     if filter.open {
-        recipient_filter(ui, fields, filter);
+        Section::fixed(tl!("Filter and Sort")).id_salt("filter").show(ui, |ui, _| filter_section(ui, fields, filter));
     }
     if let Some(order) = &order {
         let count = order.iter().flatten().count().to_string();
         let total = rows.len().to_string();
-        ui.label(
-            egui::RichText::new(crate::i18n::fmt(tl!("{count} of {total} recipients will be merged."), &[("count", &count), ("total", &total)]))
-                .weak(),
-        );
+        Text::new(crate::i18n::fmt(tl!("{count} of {total} recipients will be merged."), &[("count", &count), ("total", &total)])).show(ui);
     }
-    if !message.is_empty() {
-        ui.label(egui::RichText::new(message.as_str()).color(Tokens::get(ui.ctx()).red));
+    true
+}
+
+/// Filter and Sort: the joined condition rules and three sort keys.
+fn filter_section(ui: &mut egui::Ui, fields: &[String], filter: &mut RecipientFilter) {
+    let names: Vec<String> = fields.iter().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
+    let offered = RecipientFields { names: names.clone() };
+    let mut group = filter.conditions();
+    let built = ConditionBuilder::new(tl!("Filter"), Bind::bound(&mut group), &offered).layout(ConditionLayout::Joined).max_rules(64).show(ui);
+    if built.changed {
+        filter.set_conditions(&group, fields);
     }
-    let (ok, cancel) = buttons(ui, tl!("OK"));
-    if !ok {
-        return cancel;
+    if Button::new(tl!("Clear All")).show(ui).clicked() {
+        filter.rules.clear();
+        filter.sort = Default::default();
     }
-    let r = recipient_table(fields, rows).map_err(|e| tl!(e).to_string()).and_then(|params| app.load_recipients(params));
-    // A new list starts unfiltered; the dialog's filter and sort apply to it.
-    let r = r.and_then(|_| if filter.is_empty() { Ok(Value::Null) } else { app.run("mailings.filterRecipients", filter.params(fields)) });
-    match r {
-        Ok(_) => true,
-        Err(e) => {
-            *message = e;
-            false
+    let mut keys = vec![Entry::new(String::new(), tl!("(none)"))];
+    keys.extend(names.iter().map(|n| Entry::new(n.clone(), n.clone())));
+    let directions = [Entry::new(false, tl!("Ascending")), Entry::new(true, tl!("Descending"))];
+    for (i, (field, desc)) in filter.sort.iter_mut().enumerate() {
+        let label = tl!(if i == 0 { "Sort by" } else { "Then by" });
+        if let Some(f) = Select::new(label, Bind::given(field.clone()), &keys).id_salt(("sort", i)).show(ui).value().cloned() {
+            *field = f;
+        }
+        let has_field = !field.is_empty();
+        if let Some(d) = Select::new(tl!("Order"), Bind::given(*desc), &directions).id_salt(("dir", i)).enabled(has_field).show(ui).value().copied() {
+            *desc = d;
         }
     }
 }
 
-/// Filter and Sort: condition rows (And/Or, field, comparison, value) and three sort keys.
-fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter) {
-    let names: Vec<String> = fields.iter().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
-    let field_combo = |ui: &mut Ui, id: (&str, usize), value: &mut String, none: bool| {
-        let shown = if value.is_empty() { tl!("(none)").to_string() } else { value.clone() };
-        craft_ui::ComboBox::from_id_salt(id).width(130.0).selected_text(shown).show_ui(ui, |ui| {
-            if none {
-                ui.selectable_value(value, String::new(), tl!("(none)"));
-            }
-            for n in &names {
-                ui.selectable_value(value, n.clone(), n.as_str());
-            }
-        });
-    };
-    let mut remove = None;
-    crate::rtl::Table::new("recipient_filter").columns(5).spacing(vec2(6.0, 4.0)).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.label(""));
-            r.cell(|ui| ui.label(egui::RichText::new(tl!("Field")).weak()));
-            r.cell(|ui| ui.label(egui::RichText::new(tl!("Comparison")).weak()));
-            r.cell(|ui| ui.label(egui::RichText::new(tl!("Compare to")).weak()));
-        });
-        for (i, rule) in filter.rules.iter_mut().enumerate() {
-            t.row(|r| {
-                r.cell(|ui| {
-                    if i == 0 {
-                        ui.label("");
-                    } else {
-                        craft_ui::ComboBox::from_id_salt(("rf_join", i)).width(60.0).selected_text(tl!(if rule.or { "Or" } else { "And" })).show_ui(
-                            ui,
-                            |ui| {
-                                ui.selectable_value(&mut rule.or, false, tl!("And"));
-                                ui.selectable_value(&mut rule.or, true, tl!("Or"));
-                            },
-                        );
-                    }
-                });
-                r.cell(|ui| field_combo(ui, ("rf_field", i), &mut rule.field, false));
-                r.cell(|ui| {
-                    craft_ui::ComboBox::from_id_salt(("rf_op", i)).width(150.0).selected_text(tl!(rule.op.label())).show_ui(ui, |ui| {
-                        for op in FilterOp::ALL {
-                            ui.selectable_value(&mut rule.op, op, tl!(op.label()));
-                        }
-                    });
-                });
-                r.cell(|ui| ui.add_enabled(rule.op.has_value(), egui::TextEdit::singleline(&mut rule.value).desired_width(130.0)));
-                r.cell(|ui| {
-                    if ui.add(egui::Button::new("×").small()).on_hover_text(tl!("Remove condition")).clicked() {
-                        remove = Some(i);
-                    }
-                });
-            });
-        }
-    });
-    if let Some(i) = remove.filter(|i| *i < filter.rules.len()) {
-        filter.rules.remove(i);
+impl StackDialog for RecipientListDialog {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        craft::ui::dialog::dialog_id("recipientList")
     }
-    ui.horizontal(|ui| {
-        if ui.button(tl!("Add Condition")).clicked() && filter.rules.len() < 64 {
-            let field = names.first().cloned().unwrap_or_default();
-            filter.rules.push(FilterRow { field, op: FilterOp::Equal, value: String::new(), or: false });
+
+    fn key(&self) -> Option<&str> {
+        Some("recipientList")
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<()>> {
+        let RecipientListDialog { draft, editing, pick, held } = self;
+        let out = FormDialog::new(tl!("Recipient List"), Bind::bound(draft)).held(held).show(ui, |ui, _cx, d| recipient_body(ui, d, editing, pick));
+        if out.accepted.is_some() { Some(DialogResult::Ok(())) } else { out.closed.map(|_| DialogResult::Cancel) }
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
+    }
+
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<()> {
+        if self.held.finish().is_some() {
+            return Some(());
         }
-        if ui.button(tl!("Clear All")).clicked() {
-            filter.rules.clear();
-            filter.sort = Default::default();
+        if !self.held.is_waiting() {
+            self.held.file(self.draft.clone());
         }
-    });
-    ui.add_space(4.0);
-    crate::rtl::Table::new("recipient_sort").columns(3).spacing(vec2(6.0, 4.0)).show(ui, |t| {
-        for (i, (field, desc)) in filter.sort.iter_mut().enumerate() {
-            t.row(|r| {
-                r.cell(|ui| ui.label(tl!(if i == 0 { "Sort by" } else { "Then by" })));
-                r.cell(|ui| field_combo(ui, ("rs_field", i), field, true));
-                r.cell(|ui| {
-                    ui.add_enabled_ui(!field.is_empty(), |ui| {
-                        craft_ui::ComboBox::from_id_salt(("rs_dir", i))
-                            .width(110.0)
-                            .selected_text(tl!(if *desc { "Descending" } else { "Ascending" }))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(desc, false, tl!("Ascending"));
-                                ui.selectable_value(desc, true, tl!("Descending"));
-                            });
-                    });
-                });
-            });
+        None
+    }
+
+    fn json_fields(&self) -> Option<Value> {
+        let message = self.held.refusal().map(|(m, _)| m.as_str().to_string()).unwrap_or_default();
+        Some(json!({"fields": self.draft.fields, "rows": self.draft.rows, "filter": self.draft.filter, "message": message}))
+    }
+
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        let bad = |what: &str| format!("`{field}` needs {what}");
+        match field {
+            "fields" => self.draft.fields = serde_json::from_value(value).map_err(|_| bad("a list of names"))?,
+            "rows" => self.draft.rows = serde_json::from_value(value).map_err(|_| bad("a list of rows"))?,
+            "find" => self.draft.filter.find = value.as_str().ok_or_else(|| bad("text"))?.to_string(),
+            "onlyMerged" => self.draft.filter.only_merged = value.as_bool().ok_or_else(|| bad("true or false"))?,
+            _ => return Err(format!("no field `{field}`")),
         }
-    });
+        self.editing = false;
+        self.draft.filter.held = None;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(field: &str, op: FilterOp, value: &str, or: bool) -> FilterRow {
+        FilterRow { field: field.into(), op, value: value.into(), or }
+    }
+
+    /// A round trip through the builder's rules keeps field, operator, value and each later row's
+    /// join; the first row's `or` is never sent; a rule on a removed field drops.
+    #[test]
+    fn filter_rows_and_conditions_convert_both_ways() {
+        let fields = vec!["Name".to_string(), "City".to_string()];
+        let (a, b) = (FilterOp::ALL[0], FilterOp::ALL[1]);
+        let mut f = RecipientFilter { rules: vec![row("Name", a, "x", false), row("City", b, "y", true)], ..Default::default() };
+        let before = f.rules.clone();
+        let group = f.conditions();
+        f.rules.clear();
+        f.set_conditions(&group, &fields);
+        assert_eq!(f.rules, before);
+
+        f.rules[0].or = true;
+        let p = f.params(&fields);
+        assert_eq!(p["rules"][0]["join"], "and", "{p}");
+        assert_eq!(p["rules"][1]["join"], "or", "{p}");
+
+        let group = f.conditions();
+        f.set_conditions(&group, &["Name".to_string()]);
+        assert_eq!(f.rules.len(), 1);
+        assert_eq!(f.rules[0].field, "Name");
+    }
 }
