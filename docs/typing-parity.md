@@ -8,6 +8,42 @@ WordCraft, results read back paragraph by paragraph) and pinned by tests in
 tests together. Line breaking and pagination are in [`layout-parity.md`](layout-parity.md); the
 overall picture is in [`target-app-parity.md`](target-app-parity.md).
 
+## List levels inherited from paragraph styles (#4287 follow-up)
+
+Change List Level, Indent and Outdent resolve the effective list through style inheritance.
+A real level change sets a paragraph override for that same list and clears direct physical
+and character-unit left/first-line indents. Unchanged levels and list-level boundaries remain
+no-ops. Change List Level also leaves an explicit numbering cancellation alone. Indent and
+Outdent still move a cancelled list's unnumbered text, retaining its `numId=0` override.
+This adapts #4322's direct-indent fix to the current module split and extends it to style-based
+lists. The original ten synthetic CLI cases cover history, DOCX reopening and PDF renders
+against independently authored controls; they are not native Word acceptance.
+
+The #4723 follow-up also aligns a hanging paragraph's first line, rather than its body indent,
+to the adjacent default tab stop. With 36 pt tabs, left indent 120 pt and first-line offset
+−6 pt, Increase Indent gives 150 pt and Decrease Indent gives 114 pt, retaining the −6 pt offset.
+Repeated Outdent stops at left 6 pt, with its first line at the text margin. Character-unit
+indents use the paragraph mark's size, and an explicit list cancellation drops inherited
+list-style indents as layout already does. Four command regressions cover these cases,
+including undo/redo, no-op history and DOCX reopening.
+
+All six additional synthetic controls (ordinary, cancelled and style-inherited lists, each
+with Increase/Decrease Indent) match paragraph properties saved by native Word for Mac
+16.114.3 (26102720). Their WordCraft DOCX/PDF exports preserve the text and Romanian letters.
+These are narrow property comparisons, not full visual, Windows or general Office parity.
+Word can change a shared numbering definition when Outdent is used at level zero; that behavior
+is outside this patch, which retains the existing boundary no-op. Readiness estimates are unchanged.
+
+Indent and Outdent also resolve the nearest enclosing table's paragraph defaults and the
+cell's conditional character formatting, as layout does. Character-unit origins use that
+paragraph mark's resolved size; direct paragraph and mark overrides still win. Table style
+chains and grid width are resolved once per command. Two additional synthetic regressions
+cover physical and character-unit origins, nested tables, header/body cells, direct
+overrides, multi-cell selections, history and DOCX reopening. These are command/layout
+consistency checks, not new native Word table acceptance.
+An unnumbered paragraph whose leading edge is already at or before the text margin stays
+unchanged on Outdent, so the command cannot move it right or consume its undo/redo history.
+The additional physical/character-unit boundary regression is synthetic, not new Word acceptance.
 ## Additional editing command: Delete Previous Sentence (#3693)
 
 `text.deleteSentenceBack` is a WordCraft extension requested for Ctrl+Shift+Backspace
@@ -602,6 +638,7 @@ command is one Undo step and still obeys editing protection and the 1–1638 pt
 limits. Original-fixture engine and Linux CLI/headless UI save/reopen checks cover
 this correction; native Windows interaction and Microsoft Word remain untested.
 
+A paragraph style that supplies both numbering and its own indents still gains a direct numbering override after a real level change. Returning to the inherited level does not remove that direct override, so its indent precedence can differ from the initial style-only paragraph. The six earlier Word controls do not qualify this combined style case; native comparison is still required before changing that behavior.
 ## Empty paragraph removal
 
 Deleting a paragraph mark whose preceding paragraph was already empty preserves the
@@ -623,6 +660,8 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 |---|---|---|
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
+| 2026-11-15 | trivial | #4723: integrate current main, retaining both inherited-list/hanging-indent and previous-sentence regressions; command implementation and existing native qualification limits unchanged. |
+| 2026-11-05 | trivial | PR #4723: resolve inherited list levels and table-aware hanging indents; preserve cancellation and no-op boundaries. Existing six synthetic Word Mac property controls and command/history/DOCX regressions remain the evidence. Styled-list direct overrides and native table acceptance remain limited; original #4322 credit retained. |
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
 | 2026-11-07 | trivial | Removing an already-empty paragraph preserves the following paragraph properties, mark and inline formatting. Delete, Backspace, selected marks, outline/TOC, DOCX and Undo/Redo have synthetic coverage (Leaf #152); no new Word or native acceptance run. |
 | 2026-10-30 | trivial | Equations: `\int` + Space waits for its limits; `_x^y` then Space builds them, Space alone builds the operator without, typing goes into its operand, and Enter or an arrow key builds it without going into the operand (#4917). Review: any character that can't continue `\name` corrects it (`\int_0^1`, `\alpha+`), and `∫∫` takes the operand into the inner operator; the Word rows are now observed in Word for Windows on #4938, Enter, arrows and `∫∫` are not |
