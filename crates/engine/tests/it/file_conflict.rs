@@ -412,7 +412,15 @@ fn identical_replacement_is_benign_and_success_advances_expected_content() {
     s.run("document.setText", &json!({"text": "Local edit"})).unwrap();
     std::fs::write(&p, &a).unwrap();
     conflict(&mut s, &p, Some(&a));
-    s.run("file.open", &json!({"path": p})).unwrap();
+    let existing = s.document_id();
+    let activated = s.run("file.open", &json!({"path": p})).unwrap();
+    assert_eq!(activated["alreadyOpen"], true);
+    assert_eq!(s.document_id(), existing);
+    conflict(&mut s, &p, Some(&a));
+    s.run("file.closeDocument", &json!({"id": existing, "force": true})).unwrap();
+    assert!(!s.is_open(existing));
+    let reopened = s.run("file.open", &json!({"path": p})).unwrap();
+    assert_eq!(reopened["alreadyOpen"], false);
     s.run("document.setText", &json!({"text": "Reloaded edit"})).unwrap();
     s.run("file.save", &json!({})).unwrap();
 }
@@ -935,7 +943,7 @@ fn native_requests_distinguish_identical_bytes_and_lossy_names() {
         std::fs::write(&b, &bytes).unwrap();
         assert_eq!(a.to_string_lossy(), b.to_string_lossy());
         let mut s = Session::new(Document::new());
-        let (first, _first_guard) = s.prepare_native_open(&a).unwrap();
+        let (first, first_guard) = s.prepare_native_open(&a).unwrap();
         if password.is_some() {
             assert!(s.run("file.open", &first).is_err());
         }
@@ -952,13 +960,17 @@ fn native_requests_distinguish_identical_bytes_and_lossy_names() {
         assert!(matches!(s.run("file.save", &json!({})), Err(wordcraft_engine::CmdError::FileConflict(_))));
         assert_eq!(std::fs::read(&b).unwrap(), bytes);
         assert!(s.dirty);
+        // Completing the second request consumes that token without cancelling the first
+        // window's pending request. Abandon the first request as its native host would.
+        assert!(s.run("file.open", &second).is_err_and(|e| e.to_string().contains("expired")));
+        drop(first_guard);
         assert!(s.run("file.open", &first).is_err_and(|e| e.to_string().contains("expired")));
     }
 }
 
-/// Rejected document replacements must keep the original external-writer baseline.
+/// A rejected command or a new document leaves the original external-writer baseline in place.
 #[test]
-fn rejected_document_replacements_keep_external_save_protection() {
+fn document_commands_keep_external_save_protection() {
     use wordcraft_doc::{CharProps, InlineObject};
     for (command, params) in
         [("review.compare", json!({"text": "Different document.", "showIn": "new"})), ("mailings.envelopes", json!({"delivery": "Recipient"}))]
@@ -974,7 +986,15 @@ fn rejected_document_replacements_keep_external_save_protection() {
             .unwrap();
         s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
         let before = s.doc.clone();
-        assert!(s.run(command, &params).is_err(), "{command}");
+        let original = s.document_id();
+        let result = s.run(command, &params);
+        if command == "mailings.envelopes" {
+            result.unwrap();
+            assert_ne!(s.document_id(), original);
+            s.activate(original).unwrap();
+        } else {
+            assert!(result.is_err(), "{command}");
+        }
         assert_eq!(s.doc, before, "{command}");
         assert_eq!(s.path.as_deref(), Some(path.as_path()), "{command}");
         io::save_path(&path, &Document::from_text("External writer after refusal")).unwrap();
@@ -1083,7 +1103,7 @@ fn write_only_save_preserves_distinct_case_destinations() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn write_only_save_keeps_inode_alive_until_document_replacement() {
+fn write_only_save_keeps_inode_alive_until_document_closes() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let d = Scratch::new();
     let path = original(&d);
@@ -1106,6 +1126,37 @@ fn write_only_save_keeps_inode_alive_until_document_replacement() {
             .count()
     };
     assert!(retained() > 0, "the original inode must not be recycled while its identity is tracked");
+    let original = s.document_id();
     s.run("file.new", &json!({})).unwrap();
-    assert_eq!(retained(), 0, "document replacement releases the identity guard");
+    assert!(retained() > 0, "the still-open document keeps its identity guard");
+    s.close_document(original).unwrap();
+    assert_eq!(retained(), 0, "closing the document releases the identity guard");
+}
+
+#[test]
+fn markdown_save_versions_follow_their_own_open_document() {
+    let scratch = Scratch::new();
+    let first = scratch.path("first.md");
+    let second = scratch.path("second.md");
+    std::fs::write(&first, "# First\n\n   - Keep the original spacing\n").unwrap();
+    std::fs::write(&second, "# Second\n\n   - Another list\n").unwrap();
+    let mut session = Session::new(Document::new());
+
+    session.run("file.open", &json!({"path": first})).unwrap();
+    let first_doc = session.document_id();
+    session.run("file.open", &json!({"path": second})).unwrap();
+    let second_doc = session.document_id();
+    assert_ne!(first_doc, second_doc);
+    let second_before = std::fs::read(&second).unwrap();
+    session.run("file.save", &json!({})).unwrap();
+    assert_eq!(std::fs::read(&second).unwrap(), second_before);
+
+    let changed = "# First, edited outside WordCraft\n";
+    std::fs::write(&first, changed).unwrap();
+    session.activate(first_doc).unwrap();
+    let result = session.run("file.save", &json!({}));
+    assert!(matches!(result, Err(wordcraft_engine::CmdError::FileConflict(_))));
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), changed);
+    assert_eq!(std::fs::read(&second).unwrap(), second_before);
+    assert_eq!(session.path.as_deref(), Some(first.as_path()));
 }

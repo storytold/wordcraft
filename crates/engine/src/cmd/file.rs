@@ -1,6 +1,7 @@
 //! File tab (Backstage): new, open, save, export, print, properties; document inspection.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::{Block, Document, StoryRef};
 
 use super::{pos_json, sel_result};
@@ -82,23 +83,27 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"name": name, "path": s.path}))
 }
 
+/// Builds the file and document command table: rename, new, open, save, save as and encryption,
+/// PDF/PNG/print output and print settings, close, properties and info, author and privacy
+/// settings, and document inspection and text access. Recovery, compatibility, sharing, autosave,
+/// `file.newFromTemplate` and `file.saveTemplate` are registered in [`super::tools::specs`].
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.rename", "Rename Document", "File › Info", rename).params(r#"{"name": string (document name; its extension is kept, so the name may be given with or without it)}"#).pure(),
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word or OpenDocument text file)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}"#).pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
-            .params(r#"{"password": string (Word documents are saved encrypted with it) | null or "" (saved unencrypted)}"#)
+            .params(r#"{"password": string (Word packages and OpenDocument text files (.odt, .ott) are saved encrypted with it) | null or "" (saved unencrypted)}"#)
             .pure(),
         CommandSpec::new("file.exportPdf", "Export PDF", "File › Export", |s, v| {
             // No path (the command search, say): the app asks where to save, as File › Export
@@ -112,10 +117,13 @@ pub fn specs() -> Vec<CommandSpec> {
             crate::io::save_path_with(std::path::Path::new(&path), &s.doc, None, &opts).map_err(CmdError::Failed)?;
             Ok(json!({"path": path, "markup": opts.markup}))
         })
-        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup)}"#)
+        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
         .pure(),
         CommandSpec::new("file.exportPng", "Export Page as PNG", "File › Export", export_png)
-            .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup)}"#)
+            .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character on the page can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .pure(),
+        CommandSpec::new("file.strictReport", "Strict Export Report", "File › Export", strict_report)
+            .params(r#"{"markup"?: bool (as file.exportPdf), "page"?: n (1-based: check that page of the page image file.exportPng writes; omit for every page of a PDF)} → {"schema": 1, "strict": "passed" | "failed", "missing_glyphs": [{"cp": "U+2D30", "count": n}], "missing_pictures": [{"part", "source_part": the story part it is in (word/header2.xml; background, body, header, footer, text box or "" where unknown), "reason": "missing_part" | "external_target" | "link_only" | "undecodable" | "unsupported_format"}], "truncated": bool (either list was cut at 256 entries), "total_missing_glyphs": n (distinct, past the cap too), "total_missing_pictures": n (past the cap too), "glyphs_truncated": bool, "pictures_truncated": bool}"#)
             .pure(),
         // A print setting, like Word's: not part of the document, so no undo step.
         CommandSpec::new("file.printMarkup", "Print Markup", "File › Print", |s, v| {
@@ -126,7 +134,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.printPdf", "Print to PDF", "File › Print", crate::print::print_pdf_to_file)
             .params(
-                r#"{"path": string, "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
+                r#"{"path": string, "pagesPerSheet"?: 1 | 2 | 4 | 6 | 9 | 16 | "booklet" | "bookletReverse", "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
             )
             .pure(),
         CommandSpec::new("file.print", "Print", "File", |s, _| {
@@ -140,10 +148,13 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .key("Mod+W / Mod+F4")
-        .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask)}"#)
+        .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask; file.closeDocument closes a document there)}"#)
         .pure(),
+        CommandSpec::new("file.closeDocument", "Close Document", "Agents", close_document)
+            .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
+            .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
-            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
+            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | {"value": string, "linkTarget"?: string | null} | null (removes)}}; text values and bookmark targets are at most 1 MiB; a string keeps an existing target, an object replaces it (omitted/null target unlinks)"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
@@ -191,6 +202,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let text = p::req_str(v, "text")?;
             let d = Document::from_text(text);
             s.doc.body = d.body;
+            // The body is new even though the document id stays: a live IME composition (or an
+            // equation editing session at the same offset) belongs to the old content.
+            s.note_body_replaced();
+            s.math = None;
             s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Body));
             sel_result(s)
         })
@@ -203,7 +218,8 @@ fn privacy(s: &Session) -> Value {
     json!({"removePersonalInfo": s.doc.settings.remove_personal_info, "removeDateTime": s.doc.settings.remove_date_time})
 }
 
-/// Create a blank document in the saved proofing language, or use the requested template.
+/// Open a new document beside the open ones and make it active: a blank one in the saved
+/// proofing language, or the requested template.
 fn new(s: &mut Session, v: &Value) -> CmdResult {
     let doc = match p::str(v, "template").unwrap_or("blank") {
         "sample" => crate::sample::sample_document(),
@@ -212,22 +228,23 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
         "report" => crate::sample::report(),
         _ => normal_document(s),
     };
-    s.set_document(doc);
-    s.path = None;
+    s.add_document(doc);
     sel_result(s)
 }
 
 /// A blank document on the Normal template: the region's paper (#838), written in the editing
 /// language (the templates' text is English).
-fn normal_document(s: &Session) -> Document {
+pub(crate) fn normal_document(s: &Session) -> Document {
     let mut d = s.blank_document();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
-        d.styles.default_chr.lang = Some(lang.clone());
+        Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
     }
     d
 }
 
-/// Open a document, using the saved proofing default only for plain text and Markdown.
+/// Open a document, using the saved proofing default only for plain text and Markdown. A file
+/// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
+/// replaces an untouched blank document; otherwise it opens beside the open documents.
 fn open(s: &mut Session, v: &Value) -> CmdResult {
     if v.get("nativeRead").is_some() {
         if p::str(v, "path").is_none() || p::str(v, "data").is_none() {
@@ -240,52 +257,105 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         s.push_ui_request(json!({"open": "openFile"}));
         return sel_result(s);
     };
+    if p::str(v, "data").is_none()
+        && let Some(id) = s.find_open(std::path::Path::new(path))
+    {
+        s.activate(id)?;
+        return Ok(
+            json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id}),
+        );
+    }
     let password = p::str(v, "password");
-    let native_path = std::path::Path::new(path);
-    let encrypted = if let Some(data) = p::str(v, "data") {
+    let opened = read_document(s, std::path::Path::new(path), p::str(v, "data"), v.get("nativeRead"), password)?;
+    let encrypted = opened.encrypted;
+    finish_open(s, opened, password);
+    #[cfg(not(target_arch = "wasm32"))]
+    s.finish_native_request(v);
+    Ok(
+        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
+    )
+}
+
+struct OpenedFile {
+    path: std::path::PathBuf,
+    doc: Document,
+    encrypted: bool,
+    markdown: super::md_source::FileText,
+    #[cfg(not(target_arch = "wasm32"))]
+    version: Option<crate::io::FileVersion>,
+}
+
+/// Decode the bytes and capture their native identity together. Markdown source text must come
+/// from the same read as the document and its save baseline.
+fn read_document(
+    s: &Session,
+    path: &std::path::Path,
+    data: Option<&str>,
+    native_read: Option<&Value>,
+    password: Option<&str>,
+) -> Result<OpenedFile, CmdError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut path = path.to_owned();
+    #[cfg(target_arch = "wasm32")]
+    let path = path.to_owned();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut version = None;
+    let bytes = if let Some(data) = data {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
         #[cfg(not(target_arch = "wasm32"))]
-        let native = if let Some(id) = v.get("nativeRead") {
+        if let Some(id) = native_read {
             let read = id
                 .as_u64()
                 .and_then(|id| s.native_opens.get(&id))
                 .and_then(std::sync::Weak::upgrade)
                 .ok_or_else(|| CmdError::Failed("the native open request has expired".into()))?;
-            if read.path.to_string_lossy() != path || !read.version.matches_bytes(&bytes) {
+            if read.path.to_string_lossy() != path.to_string_lossy() || !read.version.matches_bytes(&bytes) {
                 return Err(CmdError::Failed("the native open request does not match these bytes".into()));
             }
-            Some(read)
-        } else {
-            None
-        };
-        let (doc, encrypted) = if bytes.is_empty() {
-            (normal_document(s), false)
-        } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let opened_path = native.as_ref().map_or(native_path, |read| read.path.as_path());
-        #[cfg(target_arch = "wasm32")]
-        let opened_path = native_path;
-        finish_open(s, doc, opened_path, password, encrypted);
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(read) = native {
-            s.file_version = Some(read.version.clone());
+            path.clone_from(&read.path);
+            version = Some(read.version.clone());
         }
-        encrypted
+        #[cfg(target_arch = "wasm32")]
+        if native_read.is_some() {
+            return Err(CmdError::Params("nativeRead is only available to a native host".into()));
+        }
+        bytes
     } else {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            s.open_path(native_path, password)?
+            let (bytes, read) = crate::io::read_native_file_versioned(&path).map_err(CmdError::Failed)?;
+            version = Some(read);
+            bytes
         }
         #[cfg(target_arch = "wasm32")]
-        {
-            let (doc, encrypted) = crate::io::open_path_in(native_path, password, &s.region()).map_err(CmdError::Failed)?;
-            finish_open(s, doc, native_path, password, encrypted);
-            encrypted
-        }
+        return Err(CmdError::Failed(format!("{}: files are opened through the browser on the web", path.display())));
     };
-    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted}))
+    let (mut doc, encrypted) = if bytes.is_empty() {
+        (normal_document(s), false)
+    } else {
+        let region = s.region();
+        let open_bytes = || crate::io::open_bytes_in(&path.to_string_lossy(), &bytes, password, &region);
+        #[cfg(not(target_arch = "wasm32"))]
+        let opened = if version.is_some() { crate::io::open_path_bytes_in(&path, &bytes, password, &region) } else { open_bytes() };
+        #[cfg(target_arch = "wasm32")]
+        let opened = open_bytes();
+        opened.map_err(CmdError::Failed)?
+    };
+    let ext = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
+    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
+        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
+    {
+        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+    }
+    let markdown = if super::md_source::is_markdown_file(&path) { super::md_source::FileText::from_bytes(&bytes) } else { Default::default() };
+    Ok(OpenedFile {
+        path,
+        doc,
+        encrypted,
+        markdown,
+        #[cfg(not(target_arch = "wasm32"))]
+        version,
+    })
 }
 
 /// A native Open request's lifetime. Keep it while its returned command is deferred;
@@ -311,6 +381,13 @@ pub(crate) struct NativeRead {
 }
 
 impl Session {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_native_request(&mut self, params: &Value) {
+        if let Some(id) = params.get("nativeRead").and_then(Value::as_u64) {
+            self.native_opens.remove(&id);
+        }
+    }
+
     /// Prepare a native byte-backed Open, including filenames JSON cannot represent losslessly.
     /// The host owns the returned guard through Save Changes/password retries and drops it
     /// when that request finishes or is abandoned. Neither a name nor equal bytes identify it.
@@ -331,34 +408,75 @@ impl Session {
     /// Returns whether the file was encrypted; a failed open leaves the session unchanged.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &std::path::Path, password: Option<&str>) -> Result<bool, CmdError> {
-        let (doc, encrypted, version) = crate::io::open_path_versioned_in(path, password, &self.region()).map_err(CmdError::Failed)?;
-        let doc = doc.unwrap_or_else(|| normal_document(self));
-        finish_open(self, doc, path, password, encrypted);
-        self.file_version = Some(version);
+        let opened = read_document(self, path, None, None, password)?;
+        let encrypted = opened.encrypted;
+        finish_open(self, opened, password);
         Ok(encrypted)
     }
 }
 
-fn finish_open(s: &mut Session, mut doc: Document, path: &std::path::Path, password: Option<&str>, encrypted: bool) {
-    // Plain text and Markdown carry no language: they are in the editing language.
-    let ext = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
-    {
-        doc.styles.default_chr.lang = Some(lang.clone());
+fn finish_open(s: &mut Session, opened: OpenedFile, password: Option<&str>) {
+    match s.used_because() {
+        None => s.set_document(opened.doc),
+        Some(why) => {
+            log::info!("file.open: opened beside document {}, not in its place: {why}", s.document_id());
+            s.add_opened_document(opened.doc);
+        }
     }
-    s.set_document(doc);
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }
-    s.path = Some(path.into());
-    if encrypted {
+    s.path = Some(opened.path);
+    s.md_file = opened.markdown;
+    if opened.encrypted {
         s.password = password.map(crate::io::Password::new);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        s.file_version = opened.version;
     }
 }
 
-/// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
-/// with from now on, or none.
+/// File › New from a template (#2852): a new, untitled document with the template's content,
+/// attached to the template as in Word, read as `file.open` reads a file (`data`, `password`).
+/// It opens beside the open documents, as `file.new` does. With `replaceBlank` an untouched blank
+/// document gives way to it, as to a file `file.open` opens: that is how a template the platform
+/// hands the app starts (#3433). The template is only read; the new document has no file, so
+/// saving it asks where to write, and a protected template's password doesn't come along.
+pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
+    let path = p::req_str(v, "path")?;
+    let mut doc = read_document(s, std::path::Path::new(path), p::str(v, "data"), v.get("nativeRead"), p::str(v, "password"))?.doc;
+    doc.settings.attached_template = Some(path.to_string());
+    #[cfg(not(target_arch = "wasm32"))]
+    s.finish_native_request(v);
+    if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {
+        s.set_document(doc);
+    } else {
+        s.add_document(doc);
+    }
+    s.dirty = true;
+    sel_result(s)
+}
+
+/// Close a document with no window to ask about it (agents, headless sessions).
+fn close_document(s: &mut Session, v: &Value) -> CmdResult {
+    let id = match v.get("id").filter(|x| !x.is_null()) {
+        None => s.document_id(),
+        Some(x) => x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?,
+    };
+    if !s.is_open(id) {
+        return Err(CmdError::Params(format!("no open document has id {id}")));
+    }
+    let dirty = s.documents().iter().any(|d| d.id == id && d.dirty);
+    if dirty && p::bool(v, "force") != Some(true) {
+        return Err(CmdError::Failed("the document has unsaved changes: save it first, or pass \"force\": true to discard them".into()));
+    }
+    s.close_document(id)?;
+    Ok(json!({"closed": id, "active": s.document_id(), "documents": s.documents()}))
+}
+
+/// File › Info › Protect Document › Encrypt with Password: the password Word packages and
+/// OpenDocument text files (.odt, .ott) are saved with from now on, or none.
 fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
     let password = match v.get("password") {
         Some(Value::Null) => None,
@@ -379,6 +497,8 @@ fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"encrypted": s.password.is_some()}))
 }
 
+/// Executes `file.save`: writes the document or text to disk, preserving exact file text for
+/// unedited Markdown files, and updating session path and dirty state.
 fn save(s: &mut Session, v: &Value) -> CmdResult {
     let path = match p::str(v, "path").map(std::path::PathBuf::from).or_else(|| s.path.clone()) {
         Some(p) => p,
@@ -387,6 +507,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(json!({"saved": false}));
         }
     };
+    check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut opts = export_options(s, v);
     match v.get("format").filter(|f| !f.is_null()) {
@@ -425,10 +546,19 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     // Retain main's omission of a newly created empty header/footer (#1144).
     let copy = super::insert::saved_copy(s);
     let doc = copy.as_ref().unwrap_or(&s.doc);
+    let exact = super::md_source::text_to_save(s, &path, opts.markup);
+    let rewritten = exact.is_none() && !s.md_file.is_empty() && super::md_source::is_markdown_file(&path);
     #[cfg(not(target_arch = "wasm32"))]
-    let saved = crate::io::save_path_versioned(&path, doc, pw, &opts, s.file_version.as_ref());
+    let saved = match &exact {
+        Some(text) => crate::io::save_text_versioned(&path, text, s.file_version.as_ref()),
+        None => crate::io::save_path_versioned(&path, doc, pw, &opts, s.file_version.as_ref()),
+    };
     #[cfg(target_arch = "wasm32")]
-    let saved = crate::io::save_path_with(&path, doc, pw, &opts).map_err(CmdError::Failed);
+    let saved = match &exact {
+        Some(text) => crate::io::save_text_path(&path, text),
+        None => crate::io::save_path_with(&path, doc, pw, &opts),
+    }
+    .map_err(CmdError::Failed);
     #[cfg_attr(target_arch = "wasm32", allow(clippy::let_unit_value, unused_variables))]
     let version = match saved {
         Ok(version) => version,
@@ -446,7 +576,9 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     s.password = password;
     // Saving an open text file over itself completes the save; another lossy target is a copy.
     let own_file = s.path.as_deref() == Some(path.as_path());
-    let keeps_document = own_file || ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json", "xml"].contains(&ext.as_str());
+    let markdown_to_markdown = super::md_source::is_markdown_file(&path) && s.path.as_deref().is_some_and(super::md_source::is_markdown_file);
+    let keeps_document =
+        own_file || markdown_to_markdown || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str());
     #[cfg(not(target_arch = "wasm32"))]
     if keeps_document {
         s.file_version = Some(version);
@@ -462,8 +594,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.path = Some(path.clone());
         s.dirty = false;
         s.relayout();
+        // What the file holds now.
+        s.md_file = super::md_source::FileText::saved(exact.filter(|_| super::md_source::is_markdown_file(&path)));
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
+    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten}))
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?
@@ -497,7 +631,37 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
         comments: markup && s.prefs.markup.comments,
         word2003: p::str(v, "format") == Some(FORMAT_WORD_2003),
         numeral: s.view.numeral.resolve(crate::session::system_locale()),
+        strict: p::bool(v, "strict").unwrap_or(false),
     }
+}
+
+/// `strict: true` is for a PDF or a page image only: any other output is a parameter error.
+fn check_strict_output(strict: bool, path: &str) -> Result<(), CmdError> {
+    if strict && !crate::strict::is_strict_output(path) {
+        return Err(CmdError::Params("`strict` applies to a .pdf or .png output only".into()));
+    }
+    Ok(())
+}
+
+/// The strict report of a PDF export of the document (every page), or with `page` of the page
+/// image `file.exportPng` writes. Pure: it reads the document and writes nothing.
+fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
+    let opts = export_options(s, v);
+    let report = match p::u64(v, "page") {
+        Some(n) => {
+            let page = crate::p::page_index(n);
+            let l = s.export_layout_with(opts.markup);
+            if l.pages.get(page).is_none() {
+                return Err(CmdError::Params(format!("no page {}", page + 1)));
+            }
+            crate::strict::strict_report(&s.doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png)
+        }
+        None => {
+            let out = super::references::output_fields(&s.doc);
+            crate::strict::pdf_report(out.as_ref().unwrap_or(&s.doc), &opts)
+        }
+    };
+    Ok(report.to_json())
 }
 
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
@@ -506,21 +670,36 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
         s.push_ui_request(json!({"open": "exportPng"}));
         return Ok(json!({"exported": false}));
     };
-    let page = p::u64(v, "page").unwrap_or(1).max(1) as usize - 1;
+    let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
+    let strict = p::bool(v, "strict").unwrap_or(false);
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
     let l = s.export_layout_with(export_options(s, v).markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
     // the on-screen cue while editing the body, not part of the page.
-    let mut opts = wordcraft_render::RenderOptions::default();
-    opts.display.dim_header = false;
+    let opts = wordcraft_render::RenderOptions { display: crate::strict::png_display(), ..Default::default() };
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
+    }
+    if strict {
+        let report = crate::strict::strict_report(&s.doc, &l, &opts.display, Some(page..=page), wordcraft_layout::StrictOutput::Png);
+        if !report.passed() {
+            return Err(CmdError::Failed(report.refusal()));
+        }
     }
     let img = wordcraft_render::render_page(&s.doc, pg, scale, &opts);
     let png = img.to_png();
     crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
     Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len()}))
+}
+
+/// Text and its bookmark association cross the dialog/command boundary together on rename.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkedCustomText<'a> {
+    value: &'a str,
+    #[serde(borrow)]
+    link_target: Option<&'a str>,
 }
 
 fn properties(s: &mut Session, v: &Value) -> CmdResult {
@@ -538,18 +717,43 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     set(&mut c.category, "category");
     if let Some(custom) = v.get("custom") {
         let Some(m) = custom.as_object() else {
-            return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
+            return Err(CmdError::Params("`custom` must be an object of name → text, linked text value, or null".into()));
         };
+        // Removals first: a case-only rename sends the old spelling as null and the new one
+        // with its value, and `set_custom_prop` matches names case-insensitively, so setting
+        // first would keep the old spelling (object keys are sorted, either spelling may lead).
         for (name, val) in m {
+            if val.is_null() {
+                s.doc.remove_custom_prop(name);
+            }
+        }
+        for (name, val) in m {
+            let bad_value =
+                || CmdError::Params(format!("custom property `{name}` must be text (≤ {MAX_CUSTOM_VALUE} bytes), a linked text value, or null"));
+            let (value, target) = match val {
+                // Removal also accepts names longer than today's limit (#2982).
+                Value::Null => continue,
+                Value::String(value) => (value.as_str(), None),
+                Value::Object(_) => {
+                    let linked: LinkedCustomText<'_> = serde::Deserialize::deserialize(val).map_err(|_| bad_value())?;
+                    (linked.value, Some(linked.link_target))
+                }
+                _ => return Err(bad_value()),
+            };
+            if value.len() > MAX_CUSTOM_VALUE {
+                return Err(bad_value());
+            }
             if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
                 return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
             }
-            match val {
-                Value::Null => {
-                    s.doc.remove_custom_prop(name);
-                }
-                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => s.doc.set_custom_prop(name, x),
-                _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
+            if target.flatten().is_some_and(|t| t.len() > MAX_CUSTOM_VALUE) {
+                return Err(CmdError::Params(format!("custom property bookmark targets are at most {MAX_CUSTOM_VALUE} bytes")));
+            }
+            s.doc.set_custom_prop(name, value);
+            if let Some(target) = target
+                && let Some(prop) = s.doc.custom_props.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name))
+            {
+                prop.link_target = target.map(str::to_string);
             }
         }
     }
@@ -560,10 +764,12 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     Ok(out)
 }
 
-/// Longest custom property name (Word's limit).
-const MAX_CUSTOM_NAME: usize = 255;
-/// Largest custom property value we accept from a command.
-const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
+/// Longest custom property name (Word's limit). The Custom Properties dialog validates with it
+/// too (#2982).
+pub const MAX_CUSTOM_NAME: usize = 255;
+/// Largest custom property value or bookmark target we accept from a command. The Custom Properties dialog
+/// validates with it too (#2982).
+pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();
@@ -580,6 +786,77 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "encrypted": s.password.is_some(),
         "layoutMs": l.ms,
     }))
+}
+
+/// Most fields [`story_fields`] lists for one story, and how deep it goes into nested tables.
+const MAX_STORY_FIELDS: usize = 200;
+const MAX_STORY_DEPTH: usize = 8;
+
+/// The fields of a story's paragraphs, tables included: the code, the result stored with it, and
+/// whether the page shows a value of its own (#4467). A header or footer's text carries the
+/// stored result of a page field (`1` for a PAGE, the page count when it was inserted for a
+/// NUMPAGES); each page shows its own, as the layout draws it. A STYLEREF counts too: the layout
+/// looks its text up from the page it lands on. False when a limit cut the list short.
+fn story_fields(blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Value>) -> bool {
+    if depth > MAX_STORY_DEPTH {
+        return false;
+    }
+    for b in blocks {
+        match &**b {
+            Block::Para(p) => {
+                for o in &p.objects {
+                    if let wordcraft_doc::para::InlineObject::Field { instr, result, .. } = o {
+                        if out.len() >= MAX_STORY_FIELDS {
+                            return false;
+                        }
+                        out.push(field_json(instr, result));
+                    }
+                }
+            }
+            Block::Table(t) => {
+                for cell in t.rows.iter().flat_map(|r| &r.cells) {
+                    if !story_fields(&cell.blocks, depth + 1, out) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// The range fields of `story` (a `FieldStart` … `FieldEnd` pair: what the DOCX reader makes of a
+/// field whose result has tracked changes of its own or spans paragraphs, and of every TOC),
+/// listed as [`story_fields`] lists inline ones, after them; the result is the text between the
+/// markers as it is, at most [`MAX_RANGE_RESULT`] characters of it (`resultTruncated` when it is
+/// cut: a bibliography or a long TOC). False when a limit cut the list short.
+fn range_fields(doc: &Document, story: StoryRef, out: &mut Vec<Value>) -> bool {
+    for r in doc.field_ranges(story) {
+        if out.len() >= MAX_STORY_FIELDS {
+            return false;
+        }
+        let from = wordcraft_doc::Pos { off: r.start.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..r.start.clone() };
+        let text = doc.copy_range(&from, &r.end).plain_text();
+        let mut chars = text.chars().filter(|c| *c != wordcraft_doc::para::OBJ);
+        let result: String = chars.by_ref().take(MAX_RANGE_RESULT).collect();
+        let mut field = field_json(&r.instr, &result);
+        if chars.next().is_some() {
+            field["resultTruncated"] = json!(true);
+        }
+        out.push(field);
+    }
+    true
+}
+
+/// Longest result `document.inspect` gives a range field, in characters.
+const MAX_RANGE_RESULT: usize = 2000;
+
+/// A field as `document.inspect` lists it: its code, its stored result, and whether each page
+/// shows a value of its own.
+fn field_json(instr: &str, result: &str) -> Value {
+    let name = wordcraft_layout::fields::field_name(instr);
+    let per_page = matches!(name.as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "PAGEREF" | "STYLEREF");
+    json!({"code": instr.trim(), "result": result, "perPage": per_page})
 }
 
 /// Structure for agents: blocks with text and formatting summary, selection, stats.
@@ -633,8 +910,23 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     let l = s.layout();
-    let parts: Vec<Value> =
-        s.doc.parts.iter().map(|(id, p)| json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))})).collect();
+    let parts: Vec<Value> = s
+        .doc
+        .parts
+        .iter()
+        .map(|(id, p)| {
+            let mut o = json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))});
+            let mut fields = Vec::new();
+            let complete = story_fields(&p.blocks, 0, &mut fields) && range_fields(&s.doc, StoryRef::Part(*id), &mut fields);
+            if !fields.is_empty() {
+                o["fields"] = json!(fields);
+            }
+            if !complete {
+                o["fieldsTruncated"] = json!(true);
+            }
+            o
+        })
+        .collect();
     Ok(json!({
         "blocks": blocks,
         "parts": parts,

@@ -51,8 +51,8 @@ pub fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u
         return Err("the clipboard picture is too large to paste".into());
     };
     let img = image::RgbaImage::from_raw(w, h, rgba).ok_or("the clipboard picture is damaged")?;
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| format!("couldn't read the clipboard picture: {e}"))?;
+    let png = wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(img))
+        .map_err(|e| format!("couldn't read the clipboard picture: {e}"))?;
     Ok(png)
 }
 
@@ -67,11 +67,16 @@ fn too_large_to_paste(width: u32, height: u32) -> ClipboardPicture {
     ClipboardPicture::Unreadable(format!("the clipboard picture is too large to paste ({width} × {height} pixels)"))
 }
 
+/// Whether the renderer can decode `bytes` within its budget (a 16-bit picture takes more than its pixel count says).
+fn probe_fits(bytes: &[u8]) -> bool {
+    wordcraft_geom::picture::probe(bytes).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES))
+}
+
 /// An encoded picture the host read from the clipboard (the Windows "PNG" format), refused from
 /// its header when a paste can't take its size, before anything decodes it (#3623).
 pub fn encoded_picture(bytes: Vec<u8>) -> ClipboardPicture {
     match wordcraft_geom::picture::probe(&bytes).map(|p| (p.width, p.height)) {
-        Ok((w, h)) if pastes(w, h) => ClipboardPicture::Encoded(bytes),
+        Ok((w, h)) if pastes(w, h) && probe_fits(&bytes) => ClipboardPicture::Encoded(bytes),
         Ok((w, h)) => too_large_to_paste(w, h),
         Err(e) => ClipboardPicture::Unreadable(e.to_string()),
     }
@@ -147,8 +152,14 @@ pub(crate) fn paste(app: &mut WordApp) -> Option<Result<Value, String>> {
             }
             let mut r = Err(String::new());
             for path in files {
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                r = if size > MAX_FILE_BYTES {
+                // A clipboard path can name a pipe or device that reports no length and never ends.
+                let md = std::fs::metadata(&path).ok();
+                let size = md.as_ref().map_or(0, |m| m.len());
+                r = if md.as_ref().is_some_and(|m| !m.is_file()) {
+                    let e = format!("{} is not a regular file", path.display());
+                    app.status(e.clone());
+                    Err(e)
+                } else if size > MAX_FILE_BYTES {
                     let e = format!("{} is larger than 200 MB", path.display());
                     app.status(e.clone());
                     Err(e)
@@ -175,14 +186,17 @@ pub(crate) fn clipboard_png(app: &WordApp) -> Option<Vec<u8>> {
         ClipboardPicture::Encoded(bytes) => Some(bytes),
         ClipboardPicture::Files(files) => {
             let path = files.into_iter().take(MAX_FILES).find(|p| is_picture_file(p))?;
-            let size = std::fs::metadata(&path).ok()?.len();
-            if size > MAX_FILE_BYTES.min(wordcraft_engine::cmd::paste::MAX_PICTURE_BYTES as u64 / 4 * 3) {
-                return None;
-            }
-            std::fs::read(path).ok()
+            read_picture_file(&path, MAX_FILE_BYTES.min(wordcraft_engine::cmd::paste::MAX_PICTURE_BYTES as u64 / 4 * 3))
         }
         ClipboardPicture::Unreadable(_) => None,
     }
+}
+
+/// The bytes of the regular file at `path` when it holds at most `limit` of them; `None` for
+/// anything else, such as a device like `/dev/zero` that never ends (#3692). A file that says it
+/// is larger is refused before any of it is read.
+fn read_picture_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    wordcraft_engine::io::read_regular_file_within(path, limit)
 }
 
 /// Paste text naming copied picture files: insert the pictures when the clipboard holds those
@@ -242,13 +256,29 @@ mod tests {
     /// #3623: what the Windows clipboard holds is checked from its header before it is decoded.
     #[test]
     fn windows_clipboard_pictures_are_checked_from_their_headers() {
-        let mut png = Vec::new();
-        image::RgbaImage::new(3, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let png =
+            wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::RgbaImage::new(3, 2).clone()), image::ImageFormat::Png).unwrap();
         assert!(matches!(encoded_picture(png.clone()), ClipboardPicture::Encoded(b) if b == png));
-        let mut wide = Vec::new();
-        image::GrayImage::new(20_000, 1).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+        let wide =
+            wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image::GrayImage::new(20_000, 1).clone()), image::ImageFormat::Png)
+                .unwrap();
         assert!(matches!(encoded_picture(wide), ClipboardPicture::Unreadable(e) if e.contains("too large")));
         assert!(matches!(encoded_picture(b"not a picture".to_vec()), ClipboardPicture::Unreadable(_)));
+        // 8000 × 6000 passes the pixel limits, but 16-bit RGBA needs 12 bytes a pixel to decode.
+        let mut big =
+            wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba16(image::ImageBuffer::new(1, 1)).clone(), image::ImageFormat::Png)
+                .unwrap();
+        big[16..20].copy_from_slice(&8000u32.to_be_bytes());
+        big[20..24].copy_from_slice(&6000u32.to_be_bytes());
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in &big[12..29] {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 { 0xEDB8_8320 ^ (crc >> 1) } else { crc >> 1 };
+            }
+        }
+        big[29..33].copy_from_slice(&(!crc).to_be_bytes());
+        assert!(matches!(encoded_picture(big), ClipboardPicture::Unreadable(e) if e.contains("too large")));
         // BGRA in memory: a half-transparent red pixel and an opaque blue one.
         let ClipboardPicture::Pixels { width, height, rgba } = dib_picture(dib(2, 1, &[[0, 0, 255, 128], [255, 0, 0, 255]])) else {
             panic!("pixels")
@@ -340,5 +370,33 @@ mod tests {
         r.unwrap();
         assert_eq!(pictures(&mut a), 2, "files: both pictures are kept");
         assert!(!a.session.sel.is_collapsed() && crate::objects::selected(&a).is_some(), "files: the last picture is selected");
+    }
+
+    /// Paste Special reads a copied picture file only when it is a regular file within the limit:
+    /// a folder, a device such as `/dev/zero` (length 0, never ends) or an oversized file offers
+    /// nothing instead of reading to end of file (#3692).
+    #[test]
+    fn paste_special_reads_only_regular_picture_files() {
+        let dir = std::env::temp_dir().join(format!("wc-paste-special-3692-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder.png")).unwrap();
+        let png = png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap();
+        std::fs::write(dir.join("ok.png"), &png).unwrap();
+        let big = std::fs::File::create(dir.join("big.png")).unwrap();
+        big.set_len(MAX_FILE_BYTES + 1).unwrap();
+        drop(big);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/dev/zero", dir.join("zero.png")).unwrap();
+        let offered = |name: &str| {
+            let path = dir.join(name);
+            clipboard_png(&app_with(move || Some(ClipboardPicture::Files(vec![path.clone()]))))
+        };
+        assert_eq!(offered("ok.png"), Some(png.clone()));
+        assert_eq!(offered("folder.png"), None);
+        assert_eq!(offered("big.png"), None);
+        #[cfg(unix)]
+        assert_eq!(offered("zero.png"), None);
+        assert_eq!(read_picture_file(&dir.join("ok.png"), png.len() as u64 - 1), None, "one byte over the limit");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -8,7 +8,14 @@ description = "WordCraft engine: session, selection, undo, the command registry 
 [lints]
 workspace = true
 
+[features]
+# Front-end producer tests need to simulate a globally exhausted IME revision allocator. It only
+# ever makes receipt classification fail closed. Never enable this for a production build; the
+# UI's dev-dependencies enable it for its tests.
+test-support = []
+
 [dependencies]
+craft-mime.workspace = true
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
@@ -33,19 +40,34 @@ zeroize = { workspace = true }
 # The browser clock for `now_iso` (`SystemTime::now()` panics on wasm32-unknown-unknown).
 js-sys = "0.3"
 
-[dev-dependencies]
-encoding_rs = { workspace = true }
-zip = { workspace = true }
-cfb = { workspace = true }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = { workspace = true }
 sha2 = { workspace = true }
 same-file = "1"
 unicode-normalization = "0.1.26"
-getrandom = { workspace = true }
+# Language packs (CP4.3): downloaded, verified and unpacked by the suite's font store.
+craft-font-store = { workspace = true }
+craft-font-catalog = { workspace = true }
+# The local time zone's offset for Insert ▸ Date & Time and date fields (#1707); the web asks the browser's Date.
+chrono = { workspace = true, features = ["clock"] }
+
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
+# Speech Dispatcher's wire framing for Read Aloud (speech/ssip.rs).
+craft-ssip = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["fs"] }
+# O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
+libc = { workspace = true }
+
+# File identity on Unix and plain fsync if an Apple file system refuses a full flush.
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
+[dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
+wordcraft-formats = { workspace = true, features = ["test-support"] }
+encoding_rs = { workspace = true }
+craft-zip = { workspace = true }
+cfb = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"
