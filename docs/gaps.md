@@ -75,6 +75,8 @@ Set Proofing Language › Set As Default now persists in user preferences and ap
 
 Text context menus now include the existing formatting mini toolbar (#2959), including at a caret. Object, equation and whole-cell menus keep their own controls; Read Mode and the mini-toolbar preference suppress it. The toolbar reuses the selection toolbar's commands; additional controls from Word's toolbar are not added. Context-menu paste choices remain tracked by #2583 / PR #2599.
 
+The Table Styles gallery keeps clipped tiles in its layout without rasterising their previews (#4708, gallery portion of #3636). Documents with more than 400 table styles no longer repeatedly refill and clear the preview cache while unchanged visible tiles wait. Partially visible tiles and styles scrolled into view still render, using the existing cache keys, budget and bound. Style order, clicks, editing, theme tint, Undo/Redo and saved content retain their behavior. Whole-list construction, generic cache eviction and the remaining pane/balloon work stay separate. Readiness estimates are unchanged.
+
 Page drawing indexes text-box warp lookups by paragraph and story for the current call (#3614). Ordinary text boxes no longer rescan every preceding marker to find that they have no warp. Only requested offsets are retained; traversal stops after the last requested character. Original Linux display and save/reopen checks cover the correction; other drawing and command scans remain open. Gap and readiness estimates are unchanged.
 
 ## Ranked
@@ -198,6 +200,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | trivial | The Table Styles gallery keeps clipped tiles in its layout without rasterising their previews (#4708, gallery portion of #3636). Documents with more than 400 table styles no longer repeatedly refill and clear the preview cache while unchanged visible tiles wait. Partially visible tiles and styles scrolled into view still render, using the existing cache keys, budget and bound. Style order, clicks, editing, theme tint, Undo/Redo and saved content retain their behavior. Whole-list construction, generic cache eviction and the remaining pane/balloon work stay separate. Readiness estimates are unchanged. |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
 | 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |

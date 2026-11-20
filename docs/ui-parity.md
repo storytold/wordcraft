@@ -109,6 +109,8 @@ Find selects the Results tab, including when it prefills selected text. Editing 
 
 Footnote and endnote editing keeps body and note text at normal opacity, on light and dark pages. Headers and footers still dim outside their editing context (#2545).
 
+The Table Styles gallery keeps clipped tiles in its layout without rasterising their previews (#4708, gallery portion of #3636). Documents with more than 400 table styles no longer repeatedly refill and clear the preview cache while unchanged visible tiles wait. Partially visible tiles and styles scrolled into view still render, using the existing cache keys, budget and bound. Style order, clicks, editing, theme tint, Undo/Redo and saved content retain their behavior. Whole-list construction, generic cache eviction and the remaining pane/balloon work stay separate. Readiness estimates are unchanged.
+
 Protected typing at editable-region boundaries (#3614) walks consecutive permission starts or ends without repeated paragraph-prefix counts or ID-vector searches. Existing author matching, start-before-end movement, typing and Enter behavior, refusals and saved content remain unchanged. Native desktop behavior has not been newly tested.
 Aligned copy drags keep their locked document coordinate when middle-button scrolling moves the page, and Ctrl/Command+Shift can start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing selection behavior (#4764).
 
@@ -128,6 +130,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | trivial | The Table Styles gallery keeps clipped tiles in its layout without rasterising their previews (#4708, gallery portion of #3636). Documents with more than 400 table styles no longer repeatedly refill and clear the preview cache while unchanged visible tiles wait. Partially visible tiles and styles scrolled into view still render, using the existing cache keys, budget and bound. Style order, clicks, editing, theme tint, Undo/Redo and saved content retain their behavior. Whole-list construction, generic cache eviction and the remaining pane/balloon work stay separate. Readiness estimates are unchanged. |
 | 2026-10-30 | trivial | Screen readers: Home › Paste is named "Paste"; its hint adds the key as the platform writes it ("Paste (Ctrl+V)"), where the name carried macOS's "⌘V" on every platform (UI Automation named it "Incolla (⌘V)" in the Italian build on Windows). The status bar's page count hints Go To with the platform's key too (it showed "⌘⌥G") |
 | 2026-10-28 | trivial | Screen readers: headings and list items are given AccessKit's zero-based level, so a Heading 1 reaches UI Automation as level 1 and a Heading 2 as level 2; they came one level too deep (#3173) |
 | 2026-11-16 | trivial | Insert › Shapes: the Arrow tile is drawn as the block arrow it inserts, from the outline the document draws it with, instead of a thin line with a head (#6768) |
