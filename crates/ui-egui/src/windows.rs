@@ -94,6 +94,9 @@ pub struct Windows {
     /// Whether the root OS window had focus in the last pass; a [`DocumentWindow`] reports its own gain
     /// (`focus_gained`), the root's is read from the window host's facts.
     root_focused: bool,
+    /// The room each window's last draw had, by window key (tests read it).
+    #[cfg(test)]
+    drawn: std::collections::HashMap<u64, egui::Rect>,
 }
 
 impl Windows {
@@ -101,7 +104,16 @@ impl Windows {
     pub(crate) fn new(doc: u64) -> Windows {
         let mut list = WindowList::new();
         let id = list.open(Window::new(doc, None, None, false));
-        Windows { native: cfg!(not(target_arch = "wasm32")), list, root: id, shown: id, arranged: arrange::State::default(), root_focused: false }
+        Windows {
+            native: cfg!(not(target_arch = "wasm32")),
+            list,
+            root: id,
+            shown: id,
+            arranged: arrange::State::default(),
+            root_focused: false,
+            #[cfg(test)]
+            drawn: Default::default(),
+        }
     }
 
     /// Whether documents get native windows of their own.
@@ -528,7 +540,10 @@ impl WordApp {
             let (raise, place) = (std::mem::take(&mut w.raise), std::mem::take(&mut w.place));
             let mut window = DocumentWindow::new(Self::title_in(&menu, id))
                 .id(window_container_id(id))
-                .overlay(|overlay| overlay.size_limits(SizeLimits::at_least(MIN_SIZE)));
+                // The window's body is the whole interface, which lays itself out in the window's room. A
+                // scrolling body gives it an unbounded height instead (#7149 item 5): the interface lands
+                // 32768 points tall, off the window, and the window shows nothing.
+                .overlay(|overlay| overlay.size_limits(SizeLimits::at_least(MIN_SIZE)).body_scroll(false));
             if raise {
                 window = window.raise();
             }
@@ -586,6 +601,8 @@ impl WordApp {
         if self.windows.shown() != key {
             return;
         }
+        #[cfg(test)]
+        self.windows.drawn.insert(key, ui.max_rect());
         self.window_ui(ui);
         arrange::forward_scroll(self, &ctx);
     }

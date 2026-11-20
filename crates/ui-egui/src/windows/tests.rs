@@ -139,6 +139,24 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a).as_deref()), ("Second".into(), crate::DEFAULT_TAB, None));
 }
 
+/// Each window draws its interface in the room its OS window gives it. A window's body that scrolls lays the
+/// interface out 32768 points tall, so a second window opened blank (#7149 item 5).
+#[test]
+fn a_second_window_draws_its_interface_in_the_room_of_its_window() {
+    let mut rig = Rig::new();
+    let mut a = app("First");
+    rig.frames(&mut a, 3);
+    a.run("file.new", json!({})).unwrap();
+    rig.frames(&mut a, 6);
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+    assert!(rig.drawn.contains(&child), "the second window draws: {:?}", rig.drawn);
+    let key = a.windows.active().unwrap();
+    let room = a.windows.drawn.get(&key).copied().unwrap();
+    // The kit's child window is 400 by 300 points.
+    assert!(room.height() <= 300.0 && room.min.y >= 0.0, "the interface has the window's room, not {room:?}");
+}
+
 /// Each window has its own key, and the root window's stays `main` when it adopts another entry.
 #[test]
 fn window_keys_differ_and_the_root_keeps_main() {
