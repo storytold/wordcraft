@@ -1,183 +1,244 @@
-use super::common::{mi, stack};
-use super::language::language_menu;
-use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small};
+use craft::behavior::IconId;
+use craft::keymap::CommandRef;
+use craft::menu::ribbon::{RibbonGroup, RibbonRow}; // PLAN: assumed ribbon-w8 adds the craft-menu dependency and passes the `RibbonRow`
+use craft::ui::buttons::{Arrangement, Button, IconButton, SplitButton, SplitMenu, ToggleButton};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::menu::MenuItem;
 
-pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Proofing", None, app, |ui, app| {
-        big(ui, app, "spelling", "Spelling &\nGrammar", "review.spelling", json!({}), false);
-        stack(ui, |ui| {
-            small(ui, app, "thesaurus", Some("Thesaurus"), "Thesaurus", crate::widgets::ButtonAction::new("review.thesaurus", json!({}), false));
-            small(
-                ui,
-                app,
-                "wordCount",
-                Some("Word Count"),
-                "Word Count",
-                crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "wordCount"}), false),
-            );
+use super::common::menu_button;
+use super::language::language_menu;
+use super::{WordApp, json};
+
+/// The Review tab.
+pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    row.group(RibbonGroup::new("review.proofing", tl!("Proofing").to_string(), IconId::new("spelling").into()), |ui| {
+        Button::command(CommandRef::new("review.spelling"))
+            .label(tl!("Spelling &\nGrammar").to_string())
+            .icon(IconId::new("spelling"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("review.thesaurus")).label(tl!("Thesaurus").to_string()).icon(IconId::new("thesaurus")).show(ui);
+            Button::command(CommandRef::with_params("ui.dialog", json!({"name": "wordCount"})))
+                .label(tl!("Word Count").to_string())
+                .icon(IconId::new("wordCount"))
+                .show(ui);
         });
     });
-    group(ui, "Speech", None, app, |ui, app| {
-        big(ui, app, "readAloud", "Read\nAloud", "review.readAloud", json!({}), false);
+    row.group(RibbonGroup::new("review.speech", tl!("Speech").to_string(), IconId::new("readAloud").into()), |ui| {
+        Button::command(CommandRef::new("review.readAloud"))
+            .label(tl!("Read\nAloud").to_string())
+            .icon(IconId::new("readAloud"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Accessibility", None, app, |ui, app| {
-        big(ui, app, "accessibility", "Check\nAccessibility", "file.accessibility", json!({}), false);
+    row.group(RibbonGroup::new("review.accessibility", tl!("Accessibility").to_string(), IconId::new("accessibility").into()), |ui| {
+        Button::command(CommandRef::new("file.accessibility"))
+            .label(tl!("Check\nAccessibility").to_string())
+            .icon(IconId::new("accessibility"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Language", None, app, |ui, app| {
-        big(ui, app, "translate", "Translate", "review.translate", json!({}), false);
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("language", Some("Language"), "Language", true, ""), language_menu);
+    row.group(RibbonGroup::new("review.language", tl!("Language").to_string(), IconId::new("language").into()), |ui| {
+        Button::command(CommandRef::new("review.translate"))
+            .label(tl!("Translate").to_string())
+            .icon(IconId::new("translate"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        let face = Button::new(tl!("Language").to_string()).icon(IconId::new("language")).arrangement(Arrangement::Stacked);
+        menu_button(ui, face, tl!("Language").to_string(), None, |ui, _| language_menu(ui, app));
     });
-    group(ui, "Comments", None, app, |ui, app| {
-        big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "deleteComment",
-                Some("Delete"),
-                "Delete Comment",
-                crate::widgets::ButtonAction::new("review.deleteComment", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "prevComment",
-                Some("Previous"),
-                "Previous Comment",
-                crate::widgets::ButtonAction::new("review.previousComment", json!({}), false),
-            );
-            small(ui, app, "nextComment", Some("Next"), "Next Comment", crate::widgets::ButtonAction::new("review.nextComment", json!({}), false));
+    row.group(RibbonGroup::new("review.comments", tl!("Comments").to_string(), IconId::new("newComment").into()), |ui| {
+        Button::command(CommandRef::new("review.newComment"))
+            .label(tl!("New\nComment").to_string())
+            .icon(IconId::new("newComment"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("review.deleteComment"))
+                .label(tl!("Delete").to_string())
+                .tooltip(tl!("Delete Comment").to_string())
+                .icon(IconId::new("deleteComment"))
+                .show(ui);
+            Button::command(CommandRef::new("review.previousComment"))
+                .label(tl!("Previous").to_string())
+                .tooltip(tl!("Previous Comment").to_string())
+                .icon(IconId::new("prevComment"))
+                .show(ui);
+            Button::command(CommandRef::new("review.nextComment"))
+                .label(tl!("Next").to_string())
+                .tooltip(tl!("Next Comment").to_string())
+                .icon(IconId::new("nextComment"))
+                .show(ui);
         });
         let shown = app.session.view.comments_pane;
-        big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
+        Button::command(CommandRef::with_params("view.commentsPane", json!({"value": !shown})))
+            .label(tl!("Show\nComments").to_string())
+            .icon(IconId::new("showComments"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Tracking", Some("review.trackingOptions"), app, |ui, app| {
-        let on = app.session.doc.settings.track_changes;
-        let r = big(ui, app, "trackChanges", if on { "Track\nChanges ✓" } else { "Track\nChanges" }, "review.trackChanges", json!({}), false);
-        let _ = r;
-        stack(ui, |ui| {
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new(
-                    "markup",
-                    Some(if app.session.view.show_markup { "All Markup" } else { "No Markup" }),
-                    "Display for Review",
-                    false,
-                    "review.markup",
-                ),
-                |ui, app| {
-                    mi(ui, app, "All Markup", "review.markup", json!({"value": "all"}));
-                    mi(ui, app, "No Markup", "review.markup", json!({"value": "noMarkup"}));
-                },
-            );
-            small(
-                ui,
-                app,
-                "reviewingPane",
-                Some("Reviewing Pane"),
-                "Reviewing Pane",
-                crate::widgets::ButtonAction::new("review.changes", json!({}), false),
-            );
+    row.group(
+        RibbonGroup::new("review.tracking", tl!("Tracking").to_string(), IconId::new("trackChanges").into()).launcher("review.trackingOptions"),
+        |ui| {
+            ToggleButton::command(CommandRef::new("review.trackChanges"))
+                .label(tl!("Track\nChanges").to_string())
+                .icon(IconId::new("trackChanges"))
+                .arrangement(Arrangement::Stacked)
+                .selected(app.session.doc.settings.track_changes)
+                .show(ui);
+            let all = app.session.view.show_markup;
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                let face = Button::new(if all { tl!("All Markup").to_string() } else { tl!("No Markup").to_string() }).icon(IconId::new("markup"));
+                menu_button(ui, face, tl!("Display for Review").to_string(), Some("review.markup"), |ui, _| {
+                    MenuItem::command(CommandRef::with_params("review.markup", json!({"value": "all"})))
+                        .label(tl!("All Markup").to_string())
+                        .radio_mark(all)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("review.markup", json!({"value": "noMarkup"})))
+                        .label(tl!("No Markup").to_string())
+                        .radio_mark(!all)
+                        .show(ui);
+                });
+                Button::command(CommandRef::new("review.changes"))
+                    .label(tl!("Reviewing Pane").to_string())
+                    .icon(IconId::new("reviewingPane"))
+                    .show(ui);
+            });
+        },
+    );
+    row.group(RibbonGroup::new("review.changes", tl!("Changes").to_string(), IconId::new("accept").into()), |ui| {
+        SplitButton::<u8>::command(
+            CommandRef::new("review.accept"),
+            SplitMenu::Body(Box::new(|ui, _| {
+                MenuItem::command(CommandRef::with_params("review.accept", json!({"next": true})))
+                    .label(tl!("Accept and Move to Next").to_string())
+                    .show(ui);
+                MenuItem::command(CommandRef::with_params("review.accept", json!({}))).label(tl!("Accept This Change").to_string()).show(ui);
+                MenuItem::command(CommandRef::new("review.acceptAll")).label(tl!("Accept All Changes").to_string()).show(ui);
+                MenuItem::command(CommandRef::with_params("review.acceptAll", json!({"stopTracking": true})))
+                    .label(tl!("Accept All Changes and Stop Tracking").to_string())
+                    .show(ui);
+            })),
+        )
+        .label(tl!("Accept").to_string())
+        .icon(IconId::new("accept"))
+        .arrangement(Arrangement::Stacked)
+        .show(ui);
+        SplitButton::<u8>::command(
+            CommandRef::new("review.reject"),
+            SplitMenu::Body(Box::new(|ui, _| {
+                MenuItem::command(CommandRef::with_params("review.reject", json!({"next": true})))
+                    .label(tl!("Reject and Move to Next").to_string())
+                    .show(ui);
+                MenuItem::command(CommandRef::with_params("review.reject", json!({}))).label(tl!("Reject Change").to_string()).show(ui);
+                MenuItem::command(CommandRef::new("review.rejectAll")).label(tl!("Reject All Changes").to_string()).show(ui);
+                MenuItem::command(CommandRef::with_params("review.rejectAll", json!({"stopTracking": true})))
+                    .label(tl!("Reject All Changes and Stop Tracking").to_string())
+                    .show(ui);
+            })),
+        )
+        .label(tl!("Reject").to_string())
+        .icon(IconId::new("reject"))
+        .arrangement(Arrangement::Stacked)
+        .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("review.previousChange"))
+                .label(tl!("Previous").to_string())
+                .tooltip(tl!("Previous Change").to_string())
+                .icon(IconId::new("prevChange"))
+                .show(ui);
+            Button::command(CommandRef::new("review.nextChange"))
+                .label(tl!("Next").to_string())
+                .tooltip(tl!("Next Change").to_string())
+                .icon(IconId::new("nextChange"))
+                .show(ui);
         });
     });
-    group(ui, "Changes", None, app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("accept", Some("Accept"), "Accept", true, "review.accept"), |ui, app| {
-            mi(ui, app, "Accept and Move to Next", "review.accept", json!({"next": true}));
-            mi(ui, app, "Accept This Change", "review.accept", json!({}));
-            mi(ui, app, "Accept All Changes", "review.acceptAll", json!({}));
-            mi(ui, app, "Accept All Changes and Stop Tracking", "review.acceptAll", json!({"stopTracking": true}));
-        });
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("reject", Some("Reject"), "Reject", true, "review.reject"), |ui, app| {
-            mi(ui, app, "Reject and Move to Next", "review.reject", json!({"next": true}));
-            mi(ui, app, "Reject Change", "review.reject", json!({}));
-            mi(ui, app, "Reject All Changes", "review.rejectAll", json!({}));
-            mi(ui, app, "Reject All Changes and Stop Tracking", "review.rejectAll", json!({"stopTracking": true}));
-        });
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "prevChange",
-                Some("Previous"),
-                "Previous Change",
-                crate::widgets::ButtonAction::new("review.previousChange", json!({}), false),
-            );
-            small(ui, app, "nextChange", Some("Next"), "Next Change", crate::widgets::ButtonAction::new("review.nextChange", json!({}), false));
-        });
+    row.group(RibbonGroup::new("review.compare", tl!("Compare").to_string(), IconId::new("compare").into()), |ui| {
+        Button::command(CommandRef::new("review.compare"))
+            .label(tl!("Compare").to_string())
+            .icon(IconId::new("compare"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Compare", None, app, |ui, app| {
-        big(ui, app, "compare", "Compare", "review.compare", json!({}), false);
+    row.group(RibbonGroup::new("review.protect", tl!("Protect").to_string(), IconId::new("restrict").into()), |ui| {
+        Button::command(CommandRef::new("review.blockAuthors"))
+            .label(tl!("Block\nAuthors").to_string())
+            .icon(IconId::new("blockAuthors"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Button::command(CommandRef::new("review.restrict"))
+            .label(tl!("Restrict\nEditing").to_string())
+            .icon(IconId::new("restrict"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Protect", None, app, |ui, app| {
-        big(ui, app, "blockAuthors", "Block\nAuthors", "review.blockAuthors", json!({}), false);
-        big(ui, app, "restrict", "Restrict\nEditing", "review.restrict", json!({}), false);
-    });
-    group(ui, "Ink", None, app, |ui, app| {
-        let hidden = app.session.view.hide_ink;
-        big_toggle(ui, app, "hideInk", "Hide\nInk", "review.hideInk", hidden);
+    row.group(RibbonGroup::new("review.ink", tl!("Ink").to_string(), IconId::new("hideInk").into()), |ui| {
+        ToggleButton::command(CommandRef::new("review.hideInk"))
+            .label(tl!("Hide\nInk").to_string())
+            .icon(IconId::new("hideInk"))
+            .arrangement(Arrangement::Stacked)
+            .selected(app.session.view.hide_ink)
+            .show(ui);
     });
 }
 
 /// Developer › Controls: content controls.
-pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
+pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let design = app.session.view.design_mode;
-    group(ui, "Controls", None, app, |ui, app| {
-        let rows: [[(&str, &str, &str); 3]; 3] = [
-            [
-                ("ccRichText", "Rich Text Content Control", "developer.richText"),
-                ("ccPlainText", "Plain Text Content Control", "developer.plainText"),
-                ("ccPicture", "Picture Content Control", "developer.picture"),
-            ],
-            [
-                ("ccGallery", "Building Block Gallery Content Control", "developer.buildingBlock"),
-                ("ccCheckBox", "Check Box Content Control", "developer.checkBox"),
-                ("ccComboBox", "Combo Box Content Control", "developer.comboBox"),
-            ],
-            [
-                ("ccDropDown", "Drop-Down List Content Control", "developer.dropDown"),
-                ("ccDate", "Date Picker Content Control", "developer.datePicker"),
-                ("ccRepeat", "Repeating Section Content Control", "developer.repeatingSection"),
-            ],
+    row.group(RibbonGroup::new("developer.controls", tl!("Controls").to_string(), IconId::new("ccRichText").into()), |ui| {
+        let rows: [[(&'static str, &str); 3]; 3] = [
+            [("ccRichText", "developer.richText"), ("ccPlainText", "developer.plainText"), ("ccPicture", "developer.picture")],
+            [("ccGallery", "developer.buildingBlock"), ("ccCheckBox", "developer.checkBox"), ("ccComboBox", "developer.comboBox")],
+            [("ccDropDown", "developer.dropDown"), ("ccDate", "developer.datePicker"), ("ccRepeat", "developer.repeatingSection")],
         ];
-        // Three rows of small buttons fill the group's height, like every other stack.
-        stack(ui, |ui| {
-            for row in rows {
-                crate::widgets::row(ui, |ui| {
-                    for (icon, tip, id) in row {
-                        small(ui, app, icon, None, tip, crate::widgets::ButtonAction::new(id, json!({}), false));
+        // Three rows of icon-only buttons fill the group's height; each tooltip is its command's label.
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for cells in rows {
+                Row::new().show(ui, |ui, _| {
+                    for (icon_name, id) in cells {
+                        IconButton::command(crate::icons::id(icon_name), CommandRef::new(id)).show(ui);
                     }
                 });
             }
         });
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "designMode",
-                Some("Design Mode"),
-                "Design Mode",
-                crate::widgets::ButtonAction::new("developer.designMode", json!({}), design),
-            );
-            small(
-                ui,
-                app,
-                "properties",
-                Some("Properties"),
-                "Properties",
-                crate::widgets::ButtonAction::new("developer.properties", json!({}), false),
-            );
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            ToggleButton::command(CommandRef::new("developer.designMode"))
+                .label(tl!("Design Mode").to_string())
+                .icon(IconId::new("designMode"))
+                .selected(design)
+                .show(ui);
+            Button::command(CommandRef::new("developer.properties")).label(tl!("Properties").to_string()).icon(IconId::new("properties")).show(ui);
         });
     });
 }
 
-pub(super) fn help(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Help", None, app, |ui, app| {
-        big(ui, app, "help", "Help", "ui.dialog", json!({"name": "about"}), false);
-        big(ui, app, "checkForUpdates", "Check for\nUpdates…", "ui.checkForUpdates", json!({}), false);
-        big(ui, app, "discord", "Community\nDiscord", "ui.discord", json!({}), false);
+/// The Help tab.
+pub(super) fn help(row: &mut RibbonRow<'_>, _app: &mut WordApp) {
+    row.group(RibbonGroup::new("help.help", tl!("Help").to_string(), IconId::new("help").into()), |ui| {
+        Button::command(CommandRef::with_params("ui.dialog", json!({"name": "about"})))
+            .label(tl!("Help").to_string())
+            .icon(IconId::new("help"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Button::command(CommandRef::new("ui.checkForUpdates"))
+            .label(tl!("Check for\nUpdates…").to_string())
+            .icon(IconId::new("checkForUpdates"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Button::command(CommandRef::new("ui.discord"))
+            .label(tl!("Community\nDiscord").to_string())
+            .icon(IconId::new("discord"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Agents", None, app, |ui, app| {
-        big(ui, app, "macros", "Commands", "ui.dialog", json!({"name": "commands"}), false);
+    row.group(RibbonGroup::new("help.agents", tl!("Agents").to_string(), IconId::new("macros").into()), |ui| {
+        Button::command(CommandRef::with_params("ui.dialog", json!({"name": "commands"})))
+            .label(tl!("Commands").to_string())
+            .icon(IconId::new("macros"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
 }
