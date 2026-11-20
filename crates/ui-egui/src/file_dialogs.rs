@@ -39,7 +39,9 @@ pub type FileDialogAnswer = Result<Vec<String>, String>;
 const MAX_FONTS_PER_PICK: usize = 2000;
 
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
-const DOCUMENTS: &[&str] =
+/// Extensions WordCraft opens. Shared with [`crate::cloud_app`], which judges a cloud entry by
+/// the same list a local Open does.
+pub(crate) const DOCUMENTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change

@@ -25,6 +25,8 @@ log = { workspace = true }
 serde_json = { workspace = true }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
+# Cloud storage and sharing have no backend right now (removed rather than pinned to an
+# unreviewed personal repository); see `wordcraft_ui_egui::cloud`.
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.

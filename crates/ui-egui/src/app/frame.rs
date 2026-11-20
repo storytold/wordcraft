@@ -55,12 +55,18 @@ impl WordApp {
     pub fn title_stem(&self) -> String {
         let mut title = match &self.session.path {
             Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
-            None => match &self.session.file_name {
-                Some(name) => name.clone(),
-                None if self.session.doc.core.title.is_empty() => {
-                    documents::untitled_title(&self.session.resolved_filenames().0).unwrap_or_else(|| tl!("Document1").into())
-                }
-                None => self.session.doc.core.title.clone(),
+            None => match craft_ui::cloud::origin(self) {
+                Some(origin) => match origin.entry.name.rsplit_once('.') {
+                    Some((stem, _)) if !stem.is_empty() => stem.to_string(),
+                    _ => origin.entry.name.clone(),
+                },
+                None => match &self.session.file_name {
+                    Some(name) => name.clone(),
+                    None if self.session.doc.core.title.is_empty() => {
+                        documents::untitled_title(&self.session.resolved_filenames().0).unwrap_or_else(|| tl!("Document1").into())
+                    }
+                    None => self.session.doc.core.title.clone(),
+                },
             },
         };
         // X11 converts window titles to C strings, which cannot contain NUL (#3634).
@@ -130,7 +136,16 @@ impl WordApp {
         let moved = |app: &WordApp| app.windows.shown() != window;
         content_controls::popup(self, ctx);
         crate::font_download::tick(self);
+        // Unconditional, because this is also where the share service's answers are collected,
+        // which has to keep happening while the dialog is shut.
+        self.share.show(ctx);
+        // A share of a document that has never been saved. The dialog asked; only this side can
+        // serialise a document, so it answers.
+        share_save(self);
         dialogs::show(self, ctx);
+        // Above the dialogs: a refused save has to be answered, and the answer decides what
+        // happens to the user's edits.
+        craft_ui::cloud::conflict_modal(self, ctx);
         if moved(self) {
             return;
         }
@@ -168,5 +183,36 @@ impl WordApp {
         self.frame_ms = now_ms() - t0;
         // Typing and formatting land here, after `logic` has reported.
         self.report_dirty();
+    }
+}
+
+/// Carry out a save the share dialog asked for, and report the outcome back.
+///
+/// Split into asking and answering because the save travels. The dialog waits, showing its own
+/// progress, until one of these arrives.
+fn share_save(app: &mut WordApp) {
+    if let Some(request) = app.share.take_save_request() {
+        // The name the copy is saved under is also the format it is written in (see
+        // `craft_ui::cloud::document_name`), so the pages hold it while the bytes are made.
+        app.cloud.save_name = request.name.clone();
+        match craft_ui::cloud::save_as(app, "/", &request.name) {
+            Ok(_) => app.cloud.sharing_save = true,
+            Err(reason) => app.share.save_failed(reason),
+        }
+    }
+
+    // The worker reports by clearing `busy`. A new origin means it landed.
+    if app.cloud.sharing_save && app.cloud.busy.is_none() {
+        app.cloud.sharing_save = false;
+        match craft_ui::cloud::origin(app) {
+            Some(origin) => {
+                let (id, name) = (origin.entry.id.clone(), origin.entry.name.clone());
+                app.share.saved(id, name);
+            }
+            None => {
+                let reason = app.cloud.status.clone().unwrap_or_else(|| tl!("The document was not saved.").to_owned());
+                app.share.save_failed(reason);
+            }
+        }
     }
 }

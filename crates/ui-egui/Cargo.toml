@@ -9,7 +9,15 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a" }
+# The printing controls and the shared menus, and Open/Save against cloud storage and the share
+# dialog (the `cloud` feature, which pulls in `share`). Pinned by revision to storytold/craft-libs,
+# which is how this repository already reached craft-print: a real, reviewable storytold commit,
+# not a personal fork. No backend is connected in this build, so `craft_ui::cloud::available` is
+# false and every cloud page and menu item stays hidden; see `cloud_app`.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", features = ["cloud"] }
+# The vendor-neutral cloud vocabulary (`EntryKind` for `CloudApp::paint_icon`). Same craft-libs rev
+# as craft-ui; craft-ui's own `cloud` feature already resolves this crate from the same checkout.
+craft-cloud = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
 # `craft-i18n.rev`). Same craft-libs rev as craft-ui; it brings lazy per-locale parsing
@@ -64,6 +72,12 @@ craft-zip = { workspace = true }
 # #2726's regression test: the consumer the Windows adapter runs, fed with our updates.
 # Pinned to the version egui already brings into the tree, so nothing is built twice.
 accesskit_consumer = "=0.39.1"
+# A reference `CloudBackend` over a temp folder, standing in for a real cloud service in the
+# cloud tests: proof that the app side of the contract needs no specific provider, and a backend
+# that can genuinely refuse a save rather than an inert stand-in that could never fail. Same
+# craft-libs rev as craft-ui.
+craft-cloud-local = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a" }
+tempfile = "3"
 
 [build-dependencies]
 serde_json = { workspace = true }

@@ -1,6 +1,6 @@
 //! File tab (Backstage): Home/New, Open, Info, Save As, Print, Export, Close, Options, About.
 
-use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
 use crate::theme::{Tokens, medium, regular, semibold};
@@ -291,11 +291,20 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
     if !app.has_document() && !works_without_document(id) {
         return;
     }
+    // A target set by the conflict modal's "Save as a copy" belongs to the document that
+    // conflicted, not to whatever Save As comes next: leaving the Save As page without saving,
+    // or landing on it fresh for an unrelated save, clears it (`craft_ui::cloud::cancel_save_as`).
+    let on_save_as = app.ui.backstage_page == "saveAs";
+    if (on_save_as && id != "saveAs") || (!on_save_as && matches!(id, "save" | "saveAs")) {
+        craft_ui::cloud::cancel_save_as(app);
+    }
     match id {
         // A document without a file goes to the Save As page (as in Word) instead
         // of `file.save`, which would also open the native Save As dialog.
-        // In the browser a save is a download, so it saves right away.
-        "save" if app.session.path.is_none() && app.services.download.is_none() => {
+        // In the browser a save is a download, so it saves right away. A document
+        // that came from the cloud has a destination too, and `WordApp::run` sends
+        // its Save back there (see `craft_ui::cloud::save`).
+        "save" if app.session.path.is_none() && app.services.download.is_none() && !craft_ui::cloud::has_target(app) => {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
@@ -322,6 +331,30 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
     matches!(page, "home" | "new" | "open" | "options")
+}
+
+/// A heading inside a page, as Recent has.
+fn section(ui: &mut Ui, s: &str) {
+    ui.label(egui::RichText::new(tl!(s)).font(semibold(16.0)));
+    ui.add_space(6.0);
+}
+
+/// A selectable destination on the Save As page (icon, title, one-line detail).
+fn place_row(ui: &mut Ui, icon: &str, title: &str, detail: &str, selected: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 52.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, title));
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(r, 4.0, t.checked);
+        p.rect_stroke(r, 4.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+    } else if resp.hovered() {
+        p.rect_filled(r, 4.0, t.hover);
+    }
+    icons::paint(p, Rect::from_center_size(pos2(r.min.x + 24.0, r.center().y), vec2(22.0, 22.0)), icon, t.icon, t.accent);
+    p.text(pos2(r.min.x + 52.0, r.center().y - 8.0), Align2::LEFT_CENTER, title, medium(13.5), t.text);
+    p.text(pos2(r.min.x + 52.0, r.center().y + 9.0), Align2::LEFT_CENTER, detail, regular(12.0), t.text_dim);
+    resp
 }
 
 fn heading(ui: &mut Ui, s: &str) {
@@ -825,6 +858,12 @@ fn open_page(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("ui.fileBrowser", json!({}));
     }
+    // Cloud storage sits beside the local picker and never in place of it.
+    if craft_ui::cloud::available(app) {
+        ui.add_space(22.0);
+        section(ui, "Cloud");
+        craft_ui::cloud::open_page(app, ui);
+    }
     ui.add_space(18.0);
     open_list(app, ui);
 }
@@ -837,6 +876,29 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     if !error.is_empty() {
         ui.label(egui::RichText::new(&error).color(ui.visuals().error_fg_color));
         ui.add_space(6.0);
+    }
+    // Where to save, when there is more than one answer to that.
+    if craft_ui::cloud::available(app) {
+        let to_cloud = app.ui.save_to_cloud.unwrap_or_else(|| craft_ui::cloud::prefers_cloud(app));
+        section(ui, "Where");
+        // Named here, before anything is picked, so the destination reads as the user's own
+        // account and not as a generic place.
+        craft_ui::cloud::start(app);
+        let account = craft_ui::cloud::destination_name(app);
+        if place_row(ui, "save", tl!("This PC"), tl!("A folder on this computer"), !to_cloud).clicked() {
+            app.ui.save_to_cloud = Some(false);
+        }
+        if place_row(ui, "share", &account, tl!("Your cloud account"), to_cloud).clicked() {
+            app.ui.save_to_cloud = Some(true);
+        }
+        ui.add_space(18.0);
+        if to_cloud {
+            if craft_ui::cloud::save_page(app, ui) {
+                app.ui.backstage = false;
+                app.canvas.want_focus = true;
+            }
+            return;
+        }
     }
     if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         app.save_as_dialog();

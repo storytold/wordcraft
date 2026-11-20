@@ -30,6 +30,7 @@ pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
+mod cloud_app;
 pub mod colors;
 pub mod content_controls;
 pub mod control;
@@ -290,6 +291,11 @@ pub struct UiState {
     /// File › Print settings (#641); not saved.
     #[serde(skip)]
     pub print: print_page::PrintSettings,
+    /// File › Save As: the chosen destination, once the user has picked one. `None` follows the
+    /// document, so one that came from the cloud offers the cloud first and everything else
+    /// starts on this computer. A choice about one save, so it is not saved between runs.
+    #[serde(skip)]
+    pub save_to_cloud: Option<bool>,
     pub ribbon_collapsed: bool,
     /// The Quick Access Toolbar shows in the title bar (#1945). Its menu's Hide Quick Access
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
@@ -489,6 +495,7 @@ impl Default for UiState {
             backstage: false,
             backstage_page: "home".into(),
             print: print_page::PrintSettings::default(),
+            save_to_cloud: None,
             ribbon_collapsed: false,
             quick_access_toolbar: true,
             recent: Vec::new(),
@@ -669,6 +676,14 @@ pub struct WordApp {
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,
+    /// Open and Save against cloud storage: the account, the folder being browsed, transfers in
+    /// flight, and where the open document came from. No backend is connected in this build, so
+    /// [`craft_ui::cloud::available`] is false and the pages stay hidden; see [`cloud_app`].
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Giving other people access to this document.
+    pub share: craft_ui::share::ShareDialog,
+    /// Who else is in the document. Empty until a real collaboration layer sets it.
+    pub presence: craft_ui::presence::PresenceBar,
     /// The Colors dialog (More Colors…), shown above any other dialog (#606).
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).

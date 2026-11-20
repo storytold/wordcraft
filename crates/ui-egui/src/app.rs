@@ -77,6 +77,7 @@ impl WordApp {
             tab,
             backstage,
             backstage_page,
+            save_to_cloud: _,
             print,
             nav_collapsed,
             keytip_prefix,
@@ -164,6 +165,9 @@ impl WordApp {
             canvas,
             controls,
             dialog,
+            cloud: craft_ui::cloud::CloudFiles::new(),
+            share: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new(),
             colors,
             restrict,
             spelling_review,
@@ -362,6 +366,8 @@ impl WordApp {
         } else {
             self.poll_printing(ctx);
         }
+        // Answers from the cloud worker, and anything still in flight.
+        craft_ui::cloud::pump(self, ctx);
         self.drain_control(ctx);
         // The active window's own work; with native windows each window does it again as it
         // draws, for itself.
