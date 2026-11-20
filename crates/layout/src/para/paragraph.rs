@@ -1032,9 +1032,15 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
                     thai_breaks.push(i);
                 }
             }
-            if thai_breaks.len() > breaks_before_run {
+            // Word keeps some compounds whole and splits some of the dictionary's words; a run is
+            // the dictionary's once it gave a break in it, even if a compound then took them all.
+            let dictionary_broke = thai_breaks.len() > breaks_before_run;
+            let mut run_breaks = thai_breaks.split_off(breaks_before_run);
+            crate::thai_words::adjust(text, run, &mut run_breaks, |i| crate::kinsoku::is_safe_line_break(text, i));
+            if dictionary_broke || !run_breaks.is_empty() {
                 replaced_runs.push(run.clone());
             }
+            thai_breaks.extend(run_breaks);
         }
         let mut run_index = 0;
         found.retain(|&i| {
@@ -1065,6 +1071,19 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
 
 #[cfg(test)]
 mod break_tests {
+    /// Word's own Thai words over the ICU4X dictionary's ([`crate::thai_words`]): "ฐานข้อมูล" stays
+    /// whole on a line, "หมายเหตุ" breaks after "หมาย", as in Word.
+    #[test]
+    fn thai_words_word_keeps_whole_or_splits_break_as_in_word() {
+        let doc = wordcraft_doc::Document::new();
+        let rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        let text = "ฐานข้อมูล หมายเหตุ";
+        let b = super::break_positions(text, &rp);
+        assert!(!b.contains(&"ฐาน".len()), "{b:?}");
+        let note = text.find('ห').unwrap();
+        assert!(b.contains(&(note + "หมาย".len())), "{b:?}");
+    }
+
     #[test]
     fn thai_dictionary_and_hyphen_slash_boundaries_coexist() {
         let doc = wordcraft_doc::Document::new();

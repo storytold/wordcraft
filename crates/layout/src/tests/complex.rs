@@ -194,7 +194,8 @@ fn thai_emergency_wrapping_preserves_latin_ligatures() {
 fn thai_dictionary_context_skips_hidden_text_and_tracked_deletions() {
     let text = "การประชุXmคณะกรรมการบริหารโครงการ";
     let hidden = text.find('X').unwrap_or(text.len());
-    let boundary = text.find("กรรมการ").unwrap_or(text.len());
+    // Word keeps "คณะกรรมการ" whole (crate::thai_words): the boundary before "โครงการ".
+    let boundary = text.find("โครงการ").unwrap_or(text.len());
     for deleted in [false, true] {
         let mut d = Document::from_text(text);
         d.format_range(&Pos::body(0, hidden), &Pos::body(0, hidden + 1), &|c| {
