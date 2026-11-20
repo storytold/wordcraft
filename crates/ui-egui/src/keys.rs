@@ -2,27 +2,20 @@
 //! Keyboard first, then the registry's `shortcut` fields).
 
 use egui::{Key, Modifiers};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::WordApp;
 use wordcraft_engine::ImeEditOutcome;
 
-mod alt_code;
 mod canvas;
 mod ime;
 mod shortcuts;
 
-pub(crate) use alt_code::{AltCodeEcho, FieldAltCode, field_alt_codes};
-pub use canvas::canvas_events;
-pub(crate) use ime::observe_ime;
+pub(crate) use canvas::{page_input, window_cancel};
+pub(crate) use ime::report_editor;
 #[cfg(test)]
 use ime::{ImeProof, MAX_IME_COMMIT_BYTES, MAX_IME_PREEDIT_BYTES, classify_ime_proof};
-pub use shortcuts::{combo, global_shortcuts, key_name};
-#[cfg(test)]
-use shortcuts::{
-    dispatch, is_context_menu_key, is_global_shortcut, is_paste_release, is_paste_special_release, is_shift_delete, paste_release_modifiers,
-    shift_variant_params, ui_shortcut,
-};
+pub use shortcuts::{combo, key_name};
 
 #[cfg(test)]
 mod tests;
