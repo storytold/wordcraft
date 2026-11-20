@@ -34,6 +34,27 @@ fn table_sort_refuses_vertical_merges_without_changing_history() {
     }
 }
 
+#[test]
+fn a_refused_sort_does_not_turn_on_tracking_in_a_protected_document() {
+    use wordcraft_doc::props::VMerge;
+
+    let mut s = table_from("Anchor\tZulu\n\tAlpha");
+    let table = s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![0])).unwrap();
+    table.rows[0].cells[0].props.vmerge = VMerge::Restart;
+    table.rows[1].cells[0].props.vmerge = VMerge::Continue;
+    run(&mut s, "select.text", json!({"text": "Zulu"}));
+    s.doc.settings.protection = Some("trackedChanges".into());
+    assert!(!s.doc.settings.track_changes);
+    let original = s.doc.clone();
+    let error = s.run("table.sort", &json!({"column": 1})).unwrap_err().to_string();
+    assert!(error.contains("vertically merged"), "{error}");
+    assert_eq!(s.doc, original);
+
+    run(&mut s, "text.insert", json!({"text": "Edited"}));
+    assert!(s.doc.settings.track_changes);
+    assert!(s.doc.revisions.len() > original.revisions.len());
+}
+
 /// Only vertical merges in the target table are refused. Horizontal merges and a nested
 /// table's own merges move safely with their containing row.
 #[test]
