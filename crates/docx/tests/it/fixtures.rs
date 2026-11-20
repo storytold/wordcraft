@@ -1280,10 +1280,12 @@ fn anchor_stacking_order_is_read_and_kept() {
         paras(d)[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.z) } else { None }).collect()
     };
     let d = read_body(&body);
-    assert_eq!(zs(&d), [251660288, 251657214, 0]);
+    // The shared reader keeps one more than the file's `relativeHeight` (so a file's 0 is the
+    // lowest order, not "none") and the writer writes one less.
+    assert_eq!(zs(&d), [251660289, 251657215, 0]);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let z = zs(&again);
-    assert_eq!(&z[..2], &[251660288, 251657214]);
+    assert_eq!(&z[..2], &[251660289, 251657215]);
     assert!(z[2] > 0, "an object without one gets an order on saving: {z:?}");
 }
 
@@ -2122,9 +2124,10 @@ fn rotated_ole_objects_round_trip() {
     let body = text(&unzip(&out), "word/document.xml");
     assert_eq!(attr_values(&body, "a:xfrm", "rot"), ["5400000"]);
     assert_eq!(attr_values(&body, "a:xfrm", "flipH"), ["1"]);
-    // 72 × 36 pt turned 90°: 18 pt narrower each side, 18 pt taller each side.
-    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["-228600"]);
-    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["228600"]);
+    // 72 × 36 pt turned 90°: Word measures that against the frame turned with it, so a quarter
+    // turn adds no effect extent.
+    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["0"]);
+    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
     let back = wordcraft_docx::read(&out).unwrap();
     let o = &paras(&back)[0].objects[0];
     assert!(matches!(o, InlineObject::Image { ole: Some(_), .. }), "{o:?}");
@@ -3314,7 +3317,7 @@ fn native_ink_markup_limit_does_not_write_a_dangling_reference() {
 fn native_ink_preserves_inner_transform_and_rotation_padding_on_unrelated_saves() {
     let mut files = unzip(&ink_docx(false, false));
     let body = text(&files, "word/document.xml")
-        .replace("<wp:docPr", r#"<wp:effectExtent l="55468" t="512668" r="55468" b="512668"/><wp:docPr"#)
+        .replace("<wp:docPr", r#"<wp:effectExtent l="512668" t="55468" r="512668" b="55468"/><wp:docPr"#)
         .replace("<q:xfrm>", r#"<q:xfrm rot="2700000">"#)
         .replace(r#"<a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/>"#, r#"<a:off x="127000" y="254000"/><a:ext cx="914400" cy="457200"/>"#);
     files.insert("word/document.xml".into(), body.into_bytes());
@@ -4631,6 +4634,29 @@ fn our_banded_table_styles_write_their_band_sizes() {
     assert!(style.contains(r#"<w:tblPr><w:tblStyleRowBandSize w:val="1"/><w:tblStyleColBandSize w:val="1"/>"#), "{style}");
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(back.styles.table_style("GridTable4AccentBlue").map(|t| t.parts.band_size), Some(Some(1)));
+}
+
+/// #4198: built-in styles and table styles write `w:bCs` beside `w:b` and `w:iCs` beside `w:i` in
+/// `word/styles.xml`, so Word and LibreOffice draw Arabic and Hebrew headers and emphasis bold or
+/// italic just as WordCraft does.
+#[test]
+fn builtin_styles_write_bcs_and_ics_with_b_and_i() {
+    let d = Document::new();
+    let xml = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/styles.xml");
+    let start = xml.find(r#"w:styleId="GridTable4AccentBlue""#).expect("Grid Table 4 – Blue is written");
+    let style = &xml[start..start + xml[start..].find("</w:style>").unwrap()];
+    assert!(
+        style.contains(r#"<w:tblStylePr w:type="firstRow"><w:rPr><w:b/><w:bCs/><w:color w:val="FFFFFF"/></w:rPr>"#),
+        "firstRow has w:bCs beside w:b: {style}"
+    );
+    assert!(
+        style.contains(r#"<w:tblStylePr w:type="firstCol"><w:rPr><w:b/><w:bCs/></w:rPr></w:tblStylePr>"#),
+        "firstCol has w:bCs beside w:b: {style}"
+    );
+    for rpr in xml.split("<w:rPr>").skip(1).filter_map(|s| s.split("</w:rPr>").next()) {
+        assert_eq!(rpr.contains("<w:b/>"), rpr.contains("<w:bCs/>"), "unpaired w:b / w:bCs in {rpr}");
+        assert_eq!(rpr.contains("<w:i/>"), rpr.contains("<w:iCs/>"), "unpaired w:i / w:iCs in {rpr}");
+    }
 }
 
 #[test]
