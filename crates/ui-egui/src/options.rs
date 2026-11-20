@@ -5,7 +5,7 @@
 //! setting an agent changes and the same setting changed here take one path. Settings the app keeps
 //! outside the engine are written directly by [`OptionsModel::set`].
 
-use craft::behavior::{MotionMode, keyed};
+use craft::behavior::{EditEvent, MotionMode, keyed};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
 use craft::ui::display::{Elide, Shade, Text};
@@ -430,7 +430,7 @@ impl PreferencesModel for OptionsModel<'_> {
                 GroupSpec::new(
                     Some(tl!("Custom dictionary")),
                     vec![
-                        RowSpec::new("proofing.customDictionaryFile", tl!("Dictionary file:"), RowKind::Text(prefs.custom_dictionary.as_deref().unwrap_or("")))
+                        RowSpec::new("proofing.customDictionaryFile", tl!("Dictionary file:"), RowKind::Custom)
                             .help(tl!("A custom-word dictionary file (.dic or plain text) used in conjunction with the main dictionary. Empty uses custom-dictionary.txt.")),
                         custom("proofing.customDictionary", tl!("Custom dictionary")),
                     ],
@@ -713,6 +713,7 @@ impl PreferencesModel for OptionsModel<'_> {
                     self.run("tools.autocorrect", json!({}));
                 }
             }
+            "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
             "proofing.customDictionary" => self.custom_dictionary(ui),
             "language.proofingLanguage" => {
                 Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
@@ -755,7 +756,38 @@ const CUSTOM_WORDS_SHOWN: u16 = 8;
 #[derive(Clone, Default)]
 struct NewWord(String);
 
+/// The path being typed into the Dictionary file field; `None` while the field shows the saved path.
+#[derive(Clone, Default)]
+struct PathDraft(Option<String>);
+
 impl OptionsModel<'_> {
+    /// The Dictionary file field. A text row reports every typed draft, and each would bind (and
+    /// later write to) whatever file the half-typed path names, so the path is committed only on
+    /// Enter or focus loss.
+    fn custom_dictionary_file(&mut self, ui: &mut Ui) {
+        let saved = self.app.session.prefs.custom_dictionary.clone().unwrap_or_default();
+        let mut committed = None;
+        Row::new().show(ui, |ui, cx| {
+            let draft = &mut cx.keep::<PathDraft>().0;
+            let mut text = draft.clone().unwrap_or_else(|| saved.clone());
+            let out = TextField::new(tl!("Dictionary file:"), Bind::bound(&mut text)).limit(None).show(ui);
+            *draft = (text != saved).then_some(text);
+            for event in out.events {
+                match event {
+                    EditEvent::Commit { after, .. } => {
+                        committed = Some(after);
+                        *draft = None;
+                    }
+                    EditEvent::Cancel { .. } => *draft = None,
+                    _ => {}
+                }
+            }
+        });
+        if let Some(path) = committed {
+            self.set("proofing.customDictionaryFile", PrefValue::Text(path));
+        }
+    }
+
     /// The custom dictionary: the words Add to Dictionary kept, each with a Remove button, and a
     /// field to add one.
     fn custom_dictionary(&mut self, ui: &mut Ui) {

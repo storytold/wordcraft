@@ -179,9 +179,9 @@ By default, WordCraft saves them to `custom-dictionary.txt` in the settings fold
 
 To use an existing freestanding custom dictionary (such as Microsoft Word's `CUSTOM.DIC`):
 1. Open **File › Options › Proofing**.
-2. Under **Custom dictionary**, set **Dictionary file** to the path of your `.dic` or text file and click **Apply**. Absolute paths or `~/` paths (expanded via `HOME` or `USERPROFILE`) are supported.
+2. Under **Custom dictionary**, set **Dictionary file** to the path of your `.dic` or text file and press **Enter** (or click out of the field). The path is saved then, not while you type. Absolute paths or `~/` paths (expanded via `HOME` or `USERPROFILE`) are supported.
 3. Words in that dictionary are checked in conjunction with the main dictionary, and new additions persist back to the file. Switching dictionaries clears previously loaded custom words from memory and loads the words from the newly selected file.
-4. Clicking **Clear** (or setting `"customDictionary": "auto"`) reverts to the default settings folder, reloading the words from `custom-dictionary.txt`.
+4. Emptying the field and pressing **Enter** (or setting `"customDictionary": "auto"`) means automatic: it reverts to the default settings folder, reloading the words from `custom-dictionary.txt`.
 
 WordCraft supports plain UTF-8 word lists as well as UTF-16LE with BOM (`[0xFF, 0xFE]`), UTF-16BE with BOM (`[0xFE, 0xFF]`), and UTF-8 with BOM, preserving the file's original encoding when saving additions or removals. Lines that do not conform to valid single words (such as comments or malformed entries) are ignored during spellchecking, but existing lines are preserved verbatim when saving back so that custom dictionaries shared with Word retain non-word lines, comments, and original casing. Files in another encoding (for example Windows-1252/ANSI) are refused with an error and left untouched rather than guessed: convert such a file to UTF-8 once and select it again. The chosen file must also be a regular, writable file within the automation roots; symbolic links and read-only files are refused. If a save is refused at run time, the new word stays in the in-memory dictionary for the session and the reason is written to the log, so Add to Dictionary never fails or loses the word mid-session.
 

@@ -310,3 +310,39 @@ fn a_bound_custom_dictionary_does_not_restore_saved_backup_words() {
     assert!(!wordcraft_engine::proof::user_dictionary().contains(&"zqxbackupword".to_string()), "backup words stay out of memory");
     assert_eq!(a.session.prefs.custom_dictionary.as_deref(), Some("/nonexistent/custom.dic"), "the file setting is kept");
 }
+
+/// #5840: the Dictionary file field commits the path on Enter, not on every keystroke. Typing
+/// `notes.dic` passes through `notes`, a file that exists, which must not be bound on the way.
+#[test]
+fn typing_the_custom_dictionary_path_binds_it_only_on_enter() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("wc-ui-dict-typing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("notes"), "partway\n").unwrap();
+    let target = dir.join("notes.dic");
+    std::fs::write(&target, "uiword\n").unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "proofing"})).unwrap();
+    let mut h = crate::test_harness::builder().build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    options_frames(&mut h, 3);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").focus();
+    options_frames(&mut h, 2);
+    for c in target_str.chars() {
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").type_text(&c.to_string());
+        options_frames(&mut h, 2);
+        assert_eq!(h.state().session.prefs.custom_dictionary, None, "typing {c:?} bound a path");
+    }
+    h.key_press(egui::Key::Enter);
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(target_str.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
