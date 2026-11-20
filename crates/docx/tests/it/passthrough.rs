@@ -4,29 +4,27 @@
 //! and extended properties. Hand-written fixtures (from the spec), no files produced by Word.
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::sync::Arc;
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 fn zip(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     let mut out = BTreeMap::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).unwrap();
-        let mut b = Vec::new();
-        f.read_to_end(&mut b).unwrap();
-        assert!(out.insert(f.name().to_string(), b).is_none(), "duplicate part {}", f.name());
+    for name in names {
+        let b = z.read(&name, 16 << 20).unwrap().unwrap();
+        assert!(out.insert(name.clone(), b).is_none(), "duplicate part {name}");
     }
     out
 }
@@ -272,7 +270,7 @@ fn comment_references_use_the_documents_annotation_reference_style() {
     assert!(!body.contains(r#"w:val="CommentReference""#), "{body}");
     // A document without that style keeps the English id.
     let mut doc = wordcraft_doc::Document::new();
-    doc.styles.styles.retain(|s| !s.name.eq_ignore_ascii_case("annotation reference"));
+    Arc::make_mut(&mut doc.styles).styles.retain(|s| !s.name.eq_ignore_ascii_case("annotation reference"));
     let rebuilt = wordcraft_docx::read(&comments_package(true)).unwrap();
     doc.body = rebuilt.body.clone();
     doc.parts = rebuilt.parts.clone();
@@ -314,7 +312,7 @@ fn list_identities_survive_and_a_copied_definition_gets_none() {
     // A copy of the definition (as the engine makes when restarting a list) doesn't reuse the nsid.
     let mut copy = doc.numbering.abstracts[0].clone();
     copy.id = 7;
-    doc.numbering.abstracts.push(copy);
+    Arc::make_mut(&mut doc.numbering).abstracts.push(copy);
     let n = text(&save(&doc), "word/numbering.xml");
     assert_eq!(n.matches("1F2E3D4C").count(), 1, "{n}");
 }

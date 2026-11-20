@@ -6,18 +6,76 @@ use wordcraft_doc::Document;
 /// start on `page`.
 pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Option<Result<Document, String>> {
     match ext {
-        "docx" | "docm" | "dotx" | "dotm" => Some(wordcraft_docx::read(bytes).map_err(|e| e.to_string())),
+        "docx" | "docm" | "dotx" | "dotm" => Some(crate::io::read_docx(bytes, None).map_err(|e| e.to_string())),
         "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
         // Word XML Document (Flat OPC) or Word 2003 XML, told apart by the root element.
         "xml" => Some(wordcraft_docx::read_xml(bytes).map_err(|e| e.to_string())),
-        // HTML, Markdown, ODT, RTF…: pictures fit the text width (see `io::fit_pictures`).
+        // HTML, Markdown, RTF…: pictures fit the text width (see `io::fit_pictures`). An
+        // OpenDocument file says how big they are, and one wider than the text is meant to be;
+        // changing it would take its paragraph off being written as read. Its reader fits those
+        // that state no size.
         other => wordcraft_formats::import_on(other, bytes, page).map(|r| {
             r.map(|mut doc| {
-                crate::io::fit_pictures(&mut doc);
+                let odf = matches!(other, "odt" | "ott" | "fodt");
+                if !odf {
+                    crate::io::fit_pictures(&mut doc);
+                }
+                draw_charts(&mut doc, odf);
                 doc
             })
         }),
     }
+}
+
+/// Draw the charts a reader left undrawn (ODT charts come as their chart model alone): in the
+/// document's theme colours, at their size. With `odf`, scatter series are set to markers without
+/// a line first (see `markers_only_scatter`).
+pub(crate) fn draw_charts(doc: &mut Document, odf: bool) {
+    use wordcraft_doc::para::InlineObject;
+    /// Groups nest at most this deep here (the readers flatten deeper ones).
+    const DEPTH: usize = 16;
+    fn undrawn(o: &InlineObject, depth: usize) -> bool {
+        match o {
+            InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() && graphic.items.is_empty(),
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter().any(|c| undrawn(&c.obj, depth + 1)),
+            _ => false,
+        }
+    }
+    fn draw(o: &mut InlineObject, theme: &[wordcraft_doc::Rgb], odf: bool, depth: usize) {
+        match o {
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter_mut().for_each(|c| draw(&mut c.obj, theme, odf, depth + 1)),
+            o if undrawn(o, depth) => {
+                if odf {
+                    markers_only_scatter(o);
+                }
+                crate::cmd::chart::redraw(o, theme)
+            }
+            _ => {}
+        }
+    }
+    // The ODF reader does not read a scatter chart's line setting, so every scatter series of an
+    // opened ODF file is set to markers without a line, as the ODF writer writes them. A series
+    // with its markers turned off gets them back, as Change Chart Type does, so it is still drawn.
+    fn markers_only_scatter(o: &mut InlineObject) {
+        if let InlineObject::Graphic { graphic, .. } = o
+            && let Some(spec) = graphic.chart.as_deref()
+            && spec.kind == wordcraft_doc::chart::ChartType::Scatter
+            && spec.series.iter().any(|s| !s.no_line || s.markers == Some(false))
+        {
+            let mut spec = spec.clone();
+            for series in &mut spec.series {
+                series.no_line = true;
+                if series.markers == Some(false) {
+                    series.markers = None;
+                }
+            }
+            std::sync::Arc::make_mut(graphic).chart = Some(std::sync::Arc::new(spec));
+        }
+    }
+    let theme = doc.settings.theme_colors.clone();
+    // (Markup kept as read for these charts is still written as read after they are drawn,
+    // scatter charts included.)
+    doc.fill_objects(&|o| undrawn(o, 0), &mut |o| draw(o, &theme, odf, 0));
 }
 
 /// Save to a format other than plain text / JSON.
@@ -31,13 +89,10 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
         "xml" => Some(wordcraft_docx::write_flat(doc).map_err(|e| e.to_string())),
         "png" => Some(render_png(doc, 0, 2.0, opts)),
         "pdf" => {
-            let pdf = wordcraft_pdf::PdfOptions {
-                include_markup: opts.markup,
-                comments: opts.markup && opts.comments,
-                numeral: opts.numeral,
-                ..Default::default()
-            };
-            Some(wordcraft_pdf::export(doc, &pdf).map_err(|e| e.to_string()))
+            // Output shows the fields Word fills in as it prints (see `output_fields`).
+            let out = crate::cmd::references::output_fields(doc);
+            let doc = out.as_ref().unwrap_or(doc);
+            Some(crate::strict::export_pdf(doc, opts))
         }
         other => wordcraft_formats::export_with(other, doc, &wordcraft_formats::ExportOptions { comments: opts.markup && opts.comments }),
     }
@@ -46,9 +101,23 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
 /// Render page `page` as PNG at `scale` px/pt. With Print Markup's comments the page has its
 /// markup area with the comments in balloons (page images always show tracked changes).
 pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::ExportOptions) -> Result<Vec<u8>, String> {
-    let lo = wordcraft_layout::LayoutOptions { comment_balloons: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() };
+    let out = crate::cmd::references::output_fields(doc);
+    let doc = out.as_ref().unwrap_or(doc);
+    let lo = wordcraft_layout::LayoutOptions {
+        comment_balloons: opts.markup && opts.comments,
+        numeral: opts.numeral,
+        output_page_refs: true,
+        bookmark_error: crate::locale::bookmark_error(),
+        ..Default::default()
+    };
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
+    if opts.strict {
+        let report = crate::strict::strict_report(doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png);
+        if !report.passed() {
+            return Err(report.refusal());
+        }
+    }
     let img = wordcraft_render::render_page(doc, p, scale, &Default::default());
     Ok(img.to_png())
 }

@@ -56,7 +56,9 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        if wasm && !scripts.split(',').any(|s| s.trim() == "Geor") {
+        // Arabic interface faces are small, so the web build keeps them too.
+        let small_ui_face = scripts.split(',').any(|s| matches!(s.trim(), "Arab" | "Geor"));
+        if wasm && !small_ui_face {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
