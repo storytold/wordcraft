@@ -54,6 +54,8 @@ pub struct Session {
     /// Last highlighter choice for the shortcut; palette state, outside document undo.
     pub(crate) last_highlight: wordcraft_doc::props::Highlight,
     pub path: Option<std::path::PathBuf>,
+    /// Source file whose unreadable parts were omitted during open; saves to it need confirmation.
+    pub damaged_source: Option<(std::path::PathBuf, Vec<String>)>,
     /// Name given to a document not saved yet (File › Info › Rename): what Save suggests. A file
     /// name, not document metadata, so it is not part of the document or its undo history.
     pub file_name: Option<String>,

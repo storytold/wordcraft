@@ -212,6 +212,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         passthrough,
         glossary,
         missing_pictures,
+        skipped_parts,
         ..
     } = source;
 
@@ -234,6 +235,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.passthrough = passthrough;
     document.glossary = glossary.into_iter().map(|g| glossary_value_from_shared(g, &mut graphics)).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_from_shared(missing_pictures)?;
+    document.skipped_parts = skipped_parts;
     document.fit_state = fit_state;
     Ok(document)
 }
