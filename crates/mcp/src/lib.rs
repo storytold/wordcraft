@@ -82,7 +82,10 @@ fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value
             let scale = params.get("scale").and_then(Value::as_f64).unwrap_or(1.0).clamp(0.1, 4.0) as f32;
             let l = session.layout();
             let pg = l.pages.get(page).ok_or_else(|| format!("no page {}", page.saturating_add(1)))?;
-            let img = wordcraft_render::render_page(&session.doc, pg, scale, &Default::default());
+            // Tracked changes in the Track Changes Options colours, as on screen (#6266).
+            let mut opts = wordcraft_render::RenderOptions::default();
+            opts.display.revisions = session.prefs.markup.clone();
+            let img = wordcraft_render::render_page(&session.doc, pg, scale, &opts);
             let png = img.to_png();
             Ok(json!({"png": wordcraft_engine::cmd::insert::base64_encode(&png), "width": img.width, "height": img.height, "pages": l.pages.len()}))
         }

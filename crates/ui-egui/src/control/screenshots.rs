@@ -7,9 +7,29 @@ pub(super) fn render_png(session: &wordcraft_engine::Session, page: u64, scale: 
     let page = usize::try_from(page.max(1)).unwrap_or(usize::MAX).saturating_sub(1);
     let l = session.export_layout();
     let pg = l.pages.get(page).ok_or_else(|| format!("no page {}", page.saturating_add(1)))?;
-    let img = wordcraft_render::render_page(&session.doc, pg, scale.clamp(0.1, 8.0), &Default::default());
+    // Tracked changes in the Track Changes Options colours, as on screen (#6266).
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.revisions = export_markup(&session.prefs.markup);
+    let img = wordcraft_render::render_page(&session.doc, pg, scale.clamp(0.1, 8.0), &opts);
     let png = img.to_png();
     Ok(json!({"png": wordcraft_engine::cmd::insert::base64_encode(&png), "width": img.width, "height": img.height, "pages": l.pages.len()}))
+}
+
+/// The Track Changes Options for a page of [`wordcraft_engine::Session::export_layout`]: the
+/// colours and marks as set, but never a switch that hides tracked deletions. That layout keeps
+/// their room (it has no `hide_marked`), so hiding them while drawing would leave a blank gap
+/// where the deleted text was; it is drawn struck through instead.
+pub(super) fn export_markup(markup: &wordcraft_layout::display::MarkupOptions) -> wordcraft_layout::display::MarkupOptions {
+    use wordcraft_layout::display::{DeleteMark, MarkupOptions};
+    let (mut m, d) = (markup.clone(), MarkupOptions::default());
+    m.insertions_deletions = d.insertions_deletions;
+    if m.delete_mark == DeleteMark::Hidden {
+        m.delete_mark = d.delete_mark;
+    }
+    if m.move_from_mark == DeleteMark::Hidden {
+        m.move_from_mark = d.move_from_mark;
+    }
+    m
 }
 
 /// The bounded admission policy for `ui.screenshot` captures. This is the screenshot queue;

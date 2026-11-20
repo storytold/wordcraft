@@ -120,3 +120,75 @@ fn closing_an_addressed_document_keeps_unsaved_work_unless_forced() {
     assert!(!a.session.is_open(clean) && a.session.is_open(second));
     assert_eq!(a.session.document_id(), active);
 }
+
+/// #6266: `ui.render` draws tracked changes in the Track Changes Options colours, as the page
+/// on screen does, for the active document and for one addressed by `doc`.
+#[test]
+fn render_uses_the_track_changes_colours() {
+    let mut a = app();
+    let first = a.session.document_id();
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": "Plain "}))["ok"], true);
+    assert_eq!(exec(&mut a, "review.trackChanges", json!({"value": true}))["ok"], true);
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": "Inserted while tracking"}))["ok"], true);
+    let render = |a: &mut WordApp, colour: &str, doc: Option<u64>| {
+        assert_eq!(exec(a, "review.trackingOptions", json!({"insertColor": colour}))["ok"], true);
+        let mut params = json!({"scale": 1.0});
+        if let Some(doc) = doc {
+            params["doc"] = json!(doc);
+        }
+        let r = send(a, "ui.render", params);
+        r["result"]["png"].as_str().unwrap_or_else(|| panic!("{r}")).to_string()
+    };
+    let green = render(&mut a, "00A000", None);
+    let red = render(&mut a, "C00000", None);
+    assert!(green != red, "the insertion colour reaches the rendered page");
+
+    assert_eq!(exec(&mut a, "file.new", json!({}))["ok"], true);
+    let green = render(&mut a, "00A000", Some(first));
+    let red = render(&mut a, "C00000", Some(first));
+    assert!(green != red, "a document in the background takes the colours too");
+}
+
+/// #6266 review: `ui.render` without a path draws `export_layout`, which keeps a tracked
+/// deletion's room. Deletions set to Hidden, or Insertions and Deletions off, must not leave a
+/// blank gap there: the page is drawn as with the default marks, the deleted word struck through.
+#[test]
+fn render_never_leaves_a_gap_for_hidden_deletions() {
+    let mut a = app();
+    assert_eq!(exec(&mut a, "document.setText", json!({"text": "Plain gone"}))["ok"], true);
+    assert_eq!(exec(&mut a, "review.trackChanges", json!({"value": true}))["ok"], true);
+    let word = json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 10}});
+    assert_eq!(exec(&mut a, "select.range", word)["ok"], true);
+    assert_eq!(exec(&mut a, "text.delete", json!({}))["ok"], true);
+    let render = |a: &mut WordApp, options: Value| {
+        assert_eq!(exec(a, "review.trackingOptions", options)["ok"], true);
+        let r = send(a, "ui.render", json!({"scale": 1.0}));
+        r["result"]["png"].as_str().unwrap_or_else(|| panic!("{r}")).to_string()
+    };
+    let struck = render(&mut a, json!({"deleteMark": "strikethrough", "insertionsDeletions": true}));
+    let hidden = render(&mut a, json!({"deleteMark": "hidden"}));
+    assert!(hidden == struck, "Deletions = Hidden draws the struck word, not a gap");
+    let off = render(&mut a, json!({"deleteMark": "strikethrough", "insertionsDeletions": false}));
+    assert!(off == struck, "Insertions and Deletions off draws the struck word, not a gap");
+}
+
+/// The hiding switches of the Track Changes Options never reach a render of
+/// `export_layout`; the colours and the other marks do.
+#[test]
+fn export_markup_keeps_colours_and_drops_hiding() {
+    use wordcraft_layout::display::{DeleteMark, InsertMark, MarkupOptions};
+    let set = MarkupOptions {
+        insertions_deletions: false,
+        insert_mark: InsertMark::Bold,
+        insert_color: Some(wordcraft_doc::Rgb(0, 0xA0, 0)),
+        delete_mark: DeleteMark::Hidden,
+        delete_color: Some(wordcraft_doc::Rgb(0xC0, 0, 0)),
+        move_from_mark: DeleteMark::Hidden,
+        ..MarkupOptions::default()
+    };
+    let m = super::screenshots::export_markup(&set);
+    assert!(!m.hides_deletion(false) && !m.hides_deletion(true), "{m:?}");
+    assert_eq!((m.insert_mark, m.insert_color, m.delete_color), (set.insert_mark, set.insert_color, set.delete_color));
+    let shown = MarkupOptions { delete_mark: DeleteMark::DoubleStrikethrough, ..set.clone() };
+    assert_eq!(super::screenshots::export_markup(&shown).delete_mark, DeleteMark::DoubleStrikethrough, "a visible mark is kept");
+}
