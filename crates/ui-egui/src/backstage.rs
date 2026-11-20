@@ -309,7 +309,7 @@ fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice
         let on = has_document || works_without_document(id);
         let row = Button::new(label(name))
             .id_salt(("backstage-page", id))
-            .icon(crate::icons::id(icon))
+            .icon(crate::icons::spec(icon))
             .variant(Variant::GHOST)
             .sizing(Sizing::FillWidth)
             // Icon and name at the reading start of the full-width row, as production's menu.

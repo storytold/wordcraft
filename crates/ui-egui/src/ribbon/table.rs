@@ -57,19 +57,25 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("tableStyles", tl!("Table Styles").to_string(), IconId::new("tableStyles").into()), |ui| {
         super::galleries::table_styles(ui, app);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            let _ = menu_button(ui, Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")), tl!("Styles").to_string(), None, |ui, _| {
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
-                    .label(tl!("New Table Style…").to_string())
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
-                    .label(tl!("Modify Table Style…").to_string())
-                    .enabled(can_modify)
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
-                    .label(tl!("Delete Table Style").to_string())
-                    .enabled(can_delete)
-                    .show(ui);
-            });
+            let _ = menu_button(
+                ui,
+                Button::new(tl!("Styles").to_string()).icon(crate::icons::spec("styles")),
+                tl!("Styles").to_string(),
+                None,
+                |ui, _| {
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
+                        .label(tl!("New Table Style…").to_string())
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
+                        .label(tl!("Modify Table Style…").to_string())
+                        .enabled(can_modify)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
+                        .label(tl!("Delete Table Style").to_string())
+                        .enabled(can_delete)
+                        .show(ui);
+                },
+            );
             let _ = crate::colors::shading_split(ui, app, tl!("Shading").to_string(), Target::cmd("table.shading").remember(Remember::Shading));
         });
     });
@@ -250,7 +256,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
         Button::command(CommandRef::new("table.textDirection"))
             .label(tl!("Text\nDirection").to_string())
-            .icon(IconId::new("textDirection"))
+            .icon(crate::icons::spec("textDirection"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Button::command(CommandRef::new("table.cellMargins"))
@@ -259,10 +265,10 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
-    row.group(RibbonGroup::new("data", tl!("Data").to_string(), IconId::new("sort").into()), |ui| {
+    row.group(RibbonGroup::new("data", tl!("Data").to_string(), crate::icons::spec("sort")), |ui| {
         Button::command(CommandRef::new("table.sort"))
             .label(tl!("Sort").to_string())
-            .icon(IconId::new("sort"))
+            .icon(crate::icons::spec("sort"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
@@ -271,7 +277,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 .icon(IconId::new("repeatHeader"))
                 .show(ui);
             Button::command(CommandRef::new("table.toText")).label(tl!("Convert to Text").to_string()).icon(IconId::new("toText")).show(ui);
-            Button::command(CommandRef::new("table.formula")).label(tl!("Formula").to_string()).icon(IconId::new("formula")).show(ui);
+            Button::command(CommandRef::new("table.formula")).label(tl!("Formula").to_string()).icon(crate::icons::spec("formula")).show(ui);
         });
     });
 }
