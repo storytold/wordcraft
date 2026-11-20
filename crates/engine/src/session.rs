@@ -34,7 +34,7 @@ pub use doc_state::{CellRange, ColumnBlock, FindState, MathEdit, Selection, UNDO
 use doc_state::{TypedWord, Undo, doc_bib_style};
 use ime_state::ImeCaretState;
 pub use locale::set_system_locale;
-pub(crate) use locale::system_locale;
+pub use locale::system_locale;
 pub use prefs::Prefs;
 pub use query::blank_document;
 pub use snapshot_types::EditSnapshot;
@@ -209,8 +209,12 @@ pub struct Session {
     /// browser's locale on the web); headless sessions keep `en-US`. A region the user chose
     /// ([`Prefs::region`]) wins: read it with [`Session::region`].
     pub system_region: wordcraft_geom::Region,
-    /// Custom keyboard shortcuts (`tools.customizeKeyboard`); the front end saves them too.
-    pub keymap: crate::KeyMap,
+    /// Custom keyboard shortcuts (`tools.customizeKeyboard`) over the registry's keys; the front
+    /// end saves them too. Read with [`Session::keymap`].
+    keymap: craft_keymap::Overrides,
+    /// The Accessibility checker's findings and the `(document_id, rev)` they were made for, so
+    /// the pane reading them every frame runs the checker only after a change.
+    findings: Option<((u64, u64), Vec<Value>)>,
     /// Custom ribbon and Quick Access Toolbar (`tools.customizeRibbon`); the front end saves it too.
     pub ribbon: crate::RibbonLayout,
     /// The language new blank documents (and opened plain text) are written in, a BCP 47 tag;
@@ -263,4 +267,25 @@ pub struct Session {
 impl Session {
     /// File name of the persisted custom dictionary inside the settings folder.
     pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
+
+    /// The user's keyboard shortcut changes.
+    pub fn keymap(&self) -> &craft_keymap::Overrides {
+        &self.keymap
+    }
+
+    /// The user's keyboard shortcut changes, to replace or edit (the saved preferences).
+    pub fn keymap_mut(&mut self) -> &mut craft_keymap::Overrides {
+        &mut self.keymap
+    }
+
+    /// The Accessibility checker's findings for the open document as it is now
+    /// ([`crate::cmd::accessibility::check`]). The checker runs again only when the document
+    /// changed: an edit bumps [`Session::rev`], a replacement changes [`Session::document_id`].
+    pub fn accessibility_findings(&mut self) -> &[Value] {
+        let stamp = (self.document_id, self.rev);
+        if self.findings.as_ref().is_none_or(|(made_for, _)| *made_for != stamp) {
+            self.findings = Some((stamp, crate::cmd::accessibility::check(&self.doc)));
+        }
+        self.findings.as_ref().map_or(&[], |(_, findings)| findings.as_slice())
+    }
 }
