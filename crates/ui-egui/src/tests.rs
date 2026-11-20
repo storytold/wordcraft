@@ -4069,6 +4069,7 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
 /// following the chart-wide data labels, and No fill / Smooth lines can be turned off again.
 #[test]
 fn chart_format_dialogs_clear_and_leave_alone() {
+    use crate::dialogs::host::FormHost;
     use crate::dialogs_chart::{ChartAxisForm, ChartSeriesForm};
     let mut a = app();
     a.run("insert.chart", json!({"type": "line"})).unwrap();
@@ -4076,7 +4077,8 @@ fn chart_format_dialogs_clear_and_leave_alone() {
 
     // Set a bound, reopen the dialog, clear the field, accept: Auto again, also after a reopen.
     a.run("chart.axis", json!({"min": 2, "max": 9})).unwrap();
-    let mut f = ChartAxisForm::new(&a).unwrap();
+    a.run("ui.dialog", json!({"name": "formatAxis"})).unwrap();
+    let mut f = a.dialog_host.get::<FormHost<ChartAxisForm>>().expect("Format Axis opened").form().clone();
     assert_eq!((f.min.as_str(), f.max.as_str()), ("2", "9"));
     f.min.clear();
     a.run("chart.axis", f.params().unwrap()).unwrap();
@@ -4085,7 +4087,8 @@ fn chart_format_dialogs_clear_and_leave_alone() {
 
     // An untouched Format Series dialog changes no label or marker override.
     let before = chart(&a).series[0].clone();
-    let f = ChartSeriesForm::new(&a).unwrap();
+    a.run("ui.dialog", json!({"name": "formatSeries"})).unwrap();
+    let f = a.dialog_host.get::<FormHost<ChartSeriesForm>>().expect("Format Series opened").form().clone();
     a.run("chart.series", f.params().unwrap()).unwrap();
     let after = chart(&a).series[0].clone();
     assert_eq!((after.labels, after.markers), (None, None), "no override from an unchanged form");
