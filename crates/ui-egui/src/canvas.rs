@@ -186,8 +186,7 @@ pub struct CanvasState {
     /// Reject Change ([`wordcraft_engine::cmd::review::change_at_selection`], asked once per opening).
     pub context_change: bool,
     /// The selection the context menu opened on. What the menu offers was worked out for it, so
-    /// the menu closes if the selection changes while it is open (an arrow key still reaches the
-    /// canvas).
+    /// the menu closes if the selection changes while it is open (a command can still move it).
     pub context_sel: Option<wordcraft_engine::Selection>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
     pub context_menu_open: bool,

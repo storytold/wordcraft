@@ -67,8 +67,8 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
             }
             open = true;
         }
-        // What the menu offers was worked out for the selection it opened on: when that changes
-        // under the open menu (an arrow key still reaches the canvas), the menu closes.
+        // What the menu offers was worked out for the selection it opened on: when a command
+        // changes that under the open menu (one over the control channel, say), the menu closes.
         None if app.canvas.context_sel.as_ref() != Some(&app.session.sel) => open = false,
         None => {}
     }

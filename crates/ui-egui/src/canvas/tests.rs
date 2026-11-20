@@ -2316,7 +2316,7 @@ fn context_menu_accepts_or_rejects_the_change_under_the_caret() {
         a.run("text.insert", json!({"text": "NEW "})).unwrap();
         let after = a.session.doc.plain_text(StoryRef::Body);
         let want = if accept { after } else { before };
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -2325,19 +2325,19 @@ fn context_menu_accepts_or_rejects_the_change_under_the_caret() {
             a,
         );
         for _ in 0..6 {
-            h.step();
+            h.app_frame();
         }
         let right_click = |h: &mut egui_kittest::Harness<'_, WordApp>, off: usize| {
             h.key_press(egui::Key::Escape);
-            h.step();
+            h.app_frame();
             let c = h.state_mut().session.layout().caret(&Pos::body(0, off)).expect("laid out");
             let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
             h.event(egui::Event::PointerMoved(at));
             for pressed in [true, false] {
                 h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
-                h.step();
+                h.app_frame();
             }
-            h.step();
+            h.app_frame();
         };
         right_click(&mut h, 1);
         assert!(h.query_all_by_label_contains("Paste").next().is_some(), "the context menu is open on plain text");
@@ -2345,7 +2345,7 @@ fn context_menu_accepts_or_rejects_the_change_under_the_caret() {
         right_click(&mut h, 7);
         h.get_by_label_contains(choice).click();
         for _ in 0..3 {
-            h.step();
+            h.app_frame();
         }
         let s = &h.state().session;
         assert_eq!(s.doc.plain_text(StoryRef::Body), want, "{choice}");
@@ -2353,9 +2353,10 @@ fn context_menu_accepts_or_rejects_the_change_under_the_caret() {
     }
 }
 
-/// The context menu offers what it worked out for the selection it opened on. An arrow key still
-/// reaches the canvas while the menu is open; once it moves the caret off the change, the menu
-/// closes rather than offer Accept Change for a caret that is no longer on one.
+/// The context menu offers what it worked out for the selection it opened on. The menu keeps the
+/// arrow keys, but a command can still move the caret while it is open (one over the control
+/// channel, say); once the caret is off the change, the menu closes rather than offer Accept Change
+/// for a caret that is no longer on one.
 #[test]
 fn moving_the_caret_off_a_change_closes_the_context_menu() {
     use egui_kittest::kittest::Queryable;
@@ -2363,7 +2364,7 @@ fn moving_the_caret_off_a_change_closes_the_context_menu() {
     a.run("review.trackChanges", json!({"value": true})).unwrap();
     a.run("caret.set", json!({"pos": {"block": 0, "off": 5}})).unwrap();
     a.run("text.insert", json!({"text": "NEW "})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -2372,24 +2373,22 @@ fn moving_the_caret_off_a_change_closes_the_context_menu() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let c = h.state_mut().session.layout().caret(&Pos::body(0, 7)).expect("laid out");
     let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
     h.event(egui::Event::PointerMoved(at));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     }
-    h.step();
+    h.app_frame();
     assert!(h.query_by_label_contains("Accept Change").is_some(), "the menu opens on the insertion with Accept Change");
-    for _ in 0..5 {
-        h.key_press(egui::Key::ArrowRight);
-        h.step();
-    }
-    h.step();
+    h.state_mut().run("caret.set", json!({"pos": {"block": 0, "off": 12}})).unwrap();
+    h.app_frame();
+    h.app_frame();
     let s = &h.state().session;
-    assert_eq!(s.sel, wordcraft_engine::Selection::caret(Pos::body(0, 12)), "the arrow keys moved the caret off the insertion");
+    assert_eq!(s.sel, wordcraft_engine::Selection::caret(Pos::body(0, 12)), "the command moved the caret off the insertion");
     assert!(!wordcraft_engine::cmd::review::change_at_selection(s), "no change at the new caret");
     assert!(!h.state().canvas.context_menu_open, "the menu closed when the caret moved");
     assert!(h.query_by_label_contains("Accept Change").is_none(), "no Accept Change for the caret off the change");
