@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use craft::automation::args::{ControlOptions, EnvNames, FlagNames, Source, control_port};
 use craft::automation::control::ControlChannel;
 use craft::dialogs::service::{FilePanels, FileService};
-use craft::host::target::{Backend, ShellInfo};
+use craft::host::target::{Backend, Os, Runtime, ShellInfo, WindowKind};
 use craft::host::{Host, Wake};
 use craft::platform::appearance::SystemReader;
 use craft::platform::clipboard::{Clipboard, ClipboardImage, SystemClipboard};
@@ -37,6 +37,7 @@ use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
 use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use craft::ui::shell::embed;
+use craft::window::policy::{Decision, Desktop, DesktopKind, TitleBarPref, apply, decide};
 use craft::window::restore::{self, Store};
 use craft::window::system::SystemWindows;
 use wordcraft_engine::Session;
@@ -446,12 +447,13 @@ fn main() -> eframe::Result {
             .with_app_id("ai.storyteller.wordcraft")
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE)
-            .with_drag_and_drop(true)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false),
+            .with_drag_and_drop(true),
         ..Default::default()
     };
+    let frame = frame_decision(Os::current());
+    if let Some(decision) = &frame {
+        options.viewport = apply(options.viewport, &decision.frame);
+    }
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
@@ -527,11 +529,14 @@ fn main() -> eframe::Result {
                     .build(),
             );
             let shell = ShellInfo::current().backend(if x11 { Backend::X11 } else { Backend::from_env() });
-            let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
+            let mut spec = InstallSpec::new(shell, Arc::new(SystemWindows))
                 .app_id("ai.storyteller.wordcraft")
                 .system(SystemReader::start(wake))
                 .clipboard(Clipboard::new(SystemClipboard::new().decoder(decode_png)))
                 .placement(placement);
+            if let Some(decision) = frame {
+                spec = spec.frame(decision);
+            }
             // PLAN: assumed `wordcraft_ui_egui::ui_fonts` re-exports sh.A10's `app::fonts::ui_fonts` (`mod app` is private; app-hub/shell-w11).
             embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang)).map_err(|e| format!("the runtime could not be installed: {e}"))?;
             // The system region picks the new document's paper, the units and the decimal
@@ -607,6 +612,28 @@ fn main() -> eframe::Result {
         log::warn!("preferences: {e}");
     }
     result
+}
+
+/// The root window's frame, decided for the OS. macOS draws the app's own bar over a full-size content view; the shell
+/// must be told (the install spec's frame), or it treats the window as OS-framed: the title bar has no move band to drag
+/// the window by and no room for the traffic lights (#7149 item 1). Elsewhere the OS keeps its own frame.
+fn frame_decision(os: Os) -> Option<Decision> {
+    // lean: no CRAFT_TITLEBAR override or "system title bar" setting on macOS yet; pass them to decide when asked.
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    (os == Os::Mac).then(|| decide(os, Runtime::Native, Backend::from_env(), &desktop, WindowKind::Main, TitleBarPref::default(), None))
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use craft::window::policy::Frame;
+
+    #[test]
+    fn only_macos_gets_the_inset_frame() {
+        assert!(matches!(frame_decision(Os::Mac).map(|d| d.frame), Some(Frame::Inset(_))));
+        assert!(frame_decision(Os::Linux).is_none());
+        assert!(frame_decision(Os::Windows).is_none());
+    }
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
