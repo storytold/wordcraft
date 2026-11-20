@@ -164,6 +164,46 @@ fn docx_on_disk(name: &str, body: &str) -> std::path::PathBuf {
     path
 }
 
+/// A window that gains the OS focus becomes the active one, and its canvas takes the keyboard
+/// focus (egui keeps the focus per viewport): `want_focus` is re-armed when the focus arrives,
+/// so the canvas that never was OS-focused on its first frame still asks for it back (#5263),
+/// and the typing that follows goes into that window's document alone.
+#[test]
+fn a_window_that_regains_the_focus_types_into_its_canvas() {
+    let ctx = backend();
+    let mut a = app("First");
+    let first = a.session.document_id();
+    frames(&ctx, &mut a, 3);
+    assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "the first window's canvas holds the keyboard focus");
+
+    a.run("file.new", json!({})).unwrap();
+    let second = a.session.document_id();
+    frames(&ctx, &mut a, 3);
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT, "the new window has a viewport of its own");
+    focus(child);
+    frames(&ctx, &mut a, 3);
+    assert!(a.canvas.focused, "the new window's canvas takes the keyboard focus");
+
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.session.document_id(), first, "the focused window becomes the active one");
+    assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "regaining the OS focus gives its canvas the keyboard focus back");
+
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().extend([egui::Event::Text(" back".into())]));
+    frame(&ctx, &mut a);
+    assert_eq!(text(&a), "First back", "the typing after the switch goes into the window that regained the focus");
+    assert_eq!(
+        a.session.with_document(second, |s| s.doc.plain_text(StoryRef::Body).trim().to_string()).unwrap(),
+        "",
+        "and not into the other window's document"
+    );
+
+    focus(child);
+    frames(&ctx, &mut a, 2);
+    assert!(a.canvas.focused, "and the other window's canvas takes it back again");
+}
+
 /// Open of a file a window already shows brings that window to the front; Open with only an
 /// untouched blank document open replaces it in its own window.
 #[test]
@@ -230,6 +270,7 @@ fn closing_a_window_asks_first_and_the_root_adopts_another() {
     assert_eq!(a.canvas.scroll_request, Some(a.canvas.scroll_offset), "its page stays where it was");
     frames(&ctx, &mut a, 2);
     assert_eq!(DRAWN.with(|d| d.borrow().clone()), [ViewportId::ROOT]);
+    assert_eq!(ctx.memory(|m| m.focused()), Some(a.window_id("wordcraft_canvas")), "the adopted window takes the keyboard focus");
     assert!(a.has_document() && a.session.documents().len() == 1);
 }
 
