@@ -1,4 +1,14 @@
-use super::{Stroke, Tokens, Ui, WordApp, json, semibold};
+use craft::keymap::CommandRef;
+use craft::ui::bars::{Bar, BarKind};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Entry, Show as _, ShowContainer as _, Trigger, clicked};
+use craft::ui::display::{Divider, Text};
+use craft::ui::menu::Menu;
+use craft::ui::style::TypeRole;
+use egui::Ui;
+use serde_json::{Value, json};
+
+use super::WordApp;
 
 pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
 
@@ -15,89 +25,91 @@ pub fn has_shape_selected(s: &wordcraft_engine::Session) -> bool {
     }
 }
 
+/// One picker of the reading toolbar: a button that opens a value menu of `entries` and returns the command of
+/// the one picked.
+fn picker(ui: &mut Ui, label: String, entries: &[Entry<CommandRef>]) -> Option<CommandRef> {
+    let button = Button::new(label.clone()).show(ui);
+    Menu::new(label).values().opened_by(&button.response, Trigger::Press).pick(ui, entries).picked
+}
+
+/// An entry of a picker that runs `id` with `{"value": value}`.
+fn choice(id: &str, value: Value, label: String, checked: bool) -> Entry<CommandRef> {
+    Entry::new(CommandRef::with_params(id, json!({ "value": value })), label).checked(checked)
+}
+
 /// Reading controls replace editing tabs entirely. All settings are transient view controls.
-pub(super) fn reading_toolbar(app: &mut WordApp, ui: &mut Ui, t: Tokens) {
-    egui::Panel::top("reading_toolbar")
-        .exact_size(46.0)
-        .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, t.border)))
-        .show(ui, |ui| {
-            crate::rtl::root(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.label(egui::RichText::new(tl!("Reading Mode")).font(semibold(14.0)));
-                    ui.separator();
-                    let w = app.session.view.read_column_width;
-                    let active = match w {
-                        None => "Auto",
-                        Some(v) if v <= 180.0 => "Narrow",
-                        Some(v) if v <= 240.0 => "Medium",
-                        Some(v) if v <= 350.0 => "Wide",
-                        _ => "Page",
-                    };
-                    ui.menu_button(format!("{}: {}", tl!("Column width"), tl!(active)), |ui| {
-                        for (name, value) in [("Auto", "auto"), ("Narrow", "narrow"), ("Medium", "medium"), ("Wide", "wide"), ("Page", "page")] {
-                            if ui.selectable_label(active == name, tl!(name)).clicked() {
-                                let _ = app.run("view.readColumnWidth", json!({"value": value}));
-                                ui.close();
-                            }
-                        }
-                    });
-                    ui.separator();
-                    let pct = (app.session.view.read_zoom * 100.0).round() as u32;
-                    ui.menu_button(format!("{}: {pct}%", tl!("Text size")), |ui| {
-                        for percent in [75, 90, 100, 110, 125, 150] {
-                            if ui.selectable_label(pct == percent, format!("{percent}%")).clicked() {
-                                let _ = app.run("view.readTextSize", json!({"value": percent}));
-                                ui.close();
-                            }
-                        }
-                    });
-                    ui.separator();
-                    let spacing = app.session.view.read_line_spacing;
-                    let label = spacing.map_or_else(|| tl!("Document").to_owned(), |v| format!("{v}×"));
-                    ui.menu_button(format!("{}: {}", tl!("Line spacing"), label), |ui| {
-                        if ui.selectable_label(spacing.is_none(), tl!("Document")).clicked() {
-                            let _ = app.run("view.readLineSpacing", json!({"value": "document"}));
-                            ui.close();
-                        }
-                        for value in [1.0, 1.25, 1.5, 2.0] {
-                            if ui.selectable_label(spacing == Some(value), format!("{value}×")).clicked() {
-                                let _ = app.run("view.readLineSpacing", json!({"value": value}));
-                                ui.close();
-                            }
-                        }
-                    });
-                    ui.separator();
-                    use wordcraft_engine::cmd::view::ReadPageColor;
-                    let colors = [
-                        (ReadPageColor::None, tl!("None"), "none"),
-                        (ReadPageColor::Sepia, tl!("Sepia"), "sepia"),
-                        (ReadPageColor::Inverse, tl!("Inverse"), "inverse"),
-                    ];
-                    let current = app.session.view.read_page_color;
-                    let name = colors.iter().find(|c| c.0 == current).map_or_else(|| tl!("None"), |c| c.1);
-                    ui.menu_button(format!("{}: {}", tl!("Page color"), name), |ui| {
-                        for (color, name, value) in colors {
-                            if ui.selectable_label(current == color, name).clicked() {
-                                let _ = app.run("view.readPageColor", json!({"value": value}));
-                                ui.close();
-                            }
-                        }
-                    });
-                    ui.separator();
-                    // Headings to jump to, in the Navigation pane beside the columns (Outline view
-                    // is an editing layout, so it isn't offered here).
-                    if ui.button(tl!("Navigation Pane")).clicked() {
-                        let _ = app.run("view.navigationPane", json!({"value": true}));
-                        app.ui.nav_tab = "headings".into();
-                    }
-                    ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-                        if ui.button(tl!("Edit Document")).clicked() {
-                            let _ = app.run("view.printLayout", json!({}));
-                        }
-                    });
-                });
-            })
+pub(super) fn reading_toolbar(app: &mut WordApp, ui: &mut Ui) {
+    let view = &app.session.view;
+    let column = match view.read_column_width {
+        None => "Auto",
+        Some(v) if v <= 180.0 => "Narrow",
+        Some(v) if v <= 240.0 => "Medium",
+        Some(v) if v <= 350.0 => "Wide",
+        _ => "Page",
+    };
+    let columns: Vec<Entry<CommandRef>> = [("Auto", "auto"), ("Narrow", "narrow"), ("Medium", "medium"), ("Wide", "wide"), ("Page", "page")]
+        .into_iter()
+        .map(|(name, value)| choice("view.readColumnWidth", json!(value), tl!(name).to_string(), column == name))
+        .collect();
+    let column_label = format!("{}: {}", tl!("Column width"), tl!(column));
+
+    let pct = (view.read_zoom * 100.0).round() as u32;
+    let sizes: Vec<Entry<CommandRef>> =
+        [75, 90, 100, 110, 125, 150].into_iter().map(|p| choice("view.readTextSize", json!(p), format!("{p}%"), pct == p)).collect();
+    let size_label = format!("{}: {pct}%", tl!("Text size"));
+
+    let spacing = view.read_line_spacing;
+    let mut spacings = vec![choice("view.readLineSpacing", json!("document"), tl!("Document").to_string(), spacing.is_none())];
+    spacings.extend([1.0, 1.25, 1.5, 2.0].into_iter().map(|v| choice("view.readLineSpacing", json!(v), format!("{v}×"), spacing == Some(v))));
+    let spacing_text = spacing.map_or_else(|| tl!("Document").to_owned(), |v| format!("{v}×"));
+    let spacing_label = format!("{}: {}", tl!("Line spacing"), spacing_text);
+
+    use wordcraft_engine::cmd::view::ReadPageColor;
+    let current = view.read_page_color;
+    let color_names = [
+        (ReadPageColor::None, tl!("None"), "none"),
+        (ReadPageColor::Sepia, tl!("Sepia"), "sepia"),
+        (ReadPageColor::Inverse, tl!("Inverse"), "inverse"),
+    ];
+    let color_name = color_names.iter().find(|c| c.0 == current).map_or_else(|| tl!("None"), |c| c.1);
+    let colors: Vec<Entry<CommandRef>> =
+        color_names.iter().map(|(color, name, value)| choice("view.readPageColor", json!(value), name.to_string(), current == *color)).collect();
+    let color_label = format!("{}: {}", tl!("Page color"), color_name);
+
+    // The bar's closures only record what was picked: the commands run after the bar, which holds no `app`.
+    let mut picked: Vec<CommandRef> = Vec::new();
+    let mut navigation = false;
+    let mut edit = false;
+    Bar::new(tl!("Reading Mode").to_string(), BarKind::Options)
+        .trailing(|ui, _| {
+            edit = clicked(&Button::new(tl!("Edit Document").to_string()).show(ui).response);
+        })
+        .show(ui, |ui, _| {
+            // PLAN: assumed `craft::ui::theme::TypeRole` is the re-export path of the theme's type roles.
+            Text::new(tl!("Reading Mode").to_string()).role(TypeRole::Heading).show(ui);
+            Divider::vertical().show(ui);
+            picked.extend(picker(ui, column_label.clone(), &columns));
+            Divider::vertical().show(ui);
+            picked.extend(picker(ui, size_label.clone(), &sizes));
+            Divider::vertical().show(ui);
+            picked.extend(picker(ui, spacing_label.clone(), &spacings));
+            Divider::vertical().show(ui);
+            picked.extend(picker(ui, color_label.clone(), &colors));
+            Divider::vertical().show(ui);
+            // Headings to jump to, in the Navigation pane beside the columns (Outline view
+            // is an editing layout, so it isn't offered here).
+            navigation = clicked(&Button::new(tl!("Navigation Pane").to_string()).show(ui).response);
         });
+    for command in picked {
+        let _ = app.run(&command.id, command.params);
+    }
+    if navigation {
+        let _ = app.run("view.navigationPane", json!({"value": true}));
+        app.ui.nav_tab = "headings".into();
+    }
+    if edit {
+        let _ = app.run("view.printLayout", json!({}));
+    }
 }
 
 /// Whether the selection is a SmartArt graphic WordCraft can edit (so SmartArt Design is shown).
@@ -145,331 +157,7 @@ pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
     if available.contains(&current) { current } else { crate::DEFAULT_TAB }
 }
 
-/// Width of the » button that holds the tabs the strip has no room for.
-pub(super) const MORE_TABS_W: f32 = 24.0;
-
-/// How long a contextual tab takes to settle into place after it appears, seconds.
-pub(super) const TAB_ENTRY_SECS: f64 = 0.35;
-/// How far, in points, a new contextual tab starts to the left of its place.
-pub(super) const TAB_ENTRY_SLIDE: f32 = 18.0;
-
-/// Fast at first, then slowing to rest: 0 → 1.
-pub(super) fn ease_out_cubic(p: f32) -> f32 {
-    1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3)
-}
-
-const UNDERLINE_SLIDE_SECS: f64 = 0.2;
-const CONTENT_SWITCH_SECS: f64 = 0.16;
-pub(super) const CONTENT_SWITCH_SLIDE: f32 = 14.0;
-
-#[derive(Clone, Debug, PartialEq)]
-struct Underline {
-    tab: String,
-    from: (f32, f32),
-    to: (f32, f32),
-    start: f64,
-}
-
-fn underline_at(u: &Underline, now: f64) -> (f32, f32) {
-    let e = ease_out_cubic(((now - u.start) / UNDERLINE_SLIDE_SECS) as f32);
-    (egui::lerp(u.from.0..=u.to.0, e), egui::lerp(u.from.1..=u.to.1, e))
-}
-
-pub(super) fn slide_underline(ui: &egui::Ui, window: u64, tab: &str, target: egui::Rect, color: egui::Color32, now: f64, animate: bool) {
-    let id = egui::Id::unique("tab_underline").with(window);
-    let prev: Option<Underline> = ui.ctx().data(|d| d.get_temp(id));
-    let snap = Underline { tab: tab.to_owned(), from: (target.center().x, target.width()), to: (target.center().x, target.width()), start: now };
-    let next = match prev {
-        Some(p) if animate && p.tab != tab => Underline { from: underline_at(&p, now), ..snap },
-        Some(p) if animate && now - p.start < UNDERLINE_SLIDE_SECS => Underline { to: (target.center().x, target.width()), ..p },
-        _ => snap,
-    };
-    let (x, width) = underline_at(&next, now);
-    if next.from != next.to && now - next.start < UNDERLINE_SLIDE_SECS {
-        ui.ctx().request_repaint();
-    }
-    ui.ctx().data_mut(|d| d.insert_temp(id, next));
-    ui.painter().rect_filled(egui::Rect::from_center_size(egui::pos2(x, target.center().y), egui::vec2(width, target.height())), 2.0, color);
-}
-
-/// The tab window `window`'s underline is under, or sliding to.
-#[cfg(test)]
-pub(crate) fn underline_tab(ctx: &egui::Context, window: u64) -> Option<String> {
-    let id = egui::Id::unique("tab_underline").with(window);
-    ctx.data(|d| d.get_temp::<Underline>(id)).map(|u| u.tab)
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct TabChange {
-    tab: String,
-    index: usize,
-    start: f64,
-    dir: f32,
-}
-
-pub(super) fn tab_content_entry(ctx: &egui::Context, window: u64, tab: &str, index: usize, now: f64, animate: bool) -> (f32, f32) {
-    let id = egui::Id::unique("ribbon_tab_change").with(window);
-    let prev: Option<TabChange> = ctx.data(|d| d.get_temp(id));
-    let next = match prev {
-        Some(p) if p.tab != tab => TabChange {
-            tab: tab.to_owned(),
-            index,
-            start: now,
-            dir: if !animate || p.index == index {
-                0.0
-            } else if index > p.index {
-                1.0
-            } else {
-                -1.0
-            },
-        },
-        Some(p) => p,
-        None => TabChange { tab: tab.to_owned(), index, start: f64::MIN, dir: 0.0 },
-    };
-    let p = ((now - next.start) / CONTENT_SWITCH_SECS).clamp(0.0, 1.0) as f32;
-    let dir = next.dir;
-    ctx.data_mut(|d| d.insert_temp(id, next));
-    if p < 1.0 && dir != 0.0 {
-        ctx.request_repaint();
-        (ease_out_cubic(p), dir)
-    } else {
-        (1.0, 0.0)
-    }
-}
-
-/// Track contextual tabs between frames and return those still animating out.
-pub(super) fn note_contextual_tabs(ctx: &egui::Context, window: u64, shown: &[(&str, usize)], now: f64, animate: bool) -> Vec<(String, usize, f64)> {
-    let (shown_id, leaving_id) = (egui::Id::unique("contextual_tabs_shown").with(window), egui::Id::unique("contextual_tabs_leaving").with(window));
-    let prev: Option<Vec<(String, usize)>> = ctx.data(|d| d.get_temp(shown_id));
-    let mut leaving: Vec<(String, usize, f64)> = ctx.data(|d| d.get_temp(leaving_id)).unwrap_or_default();
-    leaving.retain(|(n, _, start)| animate && now - start < TAB_ENTRY_SECS && !shown.iter().any(|(s, _)| s == n));
-    // Count retained ghosts when storing positions, so exits from different frames share one layout.
-    let shown_with_ghosts: Vec<(&str, usize)> = shown
-        .iter()
-        .map(|(tab, at)| {
-            let before = leaving.iter().filter(|(_, ghost_at, _)| ghost_at <= at).count();
-            (*tab, at + before)
-        })
-        .collect();
-    if let Some(prev) = prev {
-        for (tab, _) in shown_with_ghosts.iter().filter(|(t, _)| !prev.iter().any(|(p, _)| p == t)) {
-            let id = egui::Id::unique(("contextual_tab_entry", *tab)).with(window);
-            ctx.data_mut(|d| d.insert_temp(id, now));
-        }
-        for (tab, at) in prev.iter().filter(|(p, _)| animate && !shown_with_ghosts.iter().any(|(s, _)| s == p)) {
-            if !leaving.iter().any(|(n, _, _)| n == tab) {
-                leaving.push((tab.clone(), *at, now));
-            }
-        }
-    }
-    ctx.data_mut(|d| {
-        d.insert_temp(shown_id, shown_with_ghosts.iter().map(|(t, at)| (t.to_string(), *at)).collect::<Vec<_>>());
-        d.insert_temp(leaving_id, leaving.clone());
-    });
-    leaving
-}
-
-/// Return a newly shown contextual tab's progress, requesting frames until it settles.
-pub(super) fn tab_entry(ctx: &egui::Context, window: u64, tab: &str, now: f64, animate: bool) -> f32 {
-    let id = egui::Id::unique(("contextual_tab_entry", tab)).with(window);
-    let start: Option<f64> = ctx.data(|d| d.get_temp(id));
-    let Some(start) = start.filter(|_| animate) else { return 1.0 };
-    let p = ((now - start) / TAB_ENTRY_SECS).clamp(0.0, 1.0) as f32;
-    if p < 1.0 {
-        ctx.request_repaint();
-    }
-    ease_out_cubic(p)
-}
-
-/// Which tabs fit on a strip `avail` points wide (#897), from each tab's width and whether it must
-/// stay. The others give way from the end, leaving `more` points for the » menu that holds them
-/// (pure, tested).
-pub fn fit_tabs(tabs: &[(f32, bool)], avail: f32, more: f32) -> Vec<bool> {
-    let mut fits = vec![true; tabs.len()];
-    let mut total: f32 = tabs.iter().map(|(w, _)| w).sum();
-    if total <= avail {
-        return fits;
-    }
-    for (fit, (w, keep)) in fits.iter_mut().zip(tabs).rev() {
-        if total + more <= avail {
-            break;
-        }
-        if !keep {
-            *fit = false;
-            total -= w;
-        }
-    }
-    fits
-}
-
-/// One tab as the strip planner sees it (#2026).
-#[derive(Debug, Clone, Copy)]
-pub struct TabSpec {
-    /// Width of the label at full size.
-    pub text_w: f32,
-    /// File: always on the strip.
-    pub file: bool,
-    /// The tab being shown.
-    pub active: bool,
-    /// A contextual tab (Table Design, Picture Format…).
-    pub contextual: bool,
-}
-
-/// How the tab strip is laid out (#2026).
-#[derive(Debug, Clone, PartialEq)]
-pub struct StripPlan {
-    /// Padding each side of a tab label.
-    pub pad: f32,
-    /// How much of Comments / Editing / Share is spelled out: 0 all, 1 Share only, 2 none.
-    pub buttons: usize,
-    /// Whether each tab is on the strip (the others are in the » menu).
-    pub fits: Vec<bool>,
-    /// Width each tab takes on the strip (a label may be cut with …).
-    pub widths: Vec<f32>,
-}
-
-/// Smallest a tab label is cut down to before the tab goes into the » menu.
-pub(super) const MIN_TAB_W: f32 = 44.0;
-
-/// Lays the tabs and the buttons on their right out on `avail` points, giving way in this order:
-/// the padding between tabs, the Comments / Editing labels, the Share label, the plain tabs (from
-/// the end, into »), the labels of the active and contextual tabs (cut with …), and last those tabs
-/// themselves. The buttons' room is always kept and File never leaves the strip. `buttons` is the
-/// width of the three buttons at each level (pure, tested).
-pub fn plan_strip(tabs: &[TabSpec], buttons: [f32; 3], avail: f32, more: f32) -> StripPlan {
-    const STEPS: [(f32, usize); 4] = [(18.0, 0), (10.0, 0), (10.0, 1), (10.0, 2)];
-    let widths_at = |pad: f32| -> Vec<f32> { tabs.iter().map(|t| t.text_w.max(0.0) + pad + 2.0).collect() };
-    for (pad, level) in STEPS {
-        let widths = widths_at(pad);
-        if widths.iter().sum::<f32>() <= avail - buttons[level] {
-            return StripPlan { pad, buttons: level, fits: vec![true; tabs.len()], widths };
-        }
-    }
-    let (pad, level) = (10.0, 2);
-    let mut widths = widths_at(pad);
-    let room = avail - buttons[level];
-    let specs: Vec<(f32, bool)> = widths.iter().zip(tabs).map(|(w, t)| (*w, t.file || t.active || t.contextual)).collect();
-    let mut fits = fit_tabs(&specs, room, more);
-    // The tabs that must stay share what the plain ones left; each is cut down to its share.
-    let kept = |fits: &[bool], i: usize| fits.get(i).copied().unwrap_or(false) && tabs.get(i).is_some_and(|t| !t.file);
-    loop {
-        let n = (0..tabs.len()).filter(|&i| kept(&fits, i)).count();
-        let others: f32 =
-            (0..tabs.len()).filter(|&i| fits.get(i) == Some(&true) && !kept(&fits, i)).map(|i| widths.get(i).copied().unwrap_or(0.0)).sum();
-        let own: f32 = (0..tabs.len()).filter(|&i| kept(&fits, i)).map(|i| widths.get(i).copied().unwrap_or(0.0)).sum();
-        let extra = if fits.iter().all(|f| *f) { 0.0 } else { more };
-        let share_room = room - extra - others;
-        if n == 0 || own <= share_room {
-            break;
-        }
-        if share_room >= n as f32 * MIN_TAB_W {
-            let share = share_room / n as f32;
-            for (i, w) in widths.iter_mut().enumerate() {
-                if kept(&fits, i) {
-                    *w = w.min(share);
-                }
-            }
-            break;
-        }
-        // Not even cut down: the last of them (the active tab last of all) goes into ».
-        let last = (0..tabs.len())
-            .rev()
-            .find(|&i| kept(&fits, i) && tabs.get(i).is_some_and(|t| !t.active))
-            .or_else(|| (0..tabs.len()).rev().find(|&i| kept(&fits, i)));
-        match last.and_then(|i| fits.get_mut(i)) {
-            Some(f) => *f = false,
-            None => break,
-        }
-    }
-    StripPlan { pad, buttons: level, fits, widths }
-}
-
 /// Whether the caret is inside a table (so the contextual tabs and their badges are shown).
 pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
-}
-
-#[cfg(test)]
-mod transition_tests {
-    use super::*;
-
-    /// Contextual tabs absent on the first frame do not animate; a newly shown one eases to rest.
-    #[test]
-    fn a_new_contextual_tab_eases_in() {
-        let ctx = egui::Context::default();
-        note_contextual_tabs(&ctx, 0, &[("Table Design", 1)], 1.0, true);
-        assert_eq!(tab_entry(&ctx, 0, "Table Design", 1.0, true), 1.0, "tabs already there do not slide");
-        note_contextual_tabs(&ctx, 0, &[("Table Design", 1), ("Picture Format", 2)], 2.0, true);
-        let at = |secs: f64| tab_entry(&ctx, 0, "Picture Format", 2.0 + secs, true);
-        assert_eq!(at(0.0), 0.0);
-        let (a, b, c) = (at(0.1), at(0.2), at(TAB_ENTRY_SECS));
-        assert!(0.0 < a && a < b && b < c && c == 1.0, "{a} {b} {c}");
-        assert!(a > 0.1 / TAB_ENTRY_SECS as f32, "faster than linear at the start: {a}");
-        assert!(c - b < b - a, "slower at the end: {a} {b} {c}");
-        assert_eq!(tab_entry(&ctx, 0, "Picture Format", 2.0, false), 1.0, "animations off");
-        note_contextual_tabs(&ctx, 0, &[("Table Design", 1), ("Picture Format", 2)], 3.0, true);
-        assert_eq!(tab_entry(&ctx, 0, "Picture Format", 3.0, true), 1.0, "staying shown does not restart it");
-    }
-
-    /// A departing contextual tab remains for one exit and stops when motion is disabled.
-    #[test]
-    fn a_contextual_tab_that_goes_away_leaves_gently() {
-        let ctx = egui::Context::default();
-        let both = [("Table Design", 1), ("Picture Format", 2)];
-        assert!(note_contextual_tabs(&ctx, 0, &both, 1.0, true).is_empty());
-        let leaving = note_contextual_tabs(&ctx, 0, &both[..1], 2.0, true);
-        assert_eq!(leaving, vec![("Picture Format".to_string(), 2, 2.0)]);
-        assert_eq!(note_contextual_tabs(&ctx, 0, &both[..1], 2.2, true).len(), 1, "still leaving");
-        assert!(note_contextual_tabs(&ctx, 0, &both[..1], 2.0 + TAB_ENTRY_SECS + 0.01, true).is_empty(), "gone");
-        assert!(note_contextual_tabs(&ctx, 0, &both, 4.0, true).is_empty());
-        assert!(note_contextual_tabs(&ctx, 0, &both[..1], 5.0, false).is_empty(), "animations off");
-        note_contextual_tabs(&ctx, 0, &both, 6.0, true);
-        note_contextual_tabs(&ctx, 0, &both[..1], 7.0, true);
-        assert!(note_contextual_tabs(&ctx, 0, &both, 7.1, true).is_empty(), "back again");
-    }
-
-    #[test]
-    fn tab_underline_slides_and_can_reverse_mid_motion() {
-        let ctx = egui::Context::default();
-        let draw = |tab: &str, x: f32, now: f64| {
-            ctx.run_ui(egui::RawInput { time: Some(now), ..Default::default() }, |ui| {
-                slide_underline(
-                    ui,
-                    0,
-                    tab,
-                    egui::Rect::from_min_size(egui::pos2(x - 25.0, 10.0), egui::vec2(50.0, 3.0)),
-                    egui::Color32::WHITE,
-                    now,
-                    true,
-                );
-            })
-            .drop_without_applying_deltas();
-        };
-        draw("Home", 40.0, 1.0);
-        draw("Insert", 140.0, 2.0);
-        let frame = ctx.run_ui(egui::RawInput { time: Some(2.1), ..Default::default() }, |ui| {
-            slide_underline(
-                ui,
-                0,
-                "Draw",
-                egui::Rect::from_min_size(egui::pos2(215.0, 10.0), egui::vec2(50.0, 3.0)),
-                egui::Color32::WHITE,
-                2.1,
-                true,
-            );
-        });
-        assert!(!frame.shapes.is_empty());
-    }
-
-    #[test]
-    fn tab_content_motion_comes_from_the_new_tab_side() {
-        let ctx = egui::Context::default();
-        assert_eq!(tab_content_entry(&ctx, 0, "Home", 1, 1.0, true), (1.0, 0.0));
-        let (p, dir) = tab_content_entry(&ctx, 0, "Insert", 2, 2.0, true);
-        assert_eq!((p, dir), (0.0, 1.0));
-        let (p, dir) = tab_content_entry(&ctx, 0, "Home", 1, 2.05, true);
-        assert!(p < 1.0);
-        assert_eq!(dir, -1.0);
-        assert_eq!(tab_content_entry(&ctx, 0, "Draw", 3, 3.0, false), (1.0, 0.0));
-    }
 }

@@ -1,106 +1,71 @@
-use super::state::{SavedDock, labels, move_before, open, pane_state};
-use super::{Edge, Pane, PaneHost, PaneRequest, PaneState, Place, SidePolicy, Stroke, Tokens, Ui, Value, WordApp, json};
+use std::cell::RefCell;
 
-pub(super) struct Content<'a> {
-    pub(super) app: &'a mut WordApp,
+use craft::theme::SizeTokens;
+use craft::ui::contract::BodyCx;
+use craft::ui::patterns::dock::{PaneArea, PaneRequest, SidePolicy};
+use craft::ui::runtime::env::Env;
+use egui::Ui;
+use serde_json::{Value, json};
+
+use super::state::{SavedDock, move_before, open, pane_state, rect_to, saved_dock};
+use super::{Pane, WordApp};
+
+/// The pane bodies' view of the app. The pane area runs the bodies and the document centre one after the other
+/// inside one pass, so both reach the app through one cell that lives for that pass.
+pub(super) struct Content<'a, 'b> {
+    pub(super) app: &'a RefCell<&'b mut WordApp>,
+    /// Whether the interface reads right to left: the area's edges are logical, the saved places physical.
+    pub(super) rtl: bool,
+    /// The theme's sizes, from which each pane's least width and first float size come.
+    pub(super) size: SizeTokens,
 }
 
-/// The pane host's name. Its focus and drag state is per window ([`WordApp::window_id`]); where
-/// each pane sits is the app's.
-const HOST: &str = "task_panes";
-
-/// Whether a dialog, file browser, colors dialog, content-control popup, Zotero alert, keytips
-/// or egui popup is open: the keyboard belongs to it, not to the panes or the document.
-pub(crate) fn overlay_open(app: &WordApp, ctx: &egui::Context) -> bool {
-    app.dialog.is_some()
-        || app.file_dialog_open()
-        || app.colors.is_some()
-        || app.controls.popup_open()
-        || app.zotero.alert_open()
-        || app.ui.keytips != crate::keytips::Phase::Off
-        || egui::Popup::is_any_open(ctx)
-}
-
-/// F6 and Shift+F6 move the keyboard through the panes and back to the document. The key stays
-/// with an open dialog, file browser, popup or keytips (Customize Keyboard records it), and an
-/// F6 the user bound to a command runs that command instead.
-fn route_f6(app: &WordApp, ctx: &egui::Context) {
-    if overlay_open(app, ctx) {
-        return;
-    }
-    let reg = &app.session.registry;
-    let bound = |m: egui::Modifiers| app.session.keymap.resolve(reg, &crate::keys::combo(m, "F6", true)).is_some();
-    let mut cycle = None;
-    ctx.input_mut(|input| {
-        input.events.retain(|e| match e {
-            egui::Event::Key { key: egui::Key::F6, pressed: true, modifiers: m, .. } if !m.command && !m.ctrl && !m.mac_cmd && !bound(*m) => {
-                cycle = Some(m.shift);
-                false
-            }
-            _ => true,
-        });
-    });
-    if let Some(reverse) = cycle {
-        craft_ui::panes::focus_next(ctx, app.window_id(HOST), reverse);
-    }
-}
-
-/// Draw the open panes around the document. Call before the canvas's `CentralPanel`.
-pub fn show(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
+/// Draw the open panes around the document and run `centre` in what they leave. Call in place of the document's
+/// central panel.
+pub fn show(app: &mut WordApp, ui: &mut Ui, mut centre: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut WordApp)) {
+    let (rtl, size) = {
+        let env = Env::of(ui);
+        (env.direction.is_rtl(), env.tokens.size)
+    };
     let open = open(app);
-    if !open.contains(&Pane::FormatShape) {
-        crate::format_shape::forget_drag(ui.ctx());
-    }
-    route_f6(app, ui.ctx());
-    let states: Vec<(Pane, PaneState)> = open.iter().map(|pane| (*pane, pane_state(app, *pane))).collect();
-    let out = PaneHost::new(app.window_id(HOST))
-        .policy(SidePolicy::Columns)
-        .f6(false)
-        .labels(labels())
-        .frame(egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)))
-        .body_margin(egui::Margin::same(10))
-        .show(ui, &open, |pane| states.iter().find(|(p, _)| p == pane).map(|(_, state)| *state), &mut Content { app });
-    for request in out.requests {
-        apply(app, request);
-    }
-    if out.to_document {
-        app.canvas.want_focus = true;
+    let requests = {
+        let cell = RefCell::new(&mut *app);
+        let mut content = Content { app: &cell, rtl, size };
+        PaneArea::new(tl!("Task Panes").to_owned(), &open, &mut content)
+            .policy(SidePolicy::Columns)
+            .show(ui, |ui, cx| centre(ui, cx, &mut cell.borrow_mut()))
+            .requests
+    };
+    for request in requests {
+        apply(app, request, rtl);
     }
 }
 
-/// Run a request from the pane host through the pane's commands and the UI preferences.
-pub(crate) fn apply(app: &mut WordApp, request: PaneRequest<Pane>) {
+/// Run a request from the pane area through the pane's commands and the UI preferences.
+pub(crate) fn apply(app: &mut WordApp, request: PaneRequest<Pane>, rtl: bool) {
     match request {
         PaneRequest::Close(pane) => close(app, pane),
         PaneRequest::Place(Pane::Styles, place) => {
-            // Physical sides: the host is not RTL-flipped, and Dock Left / Dock Right mean the
-            // window's left and right (same as `ui.paneDock` / `view.stylesPaneDock`).
-            let dock = match place {
-                Place::Docked(Edge::Start) => "left",
-                Place::Docked(Edge::End) => "right",
-                Place::Floating => "float",
-                Place::Docked(Edge::Bottom) => return,
-            };
-            let _ = app.run("view.stylesPaneDock", json!({"dock": dock}));
+            // `left` and `right` are the window's physical sides (same as `ui.paneDock` / `view.stylesPaneDock`).
+            let Some(dock) = saved_dock(place, rtl) else { return };
+            let _ = app.run("view.stylesPaneDock", json!({"dock": dock.word()}));
         }
         PaneRequest::Resize(Pane::Styles, width) => app.ui.styles_pane_width = Some(width),
-        PaneRequest::FloatRect(Pane::Styles, rect) => app.ui.styles_pane_float = Some(rect),
+        PaneRequest::FloatRect(Pane::Styles, rect) => app.ui.styles_pane_float = Some(rect_to(rect)),
+        // Styles keeps no minimized flag: its place lives in the view state.
+        PaneRequest::Minimize(Pane::Styles, _) => {}
         PaneRequest::Place(pane, place) => {
-            let dock = match place {
-                Place::Docked(Edge::Start) => "left",
-                Place::Docked(Edge::End) => "right",
-                Place::Floating => "float",
-                Place::Docked(Edge::Bottom) => return,
-            };
-            let _ = app.run("ui.paneDock", json!({"pane": pane.key(), "dock": dock}));
+            let Some(dock) = saved_dock(place, rtl) else { return };
+            let _ = app.run("ui.paneDock", json!({"pane": pane.key(), "dock": dock.word()}));
         }
         PaneRequest::Resize(pane, width) => app.ui.pane_places.entry(pane.key().into()).or_default().width = Some(width),
-        PaneRequest::FloatRect(pane, rect) => app.ui.pane_places.entry(pane.key().into()).or_default().float = Some(rect),
+        PaneRequest::FloatRect(pane, rect) => app.ui.pane_places.entry(pane.key().into()).or_default().float = Some(rect_to(rect)),
+        PaneRequest::Minimize(pane, minimized) => app.ui.pane_places.entry(pane.key().into()).or_default().minimized = minimized,
         PaneRequest::Before(pane, before) => {
             let _ = app.run("ui.paneDock", json!({"pane": pane.key(), "before": before.map(Pane::key)}));
         }
-        PaneRequest::Focus(_) => {}
+        // A focus change moves no pane.
+        _ => {}
     }
 }
 
@@ -141,11 +106,8 @@ pub(crate) fn dock_command(app: &mut WordApp, p: &Value) -> Result<Value, String
         app.ui.pane_places.entry(key.into()).or_default().dock = Some(dock);
     }
     // Report the physical side the pane occupies (matches what was stored / requested).
-    let name = match pane_state(app, pane).place {
-        Place::Docked(Edge::Start) => "left",
-        Place::Floating => "float",
-        Place::Docked(_) => "right",
-    };
+    let rtl = crate::i18n::current().rtl();
+    let name = saved_dock(pane_state(app, pane, rtl).place, rtl).map_or("right", SavedDock::word);
     Ok(json!({"pane": key, "dock": name}))
 }
 

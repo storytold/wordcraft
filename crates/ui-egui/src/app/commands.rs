@@ -1,8 +1,14 @@
+use craft::host::PickRequest;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::platform::default_app::{DefaultApp, DefaultAppError};
+use craft::quit::{CloseAnswer, CloseScope};
+
+use super::command_board::command_enabled;
 use super::{
-    DefaultApp, MAX_RECENT, SaveChoice, SaveInFlight, Value, WordApp, applied_font, async_saves, chrome, colors, crop, dialogs, dialogs_table_style,
-    file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
-    table_pen, theme, widgets, zotero,
+    MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes, paste_picture,
+    printing, push_recent_font, system_clipboard, table_pen, theme, zotero,
 };
+use crate::colors;
 
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -28,9 +34,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        // While Markdown Source is open, Undo and Redo work on its typing, as Ctrl+Z does there.
-        if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
-            return crate::md_source::undo(self, id == "edit.redo");
+        // Undo and Redo act on whole steps: a SmartArt typing run still open is folded into its one step first,
+        // or Undo would take back only the last keystroke of it.
+        if matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
+            crate::dialogs_smart_art::close_typing_run(self);
         }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
@@ -43,23 +50,16 @@ impl WordApp {
         }
         // A button whose command needs input the user hasn't given yet opens its dialog (#240).
         if let Some(name) = input_dialog(id, &params)
-            && widgets::enabled(self, id)
+            && command_enabled(self, id)
         {
-            self.dialog = dialogs::Dialog::open(name, self);
+            let _ = dialogs::open(self, name, &params);
             return Ok(json!({"pending": name}));
         }
         // The same unsaved work the control channel's refusal covers, so the prompt and the
         // refusal can't drift apart (#3274).
         if (self.document_unsaved() || refused.is_some()) && discards_document(id, &params) && !self.closes_only_its_window(id, &params) {
-            let name = self.prompt_name();
-            self.dialog = Some(dialogs::Dialog::SaveChanges {
-                name,
-                then: id.to_string(),
-                params,
-                document: self.session.document_id(),
-                message: String::new(),
-            });
-            return Ok(json!({"pending": "saveChanges"}));
+            // PLAN: assumed shell-w8's `begin_closing(scope, documents, then, params) -> Result<Value, String>` opens the prompt.
+            return self.begin_closing(CloseScope::Close, vec![self.session.document_id()], id.to_string(), params);
         }
         // The ribbon and context-menu Paste commands send no text: read the system clipboard's, as
         // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
@@ -77,13 +77,15 @@ impl WordApp {
             return r;
         }
         let applied = applied_font(id, &params);
+        let previous = std::mem::replace(&mut self.user_origin, true);
         let r = self.execute_user(id, params);
+        self.user_origin = previous;
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
         }
         if let (Ok(_), Some(name)) = (&r, applied) {
-            push_recent_font(&mut self.ui.recent_fonts, &name);
+            push_recent_font(&mut self.ui.font_picker.recent, &name);
         }
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
@@ -101,10 +103,8 @@ impl WordApp {
             self.session.view.accessibility_pane = true;
         }
         // Match Fields and Check for Errors show what they found.
-        if let Ok(v) = &r
-            && let Some(d) = dialogs::Dialog::report(id, v)
-        {
-            self.dialog = Some(d);
+        if let Ok(v) = &r {
+            let _ = dialogs::merge_dialogs::report(self, id, v);
         }
         r
     }
@@ -143,7 +143,7 @@ impl WordApp {
             return r;
         }
         // Web: saving and exporting become downloads.
-        if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
+        if self.browser_saves() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
             // Inspect only the suffix bytes: no full-name allocation or UTF-8 slicing.
             let has_pdf_suffix = name.as_bytes().last_chunk::<4>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".pdf"));
@@ -158,6 +158,7 @@ impl WordApp {
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
             // Like a failed native save, a failed serialization or delivery keeps the save stamps.
+            let dirty_before = self.session.dirty;
             let before_stamp = (
                 self.session.doc.settings.zoom,
                 self.session.doc.core.last_modified_by.clone(),
@@ -186,52 +187,43 @@ impl WordApp {
                     return Err(error);
                 }
             };
-            // A ticket left over from an earlier call isn't this save's.
-            let saves = self.services.async_saves.clone();
-            if let Some(saves) = &saves {
-                let _ = saves.take_started();
-            }
             // An export is a copy, and so is a save in a format that doesn't keep everything (a
             // page image, plain text): the document itself still has unsaved changes.
             let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+            // The ticket's answer may be a failure: what the save stamped is put back then (`settle_saves`).
+            let undo_stamp: Option<Box<dyn FnOnce(&mut wordcraft_engine::Session)>> = matches!(id, "file.save" | "file.saveAs").then(|| {
+                let dirty = dirty_before;
+                Box::new(move |session: &mut wordcraft_engine::Session| {
+                    (
+                        session.doc.settings.zoom,
+                        session.doc.core.last_modified_by,
+                        session.doc.core.created,
+                        session.doc.core.modified,
+                        session.doc.core.revision,
+                    ) = before_stamp;
+                    session.dirty = dirty;
+                }) as Box<dyn FnOnce(&mut wordcraft_engine::Session)>
+            });
             // Save As tells the host page the document is now this file, which it only is when the
             // save marks it saved. A Save under a name the page never sent (an untitled document,
             // an imported .doc saved as .docx) is a new file too, never an overwrite.
             let opened_name = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
             let new_file = id == "file.saveAs" || opened_name.as_deref() != Some(name.as_str());
-            let delivered = match (&self.services.host_save, &self.services.download) {
-                (Some(host), _) => host(&name, &bytes, marked_saved && new_file),
-                (None, Some(download)) => download(&name, &bytes),
-                (None, None) => Ok(()),
-            };
-            if let Err(e) = delivered {
-                (
-                    self.session.doc.settings.zoom,
-                    self.session.doc.core.last_modified_by,
-                    self.session.doc.core.created,
-                    self.session.doc.core.modified,
-                    self.session.doc.core.revision,
-                ) = before_stamp;
-                let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
-                log::error!("download of {name} failed: {e}");
-                self.status(msg.clone());
-                return Err(msg);
-            }
+            let len = bytes.len();
+            // PLAN: assumed `self.host.files()` is the app's `craft::host::Files`.
+            let request = PickRequest::save("document").file_name(name.clone()).save_as(marked_saved && new_file);
+            let ticket = self.host.files().save(request, bytes);
             if marked_saved {
                 self.session.dirty = false;
-                // The host page keeps the file under this name now, as a desktop save would.
-                if self.services.host_save.is_some() {
-                    self.session.path = Some(std::path::PathBuf::from(&name));
-                }
+                // PLAN(shell-w8): `settle_saves` sets `session.path` when the answer's `records_file()` is true (S-L159).
             }
-            // The browser's picker writes the file later (#1315): until it says how that went,
-            // the document's save isn't confirmed.
-            if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
-                let document = self.session.document_id();
-                self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
-                return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
-            }
-            return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
+            // The browser's picker writes the file later (#1315): until it says how that went
+            // (`settle_saves` reads the ticket), the document's save isn't confirmed.
+            let document = self.session.document_id();
+            let rev = self.session.rev();
+            let pending = ticket.0;
+            self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved, rev, undo_stamp });
+            return Ok(json!({"downloaded": name, "bytes": len, "pendingSave": pending}));
         }
         let document = self.session.document_id();
         let body_epoch = self.session.ime_body_epoch();
@@ -350,7 +342,7 @@ impl WordApp {
             && params.get("path").and_then(Value::as_str).is_none()
             && self.has_document()
             && self.legacy_word_path()
-            && self.services.download.is_none()
+            && !self.browser_saves()
         {
             return match self.save_as(file_dialogs::AfterSave::Nothing) {
                 file_dialogs::Asked::Done(r) => r,
@@ -367,8 +359,7 @@ impl WordApp {
         {
             let path = params.get("path").and_then(Value::as_str).unwrap_or("");
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-            self.dialog =
-                Some(dialogs::Dialog::Password { name, then: id.to_string(), params, password: Default::default(), message: String::new() });
+            dialogs::prompts::open_password(self, &name, id, params);
             return Ok(json!({"pending": "password"}));
         }
         // Whoever asked, a failed open names the file and the cause (#1103).
@@ -391,8 +382,7 @@ impl WordApp {
     }
 
     fn after_command(&mut self, id: &str) {
-        options::sync(self);
-        self.canvas.caret_visible_since = now_ms();
+        self.canvas.glide.restart(craft::platform::clock::monotonic_ms());
         if id == "view.outline" {
             self.ui.nav_tab = "headings".into();
         }
@@ -434,9 +424,16 @@ impl WordApp {
         } else if !file_keeps_view && !["ui.", "view.", "document.", "format.state", "draw."].iter().any(|p| id.starts_with(p)) {
             self.canvas.scroll_to_caret = true;
         }
+        // A command that changes nothing and only asks for its dialog (Font Dialog, Zoom, Page Setup…) opens it for a
+        // script too, as production did: the dialog is what the script asked for. A command that changes the document
+        // and lacked its input (Insert Icon without an `id`) gives a script its data and opens nothing.
+        let launcher = self.session.registry.get(id).is_some_and(|spec| !spec.mutates);
+        let origin = self.user_origin;
+        self.user_origin = origin || launcher;
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
+        self.user_origin = origin;
         // The open document goes to the front of the recent list after every command. The recent
         // commands (`ui.recentRemove`, `ui.recentClear`) return from `ui_command` before this
         // runs, so taking a document off the list is never undone by the re-add (#2716).
@@ -509,9 +506,17 @@ impl WordApp {
                         self.ui.options_pane = pane.into();
                     }
                 }
-                "pasteSpecial" => self.dialog = Some(dialogs::Dialog::paste_special(self, req)),
+                // Programmatic calls never open dialogs: a script or an agent gets the command's data (a command
+                // with no input lists what it would ask for) and no dialog is left open behind it.
+                "pasteSpecial" if self.user_origin => {
+                    let _ = dialogs::open(self, "pasteSpecial", req);
+                }
                 "newWindow" => self.new_window(),
-                other => self.dialog = dialogs::Dialog::open(other, self),
+                "pasteSpecial" => {}
+                other if self.user_origin => {
+                    let _ = dialogs::open(self, other, &json!({}));
+                }
+                _ => {}
             }
         }
         if req.get("close").is_some() {
@@ -577,29 +582,19 @@ impl WordApp {
             }
             "ui.dialog" if s("name") == Some("colors") => {
                 // The font colour's More Colors… (#606); `tab`: standard or custom.
-                let target = colors::Target::cmd("format.color").remember(colors::Remember::FontColor);
-                let current =
-                    self.session.run("format.state", &json!({})).ok().and_then(|st| st.get("color").and_then(Value::as_str).and_then(colors::parse));
-                let mut d = colors::ColorsDialog::new(current, target);
-                if s("tab") == Some("custom") {
-                    d.tab = colors::ColorsTab::Custom;
-                }
-                self.colors = Some(d);
+                let _ = colors::open(self, "colors", p);
                 json!({"dialog": "colors"})
             }
             "ui.dialog" => {
-                self.dialog = dialogs::Dialog::open(s("name").unwrap_or(""), self);
-                // New / Modify Table Style can open on a part (`"part": "firstRow"`…).
-                if let Some(dialogs::Dialog::TableStyle { region, .. }) = &mut self.dialog
-                    && let Some(part) = s("part").and_then(wordcraft_engine::cmd::table_style::part_named)
-                {
-                    *region = dialogs_table_style::part_index(part);
-                }
-                json!({"dialog": self.dialog.as_ref().map(|d| d.name())})
+                let name = s("name").unwrap_or("");
+                let opened = dialogs::open(self, name, p);
+                json!({"dialog": opened.map(|_| name)})
             }
             "ui.closeDialog" => {
-                self.dialog = None;
-                self.colors = None;
+                // PLAN: assumed `dialogs::host::close_all(&mut WordApp, &Context)` (dg.A1).
+                if let Some(ctx) = self.ctx.clone() {
+                    dialogs::host::close_all(self, &ctx);
+                }
                 json!({})
             }
             "ui.changePicture" => {
@@ -612,8 +607,11 @@ impl WordApp {
             }
             // The page's context menu at the caret, as Shift+F10 or the Menu key opens it (#821).
             "ui.contextMenu" => {
-                self.canvas.context_menu_from_keys = true;
-                self.canvas.want_focus = true;
+                // PLAN(canvas-w16): `ContextAsk` lands in `canvas/context_menu.rs` (cv.A6, S-L131).
+                self.canvas.context_request = Some(crate::canvas::context_menu::ContextAsk::AtCaret);
+                if let Some(ctx) = self.ctx.clone() {
+                    self.canvas.focus_page(&ctx);
+                }
                 json!({"pending": "contextMenu"})
             }
             "ui.paneDock" => return Some(panes::dock_command(self, p)),
@@ -627,11 +625,11 @@ impl WordApp {
                 // it stays put away.
                 let focus = chrome::Screen::of(&self.session.view) == chrome::Screen::Focus;
                 match p.get("value") {
-                    None => self.focus_ribbon = focus && !self.focus_ribbon,
-                    Some(Value::Bool(on)) => self.focus_ribbon = focus && *on,
+                    None => self.ribbon_dropped = focus && !self.ribbon_dropped,
+                    Some(Value::Bool(on)) => self.ribbon_dropped = focus && *on,
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
-                json!({"focusRibbon": self.focus_ribbon})
+                json!({"focusRibbon": self.ribbon_dropped})
             }
             "ui.quickAccessToolbar" => {
                 // Hide Quick Access Toolbar (its menu) and Show Quick Access Toolbar (the ribbon's
@@ -648,10 +646,6 @@ impl WordApp {
                 if let Some(v) = p.get("value") {
                     let Some(enabled) = v.as_bool() else { return Some(Err("`value` must be a boolean".into())) };
                     self.ui.keytips_enabled = enabled;
-                    if !enabled {
-                        self.ui.keytips = keytips::Phase::Off;
-                        self.ui.keytip_prefix.clear();
-                    }
                 }
                 json!({"enabled": self.ui.keytips_enabled})
             }
@@ -671,6 +665,8 @@ impl WordApp {
                 }
                 json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
+            // The chord Mod+Shift+0 is this command's default; the keymap decides a user's binding.
+            "ui.resetInterfaceSize" => return self.ui_command("ui.interfaceSize", &json!({"value": "auto"})),
             "ui.interfaceSize" => {
                 // `auto` (the display scale the system reports) or an absolute size in percent,
                 // 50–300 (clamped); no value reads it. `percent` in the result is the size the
@@ -707,8 +703,7 @@ impl WordApp {
                         None => return Some(Err(format!("unknown animations setting {v:?}; use system, on or off"))),
                     }
                 }
-                self.read_system_animations();
-                json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations})
+                json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations()})
             }
             "ui.statusCount" => {
                 // `words` (the default), `characters` or `charactersNoSpaces`: what the status
@@ -747,6 +742,7 @@ impl WordApp {
                 // `auto` (follow the system) or a language code; anything else is an error.
                 if let Some(v) = s("value") {
                     match i18n::normalize_pref(v) {
+                        // `frame_input` applies the preference at the next frame.
                         Some(code) => self.ui.language = code.to_string(),
                         None => {
                             let codes: Vec<&str> = i18n::Lang::all().map(i18n::Lang::code).collect();
@@ -759,23 +755,26 @@ impl WordApp {
             }
             "ui.recoveryDiscard" => {
                 if let Some(answer) = s("answer") {
-                    let Some(dialogs::Dialog::DiscardRecovery { id, .. }) = self.dialog.clone() else {
+                    let Some(id) = dialogs::prompts::pending_discard_recovery(self) else {
                         return Some(Err("no recovery discard is pending".into()));
                     };
+                    let Some(ctx) = self.ctx.clone() else {
+                        return Some(Err("no window to answer in".into()));
+                    };
+                    // PLAN: assumed `StandardPrompt` and `PromptChoice` live under `craft::ui::panels::dialog`.
                     match answer {
                         "cancel" => {
-                            self.dialog = None;
-                            json!({"discarded": false})
+                            self.dialog_host.cancel_by_id(&ctx, id);
                         }
                         "discard" => {
-                            let result = self.execute("file.recover", json!({"discard": id}));
-                            if result.is_ok() {
-                                self.dialog = None;
+                            if let Some(prompt) = self.dialog_host.get_mut_by_id::<dialogs::host::Keyed<craft::ui::dialog::StandardPrompt>>(id) {
+                                prompt.inner_mut().set_choice(craft::ui::dialog::PromptChoice::Proceed);
                             }
-                            return Some(result);
+                            self.dialog_host.confirm_by_id(&ctx, id);
                         }
                         _ => return Some(Err("`answer` must be discard or cancel".into())),
                     }
+                    json!({"answered": answer})
                 } else {
                     let Some(id) = s("id") else {
                         return Some(Err("`id` is required".into()));
@@ -783,15 +782,18 @@ impl WordApp {
                     let Some(info) = self.session.recovery_documents().into_iter().find(|d| d.id == id) else {
                         return Some(Err("no such recovery copy".into()));
                     };
-                    self.dialog = Some(dialogs::Dialog::DiscardRecovery { id: info.id, name: info.name });
+                    dialogs::prompts::open_discard_recovery(self, &info.id, &info.name);
                     json!({"pending": "discardRecovery"})
                 }
             }
             "ui.saveChanges" => {
-                let Some(choice) = s("answer").and_then(SaveChoice::parse) else {
-                    return Some(Err("`answer` must be save, dontSave or cancel".into()));
+                let answer = match s("answer") {
+                    Some("save") => CloseAnswer::Save,
+                    Some("dontSave") => CloseAnswer::DontSave,
+                    Some("cancel") => CloseAnswer::Cancel,
+                    _ => return Some(Err("`answer` must be save, dontSave or cancel".into())),
                 };
-                return Some(self.answer_save_changes(choice));
+                return Some(self.answer_save_changes(answer));
             }
             "ui.openFileDialog" => {
                 self.open_dialog();
@@ -808,17 +810,22 @@ impl WordApp {
             // dialog still waiting for an answer is given up as cancelled.
             #[cfg(not(target_arch = "wasm32"))]
             "ui.fileBrowser" => {
-                self.browse_builtin(s("purpose").unwrap_or("document"));
-                json!({"open": self.file_browser.open.is_some()})
+                return Some(self.ask_file_browser(s("purpose").unwrap_or("document"), s("folder")));
             }
             // Mailings › Select Recipients › Use an Existing List…: pick a CSV/TSV/text file and
             // load it as the mail-merge recipients. Opens system UI, like `ui.openFileDialog`.
             "ui.openRecipientList" => {
                 self.pick_recipient_list();
+                // Pending while the host's picker is still open; a service that answers at once has loaded the list.
+                self.recipient_list_pending = self.file_dialog_open();
                 json!({"pending": self.recipient_list_pending})
             }
             // Native printing submits the selected queue on a worker; the browser owns its dialog.
-            "ui.printSettings" => return Some(printing::settings(&mut self.printing, p, self.services.printers.as_ref())),
+            "ui.printSettings" => {
+                let discover = self.services.print.as_ref().map(craft::print::spool::Spool::discoverer);
+                return Some(printing::settings(&mut self.printing, p, discover.as_ref()));
+            }
+            "ui.printPage" => return Some(printing::print_page(self, p)),
             "ui.print" | "ui.printSubmit" => return Some(self.print_to_system(p)),
             "ui.printCancel" => return Some(printing::cancel(self)),
             // File › Options › General › Make WordCraft the default… changes the user's system
@@ -855,6 +862,15 @@ impl WordApp {
                 }
                 json!({"alignmentGuides": self.ui.alignment_guides})
             }
+            "ui.citations.provider" => {
+                // Citations › Provider: the citation provider. Zotero is the only one for now, so
+                // choosing it changes nothing (no setting is stored, no undo step); when a second
+                // provider arrives its choice goes in the preferences.
+                match p.get("value").and_then(Value::as_str) {
+                    Some("zotero") => json!({"provider": "zotero"}),
+                    _ => return Some(Err("`value` must be \"zotero\", the only citation provider".into())),
+                }
+            }
             "ui.startScreen" => {
                 // File › Options › General › Start-up (#766): `value` true or false turns showing
                 // File › Home at start-up on or off; no value reads it.
@@ -876,7 +892,7 @@ impl WordApp {
                 if self.ui.recent.len() == before {
                     return Some(Err(format!("`{path}` is not on the recent list")));
                 }
-                let saved = self.save_prefs_now();
+                let saved = self.flush_prefs();
                 if !matches!(saved, Some(Err(_))) {
                     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
                     self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
@@ -889,7 +905,7 @@ impl WordApp {
                 // Clear the whole list, as Word's registry clear does for recent documents (#2716).
                 let removed = self.ui.recent.len();
                 self.ui.recent.clear();
-                let saved = self.save_prefs_now();
+                let saved = self.flush_prefs();
                 if !matches!(saved, Some(Err(_))) {
                     self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
                 }
@@ -917,7 +933,7 @@ impl WordApp {
                 Err(e) => return Some(Err(e)),
             },
             "ui.linkTextBox" => {
-                let from = wordcraft_engine::cmd::objects::text_box_target(&self.session).filter(|_| widgets::enabled(self, "shape.link"));
+                let from = wordcraft_engine::cmd::objects::text_box_target(&self.session).filter(|_| command_enabled(self, "shape.link"));
                 let Some((pos, _)) = from else { return Some(Err("select a text box that isn't linked yet first".into())) };
                 self.canvas.link_from = Some(pos);
                 self.status(tl!("Click the empty text box the text should continue in (Esc cancels)"));
@@ -937,6 +953,7 @@ impl WordApp {
     /// [`Services::make_default_app`] and say in the status bar what happened. An error when the
     /// host has no hook (web, macOS). Only the button calls this: it is deliberately not a
     /// command, so nothing programmatic (control channel, MCP, macros) can change system defaults.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn make_default_app(&mut self) -> Result<Value, String> {
         let Some(hook) = self.services.make_default_app.as_ref() else {
             return Err("WordCraft can't change the default apps here; use your system's settings".into());
@@ -951,23 +968,73 @@ impl WordApp {
                 Ok(json!({"default": true}))
             }
             Err(e) => {
-                log::warn!("make default app: {e}");
-                let msg = i18n::fmt(tl!("Couldn't make WordCraft the default: {error}"), &[("error", &e)]);
+                log::warn!("make default app: {e:?}");
+                let detail = match &e {
+                    DefaultAppError::Failed(text) | DefaultAppError::SettingsFailed(text) => text.as_str(),
+                    _ => "",
+                };
+                let msg = match e.text() {
+                    Some(text) => i18n::fmt(tl!(text.english), &[("app", "WordCraft"), ("error", detail)]),
+                    None => i18n::fmt(tl!("Couldn't make WordCraft the default: {error}"), &[("error", detail)]),
+                };
                 self.status(msg.clone());
                 Err(msg)
             }
         }
     }
 
-    /// Pick a recipient list (desktop: through the file dialog hook; web: it arrives through the
-    /// inbox).
+    /// The picker request for a mail-merge recipient list.
+    fn recipients_request() -> PickRequest {
+        PickRequest::open("recipients").filter("Recipient lists", &["csv", "tsv", "txt", "xlsx", "xls", "ods"])
+    }
+
+    /// Pick a recipient list; on the web the file arrives through the host's picker.
     fn pick_recipient_list(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("recipients");
-            self.recipient_list_pending = true;
-            return;
+        let _ = self.ask_file(Self::recipients_request(), file_dialogs::AfterPick::Recipients);
+    }
+
+    /// `ui.fileBrowser`: the in-app chooser for `purpose` (document, picture, recipients, save,
+    /// export), even when a system dialog was asked for and never showed up (it is given up as
+    /// cancelled). `folder` is where it starts, when it lies inside the automation folder.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ask_file_browser(&mut self, purpose: &str, folder: Option<&str>) -> Result<Value, String> {
+        // An export that was waiting on the system dialog keeps its format.
+        let pending = self.give_up_file_dialog();
+        let document = self.session.document_id();
+        // PLAN: the picture request's file filters come from `ask_file`'s own entry (shell-w9).
+        let (request, after) = match purpose {
+            "picture" => (PickRequest::open("picture"), file_dialogs::AfterPick::Picture),
+            "recipients" => (Self::recipients_request(), file_dialogs::AfterPick::Recipients),
+            "save" => {
+                // The same request as Browse…, with the save types of the name.
+                let name = self.default_save_name();
+                let mut request = PickRequest::save("document").file_name(name.clone()).save_as(true);
+                request.filters = crate::save_types::save_filters(&name);
+                (request, file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document })
+            }
+            "export" => {
+                let ext = pending.unwrap_or_else(|| "pdf".into());
+                let file_ext = crate::print_page::export_file_ext(&ext).to_string();
+                let mut request =
+                    PickRequest::save("export").file_name(format!("{}.{}", self.title_stem(), file_ext)).suggested_extension(file_ext.clone());
+                // The chosen format's type, so the chooser's type menu shows it (as `export_dialog` does).
+                if let Some(&(label, _)) = crate::print_page::EXPORT_FORMATS.iter().find(|&&(_, e)| e == ext) {
+                    request = request.filter(tl!(label), &[file_ext.as_str()]);
+                }
+                (request, file_dialogs::AfterPick::Export { ext })
+            }
+            _ => (PickRequest::open("document"), file_dialogs::AfterPick::OpenDocument { document }),
+        };
+        let request = request.fallback(true);
+        let inside_roots = |dir: &std::path::PathBuf| wordcraft_engine::file_access::check_read(&dir.to_string_lossy()).is_ok();
+        let request = match folder.map(std::path::PathBuf::from).filter(inside_roots) {
+            Some(dir) => request.directory(dir),
+            None => request,
+        };
+        if let file_dialogs::Asked::Done(Err(e)) = self.ask_file(request, after) {
+            return Err(e);
         }
-        let _ = self.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "recipients".into() }, file_dialogs::AfterPick::Recipients);
+        Ok(json!({"open": self.file_dialog_open()}))
     }
 
     /// Load mail-merge recipients and say how many there are. A workbook with several sheets
@@ -982,7 +1049,7 @@ impl WordApp {
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
                 .unwrap_or_default();
-            self.dialog = Some(dialogs::Dialog::SelectTable { sheets, selected: 0, headers: true, message: String::new(), params });
+            let _ = dialogs::merge_dialogs::open_select_table(self, sheets, params);
         } else if let Ok(v) = &r {
             let records = v.get("records").and_then(Value::as_u64).unwrap_or(0).to_string();
             self.status(i18n::fmt(tl!("Recipients: {count}"), &[("count", &records)]));
@@ -1055,6 +1122,8 @@ fn input_dialog_mailings(id: &str, params: &Value) -> Option<&'static str> {
 fn input_dialog_insert(id: &str, params: &Value) -> Option<&'static str> {
     match id {
         "insert.symbol" if !has_value(params, "char") => Some("symbol"),
+        // Insert › Icons without an icon opens the picker (#309); a script gets the library list.
+        "insert.icon" if !has_value(params, "id") => Some("icons"),
         "insert.field" if !has_value(params, "instr") => Some("field"),
         "insert.smartArt" if !has_value(params, "layout") && !has_value(params, "items") => Some("insertSmartArt"),
         "insert.chart" if !has_value(params, "type") && !has_value(params, "data") => Some("insertChart"),
@@ -1171,6 +1240,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.dark"
             | "ui.theme"
             | "ui.interfaceSize"
+            | "ui.resetInterfaceSize"
             | "ui.animations"
             | "ui.language"
             | "ui.saveChanges"
@@ -1181,6 +1251,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.citations.provider"
             | "ui.recentRemove"
             | "ui.recentClear"
             | "ui.displayServer"
