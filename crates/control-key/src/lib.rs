@@ -12,14 +12,16 @@ pub fn settings_dir() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("WORDCRAFT_PROFILE_DIR").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
+    // An empty base path would put settings, logs and control keys in the current directory.
     if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/WordCraft"))
+        std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join("Library/Application Support/WordCraft"))
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("WordCraft"))
+        std::env::var_os("APPDATA").filter(|a| !a.is_empty()).map(|a| PathBuf::from(a).join("WordCraft"))
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|c| !c.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .or_else(|| std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join(".config")))
             .map(|c| c.join("wordcraft"))
     }
 }
@@ -83,6 +85,53 @@ mod tests {
         if let Some(d) = settings_dir() {
             let name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
             assert!(name == "wordcraft" || name == "WordCraft", "{}", d.display());
+        }
+    }
+
+    #[test]
+    fn settings_dir_ignores_empty_environment_paths() {
+        const CHILD: &str = "WORDCRAFT_SETTINGS_DIR_TEST_CHILD";
+        const EXPECTED: &str = "WORDCRAFT_SETTINGS_DIR_TEST_EXPECTED";
+        if std::env::var_os(CHILD).is_some() {
+            assert_eq!(settings_dir(), std::env::var_os(EXPECTED).map(PathBuf::from));
+            return;
+        }
+
+        // Change only a child process's environment: other tests may read these variables.
+        let check = |variables: &[(&str, &Path)], expected: Option<&Path>| {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.args(["--exact", "tests::settings_dir_ignores_empty_environment_paths"]);
+            child.env(CHILD, "1").env_remove(EXPECTED);
+            for name in ["WORDCRAFT_PROFILE_DIR", "HOME", "APPDATA", "XDG_CONFIG_HOME"] {
+                child.env(name, "");
+            }
+            for (name, value) in variables {
+                child.env(name, value);
+            }
+            if let Some(path) = expected {
+                child.env(EXPECTED, path);
+            }
+            let output = child.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+            assert!(stdout.contains("1 passed"), "{stdout}");
+        };
+
+        let root = std::env::current_dir().unwrap().join("settings-test-root");
+        let profile = root.join("isolated-profile");
+        let (base, expected) = if cfg!(target_os = "macos") {
+            ("HOME", root.join("Library/Application Support/WordCraft"))
+        } else if cfg!(windows) {
+            ("APPDATA", root.join("WordCraft"))
+        } else {
+            ("HOME", root.join(".config/wordcraft"))
+        };
+        check(&[], None);
+        check(&[(base, &root)], Some(&expected));
+        check(&[(base, &root), ("WORDCRAFT_PROFILE_DIR", &profile)], Some(&profile));
+        if !cfg!(target_os = "macos") && !cfg!(windows) {
+            let xdg = root.join("xdg");
+            check(&[("HOME", &root), ("XDG_CONFIG_HOME", &xdg)], Some(&xdg.join("wordcraft")));
         }
     }
 }
