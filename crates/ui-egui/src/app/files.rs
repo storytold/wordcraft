@@ -124,7 +124,7 @@ impl WordApp {
         self.save_conflict = None;
         let v = result?;
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
-        if !self.safely_saved(saved) {
+        if v.get("copyOnly").and_then(Value::as_bool) == Some(true) || !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);
         }
         Ok(match v.get("pendingSave").and_then(Value::as_u64) {
@@ -489,21 +489,52 @@ impl WordApp {
         Ok(json!({"value": on}))
     }
 
+    pub(super) fn after_save_command(&mut self, result: &Value) {
+        if result.get("copyOnly").and_then(Value::as_bool) == Some(true) {
+            self.report_write_only_copy();
+            return;
+        }
+        // An explicit save to the document's own file lets AutoSave keep writing there.
+        if result.get("saved").and_then(Value::as_bool) == Some(true)
+            && result.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
+        {
+            self.autosave_path = self.session.path.clone();
+        }
+        // Edits in the formatted view can require writing out Markdown again.
+        if result.get("rewritten").and_then(Value::as_bool) == Some(true) {
+            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
+        }
+    }
+
+    fn report_write_only_copy(&mut self) {
+        self.status_long(tl!("Saved a copy. To use it for Save or AutoSave, choose a location WordCraft can read."));
+    }
+
     /// AutoSave: write a saved document a couple of seconds after the last change. A failure is
     /// shown in the status bar and turns AutoSave off for the file until the user saves it again.
     pub(crate) fn autosave_tick(&mut self, now: f64) {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
             self.last_autosave = now;
-            if let Err(e) = self.session.run("file.save", &json!({})) {
-                log::warn!("AutoSave failed: {e}");
-                self.autosave_path = None;
-                if let wordcraft_engine::CmdError::FileConflict(conflict) = &e
-                    && self.dialog.is_none()
-                {
-                    self.save_conflict = Some(conflict.clone());
-                    self.show_save_conflict();
+            match self.session.run("file.save", &json!({})) {
+                Ok(v) if v.get("copyOnly").and_then(Value::as_bool) == Some(true) => {
+                    self.autosave_path = None;
+                    self.report_write_only_copy();
                 }
-                self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
+                Err(e) => {
+                    log::warn!("AutoSave failed: {e}");
+                    self.autosave_path = None;
+                    if let wordcraft_engine::CmdError::FileConflict(conflict) = &e
+                        && self.dialog.is_none()
+                    {
+                        self.save_conflict = Some(conflict.clone());
+                        self.show_save_conflict();
+                    }
+                    self.status(i18n::fmt(
+                        tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."),
+                        &[("error", &e.to_string())],
+                    ));
+                }
+                Ok(_) => {}
             }
         }
     }

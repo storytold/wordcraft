@@ -175,17 +175,21 @@ impl Session {
         }
         Ok(false)
     }
-    /// Re-establish the active document's durable copy if a password save fails after a purge.
+    /// Re-establish the active document's durable recovery after a password save that did not
+    /// change this document's saved state, including a save that only wrote a separate copy.
     pub(crate) fn restore_recovery_after_failed_password_save(&mut self) -> Result<(), String> {
         #[cfg(not(target_arch = "wasm32"))]
         if self.dirty
             && self.password.is_none()
             && let Some(mut recovery) = self.recovery.take()
         {
-            let result = self.restore_active_recovery(&mut recovery);
-            if let Err(error) = &result {
-                recovery.error = Some(error.clone());
-            }
+            let result = self.restore_active_recovery(&mut recovery).map_err(|error| {
+                let message =
+                    format!("The recovery copy could not be restored: {error}. Keep this document open and save a copy to another location.");
+                log::warn!("{message}");
+                recovery.error = Some(message.clone());
+                message
+            });
             self.recovery = Some(recovery);
             return result;
         }

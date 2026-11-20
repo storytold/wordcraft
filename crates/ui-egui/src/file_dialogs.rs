@@ -385,10 +385,17 @@ impl WordApp {
                 // skips the status bar while Backstage is open. `fail_save_as` reaches both.
                 let result = picked.map(|path| self.run("file.save", json!({"path": path})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
+                let copy_only = matches!(&result, Some(Ok(v)) if v.get("copyOnly").and_then(Value::as_bool) == Some(true));
                 if saved {
                     self.ui.backstage = false;
                     self.canvas.want_focus = true;
                     self.clear_save_as_error();
+                }
+                if copy_only {
+                    return Ok(match after {
+                        AfterSave::Continue { .. } => json!({"done": false}),
+                        _ => json!({"saved": true, "copyOnly": true}),
+                    });
                 }
                 match after {
                     AfterSave::Nothing => {

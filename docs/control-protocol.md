@@ -258,3 +258,5 @@ its size. Independent Page Setup multiple-page modes (#2414) are not required.
 ### Native save conflicts
 
 `ui.saveConflict` answers the native Save conflict dialog. `{"answer":"cancel"}` keeps editing, and `{"answer":"copy"}` opens a Save Copy picker for the same document. Picker cancellation or a failed copy keeps the unsaved edits. A busy picker reports an error and leaves the conflict dialog open.
+A successful native `file.save` or `file.saveAs` can return `{"saved":true,"copyOnly":true}` if WordCraft cannot read the saved file.
+The output exists and the open document keeps its previous path, save baseline, and dirty state.

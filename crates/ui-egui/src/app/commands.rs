@@ -279,20 +279,10 @@ impl WordApp {
             self.recovery_seen = true;
             self.sync_document();
         }
-        // An explicit save to the document's own file lets AutoSave keep writing there.
         if let Ok(v) = &r
             && matches!(id, "file.save" | "file.saveAs")
-            && v.get("saved").and_then(Value::as_bool) == Some(true)
-            && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
         {
-            self.autosave_path = self.session.path.clone();
-        }
-        // A Markdown file edited in the formatted view was written out again, not kept as it was.
-        if let Ok(v) = &r
-            && matches!(id, "file.save" | "file.saveAs")
-            && v.get("rewritten").and_then(Value::as_bool) == Some(true)
-        {
-            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
+            self.after_save_command(v);
         }
         // A renamed file is the same file: AutoSave keeps covering it, and Recent drops the old name.
         if r.is_ok()
@@ -310,7 +300,13 @@ impl WordApp {
         }
         self.after_command(id);
         if let Err(e) = &r {
-            self.status(e.clone());
+            if self.save_conflict.is_some()
+                && let Some(recovery) = self.session.recovery_error()
+            {
+                self.status_long(recovery.to_owned());
+            } else {
+                self.status(e.clone());
+            }
         }
         r
     }

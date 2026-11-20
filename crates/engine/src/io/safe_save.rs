@@ -286,6 +286,46 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn save_as_rechecks_ownership_if_its_parent_changes_before_preparation() {
+        use std::os::unix::fs::symlink;
+
+        let scratch = Scratch::new();
+        let owned_dir = scratch.0.join("owned");
+        let separate_dir = scratch.0.join("separate");
+        let alias_dir = scratch.0.join("alias");
+        fs::create_dir(&owned_dir).unwrap();
+        fs::create_dir(&separate_dir).unwrap();
+        symlink(&separate_dir, &alias_dir).unwrap();
+        let owned = owned_dir.join("document.md");
+        let separate = separate_dir.join("document.md");
+        let target = alias_dir.join("document.md");
+        fs::write(&owned, b"Opened bytes").unwrap();
+        fs::write(&separate, b"Unrelated bytes").unwrap();
+        let (_, version) = crate::io::FileVersion::read(&owned).unwrap();
+        fs::write(&owned, b"External edit").unwrap();
+
+        let alias = alias_dir.clone();
+        let new_parent = owned_dir.clone();
+        crate::io::BEFORE_SAVE_PREPARATION.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                fs::remove_file(&alias).unwrap();
+                symlink(new_parent, alias).unwrap();
+            }));
+        });
+        let result = crate::io::commit_versioned(&target, b"Local edit", Some(&version));
+        assert!(matches!(result, Err(crate::CmdError::FileConflict(_))));
+        assert_eq!(fs::read(&owned).unwrap(), b"External edit");
+        assert_eq!(fs::read(&separate).unwrap(), b"Unrelated bytes");
+        assert_eq!(fs::read_dir(&owned_dir).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&separate_dir).unwrap().count(), 1);
+
+        crate::io::commit_versioned(&separate, b"Local edit", Some(&version)).unwrap();
+        assert_eq!(fs::read(&separate).unwrap(), b"Local edit");
+        assert_eq!(fs::read(&owned).unwrap(), b"External edit");
+    }
+
     #[test]
     fn partial_and_complete_preparation_failures_leave_original_and_no_owned_temp() {
         for partial in [true, false] {

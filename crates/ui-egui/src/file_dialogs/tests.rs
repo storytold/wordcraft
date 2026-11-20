@@ -465,6 +465,34 @@ fn a_failed_autosave_switch_save_as_says_so_and_leaves_autosave_off() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn write_only_autosave_picker_writes_a_copy_and_keeps_the_document_unsaved() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = scratch("autosave-switch-write-only");
+    let target = dir.join("copy.docx");
+    std::fs::write(&target, b"Unrelated destination").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200)).unwrap();
+    if std::fs::File::open(&target).is_ok() {
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    a.save_as(AfterSave::AutoSave);
+    answer(&shown, Some(&target.to_string_lossy()));
+    let result = a.poll_file_dialog().unwrap().unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(result, json!({"saved": true, "copyOnly": true}));
+    assert!(a.session.path.is_none() && a.session.dirty);
+    assert!(!a.autosaves());
+    assert!(saved_text(&target).contains(UNSAVED));
+    assert!(a.status_msg.as_ref().is_some_and(|(message, _)| message.contains("WordCraft can read")));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// While a dialog is open, more Save As / Open / Export / Picture clicks don't open a second one.
 #[test]
 fn a_second_dialog_while_one_is_open_is_ignored() {

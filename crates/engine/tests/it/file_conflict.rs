@@ -968,6 +968,55 @@ fn native_requests_distinguish_identical_bytes_and_lossy_names() {
     }
 }
 
+#[test]
+fn malformed_native_template_request_leaves_prepared_open_available() {
+    let scratch = Scratch::new();
+    let source = original(&scratch);
+    let template = scratch.path("letter.dotx");
+    io::save_path(&template, &Document::from_text("Template")).unwrap();
+    let mut session = Session::new(Document::new());
+    let (prepared, guard) = session.prepare_native_open(&source).unwrap();
+
+    let result = session.run("file.newFromTemplate", &json!({"path": template, "nativeRead": guard.id()}));
+    assert!(matches!(result, Err(wordcraft_engine::CmdError::Params(_))));
+    session.run("file.open", &prepared).unwrap();
+    assert_eq!(session.path.as_ref(), Some(&source));
+
+    session.run("file.newFromTemplate", &json!({"path": template})).unwrap();
+    assert!(session.path.is_none());
+    assert_eq!(session.doc.plain_text(StoryRef::Body), "Template");
+}
+
+#[test]
+fn compare_detaches_the_save_baseline_only_for_an_untitled_result() {
+    for show_in in ["new", "original"] {
+        let scratch = Scratch::new();
+        let source_dir = scratch.path("source");
+        std::fs::create_dir(&source_dir).unwrap();
+        let source = source_dir.join("original.docx");
+        io::save_path(&source, &Document::from_text("Original")).unwrap();
+        let mut session = open(&source);
+        session.run("review.compare", &json!({"showIn": show_in, "text": "Revised"})).unwrap();
+
+        if show_in == "original" {
+            assert_eq!(session.path.as_ref(), Some(&source));
+            io::save_path(&source, &Document::from_text("External editor")).unwrap();
+            assert!(matches!(session.run("file.save", &json!({})), Err(wordcraft_engine::CmdError::FileConflict(_))));
+            assert_eq!(io::open_path(&source).unwrap().plain_text(StoryRef::Body), "External editor");
+        } else {
+            assert!(session.path.is_none());
+            let moved = scratch.path("moved");
+            std::fs::rename(&source_dir, &moved).unwrap();
+            std::fs::write(&source_dir, b"source directory replaced").unwrap();
+            let destination = scratch.path("destination.docx");
+            io::save_path(&destination, &Document::from_text("Separate destination")).unwrap();
+            session.run("file.saveAs", &json!({"path": destination})).unwrap();
+            assert_eq!(session.path.as_ref(), Some(&destination));
+            assert_eq!(io::open_path(&moved.join("original.docx")).unwrap().plain_text(StoryRef::Body), "Original");
+        }
+    }
+}
+
 /// A rejected command or a new document leaves the original external-writer baseline in place.
 #[test]
 fn document_commands_keep_external_save_protection() {
@@ -1009,7 +1058,7 @@ fn document_commands_keep_external_save_protection() {
 
 #[cfg(unix)]
 #[test]
-fn save_as_to_unrelated_write_only_files_does_not_require_read_access() {
+fn save_as_to_an_unrelated_write_only_file_keeps_the_original_save_target() {
     use std::os::unix::fs::PermissionsExt;
     let d = Scratch::new();
     let path = original(&d);
@@ -1018,13 +1067,27 @@ fn save_as_to_unrelated_write_only_files_does_not_require_read_access() {
     let target = d.path("write-only.docx");
     io::save_path(&target, &Document::from_text("Unrelated destination")).unwrap();
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200)).unwrap();
+    let restricted = std::fs::File::open(&target).is_err();
     let result = s.run("file.saveAs", &json!({"path": target}));
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
-    result.unwrap();
-    assert!(!s.dirty);
-    assert_eq!(std::fs::read(&path).unwrap(), frozen);
+    let result = result.unwrap();
+    assert_eq!(result["saved"], true);
+    if restricted {
+        assert_eq!(result["copyOnly"], true);
+        assert!(s.dirty);
+        assert_eq!(s.path.as_ref(), Some(&path));
+        io::save_path(&path, &Document::from_text("External edit")).unwrap();
+        assert!(matches!(s.run("file.save", &json!({})), Err(wordcraft_engine::CmdError::FileConflict(_))));
+        assert_eq!(io::open_path(&path).unwrap().plain_text(StoryRef::Body), "External edit");
+        std::fs::write(&path, &frozen).unwrap();
+        s.run("file.save", &json!({})).unwrap();
+        assert_eq!(io::open_path(&path).unwrap().plain_text(StoryRef::Body), "Local edit");
+    } else {
+        assert!(!s.dirty);
+        assert_eq!(s.path.as_ref(), Some(&target));
+        assert_eq!(std::fs::read(&path).unwrap(), frozen);
+    }
     assert_eq!(io::open_path(&target).unwrap().plain_text(StoryRef::Body), "Local edit");
-    // A successful write-only save also records enough identity for another unrelated Save As.
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200)).unwrap();
     let next = d.path("next.docx");
     io::save_path(&next, &Document::from_text("Another destination")).unwrap();
@@ -1072,7 +1135,7 @@ fn unreadable_owned_hard_links_still_refuse_external_changes() {
 
 #[cfg(unix)]
 #[test]
-fn write_only_save_preserves_distinct_case_destinations() {
+fn a_write_only_copy_does_not_reserve_its_case_variant() {
     use std::os::unix::fs::PermissionsExt;
     let d = Scratch::new();
     let path = original(&d);
@@ -1083,19 +1146,19 @@ fn write_only_save_preserves_distinct_case_destinations() {
     let variant = d.path("REPORT.DOCX");
     let aliases = variant.exists();
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200)).unwrap();
-    let saved = s.run("file.saveAs", &json!({"path": target}));
+    if std::fs::File::open(&target).is_ok() {
+        return;
+    }
+    let saved = s.run("file.saveAs", &json!({"path": target})).unwrap();
+    assert_eq!(saved["copyOnly"], true);
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
-    saved.unwrap();
     s.run("document.setText", &json!({"text": "Later local edit"})).unwrap();
     if aliases {
         std::fs::remove_file(&target).unwrap();
-        let result = s.run("file.saveAs", &json!({"path": variant}));
-        assert!(matches!(result, Err(wordcraft_engine::CmdError::FileConflict(_))));
-        assert!(!variant.exists());
-        assert!(s.dirty);
-    } else {
-        s.run("file.saveAs", &json!({"path": variant})).unwrap();
-        assert_eq!(io::open_path(&variant).unwrap().plain_text(StoryRef::Body), "Later local edit");
+    }
+    s.run("file.saveAs", &json!({"path": variant})).unwrap();
+    assert_eq!(io::open_path(&variant).unwrap().plain_text(StoryRef::Body), "Later local edit");
+    if !aliases {
         assert_eq!(io::open_path(&target).unwrap().plain_text(StoryRef::Body), "Local edit");
     }
     assert_eq!(std::fs::read(&path).unwrap(), frozen);
@@ -1103,17 +1166,14 @@ fn write_only_save_preserves_distinct_case_destinations() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn write_only_save_keeps_inode_alive_until_document_closes() {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+fn adopted_save_keeps_inode_alive_until_document_closes() {
+    use std::os::unix::fs::MetadataExt;
     let d = Scratch::new();
     let path = original(&d);
     let mut s = open(&path);
-    let target = d.path("write-only.docx");
+    let target = d.path("saved.docx");
     io::save_path(&target, &Document::from_text("Unrelated destination")).unwrap();
-    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200)).unwrap();
-    let result = s.run("file.saveAs", &json!({"path": target}));
-    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
-    result.unwrap();
+    s.run("file.saveAs", &json!({"path": target})).unwrap();
     let saved = std::fs::metadata(&target).unwrap();
     assert_eq!(io::open_path(&target).unwrap().plain_text(StoryRef::Body), "Local edit");
     std::fs::remove_file(&target).unwrap();

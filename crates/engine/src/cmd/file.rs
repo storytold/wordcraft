@@ -242,10 +242,7 @@ pub(crate) fn normal_document(s: &Session) -> Document {
     d
 }
 
-/// Open a document, using the saved proofing default only for plain text and Markdown. A file
-/// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
-/// replaces an untouched blank document; otherwise it opens beside the open documents.
-fn open(s: &mut Session, v: &Value) -> CmdResult {
+fn validate_native_read(v: &Value) -> Result<(), CmdError> {
     if v.get("nativeRead").is_some() {
         if p::str(v, "path").is_none() || p::str(v, "data").is_none() {
             return Err(CmdError::Params("nativeRead requires its prepared path and data".into()));
@@ -253,6 +250,14 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         #[cfg(target_arch = "wasm32")]
         return Err(CmdError::Params("nativeRead is only available to a native host".into()));
     }
+    Ok(())
+}
+
+/// Open a document, using the saved proofing default only for plain text and Markdown. A file
+/// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
+/// replaces an untouched blank document; otherwise it opens beside the open documents.
+fn open(s: &mut Session, v: &Value) -> CmdResult {
+    validate_native_read(v)?;
     let Some(path) = p::str(v, "path") else {
         s.push_ui_request(json!({"open": "openFile"}));
         return sel_result(s);
@@ -444,6 +449,7 @@ fn finish_open(s: &mut Session, opened: OpenedFile, password: Option<&str>) {
 /// hands the app starts (#3433). The template is only read; the new document has no file, so
 /// saving it asks where to write, and a protected template's password doesn't come along.
 pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
+    validate_native_read(v)?;
     let path = p::req_str(v, "path")?;
     let mut doc = read_document(s, std::path::Path::new(path), p::str(v, "data"), v.get("nativeRead"), p::str(v, "password"))?.doc;
     doc.settings.attached_template = Some(path.to_string());
@@ -559,20 +565,27 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         None => crate::io::save_path_with(&path, doc, pw, &opts),
     }
     .map_err(CmdError::Failed);
-    #[cfg_attr(target_arch = "wasm32", allow(clippy::let_unit_value, unused_variables))]
-    let version = match saved {
-        Ok(version) => version,
-        Err(e) => {
-            (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-            if recovery_purged && let Err(recovery) = s.restore_recovery_after_failed_password_save() {
-                return Err(CmdError::Failed(format!(
-                    "{e}; recovery copy could not be restored: {recovery}. Keep this document open and save a copy to another location."
-                )));
-            }
-            return Err(e);
+    #[cfg(not(target_arch = "wasm32"))]
+    let copy_only = matches!(&saved, Ok(None));
+    #[cfg(target_arch = "wasm32")]
+    let copy_only = false;
+    if saved.is_err() || copy_only {
+        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+        if recovery_purged
+            && let Err(recovery) = s.restore_recovery_after_failed_password_save()
+            && let Err(error) = &saved
+            && !matches!(error, CmdError::FileConflict(_))
+        {
+            return Err(CmdError::Failed(format!("{error}; {recovery}")));
         }
-    };
+    }
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::let_unit_value, unused_variables))]
+    let version = saved?;
     let encrypted = pw.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
+    #[cfg(not(target_arch = "wasm32"))]
+    let Some(version) = version else {
+        return Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten, "copyOnly": true}));
+    };
     s.password = password;
     // Saving an open text file over itself completes the save; another lossy target is a copy.
     let own_file = s.path.as_deref() == Some(path.as_path());

@@ -893,6 +893,8 @@ pub(crate) fn check_save_destination(path: &std::path::Path, expected: Option<&F
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 std::thread_local! {
+    // A deterministic path change between initial ownership and preparation.
+    pub(crate) static BEFORE_SAVE_PREPARATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
     // A deterministic external writer at the final verification boundary.
     pub(crate) static BEFORE_SAVE_VERSION_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
@@ -906,7 +908,7 @@ pub(crate) fn save_path_versioned(
     password: Option<&str>,
     opts: &ExportOptions,
     expected: Option<&FileVersion>,
-) -> Result<FileVersion, crate::CmdError> {
+) -> Result<Option<FileVersion>, crate::CmdError> {
     crate::file_access::check_write(&path.to_string_lossy()).map_err(crate::CmdError::Failed)?;
     let bytes = save_bytes_with(&path.to_string_lossy(), doc, password, opts).map_err(crate::CmdError::Failed)?;
     commit_versioned(path, &bytes, expected)
@@ -914,22 +916,32 @@ pub(crate) fn save_path_versioned(
 
 /// Keep the Markdown source intact when it hasn't been replaced by a formatted edit.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn save_text_versioned(path: &std::path::Path, text: &str, expected: Option<&FileVersion>) -> Result<FileVersion, crate::CmdError> {
+pub(crate) fn save_text_versioned(
+    path: &std::path::Path,
+    text: &str,
+    expected: Option<&FileVersion>,
+) -> Result<Option<FileVersion>, crate::CmdError> {
     crate::file_access::check_write(&path.to_string_lossy()).map_err(crate::CmdError::Failed)?;
     commit_versioned(path, text.as_bytes(), expected)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn commit_versioned(path: &std::path::Path, bytes: &[u8], expected: Option<&FileVersion>) -> Result<FileVersion, crate::CmdError> {
-    let expected = match expected {
-        Some(v) if v.owns(path).map_err(crate::CmdError::FileConflict)? => Some(v),
-        _ => None,
+fn commit_versioned(path: &std::path::Path, bytes: &[u8], expected: Option<&FileVersion>) -> Result<Option<FileVersion>, crate::CmdError> {
+    let initially_owned = match expected {
+        Some(version) => version.owns(path).map_err(crate::CmdError::FileConflict)?,
+        None => false,
     };
+    #[cfg(test)]
+    BEFORE_SAVE_PREPARATION.with(|hook| {
+        if let Some(change) = hook.borrow_mut().take() {
+            change();
+        }
+    });
     let prepared = match safe_save::prepare(path, bytes) {
         Ok(prepared) => prepared,
         Err(e) => {
             // A preparation error may come from an inaccessible destination, not its parent.
-            if let Some(expected) = expected {
+            if initially_owned && let Some(expected) = expected {
                 expected.verify(path).map_err(crate::CmdError::FileConflict)?;
             }
             return Err(crate::CmdError::Failed(format!("{}: {e}", path.display())));
@@ -941,7 +953,10 @@ fn commit_versioned(path: &std::path::Path, bytes: &[u8], expected: Option<&File
             write();
         }
     });
-    if let Some(expected) = expected {
+    // A Save As destination can become an alias of the open file while preparing the save.
+    if let Some(expected) = expected
+        && (initially_owned || expected.owns(path).map_err(crate::CmdError::FileConflict)?)
+    {
         expected.verify(path).map_err(crate::CmdError::FileConflict)?;
     }
     prepared.commit(path).map_err(|e| crate::CmdError::Failed(format!("{}: {e}", path.display())))?;

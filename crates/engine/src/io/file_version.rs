@@ -127,29 +127,6 @@ fn entry_handle(path: &Path, kind: EntryKind) -> std::io::Result<same_file::Hand
     Ok(handle)
 }
 
-/// A completed save may be write-only. Keep its inode alive without reading or changing bytes.
-fn saved_handle(path: &Path) -> std::io::Result<same_file::Handle> {
-    let error = match entry_handle(path, EntryKind::File) {
-        Ok(handle) => return Ok(handle),
-        Err(error) => error,
-    };
-    #[cfg(unix)]
-    if error.kind() == std::io::ErrorKind::PermissionDenied {
-        use rustix::fs::{Mode, OFlags};
-        if !fs::metadata(path)?.is_file() {
-            return Err(std::io::Error::other("not a regular file after save"));
-        }
-        // No CREATE or TRUNC: this handle only preserves identity. NONBLOCK also
-        // prevents waiting if the checked entry changes to a FIFO before open.
-        let file = File::from(rustix::fs::open(path, OFlags::WRONLY | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty())?);
-        if !file.metadata()?.is_file() {
-            return Err(std::io::Error::other("entry type changed after save"));
-        }
-        return same_file::Handle::from_file(file);
-    }
-    Err(error)
-}
-
 fn regular(path: &Path) -> std::io::Result<File> {
     let meta = fs::metadata(path)?;
     if !meta.is_file() {
@@ -327,18 +304,21 @@ impl FileVersion {
         if check().unwrap_or(false) { Ok(()) } else { Err(FileConflict { path: path.to_path_buf() }) }
     }
 
-    /// Keep the identity of serialized bytes, never a second read that might capture an
-    /// external writer's version. Handle lookup is best effort after a committed replacement.
-    pub(super) fn saved(path: &Path, bytes: &[u8]) -> Self {
+    /// Keep the identity of serialized bytes without reading a later writer's content.
+    /// A destination we cannot open for reading is only a copy, since Save must verify it.
+    pub(super) fn saved(path: &Path, bytes: &[u8]) -> Option<Self> {
         let path = absolute(path);
+        let handle = entry_handle(&path, EntryKind::File);
+        if handle.as_ref().is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied) {
+            return None;
+        }
         let resolved = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let identity = saved_handle(&path).and_then(original_identity).ok();
-        Self {
+        Some(Self {
             case_aliases: [observes_case_aliases(&path), observes_case_aliases(&resolved)],
             path,
             resolved,
-            identity,
+            identity: handle.and_then(original_identity).ok(),
             digest: Sha256::digest(bytes).into(),
-        }
+        })
     }
 }

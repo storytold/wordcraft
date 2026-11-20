@@ -715,6 +715,37 @@ fn refused_password_save_retains_snapshot_and_external_version() {
     assert_eq!(crate::io::open_path_with(&copy, Some("synthetic-password")).unwrap().0.plain_text(StoryRef::Body), text);
 }
 
+#[cfg(unix)]
+#[test]
+fn password_save_to_a_write_only_copy_retains_plaintext_recovery_for_the_open_document() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Temp::new();
+    let target = scratch.0.join("copy.docx");
+    fs::write(&target, b"Unrelated destination").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o200)).unwrap();
+    if fs::File::open(&target).is_ok() {
+        return;
+    }
+    let root = scratch.0.join("profile");
+    let mut s = session(&root);
+    s.run("document.setText", &json!({"text": "Local draft"})).unwrap();
+    save_now(&mut s);
+    assert!(!records(&root).is_empty());
+    let core = s.doc.core.clone();
+
+    let result = s.run("file.saveAs", &json!({"path": target, "password": "synthetic-password"})).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(result["copyOnly"], true);
+    assert_eq!(result["encrypted"], true);
+    assert!(s.path.is_none() && s.password.is_none() && s.dirty);
+    assert_eq!(s.doc.core, core);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Local draft");
+    assert_eq!(records(&root).len(), 1);
+    assert!(s.recovery_error().is_none());
+    assert_eq!(crate::io::open_path_with(&target, Some("synthetic-password")).unwrap().0.plain_text(StoryRef::Body), "Local draft");
+}
+
 /// A writer arriving after the preliminary check must not consume durable local recovery.
 #[test]
 fn late_password_save_conflict_restores_recovery_before_returning() {
@@ -779,8 +810,8 @@ fn late_password_save_retries_transient_recovery_without_an_edit() {
     });
     let text = s.doc.plain_text(StoryRef::Body);
     let error = s.run("file.save", &json!({"path": original, "password": "synthetic-password"})).unwrap_err();
-    assert!(error.to_string().contains("recovery copy could not be restored"), "{error}");
-    assert!(s.recovery_error().is_some());
+    assert!(matches!(error, crate::CmdError::FileConflict(_)), "{error}");
+    assert!(s.recovery_error().unwrap().contains("recovery copy could not be restored"));
     assert!(s.password.is_none() && s.dirty);
     assert_eq!(s.doc.plain_text(StoryRef::Body), text);
     assert_eq!(fs::read(&original).unwrap(), external);
