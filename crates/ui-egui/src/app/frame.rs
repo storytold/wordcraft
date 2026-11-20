@@ -79,7 +79,15 @@ impl WordApp {
     pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
+        self.sync_window_frame(ctx);
+        if self.draws_window_frame() {
+            crate::window_controls::resize_edges(ctx);
+        }
         if self.ui.backstage {
+            // The Backstage covers the title bar, so the window buttons get a bar of their own.
+            if let Some(layout) = self.shown_window_controls(ctx) {
+                crate::window_controls::backstage_header(ui, &layout);
+            }
             backstage::show(self, ui);
         } else if !self.has_document() {
             // No document open (#1129): the ribbon greyed out but for Help, and no page.

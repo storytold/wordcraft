@@ -359,6 +359,11 @@ install: libX11, libX11-xcb, libXcursor, libXi and libxkbcommon-x11 (on Debian a
 `libx11-6`, `libx11-xcb1`, `libxcursor1`, `libxi6` and `libxkbcommon-x11-0`). Without them the app
 opens on native Wayland, whatever the setting says, and logs which ones are missing.
 
+Where the compositor draws no window frames (GNOME), the title bar carries GNOME-style minimize,
+maximize and close buttons in the order GNOME's button layout setting names, and the window's
+edges resize it. File › Options › General › Use system title bar gives the window a basic frame
+instead; `WORDCRAFT_TITLEBAR=app` or `=system` overrides the detection.
+
 **Arch Linux (AUR).** Community members maintain three AUR packages; the project doesn't publish
 to the AUR itself. Install one of them:
 | Package | What it installs | Choose it when |

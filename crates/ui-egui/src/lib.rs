@@ -81,6 +81,7 @@ pub mod theme;
 pub mod updates_ui;
 pub mod widgets;
 pub mod window_close;
+pub mod window_controls;
 pub mod window_geometry;
 mod window_ui;
 mod windows;
@@ -394,6 +395,10 @@ pub struct UiState {
     /// fades, as Word's does on Windows (on, the default), or it jumps and blinks on and off
     /// (off).
     pub caret_animation: bool,
+    /// File › Options › General › Use system title bar: where the desktop leaves the window frame
+    /// to the app ([`WordApp::window_controls`], GNOME on Wayland), keep winit's frame instead of
+    /// drawing the window buttons in the title bar.
+    pub system_title_bar: bool,
     /// Custom keyboard shortcuts (Customize Keyboard, #368); the session owns them while running.
     pub keyboard: wordcraft_engine::KeyMap,
     /// Custom ribbon tabs and groups, hidden tabs and the Quick Access Toolbar (Customize Ribbon,
@@ -528,6 +533,7 @@ impl Default for UiState {
             dark_page: false,
             check_spelling: true,
             caret_animation: true,
+            system_title_bar: false,
             keyboard: wordcraft_engine::KeyMap::default(),
             ribbon: wordcraft_engine::RibbonLayout::default(),
             caption_labels: Vec::new(),
@@ -702,6 +708,9 @@ pub struct WordApp {
     pub(crate) font_notices: bool,
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
+    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the title bar
+    /// carries these window buttons and the window's edges resize it.
+    pub window_controls: Option<window_controls::Layout>,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
@@ -789,6 +798,9 @@ pub struct WordApp {
     /// Full screen as last asked of the window, and as the window last reported it (#980).
     sent_full_screen: bool,
     seen_full_screen: Option<bool>,
+    /// Whether the drawn window has the app's frame rather than winit's (`None` until the desktop
+    /// app says how the first window opened, or a window's first frame). Per window.
+    pub app_frame_shown: Option<bool>,
     /// Nothing else (a dialog, menu, keytips, the File tab) is open to take Escape this frame, so
     /// Escape may leave full screen. Read before anything handles the frame's keys.
     escape_free: bool,

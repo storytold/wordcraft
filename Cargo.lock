@@ -7357,6 +7357,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "wayland-client",
  "windows",
  "winit",
  "winresource",
