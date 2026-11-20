@@ -216,8 +216,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             },
         );
         ToggleButton::command(CommandRef::new("layout.linkToPrevious"))
-            .label(crate::tl!("Link to
-Previous"))
+            .label(crate::tl!("Link to\nPrevious"))
             .icon(crate::icons::id("link"))
             .arrangement(Arrangement::Stacked)
             .selected(wordcraft_engine::cmd::page::is_hf_linked(&app.session))
