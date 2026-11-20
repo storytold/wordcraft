@@ -3,13 +3,17 @@ use super::chars::{
     SegKey, caps_expands, context_digit_dirs, draws_something, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range,
     reported_font_name, thai_run_face, upper_char,
 };
-use super::grid::east_asian;
-use super::lines::{MIN_LINE_WIDTH, MIN_SPAN, mirrored_exclusions, row_spans};
-use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
+use super::grid::{Exclusion, east_asian};
+use super::lines::{MIN_LINE_WIDTH, MIN_SPAN, label_placement, mirrored_exclusions, row_spans};
+use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::paragraph::break_positions;
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, ResolvedPara, RubyAlign, SOFT_HYPHEN};
 use wordcraft_doc::props::LineSpacing;
 use wordcraft_fonts::ShapeContext;
+
+/// Maximum exclusion-slice work in [`conservative_span_bound`] before falling back to smaller
+/// per-grapheme field clusters (`None`).
+const MAX_SPAN_BOUND_WORK: usize = 512;
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
@@ -25,10 +29,13 @@ pub(super) struct Builder<'a> {
     /// Fonts asked for that aren't installed, and the faces drawn instead (see
     /// `ParaLayout::substituted`).
     pub(super) substituted: Vec<(String, FaceRef)>,
-    /// Memoized conservative upper bound for line widths beside float exclusions and drop caps.
-    pub(super) span_bound: Option<f32>,
+    /// Memoized conservative upper bound for line widths beside float exclusions, drop caps, and
+    /// list labels (`Some(None)` when the exclusion prepass reaches [`MAX_SPAN_BOUND_WORK`]).
+    pub(super) span_bound: Option<Option<f32>>,
     /// Extra start-edge indent on drop-cap lines (`Some(0.0)` when hung in the margin).
     pub(super) drop_cap_indent: Option<f32>,
+    /// Pre-shaped list label when a field word needs the first-line text span after label placement.
+    pub(super) label: Option<Label>,
 }
 
 /// The fonts a run asks for that aren't installed (see [`Builder::note_missing_fonts`]).
@@ -70,17 +77,29 @@ fn isolate_base_level(surrounding: u8, rtl_base: bool) -> u8 {
     }
 }
 
-/// Compute a conservative upper bound for line widths exposed to text beside floating exclusions.
+/// Compute a conservative upper bound for line widths exposed to text beside floating exclusions,
+/// drop caps, and first-line list labels.
 ///
 /// If floating objects intersect the paragraph, text may flow into multiple narrower spans on a
 /// single line (such as on either side of a centered float, or beside side-restricted or overlapping
 /// exclusions). To prevent field words from remaining an indivisible cluster that overflows into an
-/// exclusion, this derives the narrowest valid span width across all vertical exclusion slices.
+/// exclusion or past a list label's first-line span, this derives the narrowest valid span width
+/// across all vertical exclusion slices and after first-line label placement.
+///
+/// Active exclusions are reused across adjacent vertical slices and bounded by
+/// [`MAX_SPAN_BOUND_WORK`]; if the cap is reached, returns `None` so callers keep smaller wrapping
+/// clusters instead of relying on a partially sampled width.
 ///
 /// Narrow lines are still lines: the bound keeps the line breaker's [`MIN_LINE_WIDTH`] floor, not
 /// the wider `MIN_SPAN` below which text avoids a floating object, so a field word narrower than
 /// 20pt in a narrower cell still breaks like plain text.
-fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara, drop_cap_indent: Option<f32>) -> f32 {
+fn conservative_span_bound(
+    env: &ParaEnv,
+    styles: &[StyleRun],
+    rp: &ResolvedPara,
+    drop_cap_indent: Option<f32>,
+    label: Option<&Label>,
+) -> Option<f32> {
     let width = env.width.max(MIN_LINE_WIDTH);
     let lo1 = rp.indent_left + rp.indent_first;
     let lo2 = rp.indent_left;
@@ -91,40 +110,77 @@ fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara
     if let Some(dlo) = drop_lo {
         bound = bound.min((hi - dlo).max(MIN_LINE_WIDTH));
     }
+    let settings = &env.doc.settings;
+    let level = env.label.as_ref().map(|(_, l)| l);
+    let default_tab = settings.default_tab;
+    let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
+    let tab_origin = if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 };
+    let first_lo = drop_lo.unwrap_or(lo1);
+    let label_text_x = |left: f32| match label {
+        Some(lab) => label_placement(rp, (default_tab, hanging_at, tab_origin), level, lab, styles, left).1.max(left),
+        None => left,
+    };
+    if label.is_some() {
+        bound = bound.min((hi - label_text_x(first_lo)).max(MIN_LINE_WIDTH));
+    }
     if env.exclusions.is_empty() {
-        return bound;
+        return Some(bound);
+    }
+    if env.exclusions.len() > MAX_SPAN_BOUND_WORK || env.exclusions.iter().any(|ex| !ex.top_bottom && ex.contour.is_some()) {
+        return None;
     }
 
     let mirrored = rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
 
+    let font_h = styles.first().map(|st| st.ascent + st.descent).unwrap_or(14.0).max(1.0);
+    let est_h = (font_h * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 }).max(1.0);
+    let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { est_h };
+    let reach = est_h.max(table_h);
+
     let mut y_points: Vec<f32> = Vec::new();
     for ex in exclusions {
+        let contact_h = if ex.table { table_h } else { est_h };
+        y_points.push((ex.top - contact_h).max(0.0));
         if !ex.top_bottom {
             y_points.push(ex.top);
-            y_points.push(ex.bottom);
         }
+        y_points.push(ex.bottom);
     }
 
     if y_points.is_empty() {
-        return bound;
+        return Some(bound);
     }
 
     y_points.sort_by(|a, b| a.total_cmp(b));
     y_points.dedup();
 
-    let font_h = styles.first().map(|st| st.ascent + st.descent).unwrap_or(14.0).max(1.0);
-    let est_h = (font_h * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 }).max(1.0);
-    let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { est_h };
-    let settings = &env.doc.settings;
     let may_tight = settings.do_not_suppress_indentation
         && settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
         && env.label.is_none()
         && drop_cap_indent.is_none();
 
+    let mut sorted_exclusions: Vec<Exclusion> = exclusions.to_vec();
+    sorted_exclusions.sort_by(|a, b| a.top.total_cmp(&b.top));
+    let mut active: Vec<Exclusion> = Vec::new();
+    let mut next_ex = 0usize;
+    let mut work = sorted_exclusions.len();
+
     for w in y_points.windows(2) {
         let &[y0, y1] = w else { continue };
         if y1 <= y0 {
+            continue;
+        }
+        active.retain(|e| e.bottom > y0);
+        while let Some(ex) = sorted_exclusions.get(next_ex) {
+            if ex.top <= y1 + reach {
+                active.push(ex.clone());
+                next_ex += 1;
+            } else {
+                break;
+            }
+        }
+        if active.is_empty() {
             continue;
         }
         let sample_y = [y0, (y0 + y1) * 0.5, (y1 - est_h * 0.5).max(y0), (y1 - 1.0).max(y0)];
@@ -135,9 +191,16 @@ fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara
                     if !tight && hi <= lo + MIN_SPAN {
                         continue;
                     }
-                    if let Ok(spans) = row_spans(exclusions, (top, est_h, table_h), (lo, hi), tight) {
-                        for (a, b) in spans {
+                    work = work.saturating_add(active.len());
+                    if work > MAX_SPAN_BOUND_WORK {
+                        return None;
+                    }
+                    if let Ok(spans) = row_spans(&active, (top, est_h, table_h), (lo, hi), tight) {
+                        for (idx, (a, b)) in spans.into_iter().enumerate() {
                             bound = bound.min(b - a);
+                            if idx == 0 && label.is_some() && (lo - first_lo).abs() <= 0.01 {
+                                bound = bound.min((b - label_text_x(a)).max(MIN_LINE_WIDTH));
+                            }
                         }
                     }
                 }
@@ -145,7 +208,7 @@ fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara
         }
     }
 
-    bound.max(MIN_LINE_WIDTH)
+    Some(bound.max(MIN_LINE_WIDTH))
 }
 
 impl<'a> Builder<'a> {
@@ -657,7 +720,6 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
-        let cl_level = isolate_base_level(surrounding, rtl_base);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster {
             start,
@@ -671,7 +733,7 @@ impl<'a> Builder<'a> {
             obj_h: 0.0,
             obj_d: 0.0,
             dot: false,
-            level: Some(cl_level),
+            level: None,
         });
     }
 
@@ -762,22 +824,22 @@ impl<'a> Builder<'a> {
             let w_end = last.end.saturating_sub(start);
 
             let group_adv: f32 = group.iter().map(|c| c.adv).sum();
-            let exceeds_bound = if !is_space && group.len() > 1 {
-                let bound = match self.span_bound {
-                    Some(b) => b,
-                    None => {
-                        let b = conservative_span_bound(self.env, &self.styles, rp, self.drop_cap_indent);
-                        self.span_bound = Some(b);
-                        b
-                    }
-                };
-                group_adv > bound
+            let group_text = text.get(head.start.saturating_sub(start)..w_end).unwrap_or("");
+            let grid_has_ea = rp.snap_to_grid && self.env.grid.chars.is_some() && group_text.chars().any(super::grid::is_east_asian);
+            let grid_snaps = rp.snap_to_grid && self.env.grid.chars.is_some() && self.env.grid.snap_all;
+            let exceeds_bound = if group.len() > 1 && ((!is_space && grid_snaps) || grid_has_ea) {
+                true
+            } else if !is_space && group.len() > 1 {
+                let bound = *self
+                    .span_bound
+                    .get_or_insert_with(|| conservative_span_bound(self.env, &self.styles, rp, self.drop_cap_indent, self.label.as_ref()));
+                bound.is_none_or(|b| group_adv > b)
             } else {
                 false
             };
-            // If an unbroken text word exceeds available line width (including indents and floats),
-            // emit grapheme clusters individually so `Scan::break_long_word` can emergency-split
-            // across lines with exact plain-text parity.
+            // If an unbroken text word exceeds available line width (including indents, floats,
+            // and list labels) or snaps to a character grid (`snap_all`), emit grapheme clusters
+            // individually so `snap_chars` and `Scan::break_long_word` match plain-text wrapping.
             if exceeds_bound {
                 let mut ci = 0;
                 while let Some(head_cl) = group.get(ci) {

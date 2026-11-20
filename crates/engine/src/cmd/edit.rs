@@ -811,7 +811,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         let target = l.pages.get(idx).and_then(|page| {
             page.items.iter().find_map(|it| match it {
                 wordcraft_layout::Placed::Lines { story, path, para, l0, .. } if *story == StoryRef::Body => {
-                    para.lines.get(*l0).map(|ln| Pos::new(*story, path.clone(), ln.start))
+                    para.line_start_pos(*story, path.clone(), *l0)
                 }
                 _ => None,
             })

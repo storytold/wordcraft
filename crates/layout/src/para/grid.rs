@@ -53,23 +53,32 @@ pub fn is_east_asian(c: char) -> bool {
 pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     let Some(pitch) = grid.chars else { return };
     let base = grid.font_size.max(1.0);
-    for c in b.clusters.iter_mut() {
-        if !matches!(c.kind, ClKind::Text | ClKind::Space) || c.adv <= 0.0 {
+    let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
+    for k in 0..b.clusters.len() {
+        let Some((kind, start, adv, style, g0, g1)) = b.clusters.get(k).map(|c| (c.kind, c.start, c.adv, c.style, c.g0, c.g1)) else { break };
+        if !matches!(kind, ClKind::Text | ClKind::Space) || adv <= 0.0 {
             continue;
         }
-        let Some(ch) = text.get(c.start..).and_then(|t| t.chars().next()) else { continue };
+        while shown.next_if(|s| s.0 < k).is_some() {}
+        let displayed = match shown.peek() {
+            Some(&(i, t)) if i == k => t,
+            _ => text.get(start..).unwrap_or(""),
+        };
+        let Some(ch) = displayed.chars().next() else { continue };
         let east_asian = is_east_asian(ch);
-        if !(east_asian || (grid.snap_all && c.kind == ClKind::Text)) {
+        if !(east_asian || (grid.snap_all && kind == ClKind::Text)) {
             continue;
         }
-        let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
-        let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
-        let adv = cells * pitch;
-        let shift = (adv - c.adv) / 2.0;
-        for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+        let size = b.styles.get(style as usize).map_or(base, |st| st.size);
+        let cells = if east_asian { (size / base).round() } else { (adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
+        let new_adv = cells * pitch;
+        let shift = (new_adv - adv) / 2.0;
+        for g in b.glyphs.get_mut(g0 as usize..g1 as usize).into_iter().flatten() {
             g.dx += shift;
         }
-        c.adv = adv;
+        if let Some(c) = b.clusters.get_mut(k) {
+            c.adv = new_adv;
+        }
     }
 }
 

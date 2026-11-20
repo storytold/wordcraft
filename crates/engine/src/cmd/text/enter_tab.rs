@@ -201,6 +201,7 @@ pub(super) fn tab(s: &mut Session, _: &Value) -> CmdResult {
     let f = s.sel.focus.clone();
     if s.sel.is_collapsed()
         && f.off == 0
+        && f.affinity.is_none()
         && let Some(n) = s.doc.para_at(&f).and_then(|x| x.props.numbering)
         && n.num != 0
     {
@@ -235,6 +236,9 @@ pub(super) fn tab_indent_on(s: &Session) -> bool {
 /// tab character as with the option off.
 fn tab_indents(s: &mut Session, f: &Pos) -> bool {
     let Some(para) = s.doc.para_at(f).filter(|p| !p.is_empty()) else { return false };
+    if f.affinity.is_some() {
+        return false;
+    }
     if f.off == 0 {
         return s.doc.styles.resolve_para(&para.props).numbering.is_none_or(|n| n.num == 0);
     }

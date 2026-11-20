@@ -64,8 +64,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("select.collapse", "Collapse Selection", "Navigation", |s, v| {
             let to_end = p::bool(v, "end").unwrap_or(false);
             let (a, b) = s.sel.ordered();
-            let at = if to_end { b } else { a };
-            s.sel = Selection::caret(at.at(at.off));
+            let at = if s.sel.is_collapsed() {
+                s.sel.focus.clone()
+            } else if to_end {
+                b
+            } else {
+                a
+            };
+            s.sel = Selection::caret(at);
             sel_result(s)
         })
         .key("Escape")
