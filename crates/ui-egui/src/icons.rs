@@ -432,12 +432,13 @@ pub fn for_command(id: &str) -> IconSpec<'static> {
         Some((_, icon)) => Cow::Borrowed(icon),
         None => Cow::Owned(id.rsplit('.').next().unwrap_or(id).to_owned()),
     };
-    let name = match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
-        Some((_, own)) => Cow::Borrowed(*own),
-        None => name,
-    };
-    match glyphs::ICONS.iter().find(|icon| icon.0 == name) {
-        Some(icon) => IconSpec::glyph(icon),
+    // A text glyph is found by the plain name (`pilcrow`); the app's own SVG of a catalog name
+    // (`wordcraft.pilcrow`) applies only to the SVG fallback.
+    if let Some(icon) = glyphs::ICONS.iter().find(|icon| icon.0 == name) {
+        return IconSpec::glyph(icon);
+    }
+    match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
+        Some((_, own)) => IconSpec::svg(IconId::new(own)),
         None => IconSpec::svg(IconId::from(name)),
     }
 }
@@ -510,6 +511,13 @@ mod tests {
             _ => String::new(),
         };
         assert_eq!(undo, "wordcraft.undo");
+    }
+
+    /// QAT and custom-group buttons draw `view.marks` as the pilcrow text glyph, as the ribbon does, not the
+    /// app's SVG of the same name.
+    #[test]
+    fn for_command_picks_the_text_glyph_before_the_own_svg() {
+        assert!(matches!(for_command("view.marks").source, craft::ui::primitives::IconSource::Glyph(_)));
     }
 
     /// #6768: the Insert › Shapes Arrow tile is the block arrow that tile inserts, outlined as the
