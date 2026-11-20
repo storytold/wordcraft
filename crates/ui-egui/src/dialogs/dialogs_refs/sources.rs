@@ -1,7 +1,27 @@
-use super::shell::{Next, go};
+use craft::behavior::{Mixed, Selection, SelectionChange, keyed};
 #[cfg(not(target_arch = "wasm32"))]
-use super::{AfterPick, Asked, FileDialogRequest};
-use super::{RefsDialog, Serialize, Source, Tokens, Ui, Value, WordApp, buttons, json, vec2};
+use craft::host::PickRequest;
+use craft::ui::buttons::Button;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::dialog::DialogId;
+use craft::ui::form::Field;
+use craft::ui::list::{List, ListRow};
+// PLAN: assumed FormButtons (dialogs-w5)
+use craft::ui::patterns::form_dialogs::{FormButtons, FormCx};
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::{Env, Label};
+use craft::ui::sections::{DialogRole, FooterButton};
+use craft::ui::text::TextField;
+use egui::Ui;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use wordcraft_doc::Source;
+
+use crate::WordApp;
+use crate::dialogs::host::{Asks, DialogHooks, Filed, FormHost, WordForm, open_form, open_form_with};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_dialogs::{AfterPick, Asked};
 
 // ---------------------------------------------------------------------------------------------
 // Sources
@@ -117,8 +137,8 @@ pub(super) fn field_mut<'a>(s: &'a mut Source, key: &str) -> Option<&'a mut Stri
 }
 
 /// Create Source / Edit Source.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SourceForm {
     pub source: Source,
     pub show_all: bool,
@@ -126,21 +146,19 @@ pub struct SourceForm {
     pub edit: bool,
     /// Insert a citation of the source on OK (Insert Citation › Add New Source…).
     pub cite: bool,
-    /// Opened from the Source Manager, which comes back when this closes.
-    pub back: bool,
     /// Corporate Author is checked: the Author box holds one organisation's name (#4848).
     pub corporate: bool,
 }
 
 impl SourceForm {
-    pub fn new(cite: bool, back: bool) -> SourceForm {
-        SourceForm::of(Source { kind: "book".into(), ..Default::default() }, false, cite, back)
+    pub fn new(cite: bool) -> SourceForm {
+        SourceForm::of(Source { kind: "book".into(), ..Default::default() }, false, cite)
     }
 
     /// The form for `source`; Corporate Author starts checked when the source has one.
-    pub fn of(source: Source, edit: bool, cite: bool, back: bool) -> SourceForm {
+    pub fn of(source: Source, edit: bool, cite: bool) -> SourceForm {
         let corporate = !source.corporate.trim().is_empty();
-        SourceForm { source, show_all: false, edit, cite, back, corporate }
+        SourceForm { source, show_all: false, edit, cite, corporate }
     }
 
     /// The source as OK adds it: the person authors or the corporate author, whichever box is
@@ -167,137 +185,213 @@ impl SourceForm {
     }
 }
 
-/// Draws a source's type and fields, optionally every bibliography field, and adds it as a
-/// bibliography source or inserts a citation on OK.
-pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> Next {
-    crate::rtl::Table::new("src").columns(2).spacing(vec2(10.0, 5.0)).show(ui, |t| {
-        t.row(|r| {
-            let kind_label = r.cell(|ui| ui.label(tl!("Source type:")));
-            r.cell(|ui| {
-                let shown = SOURCE_TYPES.iter().find(|(k, ..)| *k == f.source.kind).map(|(_, l, _)| tl!(l).to_string()).unwrap_or_default();
-                let combo = craft_ui::ComboBox::from_id_salt("src_kind").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-                    for (k, l, _) in SOURCE_TYPES {
-                        ui.selectable_value(&mut f.source.kind, k.to_string(), tl!(l));
-                    }
-                });
-                combo.response.labelled_by(kind_label.id);
-            });
-        });
-        let edit = f.edit;
-        let corporate = f.corporate;
-        for (key, label) in f.fields() {
+impl WordForm for SourceForm {
+    fn key(&self) -> &'static str {
+        if self.edit { "editSource" } else { "createSource" }
+    }
+
+    fn title(&self) -> Label {
+        Label::from(if self.edit { tl!("Edit Source") } else { tl!("Create Source") }.to_string())
+    }
+
+    /// A refusal from the command is shown by the held OK.
+    fn commands(&self) -> Vec<(String, Value)> {
+        let src = serde_json::to_value(self.finished()).unwrap_or(Value::Null);
+        if self.cite {
+            vec![("references.citation".to_string(), json!({"source": src}))]
+        } else {
+            vec![("references.sources".to_string(), json!({"add": src}))]
+        }
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        let types: Vec<Entry<String>> = SOURCE_TYPES.iter().map(|(k, l, _)| Entry::new(k.to_string(), Label::from(tl!(l).to_string()))).collect();
+        let kind_title = Label::from(tl!("Source type:").to_string());
+        let kind = Field::new(kind_title.clone())
+            .show(ui, |ui, _| Select::new(kind_title.clone(), Bind::given(Mixed::Same(self.source.kind.clone())), &types).show(ui).value().cloned())
+            .inner
+            .flatten();
+        if let Some(kind) = kind {
+            self.source.kind = kind;
+        }
+        for (key, label) in self.fields() {
             // Corporate Author swaps the Author box for one organisation's name (#4848).
-            let (key, label) = if key == "author" && corporate { ("corporate", "Corporate Author") } else { (key, label) };
-            t.row(|r| {
-                let field_label = r.cell(|ui| ui.label(format!("{}:", tl!(label))));
-                r.cell(|ui| {
-                    if let Some(v) = field_mut(&mut f.source, key) {
-                        let hint = match key {
-                            "author" => tl!("Last, First; Last, First"),
-                            "tag" => tl!("Made from the author and year when empty"),
-                            _ => "",
-                        };
-                        ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint))
-                            .labelled_by(field_label.id);
+            let (key, label) = if key == "author" && self.corporate { ("corporate", "Corporate Author") } else { (key, label) };
+            let current = field_mut(&mut self.source, key).map(|v| v.clone()).unwrap_or_default();
+            let hint = match key {
+                "author" => tl!("Last, First; Last, First"),
+                "tag" => tl!("Made from the author and year when empty"),
+                _ => "",
+            };
+            let enabled = !(self.edit && key == "tag");
+            let title = Label::from(format!("{}:", tl!(label)));
+            let typed = Field::new(title.clone())
+                .show(ui, |ui, _| {
+                    let mut field = TextField::new(title.clone(), Bind::given(current.clone())).enabled(enabled);
+                    if !hint.is_empty() {
+                        field = field.placeholder(Label::from(hint.to_string()));
                     }
-                });
-            });
+                    field.show(ui).value().cloned()
+                })
+                .inner
+                .flatten();
+            if let Some(text) = typed
+                && let Some(field) = field_mut(&mut self.source, key)
+            {
+                *field = text;
+            }
             if matches!(key, "author" | "corporate") {
-                t.row(|r| {
-                    r.cell(|ui| ui.label(""));
-                    r.cell(|ui| ui.checkbox(&mut f.corporate, tl!("Corporate Author")));
-                });
+                Checkbox::new(Bind::bound(&mut self.corporate)).label(Label::from(tl!("Corporate Author").to_string())).show(ui);
             }
         }
-    });
-    ui.checkbox(&mut f.show_all, tl!("Show every bibliography field"));
-    let (ok, cancel) = buttons(ui, tl!("OK"));
-    if ok {
-        let src = serde_json::to_value(f.finished()).unwrap_or(Value::Null);
-        let r = if f.cite { app.run("references.citation", json!({"source": src})) } else { app.run("references.sources", json!({"add": src})) };
-        if let Err(e) = r {
-            app.status(e);
-        }
+        Checkbox::new(Bind::bound(&mut self.show_all)).label(Label::from(tl!("Show every bibliography field").to_string())).show(ui);
+        true
     }
-    if (ok || cancel) && f.back {
-        return go(RefsDialog::Sources { selected: None });
-    }
-    if ok || cancel { Next::Close } else { Next::Stay }
 }
 
-/// The Source Manager: the document's sources with New…, Import…, Edit…, Delete and Insert
-/// Citation; each button runs the command an agent would.
-pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<usize>) -> Next {
-    let t = Tokens::get(ui.ctx());
-    let list: Vec<String> = app
-        .session
-        .doc
-        .sources
-        .iter()
-        .map(|s| {
-            let who = if s.corporate.trim().is_empty() { s.author.as_str() } else { s.corporate.trim() };
-            let parts: Vec<&str> = [who, s.title.as_str(), s.year.as_str()].into_iter().filter(|x| !x.is_empty()).collect();
-            format!("{} — {}", s.tag, parts.join("; "))
-        })
-        .collect();
-    ui.label(tl!("Sources in this document:"));
-    egui::Frame::new().stroke(egui::Stroke::new(1.0, t.border_strong)).inner_margin(4.0).show(ui, |ui| {
-        ui.set_min_size(vec2(380.0, 160.0));
-        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-            if list.is_empty() {
-                ui.label(egui::RichText::new(tl!("No sources yet.")).color(t.text_dim));
-            }
-            for (i, l) in list.iter().enumerate() {
-                if ui.selectable_label(*selected == Some(i), l).clicked() {
-                    *selected = Some(i);
+/// The body action that asks for a Word bibliography file to import.
+const IMPORT: u32 = 1;
+
+/// The Source Manager: the document's sources with New…, Import…, Edit…, Delete and Insert Citation; each button runs
+/// the command an agent would.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SourceManagerForm {
+    /// The picked row.
+    pub selected: Option<usize>,
+    /// The row texts, read from the document's sources before every run.
+    pub rows: Vec<String>,
+    /// The tag of each row.
+    pub tags: Vec<String>,
+}
+
+impl SourceManagerForm {
+    /// The tag of the picked row.
+    fn picked(&self) -> Option<&String> {
+        self.tags.get(self.selected?)
+    }
+}
+
+impl WordForm for SourceManagerForm {
+    fn key(&self) -> &'static str {
+        "sourceManager"
+    }
+
+    fn title(&self) -> Label {
+        Label::from(tl!("Source Manager").to_string())
+    }
+
+    /// Insert Citation is the Accept-role extra; there is no OK, only Close.
+    fn buttons(&self) -> FormButtons {
+        FormButtons::Close
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        Vec::new()
+    }
+
+    fn extra_buttons(&self) -> Vec<FooterButton> {
+        vec![FooterButton::new(Label::from(tl!("Insert Citation").to_string()), DialogRole::Accept).enabled(self.picked().is_some())]
+    }
+
+    fn extra(&mut self, _at: usize) -> Vec<(String, Value)> {
+        self.picked().map(|tag| ("references.citation".to_string(), json!({"tag": tag}))).into_iter().collect()
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
+        let which: Vec<usize> = (0..self.rows.len()).collect();
+        let source = keyed(which.as_slice(), |i: &usize| *i);
+        let selection = self.selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
+        let rows = &self.rows;
+        let shown = List::<usize>::new(Label::from(tl!("Sources in this document:").to_string()))
+            .select(SelectMode::Single)
+            // The dialog body scrolls, and a collection owns its own scroll: the list shows this many rows
+            // and scrolls the rest itself.
+            .max_rows(10)
+            .empty(Label::from(tl!("No sources yet.").to_string()))
+            .selection(Bind::given(selection))
+            .show_items(ui, &source, &mut |i, _| ListRow::new(Label::from(rows.get(*i).cloned().unwrap_or_default())));
+        for event in shown.events {
+            match event {
+                CollectionEvent::Selection(SelectionChange::Set(keys)) => self.selected = keys.last().copied(),
+                CollectionEvent::Selection(SelectionChange::Toggle(key)) => {
+                    self.selected = if self.selected == Some(key) { None } else { Some(key) };
                 }
+                CollectionEvent::Selection(SelectionChange::Clear) => self.selected = None,
+                _ => {}
             }
-        });
-    });
-    let src = selected.and_then(|i| app.session.doc.sources.get(i)).cloned();
-    let mut next = Next::Stay;
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        if ui.button(tl!("New…")).clicked() {
-            next = go(RefsDialog::Source(Box::new(SourceForm::new(false, true))));
         }
-        // Import… (desktop): a Word bibliography file (`b:Sources`, Word's own Sources.xml) adds
-        // its sources to this document (#2640); the list above follows on the next frame.
+        let tag = self.picked().cloned();
+        // Importing reads a path, which the web has no way to hand over.
+        let can_import = cfg!(not(target_arch = "wasm32")) && Env::of(ui).view().host().is_some_and(|h| h.files().can_pick());
+        if Button::new(Label::from(tl!("New…").to_string())).show(ui).clicked() {
+            asks.push(Asks::Open("createSource".to_string(), Value::Null));
+        }
+        if Button::new(Label::from(tl!("Import…").to_string())).enabled(can_import).show(ui).clicked() {
+            asks.push(Asks::Act(IMPORT));
+        }
+        if Button::new(Label::from(tl!("Edit…").to_string())).enabled(tag.is_some()).show(ui).clicked()
+            && let Some(tag) = &tag
+        {
+            asks.push(Asks::Open("editSource".to_string(), json!({"tag": tag})));
+        }
+        if Button::new(Label::from(tl!("Delete").to_string())).enabled(tag.is_some()).show(ui).clicked()
+            && let Some(tag) = &tag
+        {
+            asks.push(Asks::Run("references.sources".to_string(), json!({"remove": tag})));
+            self.selected = None;
+        }
+        true
+    }
+
+    /// Import…: a Word bibliography file (`b:Sources`, Word's own Sources.xml) adds its sources to this document
+    /// (#2640); the list follows on the next run.
+    fn applied(&mut self, app: &mut WordApp, filed: Filed, _outcome: Result<&[Value], &str>) {
         #[cfg(not(target_arch = "wasm32"))]
-        if ui.button(tl!("Import…")).clicked()
-            && let Asked::Done(Err(e)) = app.ask_file(FileDialogRequest::Open { purpose: "sources".into() }, AfterPick::Sources)
+        if matches!(filed, Filed::Act(IMPORT))
+            && let Asked::Done(Err(e)) = app.ask_file(PickRequest::open("sources"), AfterPick::Sources)
         {
             app.status(e);
         }
-        if ui.add_enabled(src.is_some(), egui::Button::new(tl!("Edit…"))).clicked()
-            && let Some(s) = &src
-        {
-            next = go(RefsDialog::Source(Box::new(SourceForm::of(s.clone(), true, false, true))));
+        #[cfg(target_arch = "wasm32")]
+        let _ = (app, filed);
+    }
+}
+
+/// The row text of a source: `tag — who; title; year`, `who` the corporate author when there is one.
+fn row_text(s: &Source) -> String {
+    let who = if s.corporate.trim().is_empty() { s.author.as_str() } else { s.corporate.trim() };
+    let parts: Vec<&str> = [who, s.title.as_str(), s.year.as_str()].into_iter().filter(|x| !x.is_empty()).collect();
+    format!("{} — {}", s.tag, parts.join("; "))
+}
+
+/// Copies the document's sources into the manager before every run.
+fn prepare_manager(app: &mut WordApp, id: DialogId) {
+    let rows: Vec<String> = app.session.doc.sources.iter().map(row_text).collect();
+    let tags: Vec<String> = app.session.doc.sources.iter().map(|s| s.tag.clone()).collect();
+    if let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<SourceManagerForm>>(id) {
+        let form = host.form_mut();
+        form.rows = rows;
+        form.tags = tags;
+        if form.selected.is_some_and(|at| at >= form.rows.len()) {
+            form.selected = None;
         }
-        if ui.add_enabled(src.is_some(), egui::Button::new(tl!("Delete"))).clicked()
-            && let Some(s) = &src
-        {
-            if let Err(e) = app.run("references.sources", json!({"remove": s.tag})) {
-                app.status(e);
-            }
-            *selected = None;
+    }
+}
+
+/// Opens the Source Manager, Create Source or Edit Source dialog (`name`), over `parent` when it is a child. Create
+/// Source opened over nothing inserts a citation of the new source; over the manager it only adds the source. Edit
+/// Source takes the source's `tag` from `params`; an unknown tag opens nothing.
+pub(super) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    match name {
+        // PLAN: assumed DialogHooks::prepare_only(prepare: fn(&mut WordApp, DialogId)) -> DialogHooks (dialogs-w13)
+        "sourceManager" => Some(open_form_with(app, parent, SourceManagerForm::default(), DialogHooks::prepare_only(prepare_manager))),
+        "createSource" => Some(open_form(app, parent, SourceForm::new(parent.is_none()))),
+        "editSource" => {
+            let tag = params.get("tag").and_then(Value::as_str)?;
+            let source = app.session.doc.sources.iter().find(|s| s.tag == tag)?.clone();
+            Some(open_form(app, parent, SourceForm::of(source, true, false)))
         }
-        if ui.add_enabled(src.is_some(), egui::Button::new(tl!("Insert Citation"))).clicked()
-            && let Some(s) = &src
-        {
-            if let Err(e) = app.run("references.citation", json!({"tag": s.tag})) {
-                app.status(e);
-            }
-            next = Next::Close;
-        }
-    });
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                next = Next::Close;
-            }
-        });
-    });
-    next
+        _ => None,
+    }
 }
