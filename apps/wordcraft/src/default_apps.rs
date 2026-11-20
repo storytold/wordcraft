@@ -175,6 +175,28 @@ mod tests {
         assert!(!declared.contains(&"text/plain"), "text/plain must not be declared");
     }
 
+    /// Every macOS document type names the app icon. Without it Finder keeps the system's
+    /// generic icon on files WordCraft is the default app for.
+    #[test]
+    fn macos_document_types_name_the_app_icon() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        let lines: Vec<&'static str> = plist.lines().map(str::trim).collect();
+        let values = |key: &str| -> Vec<&'static str> {
+            let key = format!("<key>{key}</key>");
+            lines
+                .windows(2)
+                .filter_map(|w| match w {
+                    [k, v] if *k == key => Some(*v),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(values("CFBundleIconFile"), ["<string>WordCraft</string>"]);
+        let types = values("CFBundleTypeName").len();
+        assert!(types > 0, "no document types found");
+        assert_eq!(values("CFBundleTypeIconFile"), vec!["<string>WordCraft</string>"; types], "a document type names no app icon");
+    }
+
     #[cfg(unix)]
     #[test]
     fn application_dirs_follow_the_xdg_spec() {
