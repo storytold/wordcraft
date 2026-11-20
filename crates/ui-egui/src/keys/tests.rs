@@ -113,6 +113,16 @@ fn batch_frame(h: &mut H, events: Vec<egui::Event>) {
     crate::test_harness::frame(h);
 }
 
+/// The modifiers of the platform's Mod key as egui reports them: Cmd on macOS (`mac_cmd` with `command`, and no
+/// Control), Ctrl elsewhere.
+fn mod_held() -> Modifiers {
+    if cfg!(target_os = "macos") {
+        Modifiers { mac_cmd: true, command: true, ..Default::default() }
+    } else {
+        Modifiers { ctrl: true, command: true, ..Default::default() }
+    }
+}
+
 /// One frame with `modifiers` held, then `events`.
 fn mods_frame(h: &mut H, modifiers: Modifiers, events: Vec<egui::Event>) {
     let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
@@ -224,7 +234,7 @@ fn user_assignments_become_overrides() {
 /// bold HTML, whichever of Shift and V is released first.
 #[test]
 fn mod_shift_v_released_shift_first_pastes_once() {
-    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let chord = Modifiers { shift: true, ..mod_held() };
     let ctrl = Modifiers { shift: false, ..chord };
     let mut h = alt_frame_app();
     run(&mut h, "text.insert", json!({"text": "source target"}));
@@ -241,7 +251,7 @@ fn mod_shift_v_released_shift_first_pastes_once() {
 #[test]
 fn a_global_mod_shift_v_leaves_the_next_mod_v_picture_paste_alone() {
     let mut h = picture_app();
-    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let chord = Modifiers { shift: true, ..mod_held() };
     mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
     let ctrl = Modifiers { shift: false, ..chord };
     mods_frame(&mut h, ctrl, vec![key_event(Key::V, false, ctrl)]);
@@ -296,7 +306,7 @@ fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> egui::Event {
 /// whether V or Ctrl is released first, and a plain V is no paste.
 #[test]
 fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+    let ctrl = mod_held();
 
     let mut h = alt_frame_app();
     run(&mut h, "text.insert", json!({"text": "x"}));
