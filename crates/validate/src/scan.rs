@@ -1497,6 +1497,34 @@ fn wrapper_is_block_level(frames: &[Frame], idx: usize) -> bool {
     true
 }
 
+/// Whether the direct parent is a `w:sdtContent` / `w:customXml` whose block level an unresolved ancestor decides: the walk
+/// of `wrapper_is_block_level` reaches an element of unresolved namespace named like a paragraph or a block container
+/// before it reaches a known one.
+fn wrapper_block_level_undecided(state: &State) -> bool {
+    observation_contract! {
+        rules: "-";
+        collections: "field.frames*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    let Some((parent, outer)) = state.frames.split_last() else { return false };
+    if !(parent.is_sdt_content || parent.is_custom_xml) {
+        return false;
+    }
+    for f in outer.iter().rev() {
+        if f.is_p || f.block_parent_name.is_some() {
+            return false;
+        }
+        if f.unresolved & (U_P | U_BLOCK) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 /// The prohibited direct parent of an `m:oMath` or `m:oMathPara`, when the
 /// innermost open frame is one: an inherently block-level container, or a
 /// `w:sdtContent` / `w:customXml` sitting at block level. Returns the parent's
@@ -1568,6 +1596,8 @@ fn check_math_placement(state: &mut State, id: &ElemId, role: PartRole, part: &s
             }
             if let Some(parent) = prohibited_parent(state) {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} is a direct child of w:{parent}"));
+            } else if wrapper_block_level_undecided(state) {
+                undecided = true;
             }
         }
         "oMathPara" => {
@@ -1583,6 +1613,8 @@ fn check_math_placement(state: &mut State, id: &ElemId, role: PartRole, part: &s
             }
             if let Some(parent) = prohibited_parent(state) {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} is a direct child of w:{parent}"));
+            } else if wrapper_block_level_undecided(state) {
+                undecided = true;
             }
         }
         // Paragraph properties are a legal child of oMathPara, not stray content.
@@ -2363,7 +2395,7 @@ fn push_capped<T>(into: &mut Observed<Vec<(T, String)>>, cap: usize, capped: &mu
 fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, part: &str, acc: &mut Acc, empty: bool) {
     observation_contract! {
         rules: "CUSTOMXML-SCHEMA,STRUCT-DELTEXT";
-        collections: "field.frames*1,field.move_from_end*1,field.move_from_names*1,field.move_from_start*2,field.move_start_ids*4,field.move_to_end*1,field.move_to_names*1,field.move_to_start*2";
+        collections: "field.frames*1,field.move_from_end*1,field.move_from_names*1,field.move_from_start*2,field.move_start_ids*4,field.move_to_end*1,field.move_to_names*1,field.move_to_start*2,field.withheld*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2441,8 +2473,13 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
         "t" if state.del_depth > 0 => {
             acc.add("STRUCT-DELTEXT", Some(part.to_string()), format!("a w:t element appears inside a w:del in {part}"));
         }
-        "delText" if state.del_depth == 0 && !state.frames.iter().any(|f| f.unresolved & U_DEL != 0) => {
-            acc.add("STRUCT-DELTEXT", Some(part.to_string()), format!("a w:delText element appears outside a w:del in {part}"));
+        "delText" if state.del_depth == 0 => {
+            if state.frames.iter().any(|f| f.unresolved & U_DEL != 0) {
+                // The enclosing element may be the `w:del` this is judged against: not decided.
+                state.withheld.insert("STRUCT-DELTEXT");
+            } else {
+                acc.add("STRUCT-DELTEXT", Some(part.to_string()), format!("a w:delText element appears outside a w:del in {part}"));
+            }
         }
         _ => {}
     }

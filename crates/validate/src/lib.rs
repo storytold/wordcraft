@@ -6164,6 +6164,19 @@ mod budget_tests {
         let math = |wrapper: &str| story(&format!(r#"<w:p><{wrapper} xmlns:q="urn:&year;"><m:f/></{wrapper}></w:p>"#));
         assert_eq!(rules(&math("q:vendor")), ["MATH-PLACEMENT"]);
         assert_eq!(math("q:num").verdict, Verdict::Incomplete);
+        // The same holds where a block level or a deletion is decided by an ancestor: undecided, never silent.
+        let deleted = |wrapper: &str| {
+            let name = wrapper.split(' ').next().unwrap_or_default();
+            story(&format!(r#"<w:p><{wrapper}><w:r><w:delText/></w:r></{name}></w:p>"#))
+        };
+        assert_eq!(rules(&deleted("q:del xmlns:q=\"urn:2006\"")), ["STRUCT-DELTEXT"]);
+        assert_eq!(deleted(&format!("q:del {q}")).verdict, Verdict::Incomplete);
+        let sdt = |wrapper: &str| {
+            let name = wrapper.split(' ').next().unwrap_or_default();
+            story(&format!(r#"<w:p><{wrapper}><w:sdtContent><m:oMath/></w:sdtContent></{name}></w:p>"#))
+        };
+        assert_eq!(rules(&sdt("q:tbl xmlns:q=\"urn:2006\"")), Vec::<&str>::new());
+        assert_eq!(sdt(&format!("q:tbl {q}")).verdict, Verdict::Incomplete);
         let merge = |open: &str, close: &str| settings(&format!("<{open}><w:headerSource/></{close}>"));
         assert_eq!(rules(&merge("w:mailMerge", "w:mailMerge")), ["HEADERSOURCE-PRESENT"]);
         assert_eq!(merge(&format!("q:mailMerge {q}"), "q:mailMerge").verdict, Verdict::Incomplete);
