@@ -1836,6 +1836,35 @@ fn an_easing_zoom_draws_unhinted_pages_until_it_stops() {
     assert_eq!(a.canvas.pages_hinted, platform, "hinted once the zoom stops");
 }
 
+/// `ui.subpixelText`: `system` (the default) follows what the desktop asks for, `off`, `rgb` and
+/// `bgr` override it; pages draw text so on Linux and the BSDs only. The setting is part of the
+/// pages' texture key, so changing it draws them again.
+#[test]
+fn subpixel_text_follows_the_desktop_or_the_setting() {
+    use crate::theme::SubpixelText;
+    let linux = cfg!(all(unix, not(target_os = "macos")));
+    let on = |o: &str| if linux { json!(o) } else { Value::Null };
+    // No host hook (tests, headless screenshots): nothing is asked for, so greyscale.
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    assert_eq!(a.run("ui.subpixelText", json!({})).unwrap(), json!({"subpixelText": "system", "order": null, "system": null}));
+    let services = Services { subpixel_order: Some(Box::new(|| Some(Subpixel::Bgr))), ..Default::default() };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    assert_eq!(a.run("ui.subpixelText", json!({})).unwrap(), json!({"subpixelText": "system", "order": on("bgr"), "system": "bgr"}));
+    let key = |a: &WordApp| canvas::tests_view_key(a);
+    let followed = key(&a);
+    assert_eq!(a.run("ui.subpixelText", json!({"value": "Off"})).unwrap()["order"], Value::Null);
+    assert_eq!(a.ui.subpixel_text, SubpixelText::Off);
+    assert_eq!(key(&a) != followed, linux, "greyscale pages are drawn again");
+    assert_eq!(a.run("ui.subpixelText", json!({"value": "rgb"})).unwrap()["order"], on("rgb"));
+    assert!(a.run("ui.subpixelText", json!({"value": "diagonal"})).is_err());
+    assert_eq!(a.ui.subpixel_text, SubpixelText::Rgb, "a bad value changes nothing");
+    // Kept in `ui.json`; an unknown saved value reads as the default.
+    let saved: UiState = serde_json::from_value(serde_json::to_value(&a.ui).unwrap()).unwrap();
+    assert_eq!(saved.subpixel_text, SubpixelText::Rgb);
+    let junk: UiState = serde_json::from_value(json!({"subpixelText": "sideways"})).unwrap();
+    assert_eq!(junk.subpixel_text, SubpixelText::System);
+}
+
 /// A pointer zoom stretches the pages' last rasters rather than rendering each in-between
 /// size: a notch (22 %) renders nothing until it stops, then the page once; a long zoom renders
 /// again only when a raster would be stretched past half again its size. A zoom that isn't a

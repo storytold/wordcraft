@@ -648,6 +648,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        subpixel_picker(app, ui);
+    }
     let mut keytips = app.ui.keytips_enabled;
     if ui.checkbox(&mut keytips, tl!("Show KeyTips (Alt or F10)")).changed() {
         let _ = app.run("ui.keytips", json!({"value": keytips}));
@@ -877,6 +880,36 @@ fn scroll_speed_picker(app: &mut WordApp, ui: &mut Ui) {
         if !cfg!(target_os = "macos") {
             row.response.on_hover_text(tl!("On X11, the touchpad follows the mouse wheel speed."));
         }
+    }
+}
+
+/// Subpixel text on the pages (Linux and the BSDs): follow the desktop's font settings (the
+/// default), off, RGB or BGR. Under "Use system setting" a line says what the desktop asks for.
+fn subpixel_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::theme::SubpixelText;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Subpixel text:"));
+        let combo =
+            craft_ui::ComboBox::from_id_salt("subpixel_text").selected_text(tl!(app.ui.subpixel_text.label())).width(220.0).show_ui(ui, |ui| {
+                for a in SubpixelText::ALL {
+                    if ui.selectable_label(app.ui.subpixel_text == a, tl!(a.label())).clicked() {
+                        let _ = app.run("ui.subpixelText", json!({"value": a.code()}));
+                    }
+                }
+            });
+        combo.response.labelled_by(label.id);
+    });
+    note(
+        ui,
+        "Sharper page text on LCD screens: each third of a pixel lights its own colour. Pick the order of your screen's colour stripes, left to right.",
+    );
+    if app.ui.subpixel_text == SubpixelText::System {
+        let reported = match app.system_subpixel() {
+            Some(crate::Subpixel::Rgb) => "Your desktop's font settings use subpixel rendering, RGB.",
+            Some(crate::Subpixel::Bgr) => "Your desktop's font settings use subpixel rendering, BGR.",
+            None => "Your desktop's font settings use greyscale text, so page text is greyscale.",
+        };
+        note(ui, reported);
     }
 }
 

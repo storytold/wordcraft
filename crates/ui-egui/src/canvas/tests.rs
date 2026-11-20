@@ -5947,3 +5947,58 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// A real page (tables with banded fills, shading, coloured headings): with subpixel text it
+/// differs from the greyscale page only along the edges of its text; every fill under and
+/// around the text is where it was, in its colour.
+#[test]
+fn a_page_with_subpixel_text_differs_from_greyscale_only_at_text_edges() {
+    let doc = wordcraft_engine::sample::sample_document();
+    let l = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+    let grey = wordcraft_render::RenderOptions { hinting: true, ..Default::default() };
+    let sub = wordcraft_render::RenderOptions { subpixel: Some(wordcraft_render::Subpixel::Rgb), ..grey.clone() };
+    for page in &l.pages {
+        let a = wordcraft_render::render_page(&doc, page, 1.93, &grey);
+        let b = wordcraft_render::render_page(&doc, page, 1.93, &sub);
+        let (pa, pb) = (a.pixels.as_chunks::<4>().0, b.pixels.as_chunks::<4>().0);
+        // Each pixel's brightness: greyscale and subpixel text cover about the same.
+        let lum = |p: &[u8; 4]| (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3;
+        let far = pa.iter().zip(pb).filter(|(x, y)| lum(x).abs_diff(lum(y)) > 90).count();
+        assert!(far * 1000 < pa.len(), "{far} of {} pixels far apart", pa.len());
+        // Inside every area of one colour (paper, fills, shading, a thick stroke), two pixels
+        // from any edge, the pages are the same pixel for pixel: subpixel text changes only
+        // the pixels at the edges of text, and nothing is drawn out of order.
+        let (w, h) = (a.width as usize, a.height as usize);
+        let at = |x: usize, y: usize| pa[y * w + x];
+        let mut inside = 0;
+        for y in 2..h.saturating_sub(2) {
+            for x in 2..w.saturating_sub(2) {
+                let c = at(x, y);
+                if (y - 2..=y + 2).all(|yy| (x - 2..=x + 2).all(|xx| at(xx, yy) == c)) {
+                    inside += 1;
+                    assert_eq!(pb[y * w + x], c, "({x}, {y}) inside an area of {c:?}");
+                }
+            }
+        }
+        assert!(inside * 2 > pa.len(), "most of a page is inside areas: {inside} of {}", pa.len());
+    }
+}
+
+/// A page shrunk to the GPU's texture size is drawn without subpixel text, at the raster scale it
+/// also has when shown one texel per pixel: its key tells the two rasters apart, so neither passes
+/// for the other once the zoom changes, and it stays the same while that doesn't change.
+#[test]
+fn a_rasters_key_tells_subpixel_text_from_greyscale_at_one_scale() {
+    // A 1536 × 768 point page in 2048-pixel textures: 2048/1536 and 2 screen pixels per point both
+    // rasterise it at 2048/1536.
+    let fit = raster_scale(2048.0 / 1536.0, 2048.0, 1536.0, 768.0);
+    let shrunk = raster_scale(2.0, 2048.0, 1536.0, 768.0);
+    assert_eq!(fit.scale_px, shrunk.scale_px);
+    assert!(fit.one_to_one && !shrunk.one_to_one && !fit.tiled && !shrunk.tiled);
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+    let layout = a.session.layout();
+    let view = view_key(&a, false, None, true);
+    let key = |a: &mut WordApp, s: &RasterScale| pages::page_key(a, &layout, 0, view, s.scale_px, s.one_to_one.then_some(crate::Subpixel::Rgb));
+    assert_ne!(key(&mut a, &fit), key(&mut a, &shrunk));
+    assert_eq!(key(&mut a, &fit), key(&mut a, &raster_scale(2048.0 / 1536.0, 2048.0, 1536.0, 768.0)));
+}

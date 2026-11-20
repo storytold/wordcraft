@@ -28,6 +28,7 @@ mod portal_save;
 mod prefs_merge;
 mod print;
 mod region;
+mod subpixel;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 
@@ -455,7 +456,7 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
 /// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
-fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::CancelHandle, ctx: &egui::Context) -> Services {
+fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::CancelHandle, ctx: &egui::Context, on_x: bool) -> Services {
     Services {
         file_dialog: Some(file_dialog),
         cancel_file_dialog: Some(Box::new(move || cancel_file_dialog.cancel())),
@@ -467,6 +468,7 @@ fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::C
         // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
         animations_enabled: Some(animations::hook(ctx)),
+        subpixel_order: Some(subpixel::hook(ctx, on_x)),
         clipboard_text: Some(Box::new(clipboard::text)),
         clipboard_html: Some(Box::new(clipboard::html)),
         set_clipboard_rich: Some(Box::new(clipboard::set_rich)),
@@ -676,8 +678,10 @@ fn main() -> eframe::Result {
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
+    // Whether the window draws through an X server: the desktop's subpixel setting is then read
+    // from its X resources too (subpixel.rs).
     #[cfg(all(unix, not(target_os = "macos")))]
-    {
+    let on_x = {
         let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name), x11_libraries);
         log::info!("{why}");
         if x11 {
@@ -686,7 +690,10 @@ fn main() -> eframe::Result {
                 b.with_x11();
             }));
         }
-    }
+        subpixel::window_on_x(x11, |name| std::env::var_os(name))
+    };
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let on_x = false;
     // egui-wgpu draws on the discrete GPU by default; on a laptop whose integrated GPU drives the
     // panel, that wakes the discrete GPU whenever the window redraws. Draw on the GPU that drives
     // the screen; `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` still decide (see linux_gpu.rs).
@@ -712,7 +719,7 @@ fn main() -> eframe::Result {
             let cancel_file_dialog = dialogs.cancel_handle();
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
+            let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx, on_x));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             // After the preferences, so the reason it gives is in the interface language.

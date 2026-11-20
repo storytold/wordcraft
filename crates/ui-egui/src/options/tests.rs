@@ -346,6 +346,37 @@ fn animation_effects_is_an_accessibility_option() {
     assert!(h.query_by_label("Your system has animation effects turned off.").is_none(), "only said while the system is followed");
 }
 
+/// File › Options › Advanced › Subpixel text (Linux and the BSDs): Use system setting (the
+/// default) follows the desktop's font settings, and a line says what they ask for.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn subpixel_text_is_an_advanced_option() {
+    use crate::theme::SubpixelText;
+    let services = Services { subpixel_order: Some(Box::new(|| Some(crate::Subpixel::Rgb))), ..Default::default() };
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    a.run("file.options", json!({"pane": "advanced"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert_eq!(h.state().ui.subpixel_text, SubpixelText::System);
+    assert!(h.query_by_label("Subpixel text:").is_some());
+    assert!(h.query_by_label("Your desktop's font settings use subpixel rendering, RGB.").is_some());
+    assert_eq!(h.state().subpixel_order(), Some(crate::Subpixel::Rgb));
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Subpixel text:").click();
+    h.run_steps(4);
+    h.get_by_label("Off").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.subpixel_text, SubpixelText::Off);
+    assert_eq!(h.state().subpixel_order(), None);
+    assert!(h.query_by_label("Your desktop's font settings use subpixel rendering, RGB.").is_none(), "only said while the desktop is followed");
+}
+
 /// File › Options › General › Start-up (#766): the checkbox is the `ui.startScreen` setting.
 #[test]
 fn general_start_up_turns_the_start_screen_off_and_on() {

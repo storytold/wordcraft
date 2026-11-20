@@ -1,0 +1,313 @@
+//! The desktop's subpixel text setting, which File › Options › Advanced › Subpixel text follows
+//! when set to "Use system setting" (`Services::subpixel_order`).
+//!
+//! Linux and the BSDs, KDE Plasma and GNOME alike, two sources of the same setting:
+//!
+//! - the X resources the desktop's font settings write for X applications (`Xft.antialias`,
+//!   `Xft.rgba`; KDE Plasma's System Settings › Text & Fonts › Sub-pixel rendering, GNOME's font
+//!   antialiasing through its settings daemon), which fontconfig-based apps such as Firefox follow
+//!   too, read from the root window's `RESOURCE_MANAGER` property;
+//! - the settings portal: KDE Plasma's own keys (`org.kde.kdeglobals.General`: `XftAntialias`,
+//!   `XftSubPixel`) first, then GNOME's (`org.gnome.desktop.interface`: `font-antialiasing`,
+//!   `font-rgba-order`). A portal that merges both (KDE's with GTK's) answers GNOME's keys with
+//!   GTK's defaults, not KDE's setting, so KDE's come first.
+//!
+//! Running through XWayland (the default) the X resources are asked first and the portal when
+//! they say nothing; on native Wayland only the portal, so an on-demand XWayland (GNOME's, sway's
+//! `xwayland lazy`) is never started to read a setting: where the portal has no font keys
+//! (xdg-desktop-portal-wlr), page text stays greyscale unless File › Options says otherwise. A
+//! thread asks every two seconds, so a change in the desktop's settings shows without a restart.
+//! Elsewhere the desktop isn't asked: page text is greyscale.
+
+use wordcraft_ui_egui::Subpixel;
+
+/// The answer to "which subpixel order does the desktop draw text with?" for the UI: `None` for
+/// greyscale text, or when it doesn't say. `ctx` is asked to redraw when the answer changes.
+/// `on_x`: the window draws through an X server ([`window_on_x`]), so its X resources apply.
+pub fn hook(ctx: &egui::Context, on_x: bool) -> Box<dyn Fn() -> Option<Subpixel>> {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Box::new(desktop::watch(ctx.clone(), on_x))
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = (ctx, on_x);
+        Box::new(|| None)
+    }
+}
+
+/// Whether the window draws through an X server, so the desktop's X resources apply to it:
+/// X11 forced (`forced_x11`, from `uses_x11` in `main`), or no Wayland for winit to pick.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+pub fn window_on_x(forced_x11: bool, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let set = |name: &str| env(name).is_some_and(|v| !v.is_empty());
+    forced_x11 || set("DISPLAY") && !set("WAYLAND_DISPLAY") && !set("WAYLAND_SOCKET")
+}
+
+/// What X resources (`RESOURCE_MANAGER`'s text, `name:\tvalue` lines) say: `Some(order)`, or
+/// `Some(None)` for greyscale (antialiasing off, with or without an `Xft.rgba`; `Xft.rgba` `none`,
+/// or a vertical order, which pages don't draw); `None` when they don't say (no `Xft.rgba`).
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+pub fn resources_say(resources: &str) -> Option<Option<Subpixel>> {
+    let value = |name: &str| {
+        resources.lines().filter_map(|line| line.split_once(':')).find(|(k, _)| k.trim() == name).map(|(_, v)| v.trim().to_ascii_lowercase())
+    };
+    if value("Xft.antialias").is_some_and(|a| says_off(&a)) {
+        return Some(None);
+    }
+    Some(order(&value("Xft.rgba")?))
+}
+
+/// What the settings portal's GNOME font keys say (`font-antialiasing`, `font-rgba-order`):
+/// `None` when it doesn't have them.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+pub fn portal_says(antialiasing: Option<&str>, rgba_order: Option<&str>) -> Option<Option<Subpixel>> {
+    match antialiasing?.trim().to_ascii_lowercase().as_str() {
+        "rgba" => Some(rgba_order.and_then(order)),
+        "grayscale" | "none" => Some(None),
+        _ => None,
+    }
+}
+
+/// What KDE Plasma's font settings say through the portal (`XftAntialias`, `XftSubPixel`):
+/// `None` when it doesn't have them (not a KDE desktop). Antialiasing off is greyscale whether or
+/// not an order is written.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+pub fn kde_says(antialias: Option<&str>, subpixel: Option<&str>) -> Option<Option<Subpixel>> {
+    if antialias.is_some_and(says_off) {
+        return Some(None);
+    }
+    Some(order(subpixel?))
+}
+
+/// Whether a boolean setting says off, read the way Xft reads one (`XftDefaultParseBool`): by its
+/// first letter, whatever the case (`f`, `n` or `0`), or `of…`. That covers KDE's `false`, `off`,
+/// `no` and `0` too. Anything else, including `on`, isn't off.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn says_off(value: &str) -> bool {
+    let mut letters = value.trim().chars().map(|c| c.to_ascii_lowercase());
+    match letters.next() {
+        Some('f' | 'n' | '0') => true,
+        Some('o') => letters.next() == Some('f'),
+        _ => false,
+    }
+}
+
+/// A fontconfig `rgba` name: `rgb` and `bgr` draw subpixel text; `none`, the vertical orders
+/// (`vrgb`, `vbgr`) and anything else greyscale.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn order(name: &str) -> Option<Subpixel> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "rgb" => Some(Subpixel::Rgb),
+        "bgr" => Some(Subpixel::Bgr),
+        _ => None,
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+mod desktop {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::time::Duration;
+
+    use wordcraft_ui_egui::Subpixel;
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::zvariant::{OwnedValue, Value};
+
+    /// How often the desktop is asked again.
+    const EVERY: Duration = Duration::from_secs(2);
+    /// Largest `RESOURCE_MANAGER` read, in 32-bit units (4 MB).
+    const MAX_RESOURCES: u32 = 1 << 20;
+
+    const GREYSCALE: u8 = 0;
+    const RGB: u8 = 1;
+    const BGR: u8 = 2;
+
+    /// The latest answer, kept up to date on a thread of its own.
+    pub fn watch(ctx: egui::Context, on_x: bool) -> impl Fn() -> Option<Subpixel> {
+        let latest = Arc::new(AtomicU8::new(GREYSCALE));
+        let shared = latest.clone();
+        let native_wayland = !on_x;
+        let spawned = std::thread::Builder::new().name("subpixel-setting".into()).spawn(move || {
+            // Both connections are opened when first needed and kept.
+            let mut x: Option<(x11rb::rust_connection::RustConnection, usize)> = None;
+            let mut bus: Option<Connection> = None;
+            loop {
+                let mut from_x = || {
+                    if x.is_none() {
+                        x = x11rb::connect(None).ok();
+                    }
+                    let answer = x.as_ref().and_then(|(conn, screen)| resources(conn, *screen)).and_then(|r| super::resources_say(&r));
+                    // A connection the X server dropped is opened again next time.
+                    if x.as_ref().is_some_and(|(conn, _)| conn.flush().is_err()) {
+                        x = None;
+                    }
+                    answer
+                };
+                let mut from_portal = || {
+                    if bus.is_none() {
+                        bus = Connection::session().ok();
+                    }
+                    bus.as_ref().and_then(portal)
+                };
+                // On native Wayland only the portal: asking X there could start an on-demand
+                // XWayland (GNOME's, sway's `xwayland lazy`) and keep it running.
+                let answer = if native_wayland { from_portal() } else { from_x().or_else(from_portal) }.flatten();
+                let code = match answer {
+                    Some(Subpixel::Rgb) => RGB,
+                    Some(Subpixel::Bgr) => BGR,
+                    None => GREYSCALE,
+                };
+                if shared.swap(code, Ordering::Relaxed) != code {
+                    ctx.request_repaint();
+                }
+                std::thread::sleep(EVERY);
+            }
+        });
+        if let Err(e) = spawned {
+            log::warn!("desktop subpixel setting: {e}");
+        }
+        move || match latest.load(Ordering::Relaxed) {
+            RGB => Some(Subpixel::Rgb),
+            BGR => Some(Subpixel::Bgr),
+            _ => None,
+        }
+    }
+
+    /// The root window's X resources.
+    fn resources(conn: &impl x11rb::connection::Connection, screen: usize) -> Option<String> {
+        let root = conn.setup().roots.get(screen)?.root;
+        let reply = conn.get_property(false, root, AtomEnum::RESOURCE_MANAGER, AtomEnum::STRING, 0, MAX_RESOURCES).ok()?.reply().ok()?;
+        String::from_utf8(reply.value).ok()
+    }
+
+    /// What the settings portal says: KDE Plasma's keys, else GNOME's; `None` when there's no
+    /// portal or it has neither.
+    fn portal(connection: &Connection) -> Option<Option<Subpixel>> {
+        let portal =
+            Proxy::new(connection, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings").ok()?;
+        // Plasma 6.7's portal answers `ReadOne` and `Read` for its own keys with "not found", yet
+        // lists them in `ReadAll`: so the whole namespace is read when a single key can't be.
+        let read_all = |namespace: &str, key: &str| -> Option<String> {
+            let mut all: HashMap<String, HashMap<String, OwnedValue>> = portal.call("ReadAll", &(vec![namespace],)).ok()?;
+            text(all.remove(namespace)?.get(key)?, 0)
+        };
+        let read = |namespace: &str, key: &str| -> Option<String> {
+            let one: Option<OwnedValue> = portal.call("ReadOne", &(namespace, key)).or_else(|_| portal.call("Read", &(namespace, key))).ok();
+            one.and_then(|value| text(&value, 0)).or_else(|| read_all(namespace, key))
+        };
+        let kde = "org.kde.kdeglobals.General";
+        let gnome = "org.gnome.desktop.interface";
+        super::kde_says(read(kde, "XftAntialias").as_deref(), read(kde, "XftSubPixel").as_deref())
+            .or_else(|| super::portal_says(read(gnome, "font-antialiasing").as_deref(), read(gnome, "font-rgba-order").as_deref()))
+    }
+
+    fn text(value: &Value<'_>, depth: u8) -> Option<String> {
+        match value {
+            Value::Str(s) => Some(s.as_str().to_string()),
+            // `Read` wraps its answer in a second variant.
+            Value::Value(inner) if depth < 4 => text(inner, depth + 1),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x_resources_give_the_order_kde_and_gnome_set() {
+        // As KDE Plasma writes them (this machine: Sub-pixel rendering RGB).
+        let kde = "Xft.antialias:\t1\nXft.dpi:\t139\nXft.hinting:\t1\nXft.hintstyle:\thintslight\nXft.rgba:\trgb\n";
+        assert_eq!(resources_say(kde), Some(Some(Subpixel::Rgb)));
+        assert_eq!(resources_say("Xft.rgba: BGR\n"), Some(Some(Subpixel::Bgr)));
+        // Greyscale: no subpixel rendering, antialiasing off, or a vertical order.
+        assert_eq!(resources_say("Xft.rgba:\tnone\n"), Some(None));
+        assert_eq!(resources_say("Xft.antialias:\t0\nXft.rgba:\trgb\n"), Some(None));
+        assert_eq!(resources_say("Xft.rgba:\tvrgb\n"), Some(None));
+        // Nothing said: the portal is asked next.
+        assert_eq!(resources_say("Xft.dpi:\t96\n*background: grey\n"), None);
+        assert_eq!(resources_say(""), None);
+        // Junk never panics.
+        assert_eq!(resources_say(":::\n\u{0}Xft.rgba\n"), None);
+    }
+
+    #[test]
+    fn the_portal_gives_kdes_font_settings_before_gnomes() {
+        // As KDE Plasma's portal answers here (Sub-pixel rendering RGB, the default).
+        assert_eq!(kde_says(Some("true"), Some("rgb")), Some(Some(Subpixel::Rgb)));
+        assert_eq!(kde_says(None, Some("bgr")), Some(Some(Subpixel::Bgr)));
+        assert_eq!(kde_says(Some("true"), Some("none")), Some(None));
+        assert_eq!(kde_says(Some("true"), Some("vbgr")), Some(None));
+        assert_eq!(kde_says(Some("false"), Some("rgb")), Some(None), "antialiasing off");
+        // Not KDE: GNOME's keys are asked.
+        assert_eq!(kde_says(None, None), None);
+        assert_eq!(kde_says(Some("true"), None), None);
+    }
+
+    #[test]
+    fn antialiasing_off_is_read_like_xft_reads_a_boolean() {
+        // Xft's boolean values, whatever the case: off, no and f… are off as well as false and 0.
+        for off in ["off", "Off", "no", "NO", "f", "False"] {
+            assert_eq!(resources_say(&format!("Xft.antialias:\t{off}\nXft.rgba:\trgb\n")), Some(None), "{off}");
+            assert_eq!(kde_says(Some(off), Some("rgb")), Some(None), "{off}");
+        }
+        // On stays on.
+        for on in ["on", "On", "yes", "true", "1", "t"] {
+            assert_eq!(resources_say(&format!("Xft.antialias:\t{on}\nXft.rgba:\trgb\n")), Some(Some(Subpixel::Rgb)), "{on}");
+            assert_eq!(kde_says(Some(on), Some("rgb")), Some(Some(Subpixel::Rgb)), "{on}");
+        }
+    }
+
+    #[test]
+    fn antialiasing_turned_off_is_greyscale_even_without_an_order() {
+        // KDE Plasma with antialiasing off, and X resources saying only that: greyscale, not
+        // "doesn't say" (which would ask GNOME's keys or the portal next).
+        assert_eq!(kde_says(Some("false"), None), Some(None));
+        assert_eq!(kde_says(Some("0"), None), Some(None));
+        assert_eq!(resources_say("Xft.antialias:\t0\n"), Some(None));
+        assert_eq!(resources_say("Xft.antialias:\tfalse\nXft.dpi:\t96\n"), Some(None));
+    }
+
+    #[test]
+    fn x_resources_are_asked_whenever_the_window_runs_on_x11() {
+        fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+            move |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).into())
+        }
+        // XWayland asked for with `WORDCRAFT_WAYLAND=0` (or by the setting): its X resources.
+        assert!(window_on_x(true, env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0"), ("WORDCRAFT_WAYLAND", "0")])));
+        // Native Wayland chosen by the setting (or with the X11 libraries missing), an X server
+        // there too: only the portal.
+        assert!(!window_on_x(false, env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")])));
+        // An X session without Wayland: winit runs on X11 unforced.
+        assert!(window_on_x(false, env(&[("DISPLAY", ":0")])));
+        assert!(!window_on_x(false, env(&[("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(!window_on_x(false, env(&[("DISPLAY", ""), ("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(!window_on_x(false, env(&[])));
+    }
+
+    #[test]
+    fn x_resources_as_gnomes_settings_daemon_writes_them() {
+        // GNOME's default (font antialiasing greyscale), then Tweaks › Fonts › Subpixel.
+        let grey = "Xft.antialias:\t1\nXft.hinting:\t1\nXft.hintstyle:\thintslight\nXft.rgba:\tnone\nXft.lcdfilter:\tlcddefault\nXft.dpi:\t96\n";
+        assert_eq!(resources_say(grey), Some(None));
+        let lcd = grey.replace("Xft.rgba:\tnone", "Xft.rgba:\trgb");
+        assert_eq!(resources_say(&lcd), Some(Some(Subpixel::Rgb)));
+    }
+
+    #[test]
+    fn the_portal_gives_gnomes_font_settings() {
+        assert_eq!(portal_says(Some("rgba"), Some("rgb")), Some(Some(Subpixel::Rgb)));
+        assert_eq!(portal_says(Some("rgba"), Some("bgr")), Some(Some(Subpixel::Bgr)));
+        assert_eq!(portal_says(Some("rgba"), Some("vbgr")), Some(None));
+        assert_eq!(portal_says(Some("rgba"), None), Some(None));
+        assert_eq!(portal_says(Some("grayscale"), Some("rgb")), Some(None));
+        assert_eq!(portal_says(Some("none"), None), Some(None));
+        assert_eq!(portal_says(None, Some("rgb")), None);
+        assert_eq!(portal_says(Some("sideways"), Some("rgb")), None);
+    }
+}
