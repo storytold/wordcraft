@@ -303,7 +303,7 @@ fn swatch_table(
     current: Option<Rgb>,
 ) -> (Option<Rgb>, craft::behavior::Preview<Rgb>, egui::Response) {
     use craft::behavior::Preview;
-    let swatches: Vec<(Label, Srgba)> = colors.iter().map(|c| (Label::from(c.hex()), srgba(*c))).collect();
+    let swatches: Vec<(Label, Srgba)> = colors.iter().map(|c| (Label::from(format!("#{}", c.hex())), srgba(*c))).collect();
     let out = SwatchTable::new(name.to_string(), &swatches)
         .per_row(per_row)
         .tips(true)
@@ -640,7 +640,9 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
         ),
     };
     let icon = shown.map_or_else(IconSpec::empty_swatch, IconSpec::swatch);
-    SplitButton::<NoValue>::body(text, |ui: &mut Ui, cx: &mut BodyCx<'_>| {
+    let spoken_value = current.map_or_else(|| text.as_str().to_string(), |c| format!("#{}", c.hex()));
+    let spoken = format!("{} {spoken_value}", label.as_str());
+    let field = SplitButton::<NoValue>::body(text, |ui: &mut Ui, cx: &mut BodyCx<'_>| {
         let empty_label = match empty {
             ColorFieldEmpty::NoColor => Label::from(tl!("No Color").to_string()),
             ColorFieldEmpty::Automatic { label, .. } => label.clone(),
@@ -664,9 +666,11 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
             cx.request_close();
         }
     })
-    .arrow_label(label.clone())
+    .arrow_label(spoken.clone())
     .icon(icon)
     .show(ui);
+    // The framework keeps the short visible value; both parts say the field and its value.
+    ui.ctx().accesskit_node_builder(field.response.id, |node| node.set_label(spoken));
     resp
 }
 
