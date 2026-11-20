@@ -2521,7 +2521,7 @@ fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &Namespace
             ResolveResult::Bound(Namespace(ns)) if ns == NS_MC.as_bytes() && a.key.local_name().as_ref() == b"Ignorable" => {
                 if let Ok(v) = a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
                     for pfx in v.split_whitespace() {
-                        if pfx != "xml" && !declared_has(declared, extra, pfx) {
+                        if pfx != "xml" && nearest_binding(declared, extra, pfx) == Binding::Undeclared {
                             out.unknown_prefixes.push(pfx.to_string());
                         }
                     }
@@ -2532,8 +2532,20 @@ fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &Namespace
     }
 }
 
-/// Check if prefix `pfx` exists among declared prefixes in current element stack or extras.
-fn declared_has(declared: &[Vec<String>], extra: &[String], pfx: &str) -> bool {
+/// What the nearest declaration of a prefix says about it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Binding {
+    /// No declaration in scope, or the nearest one is an empty reset: the prefix is not declared.
+    Undeclared,
+    /// The nearest declaration has a value.
+    Resolved,
+    /// The nearest declaration exists, but its value cannot be expanded: the prefix is unknown.
+    Unresolved,
+}
+
+/// Decide what `pfx` is from its NEAREST declaration: the element's own (`extra`), then each
+/// enclosing scope outward. Declarations further out never speak for it.
+fn nearest_binding(declared: &[Vec<String>], extra: &[String], pfx: &str) -> Binding {
     observation_contract! {
         rules: "-";
         collections: "type.Vec*1";
@@ -2543,7 +2555,19 @@ fn declared_has(declared: &[Vec<String>], extra: &[String], pfx: &str) -> bool {
         package_loss: "independent";
     }
 
-    declared.iter().flatten().any(|d| d == pfx) || extra.iter().any(|d| d == pfx)
+    let marked = |scope: &[String], mark: &str| scope.iter().any(|d| d.strip_prefix(mark) == Some(pfx));
+    for scope in std::iter::once(extra).chain(declared.iter().rev().map(|scope| scope.as_slice())) {
+        if marked(scope, UNRESOLVED_MARK) {
+            return Binding::Unresolved;
+        }
+        if marked(scope, RESET_MARK) {
+            return Binding::Undeclared;
+        }
+        if scope.iter().any(|d| d == pfx) {
+            return Binding::Resolved;
+        }
+    }
+    Binding::Undeclared
 }
 
 /// Extract XML namespace prefixes declared with `xmlns:prefix` in the given attributes.
@@ -2563,9 +2587,12 @@ fn declarations(attrs: &[Attribute]) -> Vec<String> {
             && !p.is_empty()
         {
             v.push(lossy(p));
-            // The declaration exists but its value cannot be expanded. It is unknown, not undeclared.
-            if a.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_err() {
-                v.push(format!("{UNRESOLVED_MARK}{}", lossy(p)));
+            // The declaration exists but its value cannot be expanded: unknown, not undeclared. An empty
+            // value un-declares the prefix for the scope it opens.
+            match a.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
+                Err(_) => v.push(format!("{UNRESOLVED_MARK}{}", lossy(p))),
+                Ok(value) if value.is_empty() => v.push(format!("{RESET_MARK}{}", lossy(p))),
+                Ok(_) => {}
             }
         }
     }
@@ -2574,9 +2601,14 @@ fn declarations(attrs: &[Attribute]) -> Vec<String> {
 
 /// Marks a prefix, among a scope's declarations, whose declared value could not be resolved.
 const UNRESOLVED_MARK: &str = "?";
+/// Marks a prefix, among a scope's declarations, that an empty value un-declares. Neither mark can
+/// begin an XML name, so a mark never collides with a prefix.
+const RESET_MARK: &str = "!";
 
-/// Record a prefix the resolver reports as unknown, unless the scope declares it with a value that
-/// cannot be resolved: that declaration is present, so the prefix is not "not declared".
+/// Record a prefix the resolver reports as unknown, unless its nearest declaration has a value that
+/// cannot be resolved: that declaration is present, so the prefix is unknown, not "not declared".
+/// The default namespace has no prefix to report: an unresolved default is unknown through element
+/// resolution and never surfaces here (its empty prefix is not a diagnostic subject).
 fn push_unknown_prefix(out: &mut PartScan, declared: &[Vec<String>], extra: &[String], prefix: Option<&str>) {
     observation_contract! {
         rules: "-";
@@ -2588,7 +2620,8 @@ fn push_unknown_prefix(out: &mut PartScan, declared: &[Vec<String>], extra: &[St
     }
 
     if let Some(prefix) = prefix
-        && !declared_has(declared, extra, &format!("{UNRESOLVED_MARK}{prefix}"))
+        && !prefix.is_empty()
+        && nearest_binding(declared, extra, prefix) != Binding::Unresolved
     {
         out.unknown_prefixes.push(prefix.to_string());
     }

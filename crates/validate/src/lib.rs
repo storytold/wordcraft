@@ -5370,14 +5370,34 @@ mod budget_tests {
     }
 
     #[test]
-    fn undeclared_prefixes_are_still_reported_beside_unresolved_ones() {
-        let document = format!(r#"<w:document xmlns:w="{NS_W}"><w:body><x:p/></w:body></w:document>"#);
-        let report = validate_bytes(&tiny_zip(&[
-            ("[Content_Types].xml", content_types()),
-            ("_rels/.rels", package_rels()),
-            ("word/document.xml", document.into_bytes()),
-        ]));
-        assert!(report.findings.iter().any(|f| f.rule == "XML-UNDECLARED-PREFIX" && f.message.contains("`x`")), "{report:?}");
+    fn prefix_use_is_undeclared_only_by_its_nearest_declaration() {
+        // `q` is declared with an unexpandable value (`&year;` is not an entity here), a value, or an
+        // empty value that un-declares it. Only a use whose NEAREST declaration is missing or empty is
+        // reported; the default namespace is never a diagnostic prefix.
+        let year = "<!DOCTYPE w:document [<!ENTITY year \"2006\">]>";
+        for (body, undeclared) in [
+            (r#"<w:p xmlns:q="&year;"><q:a/><z:b/></w:p>"#, "z"),
+            (r#"<w:p xmlns:q="&year;"><w:r xmlns:q=""><q:t/></w:r></w:p>"#, "q"),
+            (r#"<w:p xmlns:q="&year;"><w:r xmlns:q="" q:a="1"/></w:p>"#, "q"),
+            (r#"<w:p xmlns:q="urn:q"><w:r xmlns:q="&year;"><w:t xmlns:q=""><q:t/></w:t></w:r></w:p>"#, "q"),
+            (r#"<w:p><z:b/></w:p>"#, "z"),
+            (r#"<w:p xmlns:q="&year;"><q:a/></w:p>"#, ""),
+            (r#"<w:p xmlns:q="&year;"><w:r xmlns:q="urn:q"><q:t/></w:r></w:p>"#, ""),
+            (r#"<w:p xmlns:q="urn:q"><w:r xmlns:q="&year;"><q:t/></w:r></w:p>"#, ""),
+            (r#"<w:p xmlns:q="&year;"><w:r xmlns:q=""><w:t xmlns:q="&year;"><q:t/></w:t></w:r></w:p>"#, ""),
+            (r#"<w:p xmlns="&year;"><x/><y z="1"/></w:p>"#, ""),
+            (r#"<w:p xmlns="&year;"><w:r xmlns="urn:d"><x/></w:r></w:p>"#, ""),
+        ] {
+            let document = format!(r#"{year}<w:document xmlns:w="{NS_W}"><w:body>{body}</w:body></w:document>"#);
+            let report = validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.into_bytes()),
+            ]));
+            let reported: Vec<_> = report.findings.iter().filter(|f| f.rule == "XML-UNDECLARED-PREFIX").collect();
+            assert_eq!(reported.len(), usize::from(!undeclared.is_empty()), "{body}: {report:?}");
+            assert!(reported.iter().all(|f| f.message.contains(&format!("`{undeclared}`"))), "{body}: {report:?}");
+        }
     }
 
     #[test]
