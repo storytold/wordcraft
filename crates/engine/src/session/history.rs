@@ -16,6 +16,7 @@ impl Session {
             doc: self.doc.clone(),
             sel: self.sel.clone(),
             pending: self.pending.clone(),
+            pending_at: self.pending_at.clone(),
             column: self.column.clone(),
             lead_in: self.lead_in.clone(),
         }));
@@ -45,7 +46,7 @@ impl Session {
     /// those in effect before the automatic change, when the change ended a lead-in.
     pub(crate) fn push_undo_typing(&mut self, label: &str, doc: Document, sel: Selection, typing: (Option<CharProps>, Option<LeadIn>)) {
         let (pending, lead_in) = typing;
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending, column: None, lead_in }));
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending, pending_at: self.pending_at.clone(), column: None, lead_in }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -222,6 +223,7 @@ impl Session {
             doc: std::mem::replace(&mut self.doc, u.doc),
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
+            pending_at: std::mem::replace(&mut self.pending_at, u.pending_at),
             column: std::mem::replace(&mut self.column, u.column),
             lead_in: std::mem::replace(&mut self.lead_in, u.lead_in),
         };
@@ -250,6 +252,7 @@ impl Session {
             doc: std::mem::replace(&mut self.doc, u.doc),
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
+            pending_at: std::mem::replace(&mut self.pending_at, u.pending_at),
             column: std::mem::replace(&mut self.column, u.column),
             lead_in: std::mem::replace(&mut self.lead_in, u.lead_in),
         };

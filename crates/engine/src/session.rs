@@ -51,6 +51,11 @@ pub struct Session {
     pub view: ViewState,
     /// Formatting picked with a collapsed caret, applied to the next typed text.
     pub pending: Option<CharProps>,
+    /// Where the caret was when Backspace carried [`Self::pending`] over from the character it
+    /// deleted (#6518), moved on as typing advances the caret. That formatting is for typing
+    /// there only: once the caret is anywhere else (a paste, Find, Go To or a click put it
+    /// there) it is dropped (see [`Self::waiting`]). `None` for formatting picked at the caret.
+    pub(crate) pending_at: Option<Pos>,
     /// Last highlighter choice for the shortcut; palette state, outside document undo.
     pub(crate) last_highlight: wordcraft_doc::props::Highlight,
     pub path: Option<std::path::PathBuf>,
@@ -63,6 +68,9 @@ pub struct Session {
     /// `None`, so an agent's words stay in memory and never change the person's dictionary.
     /// Add to Dictionary and File › Options › Proofing save through it (#40).
     pub user_dict_path: Option<std::path::PathBuf>,
+    /// The default user dictionary path wired up by the host (usually `custom-dictionary.txt` in
+    /// the settings directory), used when [`Prefs::custom_dictionary`] is reset to auto (#5840).
+    pub default_user_dict_path: Option<std::path::PathBuf>,
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,

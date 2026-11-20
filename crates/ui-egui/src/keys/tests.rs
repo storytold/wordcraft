@@ -888,6 +888,34 @@ fn tracked_own_insertion_then_a_refused_side_rolls_the_whole_request_back() {
     assert_eq!(h.state().session.goal_x, Some(123.0), "the Up/Down goal column is restored");
 }
 
+/// #6518 review: a refused `DeleteSurrounding` rolls back the formatting Backspace carried
+/// over together with where it applies: typing at the restored caret still takes it, and a
+/// caret moved away leaves it behind, as before the request.
+#[test]
+fn a_refused_delete_surrounding_keeps_formatting_backspace_carried() {
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "abc"}));
+    // Wrap `c` in a rich-text control that refuses edits, and make `b` bold.
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 2), focus: wordcraft_doc::Pos::body(0, 3) };
+    run(&mut h, "developer.richText", json!({"tag": "locked"}));
+    run(&mut h, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 2) };
+    run(&mut h, "format.bold", json!({"value": true}));
+    caret(&mut h, 2);
+    // Backspace the bold `b`: the caret, now after `a`, carries its bold.
+    run(&mut h, "text.backspace", json!({}));
+    assert_eq!(h.state().session.typing_props().bold, Some(true));
+    alt_frame(&mut h, vec![surround(1, 1)]);
+    assert_eq!(body(h.state()), "ac", "the request is refused and rolled back");
+    assert_eq!(h.state().session.sel, wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1)));
+    assert_eq!(h.state().session.typing_props().bold, Some(true), "the carried bold still applies at the restored caret");
+    // It is still carried over by Backspace, not picked at the caret: a caret moved elsewhere
+    // and back leaves it behind.
+    h.state_mut().session.set_selection(wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0)));
+    h.state_mut().session.set_selection(wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1)));
+    assert_ne!(h.state().session.typing_props().bold, Some(true), "the caret has been elsewhere");
+}
+
 /// Selects a body range, wraps it in a rich-text content control with `tag`, and sets its
 /// placeholder.
 fn wrap_in_control(h: &mut H, start: usize, end: usize, tag: &str, placeholder: &str) {

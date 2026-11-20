@@ -126,6 +126,8 @@ pub(super) struct Undo {
     pub(super) sel: Selection,
     /// Formatting waiting at the caret (Bold with nothing selected), so Undo takes it back too.
     pub(super) pending: Option<CharProps>,
+    /// Where that formatting applies, if Backspace carried it over (`Session::pending_at`).
+    pub(super) pending_at: Option<Pos>,
     /// The column block or whole cells the selection was (undoing brings the selection back as
     /// it was).
     pub(super) column: Option<ColumnBlock>,
