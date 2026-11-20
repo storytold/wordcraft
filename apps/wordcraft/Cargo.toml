@@ -63,8 +63,18 @@ winit = { version = "0.30", default-features = false, features = ["x11"] }
 # these versions and with this feature.
 x11-dl = "2.21"
 xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
+# The account's uid, for the `user_name` passwd lookup: the environment's logon name can say
+# anything, and a non-dumpable process's `/proc/self` belongs to root (proc(5)), so neither says
+# which account this process runs as. `getuid` through `libc` needs unsafe, which the workspace
+# forbids; rustix is already in the build at this version, and this adds only its `process` module.
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 
 [target.'cfg(windows)'.dependencies]
 # The update helper: a copy of this program started with `--finish-update`
 # (`craft::update::self_update::finish`).
 craft = { workspace = true, features = ["update"] }
+# The account's first and last name a first start takes as the user name (#2209), read through
+# the Windows Runtime's `Windows.System.User`: a safe API, where the Win32 call needs unsafe,
+# which the workspace forbids. Already in the build through wgpu and AccessKit, at this version;
+# the feature is named to record why it is asked for.
+windows = { version = "0.62", features = ["System"] }
