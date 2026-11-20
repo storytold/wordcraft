@@ -31,7 +31,7 @@ impl WordApp {
     pub fn apply_prefs(&mut self, ui: Prefs) {
         self.ui = ui;
         // The browser still cannot keep writing to a file, even with a saved desktop choice.
-        self.autosave = self.ui.autosave && self.services.download.is_none();
+        self.autosave = self.ui.autosave && !self.browser_saves();
         self.session.autosave = self.autosave;
         self.ui.backstage = false;
         // Word opens on Home every launch, so the tab the settings hold is not restored. Going File
@@ -172,7 +172,8 @@ impl WordApp {
 
 #[cfg(test)]
 mod autosave_preference_tests {
-    use crate::{Services, UiState, WordApp};
+    use crate::prefs::Prefs;
+    use crate::{Services, WordApp};
     use serde_json::json;
 
     fn app(services: Services) -> WordApp {
@@ -181,7 +182,7 @@ mod autosave_preference_tests {
 
     #[test]
     fn autosave_defaults_off_and_remembers_the_raw_choice() {
-        let legacy: UiState = serde_json::from_str("{}").unwrap();
+        let legacy: Prefs = serde_json::from_str("{}").unwrap();
         assert!(!legacy.autosave);
         let mut a = app(Services::default());
         assert!(!a.autosave && !a.session.autosave);
@@ -202,8 +203,10 @@ mod autosave_preference_tests {
 
     #[test]
     fn browser_restore_keeps_autosave_off() {
-        let mut a = app(Services { download: Some(Box::new(|_, _| Ok(()))), ..Default::default() });
-        a.apply_prefs(UiState { autosave: true, ..Default::default() });
+        let files = std::sync::Arc::new(craft::host::ScriptedFiles::held().in_browser());
+        let host = craft::host::Host::builder(crate::APP).files(files).build();
+        let mut a = app(Services::default()).with_host(std::sync::Arc::new(host));
+        a.apply_prefs(Prefs { autosave: true, ..Default::default() });
         assert!(!a.autosave && !a.session.autosave && !a.autosaves());
         assert!(a.autosave_path.is_none());
     }
@@ -215,12 +218,12 @@ mod autosave_preference_tests {
         let first = a.session.document_id();
         a.run("file.new", json!({})).unwrap();
         assert!(!a.autosave && !a.session.autosave);
-        a.apply_prefs(UiState { autosave: true, ..Default::default() });
+        a.apply_prefs(Prefs { autosave: true, ..Default::default() });
         a.session.switch_document(first).unwrap();
         a.sync_document();
         assert!(a.autosave && a.session.autosave);
         a.run("file.new", json!({})).unwrap();
-        a.apply_prefs(UiState { autosave: false, ..Default::default() });
+        a.apply_prefs(Prefs { autosave: false, ..Default::default() });
         a.session.switch_document(first).unwrap();
         a.sync_document();
         assert!(!a.autosave && !a.session.autosave);
