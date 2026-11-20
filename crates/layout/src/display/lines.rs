@@ -86,12 +86,9 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
     }
 }
 
-fn collect_glyph_run(
-    ctx: &LineContext<'_, '_, '_>,
-    start: usize,
-    style_index: u32,
-    style: &crate::para::StyleRun,
-) -> (usize, Vec<(u32, f32, f32)>, String, Vec<std::ops::Range<usize>>) {
+/// The run of clusters starting at `start` that share the style `style` (index `style_index`), with
+/// its glyphs, the text they draw and each glyph's byte range, as [`GlyphRun`].
+fn collect_glyph_run(ctx: &LineContext<'_, '_, '_>, start: usize, style_index: u32, style: &crate::para::StyleRun) -> GlyphRun {
     let (pl, para, line, x, base) = (ctx.pl, ctx.para, ctx.line, ctx.x, ctx.base);
     let si = style_index;
     let st = style;
@@ -184,205 +181,322 @@ fn collect_glyph_run(
         }
         k += 1;
     }
-    (k, glyphs, text, ranges)
+    GlyphRun { start, end: k, glyphs, text, ranges }
 }
 
+/// A run of clusters that share one style, with the glyphs it draws: their places on the line,
+/// the text they stand for, and that text's byte range per glyph.
+struct GlyphRun {
+    /// Cluster index of the run's first cluster.
+    start: usize,
+    /// Cluster index one past the run's last cluster.
+    end: usize,
+    /// Glyphs with their offsets from the line's left edge and their raise above its baseline.
+    glyphs: Vec<(u32, f32, f32)>,
+    /// The text the run draws, in visual order.
+    text: String,
+    /// For each glyph, the byte range of `text` it stands for.
+    ranges: Vec<std::ops::Range<usize>>,
+}
+
+/// How a run is painted: the face and size it draws in, its colour and highlight, and the link and
+/// synthesised faces it carries.
+struct RunPaint {
+    face: FaceRef,
+    size: f32,
+    color: Rgb,
+    alpha: f32,
+    synth_bold: bool,
+    synth_italic: bool,
+    text_bg: Option<Rgb>,
+    x_scale: f32,
+    link: Option<String>,
+}
+
+impl RunPaint {
+    /// The run's glyphs as the one [`Draw::Glyphs`] item that draws them.
+    fn glyphs(&self, glyphs: Vec<(u32, f32, f32)>, text: String, ranges: Vec<std::ops::Range<usize>>) -> Draw {
+        Draw::Glyphs {
+            face: self.face,
+            size: self.size,
+            glyphs,
+            color: self.color,
+            alpha: self.alpha,
+            synth_bold: self.synth_bold,
+            synth_italic: self.synth_italic,
+            text,
+            link: self.link.clone(),
+            ranges,
+            text_bg: self.text_bg,
+            x_scale: self.x_scale,
+        }
+    }
+}
+
+/// Where a run sits on its line: its extent along the line, in page coordinates of the unturned
+/// frame, and the baseline it stands on.
+#[derive(Clone, Copy)]
+struct Placement {
+    start: f32,
+    end: f32,
+    base: f32,
+}
+
+/// What revisions a run shows: the colour and highlight it draws in, the insertion and deletion it
+/// stands for once markup shows them, and the marks those draw as.
+struct RunMarks {
+    color: Rgb,
+    text_bg: Option<Rgb>,
+    ins: Option<u32>,
+    del: Option<u32>,
+    ins_mark: Option<InsertMark>,
+    del_mark: Option<DeleteMark>,
+}
+
+/// The revisions a run of `style` shows under the current markup, as [`RunMarks`].
+fn run_marks(ctx: &LineContext<'_, '_, '_>, st: &crate::para::StyleRun) -> RunMarks {
+    let (doc, opts, authors) = (ctx.doc, ctx.opts, ctx.authors);
+    let (rc, m) = (&st.rc, &opts.revisions);
+    let shown = opts.markup && m.insertions_deletions;
+    let del = rc.del.filter(|_| shown);
+    let ins = rc.ins.filter(|_| shown && del.is_none());
+    let author = |r: u32| authors.color(r);
+    // Moved text: the Moves marks and colours (by default green, double strikethrough
+    // where it was, double underline where it went).
+    let moved_to = doc.move_name(ins).is_some();
+    let moved_from = del.is_some() && doc.move_name(del).is_some();
+    // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
+    let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
+    let color = match (ins, del) {
+        _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
+        (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
+        (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
+        (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
+        (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
+        _ => ctx.ink(&rc.color, rc.shading.or(rc.highlight)),
+    };
+    RunMarks {
+        color,
+        // The highlight or shading drawn under this run (as filled in the backgrounds pass).
+        text_bg: rc.highlight.or(rc.shading),
+        ins,
+        del,
+        ins_mark: ins.map(|_| if moved_to { m.move_to_mark } else { m.insert_mark }),
+        del_mark: del.map(|_| if moved_from { m.move_from_mark } else { m.delete_mark }),
+    }
+}
+
+/// Draw every styled run of glyphs in the line, one after another.
 fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let (doc, pl, line, x, base, opts, authors, alpha, down) =
-        (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.base, ctx.opts, ctx.authors, ctx.alpha, ctx.down);
-    let mut k = line.c0;
-    while k < line.c1 {
-        let Some(c) = pl.clusters.get(k) else { break };
-        let si = c.style;
-        let Some(st) = pl.styles.get(si as usize) else {
+    let mut k = ctx.line.c0;
+    while k < ctx.line.c1 {
+        let Some(style_index) = ctx.pl.clusters.get(k).map(|c| c.style) else { break };
+        let Some(st) = ctx.pl.styles.get(style_index as usize) else {
             k += 1;
             continue;
         };
-        let run_start = k;
-        let (run_end, mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st);
-        k = run_end;
-        let rc = &st.rc;
-        let m = &opts.revisions;
-        // Without markup a deletion is never drawn as ordinary text, even in a layout that
-        // kept it; nor when its mark is Hidden.
-        if rc.del.is_some() && (!opts.markup || m.hides_deletion(doc.move_name(rc.del).is_some())) {
-            continue;
+        let run = collect_glyph_run(ctx, k, style_index, st);
+        k = run.end;
+        draw_glyph_run(ctx, run, st, out);
+    }
+}
+
+/// Draw one run: the caret or `#` that stands in for its deleted text, its text effects, its
+/// glyphs (upright across the line when they are 縦中横), the underline and strikethrough across
+/// it, and its emphasis marks.
+fn draw_glyph_run(ctx: &LineContext<'_, '_, '_>, mut run: GlyphRun, st: &crate::para::StyleRun, out: &mut Vec<Draw>) {
+    let (start, end) = (run.start, run.end);
+    let rc = &st.rc;
+    // Without markup a deletion is never drawn as ordinary text, even in a layout that
+    // kept it; nor when its mark is Hidden.
+    if rc.del.is_some() && (!ctx.opts.markup || ctx.opts.revisions.hides_deletion(ctx.doc.move_name(rc.del).is_some())) {
+        return;
+    }
+    let marks = run_marks(ctx, st);
+    if marks.del_mark == Some(DeleteMark::Caret) {
+        // A caret where the text was, instead of the text.
+        deletion_caret(ctx, start, st, &marks, out);
+        return;
+    }
+    if marks.del_mark == Some(DeleteMark::Hash) {
+        // Each deleted character shows as #.
+        let gid = st.face.glyph_for('#');
+        for g in &mut run.glyphs {
+            g.0 = gid;
         }
-        let shown = opts.markup && m.insertions_deletions;
-        let del = rc.del.filter(|_| shown);
-        let ins = rc.ins.filter(|_| shown && del.is_none());
-        let author = |r: u32| authors.color(r);
-        // Moved text: the Moves marks and colours (by default green, double strikethrough
-        // where it was, double underline where it went).
-        let moved_to = doc.move_name(ins).is_some();
-        let moved_from = del.is_some() && doc.move_name(del).is_some();
-        // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
-        let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
-        let color = match (ins, del) {
-            _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
-            (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
-            (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
-            (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
-            (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
-            _ => ctx.ink(&rc.color, rc.shading.or(rc.highlight)),
-        };
-        // The highlight or shading drawn under this run (as filled in the backgrounds pass).
-        let text_bg = rc.highlight.or(rc.shading);
-        let ins_mark = ins.map(|_| if moved_to { m.move_to_mark } else { m.insert_mark });
-        let del_mark = del.map(|_| if moved_from { m.move_from_mark } else { m.delete_mark });
-        if del_mark == Some(DeleteMark::Caret) {
-            // A caret where the text was, instead of the text.
-            if let Some(cx) = line.cl_left(run_start).map(|c| x + c) {
-                let h = st.size * 0.3;
-                let w = (st.size / 18.0).max(0.6);
-                out.push(Draw::Line {
-                    x0: cx - h * 0.6,
-                    y0: base + 1.0,
-                    x1: cx,
-                    y1: base + 1.0 - h,
-                    width: w,
-                    color,
-                    stroke: Stroke::Solid,
-                    alpha,
-                    text_bg,
-                });
-                out.push(Draw::Line {
-                    x0: cx,
-                    y0: base + 1.0 - h,
-                    x1: cx + h * 0.6,
-                    y1: base + 1.0,
-                    width: w,
-                    color,
-                    stroke: Stroke::Solid,
-                    alpha,
-                    text_bg,
-                });
-            }
-            continue;
+    }
+    let synth_bold = st.synth_bold || marks.ins_mark == Some(InsertMark::Bold) || marks.del_mark == Some(DeleteMark::Bold);
+    let synth_italic = st.synth_italic || marks.ins_mark == Some(InsertMark::Italic) || marks.del_mark == Some(DeleteMark::Italic);
+    // Text effects draw the letters from their outlines; the glyphs stay, invisible, for
+    // the PDF's text. Not for colour glyphs (no outlines), top-to-bottom text with upright
+    // characters (their outlines would lie on their side), `#` deletion marks, or WordArt
+    // in revision colours.
+    let upright = ctx.down && (rc.vert || run.text.chars().any(upright_in_vertical));
+    let art = (!upright
+        && !run.glyphs.is_empty()
+        && marks.del_mark != Some(DeleteMark::Hash)
+        && (rc.text_effects.is_none() || marks.ins.is_none() && marks.del.is_none()))
+    .then(|| crate::wordart::run_effects(rc, marks.color))
+    .flatten()
+    .filter(|_| !st.face.has_color_glyphs());
+    let has_art = art.is_some();
+    if let Some(mut fx) = art {
+        if synth_bold {
+            crate::wordart::embolden(&mut fx, marks.color, st.size);
         }
-        if del_mark == Some(DeleteMark::Hash) {
-            // Each deleted character shows as #.
-            let gid = st.face.glyph_for('#');
-            for g in &mut glyphs {
-                g.0 = gid;
-            }
+        let path = crate::wordart::glyph_path(&st.face, st.size, &run.glyphs, synth_italic);
+        out.push(Draw::Art { path, fx: Box::new(fx), color: marks.color, alpha: ctx.alpha, text_bg: marks.text_bg });
+    }
+    let paint = RunPaint {
+        face: st.face,
+        size: st.size,
+        color: marks.color,
+        alpha: if has_art { 0.0 } else { ctx.alpha },
+        synth_bold,
+        synth_italic,
+        text_bg: marks.text_bg,
+        x_scale: rc.scale / 100.0,
+        link: rc.link.clone(),
+    };
+    if !run.glyphs.is_empty() {
+        if ctx.down && rc.vert {
+            // 縦中横: the run across the line, upright (see [`tate_chu_yoko`]).
+            let at = placement(ctx, start, end);
+            out.extend(tate_chu_yoko(&paint, run, at));
+        } else {
+            out.push(paint.glyphs(run.glyphs, run.text, run.ranges));
         }
-        let synth_bold = st.synth_bold || ins_mark == Some(InsertMark::Bold) || del_mark == Some(DeleteMark::Bold);
-        let synth_italic = st.synth_italic || ins_mark == Some(InsertMark::Italic) || del_mark == Some(DeleteMark::Italic);
-        // Text effects draw the letters from their outlines; the glyphs stay, invisible, for
-        // the PDF's text. Not for colour glyphs (no outlines), top-to-bottom text with upright
-        // characters (their outlines would lie on their side), `#` deletion marks, or WordArt
-        // in revision colours.
-        let upright = down && (rc.vert || text.chars().any(upright_in_vertical));
-        let art =
-            (!upright && !glyphs.is_empty() && del_mark != Some(DeleteMark::Hash) && (rc.text_effects.is_none() || ins.is_none() && del.is_none()))
-                .then(|| crate::wordart::run_effects(rc, color))
-                .flatten()
-                .filter(|_| !st.face.has_color_glyphs());
-        let has_art = art.is_some();
-        if let Some(mut fx) = art {
-            if synth_bold {
-                crate::wordart::embolden(&mut fx, color, st.size);
-            }
-            let path = crate::wordart::glyph_path(&st.face, st.size, &glyphs, synth_italic);
-            out.push(Draw::Art { path, fx: Box::new(fx), color, alpha, text_bg });
-        }
-        if !glyphs.is_empty() {
-            if down && rc.vert {
-                // 縦中横: the run across the line, upright (see [`tate_chu_yoko`]).
-                let start = x + line.cl_left(run_start).unwrap_or(0.0);
-                // A bidirectional line's visible boxes stop at its last cluster: a run that
-                // ends the line ends at that cluster's trailing edge, not at zero.
-                let end = x + match line.vis.last() {
-                    Some(last) if run_end == line.c1 => last.trailing(),
-                    _ => line.cl_left(run_end).unwrap_or(0.0),
-                };
-                out.extend(tate_chu_yoko(
-                    st.face,
-                    st.size,
-                    color,
-                    if has_art { 0.0 } else { alpha },
-                    synth_bold,
-                    synth_italic,
-                    rc.link.clone(),
-                    text_bg,
-                    rc.scale / 100.0,
-                    glyphs,
-                    text,
-                    ranges,
-                    start,
-                    end,
-                    base,
-                ));
+    }
+    // 縦中横 glyphs are placed across the line one by one, so a decoration along the run's
+    // line span is not Word's per-upright-glyph one; draw it along the span until that is
+    // done, or the run loses its underline, strikethrough and tracked-change marks.
+    // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
+    // text inside a run can split it into several visual spans.
+    let end_k = decorated_end(ctx.pl, ctx.line, start, end);
+    draw_run_decorations(ctx, (start, end_k), st, &marks, out);
+    draw_emphasis_marks(ctx, (start, end_k), st, &marks, out);
+}
+
+/// The run's extent along the line and its baseline, in page coordinates of the unturned frame.
+fn placement(ctx: &LineContext<'_, '_, '_>, run_start: usize, run_end: usize) -> Placement {
+    let (line, x, base) = (ctx.line, ctx.x, ctx.base);
+    let start = x + line.cl_left(run_start).unwrap_or(0.0);
+    // A bidirectional line's visible boxes stop at its last cluster: a run that
+    // ends the line ends at that cluster's trailing edge, not at zero.
+    let end = x + match line.vis.last() {
+        Some(last) if run_end == line.c1 => last.trailing(),
+        _ => line.cl_left(run_end).unwrap_or(0.0),
+    };
+    Placement { start, end, base }
+}
+
+/// The cluster one past the run's last that its decorations span: the trailing spaces, markers and
+/// line break that end the line are left out (an underline skips them).
+fn decorated_end(pl: &ParaLayout, line: &crate::para::Line, run_start: usize, run_end: usize) -> usize {
+    let mut end_k = run_end;
+    while end_k > run_start
+        && pl.clusters.get(end_k - 1).is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak))
+        && end_k == line.c1
+    {
+        end_k -= 1;
+    }
+    end_k
+}
+
+/// A caret where a run's deleted text was, instead of the text: two strokes meeting on the baseline
+/// at the run's left edge.
+fn deletion_caret(ctx: &LineContext<'_, '_, '_>, run_start: usize, st: &crate::para::StyleRun, marks: &RunMarks, out: &mut Vec<Draw>) {
+    let Some(cx) = ctx.line.cl_left(run_start).map(|c| ctx.x + c) else { return };
+    let (base, alpha, color) = (ctx.base, ctx.alpha, marks.color);
+    let h = st.size * 0.3;
+    let w = (st.size / 18.0).max(0.6);
+    out.push(Draw::Line {
+        x0: cx - h * 0.6,
+        y0: base + 1.0,
+        x1: cx,
+        y1: base + 1.0 - h,
+        width: w,
+        color,
+        stroke: Stroke::Solid,
+        alpha,
+        text_bg: marks.text_bg,
+    });
+    out.push(Draw::Line {
+        x0: cx,
+        y0: base + 1.0 - h,
+        x1: cx + h * 0.6,
+        y1: base + 1.0,
+        width: w,
+        color,
+        stroke: Stroke::Solid,
+        alpha,
+        text_bg: marks.text_bg,
+    });
+}
+
+/// The underline and strikethrough across the run's visual spans in clusters `k0..k1` (`k1` as
+/// [`decorated_end`] gives it), from the marks its tracked changes draw as well as its own.
+fn draw_run_decorations(
+    ctx: &LineContext<'_, '_, '_>,
+    (run_start, end_k): (usize, usize),
+    st: &crate::para::StyleRun,
+    marks: &RunMarks,
+    out: &mut Vec<Draw>,
+) {
+    let (pl, line, x, base, alpha) = (ctx.pl, ctx.line, ctx.x, ctx.base, ctx.alpha);
+    let (color, text_bg, ins_mark, del_mark) = (marks.color, marks.text_bg, marks.ins_mark, marks.del_mark);
+    let rc = &st.rc;
+    let thick = (st.size / 18.0).max(0.5);
+    let underline = match (ins_mark, del_mark) {
+        (Some(InsertMark::Underline), _) | (_, Some(DeleteMark::Underline)) => Underline::Single,
+        (Some(InsertMark::DoubleUnderline), _) | (_, Some(DeleteMark::DoubleUnderline)) => Underline::Double,
+        _ => rc.underline,
+    };
+    let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
+    let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
+    let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
+    for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
+        if underline != Underline::None {
+            let uy = base - st.shift + st.size * 0.12;
+            let ucolor = rc.underline_color.unwrap_or(color);
+            if underline == Underline::Words {
+                let words = word_spans(pl, line, (run_start, end_k), x, (x0, x1));
+                for (a, b) in words {
+                    out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
+                }
             } else {
-                out.push(Draw::Glyphs {
-                    face: st.face,
-                    size: st.size,
-                    glyphs,
-                    color,
-                    alpha: if has_art { 0.0 } else { alpha },
-                    synth_bold,
-                    synth_italic,
-                    text,
-                    link: rc.link.clone(),
-                    ranges,
-                    text_bg,
-                    x_scale: rc.scale / 100.0,
-                });
+                let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
+                out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
             }
         }
-        // 縦中横 glyphs are placed across the line one by one, so a decoration along the run's
-        // line span is not Word's per-upright-glyph one; draw it along the span until that is
-        // done, or the run loses its underline, strikethrough and tracked-change marks.
-        // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
-        // text inside a run can split it into several visual spans.
-        let mut end_k = run_end;
-        while end_k > run_start
-            && pl.clusters.get(end_k - 1).is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak))
-            && end_k == line.c1
-        {
-            end_k -= 1;
+        if struck {
+            let sy = base - st.shift - st.size * 0.28;
+            let stroke = if double { Stroke::Double } else { Stroke::Solid };
+            out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
         }
-        let thick = (st.size / 18.0).max(0.5);
-        let underline = match (ins_mark, del_mark) {
-            (Some(InsertMark::Underline), _) | (_, Some(DeleteMark::Underline)) => Underline::Single,
-            (Some(InsertMark::DoubleUnderline), _) | (_, Some(DeleteMark::DoubleUnderline)) => Underline::Double,
-            _ => rc.underline,
-        };
-        let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
-        let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
-        let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
-        for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
-            if underline != Underline::None {
-                let uy = base - st.shift + st.size * 0.12;
-                let ucolor = rc.underline_color.unwrap_or(color);
-                if underline == Underline::Words {
-                    let words = word_spans(pl, line, (run_start, end_k), x, (x0, x1));
-                    for (a, b) in words {
-                        out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha, text_bg });
-                    }
-                } else {
-                    let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
-                    out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
-                }
-            }
-            if struck {
-                let sy = base - st.shift - st.size * 0.28;
-                let stroke = if double { Stroke::Double } else { Stroke::Solid };
-                out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
-            }
+    }
+}
+
+/// Emphasis marks (Font › Emphasis mark): one over (or under) each character of the run.
+fn draw_emphasis_marks(
+    ctx: &LineContext<'_, '_, '_>,
+    (run_start, end_k): (usize, usize),
+    st: &crate::para::StyleRun,
+    marks: &RunMarks,
+    out: &mut Vec<Draw>,
+) {
+    let rc = &st.rc;
+    if rc.emphasis == wordcraft_doc::props::EmphasisMark::None {
+        return;
+    }
+    let (pl, line, x, base) = (ctx.pl, ctx.line, ctx.x, ctx.base);
+    for kk in run_start..end_k {
+        if pl.clusters.get(kk).is_none_or(|c| c.kind != ClKind::Text) {
+            continue;
         }
-        // Emphasis marks (Font › Emphasis mark): one over (or under) each character.
-        if rc.emphasis != wordcraft_doc::props::EmphasisMark::None {
-            for kk in run_start..end_k {
-                if pl.clusters.get(kk).is_none_or(|c| c.kind != ClKind::Text) {
-                    continue;
-                }
-                let a = x + line.cl_left(kk).unwrap_or(0.0);
-                let b = x + line.cl_right(kk).unwrap_or(a - x);
-                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, base - st.shift, st.size, color));
-            }
-        }
+        let a = x + line.cl_left(kk).unwrap_or(0.0);
+        let b = x + line.cl_right(kk).unwrap_or(a - x);
+        out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, base - st.shift, st.size, marks.color));
     }
 }
 
@@ -890,33 +1004,18 @@ fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     }
 }
 
-/// The kind of section break that ends at body paragraph `path`: the start type of the section
-/// that follows it. `None` for any other paragraph, and for the document's last section.
 /// Draws a horizontal-in-vertical run (`w:eastAsianLayout/@w:vert`, 縦中横) in top-to-bottom text:
 /// Word turns the run 90 degrees left from the way vertical text lies, so its characters stand
 /// upright side by side across the line, reading left to right, inside the length the run takes
 /// along the line (a pair of half-width digits fits one character's height). Every cluster is
-/// drawn on its own in a frame turned -90° about the em square the page's +90° turn cancels. `start`
-/// and `end` are the run's extent along the line (page coordinates of the unturned frame), `base`
-/// its baseline. The glyphs, text and ranges are the run's, as [`lines`] built them; `x_scale` is
-/// the run's character scale (`w:w`), applied to each glyph as elsewhere.
-fn tate_chu_yoko(
-    face: FaceRef,
-    size: f32,
-    color: Rgb,
-    alpha: f32,
-    synth_bold: bool,
-    synth_italic: bool,
-    link: Option<String>,
-    text_bg: Option<Rgb>,
-    x_scale: f32,
-    glyphs: Vec<(u32, f32, f32)>,
-    text: String,
-    ranges: Vec<std::ops::Range<usize>>,
-    start: f32,
-    end: f32,
-    base: f32,
-) -> Vec<Draw> {
+/// drawn on its own in a frame turned -90° about the em square the page's +90° turn cancels. `at`
+/// is the run's extent along the line (page coordinates of the unturned frame) and its baseline;
+/// `run` holds the glyphs, text and ranges [`lines`] built for it, its cluster indices unread;
+/// `paint` the face, colours and character scale (`w:w`) applied to each glyph as elsewhere.
+fn tate_chu_yoko(paint: &RunPaint, run: GlyphRun, at: Placement) -> Vec<Draw> {
+    let GlyphRun { glyphs, text, ranges, .. } = run;
+    let (face, size, x_scale) = (paint.face, paint.size, paint.x_scale);
+    let Placement { start, end, base } = at;
     // One slot per cluster: a cluster shaped to several glyphs (a base letter and its combining
     // mark, a field result's letters) stands in one slot, its glyphs keeping their places in it,
     // and its text is drawn once.
@@ -966,25 +1065,14 @@ fn tate_chu_yoko(
             cx,
             cy,
             spin: Spin::new(-90.0, false, false),
-            items: vec![Draw::Glyphs {
-                face,
-                size,
-                glyphs: items,
-                color,
-                alpha,
-                synth_bold,
-                synth_italic,
-                text: t,
-                link: link.clone(),
-                ranges: vec![range.clone(); slot.end - slot.start],
-                text_bg,
-                x_scale,
-            }],
+            items: vec![paint.glyphs(items, t, vec![range.clone(); slot.end - slot.start])],
         });
     }
     out
 }
 
+/// The kind of section break that ends at body paragraph `path`: the start type of the section
+/// that follows it. `None` for any other paragraph, and for the document's last section.
 fn section_break_after(doc: &Document, story: StoryRef, path: &Path) -> Option<SectionStart> {
     if story != StoryRef::Body || path.0.len() != 1 {
         return None;
