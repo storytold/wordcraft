@@ -189,6 +189,37 @@ from the LibreOffice repository (for example `it_IT/it_IT.aff`; the Spanish ones
 
 Never commit dictionary files to this repository: they stay on the user's system.
 
+## Romanian proofing
+
+Romanian text (`ro`, `ro-RO`, `ro-MD`; also legacy Latin-script `ron`, `rum`,
+`mo`, `mol`) uses the shared `craft-proof` Romanian specialization. The Language
+picker offers Romanian. A Romanian interface defaults new documents to `ro-RO`;
+existing document languages and an explicitly saved default take precedence.
+
+Install the Romanian Language pack or supply `ro_RO.aff`/`ro_RO.dic` in the
+dictionaries folder; `ro_MD` is also recognized. No dictionary is bundled by
+this change. Missing or unreadable dictionaries are reported by the existing
+Proofing options. Cedilla and decomposed letters are normalized for lookup only,
+not silently rewritten in the document. Installed Romanian pack hyphenation
+continues through the shared backend; no new patterns are embedded here.
+
+Spelling suggestions favor missing diacritics and handle case, typos and missing
+spaces/hyphens. Basic checks cover repetition, punctuation and sentence capitals.
+Manual contextual suggestions cover `instanta`/`instantei` before `de judecată`,
+`de apel`, `de recurs`; `instantei` after `pe rolul`/`în fața`; `parat` after
+`calitate de`/`calitatea de`; `paratul` after `contradictoriu cu`/`reclamantul și`
+or before `a depus întâmpinare`; `paratului` after `citarea`, `obligarea`, `audierea`.
+These cues do not cross punctuation or hard line boundaries. Bare ambiguous
+words, valid verb uses of `parat`, and tested identifiers/literals stay unchanged;
+Ignore All opts out. Broad `nici un` and comma-before-`ci`/`dar` guesses are disabled.
+This is not full Romanian grammar or semantic/legal checking.
+
+The shared base is storytold/craft-libs#550; the contextual extension is
+storytold/craft-libs#554. The exclusion-only helper is vioreltus/craft-libs#1. This PR temporarily pins the exact tested fork revision
+and must switch to the accepted upstream shared revision before merging.
+The original work is @Moogabe's #2565, with @VladMcj's helper adaptation in
+ro-legal-docx/wordcraft#1 and @vioreltus's shared port.
+
 ## Revision history
 
 | Date | Change | Summary |
@@ -196,6 +227,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 | 2026-11-03 | trivial | Language packs (CP4.3): the missing-pack bar offers a language before the list is fetched and gets the list, then the pack, on Install; a missing or stale list is fetched once while downloading is on; the caret's typing language counts |
 | 2026-11-03 | trivial | Language packs: install from Your languages or Add a language… in Options › Language; the Dictionaries folder is in Options › Language, not Proofing |
 | 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |
+| 2026-11-03 | minor | #4743: Romanian-specific proofing migrated to shared craft-proof on 0.15; context/compound regressions and app defaults; shared dependency pending, readiness unchanged |
 | 2026-11-02 | trivial | Language packs: language-packs-1 is published and pinned (61 languages); which languages aren't packs yet and why (CP4.4) |
 | 2026-11-02 | trivial | The Flatpak's own dictionaries folder (`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`); the host's folders are outside its sandbox |
 | 2026-11-01 | minor | Language packs (CP4.3): installing a language from File › Options › Language or the missing-pack bar, the download consent, About › Language data, the commands; an installed pack is searched after the dictionaries folders and before the system's |
