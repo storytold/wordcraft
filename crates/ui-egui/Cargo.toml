@@ -9,14 +9,23 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a" }
+# `esign`: the request-signatures dialog (storytold/craft-libs#661), behind craft-ui's feature of
+# that name. No `share` and no `cloud`: WordCraft has neither feature, and esign needs neither.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "01ffc9fbc7b46703a1afdb28f7421445f8ae116f", features = ["esign"] }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
 # `craft-i18n.rev`). Same craft-libs rev as craft-ui; it brings lazy per-locale parsing
 # (storytold/craft-libs#247), ICU4X plural rules and bidi isolates around inserted values.
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "01ffc9fbc7b46703a1afdb28f7421445f8ae116f" }
 # One native window per open document: the window list, the Window menu and the egui viewports.
-craft-window = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a", features = ["egui"] }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "01ffc9fbc7b46703a1afdb28f7421445f8ae116f", features = ["egui"] }
+# Contact and Identity: the vendor-neutral types craft-ui's esign dialog passes through for
+# recipient search and the sending account. No IO and no vendor; this crate never learns what a
+# connected backend reaches.
+craft-cloud = { git = "https://github.com/storytold/craft-libs", rev = "01ffc9fbc7b46703a1afdb28f7421445f8ae116f" }
+# EnvelopeDraft, Envelope, EsignCapability and CompletedDocument: the signing-service contract
+# craft-ui's esign feature and this crate's own request-signatures glue (`esign.rs`) speak.
+craft-esign = { git = "https://github.com/storytold/craft-libs", rev = "01ffc9fbc7b46703a1afdb28f7421445f8ae116f" }
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
