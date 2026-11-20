@@ -208,6 +208,7 @@ Page drawing resolves requested text-box warps in one prefix walk per paragraph 
 
 | Measure | WordCraft | Word | Kind |
 |---|---|---|---|
+| Comment highlight discovery in one marker-dense paragraph (#3614) | one forward object walk per displayed line, replacing repeated prefix counts; line-by-line repetition remains | not measured | `display::lines::comment_tests`, synthetic Linux paint-scaling and CLI/MCP render/persistence checks |
 | Print Markup balloon anchor discovery with many unrelated inline markers (#3614) | Single forward object walk; document order, first-root filtering, UTF-8 byte positions and the 5,000-anchor cap unchanged | not measured | `balloons::anchor_tests` semantic, cap and thread-CPU scaling regressions |
 | Cold layout, 188-page document | 61 ms | not measured | measured 2026-10-06 (not re-run this pass) |
 | Relayout after an edit | 1.4 ms | not measured | measured 2026-10-06 |
@@ -308,6 +309,8 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | trivial | Comment-highlight scaling test batches CPU samples to avoid undercounting short measurements (#3614); original workload sizes, five samples and 24x limit retained. Paint behavior and readiness estimates unchanged. |
+| 2026-10-29 | trivial | Comment highlight discovery walks objects once per displayed line (#3614); existing range bookkeeping, clipping, markup switches and saved data stay unchanged. No pairing-policy, cache or pagination change; synthetic Linux checks, no native Word comparison; readiness estimates unchanged. |
 | 2026-10-29 | trivial | A list item deleted whole under Track Changes shows its number in the deletion's colour and with its mark (struck through by default) with markup, and not at all without (#4828) |
 | 2026-11-04 | trivial | Headers, footers and note separators of the second and later sections are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's; a regression from the #4501 refactor (#4683). `layout::tests::pages::a_sections_header_is_measured_without_the_previous_sections_grid` |
 | 2026-11-08 | trivial | Turned inline pictures with no recorded effect extent keep their line to the frame (exchanged near a quarter turn in Word 2013+ layout) and overhang it, cut at the line's top and bottom, as in Word |
