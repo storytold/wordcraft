@@ -90,7 +90,30 @@ pub(crate) fn style_tile_image(doc: &Document, id: &str, ppp: f32, dark_page: bo
     if dark && !dark_page {
         dim(&mut img);
     }
+    // The old ribbon drew the sample letters on the ribbon itself, with no page behind them.
+    if !dark_page {
+        clear_white_paper(&mut img);
+    }
     img
+}
+
+/// Takes the white paper out of `img`: each pixel becomes the colour that, laid over white, gives
+/// it, so the letters keep their edges over any background and the paper is transparent.
+fn clear_white_paper(img: &mut ColorImage) {
+    for px in &mut img.pixels {
+        let [r, g, b, _] = px.to_array();
+        let alpha = 255 - r.min(g).min(b);
+        if alpha == 0 {
+            *px = egui::Color32::TRANSPARENT;
+            continue;
+        }
+        // c = a * x + (1 - a) * 255, solved for x.
+        let unlay = |c: u8| -> u8 {
+            let lifted = i32::from(c) - (255 - i32::from(alpha));
+            (lifted.max(0) * 255 / i32::from(alpha)).clamp(0, 255) as u8
+        };
+        *px = egui::Color32::from_rgba_unmultiplied(unlay(r), unlay(g), unlay(b), alpha);
+    }
 }
 
 /// A Style Sets tile: a title, a heading and a paragraph in the set `name`.
@@ -315,6 +338,16 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
 
 #[cfg(test)]
 mod tests {
+    /// White paper turns transparent and black letters stay black and opaque.
+    #[test]
+    fn white_paper_clears_and_ink_stays() {
+        let mut img = egui::ColorImage::new([3, 1], vec![egui::Color32::WHITE, egui::Color32::BLACK, egui::Color32::from_rgb(128, 128, 128)]);
+        super::clear_white_paper(&mut img);
+        assert_eq!(img.pixels[0], egui::Color32::TRANSPARENT);
+        assert_eq!(img.pixels[1], egui::Color32::BLACK);
+        assert_eq!(img.pixels[2].a(), 127);
+    }
+
     use super::*;
     use std::sync::Arc;
 
