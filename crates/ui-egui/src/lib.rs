@@ -57,6 +57,7 @@ pub(crate) mod language_packs;
 mod local_time;
 pub mod md_source;
 pub mod mini_toolbar;
+pub mod object_motion;
 pub mod objects;
 pub mod options;
 pub mod panes;

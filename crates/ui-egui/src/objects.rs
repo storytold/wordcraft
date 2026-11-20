@@ -749,7 +749,7 @@ fn preview_scale(px: f32, w: f32, h: f32, max_side: usize) -> f32 {
 
 /// `o` drawn alone over its rotated bounds, as a texture, at the canvas's `scale` (screen points
 /// per page point).
-fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
+pub(crate) fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
     let obj = hit_object(app, o)?;
     let page = layout.pages.get(o.page)?;
     let mut opts = crate::canvas::screen_render_options();
@@ -810,8 +810,42 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
     let _ = app.run("arrange.bounds", params);
 }
 
+/// The object whose changes of place, size and angle are eased ([`crate::object_motion`]): the
+/// selected shape (with text or without) or picture, or a text box being edited; not a connector
+/// or a fixed object.
+pub(crate) fn motion_subject(app: &WordApp, layout: &DocLayout) -> Option<ObjectHit> {
+    let (o, editing) = active(app, layout)?;
+    let ok = match selected(app) {
+        Some((_, InlineObject::Shape { kind, .. })) => !kind.is_connector(),
+        Some((_, InlineObject::Image { .. })) => true,
+        Some(_) => false,
+        None => editing,
+    };
+    (ok && !fixed(app, &o)).then_some(o)
+}
+
+/// A handle or the object itself being dragged, for [`crate::object_motion`].
+pub(crate) struct MotionDrag {
+    pub resize: bool,
+    pub page: usize,
+    pub key: Pos,
+    /// The drag already shows the object's pixels.
+    pub pixels: bool,
+    pub to: crate::object_motion::Pose,
+}
+
+pub(crate) fn motion_drag(app: &WordApp) -> Option<MotionDrag> {
+    let d = app.canvas.obj_drag.as_ref().filter(|d| d.drag.moved && d.end.is_none())?;
+    let to = crate::object_motion::Pose { page: d.drag.to_page, rect: d.drag.rect, deg: d.drag.deg };
+    Some(MotionDrag { resize: matches!(d.drag.grab, Grab::Resize(_)), page: d.object.page, key: d.object.pos(), pixels: shows_pixels(d), to })
+}
+
 /// Draw the frame of the active object, or the drag preview.
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
+    crate::object_motion::paint(app, painter, pages, scale);
+    if crate::object_motion::in_flight(painter.ctx()) {
+        return;
+    }
     if crate::crop::paint(app, painter, t, layout, pages, scale) {
         return;
     }

@@ -1674,7 +1674,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let ppp = ui.ctx().pixels_per_point();
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let content_origin = ui.min_rect().min;
-        let hidden = app.canvas.dragged_off_page();
+        crate::object_motion::begin(app, ui.ctx(), &layout, geo.scale);
+        let hidden = app.canvas.dragged_off_page().or_else(|| crate::object_motion::hidden(ui.ctx()));
         let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), hinted);
         // The view without the hinting, which a stretched raster may differ in (see `stretched`).
         let shown_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), true);
