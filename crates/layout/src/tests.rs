@@ -10465,6 +10465,43 @@ fn a_paragraph_opening_with_a_column_break_has_its_space_before_in_the_next_colu
     }
 }
 
+/// The space before moves past a column break only for a paragraph whose break ends the column it
+/// started in (#7053). One that keep lines together moves on to the next column had its space
+/// before dropped there; when its break ends that column, it keeps the plain column break's
+/// layout, with no space before added in the column after (not measured in Word).
+#[test]
+fn a_moved_paragraph_opening_with_a_column_break_takes_the_plain_break() {
+    crate::test_fonts();
+    use wordcraft_doc::para::COLUMN_BREAK;
+    use wordcraft_doc::props::LineSpacing;
+    // 46 lines set 14 pt exactly fill the left column but for 4 pt; the break's paragraph (two
+    // 30 pt lines, kept together) moves to the right column, and its break ends that column.
+    let layout = |before: f32, compat: u32| {
+        let lines: Vec<String> = (0..46).map(|i| format!("L{i}")).collect();
+        let mut d = Document::from_text(&format!("{}\n{COLUMN_BREAK}Right", lines.join("\n")));
+        d.settings.compat_mode = compat;
+        let n = d.body.len();
+        for i in 0..n {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            let last = i == n - 1;
+            p.props.line_spacing = Some(LineSpacing::Exactly(if last { 30.0 } else { 14.0 }));
+            p.props.space_before = Some(if last { before } else { 0.0 });
+            p.props.space_after = Some(0.0);
+            p.props.keep_lines = Some(last);
+        }
+        d.last_section.columns.count = 2;
+        let l = lay(&d);
+        let [brk, right] = [Pos::body(n - 1, 0), Pos::body(n - 1, COLUMN_BREAK.len_utf8())].map(|p| l.caret(&p).unwrap());
+        let first = l.caret(&Pos::body(0, 0)).unwrap();
+        assert!(brk.x > first.x + 100.0 && brk.page == 0, "mode {compat}: the break moved to the right column");
+        assert_eq!(right.page, 1, "mode {compat}: Right on the next page");
+        right.top
+    };
+    for compat in [14, 15] {
+        assert!((layout(12.0, compat) - layout(0.0, compat)).abs() < 0.5, "mode {compat}: no space before above Right");
+    }
+}
+
 #[test]
 fn an_odf_section_says_whether_its_columns_are_balanced() {
     use wordcraft_doc::section::SectionStart;

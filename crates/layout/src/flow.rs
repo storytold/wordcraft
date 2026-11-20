@@ -620,12 +620,14 @@ impl<'a> Flow<'a> {
             // not in the column the break ends. There the line holding the break keeps its height
             // in Word 2013 layout and takes no room in older layouts. A column starting at the top
             // of the page drops the space before in Word 2013 layout, as after a page break (Word).
-            Some(LineEnd::ColumnBreak) if starts_with(wordcraft_doc::para::COLUMN_BREAK) && !pb.web => {
+            // Only in the column where the paragraph started (the case measured): one that keep
+            // together moved on had its space before dropped there, and keeps the plain break.
+            Some(LineEnd::ColumnBreak)
+                if starts_with(wordcraft_doc::para::COLUMN_BREAK) && !pb.web && self.start.is_some_and(|(at, ..)| at == (pb.pages.len(), pb.col)) =>
+            {
                 let modern = ctx.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
                 pb.col_break_page = Some(pb.pages.len().saturating_sub(1));
-                if let Some((at, y, gap, content_bottom)) = self.start
-                    && at == (pb.pages.len(), pb.col)
-                {
+                if let Some((_, y, gap, content_bottom)) = self.start {
                     if modern {
                         pb.y -= gap;
                         pb.content_bottom = content_bottom.max(pb.y);
