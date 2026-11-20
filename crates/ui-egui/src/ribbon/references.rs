@@ -1,191 +1,218 @@
-use super::common::{mi, mi_text, stack};
-use super::language::mi_check;
-use super::{Ui, WordApp, big, group, json, menu_button, small};
+use super::common::menu_button;
+use super::{WordApp, json};
+use craft::behavior::IconId;
+use craft::keymap::CommandRef;
+use craft::menu::{RibbonGroup, RibbonRow};
+use craft::ui::buttons::{Arrangement, Button};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Divider;
+use craft::ui::layout_components::Stack;
+use craft::ui::menu::MenuItem;
 
-pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Table of Contents", None, app, |ui, app| {
+pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    row.group(RibbonGroup::new("Table of Contents", crate::tl!("Table of Contents"), IconId::new("toc").into()), |ui| {
         menu_button(
             ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("toc", Some("Table of\nContents"), "Table of Contents", true, "references.toc"),
-            |ui, app| {
-                mi(ui, app, "Automatic Table 1 (3 levels)", "references.toc", json!({"levels": 3}));
-                mi(ui, app, "Automatic Table 2 (2 levels)", "references.toc", json!({"levels": 2, "title": "Table of Contents"}));
-                ui.separator();
-                mi(ui, app, "Custom Table of Contents…", "ui.dialog", json!({"name": "toc"}));
-                mi(ui, app, "Remove Table of Contents", "references.removeToc", json!({}));
+            Button::new(crate::tl!("Table of\nContents"))
+                .icon(IconId::new("toc"))
+                .tooltip(crate::tl!("Table of Contents"))
+                .arrangement(Arrangement::Stacked),
+            crate::tl!("Table of Contents"),
+            Some("references.toc"),
+            |ui, _| {
+                for (label, params) in [
+                    ("Automatic Table 1 (3 levels)", json!({"levels": 3})),
+                    ("Automatic Table 2 (2 levels)", json!({"levels": 2, "title": "Table of Contents"})),
+                ] {
+                    MenuItem::command(CommandRef::with_params("references.toc", params)).label(crate::tl!(label)).show(ui);
+                }
+                Divider::horizontal().show(ui);
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "toc"})))
+                    .label(crate::tl!("Custom Table of Contents…"))
+                    .show(ui);
+                MenuItem::command(CommandRef::with_params("references.removeToc", json!({}))).label(crate::tl!("Remove Table of Contents")).show(ui);
             },
         );
-        stack(ui, |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             menu_button(
                 ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("addText", Some("Add Text"), "Add Text", false, "references.addText"),
-                |ui, app| {
-                    mi(ui, app, "Do Not Show in TOC", "references.addText", json!({"level": 0}));
+                Button::new(crate::tl!("Add Text")).icon(IconId::new("addText")).tooltip(crate::tl!("Add Text")),
+                crate::tl!("Add Text"),
+                Some("references.addText"),
+                |ui, _| {
+                    MenuItem::command(CommandRef::with_params("references.addText", json!({"level": 0})))
+                        .label(crate::tl!("Do Not Show in TOC"))
+                        .show(ui);
                     for l in 1..=3u64 {
-                        mi(ui, app, &format!("Level {l}"), "references.addText", json!({"level": l}));
+                        let label = format!("Level {l}");
+                        MenuItem::command(CommandRef::with_params("references.addText", json!({"level": l})))
+                            .label(crate::tl!(&label).to_string())
+                            .show(ui);
                     }
                 },
             );
-            small(
-                ui,
-                app,
-                "updateTable",
-                Some("Update Table"),
-                "Update Table",
-                crate::widgets::ButtonAction::new("references.updateToc", json!({}), false),
-            );
+            Button::command(CommandRef::with_params("references.updateToc", json!({})))
+                .label(crate::tl!("Update Table"))
+                .icon(IconId::new("updateTable"))
+                .show(ui);
         });
     });
-    group(ui, "Footnotes", Some("references.noteOptions"), app, |ui, app| {
-        big(ui, app, "footnote", "Insert\nFootnote", "references.footnote", json!({}), false);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "endnote",
-                Some("Insert Endnote"),
-                "Insert Endnote",
-                crate::widgets::ButtonAction::new("references.endnote", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "nextFootnote",
-                Some("Next Footnote"),
-                "Next Footnote",
-                crate::widgets::ButtonAction::new("references.nextFootnote", json!({}), false),
-            );
-            small(ui, app, "showNotes", Some("Show Notes"), "Show Notes", crate::widgets::ButtonAction::new("references.notes", json!({}), false));
+    row.group(RibbonGroup::new("Footnotes", crate::tl!("Footnotes"), IconId::new("footnote").into()).launcher("references.noteOptions"), |ui| {
+        Button::command(CommandRef::with_params("references.footnote", json!({})))
+            .label(crate::tl!("Insert\nFootnote"))
+            .icon(IconId::new("footnote"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for (key, label, id) in [
+                ("endnote", "Insert Endnote", "references.endnote"),
+                ("nextFootnote", "Next Footnote", "references.nextFootnote"),
+                ("showNotes", "Show Notes", "references.notes"),
+            ] {
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
+            }
         });
     });
-    group(ui, "Research", None, app, |ui, app| {
-        big(ui, app, "researcher", "Researcher", "references.researcher", json!({}), false);
+    row.group(RibbonGroup::new("Research", crate::tl!("Research"), IconId::new("researcher").into()), |ui| {
+        Button::command(CommandRef::with_params("references.researcher", json!({})))
+            .label(crate::tl!("Researcher"))
+            .icon(IconId::new("researcher"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Citations & Bibliography", None, app, |ui, app| {
+    row.group(RibbonGroup::new("Citations & Bibliography", crate::tl!("Citations & Bibliography"), IconId::new("citation").into()), |ui| {
         // The document's sources to cite, then a new one (Create Source, #402).
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("citation", Some("Insert\nCitation"), "Insert Citation", true, ""), |ui, app| {
-            let sources: Vec<(String, String)> =
-                app.session.doc.sources.iter().map(|s| (s.tag.clone(), format!("{} — {}", s.author, s.title))).collect();
-            for (tag, label) in sources {
-                mi_text(ui, app, &label, "references.citation", json!({"tag": tag}));
-            }
-            if !app.session.doc.sources.is_empty() {
-                ui.separator();
-            }
-            mi(ui, app, "Add New Source…", "ui.dialog", json!({"name": "createSource"}));
-        });
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "sources",
-                Some("Manage Sources"),
-                "Manage Sources",
-                crate::widgets::ButtonAction::new("references.sources", json!({}), false),
-            );
-            let current = app.session.bib_style.clone();
-            let label = crate::i18n::fmt(tl!("Style: {style}"), &[("style", &current)]);
+        menu_button(
+            ui,
+            Button::new(crate::tl!("Insert\nCitation"))
+                .icon(IconId::new("citation"))
+                .tooltip(crate::tl!("Insert Citation"))
+                .arrangement(Arrangement::Stacked),
+            crate::tl!("Insert Citation"),
+            Some("references.citation"),
+            |ui, _| {
+                for s in &app.session.doc.sources {
+                    let label = format!("{} — {}", s.author, s.title);
+                    MenuItem::command(CommandRef::with_params("references.citation", json!({"tag": s.tag}))).label(label).show(ui);
+                }
+                if !app.session.doc.sources.is_empty() {
+                    Divider::horizontal().show(ui);
+                }
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "createSource"})))
+                    .label(crate::tl!("Add New Source…"))
+                    .show(ui);
+            },
+        );
+        let current = app.session.bib_style.clone();
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::with_params("references.sources", json!({})))
+                .label(crate::tl!("Manage Sources"))
+                .icon(IconId::new("sources"))
+                .show(ui);
+            let label = crate::i18n::fmt(crate::tl!("Style: {style}"), &[("style", &current)]);
             menu_button(
                 ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("styles", Some(&label), "Citation Style", false, "references.citationStyle"),
-                |ui, app| {
+                Button::new(label).icon(IconId::new("styles")).tooltip(crate::tl!("Citation Style")),
+                crate::tl!("Citation Style"),
+                Some("references.citationStyle"),
+                |ui, _| {
                     for st in &wordcraft_engine::cmd::citations::STYLES {
-                        mi_check(ui, app, st.name, st.name == current, "references.citationStyle", json!({"style": st.name}));
+                        MenuItem::command(CommandRef::with_params("references.citationStyle", json!({"style": st.name})))
+                            .label(crate::tl!(st.name))
+                            .radio_mark(st.name == current)
+                            .show(ui);
                     }
                 },
             );
-            small(
-                ui,
-                app,
-                "bibliography",
-                Some("Bibliography"),
-                "Bibliography",
-                crate::widgets::ButtonAction::new("references.bibliography", json!({}), false),
-            );
+            Button::command(CommandRef::with_params("references.bibliography", json!({})))
+                .label(crate::tl!("Bibliography"))
+                .icon(IconId::new("bibliography"))
+                .show(ui);
         });
     });
-    group(ui, "Captions", None, app, |ui, app| {
-        big(ui, app, "caption", "Insert\nCaption", "references.caption", json!({}), false);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "tableOfFigures",
-                Some("Insert Table of Figures"),
-                "Insert Table of Figures",
-                crate::widgets::ButtonAction::new("references.tableOfFigures", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "update",
-                Some("Update Table"),
-                "Update Table of Figures",
-                crate::widgets::ButtonAction::new("references.updateFigures", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "crossRef",
-                Some("Cross-reference"),
-                "Cross-reference",
-                crate::widgets::ButtonAction::new("insert.crossReference", json!({}), false),
-            );
+    row.group(RibbonGroup::new("Captions", crate::tl!("Captions"), IconId::new("caption").into()), |ui| {
+        Button::command(CommandRef::with_params("references.caption", json!({})))
+            .label(crate::tl!("Insert\nCaption"))
+            .icon(IconId::new("caption"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for (key, label, tip, id) in [
+                ("tableOfFigures", "Insert Table of Figures", "Insert Table of Figures", "references.tableOfFigures"),
+                ("update", "Update Table", "Update Table of Figures", "references.updateFigures"),
+                ("crossRef", "Cross-reference", "Cross-reference", "insert.crossReference"),
+            ] {
+                Button::command(CommandRef::with_params(id, json!({})))
+                    .label(crate::tl!(label))
+                    .icon(crate::icons::id(key))
+                    .tooltip(crate::tl!(tip))
+                    .show(ui);
+            }
         });
     });
-    group(ui, "Index", None, app, |ui, app| {
-        big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
-        stack(ui, |ui| {
-            small(ui, app, "index", Some("Insert Index"), "Insert Index", crate::widgets::ButtonAction::new("references.index", json!({}), false));
-            small(
-                ui,
-                app,
-                "update",
-                Some("Update Index"),
-                "Update Index",
-                crate::widgets::ButtonAction::new("references.updateIndex", json!({}), false),
-            );
+    row.group(RibbonGroup::new("Index", crate::tl!("Index"), IconId::new("index").into()), |ui| {
+        Button::command(CommandRef::with_params("references.markEntry", json!({})))
+            .label(crate::tl!("Mark\nEntry"))
+            .icon(IconId::new("markEntry"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for (key, label, id) in [("index", "Insert Index", "references.index"), ("update", "Update Index", "references.updateIndex")] {
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
+            }
         });
     });
-    group(ui, "Table of Authorities", None, app, |ui, app| {
-        big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "tableOfAuthorities",
-                Some("Insert Table of Authorities"),
-                "Insert Table of Authorities",
-                crate::widgets::ButtonAction::new("references.tableOfAuthorities", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "update",
-                Some("Update Table"),
-                "Update Table",
-                crate::widgets::ButtonAction::new("references.updateAuthorities", json!({}), false),
-            );
+    row.group(RibbonGroup::new("Table of Authorities", crate::tl!("Table of Authorities"), IconId::new("tableOfAuthorities").into()), |ui| {
+        Button::command(CommandRef::with_params("references.markCitation", json!({})))
+            .label(crate::tl!("Mark\nCitation"))
+            .icon(IconId::new("markCitation"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for (key, label, id) in [
+                ("tableOfAuthorities", "Insert Table of Authorities", "references.tableOfAuthorities"),
+                ("update", "Update Table", "references.updateAuthorities"),
+            ] {
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
+            }
         });
     });
 }
 
 /// Zotero (`docs/zotero.md`): the Zotero desktop app does the work in its own window.
-pub(super) fn zotero(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Citations", None, app, |ui, app| {
-        big(ui, app, "citation", "Add/Edit\nCitation", "ui.zotero.addEditCitation", json!({}), false);
-        big(ui, app, "addNote", "Add\nNote", "ui.zotero.addNote", json!({}), false);
-        big(ui, app, "pastCitation", "Move Past\nCitation", "caret.pastCitation", json!({}), false);
+pub(super) fn zotero(row: &mut RibbonRow<'_>, _app: &mut WordApp) {
+    let big = |ui: &mut egui::Ui, key: &'static str, label: &'static str, id: &'static str| {
+        Button::command(CommandRef::with_params(id, json!({})))
+            .label(crate::tl!(label))
+            .icon(crate::icons::id(key))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+    };
+    row.group(RibbonGroup::new("Provider", crate::tl!("Provider"), IconId::new("citation").into()), |ui| {
+        menu_button(
+            ui,
+            Button::new(crate::tl!("Provider")).icon(IconId::new("citation")).tooltip(crate::tl!("Citation Provider")),
+            crate::tl!("Citation Provider"),
+            Some("ui.citations.provider"),
+            |ui, _| {
+                MenuItem::command(CommandRef::with_params("ui.citations.provider", json!({"value": "zotero"})))
+                    .label(crate::tl!("Zotero"))
+                    .radio_mark(true)
+                    .show(ui);
+            },
+        );
     });
-    group(ui, "Bibliography", None, app, |ui, app| {
-        big(ui, app, "bibliography", "Add/Edit\nBibliography", "ui.zotero.addEditBibliography", json!({}), false);
+    row.group(RibbonGroup::new("Citations", crate::tl!("Citations"), IconId::new("citation").into()), |ui| {
+        big(ui, "citation", "Add/Edit\nCitation", "ui.zotero.addEditCitation");
+        big(ui, "addNote", "Add\nNote", "ui.zotero.addNote");
+        big(ui, "pastCitation", "Move Past\nCitation", "caret.pastCitation");
     });
-    group(ui, "Document", None, app, |ui, app| {
-        big(ui, app, "update", "Refresh", "ui.zotero.refresh", json!({}), false);
-        big(ui, app, "docPrefs", "Document\nPreferences", "ui.zotero.setDocPrefs", json!({}), false);
-        big(ui, app, "unlinkCitations", "Unlink\nCitations", "ui.zotero.removeCodes", json!({}), false);
+    row.group(RibbonGroup::new("Bibliography", crate::tl!("Bibliography"), IconId::new("bibliography").into()), |ui| {
+        big(ui, "bibliography", "Add/Edit\nBibliography", "ui.zotero.addEditBibliography");
+    });
+    row.group(RibbonGroup::new("Document", crate::tl!("Document"), IconId::new("docPrefs").into()), |ui| {
+        big(ui, "update", "Refresh", "ui.zotero.refresh");
+        big(ui, "docPrefs", "Document\nPreferences", "ui.zotero.setDocPrefs");
+        big(ui, "unlinkCitations", "Unlink\nCitations", "ui.zotero.removeCodes");
     });
 }

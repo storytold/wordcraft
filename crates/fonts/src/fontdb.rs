@@ -33,7 +33,6 @@ use fallback_data::{CoverageIndex, SysFallback};
 use fallback_data::{FallbackCache, RunFallbackCache};
 #[cfg(not(target_arch = "wasm32"))]
 use names::CatalogEntry;
-pub(crate) use names::face_names;
 pub use names::{LocalName, base_style, name_language_matches, system_font_dirs};
 use names::{MAX_FILE_FACES, enumerate_faces, make_face};
 #[cfg(test)]
