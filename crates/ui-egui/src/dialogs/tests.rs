@@ -1696,7 +1696,10 @@ fn font_dialog_effects_stand_two_to_a_line_and_kerning_on_one() {
 #[test]
 fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
     use egui::accesskit::Role;
-    let mut h = app_harness(app_with("Lanterns"));
+    let mut app = app_with("Lanterns");
+    // The framework palette lists the document theme; use a known colour rather than its default.
+    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0xC0, 0, 0)];
+    let mut h = app_harness(app);
     open_named(&mut h, "paragraph", json!({}));
     assert!(h.query_by_role_and_label(Role::Dialog, "Paragraph").is_some(), "Paragraph is a dialog");
     assert!(h.query_by_role_and_label(Role::Window, "Paragraph").is_none(), "not only a window");
@@ -1720,8 +1723,11 @@ fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
 #[test]
 fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     use egui::accesskit::Role;
-    let mut h = app_harness(app_with("Lanterns"));
-    for (dialog, names) in [("font", vec!["Font color: Automatic"]), ("borders", vec!["Color: No Color"]), ("shading", vec!["Fill No Color"])] {
+    let mut app = app_with("Lanterns");
+    // The framework palette lists the document theme; use a known colour rather than its default.
+    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0xC0, 0, 0)];
+    let mut h = app_harness(app);
+    for (dialog, names) in [("font", vec!["Font color: Automatic"]), ("borders", vec!["Color: Automatic"]), ("shading", vec!["Fill No Color"])] {
         let ctx = h.ctx.clone();
         close_all(h.state_mut(), &ctx);
         h.run_steps(2);
