@@ -219,6 +219,19 @@ fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
     s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| escape_text(&format!("--author: {e}"), false))
 }
 
+/// `mcp`'s headless backend: a session confined to `roots`, its author `author` when given. The caller confines the
+/// process to the same roots first (`confine_process`), which a test must not do.
+fn headless_mcp(
+    roots: std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>,
+    author: Option<&str>,
+) -> Result<wordcraft_mcp::Headless, String> {
+    let mut headless = wordcraft_mcp::Headless::default().with_automation_roots(Some(roots));
+    if let Some(name) = author {
+        set_author(&mut headless.session, name)?;
+    }
+    Ok(headless)
+}
+
 fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
@@ -733,11 +746,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             wordcraft_engine::file_access::confine_process(roots.clone());
             let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
             eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
-            let mut headless = wordcraft_mcp::Headless::default().with_automation_roots(Some(roots));
-            if let Some(name) = arg_value(&rest, "--author") {
-                set_author(&mut headless.session, &name)?;
-            }
-            let backend: Box<dyn wordcraft_mcp::Backend> = Box::new(headless);
+            let backend: Box<dyn wordcraft_mcp::Backend> = Box::new(headless_mcp(roots, arg_value(&rest, "--author").as_deref())?);
             let mut server = wordcraft_mcp::Server::new(backend);
             let stdin = std::io::stdin();
             // A client that closes our stdout has hung up: `serve` returns BrokenPipe and we end cleanly.

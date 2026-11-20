@@ -320,6 +320,17 @@ fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
     }
 }
 
+/// `mcp`'s headless session takes `--author` as the session's author, and refuses a blank one as `run` does.
+#[test]
+fn mcp_headless_session_takes_the_author_flag() {
+    let scratch = Scratch::new("mcp-author");
+    let roots = wordcraft_engine::file_access::AutomationRoots::new(Some(&scratch.0), Some(&scratch.0)).unwrap().unwrap();
+    assert_eq!(headless_mcp(roots.clone(), Some("Claude (copyedit)")).unwrap().session.author, "Claude (copyedit)");
+    assert!(headless_mcp(roots.clone(), Some("   ")).is_err_and(|e| e.starts_with("--author:")));
+    let unnamed = headless_mcp(roots, None).unwrap();
+    assert_eq!(unnamed.session.author, wordcraft_mcp::Headless::default().session.author, "no flag keeps the default author");
+}
+
 /// `--connect` is refused whether or not it has a value, even with both roots valid.
 #[test]
 fn mcp_connect_is_refused_without_a_value_too() {
