@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-19 · **Change:** trivial (the desktop animation fallback uses an absolute XDG or home configuration directory, #7090); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-19: Accessibility: on Linux and BSD, the animation fallback reads KDE and GTK settings only from an absolute XDG or home configuration directory (#7090). Readiness estimates unchanged.
 - 2026-10-31: Screen readers hear what the dialogs and their drawn controls are: a dialog is a dialog, where it was only a window, so NVDA says so and reads the text in it (Word Count's figures); a dialog's tabs (Paragraph, Find and Replace, About) are tabs, the one shown selected, as in Word, where they were buttons read as pressed toggles; a colour field says its label and colour ("Font color: #104861"), where its text alone was the colour's hex digits; and each swatch of the colour grid says its colour, where it had no name. Readiness estimates unchanged.
 
 - 2026-11-01: Screen readers: the formatting shortcuts say what they did, as Word does (Bold On, Bold Off, Center On, Font 14 pt), through a polite live region (checked with NVDA); before, Ctrl+B said nothing.
@@ -918,6 +919,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
+> 2026-11-19 · Progress log: desktop animation fallback ignores relative configuration directories (#7090); readiness estimates unchanged.
+>
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
 > 2026-11-08 · Progress log: turned inline pictures without a recorded effect extent keep their line to the frame, as in Word.
