@@ -206,6 +206,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         core,
         sources,
         custom_props,
+        bookmark_attrs,
         footnote_separators,
         endnote_separators,
         media,
@@ -228,6 +229,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.core = convert(core)?;
     document.sources = convert(sources)?;
     document.custom_props = convert(custom_props)?;
+    document.bookmark_attrs = Arc::new(convert((*bookmark_attrs).clone())?);
     document.footnote_separators = convert(footnote_separators)?;
     document.endnote_separators = convert(endnote_separators)?;
     document.media = media;
@@ -403,6 +405,7 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
     document.core = convert_ref(&source.core)?;
     document.sources = convert_ref(&source.sources)?;
     document.custom_props = convert_ref(&source.custom_props)?;
+    document.bookmark_attrs = Arc::new(convert_ref(source.bookmark_attrs.as_ref())?);
     document.footnote_separators = convert_ref(&source.footnote_separators)?;
     document.endnote_separators = convert_ref(&source.endnote_separators)?;
     document.media = source.media.clone();
@@ -553,6 +556,39 @@ mod tests {
             let shared: craft_wordmodel::chart::ChartSpec = convert_ref(&local).expect("convert");
             assert_eq!(shared, craft_wordmodel::chart::ChartSpec::sample(shared.kind), "{kind:?}");
         }
+    }
+
+    /// Source placement and attributes survive both bridge directions and native JSON.
+    #[test]
+    fn bridges_bookmark_metadata_and_native_json_both_directions() {
+        use craft_wordmodel::bookmark::{BookmarkAttrs, BookmarkContainer, BookmarkPlace};
+        let mut source = craft_wordmodel::Document::new();
+        let attrs = BookmarkAttrs {
+            id: "+00019".into(),
+            col_first: Some("0".into()),
+            col_last: Some("2".into()),
+            start: Some(BookmarkPlace { container: BookmarkContainer::Row, after: false, tables: 1 }),
+            end: Some(BookmarkPlace { container: BookmarkContainer::Cell, after: true, tables: 0 }),
+        };
+        Arc::make_mut(&mut source.bookmark_attrs).insert("Range".into(), attrs.clone());
+        let doc = from_shared_model(source).unwrap();
+        let app_attrs = doc.bookmark_attrs.get("Range").unwrap();
+        assert_eq!(app_attrs.id, attrs.id);
+        assert_eq!(app_attrs.col_first, attrs.col_first);
+        assert_eq!(app_attrs.col_last, attrs.col_last);
+        assert_eq!(app_attrs.start.unwrap().tables, 1);
+        assert_eq!(app_attrs.end.unwrap().tables, 0);
+        let bytes = serde_json::to_vec(&doc).unwrap();
+        let restored: wordcraft_doc::Document = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored.bookmark_attrs, doc.bookmark_attrs);
+        let back = to_shared_model(&restored).unwrap();
+        assert_eq!(back.bookmark_attrs.get("Range"), Some(&attrs));
+
+        let plain = wordcraft_doc::Document::new();
+        let mut old_json = serde_json::to_value(&plain).unwrap();
+        old_json.as_object_mut().unwrap().remove("bookmarkAttrs");
+        let old_doc: wordcraft_doc::Document = serde_json::from_value(old_json).unwrap();
+        assert!(old_doc.bookmark_attrs.is_empty());
     }
 
     #[test]
