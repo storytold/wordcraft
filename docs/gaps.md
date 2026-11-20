@@ -182,6 +182,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
+> 2026-11-14 · Locked LISTNUM fields renumber and count on update and output, as in Word; SEQ and tracked-deletion handling are unchanged.
+>
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 
 > 2026-11-05 · Gap 16: Arabic letters join across a change of formatting and past hidden or deleted text (#4093); readiness unchanged.

@@ -72,25 +72,103 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Renumber the body's SEQ fields in document order, honouring `\* format`, `\s level` (restart
-/// after each heading of that level), `\r n` (reset to n), `\c` (repeat) and `\h` (hide), and
+/// Renumber the body's LISTNUM fields and SEQ fields in document order. SEQ honours
+/// `\* format`, `\s level` (restart after each heading of that level), `\r n` (reset to n),
+/// `\c` (repeat) and `\h` (hide). LISTNUM uses shared level counters and `\l` / `\s`. Also
 /// fill body STYLEREF fields ([`wordcraft_layout::styleref`]): chapter numbers (`STYLEREF n \s`,
 /// the last level-n heading's number, or its count when the heading isn't numbered) and the
 /// text or number of the nearest paragraph of a style.
 pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
+    update_seq_of(s, None)
+}
+
+/// [`update_seq`], storing only the results of the fields in `only` when it is given (a text box
+/// anchored in the body): they are numbered with the whole body, the body's own fields keep theirs.
+fn update_seq_of(s: &mut Session, only: Option<StoryRef>) -> Result<(), CmdError> {
+    let keep = |r: &FieldResult| only.is_none_or(|story| r.0 == story);
     // Numbers first: a STYLEREF to a heading that holds a SEQ field shows its new number.
-    let numbers = seq_results(&s.doc);
+    let mut numbers = seq_results(&s.doc);
+    numbers.retain(keep);
     apply_results(&mut s.doc, numbers)?;
-    let refs = styleref_results(&s.doc);
+    let mut refs = styleref_results(&s.doc);
+    refs.retain(keep);
     apply_results(&mut s.doc, refs)
 }
 
 /// A field's fresh result: its story and paragraph, its object index there and the text.
 type FieldResult = (StoryRef, Path, usize, String);
 
+/// LISTNUM's shared multilevel counters, independent of SEQ identifiers and restarts.
+#[derive(Default)]
+struct ListNumCount {
+    levels: [u32; 9],
+    /// Whether each level's counter was set (by a field at that level, `\s` included) since it
+    /// was last reset by a shallower field: a deeper field shows a level not set as 1 and keeps a
+    /// set one as it is, 0 from `\s 0` included (measured in Word 365).
+    started: [bool; 9],
+    last_heading: u8,
+}
+
+impl ListNumCount {
+    fn result(&mut self, field: &FieldCode, heading: Option<u8>) -> String {
+        let level = field
+            .arg('l')
+            .and_then(|v| v.parse::<u8>().ok())
+            .filter(|l| (1..=9).contains(l))
+            .unwrap_or_else(|| heading.unwrap_or_else(|| self.last_heading.saturating_add(1).min(9)));
+        let index = usize::from(level.saturating_sub(1));
+        let start = field.arg('s').and_then(|v| v.parse::<u32>().ok());
+        for (i, (n, started)) in self.levels.iter_mut().zip(self.started.iter_mut()).enumerate() {
+            if i < index {
+                if !*started {
+                    *n = 1;
+                    *started = true;
+                }
+            } else if i == index {
+                *n = start.unwrap_or_else(|| n.saturating_add(1));
+                *started = true;
+            } else {
+                *n = 0;
+                *started = false;
+            }
+        }
+        let name = field.args.first().map(String::as_str).unwrap_or("NumberDefault");
+        if name.eq_ignore_ascii_case("LegalDefault") {
+            let parts: Vec<String> = self.levels.iter().take(usize::from(level)).map(u32::to_string).collect();
+            return format!("{}.", parts.join("."));
+        }
+        let (fmt, prefix, suffix) = if name.eq_ignore_ascii_case("OutlineDefault") {
+            match level {
+                1 => (NumFormat::UpperRoman, "", "."),
+                2 => (NumFormat::UpperLetter, "", "."),
+                3 => (NumFormat::Decimal, "", "."),
+                4 => (NumFormat::LowerLetter, "", ")"),
+                5 => (NumFormat::Decimal, "(", ")"),
+                6 | 8 => (NumFormat::LowerLetter, "(", ")"),
+                _ => (NumFormat::LowerRoman, "(", ")"),
+            }
+        } else {
+            let fmt = match level {
+                2 | 5 | 8 => NumFormat::LowerLetter,
+                3 | 6 | 9 => NumFormat::LowerRoman,
+                _ => NumFormat::Decimal,
+            };
+            let (prefix, suffix) = match level {
+                4..=6 => ("(", ")"),
+                7..=9 => ("", "."),
+                _ => ("", ")"),
+            };
+            (fmt, prefix, suffix)
+        };
+        let n = self.levels.get(index).copied().unwrap_or(0);
+        format!("{prefix}{}{suffix}", fmt.format(n))
+    }
+}
+
 /// The SEQ numbering so far while the document is walked in order.
 #[derive(Default)]
 struct SeqCount {
+    listnum: ListNumCount,
     /// How many headings of each level there have been (for `\s`).
     headings: [u32; 9],
     /// Per sequence: its number, and the heading count it was last restarted at.
@@ -100,7 +178,8 @@ struct SeqCount {
     out: Vec<FieldResult>,
 }
 
-/// The fresh results of the unlocked SEQ fields in the body and in the text boxes anchored there
+/// The fresh results of LISTNUM fields (locked or unlocked) and unlocked SEQ fields
+/// in the body and in the text boxes anchored there
 /// ([`update_seq`]). A text box's fields count where the box is anchored, before the fields after
 /// the anchor in its paragraph and after those before it (measured in Word for Windows). A locked
 /// SEQ keeps its result but still counts, `\r` included; a SEQ in a tracked deletion keeps its
@@ -109,6 +188,9 @@ fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut count = SeqCount::default();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        if let Some(l) = heading_style_level(p) {
+            count.listnum.last_heading = l;
+        }
         if let Some(l) = heading_style_level(p)
             && let Some(k) = (l as usize).checked_sub(1)
             && let Some(n) = count.headings.get_mut(k)
@@ -139,6 +221,15 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
         }
         let InlineObject::Field { instr, locked, .. } = o else { continue };
         let f = FieldCode::parse(instr);
+        if f.name == "LISTNUM" {
+            // A LISTNUM in a tracked deletion keeps its result and doesn't count, as SEQ does.
+            if in_deletion {
+                continue;
+            }
+            let result = count.listnum.result(&f, heading_style_level(p));
+            count.out.push((story, path.clone(), k, result));
+            continue;
+        }
         if f.name != "SEQ" || in_deletion {
             continue;
         }
@@ -277,7 +368,8 @@ fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<
 }
 
 /// The document as Word prints and exports it (PDF, print jobs, page images). Laying a document
-/// out for output, Word fills in the body's unlocked SEQ, STYLEREF and REF fields, even with
+/// out for output, Word fills in the body's LISTNUM fields regardless of lock, and
+/// unlocked SEQ, STYLEREF and REF fields, even with
 /// "Update fields before printing" off, while NUMWORDS, FILENAME, the summary properties and
 /// formulas keep their stored results (measured with Word for Windows, printing and exporting
 /// fields whose stored results were wrong). The document itself keeps its stored results.
@@ -320,8 +412,9 @@ fn has_switch(instr: &str, sw: char) -> bool {
 /// Update fields of the story being edited, as Word's F9 does: dates, REF/PAGEREF, the document
 /// information fields (TITLE, SUBJECT, AUTHOR, KEYWORDS, COMMENTS, LASTSAVEDBY, REVNUM, NUMWORDS,
 /// NUMCHARS, FILENAME, DOCPROPERTY) in the body, or in the header, footer, note or text box the
-/// caret is in (the body's fields stay as they are then). SEQ numbering, citations and TOC are
-/// body-only, so they run only when the caret is in the body.
+/// caret is in (the body's fields stay as they are then). Citations and TOC are body-only, so they
+/// run only when the caret is in the body; SEQ and LISTNUM numbering runs in the body and, for its
+/// own fields, in a text box anchored there (not in headers, footers or notes).
 pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_fields_in(s, false)
 }
@@ -372,6 +465,12 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     let in_body = all || caret_story == StoryRef::Body;
     if in_body {
         update_seq(s)?;
+    } else if let StoryRef::Part(id) = caret_story
+        && s.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+    {
+        // A text box anchored in the body numbers its SEQ and LISTNUM fields with the body's
+        // (a box anchored elsewhere gets no results); headers, footers and notes don't number them.
+        update_seq_of(s, Some(caret_story))?;
     }
     let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
     let formats = page_formats(s);
@@ -603,4 +702,77 @@ fn set_values(s: &Session, paths: &[(StoryRef, Path)]) -> std::collections::Hash
         }
     }
     out
+}
+
+#[cfg(test)]
+mod listnum_tests {
+    use super::*;
+
+    #[test]
+    fn output_refreshes_listnum_without_changing_stored_results() {
+        for (instr, expected) in [("LISTNUM", ["1)", "2)", "3)"])] {
+            let mut doc = wordcraft_doc::Document::from_text("Numbers");
+            let path = Path::top(0);
+            let para = doc.para_mut(StoryRef::Body, &path).unwrap();
+            for locked in [false, true, false] {
+                para.insert_object(
+                    para.len(),
+                    InlineObject::Field { instr: instr.into(), result: "stale".into(), locked, dirty: true, code: false, form: String::new() },
+                    &CharProps::default(),
+                )
+                .unwrap();
+            }
+            let fresh = output_fields(&doc).unwrap();
+            let results = |doc: &wordcraft_doc::Document| {
+                doc.para(StoryRef::Body, &path)
+                    .unwrap()
+                    .objects
+                    .iter()
+                    .filter_map(|o| match o {
+                        InlineObject::Field { result, dirty, .. } => Some((result.clone(), *dirty)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(results(&fresh), expected.map(|s| (s.to_owned(), false)), "{instr}");
+            assert_eq!(results(&doc), vec![("stale".into(), true); 3]);
+            assert!(output_fields(&fresh).is_none());
+        }
+    }
+
+    #[test]
+    fn listnum_default_formats_and_bounded_switches() {
+        for (name, want) in [
+            ("NumberDefault", ["1)", "a)", "i)", "(1)", "(a)", "(i)", "1.", "a.", "i."]),
+            ("OutlineDefault", ["I.", "A.", "1.", "a)", "(1)", "(a)", "(i)", "(a)", "(i)"]),
+        ] {
+            for (index, expected) in want.iter().enumerate() {
+                let mut count = ListNumCount::default();
+                let code = FieldCode::parse(&format!("LISTNUM {name} \\l {}", index + 1));
+                assert_eq!(&count.result(&code, None), expected);
+            }
+        }
+        let mut count = ListNumCount { last_heading: 9, ..Default::default() };
+        assert_eq!(count.result(&FieldCode::parse(r"LISTNUM \l 99999999999999999999"), None), "i.");
+        assert_eq!(count.result(&FieldCode::parse(r"LISTNUM \l 0 \s 4294967295"), None), NumFormat::LowerRoman.format(u32::MAX) + ".");
+        assert_eq!(count.result(&FieldCode::parse("LISTNUM"), None), NumFormat::LowerRoman.format(u32::MAX) + ".");
+    }
+
+    /// PR #5881 review: switch values out of range or not numbers fall back, each on a fresh
+    /// counter set: a bad `\l` takes level 1 (no heading before it), `\s 0` starts at 0, and a
+    /// `\s` that isn't a number is ignored.
+    #[test]
+    fn listnum_switch_fallbacks() {
+        for (instr, want) in [
+            (r"LISTNUM \l 10", "1)"),
+            (r"LISTNUM \l 0", "1)"),
+            (r"LISTNUM \l -1", "1)"),
+            (r"LISTNUM \l x", "1)"),
+            (r"LISTNUM \s 0", "0)"),
+            (r"LISTNUM \s -3", "1)"),
+        ] {
+            let mut count = ListNumCount::default();
+            assert_eq!(count.result(&FieldCode::parse(instr), None), want, "{instr}");
+        }
+    }
 }
