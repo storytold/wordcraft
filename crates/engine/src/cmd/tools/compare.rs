@@ -1417,7 +1417,7 @@ fn para_exceeds_char_limit(p: &Paragraph, limit: usize) -> bool {
 
 /// Returns `true` if paragraph `p` contains any CJK character.
 fn para_has_cjk(p: &Paragraph) -> bool {
-    p.text.chars().any(wordcraft_fonts::is_cjk)
+    if p.objects.is_empty() { p.text.chars().any(wordcraft_fonts::is_cjk) } else { p.plain_text().chars().any(wordcraft_fonts::is_cjk) }
 }
 
 /// Diffs two matched paragraphs either at word granularity or at character granularity according
