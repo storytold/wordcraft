@@ -122,6 +122,7 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     }
     item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
+    item(ui, app, "Clear All Formatting", "format.clear", json!({}));
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {

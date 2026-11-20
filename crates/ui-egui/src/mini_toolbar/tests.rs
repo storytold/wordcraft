@@ -7,6 +7,37 @@ fn highlight_button_appearance_follows_the_picked_colour() {
     assert_eq!(highlight_button_appearance("unknown"), ("highlightNoColor", None, "none"));
 }
 
+/// #6068: the bar offers Clear All Formatting, which removes the selection's direct character
+/// formatting.
+#[test]
+fn the_bar_offers_clear_all_formatting() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::Pos;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Bold word"})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h);
+    // Scope the search to the bar: the ribbon has its own Clear All Formatting, so an
+    // unscoped search would pass without the bar's button.
+    let [bar, _] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar is shown over a selection");
+    h.query_all_by_label_contains("Clear All Formatting")
+        .find(|n| bar.contains_rect(n.rect()))
+        .expect("the bar offers Clear All Formatting")
+        .click();
+    steps(&mut h);
+    let p = h.state().session.doc.para_at(&Pos::body(0, 0)).expect("the paragraph");
+    assert_eq!(p.props_of_char(0).bold, None, "the selection's bold is cleared");
+}
+
 fn vp() -> Rect {
     Rect::from_min_size(pos2(100.0, 50.0), Vec2::new(1200.0, 700.0))
 }
