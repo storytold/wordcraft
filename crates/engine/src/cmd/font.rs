@@ -134,7 +134,9 @@ pub struct MissingFont {
     pub shown_as: Vec<String>,
     /// The font's substitute measures like it (Carlito for Calibri…): line breaks don't move.
     /// Fallback faces for characters the substitute lacks don't count: the font itself might
-    /// lack them too (an emoji in Calibri text).
+    /// lack them too (an emoji in Calibri text). Italic text the substitute has no italic for
+    /// (Segoe UI italic in Selawik) does: slanted, it keeps the upright widths, not the font's
+    /// italic's.
     pub metric_compatible: bool,
     /// Its publisher's download page, when the publisher offers the font at no charge
     /// ([`wordcraft_fonts::download`]): installing it shows the document as it was written.
@@ -145,6 +147,13 @@ pub struct MissingFont {
 /// layout picks it for `doc`.
 pub fn shown_as(doc: &Document, font: &str) -> Option<String> {
     wordcraft_layout::para::substitute_face(doc, font).map(|f| f.get().family.clone())
+}
+
+/// The family text set in `font` is drawn in when `font` isn't installed and that is worth a
+/// warning ([`warns_in`]), as layout picks it for `doc`: the font box's warning for a font no
+/// text shows yet.
+pub fn shown_as_warning(doc: &Document, font: &str) -> Option<String> {
+    wordcraft_layout::para::substitute_face(doc, font).filter(|f| warns_in(font, *f)).map(|f| f.get().family.clone())
 }
 
 /// The family Chinese, Japanese and Korean text is drawn in when its East Asian font `font_ea`
@@ -161,6 +170,13 @@ pub fn warns(font: &str, substitute: &str) -> bool {
     !wordcraft_doc::symbol_fonts::is_symbol_font(font) && !wordcraft_fonts::word::metric_compatible(font, substitute)
 }
 
+/// [`warns`] for text in `font` drawn in `face`, by either of its names: the one Word lists
+/// (Selawik Light, Segoe UI Light's twin) or its typographic family (Selawik).
+pub fn warns_in(font: &str, face: wordcraft_fonts::FaceRef) -> bool {
+    let f = face.get();
+    warns(font, &f.legacy_family) && warns(font, &f.family)
+}
+
 /// The fonts `doc`'s laid-out text asks for that aren't installed, from what layout drew
 /// ([`DocLayout::substituted_fonts`]): only text the current view shows counts (no headers or
 /// footers in Web, Draft or Read view), in every story on its pages, list labels and field
@@ -168,7 +184,7 @@ pub fn warns(font: &str, substitute: &str) -> bool {
 pub fn missing_fonts(doc: &Document, layout: &DocLayout) -> Vec<MissingFont> {
     // By key: in name order, case variants merged.
     let mut out: std::collections::BTreeMap<String, MissingFont> = std::collections::BTreeMap::new();
-    for (recorded, face) in layout.substituted_fonts() {
+    for (recorded, face, slanted) in layout.substituted_fonts() {
         let family = face.get().family.clone();
         let font = shown_name(&recorded);
         let m = out.entry(font_key(font)).or_insert_with(|| MissingFont {
@@ -176,9 +192,14 @@ pub fn missing_fonts(doc: &Document, layout: &DocLayout) -> Vec<MissingFont> {
             shown_as: Vec::new(),
             // Judged by the name layout looked up, spaces and all: "Arial " isn't Arial to it, so
             // its text is in a substitute even where Arial is installed.
-            metric_compatible: shown_as(doc, &recorded).is_some_and(|s| !warns(font, &s)),
+            metric_compatible: wordcraft_layout::para::substitute_face(doc, &recorded).is_some_and(|f| !warns_in(font, f)),
             download: wordcraft_fonts::download::download_for(font),
         });
+        // Italic text slanted in the substitute keeps its upright widths. A fallback face's
+        // slant doesn't count, as its characters don't.
+        if slanted && m.metric_compatible && wordcraft_layout::para::substitute_face(doc, &recorded).is_some_and(|f| f.get().family == family) {
+            m.metric_compatible = false;
+        }
         if !m.shown_as.contains(&family) {
             m.shown_as.push(family);
         }

@@ -10842,7 +10842,7 @@ fn a_missing_east_asian_font_is_drawn_in_its_font_table_alternate() {
     let (with, reported) = faces(true);
     assert!(!with.is_empty() && with.iter().all(|f| *f == asian_face), "你好 in the alternate {asian}");
     // Drawn in an installed alternate, the font asked for is still missing (#4770).
-    assert!(reported.iter().any(|(f, _)| f == missing), "{reported:?}");
+    assert!(reported.iter().any(|(f, ..)| f == missing), "{reported:?}");
     assert!(faces(false).0.iter().all(|f| *f != asian_face), "without the alternate, fallback picks another font");
 }
 
@@ -15862,6 +15862,62 @@ fn default_tab_stops_count_from_the_indent_in_odt_documents_that_say_so() {
 }
 
 #[test]
+fn a_missing_fonts_italic_text_records_whether_it_was_slanted() {
+    test_fonts();
+    // Italic text drawn in a face without an italic is slanted, keeping the upright widths: the
+    // missing-font notice needs to know (Segoe UI italic in Selawik). A missing monospaced font
+    // is drawn in the test fonts' JetBrains Mono, which has no italic.
+    const GONE: &str = "Wordcraft Gone Mono";
+    let mut d = Document::from_text("Upright\nItalic");
+    d.format_range(&Pos::body(0, 0), &Pos::body(1, 6), &|c| c.font = Some(GONE.into())).unwrap();
+    d.format_range(&Pos::body(1, 0), &Pos::body(1, 6), &|c| c.italic = Some(true)).unwrap();
+    let records: Vec<_> = lay(&d).substituted_fonts().into_iter().filter(|(f, ..)| f == GONE).collect();
+    let upright = wordcraft_fonts::word::resolve(GONE, false, false).face;
+    let italic = wordcraft_fonts::word::resolve(GONE, false, true).face;
+    assert!(!italic.get().italic, "{}", italic.get().family);
+    // One record a face, slanted when any of its text is.
+    let slanted = |face: wordcraft_fonts::FaceRef| records.iter().filter(|(_, f, _)| f.id() == face.id()).map(|(.., s)| *s).collect::<Vec<_>>();
+    assert_eq!(slanted(italic), [!italic.get().italic], "{records:?}");
+    if upright.id() != italic.id() {
+        assert_eq!(slanted(upright), [false], "{records:?}");
+    }
+}
+
+#[test]
+fn a_slant_is_recorded_past_the_missing_font_caps() {
+    test_fonts();
+    // A font met upright first, then many other missing fonts, then the same font in italic: its
+    // record already counts against the caps (64 a paragraph, MAX_SUBSTITUTED a document), so
+    // the italic text still marks it slanted.
+    const GONE: &str = "Wordcraft Gone Mono";
+    let italic = wordcraft_fonts::word::resolve(GONE, false, true).face;
+    assert!(!italic.get().italic, "{}", italic.get().family);
+    let slanted_in =
+        |d: &Document| lay(d).substituted_fonts().into_iter().filter(|(f, ..)| f == GONE).map(|(_, f, s)| (f.id(), s)).collect::<Vec<_>>();
+    let words: Vec<String> = (0..70).map(|i| format!("w{i}")).collect();
+    let text = format!("first {} last", words.join(" "));
+    let mut para = Document::from_text(&text);
+    let mut at = 0;
+    for (i, w) in std::iter::once("first").chain(words.iter().map(String::as_str)).chain(["last"]).enumerate() {
+        let font = if i == 0 || w == "last" { GONE.to_string() } else { format!("Wordcraft Gone Cap Face {i}") };
+        para.format_range(&Pos::body(0, at), &Pos::body(0, at + w.len()), &|c| c.font = Some(font.clone())).unwrap();
+        at += w.len() + 1;
+    }
+    para.format_range(&Pos::body(0, text.len() - 4), &Pos::body(0, text.len()), &|c| c.italic = Some(true)).unwrap();
+    assert_eq!(slanted_in(&para), [(italic.id(), true)]);
+    let n = crate::MAX_SUBSTITUTED + 10;
+    let mut doc = Document::from_text(&(0..n).map(|i| format!("p{i}")).collect::<Vec<_>>().join("\n"));
+    for i in 0..n {
+        let font = if i == 0 || i == n - 1 { GONE.to_string() } else { format!("Wordcraft Gone Cap Face {i}") };
+        let len = format!("p{i}").len();
+        doc.format_range(&Pos::body(i, 0), &Pos::body(i, len), &|c| c.font = Some(font.clone())).unwrap();
+    }
+    let len = format!("p{}", n - 1).len();
+    doc.format_range(&Pos::body(n - 1, 0), &Pos::body(n - 1, len), &|c| c.italic = Some(true)).unwrap();
+    assert_eq!(slanted_in(&doc), [(italic.id(), true)]);
+}
+
+#[test]
 fn a_list_item_that_shows_nothing_reports_no_missing_font() {
     // Its number is shaped in its mark's font before the paragraph turns out to show nothing
     // (#3982): that font isn't shown in another, so it isn't missing from what's drawn.
@@ -15875,10 +15931,10 @@ fn a_list_item_that_shows_nothing_reports_no_missing_font() {
     mark.font = Some("Wordcraft Gone Number Face".into());
     let missing = |d: &Document| layout(d, &mut LayoutCache::new(), &LayoutOptions::default()).substituted_fonts();
     let shown = missing(&d);
-    assert!(shown.iter().any(|(f, _)| f == "Wordcraft Gone Number Face"), "a shown number counts: {shown:?}");
+    assert!(shown.iter().any(|(f, ..)| f == "Wordcraft Gone Number Face"), "a shown number counts: {shown:?}");
     d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.hidden = Some(true);
     let gone = missing(&d);
-    assert!(!gone.iter().any(|(f, _)| f == "Wordcraft Gone Number Face"), "{gone:?}");
+    assert!(!gone.iter().any(|(f, ..)| f == "Wordcraft Gone Number Face"), "{gone:?}");
 }
 
 fn boundary_header_para() -> Paragraph {

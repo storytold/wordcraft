@@ -271,7 +271,9 @@ pub fn has_installed_substitute(family: &str) -> bool {
 /// Semibold or Semilight: their advance widths differ from Segoe UI Semibold's and Semilight's.
 /// Selawik has no italic, so Segoe UI italic is slanted upright Selawik, about 2.6% wider than Segoe
 /// UI Italic (Carlito Italic, the fallback otherwise, is about 6.4% narrower): italic lines can wrap
-/// differently.
+/// differently, and layout records the slant so the missing-font notice can say so. A slanted twin
+/// counts as changing the layout because each font here has an italic of its own; a twin added
+/// for a font without one (which Word slants too) would need that rule changed.
 const METRIC_TWINS: &[&[&str]] = &[
     &["Arial", "Liberation Sans", "Helvetica", "Arimo"],
     &["Times New Roman", "Liberation Serif", "Tinos"],

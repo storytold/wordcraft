@@ -19,9 +19,9 @@ pub(super) struct Builder<'a> {
     pub(super) levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
-    /// Fonts asked for that aren't installed, and the faces drawn instead (see
-    /// `ParaLayout::substituted`).
-    pub(super) substituted: Vec<(String, FaceRef)>,
+    /// Fonts asked for that aren't installed, the faces drawn instead, and whether italic text
+    /// was slanted in them (see `ParaLayout::substituted`).
+    pub(super) substituted: Vec<(String, FaceRef, bool)>,
 }
 
 /// The fonts a run asks for that aren't installed (see [`Builder::note_missing_fonts`]).
@@ -137,9 +137,17 @@ impl<'a> Builder<'a> {
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
         // A symbol font that isn't installed, or is installed one em tall (Apple's Symbol), takes
-        // the height Word gives it; so does text drawn in a twin with another line (Selawik), but
-        // not a segment drawn in another face (East Asian letters in their own font).
-        let twin = || (face.id() == r.face.id()).then(|| wordcraft_fonts::word::twin_line(family, &r)).flatten();
+        // the height Word gives it; so does text drawn in a twin with another line (Selawik), also
+        // when the font table sends the missing font to its twin by name (`w:altName`), but not a
+        // segment drawn in another face (East Asian letters in their own font).
+        let twin = || {
+            (face.id() == r.face.id())
+                .then(|| {
+                    let asked = wordcraft_fonts::word::Resolved { substituted: r.substituted || !family.eq_ignore_ascii_case(&rc.font), ..r };
+                    wordcraft_fonts::word::twin_line(family, &r).or_else(|| wordcraft_fonts::word::twin_line(&rc.font, &asked))
+                })
+                .flatten()
+        };
         let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r).or_else(twin) {
             Some((a, d)) => (a * face.upem, d * face.upem),
             None => wordcraft_fonts::word::line_metrics(&face),
@@ -170,30 +178,36 @@ impl<'a> Builder<'a> {
         i
     }
 
-    /// Record that text asking for `font` (not installed) was drawn in `drawn`, once per pair;
-    /// at most 64 pairs a paragraph, so a hostile file can't grow the list without bound. Symbol
-    /// fonts (Symbol, Wingdings…) are drawn as their Unicode equivalents on purpose: not worth
-    /// reporting (most Word bullets would be). A blank name (a file's `w:ascii=" "`) names no font
-    /// to report.
-    fn note_substituted(&mut self, font: &str, drawn: FaceRef) {
+    /// Record that text asking for `font` (not installed) was drawn in `drawn`, once per pair,
+    /// and whether any of it is italic text slanted because `drawn` has no italic (`italic`: this
+    /// text asks for italic); at most 64 pairs a paragraph, so a hostile file can't grow the list
+    /// without bound, though a recorded pair still notes its slant. Symbol fonts (Symbol,
+    /// Wingdings…) are drawn as their Unicode equivalents on purpose: not worth reporting (most
+    /// Word bullets would be). A blank name (a file's `w:ascii=" "`) names no font to report.
+    fn note_substituted(&mut self, font: &str, drawn: FaceRef, italic: bool) {
         if font.trim().is_empty() || wordcraft_doc::symbol_fonts::is_symbol_font(font) {
             return;
         }
         let font = reported_font_name(font);
-        if !self.substituted.iter().any(|(f, d)| d.id() == drawn.id() && f == font) && self.substituted.len() < 64 {
-            self.substituted.push((font.to_string(), drawn));
+        let slanted = italic && !drawn.get().italic;
+        if let Some(seen) = self.substituted.iter_mut().find(|(f, d, _)| d.id() == drawn.id() && f == font) {
+            seen.2 |= slanted;
+        } else if self.substituted.len() < 64 {
+            self.substituted.push((font.to_string(), drawn, slanted));
         }
     }
 
     /// Record the `missing` fonts the segments of `text` ask for, with the faces they are drawn
     /// in (`primary`, the complex-script and the East Asian font's faces, or a segment's own).
-    /// Segments that draw nothing ([`draws_something`]) ask for no font.
+    /// Segments that draw nothing ([`draws_something`]) ask for no font. `italic`: the run's
+    /// text, and its complex-script text, ask for italic.
     fn note_missing_fonts(
         &mut self,
         text: &str,
         segs: &[(usize, usize, SegKey)],
         (primary, primary_cs, primary_ea): (FaceRef, Option<FaceRef>, Option<FaceRef>),
         missing: &MissingFonts,
+        (italic, italic_cs): (bool, bool),
     ) {
         if missing.latin.is_none() && missing.complex.is_none() && missing.east_asian.is_none() {
             return;
@@ -203,7 +217,7 @@ impl<'a> Builder<'a> {
             let drawn = key.face.unwrap_or(if key.complex { primary_cs.unwrap_or(primary) } else { primary });
             if key.complex {
                 if let Some(cs) = missing.complex {
-                    self.note_substituted(cs, drawn);
+                    self.note_substituted(cs, drawn, italic_cs);
                 }
                 continue;
             }
@@ -216,12 +230,12 @@ impl<'a> Builder<'a> {
             // for the other characters, or for CJK text when no East Asian font is named.
             let asks_latin = latin_chars || (!missing.names_east_asian && !in_ea_font);
             if let Some(f) = missing.latin.filter(|_| asks_latin) {
-                self.note_substituted(f, drawn);
+                self.note_substituted(f, drawn, italic);
             }
             // A missing East Asian font has no face of its own: CJK text drawn in the East Asian
             // face is in its font table alternate (#2702) and still asks for it.
             if let Some(f) = missing.east_asian.filter(|_| sub.chars().any(east_asian)) {
-                self.note_substituted(f, drawn);
+                self.note_substituted(f, drawn, italic);
             }
         }
     }
@@ -329,7 +343,8 @@ impl<'a> Builder<'a> {
             east_asian: wanted_ea.filter(|(_, _, missing)| *missing).map(|(f, _, _)| f),
             names_east_asian: wanted_ea.is_some(),
         };
-        self.note_missing_fonts(text, &segs, (primary, primary_cs, primary_ea), &missing);
+        let italic = (rc.italic, rc_cs.as_ref().map_or(rc.italic, |r| r.italic));
+        self.note_missing_fonts(text, &segs, (primary, primary_cs, primary_ea), &missing, italic);
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };

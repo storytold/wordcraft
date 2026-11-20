@@ -208,14 +208,14 @@ impl WordApp {
     /// of a line), the substitute layout will draw it in is named instead.
     pub fn font_box_warning(&mut self, font: &str) -> Option<String> {
         let ahead = self.session.sel.is_collapsed();
-        self.font_box_warning_or(font, ahead, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
+        self.font_box_warning_or(font, ahead, |doc| wordcraft_engine::cmd::font::shown_as_warning(doc, font))
     }
 
     /// The Font dialog's font box's warning for `font`, the font OK applies: from the status
     /// bar's list, else the substitute layout will draw it in, whatever is selected, as no text
     /// may show the font yet.
     pub fn font_dialog_warning(&mut self, font: &str) -> Option<String> {
-        self.font_box_warning_or(font, true, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
+        self.font_box_warning_or(font, true, |doc| wordcraft_engine::cmd::font::shown_as_warning(doc, font))
     }
 
     /// The Font dialog's Asian text font box's warning for `font_ea` (the Latin text font being
@@ -230,7 +230,8 @@ impl WordApp {
     }
 
     /// The font box's warning for `font`: from the status bar's list, else, when the box shows
-    /// a font to come (`ahead`), the family `unshown` says its text will be drawn in.
+    /// a font to come (`ahead`), the warning `unshown` gives: the family its text will be drawn
+    /// in, when that changes the layout.
     fn font_box_warning_or(&mut self, font: &str, ahead: bool, unshown: impl FnOnce(&wordcraft_doc::Document) -> Option<String>) -> Option<String> {
         let layout = self.session.layout();
         let key = wordcraft_engine::cmd::font::font_key(font);
@@ -240,8 +241,7 @@ impl WordApp {
         // A font to come (typing at a collapsed caret, or what the Font dialog applies) may be in
         // no shown text yet, so the list can't have it: name the family it will be drawn in. A
         // ribbon box over a selection shows the selected text's font, which the list covers.
-        let shown = ahead.then(|| unshown(&self.session.doc)).flatten()?;
-        wordcraft_engine::cmd::font::warns(font, &shown).then_some(shown)
+        ahead.then(|| unshown(&self.session.doc)).flatten()
     }
 
     /// The document's counts, recomputed only when the document (or the count option) changes:
