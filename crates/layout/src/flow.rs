@@ -748,12 +748,14 @@ fn notes_limit(pb: &PageBuilder, new_notes: &[NoteBox], line_notes: &[NoteBox]) 
 /// bottom margin: only the text has to fit (observed: a double-spaced 12pt line stays on the page
 /// while its text ends above the margin, about half a line lower than when the whole line must
 /// fit). Only the bottom margin takes that leading: a footer taller than the margin, or
-/// footnotes (`free` is false), keep the whole line clear of them.
+/// footnotes (`free` is false), keep the whole line clear of them. A line of only pictures ends
+/// at the pictures (observed: at 1.15 spacing Word keeps a picture on the page while the picture
+/// itself fits, without the font's descent below it).
 fn fit_height(pb: &PageBuilder, l: &para::Line, rp: &wordcraft_doc::resolve::ResolvedPara, free: bool) -> f32 {
     let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
     match rp.line_spacing {
-        // `baseline` is from the paragraph's top; the text ends a descent below it.
-        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.baseline - l.top + l.text_desc).clamp(0.0, l.height),
+        // `baseline` is from the paragraph's top; the content ends its descent below it.
+        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.baseline - l.top + l.content_desc).clamp(0.0, l.height),
         _ => l.height,
     }
 }
