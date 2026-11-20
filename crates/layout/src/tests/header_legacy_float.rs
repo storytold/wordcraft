@@ -15,12 +15,14 @@
 //! at mode 14 and the body starts at the box's bottom (55.9 pt). Square wrapping at mode 14 leaves
 //! the text as it is. Mode 11 (Word 2003's layout, measured on .doc files) behaves like 14: the
 //! single line stays at the top and the body starts at 54.0 pt (mode 12: 54.0, mode 14: 54.8), and
-//! no paragraph of the three-paragraph header moves. Not measured: Tight and Through wrapping,
-//! footers (which differ), header table cells.
+//! no paragraph of the three-paragraph header moves. A 60 pt logo with Square, Tight or Through
+//! wrap leaves three short header paragraphs in place at mode 14. At mode 15 each line shifts
+//! right of the logo. Footers (which differ) and header table cells are outside this test.
 
 use super::{lay, rect_shape};
 use crate::{DocLayout, Placed, StoryRef};
 use wordcraft_doc::para::{Anchor, Float, Wrap};
+use wordcraft_doc::props::LineSpacing;
 use wordcraft_doc::{Document, ParaProps, Paragraph, PartKind, Path, para_block};
 
 const HEADER_TOP: f32 = 17.3;
@@ -84,6 +86,62 @@ fn mode_14_square_object_leaves_header_text_and_height() {
     let (sq, none) = (page(14, Some(Wrap::Square), 7.2), page(14, None, 0.0));
     assert!((header_line_top(&sq) - header_line_top(&none)).abs() < 0.5, "line at {}", header_line_top(&sq));
     assert!((body_top(&sq) - body_top(&none)).abs() < 0.5, "body at {}, {} without", body_top(&sq), body_top(&none));
+}
+
+#[test]
+fn mode_14_header_text_ignores_a_narrow_logo_with_square_tight_or_through_wrap() {
+    crate::test_fonts();
+    let layout = |mode, wrap| {
+        let mut d = Document::from_text("Body text.");
+        d.settings.compat_mode = mode;
+        d.last_section.header = 30.0;
+        d.last_section.margin_top = 72.0;
+        let mut blocks = Vec::new();
+        for (i, text) in ["First line", "Second line", "Third line"].into_iter().enumerate() {
+            let mut p = Paragraph::with_text(text, Default::default());
+            p.props =
+                ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(12.0)), ..Default::default() };
+            if i == 0
+                && let Some(wrap) = wrap
+            {
+                let float = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: 8.0, ..Default::default() };
+                p.insert_object(0, rect_shape(60.0, 60.0, float), &Default::default()).unwrap();
+            }
+            blocks.push(para_block(p));
+        }
+        let id = d.add_part(PartKind::Header, blocks);
+        d.last_section.headers.default = Some(id);
+        lay(&d)
+    };
+    let header_positions = |layout: &DocLayout| {
+        layout.pages[0]
+            .header
+            .iter()
+            .filter_map(|item| match item {
+                Placed::Lines { x, y, para, l0, .. } => para.lines.get(*l0).map(|line| (x + line.left, *y)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for mode in [11, 12, 13, 14, 15] {
+        let plain = layout(mode, None);
+        let control = header_positions(&plain);
+        assert_eq!(control.len(), 3);
+        for wrap in [Wrap::Square, Wrap::Tight, Wrap::Through] {
+            let with_logo = layout(mode, Some(wrap));
+            let positions = header_positions(&with_logo);
+            assert_eq!(positions.len(), control.len(), "mode {mode}, {wrap:?}: {positions:?}");
+            for (&(x, y), &(plain_x, plain_y)) in positions.iter().zip(&control) {
+                assert!((y - plain_y).abs() < 0.5, "mode {mode}, {wrap:?}: line moved vertically from {plain_y} to {y}");
+                if mode == 14 || (mode < 14 && wrap == Wrap::Square) {
+                    assert!((x - plain_x).abs() < 0.5, "mode {mode}, {wrap:?}: line moved from {plain_x} to {x}");
+                } else {
+                    assert!(x > plain_x + 59.5, "mode {mode}, {wrap:?}: line at {x} does not clear the logo");
+                }
+            }
+            assert!((body_top(&with_logo) - body_top(&plain)).abs() < 0.5, "mode {mode}, {wrap:?}: body moved vertically");
+        }
+    }
 }
 
 #[test]
