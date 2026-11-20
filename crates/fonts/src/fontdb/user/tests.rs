@@ -210,7 +210,9 @@ fn woff1_claiming(orig: u32) -> Vec<u8> {
 fn a_woff_claiming_a_huge_table_is_refused_before_inflating() {
     // #3703: the decoder sizes a table's buffer from the directory before inflating it.
     for orig in [200 << 20, u32::MAX] {
-        assert!(matches!(decode_font_file(&woff1_claiming(orig)), Err(UserFontError::TooLarge { .. })), "{orig}");
+        let error = decode_font_file(&woff1_claiming(orig)).unwrap_err();
+        assert!(matches!(&error, UserFontError::TooLarge { .. }), "{orig}");
+        assert!(error.to_string().contains("unpacked limit 128 MB"), "{error}");
     }
     // A small claim reaches the decoder, which finds the data doesn't inflate to it.
     assert!(matches!(decode_font_file(&woff1_claiming(64)), Err(UserFontError::BadWebFont(_))));
@@ -311,7 +313,9 @@ fn junk_is_rejected_without_adding_anything() {
     assert_eq!(db.families().len(), n + db.user_fonts().iter().map(|u| u.families().len()).sum::<usize>());
     let mut big = regular.clone();
     big.resize(MAX_FONT_FILE_BYTES + 1, 0);
-    assert!(matches!(db.install_font("big.ttf", &big), Err(UserFontError::TooLarge { .. })));
+    let error = db.install_font("big.ttf", &big).unwrap_err();
+    assert!(matches!(&error, UserFontError::TooLarge { .. }));
+    assert!(error.to_string().contains("file limit 50 MB"), "{error}");
 }
 
 #[test]
