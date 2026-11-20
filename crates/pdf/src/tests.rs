@@ -2799,6 +2799,84 @@ fn legacy_font_effects_keep_their_text() {
     assert_eq!(text.matches("Effect").count(), 4, "{text}");
 }
 
+/// Everything a PDF paints, in order: whether it is a glyph, whether it is stroked, its RGBA colour
+/// and, for a path, how many elements it has (a line has 2; letter outlines have many).
+fn painted(bytes: &[u8]) -> Vec<(bool, bool, [u8; 4], usize)> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Ex(Vec<(bool, bool, [u8; 4], usize)>);
+    impl Ex {
+        fn paint(&mut self, glyph: bool, stroke: bool, paint: &Paint<'_>, elements: usize) {
+            if let Paint::Color(c) = paint {
+                self.0.push((glyph, stroke, c.to_rgba().to_rgba8(), elements));
+            }
+        }
+    }
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, path: &kurbo::BezPath, _: kurbo::Affine, paint: &Paint<'_>, mode: &PathDrawMode) {
+            self.paint(false, matches!(mode, PathDrawMode::Stroke(_)), paint, path.elements().len());
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, paint: &Paint<'_>, mode: &GlyphDrawMode) {
+            self.paint(true, matches!(mode, GlyphDrawMode::Stroke(_)), paint, 0);
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
+}
+
+/// #2534: in a PDF with markup, a tracked run with a legacy outline and a WordArt fill keeps the
+/// outline (hollow letters drawn from their outlines, the glyphs kept only as invisible text) and
+/// drops only the WordArt fill; without markup the WordArt fill is painted.
+#[test]
+fn tracked_wordart_run_keeps_its_legacy_outline_in_pdf() {
+    use wordcraft_doc::props::Rgb;
+    use wordcraft_doc::wordart::{TextEffects, TextFill};
+    use wordcraft_doc::{Revision, RevisionKind};
+    const GREEN: [u8; 4] = [0, 200, 0, 255];
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ana".into(), date: String::new(), move_name: None });
+    let props = CharProps {
+        outline: Some(true),
+        text_effects: Some(Box::new(TextEffects {
+            fill: Some(TextFill::Solid { color: Rgb(GREEN[0], GREEN[1], GREEN[2]), transparency: 0.0 }),
+            ..Default::default()
+        })),
+        ins: Some(0),
+        ..Default::default()
+    };
+    d.body = vec![para_block(Paragraph::with_text("Outlined", props))];
+    let pdf = |include_markup| export(&d, &PdfOptions { include_markup, compress: false, ..Default::default() }).unwrap();
+
+    let plain = painted(&pdf(false));
+    assert!(plain.iter().any(|&(glyph, stroke, c, _)| !glyph && !stroke && c == GREEN), "without markup the WordArt fill is painted: {plain:?}");
+
+    let marked = pdf(true);
+    let drawn = painted(&marked);
+    assert!(drawn.iter().all(|&(_, _, c, _)| c != GREEN), "with markup the WordArt fill is dropped: {drawn:?}");
+    // Without the legacy outline the letters would be painted as ordinary, opaque glyphs.
+    assert!(drawn.iter().all(|&(glyph, _, c, _)| !glyph || c[3] == 0), "with markup the letters are hollow outlines: {drawn:?}");
+    // The insertion underline is a stroked line too; the letters' outlines are one path of many curves.
+    assert!(drawn.iter().any(|&(glyph, stroke, _, n)| !glyph && stroke && n > 20), "the letter outlines are stroked: {drawn:?}");
+    assert_eq!(squash(&extract_text(&marked).concat()), "Outlined");
+}
+
 #[test]
 fn shape_dash_arrays_export() {
     use wordcraft_doc::{
