@@ -11,7 +11,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_layout::DocLayout;
-pub use wordcraft_pdf::imposition::Imposition;
+pub use wordcraft_pdf::imposition::{Imposition, Sheet};
 
 use crate::{CmdError, Session, p};
 
