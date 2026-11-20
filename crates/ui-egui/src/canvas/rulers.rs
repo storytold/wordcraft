@@ -1,6 +1,7 @@
 use super::margins::{MarginEdge, margin_handle};
 use super::pages::page_screen_scale;
 use super::{DocLayout, Pos2, Rect, Sense, Stroke, Tokens, Ui, WordApp, json, pos2, regular, vec2};
+use egui::Color32;
 
 /// Horizontal and vertical rulers for the caret's page and paragraph. Each spans that page's
 /// rect on screen at the page's own scale and is clipped to its strip, whatever the layout
@@ -9,8 +10,14 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
     let corner = Rect::from_min_max(pos2(v.min.x, h.min.y), pos2(v.max.x, h.max.y));
-    p.rect_filled(corner, 0.0, t.canvas);
-    p.rect_filled(h, 0.0, t.canvas);
+    // The frosted ribbon goes on down through the ruler.
+    let glass = app.ribbon_glass();
+    let tint = |c: Color32| if glass { crate::ribbon_blur::glass(c) } else { c };
+    if glass {
+        crate::ribbon_blur::paint_band(app, ui, corner.union(h));
+    }
+    p.rect_filled(corner, 0.0, tint(t.canvas));
+    p.rect_filled(h, 0.0, tint(t.canvas));
     p.rect_filled(v, 0.0, t.canvas);
     crate::ruler_tabs::selector(app, ui, corner);
     let pi = app.session.page_hint.min(layout.pages.len().saturating_sub(1));
@@ -21,9 +28,9 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     let hp = ui.painter_at(h);
     let x0 = pr.min.x;
     let bar = Rect::from_min_max(pos2(x0, h.min.y + 4.0), pos2(x0 + page.w * scale, h.max.y - 3.0));
-    hp.rect_filled(bar, 0.0, t.ruler_margin);
+    hp.rect_filled(bar, 0.0, tint(t.ruler_margin));
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
-    hp.rect_filled(text, 0.0, t.ruler);
+    hp.rect_filled(text, 0.0, tint(t.ruler));
     // The spaces between the caret section's text columns, shaded like the margins (#5197).
     let columns = super::column_ruler::column_gaps(app, layout, pi);
     if let Some(cg) = &columns {
