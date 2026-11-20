@@ -70,6 +70,12 @@ pub struct ExportOptions {
     /// face can draw, a picture that is missing or can't be decoded); else the save fails with
     /// `strict: …` (#6005). Ignored for other formats.
     pub strict: bool,
+    /// A PDF copy gets fillable fields for the document's form fields and content controls:
+    /// `formFields: true` on the save and export commands.
+    pub form_fields: bool,
+    /// A PDF copy gets fillable text fields over blanks drawn with underscores (`____`,
+    /// `__/__/20__`): `blankFields: true`.
+    pub blank_fields: bool,
 }
 
 /// A document password: wiped from memory when dropped, never printed (`Debug` shows `***`).
