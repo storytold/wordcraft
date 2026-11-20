@@ -20,9 +20,12 @@ impl Folders {
         let base = loop {
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let dir = std::env::temp_dir().join(format!("wc-cli-mcp-roots-{tag}-{}-{n}", std::process::id()));
-            // `create_dir` fails when the path exists, so a leftover or a planted folder is never reused.
-            if std::fs::create_dir(&dir).is_ok() {
-                break dir;
+            // `create_dir` fails when the path exists, so a leftover or a planted folder is never reused. Any
+            // other failure (no temp folder, no permission) fails every name: report it instead of looping.
+            match std::fs::create_dir(&dir) {
+                Ok(()) => break dir,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("scratch folder {}: {e}", dir.display()),
             }
         };
         let folders = Self(base);
