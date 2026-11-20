@@ -10,6 +10,8 @@
 use serde_json::{Value, json};
 use wordcraft_engine::DocInfo;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::dialogs;
 use crate::{WordApp, panes};
 
 /// What the window keeps for an open document while another one is shown.
@@ -17,6 +19,7 @@ use crate::{WordApp, panes};
 pub(crate) struct Parked {
     /// [`WordApp`]'s `autosave_path`: the file AutoSave writes this document to.
     autosave_path: Option<std::path::PathBuf>,
+    pending_autosave_conflict: Option<wordcraft_engine::io::FileConflict>,
     /// Comment and reply text typed in this document and not yet written to it.
     comment_drafts: panes::CommentDrafts,
 }
@@ -64,6 +67,7 @@ impl WordApp {
         self.colors = None;
         self.restrict = crate::dialogs_review::RestrictPane { open: self.restrict.open, ..Default::default() };
         self.status_msg = None;
+        self.save_as_error = None;
         self.change_picture_target = None;
         self.recipient_list_pending = false;
         self.dialog_pick = None;
@@ -100,7 +104,11 @@ impl WordApp {
         if from == to {
             return false;
         }
-        let leaving = Parked { autosave_path: self.autosave_path.take(), comment_drafts: std::mem::take(&mut self.comment_drafts) };
+        let leaving = Parked {
+            autosave_path: self.autosave_path.take(),
+            pending_autosave_conflict: self.pending_autosave_conflict.take(),
+            comment_drafts: std::mem::take(&mut self.comment_drafts),
+        };
         if self.session.is_open(from) {
             self.parked.insert(from, leaving);
         }
@@ -108,6 +116,7 @@ impl WordApp {
         let seen = back.is_some();
         let back = back.unwrap_or_default();
         self.autosave_path = back.autosave_path;
+        self.pending_autosave_conflict = back.pending_autosave_conflict;
         self.comment_drafts = back.comment_drafts;
         let session = &self.session;
         self.parked.retain(|d, _| session.is_open(*d));
@@ -150,6 +159,55 @@ impl WordApp {
             Some(_) => self.run("file.open", params),
             None => self.open_file(path, None),
         }
+    }
+
+    /// Open a native path and retain the read through any deferred picker or password prompt.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_native_path(&mut self, path: &std::path::Path) -> Result<Value, String> {
+        let (mut params, guard) = self.session.prepare_native_open(path)?;
+        self.native_opens.insert(guard.id(), guard);
+        let id = if is_word_template(&path.to_string_lossy()) {
+            params["replaceBlank"] = json!(true);
+            "file.newFromTemplate"
+        } else {
+            "file.open"
+        };
+        let result = self.run(id, params);
+        self.retain_native_opens();
+        result
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn retain_native_opens(&mut self) {
+        if self.native_opens.is_empty() {
+            return;
+        }
+        let request_id = |params: &Value| params.get("nativeRead").and_then(Value::as_u64);
+        let dialog_id = |dialog: &Option<dialogs::Dialog>| match dialog {
+            Some(dialogs::Dialog::SaveChanges { params, .. } | dialogs::Dialog::Password { params, .. }) => request_id(params),
+            _ => None,
+        };
+        let browser_id = |browser: &crate::file_browser::State| browser.open.as_ref().and_then(|b| b.after.native_open_id());
+        let retained = [
+            dialog_id(&self.dialog),
+            self.awaiting_save.as_ref().and_then(|s| request_id(&s.params)),
+            self.file_dialog.as_ref().and_then(crate::file_dialogs::PendingDialog::native_open_id),
+            browser_id(&self.file_browser),
+        ];
+        let mut open: std::collections::HashSet<_> = retained.into_iter().flatten().collect();
+        for window in self.other_windows() {
+            open.extend(
+                [
+                    dialog_id(&window.dialog),
+                    window.awaiting_save.as_ref().and_then(|s| request_id(&s.params)),
+                    window.file_dialog.as_ref().and_then(crate::file_dialogs::PendingDialog::native_open_id),
+                    browser_id(&window.file_browser),
+                ]
+                .into_iter()
+                .flatten(),
+            );
+        }
+        self.native_opens.retain(|id, _| open.contains(id));
     }
 
     /// Show open document `id` in the window (View › Window › Switch Windows, quitting).

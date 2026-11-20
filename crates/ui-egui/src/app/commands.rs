@@ -238,11 +238,9 @@ impl WordApp {
         let math_session = self.session.math.as_ref().map(|m| m.session);
         let composing_before = !self.canvas.ime_preedit.is_empty();
         let old_path = self.session.path.clone();
-        let r = if self.ime_origin {
-            self.session.run_ime(id, &params).map_err(|e| e.to_string())
-        } else {
-            self.session.run(id, &params).map_err(|e| e.to_string())
-        };
+        let result = if self.ime_origin { self.session.run_ime(id, &params) } else { self.session.run(id, &params) };
+        self.remember_save_conflict(result.as_ref().err());
+        let r = result.map_err(|e| e.to_string());
         if self.session.ime_body_epoch() != body_epoch {
             self.canvas.ime_interrupted_preedit |= composing_before;
             // The body (or the whole document) was replaced under the same id — setText, a
@@ -281,20 +279,10 @@ impl WordApp {
             self.recovery_seen = true;
             self.sync_document();
         }
-        // An explicit save to the document's own file lets AutoSave keep writing there.
         if let Ok(v) = &r
             && matches!(id, "file.save" | "file.saveAs")
-            && v.get("saved").and_then(Value::as_bool) == Some(true)
-            && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
         {
-            self.autosave_path = self.session.path.clone();
-        }
-        // A Markdown file edited in the formatted view was written out again, not kept as it was.
-        if let Ok(v) = &r
-            && matches!(id, "file.save" | "file.saveAs")
-            && v.get("rewritten").and_then(Value::as_bool) == Some(true)
-        {
-            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
+            self.after_save_command(v);
         }
         // A renamed file is the same file: AutoSave keeps covering it, and Recent drops the old name.
         if r.is_ok()
@@ -312,7 +300,13 @@ impl WordApp {
         }
         self.after_command(id);
         if let Err(e) = &r {
-            self.status(e.clone());
+            if self.save_conflict.is_some()
+                && let Some(recovery) = self.session.recovery_error()
+            {
+                self.status_long(recovery.to_owned());
+            } else {
+                self.status(e.clone());
+            }
         }
         r
     }
@@ -362,6 +356,12 @@ impl WordApp {
         let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
         let r = self.execute(id, params);
+        if matches!(id, "file.save" | "file.saveAs") {
+            self.save_as_error = r.as_ref().err().map(|error| (self.session.document_id(), error.clone()));
+            if r.is_err() && self.dialog.is_none() {
+                self.show_save_conflict();
+            }
+        }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {
@@ -787,6 +787,7 @@ impl WordApp {
                     json!({"pending": "discardRecovery"})
                 }
             }
+            "ui.saveConflict" => return Some(self.answer_save_conflict(s("answer").unwrap_or(""))),
             "ui.saveChanges" => {
                 let Some(choice) = s("answer").and_then(SaveChoice::parse) else {
                     return Some(Err("`answer` must be save, dontSave or cancel".into()));
@@ -1174,6 +1175,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.animations"
             | "ui.language"
             | "ui.saveChanges"
+            | "ui.saveConflict"
             | "ui.openFileDialog"
             | "ui.printCancel"
             | "ui.fileBrowser"

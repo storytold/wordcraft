@@ -331,6 +331,14 @@ pub enum Dialog {
     About {
         tab: u8,
     },
+    /// A native Save or AutoSave refused because the file changed or became unavailable since
+    /// it was opened or last saved (`ui.saveConflict`). Neither choice overwrites the external
+    /// version: Keep editing closes it, Save copy… asks for another file.
+    SaveConflict {
+        name: String,
+        #[serde(skip)]
+        document: u64,
+    },
     /// Confirm before deleting a recovery copy.
     DiscardRecovery {
         id: String,
@@ -556,6 +564,7 @@ impl Dialog {
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
+            Dialog::SaveConflict { .. } => "saveConflict",
             Dialog::FontDownload { .. } => "fontDownload",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
@@ -607,6 +616,11 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        if name == "saveConflict" {
+            let conflict = app.save_conflict.take()?;
+            let name = conflict.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| conflict.path.display().to_string());
+            return Some(Dialog::SaveConflict { name, document: app.session.document_id() });
+        }
         // Search opens in the title bar's box when the window shows it (#5398).
         if name == "commands" && crate::chrome::open_title_search(app) {
             return None;

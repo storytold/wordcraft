@@ -44,6 +44,8 @@ pub struct DocState {
     pub(super) view: ViewState,
     pub(super) pending: Option<CharProps>,
     pub(super) path: Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) file_version: Option<crate::io::FileVersion>,
     pub(super) file_name: Option<String>,
     pub(super) dirty: bool,
     pub(super) pending_move: Option<crate::cmd::moves::PendingMove>,
@@ -100,6 +102,8 @@ impl DocState {
             view,
             pending: None,
             path: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_version: None,
             file_name: None,
             dirty: false,
             pending_move: None,
@@ -203,6 +207,8 @@ impl Session {
             view: _,
             pending: _,
             path: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                file_version: _,
             file_name: _,
             dirty: _,
             pending_move: _,
@@ -250,6 +256,10 @@ impl Session {
             // Names the document it belongs to, so it never applies to another one.
             review_style: _,
             user_dict_path: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                native_opens: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                native_open_sequence: _,
             clipboard: _,
             clipboard_text: _,
             clipboard_html: _,
@@ -302,6 +312,8 @@ impl Session {
             view,
             pending,
             path,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_version,
             file_name,
             dirty,
             pending_move,
@@ -351,6 +363,8 @@ impl Session {
         swap(&mut self.view, view);
         swap(&mut self.pending, pending);
         swap(&mut self.path, path);
+        #[cfg(not(target_arch = "wasm32"))]
+        swap(&mut self.file_version, file_version);
         swap(&mut self.file_name, file_name);
         swap(&mut self.dirty, dirty);
         swap(&mut self.pending_move, pending_move);

@@ -69,6 +69,9 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 crate::io::rename_file(path, &destination).map_err(CmdError::Failed)?;
+                if let Some(version) = &mut s.file_version {
+                    version.track_path(&destination);
+                }
             }
             s.path = Some(destination);
             s.relayout();
@@ -239,10 +242,22 @@ pub(crate) fn normal_document(s: &Session) -> Document {
     d
 }
 
+fn validate_native_read(v: &Value) -> Result<(), CmdError> {
+    if v.get("nativeRead").is_some() {
+        if p::str(v, "path").is_none() || p::str(v, "data").is_none() {
+            return Err(CmdError::Params("nativeRead requires its prepared path and data".into()));
+        }
+        #[cfg(target_arch = "wasm32")]
+        return Err(CmdError::Params("nativeRead is only available to a native host".into()));
+    }
+    Ok(())
+}
+
 /// Open a document, using the saved proofing default only for plain text and Markdown. A file
 /// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
 /// replaces an untouched blank document; otherwise it opens beside the open documents.
 fn open(s: &mut Session, v: &Value) -> CmdResult {
+    validate_native_read(v)?;
     let Some(path) = p::str(v, "path") else {
         s.push_ui_request(json!({"open": "openFile"}));
         return sel_result(s);
@@ -256,80 +271,175 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         );
     }
     let password = p::str(v, "password");
-    // An empty file opens as a new blank document that saves back to it (#1384).
-    let (doc, encrypted) = read_document(s, path, v)?;
-    match s.used_because() {
-        None => s.set_document(doc),
-        Some(why) => {
-            log::info!("file.open: opened beside document {}, not in its place: {why}", s.document_id());
-            s.add_opened_document(doc);
-        }
-    }
-    if let Some(z) = s.doc.settings.zoom {
-        super::view::restore_zoom(s, z);
-    }
-    s.path = Some(path.into());
-    // A Markdown file's own text, for the view to show and Save to write back as it is.
-    if super::md_source::is_markdown_file(std::path::Path::new(path)) {
-        s.md_file = markdown_file_text(path, v);
-    }
-    // Like Word, a document opened with a password is saved with it again.
-    if encrypted {
-        s.password = password.map(crate::io::Password::new);
-    }
+    let opened = read_document(s, std::path::Path::new(path), p::str(v, "data"), v.get("nativeRead"), password)?;
+    let encrypted = opened.encrypted;
+    finish_open(s, opened, password);
+    #[cfg(not(target_arch = "wasm32"))]
+    s.finish_native_request(v);
     Ok(
         json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
 }
 
-/// A Markdown file's own text as `file.open` finds it: the bytes the caller hands over (base64 in
-/// `data`, the same ones `read_document` decodes), else the head of the file at `path`.
-/// `FileText::from_bytes` keeps it only when it can be written back as it is.
-fn markdown_file_text(path: &str, v: &Value) -> super::md_source::FileText {
-    if let Some(data) = p::str(v, "data") {
-        // `read_document` has already refused a text it cannot decode.
-        return super::insert::base64_decode(data).map(|bytes| super::md_source::FileText::from_bytes(&bytes)).unwrap_or_default();
-    }
-    // Without `data`, the file's own bytes; not reachable on the web, where a file only arrives
-    // as `data`.
+struct OpenedFile {
+    path: std::path::PathBuf,
+    doc: Document,
+    encrypted: bool,
+    markdown: super::md_source::FileText,
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        let max = u64::try_from(super::md_source::MAX_SOURCE_BYTES).unwrap_or(u64::MAX).saturating_add(1);
-        crate::io::read_file_head(path, max).map(|bytes| super::md_source::FileText::from_bytes(&bytes)).unwrap_or_default()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = path;
-        super::md_source::FileText::default()
-    }
+    version: Option<crate::io::FileVersion>,
 }
 
-/// The document the file at `path` holds (or its bytes, base64 in `data`, with `path` only
-/// naming it), read with `password`, and whether it was encrypted: what `file.open` and
-/// `file.newFromTemplate` read. An empty file (File Explorer's New › Microsoft Word Document makes
-/// one) is a new blank document (#1384). Plain text and Markdown carry no language, so they are
-/// in the editing language.
-fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool), CmdError> {
-    let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
+/// Decode the bytes and capture their native identity together. Markdown source text must come
+/// from the same read as the document and its save baseline.
+fn read_document(
+    s: &Session,
+    path: &std::path::Path,
+    data: Option<&str>,
+    native_read: Option<&Value>,
+    password: Option<&str>,
+) -> Result<OpenedFile, CmdError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut path = path.to_owned();
+    #[cfg(target_arch = "wasm32")]
+    let path = path.to_owned();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut version = None;
+    let bytes = if let Some(data) = data {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
-        if bytes.is_empty() {
-            (normal_document(s), false)
-        } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(id) = native_read {
+            let read = id
+                .as_u64()
+                .and_then(|id| s.native_opens.get(&id))
+                .and_then(std::sync::Weak::upgrade)
+                .ok_or_else(|| CmdError::Failed("the native open request has expired".into()))?;
+            if read.path.to_string_lossy() != path.to_string_lossy() || !read.version.matches_bytes(&bytes) {
+                return Err(CmdError::Failed("the native open request does not match these bytes".into()));
+            }
+            path.clone_from(&read.path);
+            version = Some(read.version.clone());
         }
-    } else if crate::io::is_empty_file(std::path::Path::new(path)) {
+        #[cfg(target_arch = "wasm32")]
+        if native_read.is_some() {
+            return Err(CmdError::Params("nativeRead is only available to a native host".into()));
+        }
+        bytes
+    } else {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (bytes, read) = crate::io::read_native_file_versioned(&path).map_err(CmdError::Failed)?;
+            version = Some(read);
+            bytes
+        }
+        #[cfg(target_arch = "wasm32")]
+        return Err(CmdError::Failed(format!("{}: files are opened through the browser on the web", path.display())));
+    };
+    let (mut doc, encrypted) = if bytes.is_empty() {
         (normal_document(s), false)
     } else {
-        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
+        let region = s.region();
+        let open_bytes = || crate::io::open_bytes_in(&path.to_string_lossy(), &bytes, password, &region);
+        #[cfg(not(target_arch = "wasm32"))]
+        let opened = if version.is_some() { crate::io::open_path_bytes_in(&path, &bytes, password, &region) } else { open_bytes() };
+        #[cfg(target_arch = "wasm32")]
+        let opened = open_bytes();
+        opened.map_err(CmdError::Failed)?
     };
-    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
+    let ext = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
         && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
     {
         Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
     }
-    Ok((doc, encrypted))
+    let markdown = if super::md_source::is_markdown_file(&path) { super::md_source::FileText::from_bytes(&bytes) } else { Default::default() };
+    Ok(OpenedFile {
+        path,
+        doc,
+        encrypted,
+        markdown,
+        #[cfg(not(target_arch = "wasm32"))]
+        version,
+    })
+}
+
+/// A native Open request's lifetime. Keep it while its returned command is deferred;
+/// dropping it releases the read handle and makes that command refuse a later retry.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct NativeOpen {
+    id: u64,
+    _read: std::sync::Arc<NativeRead>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeOpen {
+    /// Session-local request identity used by the native host's pending command.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct NativeRead {
+    path: std::path::PathBuf,
+    version: crate::io::FileVersion,
+}
+
+impl Session {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_native_request(&mut self, params: &Value) {
+        if let Some(id) = params.get("nativeRead").and_then(Value::as_u64) {
+            self.native_opens.remove(&id);
+        }
+    }
+
+    /// Prepare a native byte-backed Open, including filenames JSON cannot represent losslessly.
+    /// The host owns the returned guard through Save Changes/password retries and drops it
+    /// when that request finishes or is abandoned. Neither a name nor equal bytes identify it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prepare_native_open(&mut self, path: &std::path::Path) -> Result<(Value, NativeOpen), String> {
+        let (bytes, version) = crate::io::read_native_file_versioned(path)?;
+        let id = self.native_open_sequence.checked_add(1).ok_or("native open request identities exhausted")?;
+        self.native_open_sequence = id;
+        let read = std::sync::Arc::new(NativeRead { path: path.to_path_buf(), version });
+        self.native_opens.retain(|_, read| read.strong_count() != 0);
+        self.native_opens.insert(id, std::sync::Arc::downgrade(&read));
+        let params = json!({"path":path.to_string_lossy(),"data":super::insert::base64_encode(&bytes),"nativeRead":id});
+        Ok((params, NativeOpen { id, _read: read }))
+    }
+
+    /// Native hosts and CLI open through the same session path as `file.open`, including
+    /// filenames that are not Unicode. The expected save version is the exact content read.
+    /// Returns whether the file was encrypted; a failed open leaves the session unchanged.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_path(&mut self, path: &std::path::Path, password: Option<&str>) -> Result<bool, CmdError> {
+        let opened = read_document(self, path, None, None, password)?;
+        let encrypted = opened.encrypted;
+        finish_open(self, opened, password);
+        Ok(encrypted)
+    }
+}
+
+fn finish_open(s: &mut Session, opened: OpenedFile, password: Option<&str>) {
+    match s.used_because() {
+        None => s.set_document(opened.doc),
+        Some(why) => {
+            log::info!("file.open: opened beside document {}, not in its place: {why}", s.document_id());
+            s.add_opened_document(opened.doc);
+        }
+    }
+    if let Some(z) = s.doc.settings.zoom {
+        super::view::restore_zoom(s, z);
+    }
+    s.path = Some(opened.path);
+    s.md_file = opened.markdown;
+    if opened.encrypted {
+        s.password = password.map(crate::io::Password::new);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        s.file_version = opened.version;
+    }
 }
 
 /// File › New from a template (#2852): a new, untitled document with the template's content,
@@ -339,9 +449,12 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
 /// hands the app starts (#3433). The template is only read; the new document has no file, so
 /// saving it asks where to write, and a protected template's password doesn't come along.
 pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
+    validate_native_read(v)?;
     let path = p::req_str(v, "path")?;
-    let (mut doc, _) = read_document(s, path, v)?;
+    let mut doc = read_document(s, std::path::Path::new(path), p::str(v, "data"), v.get("nativeRead"), p::str(v, "password"))?.doc;
     doc.settings.attached_template = Some(path.to_string());
+    #[cfg(not(target_arch = "wasm32"))]
+    s.finish_native_request(v);
     if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {
         s.set_document(doc);
     } else {
@@ -401,19 +514,6 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
-    if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
-        let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
-            return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
-        };
-        if !crate::io::can_encrypt(&path.to_string_lossy()) {
-            return Err(CmdError::Params(
-                "only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password".into(),
-            ));
-        }
-        wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
-        s.clear_recovery_before_password()?;
-        s.password = Some(crate::io::Password::new(pw));
-    }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut opts = export_options(s, v);
     match v.get("format").filter(|f| !f.is_null()) {
@@ -426,34 +526,84 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Err(CmdError::Params(format!("`format` is \"{FORMAT_WORD_2003}\" or \"{FORMAT_FLAT_OPC}\", and only for an .xml file")));
         }
     }
+    let mut password = s.password.clone();
+    let mut recovery_purged = false;
+    if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
+        let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
+            return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
+        };
+        if !crate::io::can_encrypt(&path.to_string_lossy()) {
+            return Err(CmdError::Params("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password".into()));
+        }
+        wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
+        // Refuse external changes before purging the current recovery copy.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::io::check_save_destination(&path, s.file_version.as_ref())?;
+        recovery_purged = s.clear_recovery_before_password()?;
+        password = Some(crate::io::Password::new(pw));
+    }
     // Undone below if the write fails: a failed save (no permission, disk full, a bad path)
     // must not leave the document's own save stamps — zoom, modified/created, author, revision —
     // changed, or a later save would persist them for a write that never actually happened.
     let before_stamp =
         (s.doc.settings.zoom, s.doc.core.last_modified_by.clone(), s.doc.core.created.clone(), s.doc.core.modified.clone(), s.doc.core.revision);
     s.stamp_save();
-    let password = s.password.as_ref().map(crate::io::Password::as_str);
-    // A header/footer just made and left empty isn't saved (#960).
+    let pw = password.as_ref().map(crate::io::Password::as_str);
+    // Retain main's omission of a newly created empty header/footer (#1144).
     let copy = super::insert::saved_copy(s);
-    // A Markdown file's own text goes back as it is while it still says what the document holds;
-    // once it doesn't (an edit in the formatted view), the document is written out again.
+    let doc = copy.as_ref().unwrap_or(&s.doc);
     let exact = super::md_source::text_to_save(s, &path, opts.markup);
     let rewritten = exact.is_none() && !s.md_file.is_empty() && super::md_source::is_markdown_file(&path);
-    let written = match &exact {
-        Some(text) => crate::io::save_text_path(&path, text),
-        None => crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts),
+    #[cfg(not(target_arch = "wasm32"))]
+    let saved = match &exact {
+        Some(text) => crate::io::save_text_versioned(&path, text, s.file_version.as_ref()),
+        None => crate::io::save_path_versioned(&path, doc, pw, &opts, s.file_version.as_ref()),
     };
-    if let Err(e) = written {
-        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-        return Err(CmdError::Failed(e));
+    #[cfg(target_arch = "wasm32")]
+    let saved = match &exact {
+        Some(text) => crate::io::save_text_path(&path, text),
+        None => crate::io::save_path_with(&path, doc, pw, &opts),
     }
-    let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
-    // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
-    // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
-    // A Markdown file saved as another one loses nothing its own save wouldn't: it moves there.
+    .map_err(CmdError::Failed);
+    #[cfg(not(target_arch = "wasm32"))]
+    let copy_only = matches!(&saved, Ok(None));
+    #[cfg(target_arch = "wasm32")]
+    let copy_only = false;
+    if saved.is_err() || copy_only {
+        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+        if recovery_purged
+            && let Err(recovery) = s.restore_recovery_after_failed_password_save()
+            && let Err(error) = &saved
+            && !matches!(error, CmdError::FileConflict(_))
+        {
+            return Err(CmdError::Failed(format!("{error}; {recovery}")));
+        }
+    }
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::let_unit_value, unused_variables))]
+    let version = saved?;
+    let encrypted = pw.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
+    #[cfg(not(target_arch = "wasm32"))]
+    let Some(version) = version else {
+        return Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten, "copyOnly": true}));
+    };
+    s.password = password;
+    // Saving an open text file over itself completes the save; another lossy target is a copy.
     let own_file = s.path.as_deref() == Some(path.as_path());
     let markdown_to_markdown = super::md_source::is_markdown_file(&path) && s.path.as_deref().is_some_and(super::md_source::is_markdown_file);
-    if own_file || markdown_to_markdown || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
+    let keeps_document =
+        own_file || markdown_to_markdown || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str());
+    #[cfg(not(target_arch = "wasm32"))]
+    if keeps_document {
+        s.file_version = Some(version);
+    } else if let Some(original) = &s.path
+        && version.owns(original).unwrap_or(false)
+    {
+        // Lossy saves retain the open path, so its logical aliases must stay tracked too.
+        let mut version = version;
+        version.track_path(original);
+        s.file_version = Some(version);
+    }
+    if keeps_document {
         s.path = Some(path.clone());
         s.dirty = false;
         s.relayout();

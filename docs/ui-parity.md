@@ -124,10 +124,15 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
+## Native save conflicts
+
+Keep Editing closes the conflict dialog and keeps the local edits. Save Copy opens a picker with a different suggested name and binds the response to the document that requested it. The existing Save Changes prompt keeps its pending action after a failed save. AutoSave pauses for the affected document. A failed Save As remains visible until a successful retry or a document change.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | minor | Native Save and AutoSave refuse files changed externally and retain local edits. File versions and recovery copies follow their open document (#813). |
 | 2026-10-30 | trivial | Screen readers: Home › Paste is named "Paste"; its hint adds the key as the platform writes it ("Paste (Ctrl+V)"), where the name carried macOS's "⌘V" on every platform (UI Automation named it "Incolla (⌘V)" in the Italian build on Windows). The status bar's page count hints Go To with the platform's key too (it showed "⌘⌥G") |
 | 2026-10-28 | trivial | Screen readers: headings and list items are given AccessKit's zero-based level, so a Heading 1 reaches UI Automation as level 1 and a Heading 2 as level 2; they came one level too deep (#3173) |
 | 2026-11-16 | trivial | Insert › Shapes: the Arrow tile is drawn as the block arrow it inserts, from the outline the document draws it with, instead of a thin line with a head (#6768) |

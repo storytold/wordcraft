@@ -676,6 +676,8 @@ pub struct WordApp {
     /// The language-aware spelling and grammar task pane.
     pub spelling_review: Option<proofing_pane::SpellingForm>,
     pub status_msg: Option<(String, f64)>,
+    /// A refused interactive save stays readable on File, bound to its document.
+    save_as_error: Option<(u64, String)>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,
@@ -830,12 +832,18 @@ pub struct WordApp {
     /// there. A file that was merely opened isn't rewritten until the user saves it: saving drops
     /// whatever WordCraft can't represent (content controls, charts, macros…).
     autosave_path: Option<std::path::PathBuf>,
+    /// Typed native error kept long enough for the user command to offer Save Copy.
+    save_conflict: Option<wordcraft_engine::io::FileConflict>,
+    /// AutoSave conflict waiting for the active document's other dialogs to close.
+    pending_autosave_conflict: Option<wordcraft_engine::io::FileConflict>,
     /// Web: saves the browser's picker hasn't finished yet ([`async_saves`], #1315).
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_opens: std::collections::BTreeMap<u64, wordcraft_engine::cmd::file::NativeOpen>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
@@ -888,3 +896,6 @@ mod tests_dialog_tabs;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_file_conflict;

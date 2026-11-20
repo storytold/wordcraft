@@ -180,6 +180,10 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
+### Native save reliability
+
+Save and AutoSave refuse a changed, missing, or unreadable file before replacing an owned destination. The editor keeps the local edits and offers Save Copy. A failed password save that cleared a recovery copy tries to restore the open document's durable copy before returning. Network filesystem behavior and power-loss guarantees are still outside the save contract.
+
 ## Revision history
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
@@ -198,6 +202,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | minor | Native Save and AutoSave refuse files changed externally and retain local edits. File versions and recovery copies follow their open document (#813). |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
 | 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |

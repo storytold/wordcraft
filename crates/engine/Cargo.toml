@@ -42,6 +42,9 @@ js-sys = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = { workspace = true }
+sha2 = { workspace = true }
+same-file = "1"
+unicode-normalization = "0.1.26"
 # Language packs (CP4.3): downloaded, verified and unpacked by the suite's font store.
 craft-font-store = { workspace = true }
 craft-font-catalog = { workspace = true }
@@ -56,9 +59,7 @@ craft-ssip = { workspace = true }
 # O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
 libc = { workspace = true }
 
-# A plain fsync where a file system refuses the full flush (`sync_file`, safe_save.rs).
-# Already in Cargo.lock on Apple targets (craft-atomic), so this adds no new crate.
-[target.'cfg(target_vendor = "apple")'.dependencies]
+# File identity on Unix and plain fsync if an Apple file system refuses a full flush.
 rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [dev-dependencies]
@@ -67,3 +68,6 @@ wordcraft-formats = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 craft-zip = { workspace = true }
 cfb = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1.11"

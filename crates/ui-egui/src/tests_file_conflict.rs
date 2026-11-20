@@ -1,0 +1,441 @@
+//! Save-conflict behavior at the UI dispatch boundary, with original synthetic files only.
+#![allow(clippy::unwrap_used)]
+use super::*;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::channel;
+use wordcraft_doc::Document;
+use wordcraft_engine::io;
+
+struct Scratch(PathBuf);
+impl Scratch {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let p = std::env::temp_dir().join(format!("wordcraft-ui-conflict-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir(&p).unwrap();
+        Self(p)
+    }
+    fn file(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+fn app(d: &Scratch) -> WordApp {
+    let p = d.file("original.docx");
+    io::save_path(&p, &Document::from_text("Original")).unwrap();
+    let mut a = WordApp::new(Session::new(Document::new()), Services::default());
+    a.execute("file.open", json!({"path": p})).unwrap();
+    a.execute("document.setText", json!({"text": "Local edit"})).unwrap();
+    a
+}
+fn external(d: &Scratch) -> Vec<u8> {
+    let b = io::save_bytes("external.docx", &Document::from_text("External version")).unwrap();
+    std::fs::write(d.file("original.docx"), &b).unwrap();
+    b
+}
+fn assert_local(a: &WordApp, d: &Scratch, b: &[u8]) {
+    assert!(a.session.dirty);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Local edit");
+    assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), b);
+}
+#[test]
+fn scripts_get_error_user_gets_dialog_and_keep_editing_retains_both_versions() {
+    let d = Scratch::new();
+    let mut a = app(&d);
+    let b = external(&d);
+    assert!(a.execute("file.save", json!({})).is_err());
+    assert!(a.dialog.is_none());
+    assert!(a.run("file.save", json!({})).is_err());
+    assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveConflict { .. })));
+    assert_local(&a, &d, &b);
+    assert!(a.run("ui.saveConflict", json!({"answer": "overwrite"})).is_err());
+    assert!(a.dialog.is_some());
+    a.run("ui.saveConflict", json!({"answer": "cancel"})).unwrap();
+    assert!(a.dialog.is_none());
+    assert_local(&a, &d, &b);
+}
+#[test]
+fn save_copy_picker_success_cancel_and_changed_document_are_bound_to_the_conflict() {
+    for mode in ["copy", "cancel", "new-document", "same-path"] {
+        let d = Scratch::new();
+        let mut a = app(&d);
+        let b = external(&d);
+        let (tx, rx) = channel();
+        let rx = std::cell::RefCell::new(Some(rx));
+        a.services.file_dialog = Some(Box::new(move |request| {
+            assert!(matches!(request, file_dialogs::FileDialogRequest::Save { name, dir: None } if name == "original copy.docx"));
+            rx.borrow_mut().take().unwrap()
+        }));
+        assert!(a.run("file.save", json!({})).is_err());
+        a.run("ui.saveConflict", json!({"answer": "copy"})).unwrap();
+        assert!(a.file_dialog_open());
+        let copy = d.file("copy.docx");
+        if mode == "new-document" {
+            a.execute("file.new", json!({})).unwrap();
+        }
+        let sent = tx.send(Ok(match mode {
+            "cancel" => Vec::new(),
+            "same-path" => vec![d.file("original.docx").display().to_string()],
+            _ => vec![copy.display().to_string()],
+        }));
+        if mode == "new-document" {
+            assert!(a.poll_file_dialog().is_none_or(|result| result.is_err()));
+            assert!(!copy.exists());
+            assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), b);
+            continue;
+        }
+        sent.unwrap();
+        let result = a.poll_file_dialog().unwrap();
+        if mode == "copy" {
+            result.unwrap();
+            assert!(!a.session.dirty);
+            assert_eq!(a.session.path.as_ref(), Some(&copy));
+            assert_eq!(io::open_path(&copy).unwrap().plain_text(wordcraft_doc::StoryRef::Body), "Local edit");
+        } else {
+            assert!(!copy.exists());
+            if mode == "cancel" {
+                result.unwrap();
+                assert_local(&a, &d, &b);
+            } else {
+                assert!(result.is_err());
+            }
+            if mode == "same-path" {
+                assert_local(&a, &d, &b);
+                assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveConflict { .. })));
+            }
+        }
+        assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), b);
+    }
+}
+#[test]
+fn single_window_save_copy_remains_bound_to_the_originating_document() {
+    for mode in ["save", "cancel", "closed"] {
+        let d = Scratch::new();
+        let mut a = app(&d);
+        a.windows.single();
+        let original = a.session.document_id();
+        let external = external(&d);
+        let (tx, rx) = channel();
+        let rx = std::cell::RefCell::new(Some(rx));
+        a.services.file_dialog = Some(Box::new(move |_| rx.borrow_mut().take().unwrap()));
+        a.run("file.save", json!({})).unwrap_err();
+        assert_eq!(a.run("ui.saveConflict", json!({"answer": "copy"})).unwrap()["pending"], "saveCopy");
+
+        a.execute("file.new", json!({})).unwrap();
+        a.execute("document.setText", json!({"text": "Other document"})).unwrap();
+        let other = a.session.document_id();
+        assert_ne!(other, original);
+        if mode == "closed" {
+            a.execute("file.closeDocument", json!({"id": original, "force": true})).unwrap();
+            assert!(!a.session.is_open(original));
+        }
+
+        let copy = d.file("copy.docx");
+        let picked = if mode == "cancel" { Vec::new() } else { vec![copy.display().to_string()] };
+        tx.send(Ok(picked)).unwrap();
+        let result = a.poll_file_dialog().unwrap();
+        if mode == "save" {
+            assert_eq!(result.unwrap()["saved"], true);
+            assert_eq!(a.session.document_id(), original);
+            assert_eq!(a.session.path.as_ref(), Some(&copy));
+            assert!(!a.session.dirty);
+            assert_eq!(io::open_path(&copy).unwrap().plain_text(wordcraft_doc::StoryRef::Body), "Local edit");
+            a.show_document(other).unwrap();
+        } else if mode == "closed" {
+            let error = result.unwrap_err();
+            assert!(error.contains("closed"), "{error}");
+            assert!(a.status_msg.as_ref().is_some_and(|(message, _)| message == &error));
+        } else {
+            assert_eq!(result.unwrap()["saved"], false);
+        }
+        assert_eq!(a.session.document_id(), other);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Other document");
+        assert!(a.session.dirty);
+        assert_eq!(copy.exists(), mode == "save");
+        assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), external);
+    }
+}
+
+#[test]
+fn autosave_pauses_after_conflict_and_pending_close_does_not_discard_edits() {
+    let d = Scratch::new();
+    let mut a = app(&d);
+    a.execute("document.setText", json!({"text": "Saved intermediate version"})).unwrap();
+    a.execute("file.save", json!({})).unwrap();
+    a.execute("document.setText", json!({"text": "Local edit"})).unwrap();
+    assert!(a.session.dirty, "the conflict must follow a real unsaved edit");
+    let b = external(&d);
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(!a.autosaves());
+    assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveConflict { .. })));
+    assert_local(&a, &d, &b);
+    a.run("ui.saveConflict", json!({"answer": "cancel"})).unwrap();
+    a.autosave_tick(now_ms() + 20_000.0);
+    assert!(a.dialog.is_none());
+    assert_eq!(a.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
+    let error = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap_err();
+    assert!(error.contains("file changed or is unavailable"));
+    assert!(
+        matches!(&a.dialog, Some(dialogs::Dialog::SaveChanges { then, message, .. }) if then == "file.close" && message.contains("file changed or is unavailable"))
+    );
+    assert!(a.save_conflict.is_none());
+    assert!(!a.quit_requested);
+    assert_local(&a, &d, &b);
+}
+
+#[test]
+fn dialog_buttons_keep_edits_and_render_selected_direction() {
+    use egui_kittest::kittest::Queryable;
+    let d = Scratch::new();
+    let mut a = app(&d);
+    let b = external(&d);
+    a.run("file.save", json!({})).unwrap_err();
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+            if fonts {
+                dialogs::show(app, &ctx);
+            } else {
+                crate::theme::install_fonts_for(&ctx, false);
+                fonts = true;
+            }
+        },
+        a,
+    );
+    h.run();
+    h.get_by_label("Keep editing").click();
+    h.run();
+    assert!(h.state().dialog.is_none());
+    assert_local(h.state(), &d, &b);
+    h.state_mut().run("file.save", json!({})).unwrap_err();
+    h.run();
+    h.get_by_label("Save copy…").click();
+    h.run();
+    // This harness has no file picker, so Save Copy is cancelled without writing.
+    assert!(h.state().dialog.is_none());
+    assert_local(h.state(), &d, &b);
+}
+
+#[test]
+fn busy_copy_picker_retains_conflict_and_can_be_retried() {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    let d = Scratch::new();
+    let mut a = app(&d);
+    let b = external(&d);
+    let (first_tx, first_rx) = channel();
+    let (copy_tx, copy_rx) = channel();
+    let receivers = RefCell::new(VecDeque::from([first_rx, copy_rx]));
+    a.services.file_dialog = Some(Box::new(move |_| receivers.borrow_mut().pop_front().unwrap()));
+    assert!(matches!(
+        a.ask_file(
+            file_dialogs::FileDialogRequest::Save { name: "Unrelated.docx".into(), dir: None },
+            file_dialogs::AfterPick::Export { ext: "docx".into() }
+        ),
+        file_dialogs::Asked::Pending
+    ));
+    a.run("file.save", json!({})).unwrap_err();
+    let result = a.run("ui.saveConflict", json!({"answer":"copy"}));
+    assert!(result.is_err(), "Busy must not acknowledge a picker that never opened: {result:?}");
+    assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveConflict { .. })));
+    assert_local(&a, &d, &b);
+    first_tx.send(Ok(Vec::new())).unwrap();
+    a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!(a.run("ui.saveConflict", json!({"answer":"copy"})).unwrap()["pending"], "saveCopy");
+    let copy = d.file("retry.docx");
+    copy_tx.send(Ok(vec![copy.display().to_string()])).unwrap();
+    a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!(io::open_path(&copy).unwrap().plain_text(wordcraft_doc::StoryRef::Body), "Local edit");
+    assert!(!a.session.dirty);
+    assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), b);
+}
+
+#[test]
+fn autosave_conflict_retains_open_save_changes_and_its_close_command() {
+    let d = Scratch::new();
+    let mut a = app(&d);
+    a.execute("document.setText", json!({"text": "Saved intermediate version"})).unwrap();
+    a.execute("file.save", json!({})).unwrap();
+    a.execute("document.setText", json!({"text":"Local edit"})).unwrap();
+    assert!(a.session.dirty, "the conflict must follow a real unsaved edit");
+    a.execute("file.autosave", json!({"value":true})).unwrap();
+    let b = external(&d);
+    assert_eq!(a.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(!a.autosaves());
+    assert!(matches!(&a.dialog, Some(dialogs::Dialog::SaveChanges { then, .. }) if then == "file.close"));
+    assert!(!a.quit_requested);
+    assert_local(&a, &d, &b);
+    assert!(a.run("ui.saveChanges", json!({"answer":"save"})).is_err());
+    assert!(
+        matches!(&a.dialog, Some(dialogs::Dialog::SaveChanges { then, message, .. }) if then == "file.close" && message.contains("file changed or is unavailable"))
+    );
+    a.run("ui.saveChanges", json!({"answer":"cancel"})).unwrap();
+    assert!(a.dialog.is_none());
+    assert!(!a.quit_requested);
+    a.window_work(&egui::Context::default());
+    assert!(matches!(&a.dialog, Some(dialogs::Dialog::SaveConflict { document, .. }) if *document == a.session.document_id()));
+    assert_local(&a, &d, &b);
+}
+
+#[test]
+fn deferred_autosave_conflict_follows_its_document() {
+    let d = Scratch::new();
+    let mut a = app(&d);
+    let original = a.session.document_id();
+    a.execute("file.save", json!({})).unwrap();
+    a.execute("document.setText", json!({"text": "Pending edit"})).unwrap();
+    let external = external(&d);
+
+    a.run("file.close", json!({})).unwrap();
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveChanges { .. })));
+    a.execute("file.new", json!({})).unwrap();
+    let other = a.session.document_id();
+    assert_ne!(other, original);
+    a.window_work(&egui::Context::default());
+    assert!(a.dialog.is_none(), "another document must not inherit the conflict");
+
+    a.show_document(original).unwrap();
+    assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveChanges { .. })));
+    a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+    a.window_work(&egui::Context::default());
+    assert!(matches!(&a.dialog, Some(dialogs::Dialog::SaveConflict { document, .. }) if *document == original));
+    assert!(!a.autosaves());
+    assert!(a.session.dirty);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Pending edit");
+    assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), external);
+    a.run("ui.saveConflict", json!({"answer": "cancel"})).unwrap();
+    a.window_work(&egui::Context::default());
+    assert!(a.dialog.is_none(), "Keep editing acknowledges the queued conflict");
+}
+
+#[test]
+fn native_byte_open_keeps_its_baseline_while_a_password_is_pending() {
+    let dir = Scratch::new();
+    let path = dir.file("original.docx");
+    let password = "synthetic-password";
+    let first = io::save_bytes_with("original.docx", &Document::from_text("Original A"), Some(password), &io::ExportOptions::default()).unwrap();
+    let external = io::save_bytes("external.docx", &Document::from_text("External B")).unwrap();
+    std::fs::write(&path, first).unwrap();
+    let mut app = WordApp::new(Session::new(Document::new()), Services::default());
+    app.run("text.insert", json!({"text":"Previous unsaved draft"})).unwrap();
+    let prior = app.session.document_id();
+    assert_eq!(app.open_native_path(&path).unwrap()["pending"], "password");
+    assert!(app.open_native_path(&dir.file("missing.docx")).is_err());
+    std::fs::write(&path, &external).unwrap();
+    let Some(dialogs::Dialog::Password { then, mut params, .. }) = app.dialog.take() else {
+        panic!("the native open must keep its password prompt");
+    };
+    params["password"] = json!(password);
+    app.execute_user(&then, params).unwrap();
+    assert_ne!(app.session.document_id(), prior);
+    assert!(app.session.document_dirty(prior));
+    assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
+    app.run("text.insert", json!({"text":"Local edits"})).unwrap();
+    assert!(app.run("file.save", json!({})).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), external);
+    assert!(app.session.dirty);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn abandoned_native_opens_release_handles_but_pending_dialogs_keep_them() {
+    let d = Scratch::new();
+    let handles = || {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+            .filter(|path| path.starts_with(&d.0))
+            .count()
+    };
+    let mut a = WordApp::new(Session::new(Document::new()), Services::default());
+    for i in 0..100 {
+        let path = d.file(&format!("malformed-{i}.docx"));
+        std::fs::write(&path, b"Not a document package").unwrap();
+        assert!(a.open_native_path(&path).is_err());
+    }
+    assert_eq!(handles(), 0, "definitive failed opens release their read handles");
+    let path = d.file("protected.docx");
+    let bytes =
+        io::save_bytes_with("protected.docx", &Document::from_text("Protected original"), Some("synthetic-password"), &io::ExportOptions::default())
+            .unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    a.run("text.insert", json!({"text":"Unsaved draft"})).unwrap();
+    assert_eq!(a.open_native_path(&path).unwrap()["pending"], "password");
+    let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut WordApp| app.logic(ui.ctx()), a);
+    h.run();
+    assert_eq!(handles(), 1);
+    h.state_mut().run("ui.closeDialog", json!({})).unwrap();
+    h.run();
+    assert_eq!(handles(), 0);
+    assert!(h.state().session.dirty);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Unsaved draft");
+    h.state_mut().execute("file.new", json!({})).unwrap();
+    assert_eq!(h.state_mut().open_native_path(&path).unwrap()["pending"], "password");
+    h.run();
+    assert_eq!(handles(), 1);
+    h.state_mut().run("ui.closeDialog", json!({})).unwrap();
+    h.run();
+    assert_eq!(handles(), 0);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn native_open_baseline_survives_saving_another_open_document() {
+    let d = Scratch::new();
+    let path = d.file("next.docx");
+    io::save_path(&path, &Document::from_text("Next original")).unwrap();
+    let mut app = WordApp::new(Session::new(Document::new()), Services::default());
+    app.run("text.insert", json!({"text":"Prior draft"})).unwrap();
+    let prior_doc = app.session.document_id();
+    app.open_native_path(&path).unwrap();
+    let next_doc = app.session.document_id();
+    assert_ne!(prior_doc, next_doc);
+    let external = io::save_bytes("external.docx", &Document::from_text("External next")).unwrap();
+    std::fs::write(&path, &external).unwrap();
+
+    app.show_document(prior_doc).unwrap();
+    let prior = d.file("prior.docx");
+    app.run("file.saveAs", json!({"path":prior})).unwrap();
+    assert_eq!(io::open_path(&prior).unwrap().plain_text(wordcraft_doc::StoryRef::Body), "Prior draft");
+
+    app.show_document(next_doc).unwrap();
+    assert_eq!(app.session.path.as_ref(), Some(&path));
+    app.run("text.insert", json!({"text":"Local next"})).unwrap();
+    assert!(app.run("file.save", json!({})).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), external);
+    assert!(app.session.dirty);
+}
+
+/// Native Windows CI runs this through the existing app/UI test gate.
+#[cfg(windows)]
+#[test]
+fn native_file_versions_leave_windows_destinations_closed_between_commands() {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    let d = Scratch::new();
+    let mut a = app(&d);
+    let path = d.file("original.docx");
+    for text in ["First safe save", "Second safe save"] {
+        // A non-sharing open independently detects any retained destination handle.
+        let file = OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        drop(file);
+        a.execute("document.setText", json!({"text": text})).unwrap();
+        a.execute("file.save", json!({})).unwrap();
+        assert_eq!(io::open_path(&path).unwrap().plain_text(wordcraft_doc::StoryRef::Body), text);
+    }
+    let file = OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+    drop(file);
+    a.execute("document.setText", json!({"text": "Local edit"})).unwrap();
+    let external = external(&d);
+    assert!(a.execute("file.save", json!({})).is_err());
+    assert_local(&a, &d, &external);
+}

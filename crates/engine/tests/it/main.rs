@@ -1,5 +1,7 @@
 mod comment_ids;
 mod date_fields;
+#[cfg(not(target_arch = "wasm32"))]
+mod file_conflict;
 mod macro_packages;
 mod odt_charts;
 mod odt_fields;

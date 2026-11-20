@@ -54,6 +54,14 @@ pub struct Session {
     /// Last highlighter choice for the shortcut; palette state, outside document undo.
     pub(crate) last_highlight: wordcraft_doc::props::Highlight,
     pub path: Option<std::path::PathBuf>,
+    /// Identity of this session's native file; never part of document JSON or undo history.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) file_version: Option<crate::io::FileVersion>,
+    /// Weak request records: native hosts own each deferred Open's lifetime.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) native_opens: std::collections::BTreeMap<u64, std::sync::Weak<crate::cmd::file::NativeRead>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) native_open_sequence: u64,
     /// Name given to a document not saved yet (File › Info › Rename): what Save suggests. A file
     /// name, not document metadata, so it is not part of the document or its undo history.
     pub file_name: Option<String>,

@@ -63,6 +63,8 @@ pub(crate) enum AfterPick {
     Picture,
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
+    /// A conflict copy belongs to the document that opened its picker.
+    SaveCopy { document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
@@ -101,6 +103,23 @@ pub(crate) struct PendingDialog {
     rx: Receiver<FileDialogAnswer>,
     req: FileDialogRequest,
     after: AfterPick,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl AfterPick {
+    pub(crate) fn native_open_id(&self) -> Option<u64> {
+        match self {
+            Self::SaveAs { after: AfterSave::Continue { params, .. }, .. } => params.get("nativeRead").and_then(Value::as_u64),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PendingDialog {
+    pub(crate) fn native_open_id(&self) -> Option<u64> {
+        self.after.native_open_id()
+    }
 }
 
 /// How asking for a file went.
@@ -344,6 +363,18 @@ impl WordApp {
                 }
                 r
             }
+            AfterPick::SaveCopy { document } => {
+                let Some(path) = picked else { return Ok(json!({"saved": false})) };
+                if document != self.session.document_id() {
+                    if !self.session.is_open(document) {
+                        let error = tl!("The document for this copy was closed.");
+                        self.status_long(error);
+                        return Err(error.into());
+                    }
+                    self.show_document(document)?;
+                }
+                self.run("file.saveAs", json!({"path": path}))
+            }
             AfterPick::SaveAs { after, document } => {
                 // The document it was for may wait behind another one: it is shown and saved.
                 if document != self.session.document_id() {
@@ -359,10 +390,17 @@ impl WordApp {
                 // skips the status bar while Backstage is open. `fail_save_as` reaches both.
                 let result = picked.map(|path| self.run("file.save", json!({"path": path})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
+                let copy_only = matches!(&result, Some(Ok(v)) if v.get("copyOnly").and_then(Value::as_bool) == Some(true));
                 if saved {
                     self.ui.backstage = false;
                     self.canvas.want_focus = true;
                     self.clear_save_as_error();
+                }
+                if copy_only {
+                    return Ok(match after {
+                        AfterSave::Continue { .. } => json!({"done": false}),
+                        _ => json!({"saved": true, "copyOnly": true}),
+                    });
                 }
                 match after {
                     AfterSave::Nothing => {
@@ -405,7 +443,7 @@ impl WordApp {
     fn fail_save_as(&mut self, error: &str) {
         self.status(error.to_string());
         if let Some(ctx) = self.ctx.clone() {
-            ctx.data_mut(|d| d.insert_temp(crate::backstage::save_as_error_id(), error.to_string()));
+            ctx.data_mut(|d| d.insert_temp(crate::backstage::save_as_error_id(), (self.session.document_id(), error.to_string())));
         }
     }
 

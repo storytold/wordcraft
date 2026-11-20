@@ -173,6 +173,10 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
         s.file_name = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            s.file_version = None;
+        }
         // Version snapshots belong to the document they were taken from, including when
         // Compare creates an untitled result from the current document.
         s.clear_versions();

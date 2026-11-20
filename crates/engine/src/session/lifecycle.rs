@@ -42,6 +42,8 @@ impl Session {
             view,
             pending,
             path,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_version,
             file_name,
             dirty,
             pending_move,
@@ -93,7 +95,13 @@ impl Session {
             pending,
             last_highlight: wordcraft_doc::props::Highlight::Yellow,
             path,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_version,
             file_name,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_opens: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            native_open_sequence: 0,
             user_dict_path: None,
             dirty,
             clipboard: None,

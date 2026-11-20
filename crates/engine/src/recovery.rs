@@ -165,31 +165,63 @@ impl Session {
         }
     }
     /// Only an explicit protect/save action waits for the worker and removes plaintext copies.
-    /// A failure prevents applying the password; typing never waits.
-    pub(crate) fn clear_recovery_before_password(&mut self) -> Result<(), CmdError> {
+    /// Returns whether a copy was removed. A failure prevents applying the password; typing never waits.
+    pub(crate) fn clear_recovery_before_password(&mut self) -> Result<bool, CmdError> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(mut r) = self.recovery.take() {
             let result = self.purge_recovery(&mut r);
             self.recovery = Some(r);
-            result.map_err(CmdError::Failed)?;
+            return result.map_err(CmdError::Failed);
+        }
+        Ok(false)
+    }
+    /// Re-establish the active document's durable recovery after a password save that did not
+    /// change this document's saved state, including a save that only wrote a separate copy.
+    pub(crate) fn restore_recovery_after_failed_password_save(&mut self) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.dirty
+            && self.password.is_none()
+            && let Some(mut recovery) = self.recovery.take()
+        {
+            let result = self.restore_active_recovery(&mut recovery).map_err(|error| {
+                let message =
+                    format!("The recovery copy could not be restored: {error}. Keep this document open and save a copy to another location.");
+                log::warn!("{message}");
+                recovery.error = Some(message.clone());
+                message
+            });
+            self.recovery = Some(recovery);
+            return result;
         }
         Ok(())
     }
-    /// Waits out the job under way (it may be this document's copy being written), then deletes
-    /// the active document's copy.
+
     #[cfg(not(target_arch = "wasm32"))]
-    fn purge_recovery(&mut self, r: &mut Recovery) -> Result<(), String> {
+    fn restore_active_recovery(&mut self, recovery: &mut Recovery) -> Result<(), String> {
+        let active = self.document_id();
+        let document = self.recovery_docs().find(|d| d.id == active).ok_or("the active recovery slot is missing")?;
+        let result = recovery.snapshot_now(document)?;
+        self.apply_recovery(recovery, result);
+        if let Some(error) = &recovery.error {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+
+    /// Waits out the job under way, then deletes the active document's copy if one exists.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn purge_recovery(&mut self, r: &mut Recovery) -> Result<bool, String> {
         if let Some(e) = r.receive(true) {
             self.apply_recovery(r, e);
         }
-        let Some(id) = self.recovery_slot.id.clone() else { return Ok(()) };
+        let Some(id) = self.recovery_slot.id.clone() else { return Ok(false) };
         let e = r.discard_now(&id, Some(self.document_id()))?;
         self.apply_recovery(r, e);
         if self.recovery_slot.id.is_some() {
             return Err(r.error.clone().unwrap_or_else(|| "the recovery copy could not be removed".into()));
         }
         self.recovery_slot.revision = None;
-        Ok(())
+        Ok(true)
     }
     pub(crate) fn recover(&mut self, v: &Value) -> CmdResult {
         let restore = v.get("restore");

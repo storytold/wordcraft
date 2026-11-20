@@ -42,6 +42,32 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::About { .. } => about_dialog(ui, d),
         Dialog::FontDownload { fonts, dont_show } => crate::font_download::body(app, ui, fonts, dont_show),
         Dialog::DiscardRecovery { .. } => discard_recovery_dialog(app, ui, d),
+        Dialog::SaveConflict { name, .. } => {
+            ui.label(egui::RichText::new(tl!("The file changed or is unavailable")).font(semibold(15.0)));
+            ui.label(tl!("Your edits are still here. Save them to a different file to keep both versions."));
+            ui.label(egui::RichText::new(&*name).strong());
+            ui.add_space(8.0);
+            let (keep, copy) = ui
+                .horizontal(|ui| {
+                    let keep = ui.button(tl!("Keep editing"));
+                    let copy = ui.add(crate::widgets::primary_button(ui, tl!("Save copy…")));
+                    (keep, copy)
+                })
+                .inner;
+            let answer = if keep.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                Some("cancel")
+            } else if copy.clicked() {
+                Some("copy")
+            } else {
+                None
+            };
+            if let Some(answer) = answer {
+                app.dialog = Some(d.clone());
+                let _ = app.run("ui.saveConflict", json!({"answer": answer}));
+                return true;
+            }
+            false
+        }
         Dialog::SaveChanges { .. } => save_changes_dialog(app, ui, d),
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),
         Dialog::InsertMergeField { .. } => insert_merge_field_dialog(app, ui, d),

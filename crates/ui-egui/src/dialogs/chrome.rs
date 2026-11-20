@@ -189,6 +189,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
         Dialog::FontDownload { .. } => "Get the Missing Fonts",
+        Dialog::SaveConflict { .. } => "Save conflict",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
         Dialog::RecipientList { .. } => "Recipient List",

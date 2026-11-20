@@ -74,6 +74,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | minor | Native Save and AutoSave refuse files changed externally and retain local edits. File versions and recovery copies follow their open document (#813). |
 | 2026-11-03 | trivial | DOCX text-frame anchor locks survive JSON and two save/reopen cycles, including position and size edits |
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
 | 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |

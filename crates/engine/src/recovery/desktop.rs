@@ -681,20 +681,31 @@ impl Recovery {
             if d.slot.revision == Some(d.rev) || now < d.slot.due {
                 continue;
             }
-            let id = match &d.slot.id {
-                Some(id) => id.clone(),
-                None => new_id()?,
-            };
-            let name = d.path.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled draft".into());
-            let info = RecoveryInfo { id: id.clone(), name, saved_at: crate::cmd::now_iso() };
-            self.queue(Job::Save(Box::new(Snapshot { version: 1, info, generation: 0, document: d.doc.clone() }), d.id))?;
-            d.slot.id = Some(id);
-            d.slot.revision = Some(d.rev);
-            d.slot.due = now + INTERVAL;
+            self.queue_snapshot(d, now)?;
             return Ok(());
         }
         Ok(())
     }
+    /// Enqueue the active slot immediately and wait for the durable copy.
+    pub(super) fn snapshot_now(&mut self, document: DocRecovery<'_>) -> Result<Event, String> {
+        self.queue_snapshot(document, Instant::now())?;
+        self.receive(true).ok_or_else(|| "recovery worker is unavailable".to_string())
+    }
+
+    fn queue_snapshot(&mut self, d: DocRecovery<'_>, now: Instant) -> Result<(), String> {
+        let id = match &d.slot.id {
+            Some(id) => id.clone(),
+            None => new_id()?,
+        };
+        let name = d.path.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled draft".into());
+        let info = RecoveryInfo { id: id.clone(), name, saved_at: crate::cmd::now_iso() };
+        self.queue(Job::Save(Box::new(Snapshot { version: 1, info, generation: 0, document: d.doc.clone() }), d.id))?;
+        d.slot.id = Some(id);
+        d.slot.revision = Some(d.rev);
+        d.slot.due = now + INTERVAL;
+        Ok(())
+    }
+
     /// How long until [`tick`](Self::tick) has work, for a host that repaints only on demand.
     pub fn wait<'a>(&self, docs: impl Iterator<Item = (bool, u64, &'a Slot)>) -> Option<Duration> {
         if !self.alive || !self.ready || self.busy {

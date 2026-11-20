@@ -322,6 +322,12 @@ CSL and library import are separate work.
 
 For field results, the engine parser treats a backslash in quoted arguments as escaping the next character, as Word does. The DOCX HYPERLINK target reader applies the same rule; escaped asterisks remain argument text instead of starting a format switch. Engine parser and DOCX import tests cover these cases.
 
+## Native save conflicts
+
+A native open records the content version of the bytes it reads. Save and AutoSave compare the saved file just before replacement. An external change to an owned destination leaves the local edits and existing file in place. Save Copy offers a separate filename. The version is per open document and advances after a successful save.
+
+The final content check precedes the rename. Another writer can still change the file between those two operations. The version check covers encrypted file bytes and never writes a plaintext copy.
+
 ## Revision history
 
 > 2026-11-08 · `convert --strict` for PDF and PNG output, and the pictures a DOCX open leaves out are recorded (#6005); recorded in the progress log, readiness unchanged.
@@ -339,6 +345,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | minor | Native Save and AutoSave refuse files changed externally and retain local edits. File versions and recovery copies follow their open document (#813). |
 | 2026-11-13 | trivial | A rounded rectangle without a corner size of its own (`roundRect` with an empty `a:avLst`) takes the preset's default `adj` of 16667, a sixth of its shorter side; it was drawn with 16%. Measured in Word for Windows: such a shape of 300 x 100 pt has corners of 16.67 pt, one of 300 x 40 pt of 6.67 pt and one of 60 x 150 pt of 10 pt (#6546) (`doc::connector::tests::corner_radius_follows_the_shorter_side`). |
 | 2026-11-04 | trivial | ODT: a later paragraph default style that names no font no longer clears the document's default font; a regression from the #4501 refactor (#4683) |
 | 2026-11-08 | trivial | ODT row corrected: a file whose tab stops are measured from the indent is saved measuring from it, not always from the margin (the 2026-11-03 change); the default stops are counted from the indent |

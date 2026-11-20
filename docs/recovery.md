@@ -110,3 +110,5 @@ all repository CI gates; no daily-driver recovery folder or native app is operat
 The desktop host chooses the private recovery profile. Recovery commands accept known
 snapshot IDs, never file paths or a profile override. This internal store is separate from
 the automation roots that constrain opening and saving user documents.
+
+If an explicit password Save clears a recovery copy and then fails, a dirty document that remains unprotected gets another durable copy before the error returns. A failure to write that copy is reported. The worker retries transient failures under its normal retry policy. A process exit between the filesystem operations can still interrupt recovery.

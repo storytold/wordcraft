@@ -18,6 +18,10 @@ impl Session {
         self.doc = doc;
         self.doc.ensure_nonempty();
         self.password = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.file_version = None;
+        }
         self.file_name = None;
         // The old document's equation is gone: its editing session cannot carry over.
         self.math = None;
@@ -74,6 +78,12 @@ impl Session {
             pending: _,
             last_highlight: _,
             path: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                file_version: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                native_opens: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                native_open_sequence: _,
             file_name: _,
             // The custom dictionary file, like the file path: host wiring, not an edit.
             user_dict_path: _,

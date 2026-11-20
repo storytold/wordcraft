@@ -552,15 +552,8 @@ fn without_launch_args(args: Vec<String>) -> Vec<String> {
 /// template starts a new document instead ([`WordApp::open_from_platform`]), which has no path.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     let name = path.to_string_lossy();
-    let opened = wordcraft_engine::io::read_document(path)
-        .and_then(|bytes| app.open_from_platform(&name, Some(&wordcraft_engine::cmd::insert::base64_encode(&bytes))));
-    match opened {
-        // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() && !wordcraft_ui_egui::documents::is_word_template(&name) => app.session.path = Some(path.into()),
-        Ok(_) => {}
-        Err(e) => {
-            app.report_open_failure(&name, &e);
-        }
+    if let Err(error) = app.open_native_path(path) {
+        app.report_open_failure(&name, &error);
     }
 }
 
@@ -805,6 +798,14 @@ mod tests {
         app.run("file.save", serde_json::json!({})).unwrap();
         assert!(std::fs::read_to_string(&path).unwrap().contains("Bonjour encore"));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "a second file was written");
+
+        // A native byte-backed open retains the content read, including after the first save.
+        let external = wordcraft_engine::io::save_bytes("external.docx", &wordcraft_doc::Document::from_text("External B")).unwrap();
+        std::fs::write(&path, &external).unwrap();
+        app.run("text.insert", serde_json::json!({"text":"Local edits"})).unwrap();
+        assert!(app.run("file.save", serde_json::json!({})).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), external);
+        assert!(app.session.dirty);
 
         // A file that can't be read is a warning, as one that fails to open by name is.
         open_non_unicode(&mut app, &dir.join(std::ffi::OsString::from_vec(b"gon\xe9.txt".to_vec())));

@@ -465,6 +465,34 @@ fn a_failed_autosave_switch_save_as_says_so_and_leaves_autosave_off() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn write_only_autosave_picker_writes_a_copy_and_keeps_the_document_unsaved() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = scratch("autosave-switch-write-only");
+    let target = dir.join("copy.docx");
+    std::fs::write(&target, b"Unrelated destination").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o200)).unwrap();
+    if std::fs::File::open(&target).is_ok() {
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    a.save_as(AfterSave::AutoSave);
+    answer(&shown, Some(&target.to_string_lossy()));
+    let result = a.poll_file_dialog().unwrap().unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(result, json!({"saved": true, "copyOnly": true}));
+    assert!(a.session.path.is_none() && a.session.dirty);
+    assert!(!a.autosaves());
+    assert!(saved_text(&target).contains(UNSAVED));
+    assert!(a.status_msg.as_ref().is_some_and(|(message, _)| message.contains("WordCraft can read")));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// While a dialog is open, more Save As / Open / Export / Picture clicks don't open a second one.
 #[test]
 fn a_second_dialog_while_one_is_open_is_ignored() {
@@ -862,4 +890,69 @@ fn many_failed_fonts_end_with_a_count() {
     a.add_fonts(paths).unwrap();
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
+}
+
+/// A native Save As refusal stays readable on File, where the editor status bar is absent.
+#[test]
+fn native_save_as_failure_remains_visible_until_retry_or_document_change() {
+    use egui_kittest::kittest::Queryable;
+    for dark in [false, true] {
+        let dir = scratch(if dark { "save-error-dark" } else { "save-error-light" });
+        let failed = dir.join("missing").join("draft.docx");
+        let saved = dir.join("retry.docx");
+        let (mut a, shown) = async_app();
+        typed(&mut a);
+        a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+        h.run_steps(4);
+        h.get_by_label("Browse…").click();
+        h.run_steps(4);
+        answer(&shown, Some(&failed.to_string_lossy()));
+        h.run_steps(4);
+        let error = h.state().status_msg.as_ref().unwrap().0.clone();
+        assert!(error.contains("draft.docx"), "{error}");
+        assert!(h.state().ui.backstage && h.state().session.dirty);
+        assert!(!failed.exists());
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), UNSAVED);
+        h.state_mut().status_msg.as_mut().unwrap().1 -= 10_000.0;
+        h.run_steps(4);
+        assert!(h.query_by_label(&error).is_some(), "the save refusal stays visible after the editor status expires: {error}");
+
+        h.get_by_label("Browse…").click();
+        h.run_steps(4);
+        answer(&shown, None);
+        h.run_steps(4);
+        assert!(h.state().ui.backstage && h.state().session.dirty);
+        assert!(!failed.exists() && !saved.exists());
+
+        h.get_by_label("Browse…").click();
+        h.run_steps(4);
+        answer(&shown, Some(&saved.to_string_lossy()));
+        h.run_steps(4);
+        assert!(!h.state().ui.backstage && !h.state().session.dirty);
+        assert!(saved_text(&saved).contains(UNSAVED));
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+        h.run_steps(4);
+        assert!(h.query_by_label(&error).is_none(), "a successful retry clears the old error");
+
+        h.get_by_label("Browse…").click();
+        h.run_steps(4);
+        answer(&shown, Some(&failed.to_string_lossy()));
+        h.run_steps(4);
+        let error = h.state().status_msg.as_ref().unwrap().0.clone();
+        assert!(h.query_by_label(&error).is_some());
+        h.state_mut().execute("file.new", json!({})).unwrap();
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+        h.run_steps(4);
+        assert!(h.query_by_label(&error).is_none(), "a new document does not inherit another document error");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

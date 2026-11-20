@@ -1,9 +1,72 @@
+use wordcraft_engine::io::FileConflict;
+
 use super::{
     AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
     printing,
 };
 
+/// The name Save copy… suggests for `name`: `Report copy.docx`, or `Report copy` when `name` has
+/// no extension (no trailing dot).
+fn copy_name(name: &str) -> String {
+    let path = std::path::Path::new(name);
+    let stem = path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+    match path.extension().map(|e| e.to_string_lossy()).filter(|e| !e.is_empty()) {
+        Some(ext) => format!("{stem} copy.{ext}"),
+        None => format!("{stem} copy"),
+    }
+}
+
 impl WordApp {
+    pub(super) fn remember_save_conflict(&mut self, error: Option<&wordcraft_engine::CmdError>) {
+        self.save_conflict = match error {
+            Some(wordcraft_engine::CmdError::FileConflict(conflict)) => {
+                self.autosave_path = None;
+                Some(conflict.clone())
+            }
+            _ => None,
+        };
+    }
+
+    pub(crate) fn show_save_conflict(&mut self) {
+        if let Some(conflict) = self.save_conflict.take() {
+            self.present_save_conflict(conflict);
+        }
+    }
+
+    fn present_save_conflict(&mut self, conflict: FileConflict) {
+        self.pending_autosave_conflict = None;
+        let name = conflict.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| conflict.path.display().to_string());
+        self.dialog = Some(dialogs::Dialog::SaveConflict { name, document: self.session.document_id() });
+    }
+
+    pub(crate) fn answer_save_conflict(&mut self, answer: &str) -> Result<Value, String> {
+        if !matches!(answer, "copy" | "cancel") {
+            return Err("`answer` must be copy or cancel".into());
+        }
+        let Some(dialogs::Dialog::SaveConflict { document, .. }) = self.dialog.as_ref() else {
+            return Err("no save conflict dialog is open".into());
+        };
+        let document = *document;
+        if document != self.session.document_id() {
+            self.dialog = None;
+            return Err("the document has been replaced".into());
+        }
+        if answer == "cancel" {
+            self.dialog = None;
+            return Ok(json!({"saved": false}));
+        }
+        let name = copy_name(&self.default_save_name());
+        let keep = self.dialog.take();
+        match self.ask_file(file_dialogs::FileDialogRequest::Save { name, dir: None }, file_dialogs::AfterPick::SaveCopy { document }) {
+            file_dialogs::Asked::Done(r) => r,
+            file_dialogs::Asked::Pending => Ok(json!({"pending": "saveCopy"})),
+            file_dialogs::Asked::Busy => {
+                self.dialog = keep;
+                Err(tl!("A file dialog is already open.").into())
+            }
+        }
+    }
+
     /// Answer the Save Changes prompt: Save (through Save As for a new document) and carry on,
     /// carry on without saving, or cancel. A failed or cancelled save cancels too.
     pub(super) fn answer_save_changes(&mut self, choice: SaveChoice) -> Result<Value, String> {
@@ -63,9 +126,12 @@ impl WordApp {
     /// tells the user).
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
-        let v = self.execute("file.save", json!({}))?;
+        let result = self.execute("file.save", json!({}));
+        // A failed Save Changes continuation keeps its original prompt and command.
+        self.save_conflict = None;
+        let v = result?;
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
-        if !self.safely_saved(saved) {
+        if v.get("copyOnly").and_then(Value::as_bool) == Some(true) || !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);
         }
         Ok(match v.get("pendingSave").and_then(Value::as_u64) {
@@ -430,16 +496,58 @@ impl WordApp {
         Ok(json!({"value": on}))
     }
 
+    pub(super) fn after_save_command(&mut self, result: &Value) {
+        if result.get("copyOnly").and_then(Value::as_bool) == Some(true) {
+            self.report_write_only_copy();
+            return;
+        }
+        // An explicit save to the document's own file lets AutoSave keep writing there.
+        if result.get("saved").and_then(Value::as_bool) == Some(true)
+            && result.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
+        {
+            self.autosave_path = self.session.path.clone();
+            self.pending_autosave_conflict = None;
+        }
+        // Edits in the formatted view can require writing out Markdown again.
+        if result.get("rewritten").and_then(Value::as_bool) == Some(true) {
+            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
+        }
+    }
+
+    fn report_write_only_copy(&mut self) {
+        self.status_long(tl!("Saved a copy. To use it for Save or AutoSave, choose a location WordCraft can read."));
+    }
+
     /// AutoSave: write a saved document a couple of seconds after the last change. A failure is
     /// shown in the status bar and turns AutoSave off for the file until the user saves it again.
     pub(crate) fn autosave_tick(&mut self, now: f64) {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
             self.last_autosave = now;
-            if let Err(e) = self.session.run("file.save", &json!({})) {
-                log::warn!("AutoSave failed: {e}");
-                self.autosave_path = None;
-                self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
+            match self.session.run("file.save", &json!({})) {
+                Ok(v) if v.get("copyOnly").and_then(Value::as_bool) == Some(true) => {
+                    self.autosave_path = None;
+                    self.report_write_only_copy();
+                }
+                Err(e) => {
+                    log::warn!("AutoSave failed: {e}");
+                    self.autosave_path = None;
+                    if let wordcraft_engine::CmdError::FileConflict(conflict) = &e {
+                        self.pending_autosave_conflict = Some(conflict.clone());
+                    }
+                    self.status(i18n::fmt(
+                        tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."),
+                        &[("error", &e.to_string())],
+                    ));
+                }
+                Ok(_) => {}
             }
+        }
+        // A conflict pauses AutoSave, so this must still run on later frames after dialogs close.
+        if self.dialog.is_none()
+            && !self.file_dialog_open()
+            && let Some(conflict) = self.pending_autosave_conflict.take()
+        {
+            self.present_save_conflict(conflict);
         }
     }
 
@@ -506,4 +614,11 @@ pub(crate) fn suggested_stem(text: &str) -> Option<String> {
     }
     let words = words.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
     (!words.is_empty()).then_some(words)
+}
+
+#[test]
+fn save_copy_name_has_no_trailing_dot_without_an_extension() {
+    assert_eq!(copy_name("Report.docx"), "Report copy.docx");
+    assert_eq!(copy_name("Report"), "Report copy");
+    assert_eq!(copy_name("Report."), "Report copy");
 }

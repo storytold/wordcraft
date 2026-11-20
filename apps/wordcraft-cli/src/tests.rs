@@ -601,3 +601,17 @@ fn invisible_characters_are_escaped_and_json_lines_still_parse_back() {
     assert!(line.contains("\\ud800") || line.contains("\\udb40"), "{line}");
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), value);
 }
+
+#[test]
+fn cli_open_retains_native_file_identity_for_saves() {
+    let dir = script_dir("conflict");
+    let path = dir.join("input.docx");
+    wordcraft_engine::io::save_path(&path, &wordcraft_doc::Document::from_text("Original A")).unwrap();
+    let mut s = open(&path, None).unwrap();
+    s.run("document.setText", &json!({"text": "Local edit"})).unwrap();
+    let external = wordcraft_engine::io::save_bytes("external.docx", &wordcraft_doc::Document::from_text("External B")).unwrap();
+    std::fs::write(&path, &external).unwrap();
+    assert!(matches!(s.run("file.save", &json!({})), Err(wordcraft_engine::CmdError::FileConflict(_))));
+    assert!(s.dirty);
+    assert_eq!(std::fs::read(&path).unwrap(), external);
+}

@@ -653,3 +653,214 @@ fn removing_a_record_folder_waits_for_files_still_being_deleted() {
     assert_eq!(denied.map_err(|e| e.kind()), Err(io::ErrorKind::PermissionDenied));
     assert_eq!(calls, 1);
 }
+
+#[test]
+fn invalid_save_format_retains_recovery_and_password_state() {
+    let t = Temp::new();
+    let original = t.0.join("invalid-format.docx");
+    let root = t.0.join("profile");
+    crate::io::save_path(&original, &Document::from_text("Synthetic original")).unwrap();
+    let original_bytes = fs::read(&original).unwrap();
+    let mut s = session(&root);
+    s.run("file.open", &json!({"path": original})).unwrap();
+    s.run("text.insert", &json!({"text": "Unsaved edit. "})).unwrap();
+    save_now(&mut s);
+    let id = records(&root).remove(0);
+    let snapshot = Store::files(&root.join(&id)).unwrap()[0].clone();
+    let recoverable = fs::read(&snapshot).unwrap();
+    let core = s.doc.core.clone();
+    let text = s.doc.plain_text(StoryRef::Body);
+    let error = s.run("file.save", &json!({"path": original, "password": "synthetic-password", "format": "wordml2003"})).unwrap_err();
+    assert!(error.to_string().contains("format"));
+    assert!(s.password.is_none() && s.dirty);
+    assert_eq!(s.doc.core, core);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), text);
+    assert_eq!(fs::read(original).unwrap(), original_bytes);
+    assert_eq!(fs::read(snapshot).unwrap(), recoverable);
+    assert!(records(&root).contains(&id));
+}
+
+// Ordered #586 + #813 integration: a refused save must not erase recoverable edits.
+#[test]
+fn refused_password_save_retains_snapshot_and_external_version() {
+    let t = Temp::new();
+    let original = t.0.join("external-change.docx");
+    let root = t.0.join("profile");
+    crate::io::save_path(&original, &Document::from_text("Original synthetic note")).unwrap();
+    let mut s = session(&root);
+    s.run("file.open", &json!({"path": original})).unwrap();
+    s.run("text.insert", &json!({"text": "Unsaved local edit. "})).unwrap();
+    save_now(&mut s);
+    let id = records(&root).remove(0);
+    let snapshot = Store::files(&root.join(&id)).unwrap()[0].clone();
+    let recoverable = fs::read(&snapshot).unwrap();
+    crate::io::save_path(&original, &Document::from_text("Independent external writer")).unwrap();
+    let external = fs::read(&original).unwrap();
+    let core = s.doc.core.clone();
+    let text = s.doc.plain_text(StoryRef::Body);
+    assert!(s.run("file.save", &json!({"path": original, "password": "synthetic-password"})).is_err());
+    assert!(s.password.is_none() && s.dirty);
+    assert_eq!(s.doc.core, core);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), text);
+    assert_eq!(fs::read(&original).unwrap(), external);
+    assert_eq!(fs::read(&snapshot).unwrap(), recoverable);
+    assert!(records(&root).contains(&id));
+    let copy = t.0.join("protected-copy.docx");
+    s.run("file.saveAs", &json!({"path": copy, "password": "synthetic-password"})).unwrap();
+    settle(&mut s);
+    assert!(s.password.is_some());
+    assert!(records(&root).is_empty());
+    assert!(fs::read_dir(&root).unwrap().next().is_none());
+    assert_eq!(fs::read(original).unwrap(), external);
+    assert_eq!(crate::io::open_path_with(&copy, Some("synthetic-password")).unwrap().0.plain_text(StoryRef::Body), text);
+}
+
+#[cfg(unix)]
+#[test]
+fn password_save_to_a_write_only_copy_retains_plaintext_recovery_for_the_open_document() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Temp::new();
+    let target = scratch.0.join("copy.docx");
+    fs::write(&target, b"Unrelated destination").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o200)).unwrap();
+    if fs::File::open(&target).is_ok() {
+        return;
+    }
+    let root = scratch.0.join("profile");
+    let mut s = session(&root);
+    s.run("document.setText", &json!({"text": "Local draft"})).unwrap();
+    save_now(&mut s);
+    assert!(!records(&root).is_empty());
+    let core = s.doc.core.clone();
+
+    let result = s.run("file.saveAs", &json!({"path": target, "password": "synthetic-password"})).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(result["copyOnly"], true);
+    assert_eq!(result["encrypted"], true);
+    assert!(s.path.is_none() && s.password.is_none() && s.dirty);
+    assert_eq!(s.doc.core, core);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Local draft");
+    assert_eq!(records(&root).len(), 1);
+    assert!(s.recovery_error().is_none());
+    assert_eq!(crate::io::open_path_with(&target, Some("synthetic-password")).unwrap().0.plain_text(StoryRef::Body), "Local draft");
+}
+
+/// A writer arriving after the preliminary check must not consume durable local recovery.
+#[test]
+fn late_password_save_conflict_restores_recovery_before_returning() {
+    let t = Temp::new();
+    let original = t.0.join("late-external-change.docx");
+    let root = t.0.join("profile");
+    crate::io::save_path(&original, &Document::from_text("Original synthetic note")).unwrap();
+    let mut s = session(&root);
+    s.run("file.open", &json!({"path": original})).unwrap();
+    s.run("text.insert", &json!({"text": "Unsaved local edit. "})).unwrap();
+    save_now(&mut s);
+    assert!(!records(&root).is_empty());
+    let external = crate::io::save_bytes("external.docx", &Document::from_text("Late external writer")).unwrap();
+    let destination = original.clone();
+    let changed = external.clone();
+    crate::io::BEFORE_SAVE_VERSION_CHECK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || fs::write(destination, changed).unwrap()));
+    });
+    let text = s.doc.plain_text(StoryRef::Body);
+    let core = s.doc.core.clone();
+    let error = s.run("file.save", &json!({"path": original, "password": "synthetic-password"})).unwrap_err();
+    assert!(matches!(error, crate::CmdError::FileConflict(_)));
+    assert!(s.password.is_none() && s.dirty);
+    assert_eq!(s.doc.core, core);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), text);
+    assert_eq!(fs::read(original).unwrap(), external);
+    // No recovery tick, finish call or close action may be required after the refusal.
+    assert!(!records(&root).is_empty(), "the refusal returned without durable recovery");
+    let id = records(&root).remove(0);
+    drop(s);
+    let mut store = Store::new(root).unwrap();
+    for _ in 0..50 {
+        store.scan().unwrap();
+        if store.entries.contains_key(&id) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(load_retrying(&mut store, &id).document.plain_text(StoryRef::Body), text);
+}
+
+#[test]
+fn late_password_save_retries_transient_recovery_without_an_edit() {
+    let t = Temp::new();
+    let original = t.0.join("late-external-change.docx");
+    let root = t.0.join("profile");
+    crate::io::save_path(&original, &Document::from_text("Original synthetic note")).unwrap();
+    let mut s = session(&root);
+    s.run("file.open", &json!({"path": original})).unwrap();
+    s.run("text.insert", &json!({"text": "Unsaved local edit. "})).unwrap();
+    save_now(&mut s);
+    let external = crate::io::save_bytes("external.docx", &Document::from_text("Late external writer")).unwrap();
+    let destination = original.clone();
+    let changed = external.clone();
+    let blocked = root.clone();
+    crate::io::BEFORE_SAVE_VERSION_CHECK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            fs::write(destination, changed).unwrap();
+            fs::rename(&blocked, blocked.with_extension("retained")).unwrap();
+            fs::write(blocked, b"synthetic blocked profile path").unwrap();
+        }));
+    });
+    let text = s.doc.plain_text(StoryRef::Body);
+    let error = s.run("file.save", &json!({"path": original, "password": "synthetic-password"})).unwrap_err();
+    assert!(matches!(error, crate::CmdError::FileConflict(_)), "{error}");
+    assert!(s.recovery_error().unwrap().contains("recovery copy could not be restored"));
+    assert!(s.password.is_none() && s.dirty);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), text);
+    assert_eq!(fs::read(&original).unwrap(), external);
+    // Restore the profile without editing the document: idle recovery must retry this revision.
+    fs::remove_file(&root).unwrap();
+    fs::rename(root.with_extension("retained"), &root).unwrap();
+    assert!(s.recovery_wait().is_some(), "the transient forced-write failure disabled idle recovery");
+    let revision = s.rev();
+    let due = s.recovery_slot.due;
+    let mut recovery = s.recovery.take().unwrap();
+    recovery.tick(s.recovery_docs(), due - Duration::from_millis(1)).unwrap();
+    assert!(!recovery.busy, "retry must wait for its interval");
+    recovery.tick(s.recovery_docs(), due).unwrap();
+    s.recovery = Some(recovery);
+    settle(&mut s);
+    assert_eq!(s.rev(), revision);
+    assert!(s.recovery_error().is_none());
+    assert_eq!(records(&root).len(), 1, "the unchanged dirty document still has no recovery copy");
+    let id = records(&root).remove(0);
+    drop(s);
+    let mut store = Store::new(root).unwrap();
+    for _ in 0..50 {
+        store.scan().unwrap();
+        if store.entries.contains_key(&id) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(load_retrying(&mut store, &id).document.plain_text(StoryRef::Body), text);
+    assert_eq!(fs::read(original).unwrap(), external);
+}
+
+/// The forced-write path keeps the same permanent-failure barrier as regular polling.
+#[test]
+fn forced_permanent_recovery_failure_waits_for_an_edit() {
+    let t = Temp::new();
+    let mut s = session(&t.0);
+    s.run("document.setText", &json!({"text": "Synthetic draft"})).unwrap();
+    s.doc.last_section.page_w = f32::NAN;
+    assert!(s.restore_recovery_after_failed_password_save().is_err());
+    assert!(s.recovery_wait().is_none());
+    let mut recovery = s.recovery.take().unwrap();
+    recovery.tick(s.recovery_docs(), Instant::now() + INTERVAL + INTERVAL).unwrap();
+    assert!(!recovery.busy, "a permanent forced-write failure retried the unchanged snapshot");
+    s.doc.last_section.page_w = 612.0;
+    s.run("text.insert", &json!({"text": "!"})).unwrap();
+    recovery.tick(s.recovery_docs(), Instant::now() + INTERVAL + INTERVAL).unwrap();
+    assert!(recovery.busy, "an edit should make the snapshot eligible again");
+    s.recovery = Some(recovery);
+    settle(&mut s);
+    assert_eq!(records(&t.0).len(), 1);
+}

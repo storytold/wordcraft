@@ -43,6 +43,7 @@ impl WordApp {
             restrict,
             spelling_review,
             status_msg,
+            save_as_error,
             previews,
             change_picture_target,
             recipient_list_pending,
@@ -153,6 +154,10 @@ impl WordApp {
             ime_origin: false,
             read_aloud_error: None,
             autosave_path: None,
+            save_conflict: None,
+            pending_autosave_conflict: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_opens: Default::default(),
             saves_in_flight: Vec::new(),
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             recovery_seen: false,
@@ -168,6 +173,7 @@ impl WordApp {
             restrict,
             spelling_review,
             status_msg,
+            save_as_error,
             previews,
             change_picture_target,
             recipient_list_pending,
@@ -244,6 +250,8 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.retain_native_opens();
         // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
         // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
         ctx.add_plugin(super::a11y::FocusGuard);

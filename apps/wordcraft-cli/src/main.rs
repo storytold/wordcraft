@@ -104,13 +104,8 @@ fn missing_argument() -> Failure {
 fn open(path: &Path, password: Option<&str>) -> Result<Session, Failure> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
-    let region = system_region();
-    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region).map_err(engine_error)?;
-    let mut s = session(doc);
-    s.path = Some(path.into());
-    if encrypted {
-        s.password = password.map(wordcraft_engine::io::Password::new);
-    }
+    let mut s = session(wordcraft_doc::Document::new());
+    s.open_path(path, password).map_err(engine_error)?;
     Ok(s)
 }
 

@@ -1032,9 +1032,10 @@ mod tests {
     #[test]
     fn exporting_word_xml_to_a_dotfile_name_writes_the_file() {
         let dir = scratch("export_xml_dotfile");
-        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-        a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
         for format in ["xml", crate::print_page::EXPORT_WORD_2003] {
+            // Save As adopts its output. Each format starts with a fresh document.
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+            a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
             let typed = dir.join(".docx").to_string_lossy().into_owned();
             a.finish_pick(AfterPick::Export { ext: format.into() }, Some(typed)).unwrap();
             let written = dir.join(".docx.xml");

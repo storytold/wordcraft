@@ -166,6 +166,8 @@ impl Session {
         let replaces_document = matches!(id, "review.compare" | "review.combine" | "mailings.envelopes" | "mailings.labels")
             || (id == "mailings.finish" && crate::p::str(params, "path").is_none());
         let versions_before = replaces_document.then(|| self.versions.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let file_version_before = replaces_document.then(|| self.file_version.clone());
         let identity_before = replaces_document.then(|| {
             (
                 self.path.clone(),
@@ -265,6 +267,10 @@ impl Session {
                     self.versions = versions;
                 }
                 if let Some((path, file_name, document_id, password, dirty, bib_style, merge_preview)) = identity_before {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.file_version = file_version_before.flatten();
+                    }
                     self.path = path;
                     self.file_name = file_name;
                     self.document_id = document_id;
