@@ -1782,6 +1782,18 @@ fn backspace_or_delete_in_a_lead_in_keeps_the_lead_in() {
     typ(&mut s, ": more");
     assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
     assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
+    // Delete Previous Word and Delete Previous Sentence.
+    for id in ["text.deleteWordBack", "text.deleteSentenceBack"] {
+        let mut s = with_list_lead_in();
+        typ(&mut s, "* Label: explanation");
+        format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+        typ(&mut s, "\nNext Wrong");
+        run(&mut s, id, json!({}));
+        typ(&mut s, "Item: more");
+        let text = s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).unwrap_or_default();
+        let at = text.find("Item").unwrap_or_default();
+        assert!(char_at(&s, 1, at).bold == Some(true) && char_at(&s, 1, text.len() - 1).bold.is_none(), "{id}: {text:?}");
+    }
 }
 
 #[test]

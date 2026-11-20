@@ -224,9 +224,13 @@ pub(super) fn delete_word_back(s: &mut Session, v: &Value) -> CmdResult {
         return backspace(s, v);
     }
     let a = Pos { off: para.word_start(f.off), ..f.clone() };
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     s.sel = Selection { anchor: a, focus: f };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     sel_result(s)
 }
 
@@ -240,9 +244,13 @@ pub(super) fn delete_word_fwd(s: &mut Session, v: &Value) -> CmdResult {
         return delete(s, v);
     }
     let b = Pos { off: para.word_end(f.off), ..f.clone() };
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     s.sel = Selection { anchor: f, focus: b };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     sel_result(s)
 }
 
@@ -257,8 +265,12 @@ pub(super) fn delete_sentence_back(s: &mut Session, v: &Value) -> CmdResult {
     f.off = para.clamp(f.off);
     let Some((previous, _)) = para.text.get(..f.off).and_then(|text| text.char_indices().next_back()) else { return sel_result(s) };
     let start = para.sentence_at(previous).0;
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     s.sel = Selection { anchor: Pos { off: start, ..f.clone() }, focus: f };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     sel_result(s)
 }
