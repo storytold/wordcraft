@@ -275,7 +275,7 @@ pub(crate) mod testing {
             let Some(list) = self.0.read(&[URI_LIST], u64::MAX)? else { return Ok(None) };
             let files: Vec<PathBuf> = String::from_utf8_lossy(&list.data)
                 .lines()
-                .filter_map(|line| line.trim().strip_prefix("file://").filter(|path| path.starts_with('/')).map(PathBuf::from))
+                .filter_map(|line| line.trim().strip_prefix("file://").map(PathBuf::from).filter(|path| path.is_absolute()))
                 .take(limit.saturating_add(1))
                 .collect();
             Ok((!files.is_empty()).then_some(files))
