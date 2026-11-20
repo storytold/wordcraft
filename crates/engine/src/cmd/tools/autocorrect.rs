@@ -319,8 +319,18 @@ pub fn lenient_autocorrect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Aut
     Ok(serde_json::from_value::<AutoCorrectPrefs>(v).map(AutoCorrectPrefs::cleaned).unwrap_or_default())
 }
 
-/// `tools.autocorrect`: change AutoCorrect Options and report them.
+/// `tools.autocorrect`: change AutoCorrect Options and report them. A request that is refused
+/// leaves the options, and a list item's lead-in being typed, as they were.
 pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
+    let before = (s.prefs.autocorrect.clone(), s.lead_in.clone(), s.pending.clone());
+    let result = change_autocorrect_options(s, v);
+    if result.is_err() {
+        (s.prefs.autocorrect, s.lead_in, s.pending) = before;
+    }
+    result
+}
+
+fn change_autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
     let ac = &mut s.prefs.autocorrect;
     let switches = [
         ("enabled", &mut ac.enabled as &mut bool),

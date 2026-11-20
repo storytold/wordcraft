@@ -1920,6 +1920,21 @@ fn the_list_item_option_is_reported_and_set_through_autocorrect_options() {
 }
 
 #[test]
+fn a_refused_autocorrect_request_leaves_the_options_and_the_lead_in_as_they_were() {
+    // The switches are valid but the entry is not: nothing changes, and the lead-in goes on.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNe");
+    let bad = json!({"capDays": false, "formatListItemStart": false, "add": {}});
+    assert!(matches!(s.run("tools.autocorrect", &bad), Err(crate::CmdError::Params(_))));
+    assert!(s.prefs.autocorrect.format_list_item_start && s.prefs.autocorrect.cap_days);
+    typ(&mut s, "xt: more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
+}
+
+#[test]
 fn enter_in_an_editable_region_after_a_protected_short_line_breaks_the_paragraph() {
     // Read only, with an editable region from the end of "Title" to the start of "End.": Enter
     // twice in the region breaks the paragraph and leaves the protected line Normal text, and a
