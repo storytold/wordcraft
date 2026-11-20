@@ -8,11 +8,12 @@
 //! - Linux and the BSDs: the desktop's antialiasing, hinting and subpixel order, as GNOME
 //!   (`org.gnome.desktop.interface`) or KDE Plasma (`kdeglobals`) keeps them.
 //!
-//! This module turns those values into one [`ScreenText`] and keeps the latest one for the page
-//! rasters to read. It never asks the system itself: the app binary does, off the UI thread, and
-//! hands the answer to [`set_system`]. Until it does (and always in tests and headless
-//! screenshots) [`ScreenText::PLATFORM`] stands, so nothing here depends on the machine's
-//! settings unless the running app asked for them.
+//! This module turns those values into one [`ScreenText`] and keeps the latest one for the page rasters to read.
+//! It never asks the system itself, and for now nothing does: the app reads the system through craft-libs'
+//! `platform::appearance`, which reports theme, contrast and reduced motion and no text settings yet. Until a
+//! reader there hands an answer to [`set_system`] (and always in tests and headless screenshots)
+//! [`ScreenText::PLATFORM`] stands, so pages are drawn each platform's fixed way. The constructors below are what
+//! that reader's values go through.
 
 use std::sync::Mutex;
 
@@ -154,8 +155,8 @@ impl ScreenText {
 /// What the system said last; `None` until the app has asked, and when the system said nothing.
 static SYSTEM: Mutex<Option<ScreenText>> = Mutex::new(None);
 
-/// How page text is drawn now: the system's settings once the app has asked for them
-/// ([`set_system`]), else [`ScreenText::PLATFORM`].
+/// How page text is drawn now: the system's settings once they are known ([`set_system`]), else
+/// [`ScreenText::PLATFORM`].
 pub fn current() -> ScreenText {
     SYSTEM.lock().unwrap_or_else(std::sync::PoisonError::into_inner).unwrap_or(ScreenText::PLATFORM)
 }

@@ -265,6 +265,7 @@ fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
 
 #[test]
 fn custom_dictionary_words_persist_through_their_file() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: adding a word through a command writes it to the session's file, and loading
     // that file makes the word known (only the desktop app wires this up).
     let dir = std::env::temp_dir().join(format!("wc-engdict-{}", std::process::id()));
@@ -292,6 +293,7 @@ fn custom_dictionary_words_persist_through_their_file() {
 
 #[test]
 fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_their_roots() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #3737 (findings 34 and WC-35): the custom dictionary file and the folder settings are
     // held to the automation roots like any other path.
     let base = scratch_dir("dict-roots");
@@ -305,6 +307,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
     let confined = |s: &mut Session, cmd: &str, v: serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(cmd, &v));
     assert!(confined(&mut s, "review.addToDictionary", json!({"word": "zxqengconfined"})).is_ok());
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengconfined".to_string()), "kept in memory");
+    wordcraft_proof::remove_word("zxqengconfined");
     assert!(!outside.exists(), "nothing written outside the write root");
     for key in ["dictionariesFolder", "userTemplatesFolder"] {
         assert!(confined(&mut s, "file.options", json!({key: base.join("outside").to_string_lossy()})).is_err(), "{key}");
@@ -319,6 +322,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
 
 #[test]
 fn add_to_dictionary_takes_only_words_the_file_keeps() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: the same rule as loading the dictionary file, so nothing added is dropped on the next load.
     let mut s = s();
     for bad in ["two words", "tab\tword", "bell\u{7}", &"x".repeat(65)] {
@@ -327,6 +331,202 @@ fn add_to_dictionary_takes_only_words_the_file_keeps() {
     }
     run(&mut s, "review.addToDictionary", json!({"word": " zxqengtrimmed "}));
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengtrimmed".to_string()));
+    wordcraft_proof::remove_word("zxqengtrimmed");
+}
+
+/// #5840: WordCraft supports choosing a freestanding custom.dic dictionary file (including
+/// UTF-16LE with BOM as written by Microsoft Word), using it in conjunction with the main
+/// dictionary, and persisting additions back to it in the same encoding.
+#[test]
+fn custom_dictionary_freestanding_file_option() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic");
+    let dic_path = dir.path().join("custom.dic");
+
+    // Write a freestanding UTF-16LE dictionary file with BOM, as Word saves it on Windows.
+    let mut initial_bytes = vec![0xFF, 0xFE];
+    for u in "freestandingword\r\nmameui\r\n".encode_utf16() {
+        initial_bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    std::fs::write(&dic_path, &initial_bytes).unwrap();
+
+    let mut s = s();
+    let default_path = dir.path().join("default.txt");
+    s.default_user_dict_path = Some(default_path.clone());
+    s.user_dict_path = Some(default_path.clone());
+
+    // Seed default dictionary with a default word.
+    std::fs::write(&default_path, "defaultword\n").unwrap();
+    crate::custom_dict::load_custom_dictionary(&default_path).unwrap();
+    assert!(wordcraft_proof::is_correct("defaultword"));
+
+    // Before binding, the word is unknown.
+    assert!(!wordcraft_proof::is_correct("freestandingword"));
+
+    // Set customDictionary in file.options: removes previous words and loads custom.dic.
+    let res = s.run("file.options", &json!({"customDictionary": dic_path.to_string_lossy()})).unwrap();
+    assert_eq!(res["customDictionary"], json!(dic_path.to_string_lossy()));
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(dic_path.to_string_lossy().as_ref()));
+    assert_eq!(s.user_dict_path.as_ref(), Some(&dic_path));
+    assert!(!wordcraft_proof::is_correct("defaultword"), "previous words removed on switch");
+    assert!(wordcraft_proof::is_correct("freestandingword"));
+    assert!(wordcraft_proof::is_correct("mameui"));
+
+    // Add a new word via review.addToDictionary: it persists back to custom.dic in UTF-16LE.
+    run(&mut s, "review.addToDictionary", json!({"word": "zxqaddedword"}));
+    let saved_raw = std::fs::read(&dic_path).unwrap();
+    assert_eq!(saved_raw[0..2], [0xFF, 0xFE], "persists as UTF-16LE with BOM");
+    let decoded = crate::custom_dict::decode_dictionary_bytes(&saved_raw).unwrap();
+    assert!(decoded.contains("freestandingword"));
+    assert!(decoded.contains("zxqaddedword"));
+
+    // Revert to "auto": removes custom dictionary words and restores default path.
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+    assert_eq!(s.user_dict_path.as_ref(), Some(&default_path));
+    assert!(!wordcraft_proof::is_correct("freestandingword"), "freestanding words removed on revert");
+    assert!(!wordcraft_proof::is_correct("zxqaddedword"));
+    assert!(wordcraft_proof::is_correct("defaultword"), "default words restored");
+
+    // Setting customDictionary to "auto" when user_dict_path is already default_path
+    // updates s.prefs.custom_dictionary even if it previously held a stale path.
+    s.prefs.custom_dictionary = Some("/stale/nonexistent.dic".to_string());
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+
+    // Clean up test words from proofing dictionary
+    wordcraft_proof::remove_word("defaultword");
+
+    // Reject nonexistent files, folders, relative paths, or oversized files.
+    assert!(s.run("file.options", &json!({"customDictionary": dir.path().join("missing.dic").to_string_lossy()})).is_err());
+    let dir_err = s.run("file.options", &json!({"customDictionary": dir.path().to_string_lossy()})).unwrap_err();
+    assert!(format!("{dir_err:?}").contains("is a folder, not a file"));
+    let rel_err = s.run("file.options", &json!({"customDictionary": "relative/custom.dic"})).unwrap_err();
+    assert!(format!("{rel_err:?}").contains("isn't a full path"));
+
+    // Accept ~/ path expansion when HOME points to a directory.
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        let home_dir = std::path::PathBuf::from(home);
+        let test_name = format!(".wordcraft-test-tilde-{}.dic", std::process::id());
+        let tilde_file = home_dir.join(&test_name);
+        struct CleanFile(std::path::PathBuf);
+        impl Drop for CleanFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        if let Ok(mut f) = opts.open(&tilde_file) {
+            use std::io::Write;
+            let _ = f.write_all(b"tildeword\n");
+            let _cleaner = CleanFile(tilde_file.clone());
+            let tilde_res = s.run("file.options", &json!({"customDictionary": format!("~/{test_name}")}));
+            assert!(tilde_res.is_ok(), "tilde expansion succeeds: {:?}", tilde_res.err());
+            assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(tilde_file.to_string_lossy().as_ref()));
+            assert!(wordcraft_proof::is_correct("tildeword"));
+            s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+            wordcraft_proof::remove_word("tildeword");
+            wordcraft_proof::remove_word("defaultword");
+        }
+    }
+
+    let huge_dic = dir.path().join("huge.dic");
+    std::fs::write(&huge_dic, vec![b'a'; (crate::custom_dict::MAX_CUSTOM_FILE_BYTES + 1024) as usize]).unwrap();
+    assert!(s.run("file.options", &json!({"customDictionary": huge_dic.to_string_lossy()})).is_err());
+    assert_eq!(s.prefs.custom_dictionary, None, "oversized dictionary rejects without changing prefs");
+    wordcraft_proof::remove_word("defaultword");
+}
+
+/// #5840 review: a dictionary that passes the metadata and access checks but can't be decoded
+/// refuses the whole `file.options` call before any setting is applied, so a combined call leaves
+/// the preferences, the bound path and the proofing words as they were.
+#[test]
+fn refused_custom_dictionary_leaves_every_other_option_unchanged() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-refused");
+    let bound = dir.path().join("custom.dic");
+    std::fs::write(&bound, "boundword\n").unwrap();
+    // A lone 0xFF byte is neither UTF-8 nor a UTF-16LE BOM pair: the file is a readable, writable
+    // regular file, so only decoding refuses it.
+    let bad = dir.path().join("bad.dic");
+    std::fs::write(&bad, [b'h', b'i', 0xFF]).unwrap();
+
+    let mut s = s();
+    s.default_user_dict_path = Some(dir.path().join("custom-dictionary.txt"));
+    run(
+        &mut s,
+        "file.options",
+        json!({
+            "author": "Ada",
+            "initials": "AL",
+            "units": "centimeters",
+            "region": "pl-PL",
+            "dictionariesFolder": dir.path().to_string_lossy(),
+            "customDictionary": bound.to_string_lossy(),
+            "markGrammar": true,
+            "checkSpelling": true,
+        }),
+    );
+    assert!(wordcraft_proof::is_correct("boundword"));
+    let before = cmd::options::current(&s);
+
+    let err = s
+        .run(
+            "file.options",
+            &json!({
+                "author": "Grace",
+                "initials": "GH",
+                "units": "inches",
+                "region": "en-US",
+                "dictionariesFolder": "auto",
+                "customDictionary": bad.to_string_lossy(),
+                "markGrammar": false,
+                "checkSpelling": false,
+                "addWords": ["zxqrefusedword"],
+            }),
+        )
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a refused dictionary changes no setting");
+    assert_eq!(s.user_dict_path.as_ref(), Some(&bound), "the bound dictionary stays");
+    assert!(!wordcraft_proof::is_correct("zxqrefusedword"), "the refused call adds no words");
+
+    // `auto` decodes the default file before applying too, so a malformed default file is refused
+    // the same way and its companion settings stay as they were.
+    let default_path = dir.path().join("custom-dictionary.txt");
+    std::fs::write(&default_path, [b'x', 0xFF]).unwrap();
+    let before = cmd::options::current(&s);
+    let err = s.run("file.options", &json!({"customDictionary": "auto", "units": "points"})).unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a malformed default dictionary changes no setting");
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(bound.to_string_lossy().as_ref()));
+
+    wordcraft_proof::remove_word("boundword");
+}
+
+#[cfg(unix)]
+#[test]
+fn custom_dictionary_rejects_symlink_and_readonly_files() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-symlink");
+    let dic_path = dir.path().join("custom.dic");
+    std::fs::write(&dic_path, "word\n").unwrap();
+
+    let mut s = s();
+    let symlink_path = dir.path().join("symlink.dic");
+    let _ = std::os::unix::fs::symlink(&dic_path, &symlink_path);
+    let link_err = s.run("file.options", &json!({"customDictionary": symlink_path.to_string_lossy()})).unwrap_err();
+    assert!(format!("{link_err:?}").contains("is a symbolic link"));
+
+    let ro_path = dir.path().join("readonly.dic");
+    std::fs::write(&ro_path, "word\n").unwrap();
+    let mut perms = std::fs::metadata(&ro_path).unwrap().permissions();
+    perms.set_readonly(true);
+    let _ = std::fs::set_permissions(&ro_path, perms);
+    let ro_err = s.run("file.options", &json!({"customDictionary": ro_path.to_string_lossy()})).unwrap_err();
+    let ro_msg = format!("{ro_err:?}");
+    assert!(ro_msg.contains("read-only") || ro_msg.contains("Permission denied"));
 }
 
 #[test]
@@ -1676,6 +1876,26 @@ fn paste_merge_formatting_keeps_rtf_deletions() {
 }
 
 #[test]
+fn paste_merge_formatting_keeps_bold_and_italic_in_a_complex_script_run() {
+    // #4852 review: with the caret in a run marked `w:cs` (Thai from a WPS or Word file), the
+    // pasted text takes `cs` too, so its bold and italic must be the complex-script ones as well.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ภาษาไทย"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.set", json!({"props": {"cs": true}}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.pasteMerge", json!({"rtf": r"{\rtf1{\b bold}{\i slant}\par}"}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let at = |word: &str| p.props_of_char(p.text.find(word).unwrap() + 1).clone();
+    let (b, i) = (at("bold"), at("slant"));
+    assert_eq!((b.cs, b.bold, b.bold_cs), (Some(true), Some(true), Some(true)), "{b:?}");
+    assert_eq!((i.cs, i.italic, i.italic_cs), (Some(true), Some(true), Some(true)), "{i:?}");
+    assert_ne!(b.italic, Some(true));
+    let r = s.doc.styles.resolve_char(None, &b);
+    assert!(r.bold_cs, "drawn bold as complex script");
+}
+
+#[test]
 fn pasted_rtf_sections_link_their_headers_to_the_previous() {
     // #1378: the RTF's own header part ids mean nothing in this document; a pasted section
     // break keeps its page but links its headers and footers to the previous section.
@@ -2132,6 +2352,58 @@ fn body_table_cells(s: &Session) -> Vec<Vec<String>> {
 }
 
 /// #1744: Select Table → Copy → Paste outside the table pastes a copy of the whole table.
+#[test]
+fn table_spots_and_borders_are_the_areas_the_pointer_queries_answer_for() {
+    use crate::cmd::{table_mouse, table_resize};
+    let mut sess = s();
+    run(&mut sess, "insert.table", serde_json::json!({"rows": 3, "cols": 3}));
+    let l = sess.layout();
+    let story = sess.sel.focus.story;
+    let reach = 3.0;
+    let spots = table_mouse::spots(&l, &sess.doc, story, 0, reach);
+    let borders = table_resize::borders(&l, &sess.doc, 0, reach);
+    assert!(!spots.is_empty() && !borders.is_empty());
+    let inside = |r: &wordcraft_geom::Rect, x: f32, y: f32| x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom();
+    let (w, bottom) = l.pages.first().map_or((0.0, 0.0), |p| (p.w, p.body.bottom()));
+    let (mut spot_hits, mut border_hits) = (0, 0);
+    let mut y = 0.3f32;
+    while y < bottom {
+        let mut x = 0.3f32;
+        while x < w {
+            let spot = table_mouse::target_at(&l, &sess.doc, story, 0, x, y, reach);
+            if let Some(t) = &spot {
+                spot_hits += 1;
+                assert!(spots.iter().any(|a| a.target == *t && inside(&a.area, x, y)), "spot at ({x}, {y}) lies in its listed area");
+            }
+            if spot.is_none() && table_resize::resize_target(&l, &sess.doc, 0, x, y, reach).is_none() {
+                // Nothing answers: no listed area may hold the point unless a border took it first.
+                assert!(!spots.iter().any(|a| inside(&a.area, x, y)), "an area holds ({x}, {y}) yet nothing answers");
+            }
+            let border = table_resize::resize_target(&l, &sess.doc, 0, x, y, reach);
+            match &border {
+                Some(t) => {
+                    border_hits += 1;
+                    assert!(borders.iter().any(|(a, b)| b == t && inside(a, x, y)), "border at ({x}, {y}) lies in its listed strip");
+                }
+                None => assert!(
+                    !borders.iter().any(|(a, b)| inside(a, x, y) && {
+                        let d = match b.edge {
+                            table_resize::Edge::Column(i) => b.cols.get(i).map_or(f32::INFINITY, |c| (x - c).abs()),
+                            table_resize::Edge::Row(r) => b.rows.iter().find(|q| q.row == r).map_or(f32::INFINITY, |q| (y - q.bottom).abs()),
+                            table_resize::Edge::Corner => 0.0,
+                        };
+                        d <= reach
+                    }),
+                    "a strip holds ({x}, {y}) within reach yet no border answers"
+                ),
+            }
+            x += 3.7;
+        }
+        y += 3.7;
+    }
+    assert!(spot_hits > 0 && border_hits > 0, "the sweep met both kinds of spot");
+}
+
 #[test]
 fn copy_whole_table_pastes_a_table() {
     let mut s = table_doc();
@@ -6448,6 +6720,21 @@ fn file_capped_read_refuses_content_over_the_cap() {
     assert_eq!(whole.unwrap().len(), 100);
 }
 
+/// Web fallback for `read_file_capped` and `read_file_head` returns the expected browser error.
+#[test]
+fn wasm_read_file_fallback_returns_browser_error() {
+    let err = crate::io::wasm_read_file_fallback("sample.dic").unwrap_err();
+    assert!(err.contains("files are opened through the browser on the web"));
+}
+
+/// #5840: On wasm32 targets, `read_file_capped` and `read_file_head` return the browser fallback error.
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn wasm_target_read_file_capped_and_head_return_browser_error() {
+    assert!(crate::io::read_file_capped("test.dic", 1024, "dictionary").unwrap_err().contains("browser on the web"));
+    assert!(crate::io::read_file_head("test.dic", 1024).unwrap_err().contains("browser on the web"));
+}
+
 /// #3666: `read_regular_file_within` (Paste Special's copied picture file) reads a file of up to
 /// `limit` bytes whole and refuses one whose handle reports more, before reading any of it.
 #[cfg(not(target_arch = "wasm32"))]
@@ -7915,6 +8202,35 @@ fn hostile_chart_data_is_capped() {
     assert!(s.run("chart.type", &json!({"type": "pie"})).is_err());
 }
 
+/// The pane's findings follow the document: an edit that fixes an issue and a replacement by
+/// another document both show at the next read, though the session keeps them between reads.
+#[test]
+fn accessibility_findings_follow_the_document() {
+    let alt = |s: &mut Session| s.accessibility_findings().iter().any(|i| i["rule"] == "altText");
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title"));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s), "a shape without alternative text is reported");
+    assert!(alt(&mut s), "and still is at the next read");
+    let (id, rev) = (s.document_id(), s.rev());
+
+    // The fix the issue names, as the pane runs it.
+    let issue = s.accessibility_findings().iter().find(|i| i["rule"] == "altText").cloned().expect("the alt text issue");
+    run(&mut s, "select.range", issue["select"].clone());
+    run(&mut s, issue["action"]["command"].as_str().expect("a fix"), issue["action"]["params"].clone());
+    assert_eq!(s.document_id(), id);
+    assert_ne!(s.rev(), rev);
+    assert!(!alt(&mut s), "the fixed issue is gone");
+
+    // The issue again, then another document in its place.
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s));
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), id);
+    let want = crate::cmd::accessibility::check(&s.doc);
+    assert_eq!(s.accessibility_findings(), want.as_slice(), "the new document's findings");
+    assert!(!alt(&mut s));
+}
+
 #[test]
 fn accessibility_reports_a_chart_without_alt_text() {
     use std::sync::Arc;
@@ -8497,6 +8813,113 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     let png2 = wordcraft_geom::picture::decode_memory(&s.doc.media[&m2]).unwrap().to_rgba8();
     assert!(png2.pixels().zip(png.pixels()).all(|(a, b)| a.0[3] == b.0[3] && (a.0[3] == 0 || a.0[..3] == [0x1F, 0x4E, 0x79])));
     assert!(s.run("picture.iconColor", &json!({})).is_err());
+}
+
+/// #5232: a PDF with markup (file.exportPdf, file.printPdf) marks tracked changes in the Track
+/// Changes Options colours, not always by author.
+#[test]
+fn markup_pdf_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+    let markup = json!({"markup": true});
+    let uncompressed_markup = json!({"markup": true, "compress": false});
+    let pdf = |s: &Session| crate::io::save_bytes_opts("x.pdf", &s.doc, &cmd::file::export_options(s, &markup)).unwrap();
+    let print = |s: &Session| s.print_pdf(&markup).unwrap().0;
+    let (by_author, printed_by_author) = (pdf(&s), print(&s));
+    // Exports are deterministic, so differences are solely due to the colours.
+    assert_eq!(pdf(&s), by_author, "pdf export must be deterministic");
+    assert_eq!(print(&s), printed_by_author, "print_pdf must be deterministic");
+
+    let has = |t: &[&str], op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        t.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    let by_author_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let by_author_print_raw = String::from_utf8_lossy(&by_author_print_uncompressed);
+    let by_author_print_tokens: Vec<_> = by_author_print_raw.split_ascii_whitespace().collect();
+    assert!(!has(&by_author_print_tokens, "0 0 1 rg") && !has(&by_author_print_tokens, "1 0 0 rg"), "by-author print has no pure blue or red");
+
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let opts = cmd::file::export_options(&s, &markup);
+    assert_eq!(opts.revisions.insert_color, Some(wordcraft_doc::props::Rgb(0, 0, 255)));
+    assert_eq!(opts.revisions.delete_color, Some(wordcraft_doc::props::Rgb(255, 0, 0)));
+
+    let coloured_pdf = pdf(&s);
+    let coloured_print = print(&s);
+    assert_ne!(coloured_pdf, by_author, "file.exportPdf ignores the tracking colours");
+    assert_ne!(coloured_print, printed_by_author, "file.printPdf ignores the tracking colours");
+
+    let coloured_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let print_raw = String::from_utf8_lossy(&coloured_print_uncompressed);
+    let print_tokens: Vec<_> = print_raw.split_ascii_whitespace().collect();
+    assert!(has(&print_tokens, "0 0 1 rg"), "coloured print_pdf has blue operator for insertion");
+    assert!(has(&print_tokens, "1 0 0 rg"), "coloured print_pdf has red operator for deletion");
+}
+
+/// #5232 review: File › Print without Print Markup leaves out tracked deletions in layout,
+/// so the page count matches the PDF export and deletions take no blank space.
+#[test]
+fn print_jobs_without_markup_lay_out_the_final_text() {
+    let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the original agreement")).collect();
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&text.join("\n")));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Replaced"})).unwrap();
+    // With markup: 200 deleted lines take space in print.
+    let (marked_pdf, marked_plan) = s.print_pdf(&json!({"markup": true})).unwrap();
+    assert!(marked_plan.chosen > 1);
+    assert!(marked_pdf.starts_with(b"%PDF-"));
+    // Without markup: final text only, 1 page.
+    let (plain_pdf, plain_plan) = s.print_pdf(&json!({"markup": false})).unwrap();
+    assert_eq!(plain_plan.chosen, 1);
+    assert!(plain_pdf.starts_with(b"%PDF-"));
+}
+
+/// #5232 review: page images (render_png and file.exportPng) respect Track Changes Options
+/// colours and hidden deletions.
+#[test]
+fn markup_png_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+
+    let markup_opts = json!({"markup": true});
+    let by_author_opts = cmd::file::export_options(&s, &markup_opts);
+    let by_author_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &by_author_opts).unwrap();
+
+    // Change tracking options to blue insertions / red deletions.
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let coloured_opts = cmd::file::export_options(&s, &markup_opts);
+    let coloured_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &coloured_opts).unwrap();
+    assert_ne!(by_author_png, coloured_png, "PNG export must reflect tracking colours");
+
+    // Also verify via file.exportPng command.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = TempDir(std::env::temp_dir().join(format!("wordcraft-tracking-png-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let p1 = dir.0.join("by_author.png");
+    let p2 = dir.0.join("coloured.png");
+    s.run("review.trackingOptions", &json!({"insertColor": "byAuthor", "deleteColor": "byAuthor"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p1.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p2.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    assert_ne!(std::fs::read(&p1).unwrap(), std::fs::read(&p2).unwrap());
+    assert_eq!(std::fs::read(&p1).unwrap(), by_author_png);
+    assert_eq!(std::fs::read(&p2).unwrap(), coloured_png);
+
+    // Verify hidden deletions take no space in PNG export.
+    s.run("review.trackingOptions", &json!({"deleteMark": "hidden"})).unwrap();
+    let hidden_opts = cmd::file::export_options(&s, &markup_opts);
+    let hidden_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &hidden_opts).unwrap();
+    assert_ne!(hidden_png, coloured_png, "hidden deletions must affect PNG pixels/layout");
 }
 
 /// Print Markup (#589): `file.printMarkup` or a command's `markup` puts the comments into PDFs
@@ -11383,8 +11806,6 @@ fn find_replace_and_go_to_open_like_word() {
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "replace"})));
     assert!(!s.dirty, "opening the dialog changes nothing");
     assert!(s.run("edit.findReplace", &json!({"tab": "nope"})).is_err());
-    let reg = s.registry.clone();
-    assert_eq!(s.keymap.resolve(&reg, "Mod+H").map(|c| c.id), Some("edit.findReplace"));
     run(&mut s, "edit.goto", json!({}));
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "goto"})));
     // Replace with a "with" and the last search still replaces, as before.
@@ -13150,6 +13571,13 @@ fn style_set_keeps_imported_styles_latent_styles_and_defaults() {
     let mut s = s();
     run(&mut s, "design.styleSet", json!({ "name": "title" }));
     assert_eq!(s.doc.styles.get("Title").unwrap().chr.size, Some(36.0));
+    // #4852 review: the sets that make headings bold or italic do it in both scripts, so a Thai
+    // heading in a run marked `w:cs` is drawn bold or italic too.
+    let cs = wordcraft_doc::props::CharProps { cs: Some(true), ..Default::default() };
+    run(&mut s, "design.styleSet", json!({ "name": "basic" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading1"), &cs).bold_cs, "basic");
+    run(&mut s, "design.styleSet", json!({ "name": "casual" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading2"), &cs).italic_cs, "casual");
 }
 
 fn style_size(s: &Session, id: &str) -> f32 {

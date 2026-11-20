@@ -94,15 +94,6 @@ fn object_value_from_shared(
             };
             Ok(Target::Graphic { w, h, alt, float: convert(float)?, graphic })
         }
-        // This model has no picture frame shape: DrawingML's `frame` preset is read as a
-        // rectangle, without the frame's border width.
-        mut shape @ Source::Shape { kind: craft_wordmodel::para::ShapeKind::Frame, .. } => {
-            if let Source::Shape { kind, extra, .. } = &mut shape {
-                *kind = craft_wordmodel::para::ShapeKind::Rectangle;
-                extra.corner = None;
-            }
-            convert(shape)
-        }
         Source::Group { w, h, float, ch_w, ch_h, children, canvas } => Ok(Target::Group {
             w,
             h,
@@ -478,9 +469,9 @@ mod tests {
             .collect()
     }
 
-    /// A picture frame shape opens as a rectangle instead of failing the whole document.
+    /// A picture frame shape opens as a frame and keeps its own border width.
     #[test]
-    fn a_frame_shape_reads_as_a_rectangle() {
+    fn a_frame_shape_keeps_its_kind_and_border_width() {
         let shape = |kind| craft_wordmodel::para::InlineObject::Shape {
             kind,
             w: 40.0,
@@ -497,7 +488,7 @@ mod tests {
         let doc = from_shared_model(doc_with(vec![shape(craft_wordmodel::para::ShapeKind::Frame)])).expect("from_shared_model");
         let found = objects(&doc);
         let [wordcraft_doc::para::InlineObject::Shape { kind, w, extra, .. }] = found.as_slice() else { panic!("{found:?}") };
-        assert_eq!((*kind, *w, extra.corner), (wordcraft_doc::para::ShapeKind::Rectangle, 40.0, None));
+        assert_eq!((*kind, *w, extra.corner), (wordcraft_doc::para::ShapeKind::Frame, 40.0, Some(2604)));
     }
 
     /// A chart's series formatting and axis settings survive the trip through this model, so

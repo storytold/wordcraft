@@ -1,15 +1,16 @@
-use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, WordApp, json, pos2};
+use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Rect, WordApp, json};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
-/// Taken once per frame.
-pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hinted: bool) -> u64 {
+/// Taken once per pass.
+// lean: a hash of the view inputs stands in for the page-raster revision; the upgrade is an engine render-inputs
+// revision that the pages' pictures key on directly.
+pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]).
-    hinted.hash(&mut h);
-    // Nor a page drawn under the system's earlier text settings for one drawn under these.
-    crate::screen_text::current().key().hash(&mut h);
+    // A page drawn under the system's earlier text settings, or the user's earlier smoothing choice, must not pass
+    // for one drawn under these.
+    (crate::screen_text::current().key(), app.session.prefs.text_smoothing).hash(&mut h);
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
@@ -68,7 +69,7 @@ pub(crate) struct PageKeys {
 }
 
 impl PageKeys {
-    fn content(&mut self, layout: &std::sync::Arc<DocLayout>, i: usize) -> u64 {
+    pub(super) fn content(&mut self, layout: &std::sync::Arc<DocLayout>, i: usize) -> u64 {
         if !self.layout.as_ref().is_some_and(|l| std::sync::Arc::ptr_eq(l, layout)) {
             self.layout = Some(layout.clone());
             self.keys = vec![None; layout.pages.len()];
@@ -86,190 +87,18 @@ impl PageKeys {
     }
 }
 
-/// What page `i` shows, whatever its size: its content and the view (`view_key` with the
-/// hinting fixed). A raster that showed this may be stretched to stand in for the page.
-pub(super) fn page_shows(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
+/// What page `i` shows, whatever its size: its content and the view (`view_key`). The page's picture is versioned
+/// by it.
+pub(super) fn page_shows(keys: &mut PageKeys, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, app.canvas.page_keys.content(layout, i)).hash(&mut h);
+    (view, keys.content(layout, i)).hash(&mut h);
     h.finish()
-}
-
-/// The texture cache key of page `i`: its content, the view, and the raster scale.
-pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64, scale_px: f32) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, scale_px.to_bits(), app.canvas.page_keys.content(layout, i)).hash(&mut h);
-    h.finish()
-}
-
-pub(super) fn to_screen(origin: Pos2, page_rect: Rect, scale: f32, x: f32, y: f32) -> Pos2 {
-    pos2(origin.x + page_rect.min.x + x * scale, origin.y + page_rect.min.y + y * scale)
-}
-
-/// A page raster as an egui image. Both hold premultiplied RGBA8, so the pixels go across as they
-/// are: un-premultiplying them for egui to premultiply again gave the same image for two more
-/// passes over every pixel of the page, on each keystroke.
-pub(super) fn page_image(img: &wordcraft_render::Rendered) -> egui::ColorImage {
-    egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels)
-}
-
-/// Place a raster at a physical-pixel-aligned origin and its exact device-pixel size.
-pub(super) fn texel_aligned_rect(layout: Rect, texture_px: egui::Vec2, ppp: f32) -> Rect {
-    let snap = |v: f32| (v * ppp).round() / ppp;
-    Rect::from_min_size(pos2(snap(layout.min.x), snap(layout.min.y)), texture_px / ppp)
-}
-
-/// Tile indices intersecting the view, in a fixed grid of raster pixels. The grid follows the
-/// document, not the viewport, so scrolling never changes tile contents or their cache keys.
-pub(super) fn visible_tiles(page_rect: Rect, clip: Rect, screen_scale: f32, raster_scale: f32, tile_height_px: usize) -> std::ops::Range<usize> {
-    if !page_rect.intersects(clip)
-        || !screen_scale.is_finite()
-        || !raster_scale.is_finite()
-        || screen_scale <= 0.0
-        || raster_scale <= 0.0
-        || tile_height_px == 0
-    {
-        return 0..0;
-    }
-    let total_px = (page_rect.height() / screen_scale * raster_scale).ceil() as usize;
-    let count = total_px.div_ceil(tile_height_px);
-    let at = |y: f32| ((y - page_rect.min.y).clamp(0.0, page_rect.height()) / screen_scale * raster_scale) / tile_height_px as f32;
-    let first = (at(clip.top()).floor() as usize).min(count);
-    let last = (at(clip.bottom()).ceil() as usize).min(count);
-    first..last.max(first)
 }
 
 pub(crate) fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {
     if page.w > 0.0 { rect.width() / page.w } else { fallback }
 }
 
-/// Closest the drawing grid's lines get on screen; zoomed far out, every other line is skipped.
-pub(super) const DRAWING_GRID_MIN_PX: f32 = 4.0;
-
-/// Most grid lines drawn each way on one page (page sizes come from files).
-pub(super) const DRAWING_GRID_MAX_LINES: usize = 2000;
-
-/// The View › Gridlines drawing grid over a page's text area, in document points: the x of each
-/// vertical line and the y of each horizontal line, starting at the margins and `step` (across,
-/// down) apart, never outside the margins. Drawn on screen only — never printed or exported.
-pub(super) fn drawing_grid(body: wordcraft_geom::Rect, step: (f32, f32)) -> (Vec<f32>, Vec<f32>) {
-    let axis = |start: f32, len: f32, step: f32| -> Vec<f32> {
-        if !(step.is_finite() && step > 0.0 && start.is_finite() && len.is_finite() && len >= 0.0) {
-            return Vec::new();
-        }
-        let end = start + len + 0.01;
-        (0..DRAWING_GRID_MAX_LINES).map(|k| start + k as f32 * step).take_while(|p| *p <= end).collect()
-    };
-    (axis(body.x, body.w, step.0), axis(body.y, body.h, step.1))
-}
-
-/// Global View Gridlines outlines every table (#1628). While editing a header/footer, also
-/// outline that story's cells (#2197), without adding printable borders or changing the view flag.
-pub(super) fn gridline_cells(page: &Page, all: bool, editing: Option<StoryRef>) -> impl Iterator<Item = wordcraft_geom::Rect> + '_ {
-    // Automatic header/footer guides need not scan a potentially large body placement list.
-    let body = if all { page.items.as_slice() } else { &[] };
-    body.iter().chain(&page.header).chain(&page.footer).filter_map(move |it| match it {
-        Placed::Cell { rect, covered: false, story, .. } if all || Some(*story) == editing => Some(*rect),
-        _ => None,
-    })
-}
-
-/// The table gridline segments to draw on a page, in document points: the edges of the
-/// [`gridline_cells`] minus the parts a printed border already draws. Word shows gridlines only
-/// where a cell has no border; drawn over a border, the thin blue guide tinted every bordered
-/// table blue and made its lines look uneven when zoomed out (#5967).
-pub(super) fn gridline_segments(page: &Page, all: bool, editing: Option<StoryRef>) -> Vec<(wordcraft_geom::Point, wordcraft_geom::Point)> {
-    use wordcraft_geom::Point;
-    // A rule this close to a cell edge (points) is drawn on it.
-    const ON_EDGE: f32 = 0.25;
-    // Rules by the line they run along (horizontal or not, coordinate in quarter points), so
-    // each cell edge looks only at the rules on its own line. Body rules cannot cover header or
-    // footer cells, so they are left out when only those are outlined, as in `gridline_cells`.
-    let key = |c: f32| (c * 4.0).round() as i64;
-    let body = if all { page.items.as_slice() } else { &[] };
-    let mut rules: std::collections::HashMap<(bool, i64), Vec<(f32, f32, f32)>> = std::collections::HashMap::new();
-    for it in body.iter().chain(&page.header).chain(&page.footer) {
-        let Placed::Rule { x0, y0, x1, y1, border } = it else { continue };
-        if !border.is_visible() {
-            continue;
-        }
-        let (horizontal, c0, c1, s0, s1) = if (y0 - y1).abs() <= ON_EDGE { (true, *y0, *y1, *x0, *x1) } else { (false, *x0, *x1, *y0, *y1) };
-        if (c0 - c1).abs() <= ON_EDGE && c0.is_finite() {
-            rules.entry((horizontal, key(c0))).or_default().push((c0, s0.min(s1), s0.max(s1)));
-        }
-    }
-    // The rules covering the line at `at`, sorted and merged into disjoint spans. Cells share their
-    // edges, so each distinct line is sorted once (not once per cell edge) and every edge then
-    // binary-searches its start.
-    let mut merged: std::collections::HashMap<(bool, u32), Vec<(f32, f32)>> = std::collections::HashMap::new();
-    // The parts of [a, b] along a line at `at` that no rule on the same line covers; `horizontal`
-    // picks rules running along x at y = `at`, otherwise along y at x = `at`.
-    let mut uncovered = |horizontal: bool, at: f32, a: f32, b: f32| -> Vec<(f32, f32)> {
-        let covers = merged.entry((horizontal, at.to_bits())).or_insert_with(|| {
-            let k = key(at);
-            let mut covers: Vec<(f32, f32)> = (k - 1..=k + 1)
-                .filter_map(|k| rules.get(&(horizontal, k)))
-                .flatten()
-                .filter(|(c, _, _)| (c - at).abs() <= ON_EDGE)
-                .map(|&(_, s0, s1)| (s0, s1))
-                .collect();
-            covers.sort_by(|p, q| p.0.total_cmp(&q.0));
-            let mut spans: Vec<(f32, f32)> = Vec::with_capacity(covers.len());
-            for (c0, c1) in covers {
-                match spans.last_mut() {
-                    Some(last) if c0 <= last.1 + ON_EDGE => last.1 = last.1.max(c1),
-                    _ => spans.push((c0, c1)),
-                }
-            }
-            spans
-        });
-        let mut out = Vec::new();
-        let mut from = a;
-        for &(c0, c1) in &covers[covers.partition_point(|s| s.1 < a)..] {
-            if c0 > from + ON_EDGE {
-                out.push((from, c0.min(b)));
-            }
-            from = from.max(c1);
-            if from >= b {
-                break;
-            }
-        }
-        if from + ON_EDGE < b {
-            out.push((from, b));
-        }
-        out
-    };
-    let mut segs = Vec::new();
-    for r in gridline_cells(page, all, editing) {
-        let (l, t, rt, bt) = (r.x, r.y, r.x + r.w, r.y + r.h);
-        for y in [t, bt] {
-            segs.extend(uncovered(true, y, l, rt).into_iter().map(|(a, b)| (Point::new(a, y), Point::new(b, y))));
-        }
-        for x in [l, rt] {
-            segs.extend(uncovered(false, x, t, bt).into_iter().map(|(a, b)| (Point::new(x, a), Point::new(x, b))));
-        }
-    }
-    segs
-}
-
-/// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
-/// ECMA-376's 1/8 inch when it doesn't say), doubled until the lines are at least
-/// [`DRAWING_GRID_MIN_PX`] apart on screen.
-pub(super) fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
-    let mut step = if spacing.is_finite() && spacing > 0.0 { spacing } else { wordcraft_doc::DEFAULT_GRID };
-    if !(scale.is_finite() && scale > 0.0) {
-        return step;
-    }
-    for _ in 0..16 {
-        if step * scale >= DRAWING_GRID_MIN_PX {
-            break;
-        }
-        step *= 2.0;
-    }
-    step
-}
-
-/// Draw the document canvas in the space `ui` has left, one frame: the pages, caret, selection
-/// and rulers, with the mouse editing and the pointer shape over them.
 /// The layout the page shows: the document's own, or with the table Insert › Table's grid is
 /// hovering over (#3931). The preview is laid out on a copy, so the document and its undo history
 /// change only when a square is clicked.
@@ -325,8 +154,8 @@ pub(crate) fn dark_page(app: &WordApp) -> bool {
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
-    // Pages, and only pages, follow the system's own text settings once the app has asked for
-    // them ([`crate::screen_text`]); `view_key` has them, so a change redraws the pages.
+    // Pages, and only pages, follow the system's own text settings once they are known ([`crate::screen_text`]);
+    // `view_key` has them, so a change redraws the pages.
     crate::screen_text::current().apply(&mut opts);
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
@@ -356,20 +185,11 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     opts
 }
 
-/// Subpixel (LCD) text for the page rasters of a screen with `ppp` device pixels per point, as
-/// File › Options › General › Screen text smoothing says. "Use system setting" draws it where
-/// the system asks for it ([`crate::screen_text`]) and the screen is below two device pixels per
-/// point: on a denser screen the stripes are too fine to gain from, and a page has four times
-/// the pixels to rasterise three times. "Subpixel (LCD)" draws it on any screen, in the
-/// system's stripe order, RGB when it names none (macOS never does).
-pub(super) fn page_lcd(app: &WordApp, ppp: f32) -> Option<wordcraft_render::LcdOrder> {
-    let system = crate::screen_text::current();
-    lcd_for(app.session.prefs.text_smoothing, system.subpixel, system.stripes, ppp)
-}
-
-/// [`page_lcd`] for the user's choice, what the system asks for (`asked`: subpixel text in this
-/// order, or `None` for greyscale or no answer), the screen's stripe order where the system
-/// names one (`stripes`, whatever it asks for), and the screen's density.
+/// Subpixel (LCD) text for the page rasters of a screen with `ppp` device pixels per point, as File › Options ›
+/// General › Screen text smoothing says. "Use system setting" draws it where the system asks for it
+/// ([`crate::screen_text`]) and the screen is below two device pixels per point: on a denser screen the stripes are
+/// too fine to gain from, and a page has four times the pixels to rasterise three times. "Subpixel (LCD)" draws it
+/// on any screen, in the system's stripe order, RGB when it names none (macOS never does).
 pub(super) fn lcd_for(
     choice: wordcraft_engine::cmd::view::TextSmoothing,
     asked: Option<crate::screen_text::SubpixelOrder>,
@@ -385,47 +205,52 @@ pub(super) fn lcd_for(
     };
     match choice {
         TextSmoothing::Grayscale => None,
-        // The user's own choice, in the order of their screen even where the system has
-        // smoothing off (a BGR panel with ClearType off must not get RGB edges).
+        // The user's own choice, in the order of their screen even where the system has smoothing off (a BGR panel
+        // with ClearType off must not get RGB edges).
         TextSmoothing::Subpixel => Some(asked.or(stripes).map(order).unwrap_or(LcdOrder::Rgb)),
         // Written so a density that isn't a number is greyscale too.
         TextSmoothing::System => asked.map(order).filter(|_| ppp < 2.0),
     }
 }
 
-/// Is a page raster at `raster_scale` pixels per point shown one raster pixel per device pixel,
-/// on a view at `screen_scale` device pixels per point? A page too large for one texture is
-/// rasterised smaller and stretched: subpixel text there would put each colour's edge on the
-/// wrong stripe, so such a raster is greyscale ([`wordcraft_render::RenderOptions::lcd`]).
-pub(super) fn raster_is_native(raster_scale: f32, screen_scale: f32) -> bool {
-    raster_scale.is_finite() && screen_scale.is_finite() && screen_scale > 0.0 && (raster_scale - screen_scale).abs() <= screen_scale * 1e-4
+/// The scale (pixels per document point) to rasterise a page picture at, and whether that is the screen's own.
+///
+/// The page view asks for a picture by its longest side in pixels, `side`, rounded up to a multiple of `step`, and
+/// scales what it gets to the page's place on screen. Rasterised at `side`, a page is up to `step` pixels larger
+/// than it shows and every glyph is resampled on the way to the screen, which undoes baselines put on whole pixels
+/// and makes subpixel text wrong (each colour's edge off its stripe). `native` is the view's own scale, device
+/// pixels per document point, when it is known: where it accounts for the side asked for (the page's `longest`
+/// side, in points, at that scale rounds up to `side`), the picture is rasterised at exactly that scale, one raster
+/// pixel per device pixel. Otherwise (another view's request, a fit zoom not settled yet, a part of a page shown
+/// reduced) it is rasterised at the side asked for, as before, and is not the screen's own.
+pub(super) fn raster_scale(side: u32, step: u32, longest: f32, native: Option<f32>) -> (f32, bool) {
+    let asked = side as f32 / longest;
+    let fits = |scale: f32| {
+        let pixels = longest * scale;
+        scale.is_finite() && scale > 0.0 && pixels.is_finite() && pixels <= side as f32 + 0.5 && pixels > side as f32 - step as f32 - 0.5
+    };
+    match native.filter(|scale| longest.is_finite() && longest > 0.0 && step > 0 && fits(*scale)) {
+        Some(scale) => (scale, true),
+        None => (asked, false),
+    }
 }
 
-/// `view` ([`view_key`]) for pages drawn with subpixel text in `lcd` order: a page drawn in
-/// greyscale (mid-zoom, or before the setting changed) must not pass for one drawn with it.
-pub(super) fn lcd_view_key(view: u64, lcd: Option<wordcraft_render::LcdOrder>) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, lcd).hash(&mut h);
-    h.finish()
-}
-
-/// Render options for rasters shown on screen other than the pages themselves (style and font
-/// previews, a dragged object), so their text looks as it does in the platform's other apps
-/// (exports never change): on macOS it is darkened the way the system draws it; on Linux and the
-/// BSDs it is hinted lightly, as FreeType's `hintslight` draws it there (not darkened: hinted
-/// text already has FreeType's weight, and darkening made it look semi-bold). Baselines sit on
-/// whole device pixels (hinting does that; unhinted text is moved there). These are fixed per
-/// platform: such rasters are cached without the system's text settings in their keys, so
-/// they must not follow them. Pages do ([`page_render_options`]).
+/// Render options for rasters shown on screen other than the pages themselves (style and font previews, a dragged
+/// object), so their text looks as it does in the platform's other apps (exports never change): on macOS it is
+/// darkened the way the system draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight`
+/// draws it there (not darkened: hinted text already has FreeType's weight, and darkening made it look semi-bold).
+/// Baselines sit on whole device pixels (hinting does that; unhinted text is moved there). These are fixed per
+/// platform: such rasters are cached without the system's text settings in their keys, so they must not follow
+/// them. Pages do ([`page_render_options`]).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
     let mut opts = wordcraft_render::RenderOptions { baseline_snap: true, ..Default::default() };
     crate::screen_text::ScreenText::PLATFORM.apply(&mut opts);
     opts
 }
 
-/// Render options for the template thumbnails of File › New: the platform's text, as
-/// [`screen_render_options`], without the baseline snapping. A thumbnail is a page shrunk to a
-/// tile, drawn as it was before pages were sharpened.
+/// Render options for the template thumbnails of File › New: the platform's text, as [`screen_render_options`],
+/// without the baseline snapping. A thumbnail is a page shrunk to a tile, drawn as it was before pages were
+/// sharpened.
 pub(crate) fn thumbnail_render_options() -> wordcraft_render::RenderOptions {
     let mut opts = wordcraft_render::RenderOptions::default();
     crate::screen_text::ScreenText::PLATFORM.apply(&mut opts);
