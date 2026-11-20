@@ -18,8 +18,8 @@ mod styles;
 mod tabs_borders;
 mod tools;
 
+pub use format::{SPACING_LABELS, cur as selection_para, fmt, indent, outdent, spacing_labels};
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
-pub use format::{cur as selection_para, fmt, indent, outdent};
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
 use lists::{list, restart_numbering};
 pub(crate) use outline::{ensure_heading_style, set_heading};

@@ -11447,6 +11447,67 @@ fn spacing_commands_handle_automatic_spacing() {
     assert!(s.run("para.spacing", &json!({"beforeAuto": "yes"})).is_ok(), "junk is ignored, never a panic");
 }
 
+/// #5175: the Line Spacing menu's spacing items say what clicking them will do, and flip after
+/// each click, as in Word.
+#[test]
+fn spacing_menu_labels_follow_the_paragraph() {
+    use crate::cmd::para::spacing_labels;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Spacing"}));
+    run(&mut s, "para.spacing", json!({"before": 0, "after": 0}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Add Space After Paragraph"));
+    run(&mut s, "para.addSpaceBefore", json!({}));
+    assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph");
+    run(&mut s, "para.removeSpaceAfter", json!({}));
+    assert_eq!(spacing_labels(&s).1, "Remove Space After Paragraph", "clicking it with no space after added some");
+    run(&mut s, "para.addSpaceBefore", json!({}));
+    run(&mut s, "para.removeSpaceAfter", json!({}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Add Space After Paragraph"));
+    run(&mut s, "para.spacing", json!({"beforeAuto": true}));
+    assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph", "automatic spacing counts as space");
+
+    // Spacing that only the style gives counts too: a new Normal paragraph has 8 pt after, Heading 1
+    // 18 pt before.
+    let mut s = crate::Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Styled"}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Remove Space After Paragraph"));
+    run(&mut s, "para.style", json!({"style": "Heading 1"}));
+    assert_eq!(spacing_labels(&s), ("Remove Space Before Paragraph", "Remove Space After Paragraph"), "Heading 1's own spacing");
+    run(&mut s, "para.addSpaceBefore", json!({}));
+    assert_eq!(spacing_labels(&s).0, "Add Space Before Paragraph", "a click removes the style's space");
+    run(&mut s, "para.removeSpaceAfter", json!({}));
+    assert_eq!(spacing_labels(&s).1, "Add Space After Paragraph", "a click removes the style's space after too");
+
+    // #418: a selection ending at the next paragraph's start is labelled from the last paragraph it
+    // covers, the one the commands change. Alpha and Beta have opposite spacing, so each label
+    // shows which paragraph it was read from.
+    let mut s = crate::Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Alpha\rBeta", "raw": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 2}}));
+    run(&mut s, "para.spacing", json!({"before": 12, "after": 0}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 2}}));
+    run(&mut s, "para.spacing", json!({"before": 0, "after": 10}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 2}}));
+    run(&mut s, "select.paragraph", json!({}));
+    let (start, end) = s.sel.ordered();
+    assert_eq!((start.path.0.as_slice(), start.off), ([0].as_slice(), 0), "the selection starts at Alpha");
+    assert_eq!((end.path.0.as_slice(), end.off), ([1].as_slice(), 0), "and ends at Beta's start, still selected");
+    assert_eq!(spacing_labels(&s), ("Remove Space Before Paragraph", "Add Space After Paragraph"), "both read from Alpha");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Remove Space After Paragraph"), "a caret in Beta reads Beta");
+
+    // Any space at all counts: the test is `> 0`, as the commands' is.
+    let mut s = crate::Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Thin"}));
+    run(&mut s, "para.spacing", json!({"before": 0.1, "after": 0.1}));
+    assert_eq!(spacing_labels(&s), ("Remove Space Before Paragraph", "Remove Space After Paragraph"), "0.1 pt is space");
+    run(&mut s, "para.spacing", json!({"before": 0, "after": 0}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Add Space After Paragraph"), "0 pt is none");
+    // Spacing can't go below zero (`para.spacing` clamps it), so a negative request reads as none.
+    run(&mut s, "para.spacing", json!({"before": -6, "after": -6}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Add Space After Paragraph"), "clamped to 0 pt");
+}
+
 /// #712, as in Word: Ctrl+F (`edit.find` with no text) opens the Navigation pane and asks the UI
 /// to put the keyboard in its search box, not the dialog; Ctrl+H (`edit.replace` with nothing to
 /// replace) opens Find and Replace on its Replace tab instead of failing; Go To moves by pages from

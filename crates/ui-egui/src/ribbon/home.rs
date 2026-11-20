@@ -366,6 +366,9 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         .tooltip(tl!(tip).to_string())
                         .show(ui);
                 }
+                // The spacing items toggle, so each says what a click will do for the caret's
+                // paragraph: "Remove …" while it has that space, "Add …" once it hasn't (#5175).
+                let (before, after) = wordcraft_engine::cmd::para::spacing_labels(&app.session);
                 let face = Button::new(tl!("Line and Paragraph Spacing").to_string())
                     .icon(IconId::new("lineSpacing"))
                     .tooltip(tl!("Line and Paragraph Spacing").to_string());
@@ -374,11 +377,8 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         MenuItem::command(CommandRef::with_params("para.lineSpacing", json!({"value": v}))).label(format!("{v}")).show(ui);
                     }
                     Divider::horizontal().show(ui);
-                    for (label, id) in [
-                        ("Add Space Before Paragraph", "para.addSpaceBefore"),
-                        ("Remove Space After Paragraph", "para.removeSpaceAfter"),
-                        ("Line Spacing Options…", "para.dialog"),
-                    ] {
+                    for (label, id) in [(before, "para.addSpaceBefore"), (after, "para.removeSpaceAfter"), ("Line Spacing Options…", "para.dialog")]
+                    {
                         MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
                     }
                 });
