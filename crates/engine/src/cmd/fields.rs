@@ -183,7 +183,7 @@ fn set_locked(s: &mut Session, value: bool) -> CmdResult {
 
 /// The text a simple field shows now (page numbers from the current layout).
 fn shown_text(s: &mut Session, f: &FieldAt) -> String {
-    let Some(InlineObject::Field { instr, result, .. }) = s.doc.para_at(&f.at).and_then(|p| p.object_at(f.at.off)).cloned() else {
+    let Some(InlineObject::Field { instr, result, locked, .. }) = s.doc.para_at(&f.at).and_then(|p| p.object_at(f.at.off)).cloned() else {
         return String::new();
     };
     let l = s.layout();
@@ -206,7 +206,7 @@ fn shown_text(s: &mut Session, f: &FieldAt) -> String {
         filepath: fn_path.into(),
         ..Default::default()
     };
-    wordcraft_layout::fields::field_text(&instr, &result, &ctx).0
+    wordcraft_layout::fields::shown_field_text(&instr, &result, locked, &ctx, ctx.page).0
 }
 
 /// Ctrl+Shift+F9: replace the selected fields with what they show (a simple field becomes its
