@@ -9,6 +9,9 @@
 //! `WORDCRAFT_CONTROL_TOKEN_FILE`), else one the app generates and writes to the token file
 //! (`docs/control-protocol.md`, Token).
 //! Requests after that carry no key. See `docs/control-protocol.md`.
+//! While File › Options › Agents › Keep agents from changing my preferences is on, its requests
+//! can't change the user's saved preferences (user name, AutoCorrect, shortcuts, ribbon, options;
+//! #3622).
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

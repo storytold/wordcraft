@@ -162,6 +162,7 @@ impl Session {
             keymap: craft_keymap::Overrides::default(),
             findings: None,
             ribbon: crate::RibbonLayout::default(),
+            preferences_locked: false,
             editing_lang: None,
             read_aloud: Default::default(),
             windows: Default::default(),

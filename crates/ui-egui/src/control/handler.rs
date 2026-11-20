@@ -218,16 +218,102 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Reply {
 
 /// Dispatches one control request: commands and inspection, parity, the library's input and
 /// dialog methods, screenshots and renders, resize, focus, clipboard and quit, and unknown ids as
-/// commands. It refuses closing unsaved work and document operations without a document.
+/// commands. It refuses closing unsaved work and document operations without a document, and,
+/// while the user has turned on File › Options › Agents › Keep agents from changing my
+/// preferences (#3622), commands that would change the user's saved preferences: an agent steered
+/// by a document it reads then can't leave AutoCorrect entries, shortcuts or a user name behind
+/// for documents it never saw, nor turn the setting off.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Reply {
-    let before = app.session.document_id();
-    let outcome = handle_request(app, ctx, req);
+    let locked = app.session.prefs.protect_preferences;
+    app.session.preferences_locked = locked;
+    // The session's preferences are guarded command by command; the File › Options settings the
+    // window keeps itself (`ui.*` commands never reach `Session::run`) are compared here.
+    let options_before = locked.then(|| WindowOptions::of(&app.ui));
+    let doc_before = app.session.document_id();
+    let mut outcome = handle_request(app, ctx, req);
     // A document a script opened doesn't bring up the missing-fonts box.
-    let after = app.session.document_id();
-    if after != before {
-        crate::font_download::skip(app, after);
+    let doc_after = app.session.document_id();
+    if doc_after != doc_before {
+        crate::font_download::skip(app, doc_after);
+    }
+    // The user's own edits after the request change preferences as usual.
+    app.session.preferences_locked = false;
+    if let Some(before) = options_before
+        && WindowOptions::of(&app.ui) != before
+    {
+        before.restore(&mut app.ui);
+        outcome = err(format!("{}: {}", req.method, wordcraft_engine::PREFERENCES_LOCKED));
     }
     outcome
+}
+
+/// The File › Options settings the window keeps in `ui.json` itself, not in the session: the
+/// interface theme, size, language and animations, the Quick Access Toolbar, KeyTips, the mini
+/// toolbar, alignment guides, the Start screen, the recent-document count, the print options, the
+/// status bar's count, the mouse wheel and touchpad scroll speeds and (Linux) the display server.
+#[derive(PartialEq)]
+struct WindowOptions {
+    theme: crate::theme::Appearance,
+    interface_size: crate::theme::InterfaceSize,
+    animations: crate::theme::Animations,
+    language: String,
+    quick_access_toolbar: bool,
+    keytips_enabled: bool,
+    caret_animation: bool,
+    mini_toolbar: bool,
+    alignment_guides: bool,
+    start_screen: bool,
+    recent_count: usize,
+    print_backgrounds: bool,
+    update_fields_before_print: bool,
+    status_count: crate::StatusCount,
+    scroll_speed: crate::ScrollSpeed,
+    touchpad_scroll_speed: crate::ScrollSpeed,
+    display_server: crate::DisplayServer,
+}
+
+impl WindowOptions {
+    fn of(ui: &crate::prefs::Prefs) -> Self {
+        WindowOptions {
+            theme: ui.theme,
+            interface_size: ui.interface_size,
+            animations: ui.animations,
+            language: ui.language.clone(),
+            quick_access_toolbar: ui.quick_access_toolbar,
+            keytips_enabled: ui.keytips_enabled,
+            caret_animation: ui.caret_animation,
+            mini_toolbar: ui.mini_toolbar,
+            alignment_guides: ui.alignment_guides,
+            start_screen: ui.start_screen,
+            recent_count: ui.recent_count,
+            print_backgrounds: ui.print_backgrounds,
+            update_fields_before_print: ui.update_fields_before_print,
+            status_count: ui.status_count,
+            scroll_speed: ui.scroll_speed,
+            touchpad_scroll_speed: ui.touchpad_scroll_speed,
+            display_server: ui.display_server,
+        }
+    }
+
+    fn restore(self, ui: &mut crate::prefs::Prefs) {
+        ui.theme = self.theme;
+        ui.interface_size = self.interface_size;
+        ui.animations = self.animations;
+        ui.language = self.language;
+        ui.quick_access_toolbar = self.quick_access_toolbar;
+        ui.keytips_enabled = self.keytips_enabled;
+        ui.caret_animation = self.caret_animation;
+        ui.mini_toolbar = self.mini_toolbar;
+        ui.alignment_guides = self.alignment_guides;
+        ui.start_screen = self.start_screen;
+        ui.recent_count = self.recent_count;
+        ui.print_backgrounds = self.print_backgrounds;
+        ui.update_fields_before_print = self.update_fields_before_print;
+        ui.status_count = self.status_count;
+        ui.scroll_speed = self.scroll_speed;
+        ui.touchpad_scroll_speed = self.touchpad_scroll_speed;
+        ui.display_server = self.display_server;
+    }
 }
 
 /// The open dialogs for `ui.inspect`. The control library's dialog methods do not build for wasm32, so the web lists none.

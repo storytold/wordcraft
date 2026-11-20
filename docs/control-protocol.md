@@ -220,6 +220,34 @@ disagree (#3274).
 the app keeps running and the work stays. Save first, or pass `{"force": true}` to discard the
 changes and quit. Only a boolean `true` counts as `force`.
 
+### Preferences
+
+Agents can change the user's preferences, as users ask them to (an AutoCorrect entry, a shortcut,
+their name). A user who'd rather they didn't turns on File › Options › Agents › **Keep agents from
+changing my preferences** (`file.options` `protectPreferences`, saved with the other options).
+While it is on, commands can't change what the app saves for later documents: the user name and
+initials, AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File ›
+Options settings (including the ones the window keeps itself: `ui.theme`, `ui.startScreen`,
+`ui.language`, `ui.statusCount`, `ui.scrollSpeed`, `ui.touchpadScrollSpeed`, `ui.displayServer`…,
+and this setting). A command that would, sent by any method (`engine.execute`, the
+bare id, or with `doc`), is refused with an error that names the setting, and what that command
+did is undone (#3622). An agent reading a document can't then be steered by text in it into
+leaving an AutoCorrect entry or a rebound Save shortcut behind. Asking for a setting without
+changing it still answers. The user's own changes, in the window, are never affected.
+
+What the lock doesn't cover yet:
+
+- Synthetic input (`ui.click`, `ui.clickText`, `ui.key`, `ui.text`, `ui.drag`) is played back
+  after the request returns, so clicking through File › Options can still change a setting.
+- Words added to the user dictionary (`file.options` `addWords`, `review.addToDictionary`) stay,
+  even when the same request is refused for another setting.
+- A macro (`tools.macros` `run`) whose later step is refused keeps its earlier steps' edits, as
+  it does when any step fails.
+- What else the app remembers is not locked: view switches (the Navigation pane, Dark page, where
+  panes sit), the Read Aloud speed and citation skipping, and pens added to the Draw gallery. They
+  change how the window looks or reads aloud, not what is written, and carry live state (the
+  reading queue, the pen in hand) a refusal couldn't put back cleanly.
+
 ### Native printing
 
 `engine.execute` can call `ui.printSettings` with `{}` to inspect the printer list, selected

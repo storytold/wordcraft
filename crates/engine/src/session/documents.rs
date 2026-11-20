@@ -275,6 +275,7 @@ impl Session {
             // Stamped with the document id and revision, so one cache serves every document.
             findings: _,
             ribbon: _,
+            preferences_locked: _,
             editing_lang: _,
             math_latex: _,
             math_normal_text: _,

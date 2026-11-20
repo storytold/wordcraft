@@ -291,6 +291,7 @@ impl<'a> OptionsModel<'a> {
                 ("advanced.scrollSpeed", Choice(ui.scroll_speed.code().to_string())),
                 ("advanced.touchpadScrollSpeed", Choice(ui.touchpad_scroll_speed.code().to_string())),
             ],
+            "agents" => vec![("agents.protectPreferences", Bool(prefs.protect_preferences))],
             _ => Vec::new(),
         }
     }
@@ -615,7 +616,21 @@ impl PreferencesModel for OptionsModel<'_> {
         ));
         let advanced = page_of("advanced", tl!("Advanced"), groups);
 
-        let agents = PageSpec::custom("agents", tl!("Agents"));
+        // #3622: whether agents driving this window may change the user's saved preferences. The
+        // checkbox runs `file.options` like the other rows, so it is the setting agents read.
+        let agents = page_of(
+            "agents",
+            tl!("Agents"),
+            vec![
+                GroupSpec::new(None, vec![custom("agents.about", "")]),
+                GroupSpec::new(
+                    Some(tl!("Preferences")),
+                    vec![b("agents.protectPreferences", tl!("Keep agents from changing my preferences"), prefs.protect_preferences).help(tl!(
+                        "On: agents driving this window (`--control`, `wordcraft-cli mcp --connect`) can't change your user name, AutoCorrect, keyboard shortcuts, the ribbon or these options, nor turn this off. A request that would is refused and undone."
+                    ))],
+                ),
+            ],
+        );
         vec![general, display, proofing, save, language, accessibility, advanced, agents]
     }
 
@@ -633,6 +648,7 @@ impl PreferencesModel for OptionsModel<'_> {
             ("general.fontDownloadNotice", Bool(v)) => self.app.ui.font_download_notice = v,
             ("general.darkPage", Bool(v)) => self.run("view.darkMode", json!({"value": v})),
             ("general.startScreen", Bool(v)) => self.run("ui.startScreen", json!({"value": v})),
+            ("agents.protectPreferences", Bool(v)) => self.options(json!({"protectPreferences": v})),
             ("general.userName", Text(t)) => {
                 if !wordcraft_engine::cmd::protect::enforced(&self.app.session.doc) {
                     self.app.session.author = t;
@@ -702,6 +718,10 @@ impl PreferencesModel for OptionsModel<'_> {
                 }
             }
             "proofing.customDictionary" => self.custom_dictionary(ui),
+            "agents.about" => {
+                Text::new(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."))
+                    .show(ui);
+            }
             "language.proofingLanguage" => {
                 Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
             }
@@ -720,13 +740,7 @@ impl PreferencesModel for OptionsModel<'_> {
         }
     }
 
-    fn custom_page(&mut self, ui: &mut Ui, page: &str) {
-        if page == "agents" {
-            Text::new(tl!("Agents")).role(TypeRole::Heading).show(ui);
-            Text::new(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."))
-                .show(ui);
-        }
-    }
+    fn custom_page(&mut self, _ui: &mut Ui, _page: &str) {}
 
     fn reset_page(&mut self, page: &str) {
         for (key, value) in self.defaults(page) {

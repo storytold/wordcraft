@@ -154,6 +154,8 @@ impl Session {
             // Derived from `document_id` and `rev`: rebuilt on the next read, not an edit.
             findings: _,
             ribbon: _,
+            // Who is driving the session, not part of the document.
+            preferences_locked: _,
             // A preference for new documents, like `prefs`: not part of this document.
             editing_lang: _,
             // Equation editing mode, like `view`: not part of the document or its history.
