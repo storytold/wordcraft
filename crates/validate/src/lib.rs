@@ -5263,6 +5263,44 @@ mod budget_tests {
     }
 
     #[test]
+    fn declined_layout_walkers_mirror_the_decoders_dispatch() {
+        let chunk = |tag: &[u8; 4], data: &[u8]| [&tag[..], &(data.len() as u32).to_le_bytes(), data, &[0u8; 1][..data.len() % 2]].concat();
+        let riff = |chunks: &[Vec<u8>]| {
+            let body = [b"WEBP".to_vec(), chunks.concat()].concat();
+            [b"RIFF".to_vec(), (body.len() as u32).to_le_bytes().to_vec(), body].concat()
+        };
+        let (mut key, mut inter) = (vec![0u8; 10], vec![0u8; 10]);
+        inter[0] = 1;
+        key[3..6].copy_from_slice(&[0x9d, 0x01, 0x2a]);
+        let (vp8_key, vp8_inter, vp8l, junk) =
+            (chunk(b"VP8 ", &key), chunk(b"VP8 ", &inter), chunk(b"VP8L", &[0x2f, 0, 0, 0, 0]), chunk(b"JUNK", &[]));
+        let canvas = [0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let (still, animated) = (chunk(b"VP8X", &canvas), chunk(b"VP8X", &[&[2u8][..], &canvas[1..]].concat()));
+        let anmf = |frame: &[u8]| chunk(b"ANMF", &[&[0u8; 16][..], frame].concat());
+        let named = |bytes: Vec<u8>| media_boundary::declined_layout(Format::WebP, &bytes).is_some();
+        // The frame the decoder selects is named: a plain file's first chunk, a still file's only image, the first
+        // animation frame's first child (or the chunk after an alpha chunk, decoded as VP8).
+        assert!(named(riff(std::slice::from_ref(&vp8_inter))) && !named(riff(std::slice::from_ref(&vp8_key))));
+        assert!(named(riff(&[still.clone(), vp8_inter.clone()])));
+        assert!(named(riff(&[animated.clone(), chunk(b"ANIM", &[0; 6]), anmf(&vp8_inter)])));
+        assert!(named(riff(&[animated.clone(), chunk(b"ANIM", &[0; 6]), anmf(&[chunk(b"ALPH", &[0; 4]), vp8_inter.clone()].concat())])));
+        // Nothing else is: a first image that is not VP8 (the later chunk is never decoded), a top-level chunk of an
+        // animated file, a first child the decoder rejects, a still file with two images.
+        assert!(!named(riff(&[vp8l.clone(), vp8_inter.clone()])));
+        assert!(!named(riff(&[still.clone(), vp8l.clone(), vp8_inter.clone()])));
+        assert!(!named(riff(&[animated.clone(), vp8_inter.clone()])));
+        assert!(!named(riff(&[animated.clone(), chunk(b"ANIM", &[0; 6]), anmf(&vp8l), vp8_inter.clone()])));
+        assert!(!named(riff(&[animated, chunk(b"ANIM", &[0; 6]), anmf(&[junk, vp8_inter].concat())])));
+        // A frame header names a marker only with its whole declared component table inside the segment.
+        let frame = |count: u8, descriptors: usize| {
+            [&[0xff, 0xd8, 0xff, 0xc5, 0, 8 + 3 * descriptors as u8, 8, 0, 8, 0, 8, count][..], &[1, 0x11, 0].repeat(descriptors)].concat()
+        };
+        let named = |bytes: Vec<u8>| media_boundary::declined_layout(Format::Jpeg, &bytes).is_some();
+        assert!(named(frame(1, 1)) && named(frame(3, 3)));
+        assert!(!named(frame(3, 1)) && !named(frame(0, 1)));
+    }
+
+    #[test]
     fn media_magic_names_header_declined_layouts_the_adapter_flattens() {
         let grade = |bytes: &[u8]| {
             let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));

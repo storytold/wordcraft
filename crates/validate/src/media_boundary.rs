@@ -241,34 +241,55 @@ pub(crate) fn declined_layout(format: Format, bytes: &[u8]) -> Option<&'static s
     }
 }
 
-/// The 24-bit frame tag of the SELECTED frame: the first image of the file, which is the first `VP8 ` chunk of a
-/// plain file, or the image inside the first `ANMF` animation frame. The walk follows RIFF chunk sizes, never
-/// leaves the body of the frame it is in (a frame with no image of its own names nothing; the next frame is a
-/// different frame), and reads the tag only from a complete frame header (a `VP8 ` chunk of at least ten bytes,
-/// the size of a keyframe's header, inside its container).
+/// The 24-bit frame tag of the frame the decoder SELECTS and decodes, found by the chunk dispatch `image-webp` makes
+/// (`decoder.rs`): a plain file is its first chunk (`VP8 ` is the frame, `VP8L` a lossless image that names nothing,
+/// anything else a file the decoder refuses); an extended file (`VP8X`) is its chunks collected in order, an
+/// animated one decoding the first `ANMF` and a still one needing exactly one of `VP8 ` and `VP8L`. Top-level chunks
+/// of an animated file are not frames. Inside the first `ANMF` the image is the first child (`VP8 `, `VP8L`, or `ALPH`
+/// followed by the chunk that is decoded as `VP8 `); any other first child is rejected by the decoder, so it names
+/// nothing, and the walk never leaves the frame it is in. The tag is read only from a complete frame header (a chunk of
+/// at least ten bytes, the size of a keyframe's header, inside its container).
 fn webp_frame_tag(bytes: &[u8]) -> Option<u32> {
     if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
         return None;
     }
-    let mut at = 12usize;
-    loop {
-        let (kind, body, end) = webp_chunk(bytes, at, bytes.len())?;
-        match kind {
-            b"VP8 " => return vp8_tag(bytes, body, end),
-            // An animation frame holds its own chunks after sixteen bytes of frame geometry.
-            b"ANMF" => {
-                let mut inner = body.checked_add(16).filter(|&inner| inner <= end)?;
-                loop {
-                    let (kind, body, chunk_end) = webp_chunk(bytes, inner, end)?;
-                    match kind {
-                        b"VP8 " => return vp8_tag(bytes, body, chunk_end),
-                        b"VP8L" => return None,
-                        _ => inner = chunk_end.checked_add(chunk_end.checked_sub(body)? & 1)?,
-                    }
+    let (kind, body, end) = webp_chunk(bytes, 12, bytes.len())?;
+    match kind {
+        b"VP8 " => vp8_tag(bytes, body, end),
+        b"VP8X" => {
+            let animated = bytes.get(body)? & 2 != 0;
+            let (mut first_vp8, mut has_vp8l, mut has_anim, mut first_anmf) = (None, false, false, None);
+            let mut at = end.checked_add(end.checked_sub(body)? & 1)?;
+            while let Some((kind, body, end)) = webp_chunk(bytes, at, bytes.len()) {
+                match kind {
+                    b"VP8 " => first_vp8 = first_vp8.or(Some((body, end))),
+                    b"VP8L" => has_vp8l = true,
+                    b"ANIM" => has_anim = true,
+                    b"ANMF" => first_anmf = first_anmf.or(Some((body, end))),
+                    _ => {}
                 }
+                at = end.checked_add(end.checked_sub(body)? & 1)?;
             }
-            _ => at = end.checked_add(end.checked_sub(body)? & 1)?,
+            if !animated {
+                return match (first_vp8, has_vp8l) {
+                    (Some((body, end)), false) => vp8_tag(bytes, body, end),
+                    _ => None,
+                };
+            }
+            let (body, end) = first_anmf.filter(|_| has_anim)?;
+            let inner = body.checked_add(16).filter(|&inner| inner <= end)?;
+            let (kind, body, chunk_end) = webp_chunk(bytes, inner, end)?;
+            match kind {
+                b"VP8 " => vp8_tag(bytes, body, chunk_end),
+                b"ALPH" => {
+                    let next = chunk_end.checked_add(chunk_end.checked_sub(body)? & 1)?;
+                    let (_, body, chunk_end) = webp_chunk(bytes, next, end)?;
+                    vp8_tag(bytes, body, chunk_end)
+                }
+                _ => None,
+            }
         }
+        _ => None,
     }
 }
 
@@ -302,11 +323,14 @@ fn jpeg_frame_marker(bytes: &[u8]) -> Option<u8> {
         let marker = *bytes.get(at)?;
         at += 1;
         match marker {
-            // A frame header is a whole segment: the length, the precision, both dimensions and at least one
-            // component (eleven bytes); a marker byte alone, or a cut-off segment, is no frame.
+            // A frame header is a whole segment: the length, the precision, both dimensions, the component count and
+            // that many component descriptors; a marker byte alone, a cut-off segment or a short table is no frame.
             0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => {
                 let length = be16(bytes, at)?;
-                return (length >= 11 && bytes.get(at..at.checked_add(length)?).is_some()).then_some(marker);
+                // The declared component table (one three-byte descriptor each, at least one) is wholly inside it.
+                let components = usize::from(*bytes.get(at.checked_add(7)?)?);
+                let table = components.checked_mul(3)?.checked_add(8)?;
+                return (components >= 1 && length >= table && bytes.get(at..at.checked_add(length)?).is_some()).then_some(marker);
             }
             0xd9 | 0xda | 0x00 => return None,
             0x01 | 0xd0..=0xd8 => {}
