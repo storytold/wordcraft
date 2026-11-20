@@ -5040,6 +5040,32 @@ mod budget_tests {
     }
 
     #[test]
+    fn media_magic_tiff_depth_is_the_minimum_over_routes() {
+        // A and B are main-chain pages; B points to the leaf L (depth 1). From A a chain of SubIFD edges leads to
+        // D1..Dn. Every directory is within the depth bound by its NEAREST route, so one more edge D10 -> L (which
+        // reaches L at depth 11) changes nothing, while a directory whose nearest route is too deep still rejects.
+        let node = |sub: Option<usize>, next: Option<usize>| {
+            let mut entries = vec![(40000u16, 4u16, None, 0u32)];
+            entries.extend(sub.map(|to| (330, 4, Some(to), 0)));
+            entries.extend(next.map(|to| (0xffff, 4, Some(to), 0)));
+            entries
+        };
+        let graph = |chain: usize, back: bool| {
+            // 0 = A, 1 = B, 2 = L, 3.. = D1..Dn
+            let mut directories = vec![node(Some(3), Some(1)), node(Some(2), None), node(None, None)];
+            directories.extend((1..=chain).map(|n| node((n < chain).then_some(3 + n), None)));
+            if back && let Some(last) = directories.last_mut() {
+                last.push((330, 4, Some(2), 0));
+            }
+            graph_tiff(&directories)
+        };
+        for (chain, back, admitted) in [(10, false, true), (10, true, true), (11, false, false), (11, true, false)] {
+            let bytes = graph(chain, back);
+            assert_eq!(tiff_admission::payload(&bytes, |_| Ok(())).unwrap().is_some(), admitted, "{chain} edges, back edge {back}");
+        }
+    }
+
+    #[test]
     fn media_magic_tiff_workspace_charges_each_worker_its_decoder_state() {
         // The codec opens one `tiff` decoder per band worker, and each rebuilds the directory and
         // both strip tables (and expands them through 32-byte values on the way). The debit must

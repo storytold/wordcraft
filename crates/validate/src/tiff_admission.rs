@@ -79,12 +79,12 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
     /// pointer, and the `next` pointer of every directory that is read as a chain member (the first
     /// directory, a `next` target or a SubIFD target; Exif, GPS and Interop directories are single
     /// directories whose `next` nothing follows). Reaching a directory again is free whatever route
-    /// it took; only a directory that reaches itself rejects. Reachability is explored first, so
+    /// it took, deeper routes included; only a directory that reaches itself rejects. Reachability is explored first, so
     /// the verdict depends on the graph and not on the order its edges are visited in.
     fn admit(&mut self, first: u64) -> Result<Option<Vec<u64>>, CodecError> {
         observation_contract! {
             rules: "-";
-            collections: "field.parsed*1,type.HashMap*6,type.HashSet*1,type.Vec*3";
+            collections: "field.parsed*1,type.HashMap*8,type.HashSet*1,type.Vec*3";
             scope: "the TIFF directory graph within the directory, entry, depth and work bounds";
             loss: "directory cycle, malformed directory or metadata budget";
             fallback: "leave the image unassessed";
@@ -95,14 +95,17 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
         // `next` keeps the depth (a chain is one level); a pointer to a child adds one.
         let mut queue = VecDeque::from([(first, true, 0usize)]);
         let mut visited = HashSet::new();
+        // The depth at which each directory was first reached in any role: the queue pops nearest first, so it is
+        // the directory's minimum depth, and the depth bound is decided on that alone.
+        let mut nearest: HashMap<u64, usize> = HashMap::new();
         let mut children_of: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut chain_next: HashMap<u64, u64> = HashMap::new();
         while let Some((offset, chain, depth)) = queue.pop_front() {
-            if depth > self.limits.max_depth {
-                return Ok(None);
-            }
             if !visited.insert((offset, chain)) {
                 continue;
+            }
+            if *nearest.entry(offset).or_insert(depth) > self.limits.max_depth {
+                return Ok(None);
             }
             let Some((tags, next)) = self.directory(offset)? else { return Ok(None) };
             if let Entry::Vacant(slot) = children_of.entry(offset) {
