@@ -489,11 +489,23 @@ pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<
 pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
     let bytes = read_document(path)?;
     let name = path.to_string_lossy();
-    if matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
+    let ext = ext_of(&name);
+    if matches!(ext.as_str(), "html" | "htm" | "xhtml") {
         // Pictures referenced by a relative path load from beside the HTML file.
         let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));
         let html = wordcraft_formats::html::decode(&bytes);
         let mut doc = wordcraft_formats::html::import_on(&html, &|src| images.load(src), &region_page(region));
+        fit_pictures(&mut doc);
+        opened(&mut doc);
+        return Ok((doc, false));
+    }
+    if matches!(ext.as_str(), "md" | "markdown") {
+        // craft-markdown turns only `data:` URIs into pictures. Inline the pictures beside the
+        // Markdown file, with the same path and budget checks HTML uses, so `![](Desk01.png)`
+        // shows the file instead of vanishing into its empty alt text.
+        let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));
+        let text = inline_local_images(&decode_text(&bytes), &images);
+        let mut doc = wordcraft_formats::markdown::import_on(&text, &region_page(region));
         fit_pictures(&mut doc);
         opened(&mut doc);
         return Ok((doc, false));
@@ -612,6 +624,148 @@ impl LocalImages {
         crate::file_access::check_read(&path.to_string_lossy()).ok()?;
         path.starts_with(dir).then_some(path)
     }
+}
+
+/// Longest `![...](...)` span this pass reads. Longer spans are left as they are: they are not
+/// useful picture references, and this keeps a hostile file from scanning without bound.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_LOCAL_IMAGE_LINK: usize = 4096;
+
+/// Inline the local files an inline Markdown image refers to as `data:` URIs, which the Markdown
+/// reader turns into pictures. A destination that isn't a readable picture beside the file is
+/// left alone: `craft-markdown` keeps its alt text, as before. Code fences and code spans are
+/// copied verbatim, so a `![x](pic.png)` shown as an example stays text.
+#[cfg(not(target_arch = "wasm32"))]
+fn inline_local_images(md: &str, images: &LocalImages) -> String {
+    let bytes = md.as_bytes();
+    let mut out = String::with_capacity(md.len());
+    let mut i = 0usize;
+    let mut fence: Option<(u8, usize)> = None;
+    let mut line_start = true;
+    while i < bytes.len() {
+        if line_start {
+            let indent = bytes[i..].iter().take_while(|&&c| c == b' ').count().min(3);
+            let at = i + indent;
+            let ch = bytes.get(at).copied().unwrap_or(0);
+            if matches!(ch, b'`' | b'~') {
+                let run = bytes[at..].iter().take_while(|&&c| c == ch).count();
+                if run >= 3 {
+                    fence = match fence {
+                        Some((open, len)) if open == ch && run >= len => None,
+                        Some(kept) => Some(kept),
+                        None => Some((ch, run)),
+                    };
+                    let end = line_end(bytes, i);
+                    out.push_str(md.get(i..end).unwrap_or(""));
+                    i = end;
+                    line_start = true;
+                    continue;
+                }
+            }
+            line_start = false;
+        }
+        if fence.is_some() {
+            let end = line_end(bytes, i);
+            out.push_str(md.get(i..end).unwrap_or(""));
+            i = end;
+            line_start = true;
+            continue;
+        }
+        if bytes[i] == b'\n' {
+            out.push('\n');
+            i += 1;
+            line_start = true;
+            continue;
+        }
+        if bytes[i] == b'`' {
+            // A code span is copied whole, including its backtick runs.
+            let run = bytes[i..].iter().take_while(|&&c| c == b'`').count();
+            let mut j = i + run;
+            while j < bytes.len() {
+                if bytes[j] == b'`' {
+                    let closing = bytes[j..].iter().take_while(|&&c| c == b'`').count();
+                    if closing == run {
+                        j += closing;
+                        break;
+                    }
+                    j += closing;
+                } else {
+                    j += 1;
+                }
+            }
+            out.push_str(md.get(i..j).unwrap_or(""));
+            i = j;
+            continue;
+        }
+        if bytes[i] == b'!'
+            && bytes.get(i + 1) == Some(&b'[')
+            && (i == 0 || bytes[i - 1] != b'\\')
+            && let Some((dest_start, dest_end, uri)) = local_image_uri(md, i, images)
+        {
+            out.push_str(md.get(i..dest_start).unwrap_or(""));
+            out.push_str(&uri);
+            out.push(')');
+            i = dest_end;
+            continue;
+        }
+        let Some(ch) = md.get(i..).and_then(|s| s.chars().next()) else { break };
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// The end of the line starting at `i`, including its newline, or the end of the text.
+#[cfg(not(target_arch = "wasm32"))]
+fn line_end(bytes: &[u8], i: usize) -> usize {
+    bytes.get(i..).and_then(|s| s.iter().position(|&c| c == b'\n')).map_or(bytes.len(), |n| i + n + 1)
+}
+
+/// A `data:` URI for the local picture the image at `start` names, with the destination's byte
+/// range (through the closing `)`) so the caller can skip it.
+#[cfg(not(target_arch = "wasm32"))]
+fn local_image_uri(md: &str, start: usize, images: &LocalImages) -> Option<(usize, usize, String)> {
+    let bytes = md.as_bytes();
+    if bytes.get(start) != Some(&b'!') || bytes.get(start + 1) != Some(&b'[') || (start > 0 && bytes[start - 1] == b'\\') {
+        return None;
+    }
+    let mut close = start + 2;
+    while let Some(&c) = bytes.get(close) {
+        if close.saturating_sub(start) > MAX_LOCAL_IMAGE_LINK {
+            return None;
+        }
+        match c {
+            b'\\' => close = close.saturating_add(2),
+            b']' => break,
+            b'[' | b'\n' => return None,
+            _ => close += 1,
+        }
+    }
+    if bytes.get(close) != Some(&b']') || bytes.get(close + 1) != Some(&b'(') {
+        return None;
+    }
+    let dest_start = close + 2;
+    let mut end = dest_start;
+    while let Some(&c) = bytes.get(end) {
+        if end.saturating_sub(dest_start) > MAX_LOCAL_IMAGE_LINK {
+            return None;
+        }
+        match c {
+            b'\\' => end = end.saturating_add(2),
+            b')' => break,
+            b'(' | b'"' | b'\'' | b'\n' => return None,
+            c if c.is_ascii_whitespace() => return None,
+            _ => end += 1,
+        }
+    }
+    if bytes.get(end) != Some(&b')') {
+        return None;
+    }
+    let data = images.load(md.get(dest_start..end)?)?;
+    let mime =
+        wordcraft_formats::model::sniff_image(&data).map(|ext| format!("image/{ext}")).unwrap_or_else(|| "application/octet-stream".to_string());
+    let uri = format!("data:{mime};base64,{}", crate::cmd::insert::base64_encode(&data));
+    Some((dest_start, end + 1, uri))
 }
 
 /// Up to `limit + 1` bytes of the regular file at `path` (more than `limit` means too large), or

@@ -6216,6 +6216,60 @@ fn html_pictures_outside_the_folder_are_not_loaded() {
     assert!(text.contains("Up") && text.contains("Sneak") && !text.contains("In"), "{text:?}");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn markdown_local_picture_in_a_relative_image_loads() {
+    // `![alt](Desk01.png)` used to vanish: craft-markdown only makes pictures from data URIs.
+    let root = scratch_dir("md-local-img");
+    let png = tiny_png();
+    std::fs::write(root.join("Desk01.png"), &png).unwrap();
+    std::fs::write(root.join("page.md"), "Before\n\n![Desk](Desk01.png)\n").unwrap();
+    let doc = crate::io::open_path(&root.join("page.md"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    let images: Vec<_> = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Image { media, .. } => Some(media.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images.len(), 1, "{images:?}");
+    assert_eq!(doc.media.get(images[0]).map(|m| m.to_vec()), Some(png));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn markdown_local_pictures_are_loaded_only_from_the_file_folder_and_outside_code() {
+    let root = scratch_dir("md-img-limits");
+    std::fs::create_dir_all(root.join("site")).unwrap();
+    let png = tiny_png();
+    std::fs::write(root.join("outside.png"), &png).unwrap();
+    std::fs::write(root.join("site/Desk01.png"), &png).unwrap();
+    let md = concat!(
+        "![Out](../outside.png)\n\n",
+        "```markdown\n![Fenced](Desk01.png)\n```\n\n",
+        "Inline `![Spanned](Desk01.png)` text.\n\n",
+        "![Desk](Desk01.png)\n",
+    );
+    std::fs::write(root.join("site/page.md"), md).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.md"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    let count = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter(|o| matches!(o, wordcraft_doc::InlineObject::Image { .. }))
+        .count();
+    assert_eq!(count, 1, "only the real picture beside the file loads");
+    assert_eq!(doc.media.len(), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn html_pictures_through_a_symlink_out_of_the_folder_are_not_loaded() {
