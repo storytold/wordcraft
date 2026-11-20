@@ -44,7 +44,12 @@ fn main() {
 fn embed_fonts(catalogs: Vec<std::path::PathBuf>) {
     println!("cargo::rerun-if-changed=build.rs");
     let wasm = craft_fonts_build::target_is_wasm();
-    let embedded = craft_fonts_build::Embed::new().subset_to(catalogs).filter(move |face| !wasm || face.has_script("Jpan")).write("craft_fonts.rs");
+    // The web build embeds only the cut Japanese interface face, which needs a craft-fonts checkout whose
+    // manifest marks interface faces (`role` `ui`); with an older one it embeds none and falls back to the
+    // Latin faces, so `CRAFT_FONTS_REQUIRED` binds the native build only.
+    let embed = craft_fonts_build::Embed::new().subset_to(catalogs).filter(move |face| !wasm || face.has_script("Jpan"));
+    let embed = if wasm { embed.required(false) } else { embed };
+    let embedded = embed.write("craft_fonts.rs");
     if let Err(e) = embedded {
         println!("cargo::error={e}");
     }
