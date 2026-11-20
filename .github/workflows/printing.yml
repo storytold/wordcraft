@@ -51,6 +51,11 @@ jobs:
       # keep their file:line.
       dev-strip: true
       # Clippy on its own leg beside the tests, off their critical path. fmt is platform-independent
-      # and runs in ci.yml.
-      lint-command: cargo clippy -p wordcraft -p wordcraft-ui-egui --all-targets --locked -- -D warnings
+      # and runs in ci.yml. The web app's wasm build, once: ci.yml's `cargo xtask wasm` checks the
+      # library crates and ui-egui, not apps/wordcraft-web.
+      lint-command: |
+        cargo clippy -p wordcraft -p wordcraft-ui-egui --all-targets --locked -- -D warnings
+        if [ "$RUNNER_OS" = macOS ]; then
+          cargo check -p wordcraft-web --target wasm32-unknown-unknown --locked
+        fi
       command: cargo test -p wordcraft -p wordcraft-ui-egui --locked
