@@ -189,11 +189,20 @@ fn define_style(s: &mut Session, at: &Pos, styled: wordcraft_doc::Paragraph, und
     } else {
         None
     };
-    // The new paragraph keeps the formatting change the paragraph had before, not the style change.
-    let prior = s.doc.para_at(at).and_then(|p| p.props.fmt_change.clone());
+    // The new paragraph keeps the formatting changes it would have had before the style change.
+    // Its mark takes the formatting at the split (the last run's), so when Enter carried the
+    // converted run's style-change revision, the run's earlier change takes its place.
+    let carried = |s: &Session| s.doc.para_at(at).and_then(|p| p.props_at(at.off).fmt_change.clone());
+    let (prior, prior_carried) = (s.doc.para_at(at).and_then(|p| p.props.fmt_change.clone()), carried(s));
     super::autoformat::apply_defined_style(s, at, styled)?;
+    let styled_carried = carried(s);
     let new = split_para(s, at)?;
-    s.doc.para_mut(new.story, &new.path)?.props.fmt_change = prior;
+    let p = s.doc.para_mut(new.story, &new.path)?;
+    p.props.fmt_change = prior;
+    if styled_carried.is_some() && p.mark.fmt_change == styled_carried {
+        p.mark.fmt_change = prior_carried;
+    }
+    p.touch();
     s.sel = Selection::caret(new);
     s.goal_x = None;
     if let Some((plain_doc, plain_sel)) = plain {

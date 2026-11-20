@@ -1498,6 +1498,37 @@ fn a_tracked_define_styles_change_can_be_rejected() {
     assert_eq!((p.props.style.as_deref(), looks(&s, 0)), (None, before), "the look is back");
 }
 
+/// With Track Changes on and a heading style that names no next style, Enter keeps the heading
+/// style and the formatting at the end of the text in the new paragraph, but not the formatting
+/// change Define styles recorded there; with the paragraph mark unformatted or formatted like the
+/// text.
+#[test]
+fn a_heading_without_a_next_style_keeps_its_tracked_change_to_itself() {
+    for format_mark in [false, true] {
+        let mut s = s();
+        run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+        if let Some(one) = Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+            one.next = None;
+        }
+        typ(&mut s, "Results");
+        format_like_heading(&mut s, 0, 1);
+        if format_mark {
+            let st = s.doc.styles.get("Heading1").cloned().unwrap_or_default();
+            let p = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+            (p.mark.font, p.mark.size, p.mark.color, p.mark.italic) = (st.chr.font.clone(), st.chr.size, st.chr.color, st.chr.italic);
+            p.touch();
+        }
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        typ(&mut s, "\n");
+        let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+        assert_eq!(p.props.style.as_deref(), Some("Heading1"), "format_mark {format_mark}");
+        assert!(p.run_ranges().all(|(_, c)| c.fmt_change.is_some()), "the style change is tracked on the text: {:?}", p.runs);
+        let next = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+        assert_eq!(next.props.style.as_deref(), Some("Heading1"), "no next style: the new paragraph keeps the heading style");
+        assert!(next.props.fmt_change.is_none() && next.mark.fmt_change.is_none(), "format_mark {format_mark}: {:?}", next.mark.fmt_change);
+    }
+}
+
 #[test]
 fn text_without_direct_formatting_stays_normal_when_a_heading_looks_like_normal() {
     let mut s = s();
