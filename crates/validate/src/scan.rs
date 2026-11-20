@@ -395,6 +395,10 @@ struct ElemId<'a> {
     ns: Option<&'a [u8]>,
     local: String,
     unknown: Option<String>,
+    /// The element's namespace is declared but its value could not be expanded (an entity or character
+    /// reference that does not resolve). The element may be anything, so it can never establish that
+    /// something is absent: not an ancestor, not a counterpart, not a block child.
+    unresolved: bool,
 }
 
 impl ElemId<'_> {
@@ -580,6 +584,8 @@ enum TcEnd {
 }
 
 struct Frame {
+    /// The element's namespace is unresolved: an ancestor that may be a paragraph, a deletion, a container.
+    unresolved: bool,
     is_tc: bool,
     /// A `w:p` frame: math placement is judged against paragraph ancestry.
     is_p: bool,
@@ -645,6 +651,9 @@ struct State {
     /// A note definition or listing was dropped at the fact budget.
     note_capped: bool,
     declared: Vec<Vec<String>>,
+    /// An element with an unresolved namespace was seen: what it may be is unknown, so nothing in
+    /// the part may be reported absent on its account (see `ElemId::unresolved`).
+    unresolved_ns: bool,
     frames: Vec<Frame>,
     del_depth: i64,
     wrapper_depth: i64,
@@ -839,7 +848,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "-";
-        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*3,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -907,7 +916,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     budget_stopped = true;
                     break;
                 }
-                let id = resolve_elem(reader.resolver(), e.name());
+                let mut id = resolve_elem(reader.resolver(), e.name());
                 let Some(attrs) = open_attributes(&e, &mut out) else {
                     push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
                     break;
@@ -918,6 +927,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
                 state.declared.push(decls);
+                note_unresolved_element(&mut state, &mut id, &[], &mut out);
                 push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
@@ -949,7 +959,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     }
                     root_count += 1;
                 }
-                let id = resolve_elem(reader.resolver(), e.name());
+                let mut id = resolve_elem(reader.resolver(), e.name());
                 let Some(attrs) = open_attributes(&e, &mut out) else {
                     push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
                     break;
@@ -959,6 +969,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let is_alt = enter_alt(&mut state, &id, part, acc);
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
+                note_unresolved_element(&mut state, &mut id, &decls, &mut out);
                 push_unknown_prefix(&mut out, &state.declared, &decls, id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
@@ -1060,13 +1071,21 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     // that would have reported something marks the run INCOMPLETE below (the malformed part itself
     // is Warning-only by calibration).
     let skipped_content = state.alt_noted;
-    let scan_complete = out.malformed.is_none() && !budget_stopped && !state.fact_capped && !state.refs_capped && !skipped_content && !entity_notes.1;
+    let scan_complete = out.malformed.is_none()
+        && !budget_stopped
+        && !state.fact_capped
+        && !state.refs_capped
+        && !skipped_content
+        && !state.unresolved_ns
+        && !entity_notes.1;
     out.facts_complete = scan_complete;
     out.syntax_complete = out.malformed.is_none() && !budget_stopped && !entity_notes.1;
     if !out.syntax_complete || role.conflicting() {
         state.facts.invalidate("XML source or role incomplete");
     } else if skipped_content {
         state.facts.invalidate("mc:AlternateContent subtree skipped");
+    } else if state.unresolved_ns {
+        state.facts.invalidate("element namespace unresolved");
     }
     finish_prefix(&state, part, acc);
     note_scan_incomplete(part, &state, &out, scan_complete, skipped_content, acc);
@@ -1133,6 +1152,11 @@ fn note_scan_incomplete(part: &str, state: &State, out: &PartScan, scan_complete
         // pairing check could not run and would have reported something: the run could not examine
         // everything a finding depends on. Name the part and the check that could not complete.
         acc.note(format!("{part} ends before its field/move/bookmark pairing checks could complete; they were not run"));
+        acc.set_incomplete();
+    } else if state.unresolved_ns && completion_dependent_pending(state) {
+        acc.note(format!(
+            "{part} has field/move/bookmark ranges that depend on elements whose namespace is not resolved; pairing checks were not run"
+        ));
         acc.set_incomplete();
     } else if skipped_content && completion_dependent_pending(state) {
         acc.note(format!("{part} has open field/move/bookmark ranges across skipped mc:AlternateContent; pairing checks were not run"));
@@ -1207,6 +1231,7 @@ fn frame_for(id: &ElemId) -> Frame {
     let w = id.w();
     let local = id.local.as_str();
     Frame {
+        unresolved: id.unresolved,
         is_tc: w && local == "tc",
         is_p: w && local == "p",
         is_footnote_pr: w && local == "footnotePr",
@@ -1278,13 +1303,21 @@ fn close_cell(f: &Frame, part: &str, role: PartRole, acc: &mut Acc) {
 fn mark_block_content(state: &mut State, id: &ElemId) {
     observation_contract! {
         rules: "-";
-        collections: "field.frames*1";
+        collections: "field.frames*2";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
 
+    if id.unresolved {
+        // It may be a paragraph or a table: the cell has block content, of unknown last kind.
+        if let Some(f) = state.frames.last_mut().filter(|f| f.is_tc) {
+            f.tc_has_block = true;
+            f.tc_last_block = None;
+        }
+        return;
+    }
     if !id.w() || !matches!(id.local.as_str(), "p" | "tbl" | "sdt" | "customXml" | "altChunk") {
         return;
     }
@@ -1313,7 +1346,8 @@ fn mark_block_content(state: &mut State, id: &ElemId) {
 /// level only.
 fn wrapper_is_block_level(frames: &[Frame], idx: usize) -> bool {
     for f in frames[..idx].iter().rev() {
-        if f.is_p {
+        // An ancestor of unresolved namespace may be the paragraph: block level is unknown.
+        if f.is_p || f.unresolved {
             return false;
         }
         if f.block_parent_name.is_some() {
@@ -1360,7 +1394,7 @@ fn prohibited_parent(state: &State) -> Option<&'static str> {
 fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "MATH-PLACEMENT";
-        collections: "field.frames*6";
+        collections: "field.frames*7";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1376,12 +1410,14 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
     let in_omath_para = state.frames.iter().any(|f| f.is_omath_para);
     let in_parapr = state.frames.iter().any(|f| f.is_omath_parapr);
     let in_p = state.frames.iter().any(|f| f.is_p);
+    // An ancestor whose namespace is unresolved may be the paragraph or the `m:oMath`: absence is unknown.
+    let unknown_ancestor = state.frames.iter().any(|f| f.unresolved);
     match id.local.as_str() {
         "oMath" => {
             if in_omath {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} is nested inside another m:oMath"));
             }
-            if !in_p {
+            if !in_p && !unknown_ancestor {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} occurs outside any w:p"));
             }
             if let Some(parent) = prohibited_parent(state) {
@@ -1392,7 +1428,7 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
             if in_math {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} is a descendant of a math element"));
             }
-            if !in_p {
+            if !in_p && !unknown_ancestor {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} occurs outside any w:p"));
             }
             if let Some(parent) = prohibited_parent(state) {
@@ -1401,7 +1437,7 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
         }
         // Paragraph properties are a legal child of oMathPara, not stray content.
         "oMathParaPr" if in_omath_para => {}
-        _ if !in_omath && !in_stray && !in_parapr => {
+        _ if !in_omath && !in_stray && !in_parapr && !unknown_ancestor => {
             // Batch b6 (Word for the web, 2026-11-07): a lone stray math
             // element opened clean and rendered as plain text, unlike the
             // placement cases above, which drew the corruption banner —
@@ -2102,7 +2138,7 @@ fn push_capped<T>(into: &mut Observed<Vec<(T, String)>>, cap: usize, capped: &mu
 fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, part: &str, acc: &mut Acc, empty: bool) {
     observation_contract! {
         rules: "CUSTOMXML-SCHEMA,STRUCT-DELTEXT";
-        collections: "field.move_from_end*1,field.move_from_names*1,field.move_from_start*2,field.move_start_ids*4,field.move_to_end*1,field.move_to_names*1,field.move_to_start*2";
+        collections: "field.frames*1,field.move_from_end*1,field.move_from_names*1,field.move_from_start*2,field.move_start_ids*4,field.move_to_end*1,field.move_to_names*1,field.move_to_start*2";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -2177,7 +2213,7 @@ fn record_structure(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &N
         "t" if state.del_depth > 0 => {
             acc.add("STRUCT-DELTEXT", Some(part.to_string()), format!("a w:t element appears inside a w:del in {part}"));
         }
-        "delText" if state.del_depth == 0 => {
+        "delText" if state.del_depth == 0 && !state.frames.iter().any(|f| f.unresolved) => {
             acc.add("STRUCT-DELTEXT", Some(part.to_string()), format!("a w:delText element appears outside a w:del in {part}"));
         }
         _ => {}
@@ -2441,7 +2477,8 @@ fn finish_prefix(state: &State, part: &str, acc: &mut Acc) {
             );
         }
     }
-    if state.fld_extra_end > 0 {
+    // An element of unresolved namespace may be the `w:fldChar` begin that balances the end.
+    if state.fld_extra_end > 0 && !state.unresolved_ns {
         acc.add("FLD-UNBALANCED", Some(part.to_string()), format!("{part} has {} w:fldChar end(s) with no open begin", state.fld_extra_end));
     }
 }
@@ -2632,10 +2669,45 @@ fn resolve_elem<'a>(res: &'a NamespaceResolver, name: QName<'_>) -> ElemId<'a> {
     let (r, local) = crate::xml::resolve_element(res, name);
     let local = lossy(local.as_ref());
     match r {
-        ResolveResult::Unknown(p) => ElemId { ns: None, local, unknown: Some(lossy(&p)) },
-        ResolveResult::Bound(Namespace(ns)) => ElemId { ns: Some(ns), local, unknown: None },
-        ResolveResult::Unbound => ElemId { ns: None, local, unknown: None },
+        ResolveResult::Unknown(p) => ElemId { ns: None, local, unknown: Some(lossy(&p)), unresolved: false },
+        ResolveResult::Bound(Namespace(ns)) => ElemId { ns: Some(ns), local, unknown: None, unresolved: false },
+        ResolveResult::Unbound => ElemId { ns: None, local, unknown: None, unresolved: false },
     }
+}
+
+/// Record that an element's namespace cannot be resolved. Nothing in the part may then be reported
+/// absent on its account, and a drawing reference may hide in it.
+fn note_unresolved_element(state: &mut State, id: &mut ElemId, own: &[String], out: &mut PartScan) {
+    observation_contract! {
+        rules: "-";
+        collections: "field.declared*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    id.unresolved = namespace_unresolved(id, &state.declared, own);
+    if id.unresolved {
+        state.unresolved_ns = true;
+        out.drawing_refs_complete = false;
+    }
+}
+
+/// Whether the element's namespace is unknown because its declaration cannot be expanded, as opposed to
+/// undeclared. An unresolved default namespace reaches here as the empty prefix; a named prefix is
+/// unresolved when its NEAREST declaration is.
+fn namespace_unresolved(id: &ElemId, declared: &[Vec<String>], extra: &[String]) -> bool {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    id.unknown.as_deref().is_some_and(|prefix| prefix.is_empty() || nearest_binding(declared, extra, prefix) == Binding::Unresolved)
 }
 
 /// Find an attribute with the given namespace URI and local name, returning its normalized value.

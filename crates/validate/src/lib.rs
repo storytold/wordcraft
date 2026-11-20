@@ -5401,6 +5401,68 @@ mod budget_tests {
     }
 
     #[test]
+    fn unresolved_element_namespaces_never_establish_an_absence() {
+        // `u` is the main namespace spelled through an entity this part cannot expand, so a `u:` element
+        // may be any main-namespace element. Each shape claims something is absent (outside a
+        // paragraph, unpaired, no block content, outside a deletion, no field begin) once it is
+        // spelled plainly, and must not once the element that could refute it is unresolved.
+        let year = format!("<!DOCTYPE w:document [<!ENTITY ns \"{NS_W}\">]>");
+        let validate = |body: &str| {
+            let document = format!(r#"{year}<w:document xmlns:w="{NS_W}" xmlns:m="{NS_M}"><w:body>{body}</w:body></w:document>"#);
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.into_bytes()),
+            ]))
+        };
+        let u = r#"xmlns:u="&ns;""#;
+        for (rule, claimed, refuted) in [
+            ("MATH-PLACEMENT", "<m:oMath/>".to_string(), format!("<u:p {u}><m:oMath/></u:p>")),
+            (
+                "BOOKMARK-UNPAIRED",
+                r#"<w:p><w:bookmarkStart w:id="1" w:name="b"/></w:p>"#.into(),
+                format!(r#"<w:p><w:bookmarkStart w:id="1" w:name="b"/><u:bookmarkEnd {u} w:id="1"/></w:p>"#),
+            ),
+            (
+                "STRUCT-TC-NO-P",
+                "<w:tbl><w:tr><w:tc><w:r/></w:tc></w:tr></w:tbl>".into(),
+                format!("<w:tbl><w:tr><w:tc><u:p {u}/></w:tc></w:tr></w:tbl>"),
+            ),
+            ("STRUCT-DELTEXT", "<w:p><w:r><w:delText/></w:r></w:p>".into(), format!("<w:p><u:del {u}><w:r><w:delText/></w:r></u:del></w:p>")),
+            (
+                "FLD-UNBALANCED",
+                r#"<w:p><w:fldChar w:fldCharType="end"/></w:p>"#.into(),
+                format!(r#"<w:p><u:fldChar {u} w:fldCharType="begin"/><w:fldChar w:fldCharType="end"/></w:p>"#),
+            ),
+        ] {
+            let claim = validate(&claimed);
+            assert!(claim.findings.iter().any(|f| f.rule == rule), "{rule} control: {claim:?}");
+            let unknown = validate(&refuted);
+            assert!(!unknown.findings.iter().any(|f| f.rule == rule), "{rule}: {unknown:?}");
+        }
+        // An unresolved `Relationship` element may be a relationship the drawn image uses, so its
+        // target is not "missing": the drawn image keeps its Error instead of degrading to a Warning.
+        let rel = format!(r#"<Relationship Id="rImg" Type="{NS_R}/image" Target="media/drawn.png" xmlns="&ns;"/>"#);
+        let rels_ns = "http://schemas.openxmlformats.org/package/2006/relationships";
+        let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"><w:body>{DRAWN}</w:body></w:document>"#);
+        for (rels, missing) in [
+            (format!(r#"<Relationships xmlns="{rels_ns}"/>"#), true),
+            (format!(r#"<!DOCTYPE Relationships [<!ENTITY ns "{rels_ns}">]><Relationships xmlns="{rels_ns}">{rel}</Relationships>"#), false),
+        ] {
+            let report = validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types_with_override("word/media/drawn.png", "image/png")),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.clone().into_bytes()),
+                ("word/_rels/document.xml.rels", rels.into_bytes()),
+                ("word/media/drawn.png", b"text".to_vec()),
+            ]));
+            assert_eq!(report.findings.iter().any(|f| f.rule == "REL-REF-MISSING"), missing, "{report:?}");
+            let grade = if missing { Severity::Warning } else { Severity::Error };
+            assert!(report.findings.iter().any(|f| (f.rule, f.severity) == ("MEDIA-MAGIC", grade)), "{report:?}");
+        }
+    }
+
+    #[test]
     fn malformed_relationship_sources_withhold_both_ct_demotions() {
         for (manifest, part, bytes, rule, target) in [
             (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED", "../[trash]/00af.dat"),

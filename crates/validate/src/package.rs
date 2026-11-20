@@ -1668,6 +1668,9 @@ fn parse_opc_children(
     let mut roots = 0usize;
     let mut inventory_complete = text.chars().all(craft_xml::is_xml_char);
     let mut at_start = true;
+    // An element whose namespace is unknown may be anything, including a declaration the walk did
+    // not visit, so a traversal that met one is not complete.
+    let mut unknown_namespace = false;
     // Hashing expanded attribute names can rescan an inherited URI. Bound that work
     // separately from reading namespace declarations, which are expanded once.
     let mut namespace_work = text.len().saturating_mul(16);
@@ -1686,6 +1689,7 @@ fn parse_opc_children(
                 let ns = crate::xml::resolve_element(res, e.name()).0;
                 let local = e.local_name();
                 let recognized = matches!(&ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace);
+                unknown_namespace |= matches!(&ns, ResolveResult::Unknown(_));
                 if inventory_complete {
                     inventory_complete = !matches!(&ns, ResolveResult::Unknown(_))
                         && valid_element_name(e.name().as_ref())
@@ -1727,7 +1731,7 @@ fn parse_opc_children(
             // An unevaluated DTD can change declarations or present replacement markup
             // that this walk does not traverse.
             Event::DocType(_) => inventory_complete = false,
-            Event::Eof => return (depth == 0, depth == 0 && roots == 1 && valid_root && inventory_complete),
+            Event::Eof => return (depth == 0 && !unknown_namespace, depth == 0 && roots == 1 && valid_root && inventory_complete),
         }
         at_start = false;
         buf.clear();
