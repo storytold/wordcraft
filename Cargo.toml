@@ -167,4 +167,30 @@ codegen-units = 16
 debug = 0
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
+# The framework's patches, which Cargo does not carry over to dependents: its vendored crates from craft-libs,
+# and the egui and winit forks it builds with.
+[patch.crates-io]
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "362eb2820996b475e6f21967c561219dbde24343" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
