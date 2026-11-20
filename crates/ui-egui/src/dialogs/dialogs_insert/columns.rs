@@ -74,15 +74,16 @@ pub(super) fn drop_cap_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DropCapForm) -
                 });
             });
             t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Lines to drop:")));
-                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.lines).range(1..=10)));
+                let label = r.cell(|ui| ui.label(tl!("Lines to drop:")));
+                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.lines).range(1..=10)).labelled_by(label.id));
             });
             t.row(|r| {
-                r.cell(|ui| ui.label(tl!("Distance from text:")));
+                let label = r.cell(|ui| ui.label(tl!("Distance from text:")));
                 r.cell(|ui| {
                     ui.add(
                         egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit.pt_per_unit()).measure(unit).max_decimals(2),
                     )
+                    .labelled_by(label.id)
                 });
             });
         });
@@ -448,14 +449,14 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
                                 r.cell(|ui| {
                                     let w =
                                         egui::DragValue::new(&mut c.0).speed(0.01).range(ColumnsForm::min_w()..=max).measure(unit).max_decimals(2);
-                                    if ui.add_enabled(editable, w).changed() {
+                                    if ui.add_enabled(editable, w).accessible_name(format!("{} {}", tl!("Width:"), i + 1)).changed() {
                                         changed = Some(i);
                                     }
                                 });
                                 r.cell(|ui| {
                                     if i + 1 < n {
                                         let s = egui::DragValue::new(&mut c.1).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2);
-                                        if ui.add_enabled(editable, s).changed() {
+                                        if ui.add_enabled(editable, s).accessible_name(format!("{} {}", tl!("Spacing:"), i + 1)).changed() {
                                             changed = Some(i);
                                         }
                                     } else {

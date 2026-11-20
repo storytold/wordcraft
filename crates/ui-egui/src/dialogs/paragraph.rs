@@ -61,9 +61,6 @@ pub(super) enum ParaNumber {
     Lines,
 }
 
-/// The right-to-left mark.
-const RLM: char = '\u{200F}';
-
 /// A Paragraph dialog number box for the field `key`. While the selected paragraphs differ in
 /// it, it shows nothing, not even the unit, until a value is typed or dragged in.
 pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &str, mixed: &mut BTreeSet<String>, label: &egui::Response) {
@@ -73,17 +70,16 @@ pub(super) fn para_number(ui: &mut Ui, value: &mut f32, kind: ParaNumber, key: &
     let field = match kind {
         ParaNumber::Length => egui::DragValue::new(value).speed(3.6 / unit.pt_per_unit()).max_decimals(2),
         ParaNumber::Points => egui::DragValue::new(value).speed(1.0).range(0.0..=1584.0).clamp_existing_to_range(false),
-        ParaNumber::Lines => egui::DragValue::new(value).speed(0.05).range(0.5..=5.0).clamp_existing_to_range(false),
+        ParaNumber::Lines => egui::DragValue::new(value).speed(0.05).range(0.5..=5.0).clamp_existing_to_range(false).max_decimals(2),
     };
     let field = match kind {
         ParaNumber::Length if blank => field.measure_blank(unit),
         ParaNumber::Length => field.measure(unit),
-        _ if blank => field.custom_formatter(|_, _| String::new()),
-        // Right to left, the unit's space goes after the word and a right-to-left mark closes it: a
-        // plain leading space between the digits and an Arabic unit is drawn with no width.
-        ParaNumber::Points if crate::rtl::on() => field.suffix(format!("{} {RLM}", tl!("pt"))),
-        ParaNumber::Points => field.suffix(format!(" {}", tl!("pt"))),
-        ParaNumber::Lines => field,
+        // Blank, with the parser of the box it stands for (a typed "1,5" reads as it does there).
+        ParaNumber::Points if blank => field.points().custom_formatter(|_, _| String::new()),
+        ParaNumber::Lines if blank => field.region_number().custom_formatter(|_, _| String::new()),
+        ParaNumber::Points => field.points(),
+        ParaNumber::Lines => field.region_number(),
     };
     if ui.add(field).labelled_by(label.id).changed() {
         mixed.remove(key);
