@@ -177,7 +177,9 @@ mod autosave_preference_tests {
     use serde_json::json;
 
     fn app(services: Services) -> WordApp {
-        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services)
+        let files = std::sync::Arc::new(craft::host::ScriptedFiles::new());
+        let host = craft::host::Host::builder(crate::APP).files(files).build();
+        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services).with_host(std::sync::Arc::new(host))
     }
 
     #[test]
