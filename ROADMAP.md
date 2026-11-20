@@ -1479,3 +1479,9 @@ MATH glyphs that reference the same construction now share its immutable variant
 ### Format Painter integration refresh, 2026-10-30
 
 Single-click release applies the armed painter to the target word without trailing spaces and disarms it. Explicit selections retain their scope (#1455, partial). Source and UI regressions are retained after the canvas/input module split. Earlier Windows pointer and browser qualification are historical; current-head hosted validation is pending, and native shortcut/Mint qualification is not newly claimed.
+
+### Thai dictionary wrapping (#1548) — 2026-11-06
+
+Dictionary word opportunities and safe emergency boundaries are isolated from alignment. See [Thai segmentation](docs/thai-segmentation.md).
+
+Validation is recorded in the pull request; no change to readiness estimates.
