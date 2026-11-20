@@ -316,6 +316,153 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
     assert!(!h.state().session.doc.settings.remove_personal_info, "and off again");
 }
 
+/// File › Options › Proofing › Exceptions: the checkboxes are the document's
+/// `file.proofingExceptions` settings.
+#[test]
+fn proofing_exception_checkboxes_hide_the_document_errors() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "proofing"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Exceptions for this document").is_some(), "the section is there");
+    h.get_by_label("Hide spelling errors in this document only").click();
+    h.run_steps(4);
+    assert!(h.state().session.doc.settings.hide_spelling_errors);
+    assert!(!h.state().session.doc.settings.hide_grammar_errors);
+    h.get_by_label("Hide grammar errors in this document only").click();
+    h.run_steps(4);
+    let proofing = h.state_mut().session.run("file.proofing", &json!({})).unwrap();
+    assert_eq!(proofing, json!({"hideSpellingErrors": true, "hideGrammarErrors": true}));
+    h.get_by_label("Hide spelling errors in this document only").click();
+    h.run_steps(4);
+    assert!(!h.state().session.doc.settings.hide_spelling_errors, "and off again");
+}
+
+/// The document's own checkboxes on the Proofing and Save panes.
+const DOCUMENT_CHECKBOXES: [(&str, [&str; 2]); 2] = [
+    ("proofing", ["Hide spelling errors in this document only", "Hide grammar errors in this document only"]),
+    (
+        "save",
+        [
+            "Remove my name from comments, changes and file properties when saving",
+            "Leave out the date and time of comments and tracked changes when saving",
+        ],
+    ),
+];
+
+/// The Options `pane` over the Start screen, in a `width` by `height` window at `percent`
+/// interface size. The blank document behind the Start screen has all four document options on.
+fn start_screen_options(pane: &str, width: f32, height: f32, percent: u16) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = app();
+    assert!(a.start_screen() && !a.has_document());
+    let settings = &mut a.session.doc.settings;
+    settings.hide_spelling_errors = true;
+    settings.hide_grammar_errors = true;
+    settings.remove_personal_info = true;
+    settings.remove_date_time = true;
+    a.run("ui.interfaceSize", json!({"percent": percent})).unwrap();
+    a.run("file.options", json!({"pane": pane})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, height)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// On the Start screen no document is open, so the document's own checkboxes on the Proofing
+/// and Save panes are off and unchecked, whatever the blank document behind it holds.
+#[test]
+fn document_checkboxes_are_off_on_the_start_screen() {
+    for (pane, labels) in DOCUMENT_CHECKBOXES {
+        let h = start_screen_options(pane, 1440.0, 900.0, 100);
+        for label in labels {
+            let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label);
+            assert!(checkbox.accesskit_node().is_disabled(), "{pane}: {label}");
+            assert_eq!(checkbox.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False), "{pane}: {label}");
+        }
+    }
+}
+
+/// A protected document refuses its privacy options and proofing exceptions, so their
+/// checkboxes are off while it is protected and on again once protection stops.
+#[test]
+fn document_checkboxes_are_off_while_the_document_is_protected() {
+    for (pane, labels) in DOCUMENT_CHECKBOXES {
+        let mut a = app();
+        a.run("file.new", json!({})).unwrap();
+        a.run("file.options", json!({"pane": pane})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let disabled = |h: &egui_kittest::Harness<'_, WordApp>, label: &str| {
+            h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).accesskit_node().is_disabled()
+        };
+        for label in labels {
+            assert!(!disabled(&h, label), "{pane}: {label} with a document open");
+        }
+        h.state_mut().run("review.restrict", json!({"mode": "trackedChanges"})).unwrap();
+        h.run_steps(4);
+        for label in labels {
+            assert!(disabled(&h, label), "{pane}: {label} while protected");
+        }
+        h.state_mut().run("review.restrict", json!({"stop": true})).unwrap();
+        h.run_steps(4);
+        for label in labels {
+            assert!(!disabled(&h, label), "{pane}: {label} after protection stops");
+        }
+    }
+}
+
+/// The disabled checkboxes' labels are painted dimmed but legible, and inside the pane and the
+/// window, in a 1440 by 900 window at interface sizes from 75% to 150%.
+#[test]
+fn document_checkboxes_on_the_start_screen_paint_dimmed_inside_the_pane() {
+    for percent in crate::theme::InterfaceSize::PRESETS.into_iter().filter(|p| *p <= 150) {
+        for (pane, labels) in DOCUMENT_CHECKBOXES {
+            let mut h = start_screen_options(pane, 1440.0, 900.0, percent);
+            for label in labels {
+                h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).scroll_to_me();
+                h.run_steps(4);
+                let at = format!("{percent}% {pane}: {label}");
+                let screen = h.ctx.content_rect();
+                let (clip, text) = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => Some((s.clip_rect, text.clone())),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{at} is painted"));
+                // A disabled `Ui` multiplies the colors it paints by `disabled_alpha` (0.5).
+                let alpha = text.fallback_color.a();
+                assert!((96..224).contains(&alpha), "{at} is dimmed but legible: alpha {alpha}");
+                let bounds = text.visual_bounding_rect();
+                assert!(clip.contains_rect(bounds), "{at} paints outside its clip {clip:?}: {bounds:?}");
+                assert!(screen.contains_rect(bounds), "{at} paints outside the window {screen:?}: {bounds:?}");
+            }
+        }
+    }
+}
+
 /// File › Options › Accessibility › Animation effects: Use system setting (the default), On
 /// or Off, with a line saying what the system's own setting is while it is followed.
 #[test]

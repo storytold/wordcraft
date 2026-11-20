@@ -354,6 +354,27 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
     ui.add_space(8.0);
+    // The open document's `file.proofingExceptions`: saved with it, and only the marks are hidden.
+    section(ui, "Exceptions for this document");
+    let settings = &app.session.doc.settings;
+    let open = app.has_document();
+    let rows = [
+        ("Hide spelling errors in this document only", "hideSpellingErrors", open && settings.hide_spelling_errors),
+        ("Hide grammar errors in this document only", "hideGrammarErrors", open && settings.hide_grammar_errors),
+    ];
+    // Off and unchecked on the Start screen, where no document takes the setting, and off while
+    // the document is protected.
+    ui.add_enabled_ui(crate::widgets::enabled(app, "file.proofingExceptions"), |ui| {
+        for (label, key, value) in rows {
+            let mut v = value;
+            if ui.checkbox(&mut v, tl!(label)).changed()
+                && let Err(e) = app.run("file.proofingExceptions", json!({ key: v }))
+            {
+                app.status(e);
+            }
+        }
+    });
+    ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
 }
@@ -512,18 +533,23 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
     // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
     section(ui, "Privacy for this document");
     let settings = &app.session.doc.settings;
+    let open = app.has_document();
     let rows = [
-        ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", settings.remove_personal_info),
-        ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", settings.remove_date_time),
+        ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", open && settings.remove_personal_info),
+        ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", open && settings.remove_date_time),
     ];
-    for (label, key, value) in rows {
-        let mut v = value;
-        if ui.checkbox(&mut v, tl!(label)).changed()
-            && let Err(e) = app.run("file.privacyOptions", json!({ key: v }))
-        {
-            app.status(e);
+    // Off and unchecked on the Start screen, where no document takes the setting, and off while
+    // the document is protected.
+    ui.add_enabled_ui(crate::widgets::enabled(app, "file.privacyOptions"), |ui| {
+        for (label, key, value) in rows {
+            let mut v = value;
+            if ui.checkbox(&mut v, tl!(label)).changed()
+                && let Err(e) = app.run("file.privacyOptions", json!({ key: v }))
+            {
+                app.status(e);
+            }
         }
-    }
+    });
     note(ui, "The document you are editing keeps the names and dates; only the saved file leaves them out.");
 }
 

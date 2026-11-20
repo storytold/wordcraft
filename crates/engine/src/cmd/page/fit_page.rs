@@ -931,7 +931,7 @@ fn fit_layout_options(s: &Session) -> LayoutOptions {
         hide_marked: s.prefs.markup.hidden_deletions(),
         deletions_in_balloons: s.revisions_in_balloons(),
         proofing: false,
-        proof: wordcraft_layout::ProofOptions { grammar: false, spelling: Default::default() },
+        proof: wordcraft_layout::ProofOptions { grammar: false, spelling_marks: false, spelling: Default::default() },
         numeral: s.view.numeral.resolve(crate::locale::system_locale()),
         filename: Some(Arc::from(fn_name.as_str())),
         filepath: Some(Arc::from(fn_path.as_str())),
