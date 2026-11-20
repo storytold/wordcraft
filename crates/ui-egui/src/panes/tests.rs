@@ -596,3 +596,92 @@ fn the_styles_pane_scroll_bar_leaves_the_style_markers_clear() {
         );
     }
 }
+
+/// Headings "Kilns" (Heading 1) with body "a", "Glazes" (Heading 2) with "b", "Firing"
+/// (Heading 1) with "c", with the Navigation pane open on its Headings.
+fn headings_app() -> crate::WordApp {
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Kilns\na\nGlazes\nb\nFiring\nc"));
+    for (i, style) in [(0, "Heading1"), (2, "Heading2"), (4, "Heading1")] {
+        s.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(i, 0));
+        s.run("para.style", &serde_json::json!({"style": style})).unwrap();
+    }
+    let mut app = crate::WordApp::new(s, crate::Services::default());
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    app
+}
+
+/// Press on the row labelled `from`, drag it to `to` and, unless `escape` is pressed on the way,
+/// let go there.
+fn drag_row(h: &mut egui_kittest::Harness<'static, crate::WordApp>, from: &str, to: egui::Pos2, escape: bool) {
+    use egui_kittest::kittest::Queryable;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let at = h.get_by_label(from).rect().center();
+    h.input_mut().events.extend([egui::Event::PointerMoved(at), button(at, true)]);
+    h.run_steps(1);
+    h.input_mut().events.push(egui::Event::PointerMoved(at + egui::vec2(0.0, -8.0)));
+    h.run_steps(1);
+    h.input_mut().events.push(egui::Event::PointerMoved(to));
+    h.run_steps(2);
+    if escape {
+        press(h, egui::Key::Escape, egui::Modifiers::NONE);
+    }
+    h.input_mut().events.push(button(to, false));
+    h.run_steps(3);
+}
+
+/// #4288: dragging a heading row in Navigation › Headings and letting go above another row moves
+/// the heading with its content (its subheadings and body text) before that heading, in one undo
+/// step; a line shows where while it is dragged; Escape on the way cancels.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn dragging_a_heading_row_moves_its_section() {
+    use egui_kittest::kittest::Queryable;
+    let text = |h: &egui_kittest::Harness<'static, crate::WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    let mut h = pane_harness(headings_app());
+    let kilns = h.get_by_label("Kilns").rect();
+    let above_kilns = egui::pos2(kilns.center().x, kilns.top() + 2.0);
+    drag_row(&mut h, "Firing", above_kilns, true);
+    assert_eq!(text(&h), "Kilns\na\nGlazes\nb\nFiring\nc", "Escape cancelled the drag");
+    drag_row(&mut h, "Firing", above_kilns, false);
+    assert_eq!(text(&h), "Firing\nc\nKilns\na\nGlazes\nb");
+    assert_eq!(h.state().session.sel.focus, wordcraft_doc::Pos::body(0, 0), "the caret is at the moved heading");
+    h.state_mut().run("edit.undo", serde_json::json!({})).unwrap();
+    assert_eq!(text(&h), "Kilns\na\nGlazes\nb\nFiring\nc", "one undo step");
+    // Down, past the end: "Kilns" takes "Glazes" (its subheading) and the body text along.
+    h.run_steps(2);
+    let firing = h.get_by_label("Firing").rect();
+    drag_row(&mut h, "Kilns", egui::pos2(firing.center().x, firing.bottom() + 6.0), false);
+    assert_eq!(text(&h), "Firing\nc\nKilns\na\nGlazes\nb");
+    // Into its own content: nothing moves.
+    h.run_steps(2);
+    let glazes = h.get_by_label("Glazes").rect();
+    drag_row(&mut h, "Kilns", egui::pos2(glazes.center().x, glazes.top() + 2.0), false);
+    assert_eq!(text(&h), "Firing\nc\nKilns\na\nGlazes\nb");
+}
+
+/// The line shows between rows while a heading is dragged, never inside its own content.
+#[test]
+fn a_dragged_heading_lands_between_rows_outside_its_content() {
+    let row = |y: f32, block: Option<usize>, level: u8| super::nav::DropRow {
+        rect: egui::Rect::from_min_size(egui::pos2(0.0, y), egui::vec2(100.0, 20.0)),
+        block,
+        level,
+    };
+    // Kilns (0, level 0), Glazes (2, level 1), Firing (4, level 0).
+    let rows = [row(0.0, Some(0), 0), row(20.0, Some(2), 1), row(40.0, Some(4), 0)];
+    let target = |from: usize, y: f32| super::nav::drop_target(&rows, from, y);
+    assert_eq!(target(4, 5.0), Some((0.0, Some(0))), "above Kilns");
+    assert_eq!(target(4, 45.0), None, "Firing stays where it is");
+    assert_eq!(target(0, 25.0), None, "not inside its own content");
+    assert_eq!(target(0, 35.0), None, "nor just after it");
+    assert_eq!(target(0, 55.0), Some((60.0, None)), "the end");
+    assert_eq!(target(2, 5.0), Some((0.0, Some(0))), "a subheading moves out of its parent");
+    assert_eq!(target(9, 5.0), None, "a row that isn't there");
+    // Folded headings stay folded where their heading went.
+    let p = |i: usize| wordcraft_doc::Path::top(i);
+    let moved = |i: usize, tracked: bool| super::nav::moved_path(&p(i), 4, 2, 0, tracked).0[0];
+    assert_eq!((moved(0, false), moved(2, false), moved(4, false), moved(5, false)), (2, 4, 0, 1));
+    assert_eq!((moved(0, true), moved(4, true)), (2, 6));
+    let down = |i: usize| super::nav::moved_path(&p(i), 0, 4, 6, false).0[0];
+    assert_eq!((down(0), down(2), down(4), down(5)), (2, 4, 0, 1));
+}

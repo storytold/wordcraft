@@ -55,6 +55,7 @@ fn run_joined(s: &mut Session, id: &str) -> CmdResult {
 
 const LEVEL: &str = r#"{"level": 1-9 | "body"}"#;
 const BLOCK: &str = r#"{"block"?: body paragraph index (default: the selection)}"#;
+const MOVE: &str = r#"{"block": body paragraph index of a heading, "before": body paragraph index of another heading | "end"} (the heading moves with everything under it)"#;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -99,6 +100,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(BLOCK)
             .when(in_outline)
             .pure(),
+        // Dragging a heading in the Navigation pane: in any view, by index rather than selection.
+        CommandSpec::new("outline.moveSubtree", "Move Heading and Content", "Navigation Pane", move_subtree).params(MOVE),
         CommandSpec::new("outline.showLevel", "Show Level", "Outlining › Outline Tools", |s, v| {
             let level = match v.get("level") {
                 Some(Value::String(a)) if a.eq_ignore_ascii_case("all") => 0,
@@ -352,6 +355,84 @@ fn select_subtree(s: &mut Session, v: &Value) -> CmdResult {
     let anchor = s.doc.clamp(&Pos::body(start, 0));
     let focus = block_end(&s.doc, end - 1);
     s.sel = Selection { anchor, focus };
+    s.goal_x = None;
+    sel_result(s)
+}
+
+/// A heading's body block index from parameter `key`: a number naming a heading.
+fn heading_param(levels: &[u8], v: &Value, key: &str) -> Result<usize, CmdError> {
+    let i = match v.get(key) {
+        Some(x) => x.as_u64().map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
+        None => return Err(CmdError::Params(format!("`{key}` is required: {MOVE}"))),
+    };
+    match i {
+        Some(i) if levels.get(i).is_some_and(|l| *l < BODY) => Ok(i),
+        _ => Err(CmdError::Params(format!("`{key}` must be the body paragraph index of a heading: {MOVE}"))),
+    }
+}
+
+/// Move Heading and Content (dragging a heading in the Navigation pane, as in Word): heading
+/// `block` and everything under it, down to the next heading of its level or higher, go before
+/// heading `before` (or to the end of the document). Levels don't change. One undo step; with
+/// Track Changes on it is recorded as a move. The caret ends at the start of the moved heading.
+fn move_subtree(s: &mut Session, v: &Value) -> CmdResult {
+    let levels = ol::levels(&s.doc);
+    let len = levels.len();
+    let start = heading_param(&levels, v, "block")?;
+    let before = match v.get("before") {
+        Some(Value::String(e)) if e.eq_ignore_ascii_case("end") => len,
+        _ => heading_param(&levels, v, "before")?,
+    };
+    let end = ol::subtree_end(&levels, start).clamp(start + 1, len);
+    if before > start && before < end {
+        return Err(CmdError::Failed("a heading can't move into its own content".into()));
+    }
+    if before == start || before == end {
+        return Err(CmdError::Failed("the heading is already there".into()));
+    }
+    let moved = s.doc.body.get(start..end).ok_or_else(|| CmdError::Failed("bad range".into()))?;
+    if moved.iter().any(|b| b.as_para().is_some_and(|p| p.section.is_some())) {
+        return Err(CmdError::Failed("a heading whose content holds a section break doesn't move".into()));
+    }
+    // The document ends with a paragraph that carries no section break: what ends it after the
+    // move must too.
+    let last = if before == len {
+        end - 1
+    } else if end == len {
+        start.saturating_sub(1)
+    } else {
+        len - 1
+    };
+    if !s.doc.body.get(last).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_none()) {
+        return Err(CmdError::Failed("the document has to end with a paragraph".into()));
+    }
+    // A content control reaching across either end of the content, or across the place it
+    // lands, would be cut in two.
+    let block_of = |p: &Pos| p.path.0.first().map(|i| *i as usize);
+    for r in s.doc.control_ranges(StoryRef::Body) {
+        let (Some(a), Some(b)) = (block_of(&r.start), block_of(&r.end)) else { continue };
+        if (start..end).contains(&a) != (start..end).contains(&b) || (a < before && before <= b) {
+            return Err(CmdError::Failed("a content control is in the way".into()));
+        }
+    }
+    let a = Pos::body(start, 0);
+    let b = block_end(&s.doc, end - 1);
+    super::controls::check_delete(s, &a, &b)?;
+    let at = if s.doc.settings.track_changes {
+        super::moves::move_blocks_tracked(s, start, end, before)?
+    } else {
+        // The blocks themselves move, with everything anchored in them.
+        let n = end - start;
+        let (range, at) = if before < start { (before..end, before) } else { (start..before, before - n) };
+        let slice = s.doc.body.get_mut(range).ok_or_else(|| CmdError::Failed("bad range".into()))?;
+        if before < start {
+            slice.rotate_right(n);
+        } else {
+            slice.rotate_left(n);
+        }
+        at
+    };
+    s.sel = Selection::caret(s.doc.clamp(&Pos::body(at, 0)));
     s.goal_x = None;
     sel_result(s)
 }

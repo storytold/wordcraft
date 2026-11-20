@@ -37,6 +37,8 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     ui.separator();
+    // Where a dragged heading may be dropped: the rows, and the empty pane below them.
+    let list = ui.available_rect_before_wrap();
     egui::ScrollArea::vertical().show(ui, |ui| match app.ui.nav_tab.as_str() {
         "pages" => {
             let l = app.session.layout();
@@ -83,12 +85,24 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             let collapsed_flags: Vec<bool> = items.iter().enumerate().map(|(i, (p, _, _))| has_children[i] && app.ui.nav_collapsed.contains(p)).collect();
             let levels: Vec<u8> = items.iter().map(|(_, lv, _)| *lv).collect();
             let visible = visible_headings(&levels, &collapsed_flags);
+            // A heading row being dragged (#4288): the row's id and its heading's body index.
+            let drag_id = app.window_id("nav_heading_drag");
+            let dragging: Option<(egui::Id, usize)> = ui.data(|d| d.get_temp(drag_id));
+            let mut rows: Vec<DropRow> = Vec::new();
             for (i, (path, lv, txt)) in items.into_iter().enumerate() {
                 if !visible[i] {
                     continue;
                 }
                 let collapsed = collapsed_flags[i];
                 let (toggle, r) = nav_heading(ui, lv, &txt, current == Some(i), has_children[i].then_some(collapsed));
+                // Only headings in the body text itself (not in a table) move.
+                let block = (path.0.len() == 1).then(|| path.last());
+                rows.push(DropRow { rect: r.rect, block, level: lv });
+                if r.drag_started()
+                    && let Some(b) = block
+                {
+                    ui.data_mut(|d| d.insert_temp(drag_id, (r.id, b)));
+                }
                 if toggle {
                     if !app.ui.nav_collapsed.remove(&path) {
                         app.ui.nav_collapsed.insert(path);
@@ -102,8 +116,97 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
                     app.canvas.want_focus = true;
                 }
             }
+            if let Some((row, from)) = dragging {
+                drag_heading(app, ui, (drag_id, row), from, &rows, list);
+            }
         }
     });
+}
+
+/// A heading row as a place to drop a dragged heading.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DropRow {
+    pub(super) rect: egui::Rect,
+    /// The heading's body block index; `None` for a heading in a table, which doesn't move.
+    pub(super) block: Option<usize>,
+    pub(super) level: u8,
+}
+
+/// Where the heading at body block `from` lands when dropped with the pointer at height `y`
+/// over the shown rows: before the first body heading row whose middle is below the pointer
+/// (`Some(block)`), or at the end (`None`), with the height of the line that shows it. Nothing
+/// where it would land in its own content or stay where it is.
+pub(super) fn drop_target(rows: &[DropRow], from: usize, y: f32) -> Option<(f32, Option<usize>)> {
+    let src = rows.iter().position(|r| r.block == Some(from))?;
+    let level = rows.get(src)?.level;
+    // Its own content ends at the next row of its level or higher.
+    let own_end = rows.iter().enumerate().skip(src + 1).find(|(_, r)| r.level <= level).map_or(rows.len(), |(k, _)| k);
+    let (k, at) = match rows.iter().enumerate().find(|(_, r)| r.block.is_some() && r.rect.center().y > y) {
+        Some((k, r)) => (k, (r.rect.top(), r.block)),
+        None => (rows.len(), (rows.last()?.rect.bottom(), None)),
+    };
+    (!(src..=own_end).contains(&k)).then_some(at)
+}
+
+/// While a heading row is dragged: a line shows where the heading would land, and letting go
+/// there moves it with its content (`outline.moveSubtree`). Escape, or letting go away from the
+/// list, cancels.
+fn drag_heading(app: &mut WordApp, ui: &mut Ui, (drag_id, row): (egui::Id, egui::Id), from: usize, rows: &[DropRow], list: egui::Rect) {
+    let (escape, released, down, pointer) =
+        ui.input(|i| (i.key_pressed(egui::Key::Escape), i.pointer.primary_released(), i.pointer.primary_down(), i.pointer.latest_pos()));
+    // egui drops a drag on Escape itself: a held button with no drag is what is left of it.
+    let cancelled = escape || (!released && (!down || ui.ctx().dragged_id() != Some(row)));
+    if cancelled || released {
+        ui.data_mut(|d| d.remove::<(egui::Id, usize)>(drag_id));
+    }
+    let target = pointer.filter(|p| list.contains(*p)).and_then(|p| drop_target(rows, from, p.y));
+    let Some((y, before)) = target.filter(|_| !cancelled) else { return };
+    if !released {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        // Drawn over the whole list, so the line after the last row isn't clipped.
+        let painter = egui::Painter::new(ui.ctx().clone(), ui.layer_id(), list);
+        painter.hline(list.x_range(), y, Stroke::new(2.0, Tokens::get(ui.ctx()).accent));
+        return;
+    }
+    let tracked = app.session.doc.settings.track_changes;
+    let levels = wordcraft_layout::outline::levels(&app.session.doc);
+    let n = wordcraft_layout::outline::subtree_end(&levels, from).saturating_sub(from);
+    let to = before.unwrap_or(levels.len());
+    if app.run("outline.moveSubtree", json!({"block": from, "before": before.map_or(json!("end"), |b| json!(b))})).is_ok() {
+        // Folded headings stay folded where they went.
+        let folded = std::mem::take(&mut app.ui.nav_collapsed);
+        app.ui.nav_collapsed = folded.into_iter().map(|p| moved_path(&p, from, n, to, tracked)).collect();
+        app.canvas.scroll_to_caret = true;
+    }
+}
+
+/// Where the heading at `path` is once the `n` body blocks at `from` moved before block `to`:
+/// they move, or with Track Changes on a copy of them goes there.
+pub(super) fn moved_path(path: &Path, from: usize, n: usize, to: usize, tracked: bool) -> Path {
+    let Some(i) = path.0.first().map(|i| *i as usize) else { return path.clone() };
+    let end = from.saturating_add(n);
+    let j = if tracked {
+        if i >= to { i.saturating_add(n) } else { i }
+    } else if to < from {
+        if (to..from).contains(&i) {
+            i.saturating_add(n)
+        } else if (from..end).contains(&i) {
+            i - from + to
+        } else {
+            i
+        }
+    } else if (from..end).contains(&i) {
+        (i - from + to).saturating_sub(n)
+    } else if (end..to).contains(&i) {
+        i - n
+    } else {
+        i
+    };
+    let mut p = path.clone();
+    if let Some(first) = p.0.first_mut() {
+        *first = u32::try_from(j).unwrap_or(u32::MAX);
+    }
+    p
 }
 
 /// Which headings the pane shows: those under a collapsed heading (every following heading
@@ -182,7 +285,11 @@ pub(super) fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, co
             // The trailing grow atom takes the spare width, so the text starts flush left
             // under its parent instead of centred, as in Word (#1199). A minimum height
             // keeps short headings on one row; a wrapped one becomes as tall as it needs.
-            egui::Button::selectable(selected, (label, egui::Atom::grow())).wrap().min_size(vec2(width, ui.spacing().interact_size.y)),
+            // Dragging a row moves its heading with its content (#4288).
+            egui::Button::selectable(selected, (label, egui::Atom::grow()))
+                .wrap()
+                .min_size(vec2(width, ui.spacing().interact_size.y))
+                .sense(egui::Sense::click_and_drag()),
         );
         (toggled, r)
     })
