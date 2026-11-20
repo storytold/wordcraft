@@ -264,6 +264,12 @@ pub(super) fn mini_font(tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
     font
 }
 
+/// An environment directory must be absolute: an empty or relative base would scan fonts
+/// beneath the working directory instead of the platform's system or user font folder.
+fn absolute_font_dir(value: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    value.map(std::path::PathBuf::from).filter(|path| path.is_absolute())
+}
+
 /// The platform's font folders (the system's and the user's), scanned by [`FontDb::global`].
 /// Empty on wasm.
 pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
@@ -271,7 +277,7 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
     if cfg!(target_arch = "wasm32") {
         return dirs;
     }
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let home = absolute_font_dir(std::env::var_os("HOME"));
     if cfg!(target_os = "macos") {
         dirs.extend(["/System/Library/Fonts", "/Library/Fonts"].map(Into::into));
         if let Some(h) = &home {
@@ -288,10 +294,10 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
             }
         }
     } else if cfg!(windows) {
-        let root = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+        let root = absolute_font_dir(std::env::var_os("WINDIR")).unwrap_or_else(|| "C:\\Windows".into());
         dirs.push(root.join("Fonts"));
-        if let Some(l) = std::env::var_os("LOCALAPPDATA") {
-            dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
+        if let Some(l) = absolute_font_dir(std::env::var_os("LOCALAPPDATA")) {
+            dirs.push(l.join("Microsoft\\Windows\\Fonts"));
         }
     } else {
         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into));
@@ -510,4 +516,70 @@ fn static_weight(file: f32, family: &str) -> f32 {
 pub(super) fn style_italic(style: &str) -> bool {
     let s = norm(style);
     s.contains("italic") || s.contains("oblique") || s == "it"
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod environment_directory_tests {
+    use super::system_font_dirs;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn system_font_dirs_reject_invalid_environment_paths() {
+        const CHILD: &str = "WORDCRAFT_FONT_DIRS_TEST_CHILD";
+        const COUNT: &str = "WORDCRAFT_FONT_DIRS_TEST_EXPECTED_COUNT";
+        const EXPECTED: &str = "WORDCRAFT_FONT_DIRS_TEST_EXPECTED_";
+        if std::env::var_os(CHILD).is_some() {
+            let count: usize = std::env::var(COUNT).unwrap().parse().unwrap();
+            let expected: Vec<PathBuf> = (0..count).map(|i| std::env::var_os(format!("{EXPECTED}{i}")).unwrap().into()).collect();
+            let dirs = system_font_dirs();
+            assert!(dirs.iter().all(|dir| dir.is_absolute()), "{dirs:?}");
+            assert!(dirs.starts_with(&expected), "expected prefix {expected:?}, got {dirs:?}");
+            return;
+        }
+
+        // Isolate environment changes in fresh processes; no font files are opened.
+        let check = |variables: &[(&str, &Path)], expected: &[PathBuf]| {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            let name = concat!(module_path!(), "::system_font_dirs_reject_invalid_environment_paths").split_once("::").unwrap().1;
+            child.args(["--exact", name]).env(CHILD, "1").env(COUNT, expected.len().to_string());
+            for variable in ["HOME", "WINDIR", "LOCALAPPDATA"] {
+                child.env_remove(variable);
+            }
+            for (variable, value) in variables {
+                child.env(variable, value);
+            }
+            for (i, path) in expected.iter().enumerate() {
+                child.env(format!("{EXPECTED}{i}"), path);
+            }
+            let output = child.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "{variables:?}: {stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+            assert!(stdout.contains("1 passed"), "{stdout}");
+        };
+        let base = std::env::current_dir().unwrap().join("font-directory-test");
+        if cfg!(windows) {
+            let default = [PathBuf::from("C:\\Windows").join("Fonts")];
+            check(&[], &default);
+            check(&[("WINDIR", Path::new("")), ("LOCALAPPDATA", Path::new(""))], &default);
+            check(&[("WINDIR", Path::new("relative-windows")), ("LOCALAPPDATA", Path::new("relative-local"))], &default);
+            let (windows, local) = (base.join("windows"), base.join("local"));
+            check(&[("WINDIR", &windows), ("LOCALAPPDATA", &local)], &[windows.join("Fonts"), local.join("Microsoft\\Windows\\Fonts")]);
+        } else {
+            let system: Vec<PathBuf> = if cfg!(target_os = "macos") {
+                ["/System/Library/Fonts", "/Library/Fonts"].map(Into::into).to_vec()
+            } else {
+                ["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into).to_vec()
+            };
+            check(&[], &system);
+            check(&[("HOME", Path::new(""))], &system);
+            check(&[("HOME", Path::new("relative-home"))], &system);
+            let mut expected = system;
+            if cfg!(target_os = "macos") {
+                expected.push(base.join("Library/Fonts"));
+            } else {
+                expected.extend([base.join(".fonts"), base.join(".local/share/fonts")]);
+            }
+            check(&[("HOME", &base)], &expected);
+        }
+    }
 }
