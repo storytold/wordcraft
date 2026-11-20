@@ -427,6 +427,24 @@ fn a_family_partly_loaded_by_a_character_fallback_is_loaded_whole_for_a_run() {
 }
 
 #[test]
+fn a_loaded_last_resort_face_does_not_skip_the_preferred_family_for_a_run() {
+    // Once a character's search has loaded the placeholder face, a run it maps must still load
+    // the preferred fallback family, not the first installed file in path order.
+    let dir = font_dir("run-last-resort");
+    let regular = "SourceSans3-Regular.ttf";
+    std::fs::write(dir.join("1-other.ttf"), mapping(regular, "Sysfont Other", 0xF_0007, 0xF_0008)).unwrap();
+    std::fs::write(dir.join("2-preferred.ttf"), mapping(regular, "Hiragino Sans", 0xF_0007, 0xF_0008)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    let bytes = FontBytes::Owned(Arc::new(mapping(regular, "Sysfont Other", 0xF_0007, 0xF_0008)));
+    let placeholder = Arc::new(make_face(bytes, 0, ".LastResort".into(), "Regular".into(), ".LastResort".into(), Vec::new()).unwrap());
+    assert!(placeholder.covers('\u{F0007}') && placeholder.covers('\u{F0008}'));
+    db.faces.write().unwrap().push(placeholder);
+    let f = db.fallback_for_run(&['\u{F0007}', '\u{F0008}'], latin.id(), false, false).expect("an installed font maps the run");
+    assert_eq!(f.family, "Hiragino Sans");
+}
+
+#[test]
 fn a_preferred_fallback_family_loads_only_when_it_maps_the_character() {
     // A character no loaded font covers loaded every installed family in the fallback list up
     // to one that covers it, and kept them all: an emoji loaded every CJK family a Mac has,
