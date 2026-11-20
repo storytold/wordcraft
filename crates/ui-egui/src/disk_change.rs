@@ -17,12 +17,15 @@
 //! so meanwhile. Headless sessions, tests and the web build don't watch files: only the
 //! window's frame loop calls [`WordApp::disk_tick`].
 
-use egui::{RichText, Ui};
+use craft::platform::clock::monotonic_ms;
+use craft::theme::variant::Tone;
+use craft::ui::contract::{BodyCx, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::Row;
+use craft::ui::notices::{Notice, NoticeAction};
+use egui::Ui;
 use serde_json::json;
 
 use crate::WordApp;
-use crate::clock::now_ms;
-use crate::theme::Tokens;
 
 /// How often, at most, the files are looked at while the window has the focus, in
 /// milliseconds: one `stat` call per open document with a file, cheap enough to repeat, and
@@ -58,7 +61,7 @@ impl WordApp {
         let focused = ctx.input(|i| i.focused);
         let regained = focused && !self.window_focused;
         self.window_focused = focused;
-        let now = now_ms();
+        let now = monotonic_ms();
         if regained || now - self.disk_check_at >= POLL_MS {
             self.disk_check_at = now;
             self.check_disk_change();
@@ -191,45 +194,41 @@ impl WordApp {
     }
 }
 
-/// The bar under the ribbon while the document on screen has a notice: its file changed on
-/// disk while it had unsaved changes, or changed and could not be read. Reload or Keep mine.
+/// Whether the `diskChange` slot under the ribbon has a notice to show: the shown document's file
+/// changed on disk while it had unsaved changes, or changed and could not be read.
+pub(crate) fn bar_offer(app: &WordApp) -> bool {
+    app.disk_notice().is_some()
+}
+
+/// The bar under the ribbon while the document on screen has a notice. Reload or Keep mine.
 /// The file itself is looked at by [`WordApp::check_disk_change`], not here.
-pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
+pub(crate) fn bar(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let Some(why) = app.disk_notice().cloned() else { return };
     let name = app.session.path.as_ref().and_then(|p| p.file_name()).map_or_else(|| app.title_stem(), |n| n.to_string_lossy().to_string());
-    let t = Tokens::get(ui.ctx());
-    egui::Panel::top("disk_change_bar")
-        .exact_size(36.0)
-        .show_separator_line(false)
-        .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(12, 0)))
-        .show(ui, |ui| {
-            let full = ui.max_rect();
-            ui.painter().hline(full.x_range(), full.bottom() - 0.5, egui::Stroke::new(1.0, t.border));
-            ui.horizontal_centered(|ui| {
-                let (message, reload_hint, keep_hint) = match &why {
-                    DiskNotice::Unsaved => (
-                        crate::i18n::fmt(tl!("{name} was changed on disk by another program."), &[("name", &name)]),
-                        tl!("Read the file again; Undo brings your version back."),
-                        tl!("Keep your version; Save writes it over the file."),
-                    ),
-                    DiskNotice::Unreadable(error) => (
-                        crate::i18n::fmt(
-                            tl!("{name} was changed on disk by another program, but could not be read: {error}"),
-                            &[("name", &name), ("error", error)],
-                        ),
-                        tl!("Try reading the file again now."),
-                        tl!("Keep the document as it is; Save writes it over the file."),
-                    ),
-                };
-                ui.add(egui::Label::new(RichText::new(message).color(t.text)).truncate());
-                if ui.add(crate::widgets::primary_button(ui, tl!("Reload"))).on_hover_text(reload_hint).clicked() {
-                    app.reload_from_disk();
-                }
-                if ui.button(tl!("Keep mine")).on_hover_text(keep_hint).clicked() {
-                    app.keep_mine();
-                }
-            });
-        });
+    let (message, tone) = match &why {
+        DiskNotice::Unsaved => (crate::i18n::fmt(tl!("{name} was changed on disk by another program."), &[("name", &name)]), Tone::Info),
+        DiskNotice::Unreadable(error) => (
+            crate::i18n::fmt(
+                tl!("{name} was changed on disk by another program, but could not be read: {error}"),
+                &[("name", &name), ("error", error)],
+            ),
+            Tone::Bad,
+        ),
+    };
+    // The body can run twice in a pass (measuring, then drawing): the notice is built in it each time.
+    let shown = Row::new().show(ui, |ui, _| {
+        Notice::new(tone, message.to_string())
+            .id_salt("diskChange")
+            .action(NoticeAction::new(tl!("Reload").to_string()))
+            .action(NoticeAction::new(tl!("Keep mine").to_string()))
+            .show(ui)
+            .action
+    });
+    match shown.inner.flatten() {
+        Some(0) => app.reload_from_disk(),
+        Some(1) => app.keep_mine(),
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -330,7 +329,7 @@ mod tests {
         assert!(app.autosaves(), "AutoSave covers a file saved here");
         app.run("text.insert", json!({"text": "X"})).unwrap();
         std::fs::write(&path, "their text").unwrap();
-        app.autosave_tick(now_ms() + 100_000.0);
+        app.autosave_tick(monotonic_ms() + 100_000.0);
         assert_eq!(std::fs::read(&path).unwrap(), b"their text", "AutoSave waited");
         assert!(app.session.dirty);
         assert!(app.autosaves(), "and stays on");

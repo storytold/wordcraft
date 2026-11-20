@@ -1,10 +1,26 @@
-use super::arrange::{align_menu, group_menu, rotate_menu, wrap_menu};
-use super::common::{mi, size_menu, stack};
-use super::language::mi_check;
-use super::{MeasureExt, Ui, WordApp, big, group, json, menu_button, small, vec2};
+use craft::behavior::{ColumnWidth, IconId};
+use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::theme::ControlSize;
+use craft::ui::buttons::{Arrangement, Button};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::{Divider, Text};
+use craft::ui::layout_components::{Grid, Row, Stack};
+use craft::ui::menu::MenuItem;
+use craft::ui::runtime::commands::CommandRef;
+use craft::ui::runtime::env::UnitKind;
+use craft::ui::style::TypeRole;
+use craft::ui::text::NumberField;
 
-// Layout › Margins, Orientation, Size and Columns: the caret section's setting has a check
-// mark, as Text Direction's does (#1206).
+use super::arrange::{align_menu, group_menu, rotate_menu, wrap_menu};
+use super::common::{menu_button, size_menu};
+use super::{Ui, WordApp, json};
+use crate::undo_marks::apply_edits;
+
+/// The columns of each half of the Paragraph group: a label and its field.
+const PARAGRAPH_GRID: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
+
+// Layout › Margins, Orientation, Size and Columns: the caret section's setting is marked, as
+// Text Direction's is (#1206).
 pub(super) fn margins_items(ui: &mut Ui, app: &mut WordApp) {
     let current = wordcraft_engine::cmd::page::margins_preset_at(&app.session);
     // The two uniform presets name their margin in the measurement unit (`2,54 cm`, #838).
@@ -17,20 +33,23 @@ pub(super) fn margins_items(ui: &mut Ui, app: &mut WordApp) {
         ("Office 2003 Default", "office2003", None),
     ] {
         let label = match uniform {
-            Some(pt) => crate::i18n::fmt(tl!(l), &[("size", &crate::options::length(pt))]),
+            Some(pt) => crate::i18n::fmt(tl!(l), &[("size", &app.session.format_length(pt))]),
             None => l.to_string(),
         };
         // Mirrored margins come from the document as well as from the preset (#1181).
         let on = current == Some(k) || (k == "mirrored" && app.session.doc.settings.mirror_margins);
-        mi_check(ui, app, &label, on, "layout.margins", json!({"preset": k}));
+        MenuItem::command(CommandRef::with_params("layout.margins", json!({"preset": k})))
+            .label(tl!(label.as_str()).to_string())
+            .radio_mark(on)
+            .show(ui);
     }
-    mi(ui, app, "Custom Margins…", "ui.dialog", json!({"name": "pageSetup"}));
+    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "pageSetup"}))).label(tl!("Custom Margins…")).show(ui);
 }
 
 pub(super) fn orientation_items(ui: &mut Ui, app: &mut WordApp) {
     let land = wordcraft_engine::cmd::page::sect(&app.session).landscape;
-    mi_check(ui, app, "Portrait", !land, "layout.orientation", json!({"value": "portrait"}));
-    mi_check(ui, app, "Landscape", land, "layout.orientation", json!({"value": "landscape"}));
+    MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "portrait"}))).label(tl!("Portrait")).radio_mark(!land).show(ui);
+    MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "landscape"}))).label(tl!("Landscape")).radio_mark(land).show(ui);
 }
 
 pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
@@ -42,182 +61,164 @@ pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
         ("Left", "left", json!({"preset": "left"})),
         ("Right", "right", json!({"preset": "right"})),
     ] {
-        mi_check(ui, app, l, current == Some(k), "layout.columns", params);
+        MenuItem::command(CommandRef::with_params("layout.columns", params)).label(tl!(l)).radio_mark(current == Some(k)).show(ui);
     }
-    ui.separator();
-    mi(ui, app, "More Columns…", "ui.dialog", json!({"name": "columns"}));
+    Divider::horizontal().show(ui);
+    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "columns"}))).label(tl!("More Columns…")).show(ui);
 }
 
-pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Page Setup", Some("layout.pageSetup"), app, |ui, app| {
-        // Text Direction works on what the caret is in: table cells, a text box, else the section.
-        let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("textDirection", Some("Text\nDirection"), "Text Direction", true, "layout.textDirection"),
-            |ui, app| {
+/// Fills the Layout ribbon tab (Page Setup, Paragraph, Arrange).
+pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    row.group(
+        RibbonGroup::new("layout.pageSetup", tl!("Page Setup"), IconId::new("wordcraft.more").into()).launcher(CommandRef::new("layout.pageSetup")),
+        |ui| {
+            // Text Direction works on what the caret is in: table cells, a text box, else the section.
+            let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
+            let stacked =
+                |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon)).arrangement(Arrangement::Stacked);
+            menu_button(ui, stacked("Text\nDirection", "textDirection"), tl!("Text Direction"), Some("layout.textDirection"), |ui, _| {
                 use wordcraft_doc::props::TextDirection;
                 for (label, d) in [
                     ("Horizontal", TextDirection::Horizontal),
                     ("Rotate all text 90°", TextDirection::Down),
                     ("Rotate all text 270°", TextDirection::Up),
                 ] {
-                    mi_check(ui, app, label, dir == d, "layout.textDirection", json!({"value": d.ooxml()}));
+                    MenuItem::command(CommandRef::with_params("layout.textDirection", json!({"value": d.ooxml()})))
+                        .label(tl!(label))
+                        .radio_mark(dir == d)
+                        .show(ui);
                 }
-            },
-        );
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("margins", Some("Margins"), "Margins", true, "layout.margins"), margins_items);
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("orientation", Some("Orientation"), "Orientation", true, "layout.orientation"),
-            orientation_items,
-        );
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("size", Some("Size"), "Size", true, "layout.size"), size_menu);
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("columns", Some("Columns"), "Columns", true, "layout.columns"), columns_items);
-        stack(ui, |ui| {
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("breaks", Some("Breaks"), "Breaks", false, "layout.break"), |ui, app| {
-                ui.label(egui::RichText::new(tl!("Page Breaks")).strong());
-                mi(ui, app, "Page", "layout.break", json!({"kind": "page"}));
-                mi(ui, app, "Column", "layout.break", json!({"kind": "column"}));
-                mi(ui, app, "Text Wrapping", "layout.break", json!({"kind": "textWrapping"}));
-                ui.label(egui::RichText::new(tl!("Section Breaks")).strong());
-                mi(ui, app, "Next Page", "layout.break", json!({"kind": "nextPage"}));
-                mi(ui, app, "Continuous", "layout.break", json!({"kind": "continuous"}));
-                mi(ui, app, "Even Page", "layout.break", json!({"kind": "evenPage"}));
-                mi(ui, app, "Odd Page", "layout.break", json!({"kind": "oddPage"}));
             });
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("lineNumbers", Some("Line Numbers"), "Line Numbers", false, "layout.lineNumbers"),
-                |ui, app| {
+            menu_button(ui, stacked("Margins", "margins"), tl!("Margins"), Some("layout.margins"), |ui, _| margins_items(ui, app));
+            menu_button(ui, stacked("Orientation", "orientation"), tl!("Orientation"), Some("layout.orientation"), |ui, _| {
+                orientation_items(ui, app)
+            });
+            menu_button(ui, stacked("Size", "size"), tl!("Size"), Some("layout.size"), |ui, _| size_menu(ui, app));
+            menu_button(ui, stacked("Columns", "columns"), tl!("Columns"), Some("layout.columns"), |ui, _| columns_items(ui, app));
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon));
+                menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| {
+                    MenuItem::heading(tl!("Page Breaks")).show(ui);
+                    for (l, k) in [("Page", "page"), ("Column", "column"), ("Text Wrapping", "textWrapping")] {
+                        MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
+                    }
+                    MenuItem::heading(tl!("Section Breaks")).show(ui);
+                    for (l, k) in [("Next Page", "nextPage"), ("Continuous", "continuous"), ("Even Page", "evenPage"), ("Odd Page", "oddPage")] {
+                        MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
+                    }
+                });
+                menu_button(ui, inline("Line Numbers", "lineNumbers"), tl!("Line Numbers"), Some("layout.lineNumbers"), |ui, _| {
                     for (l, v) in [
                         ("None", "none"),
                         ("Continuous", "continuous"),
                         ("Restart Each Page", "restartPage"),
                         ("Restart Each Section", "restartSection"),
                     ] {
-                        mi(ui, app, l, "layout.lineNumbers", json!({"value": v}));
+                        MenuItem::command(CommandRef::with_params("layout.lineNumbers", json!({"value": v}))).label(tl!(l)).show(ui);
                     }
-                    ui.separator();
-                    mi(ui, app, "Line Numbering Options…", "ui.dialog", json!({"name": "lineNumbers"}));
-                },
-            );
-            let hy = app.session.doc.settings.auto_hyphenation;
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("hyphenation", Some("Hyphenation"), "Hyphenation", false, "layout.hyphenation"),
-                |ui, app| {
-                    mi(ui, app, if hy { "✓ Automatic" } else { "Automatic" }, "layout.hyphenation", json!({"value": true}));
-                    mi(ui, app, if hy { "None" } else { "✓ None" }, "layout.hyphenation", json!({"value": false}));
-                    mi(ui, app, "Manual…", "ui.dialog", json!({"name": "manualHyphenation"}));
-                    ui.separator();
-                    mi(ui, app, "Hyphenation Options…", "ui.dialog", json!({"name": "hyphenation"}));
-                },
-            );
-        });
-    });
-    group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
-        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
-        let Some(rp) = rp else { return };
-        // #654: header + two rows of 20 px fields fit the content height above the group title
-        // (1.5 pt between rows; 3 ran 2.5 pt into it); labels and fields sit on shared columns,
-        // every field the same width.
-        const FIELD: egui::Vec2 = egui::Vec2::new(64.0, 20.0);
-        ui.spacing_mut().interact_size.y = FIELD.y;
-        // The gap before the Spacing column sits inside its cells: `add_space` in a grid moves the
-        // next cell in release builds but trips a debug assertion.
-        let spaced = |ui: &mut Ui, text: egui::RichText| {
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                ui.label(text);
-            });
-        };
-        crate::rtl::Table::new("layout_para").columns(0).spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |t| {
-            t.row(|r| {
-                r.cell(|ui| ui.label(egui::RichText::new(tl!("Indent")).small().strong()));
-                r.cell(|ui| ui.label(""));
-                r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong()));
-            });
-            // Indents in the File › Options unit.
-            let u = crate::options::unit();
-            let k = u.pt_per_unit();
-            let mut l = rp.indent_left / k;
-            let mut b = rp.space_before;
-            t.row(|r| {
-                r.cell(|ui| ui.label(egui::RichText::new(tl!("Left:")).small()));
-                r.cell(|ui| {
-                    if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
-                        .changed()
-                    {
-                        let _ = app.run("para.indents", json!({"left": l * k}));
-                    }
+                    Divider::horizontal().show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "lineNumbers"})))
+                        .label(tl!("Line Numbering Options…"))
+                        .show(ui);
                 });
-                r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Before:")).small()));
-                r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
-                        let _ = app.run("para.spacing", json!({"before": b}));
-                    }
+                let hy = app.session.doc.settings.auto_hyphenation;
+                menu_button(ui, inline("Hyphenation", "hyphenation"), tl!("Hyphenation"), Some("layout.hyphenation"), |ui, _| {
+                    MenuItem::command(CommandRef::with_params("layout.hyphenation", json!({"value": true})))
+                        .label(tl!("Automatic"))
+                        .radio_mark(hy)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("layout.hyphenation", json!({"value": false})))
+                        .label(tl!("None"))
+                        .radio_mark(!hy)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "manualHyphenation"}))).label(tl!("Manual…")).show(ui);
+                    Divider::horizontal().show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "hyphenation"})))
+                        .label(tl!("Hyphenation Options…"))
+                        .show(ui);
                 });
             });
-            let mut right = rp.indent_right / k;
-            let mut a = rp.space_after;
-            t.row(|r| {
-                r.cell(|ui| ui.label(egui::RichText::new(tl!("Right:")).small()));
-                r.cell(|ui| {
-                    if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
-                        .changed()
-                    {
-                        let _ = app.run("para.indents", json!({"right": right * k}));
-                    }
+            Button::command(CommandRef::new("layout.fitOnePage"))
+                .label(tl!("Fit\nOne Page"))
+                .icon(IconId::new("fitOnePage"))
+                .arrangement(Arrangement::Stacked)
+                .show(ui);
+        },
+    );
+    row.group(
+        RibbonGroup::new("layout.paragraph", tl!("Paragraph"), IconId::new("alignLeft").into()).launcher(CommandRef::new("para.dialog")),
+        |ui| {
+            if app.session.doc.para_at(&app.session.sel.focus).is_none() {
+                return;
+            }
+            let rp = wordcraft_engine::cmd::para::selection_para(&app.session);
+            let lengths = crate::options::lengths(app.session.units());
+            let mut left = Some(f64::from(rp.indent_left));
+            let mut right = Some(f64::from(rp.indent_right));
+            let mut before = Some(f64::from(rp.space_before));
+            let mut after = Some(f64::from(rp.space_after));
+            let caption = |label: &'static str| Text::new(tl!(label)).role(TypeRole::Caption);
+            // As the old ribbon: two columns of small fields (a header over each label column), labels close to their
+            // fields, rows close together, and a wider gap before the Spacing column. Indents show two decimals ("0.00").
+            Row::new().gap(Gap::Section).show(ui, |ui, _| {
+                Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                    caption("Indent").show(ui);
+                    Text::new("").show(ui);
+                    caption("Left:").show(ui);
+                    let field = NumberField::length(tl!("Left"), Bind::bound(&mut left), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.indents", json!({"left": pt}));
+                        }
+                    });
+                    caption("Right:").show(ui);
+                    let field = NumberField::length(tl!("Right"), Bind::bound(&mut right), lengths).range(-792.0..=1584.0).fixed_decimals(2);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.indents", json!({"right": pt}));
+                        }
+                    });
                 });
-                r.cell(|ui| spaced(ui, egui::RichText::new(tl!("After:")).small()));
-                r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
-                        let _ = app.run("para.spacing", json!({"after": a}));
-                    }
+                Grid::new(&PARAGRAPH_GRID).gap(Gap::Tight).show(ui, |ui, _| {
+                    caption("Spacing").show(ui);
+                    Text::new("").show(ui);
+                    caption("Before:").show(ui);
+                    let field = NumberField::new(tl!("Before"), Bind::bound(&mut before)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.spacing", json!({"before": pt}));
+                        }
+                    });
+                    caption("After:").show(ui);
+                    let field = NumberField::new(tl!("After"), Bind::bound(&mut after)).unit_kind(UnitKind::Points).range(0.0..=1584.0);
+                    let out = field.size(ControlSize::Sm).show(ui);
+                    apply_edits(app, out.edit.events, |app, v: Option<f64>| {
+                        if let Some(pt) = v {
+                            let _ = app.run("para.spacing", json!({"after": pt}));
+                        }
+                    });
                 });
             });
-        });
-    });
-    group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        },
+    );
+    row.group(RibbonGroup::new("layout.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
+        Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "bringForward",
-                Some("Bring Forward"),
-                "Bring Forward",
-                crate::widgets::ButtonAction::new("arrange.bringForward", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "sendBackward",
-                Some("Send Backward"),
-                "Send Backward",
-                crate::widgets::ButtonAction::new("arrange.sendBackward", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "selectionPane",
-                Some("Selection Pane"),
-                "Selection Pane",
-                crate::widgets::ButtonAction::new("arrange.selectionPane", json!({}), false),
-            );
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("arrange.bringForward")).icon(IconId::new("bringForward")).show(ui);
+            Button::command(CommandRef::new("arrange.sendBackward")).icon(IconId::new("sendBackward")).show(ui);
+            Button::command(CommandRef::new("arrange.selectionPane")).icon(IconId::new("selectionPane")).show(ui);
         });
-        stack(ui, |ui| {
-            align_menu(ui, app, None);
-            group_menu(ui, app, None);
-            rotate_menu(ui, app, None);
+        // Align, Group and Rotate show their icons alone, as the old ribbon showed them.
+        super::common::icon_only(ui, |ui| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                align_menu(ui);
+                group_menu(ui, app);
+                rotate_menu(ui);
+            });
         });
     });
 }

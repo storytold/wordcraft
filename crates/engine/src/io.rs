@@ -473,11 +473,11 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
 }
 
 /// [`save_bytes`], encrypted with `password` when there is one and the format is a Word package
-/// (other formats are copies and are written as they are).
+/// or OpenDocument text file (.odt, .ott); other formats are copies and are written as they are.
 pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let bytes = save_bytes_opts(name, doc, opts)?;
     match password {
-        Some(pw) if matches!(ext_of(name).as_str(), "odt" | "ott") => wordcraft_formats::odt::encrypt(&bytes, pw),
+        Some(pw) if matches!(ext_of(name).as_str(), "odt" | "ott") => wordcraft_formats::odt::encrypt(&bytes, pw).map_err(|e| e.to_string()),
         Some(pw) if can_encrypt(name) => wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string()),
         _ => Ok(bytes),
     }
@@ -891,8 +891,23 @@ pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&
     Ok(bytes.len())
 }
 
+/// Saves a document to `path` with optional password and export options on web targets.
 #[cfg(target_arch = "wasm32")]
 pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<usize, String> {
+    Err(format!("{}: files are saved through the browser on the web", path.display()))
+}
+
+/// Write `text` to `path` as it is (a Markdown file's own text), as safely as [`save_path_with`]. Returns the bytes written.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_text_path(path: &std::path::Path, text: &str) -> Result<usize, String> {
+    crate::file_access::check_write(&path.to_string_lossy())?;
+    safe_save::write(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(text.len())
+}
+
+/// Write `text` to `path` as it is (a Markdown file's own text), as safely as [`save_path_with`].
+#[cfg(target_arch = "wasm32")]
+pub fn save_text_path(path: &std::path::Path, _text: &str) -> Result<usize, String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 
