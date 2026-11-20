@@ -33,6 +33,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
     s.pending = None;
     if !s.sel.is_collapsed() {
+        crate::cmd::keep_final_mark(s, false);
         let effect = delete_selection_effect(s)?;
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
             classified: true,
@@ -145,6 +146,7 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
     s.pending = None;
     if !s.sel.is_collapsed() {
+        crate::cmd::keep_final_mark(s, false);
         let effect = delete_selection_effect(s)?;
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
             classified: true,
