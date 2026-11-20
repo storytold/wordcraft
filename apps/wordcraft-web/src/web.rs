@@ -107,7 +107,7 @@ pub fn start() {
                             .i18n(wordcraft_ui_egui::i18n::catalogs())
                             .files(files)
                             .settings(Arc::new(settings.clone()))
-                            .lang(lang.lang)
+                            .lang(lang.craft_lang())
                             .build(),
                     );
 
@@ -237,8 +237,8 @@ impl eframe::App for WebShell {
     }
 
     /// Draws the app.
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        embed::before_ui(ui.ctx(), frame);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // No `embed::before_ui`: it fits and routes a native window, and the page's canvas is neither.
         self.app.ui(ui);
     }
 }

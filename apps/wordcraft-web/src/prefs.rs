@@ -13,6 +13,7 @@ pub fn open() -> (SharedSettings<Prefs>, craft::settings::LoadReport) {
     use std::time::Duration;
 
     use craft::settings::{LegacyFile, LocalStorageFiles, Location, OpenOptions, SettingsStore};
+    use wordcraft_ui_egui::prefs::legacy_ui_json;
 
     /// Largest stored value read back (`localStorage` holds about 5 MB per site).
     const MAX_STORED: usize = 4 << 20;
