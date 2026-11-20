@@ -490,7 +490,7 @@ fn lines(ui: &mut Ui, key: &'static str, l: &mut LineForm, area: SampleArea, fil
         });
         Stack::new().show(ui, |ui, _| {
             let mut edges = l.edges(between);
-            let sample = EdgeLook::Sample { area, fill: fill.map(srgba) };
+            let sample = EdgeLook::sample(area, fill.map(srgba));
             let picker = EdgePicker::new(word(tl!("Preview")), Bind::bound(&mut edges)).look(sample);
             let picker = if between { picker.paragraph() } else { picker };
             picker.show(ui);
@@ -544,7 +544,7 @@ impl WordForm for BordersForm {
                 // The same sample as the Borders tab shows, without the lines and not editable.
                 let mut none = BorderEdges::default();
                 let area = if self.fill_to_text { SampleArea::Text } else { SampleArea::Paragraph };
-                let sample = EdgeLook::Sample { area, fill: Rgb::parse(&self.fill).map(srgba) };
+                let sample = EdgeLook::sample(area, Rgb::parse(&self.fill).map(srgba));
                 EdgePicker::new(word(tl!("Preview")), Bind::bound(&mut none)).look(sample).enabled(false).show(ui);
                 Self::apply_to(ui, &mut self.fill_to_text, word(tl!("Paragraph")), word(tl!("Text")));
             }

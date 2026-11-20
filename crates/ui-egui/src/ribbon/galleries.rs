@@ -158,7 +158,7 @@ fn image_items<'a>(kind: &str, entries: &[(String, String)], makers: &'a [Maker<
         .map(|((id, name), make)| GalleryItem {
             key: id.clone(),
             label: name.clone().into(),
-            face: GalleryFace::Image { key: picture_key(&(kind, id, ppp.to_bits())), revision, image: &**make },
+            face: GalleryFace::image(picture_key(&(kind, id, ppp.to_bits())), revision, &**make),
         })
         .collect()
 }

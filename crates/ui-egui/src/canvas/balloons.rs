@@ -50,8 +50,8 @@ pub(crate) fn balloons(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::P
     let items: Vec<BalloonItem<'_>> = cards
         .iter()
         .map(|c| match &c.what {
-            What::Thread(thread) => BalloonItem::Thread { thread, page: c.page, anchor: c.anchor },
-            What::Revision(revision) => BalloonItem::Revision { revision, page: c.page, anchor: c.anchor },
+            What::Thread(thread) => BalloonItem::thread(thread, c.page, c.anchor),
+            What::Revision(revision) => BalloonItem::revision(revision, c.page, c.anchor),
         })
         .collect();
     let scale = out.pages.first().map_or(1.0, |p| p.scale as f32);

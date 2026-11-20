@@ -227,7 +227,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
         .map(|(c, source)| GalleryItem {
             key: *c,
             label: Label::from(symbol_tooltip(*c, &math_placeholder(ui, &c.to_string()))),
-            face: GalleryFace::Rendered { key: math_key(&format!("sym:{c}")), thumbnails: &thumbs, source },
+            face: GalleryFace::rendered(math_key(&format!("sym:{c}")), &thumbs, source),
         })
         .collect();
     let mut sets = |ui: &mut Ui| {

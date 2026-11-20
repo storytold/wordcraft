@@ -121,13 +121,13 @@ pub(crate) fn fill_tile(fill: &Fill) -> (GradientStops, GradientTile) {
         }
         Fill::Gradient(g) => {
             let tile = match g.kind {
-                GradientKind::Linear { angle, .. } => GradientTile::Style { style: GradientStyle::Linear, angle: -angle },
+                GradientKind::Linear { angle, .. } => GradientTile::style(GradientStyle::Linear, -angle),
                 GradientKind::Path { shape, focus } => {
                     let [l, t, r, b] = focus;
-                    GradientTile::Focus {
-                        outline: if shape == PathShape::Circle { FocusOutline::Circle } else { FocusOutline::Rect },
-                        focus: egui::Rect::from_min_max(pos2(l / 100.0, t / 100.0), pos2(1.0 - r / 100.0, 1.0 - b / 100.0)),
-                    }
+                    GradientTile::focus(
+                        if shape == PathShape::Circle { FocusOutline::Circle } else { FocusOutline::Rect },
+                        egui::Rect::from_min_max(pos2(l / 100.0, t / 100.0), pos2(1.0 - r / 100.0, 1.0 - b / 100.0)),
+                    )
                 }
             };
             (stops_of(g), tile)

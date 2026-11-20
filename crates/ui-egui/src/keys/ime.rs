@@ -59,8 +59,8 @@ pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Cont
     // A wide selection or cross-story caret has no single surrounding window either.
     let window = if in_equation { None } else { ime_window(app) };
     let surrounding = match &window {
-        Some(w) => EditorSurrounding::Text { text: &w.text, cursor: w.cursor, anchor: w.anchor },
-        None => EditorSurrounding::Unavailable { revision },
+        Some(w) => EditorSurrounding::text(&w.text, w.cursor, w.anchor),
+        None => EditorSurrounding::unavailable(revision),
     };
     // The page reports no lines: the page view's describer carries the text and selection.
     // The page draws the marked text itself, so a pass that dropped it (a refused deletion) reports

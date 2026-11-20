@@ -140,7 +140,7 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
             let out = button.show(ui);
             rects.push(out.response.rect);
             // The ribbon's command menu: on or off the toolbar, and the customize rows.
-            let request = RibbonMenuRequest { command: Some(CommandRef::new(id.as_str())), at: out.response.rect.left_bottom() };
+            let request = RibbonMenuRequest::new(Some(CommandRef::new(id.as_str())), out.response.rect.left_bottom());
             Menu::context(tl!("Quick Access Toolbar").to_string(), &out.response).show(ui, |ui, _| crate::ribbon::command_menu(ui, app, &request));
             if id == "edit.undo" {
                 // The list is the document's steps, not the Markdown Source pane's typing.

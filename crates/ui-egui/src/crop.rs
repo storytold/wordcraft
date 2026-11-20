@@ -273,7 +273,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         CropSource::new(tl!("Picture source").to_string(), on_screen, texture, (pic.flip_h, pic.flip_v)).show_at(ui, body.rect);
     }
     let crop_box = CropBox::upright(to_doc_rect(placed, &body.view, frame));
-    let scope = CropScope::Object { source: to_doc_rect(placed, &body.view, source) };
+    let scope = CropScope::object(to_doc_rect(placed, &body.view, source));
     // Given, not bound: the box is made from the document each pass and only the drop's Commit changes the document, so
     // the box stays at its pass-start value while a drag runs; a bound value that differs from the drag's last update
     // reads as the document moving under the gesture, which cancels it.

@@ -201,8 +201,8 @@ impl WordApp {
             .scale(self.ui.interface_size.scale(self.native_scale, self.auto_scale_limit))
             .direction(direction)
             .mode(self.ui.theme.mode())
-            .wheel_speed(WheelSpeed { line, point })
-            .alt_code_pages(AltCodePages { ansi, oem });
+            .wheel_speed(WheelSpeed::new(line, point))
+            .alt_code_pages(AltCodePages::new(ansi, oem));
         env.motion = self.ui.animations.motion();
         env.sizes = std::sync::Arc::clone(&APP_SIZES);
         env

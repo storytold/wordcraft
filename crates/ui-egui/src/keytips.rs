@@ -436,7 +436,7 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
         rows.push(search_row());
     }
     let controls: Vec<KeytipControl<'_>> =
-        rows.iter().map(|r| KeytipControl { command: r.control.command.clone(), label: r.control.tip, letters: r.letters.as_deref() }).collect();
+        rows.iter().map(|r| KeytipControl::new(r.control.command.clone(), r.control.tip, r.letters.as_deref())).collect();
 
     let sequences = if cfg!(target_os = "macos") { Vec::new() } else { legacy() };
     // A hidden toolbar has no badges, and a disabled command's button has none to press.
@@ -463,7 +463,7 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     }
 
     let out =
-        Keytips::new(enabled).tabs(&tabs).controls(&controls).sequences(&sequences).digits(&digits).reserved(&reserved).places(&places).show(ui);
+        Keytips::new(enabled).tabs(&tabs).controls(&controls).sequences(&sequences).digits(&digits).reserved(&reserved).places(&places).show_over(ui);
     // PLAN: `WordApp::keytips_active` is app-hub's (rb.A11).
     app.keytips_active = out.active;
     if let Some(tab) = out.tab.as_deref().and_then(tab_of_badge) {
