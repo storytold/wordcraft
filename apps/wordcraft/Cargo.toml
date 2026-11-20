@@ -17,15 +17,35 @@ wordcraft-proof = { workspace = true }
 # Fonts the user added (#582) load from the settings folder at start-up.
 wordcraft-fonts = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
+# The clipboard's PNG decoder.
+wordcraft-geom = { workspace = true, features = ["image"] }
 # The control key file's location (shared with the MCP bridge).
 wordcraft-control-key = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
-serde = { workspace = true }
-tempfile = "3"
 log = { workspace = true }
-chrono = { workspace = true }
+# The suite's shared libraries: the runtime hooks (`ui`, `ui-app`), file dialogs, the control
+# channel's arguments, the GPU choice, printing, settings and window placement, the OS appearance
+# reader and the system clipboard.
+craft = { workspace = true, features = [
+    "ui",
+    "ui-app",
+    "dialogs",
+    "automation",
+    "gpu-startup",
+    "print",
+    "settings",
+    "window",
+    "platform-appearance",
+    "platform-clipboard-system",
+] }
+
+[dev-dependencies]
+# Temporary settings folders for the `prefs` tests.
+tempfile = "3"
+# The frame driver of the `smoke` test.
+craft = { workspace = true, features = ["ui-testing"] }
 
 [build-dependencies]
 # Icon + VERSIONINFO for wordcraft.exe; build.rs only uses it when the target is Windows.
@@ -33,69 +53,18 @@ winresource = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click, Open With, Dock drops and `open -a WordCraft letter.docx` arrive as a
-# kAEOpenDocuments Apple event, which winit 0.30 doesn't handle (#27). This audited crate (also used
-# by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our
-# workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
-fmv-macos-events = "=0.1.0"
-# The system's Reduce motion setting (System Settings › Accessibility › Display), read through
-# NSWorkspace: a safe call in these bindings. Already in the build through eframe, rfd and arboard,
-# at this version; this adds the `NSAccessibility` bindings and, to fit the title bar around the
-# traffic lights, the window, button and view ones; and `NSPasteboard` for the clipboard's RTF.
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder", "NSPasteboard"] }
-objc2 = "0.6"
-# A copied equation's MathML goes on the pasteboard as `public.mathml.presentation` beside
-# arboard's HTML and text (#1297), through NSPasteboard's safe `setString:forType:`. Already in
-# the build through arboard, at this version; this adds only the NSString bindings, and NSData
-# for the clipboard's RTF (`public.rtf`).
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData"] }
-# Closing the window must quit through NSApplication rather than by dropping the NSWindow
-# inside the AppKit run loop (see `schedule_macos_terminate`).
-dispatch2 = "0.3"
+# kAEOpenDocuments Apple event, which winit doesn't handle (#27).
+craft = { workspace = true, features = ["platform-apple-events"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
-# The desktop's animation setting on Linux and the BSDs, read from the XDG settings portal over
-# D-Bus. Already in the build through AccessKit, at this version; this adds only its blocking API.
-zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
-# Wayland's clipboard through the data-control protocol (#687, #833): the RTF and other picture
-# types that arboard doesn't read, and the formats offered. Already in the build through arboard's
-# `wayland-data-control` feature, at this version.
-wl-clipboard-rs = "0.9"
-# Another program's RTF on X11 (`text/rtf`), which arboard doesn't read. Already in the build
-# through arboard, at this version.
-x11rb = "0.13"
 # Check that the libraries winit's X11 backend opens are installed before choosing XWayland (see
 # `x11_libraries` in main.rs). Both are already in the build through winit's `x11` feature, at
 # these versions and with this feature.
 x11-dl = "2.21"
 xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-# The upstream default-apps button opens Windows Settings; printing uses craft-print instead.
-open = "5"
-# The system's Animation effects setting (Settings › Accessibility › Visual effects), read through
-# the Windows Runtime's UISettings: a safe API, where the Win32 call needs unsafe, which our
-# workspace forbids. Already in the build through wgpu and AccessKit, at this version; this adds
-# only the `UI_ViewManagement` bindings, and `System_UserProfile` for the home region new
-# documents take their paper and units from (#838).
-windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfile"] }
-# The clipboard's "Rich Text Format" and the names of its formats (#687, #833), which arboard
-# doesn't read. Already in the build through arboard, at this version.
-clipboard-win = { version = "5.4", features = ["std"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# At the same craft-libs commit as the workspace's crates: `printer_queues`, the printer list that
-# asks no driver (#5710, storytold/craft-libs#618), and `submit_cancellable` (storytold/craft-libs#622).
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "93dac78c93a7f1fd66e2022edeb089233b1dc45a" }
-rfd = { workspace = true }
-# Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
-# rfd itself already depends on it.
-pollster = "1"
-# Pictures and copied files on the system clipboard (#45); egui's paste only carries text. Already
-# in the build through egui-winit, with the same features.
-arboard = { workspace = true, features = ["image-data"] }
-# The control server's random key.
-getrandom = "0.3"
-
 [target.'cfg(windows)'.dependencies]
-craft-update = { workspace = true }
+# The update helper: a copy of this program started with `--finish-update`
+# (`craft::update::self_update::finish`).
+craft = { workspace = true, features = ["update"] }
