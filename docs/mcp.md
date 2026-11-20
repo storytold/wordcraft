@@ -181,7 +181,7 @@ test source in File › Options › Language and on the bar's Install.
 | `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` (an empty table; for a filled one use `insert_table`) |
 | `insert_table` | insert a filled table in one call: `{values: [["Month", "Cases"], ["January", 12]], header: true, style?}` (same as `insert.spreadsheet`) |
 | `batch` | run several commands in order |
-| `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
+| `new_document` | blank, sample, letter, resume, report, memo, agenda, minutes, invoice, cover-letter, proposal, flyer; opens beside the open documents |
 | `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
 | `list_documents` | the open documents: `id`, `title`, `path`, `dirty`, `active` |
 | `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs: one undo step; each break is the Enter it stands for, so AutoFormat and AutoCorrect run and a one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a control-channel or CLI call is held to it too) |

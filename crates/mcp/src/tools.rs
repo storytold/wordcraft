@@ -106,8 +106,8 @@ pub fn tool_definitions() -> Value {
         tool(
             "new_document",
             "New document",
-            "Start a document: blank, sample, letter, resume or report. It opens beside the documents already open and becomes the active one; the reply's `id` addresses it (`doc`).",
-            obj(json!({"template": s("blank|sample|letter|resume|report")}), &[]),
+            "Start a document: blank, or a template (sample, letter, resume, report, memo, agenda, minutes, invoice, cover-letter, proposal or flyer). It opens beside the documents already open and becomes the active one; the reply's `id` addresses it (`doc`).",
+            obj(json!({"template": s("blank|sample|letter|resume|report|memo|agenda|minutes|invoice|cover-letter|proposal|flyer")}), &[]),
             false
         ),
         tool(
