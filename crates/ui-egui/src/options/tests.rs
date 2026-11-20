@@ -263,7 +263,9 @@ fn screen_paper_color_options_round_trip_and_work_without_a_document() {
 #[test]
 fn proofing_custom_dictionary_file_setting_is_visible() {
     let mut a = app();
-    let found = with_model(&mut a, true, |m| m.pages().iter().flat_map(|p| p.groups.iter()).flat_map(|g| g.rows.iter()).any(|r| r.key == "proofing.customDictionaryFile"));
+    let found = with_model(&mut a, true, |m| {
+        m.pages().iter().flat_map(|p| p.groups.iter()).flat_map(|g| g.rows.iter()).any(|r| r.key == "proofing.customDictionaryFile")
+    });
     assert!(found);
 }
 
