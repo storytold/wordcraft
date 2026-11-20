@@ -151,6 +151,8 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            // Derived from `document_id` and `rev`: rebuilt on the next read, not an edit.
+            findings: _,
             ribbon: _,
             // Who is driving the session, not part of the document.
             preferences_locked: _,

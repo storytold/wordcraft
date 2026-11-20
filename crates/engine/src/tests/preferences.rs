@@ -5,12 +5,12 @@
 
 use serde_json::{Value, json};
 
-use crate::{CmdError, KeyMap, Prefs, RibbonLayout, Session};
+use crate::{CmdError, Prefs, RibbonLayout, Session};
 
 /// What the desktop app saves between runs from the session (`WordApp::prefs`) that the lock
 /// guards: not the view switches, the Read Aloud settings or the Draw gallery's pens.
-fn kept(s: &Session) -> (String, String, Prefs, KeyMap, RibbonLayout, bool) {
-    (s.author.clone(), s.initials.clone(), s.prefs.clone(), s.keymap.clone(), s.ribbon.clone(), s.view.proofing)
+fn kept(s: &Session) -> (String, String, Prefs, craft_keymap::Overrides, RibbonLayout, bool) {
+    (s.author.clone(), s.initials.clone(), s.prefs.clone(), s.keymap().clone(), s.ribbon.clone(), s.view.proofing)
 }
 
 fn locked() -> Session {

@@ -31,7 +31,7 @@ struct KeptPrefs {
     author: String,
     initials: String,
     prefs: crate::Prefs,
-    keymap: crate::KeyMap,
+    keymap: craft_keymap::Overrides,
     ribbon: crate::RibbonLayout,
     /// Check Spelling as You Type as the window shows it: the active view's copy of the one
     /// app-wide setting (#5740). It is compared and put back only while the command's own
