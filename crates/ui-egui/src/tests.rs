@@ -308,6 +308,7 @@ fn row_mod_shift_equals_stays_superscript() {
 /// what Word's chord does: the effect is asserted, not the key name.
 #[test]
 fn default_chords_fire_their_commands() {
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
     let mut rows: Vec<(&str, fn())> = vec![
         ("Ctrl+Alt+1 applies Heading 1 and types nothing", row_heading_shortcut),
         ("Ctrl+Q resets the paragraph and does not close", row_ctrl_q_resets_the_paragraph),
