@@ -1,19 +1,36 @@
-use super::common::{mi, stack};
-use super::language::mi_check;
-use super::{Ui, WordApp, big, group, json, menu_button, small};
+use super::common::menu_button;
+use super::{WordApp, json};
+use craft::behavior::IconId;
+use craft::keymap::CommandRef;
+use craft::menu::{RibbonGroup, RibbonRow};
+use craft::ui::buttons::{Arrangement, Button, IconButton};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::menu::MenuItem;
+use craft::ui::primitives::IconSpec;
+use craft::ui::text::NumberField;
 
-pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Create", None, app, |ui, app| {
-        big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
-        big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
+pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    row.group(RibbonGroup::new("Create", crate::tl!("Create"), IconId::new("envelope").into()), |ui| {
+        for (key, label, id) in [("envelope", "Envelopes", "mailings.envelopes"), ("labels", "Labels", "mailings.labels")] {
+            Button::command(CommandRef::with_params(id, json!({})))
+                .label(crate::tl!(label))
+                .icon(crate::icons::id(key))
+                .arrangement(Arrangement::Stacked)
+                .show(ui);
+        }
     });
-    group(ui, "Start Mail Merge", None, app, |ui, app| {
-        // The kinds of merge document the engine makes, the current one checked.
+    row.group(RibbonGroup::new("Start Mail Merge", crate::tl!("Start Mail Merge"), IconId::new("mailMerge").into()), |ui| {
+        // The kinds of merge document the engine makes, the current one marked.
         menu_button(
             ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("mailMerge", Some("Start Mail\nMerge"), "Start Mail Merge", true, "mailings.start"),
-            |ui, app| {
+            Button::new(crate::tl!("Start Mail\nMerge"))
+                .icon(IconId::new("mailMerge"))
+                .tooltip(crate::tl!("Start Mail Merge"))
+                .arrangement(Arrangement::Stacked),
+            crate::tl!("Start Mail Merge"),
+            Some("mailings.start"),
+            |ui, _| {
                 let kind = app.session.merge.kind.clone();
                 for (label, k) in [
                     ("Letters", "letters"),
@@ -24,102 +41,130 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
                     ("Normal Word Document", "normal"),
                 ] {
                     let current = kind == k || (k == "normal" && kind.is_empty());
-                    mi_check(ui, app, label, current, "mailings.start", json!({"kind": k}));
+                    MenuItem::command(CommandRef::with_params("mailings.start", json!({"kind": k})))
+                        .label(crate::tl!(label))
+                        .radio_mark(current)
+                        .show(ui);
                 }
             },
         );
         // The command needs data, so the button offers the two ways to give it (#240).
         menu_button(
             ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("recipients", Some("Select\nRecipients"), "Select Recipients", true, "mailings.recipients"),
-            |ui, app| {
-                mi(ui, app, "Type a New List…", "ui.dialog", json!({"name": "newRecipientList"}));
-                mi(ui, app, "Use an Existing List…", "ui.openRecipientList", json!({}));
+            Button::new(crate::tl!("Select\nRecipients"))
+                .icon(IconId::new("recipients"))
+                .tooltip(crate::tl!("Select Recipients"))
+                .arrangement(Arrangement::Stacked),
+            crate::tl!("Select Recipients"),
+            None,
+            |ui, _| {
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newRecipientList"})))
+                    .label(crate::tl!("Type a New List…"))
+                    .show(ui);
+                MenuItem::command(CommandRef::with_params("ui.openRecipientList", json!({}))).label(crate::tl!("Use an Existing List…")).show(ui);
             },
         );
-        big(ui, app, "editRecipients", "Edit\nRecipient List", "mailings.editRecipients", json!({}), false);
+        Button::command(CommandRef::with_params("mailings.editRecipients", json!({})))
+            .label(crate::tl!("Edit\nRecipient List"))
+            .icon(IconId::new("editRecipients"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Write & Insert Fields", None, app, |ui, app| {
-        big(ui, app, "highlightFields", "Highlight\nMerge Fields", "mailings.highlightFields", json!({}), false);
-        big(ui, app, "addressBlock", "Address\nBlock", "mailings.addressBlock", json!({}), false);
-        big(ui, app, "greetingLine", "Greeting\nLine", "mailings.greetingLine", json!({}), false);
-        big(ui, app, "mergeField", "Insert Merge\nField", "mailings.insertField", json!({}), false);
-        stack(ui, |ui| {
+    row.group(RibbonGroup::new("Write & Insert Fields", crate::tl!("Write & Insert Fields"), IconId::new("mergeField").into()), |ui| {
+        for (key, label, id) in [
+            ("highlightFields", "Highlight\nMerge Fields", "mailings.highlightFields"),
+            ("addressBlock", "Address\nBlock", "mailings.addressBlock"),
+            ("greetingLine", "Greeting\nLine", "mailings.greetingLine"),
+            ("mergeField", "Insert Merge\nField", "mailings.insertField"),
+        ] {
+            Button::command(CommandRef::with_params(id, json!({})))
+                .label(crate::tl!(label))
+                .icon(crate::icons::id(key))
+                .arrangement(Arrangement::Stacked)
+                .show(ui);
+        }
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             // The merge rules the engine knows; If and Skip Record If ask for their condition.
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("rules", Some("Rules"), "Rules", false, "mailings.rules"), |ui, app| {
-                mi(ui, app, "If…Then…Else…", "mailings.rules", json!({"rule": "IF"}));
-                mi(ui, app, "Merge Record #", "mailings.rules", json!({"rule": "MERGEREC"}));
-                mi(ui, app, "Next Record", "mailings.rules", json!({"rule": "NEXT"}));
-                mi(ui, app, "Skip Record If…", "mailings.rules", json!({"rule": "SKIPIF"}));
-            });
-            small(
+            menu_button(
                 ui,
-                app,
-                "matchFields",
-                Some("Match Fields"),
-                "Match Fields",
-                crate::widgets::ButtonAction::new("mailings.matchFields", json!({}), false),
+                Button::new(crate::tl!("Rules")).icon(IconId::new("rules")).tooltip(crate::tl!("Rules")),
+                crate::tl!("Rules"),
+                Some("mailings.rules"),
+                |ui, _| {
+                    for (label, rule) in
+                        [("If…Then…Else…", "IF"), ("Merge Record #", "MERGEREC"), ("Next Record", "NEXT"), ("Skip Record If…", "SKIPIF")]
+                    {
+                        MenuItem::command(CommandRef::with_params("mailings.rules", json!({"rule": rule}))).label(crate::tl!(label)).show(ui);
+                    }
+                },
             );
+            Button::command(CommandRef::with_params("mailings.matchFields", json!({})))
+                .label(crate::tl!("Match Fields"))
+                .icon(IconId::new("matchFields"))
+                .show(ui);
         });
     });
-    group(ui, "Preview Results", None, app, |ui, app| {
-        big(ui, app, "preview", "Preview\nResults", "mailings.preview", json!({}), false);
-        stack(ui, |ui| {
-            crate::widgets::row(ui, |ui| {
-                small(ui, app, "first", None, "First Record", crate::widgets::ButtonAction::new("mailings.first", json!({}), false));
-                small(ui, app, "previous", None, "Previous Record", crate::widgets::ButtonAction::new("mailings.previous", json!({}), false));
+    row.group(RibbonGroup::new("Preview Results", crate::tl!("Preview Results"), IconId::new("preview").into()), |ui| {
+        Button::command(CommandRef::with_params("mailings.preview", json!({})))
+            .label(crate::tl!("Preview\nResults"))
+            .icon(IconId::new("preview"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                let nav = |ui: &mut egui::Ui, key: &'static str, tip: &'static str, id: &'static str| {
+                    IconButton::command(IconSpec::from(crate::icons::id(key)), CommandRef::with_params(id, json!({})))
+                        .label(crate::tl!(tip))
+                        .tooltip(crate::tl!(tip))
+                        .show(ui);
+                };
+                nav(ui, "first", "First Record", "mailings.first");
+                nav(ui, "previous", "Previous Record", "mailings.previous");
                 record_box(ui, app);
-                small(ui, app, "next", None, "Next Record", crate::widgets::ButtonAction::new("mailings.next", json!({}), false));
-                small(ui, app, "last", None, "Last Record", crate::widgets::ButtonAction::new("mailings.last", json!({}), false));
+                nav(ui, "next", "Next Record", "mailings.next");
+                nav(ui, "last", "Last Record", "mailings.last");
             });
-            small(
-                ui,
-                app,
-                "find",
-                Some("Find Recipient"),
-                "Find Recipient",
-                crate::widgets::ButtonAction::new("mailings.findRecipient", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "checkErrors",
-                Some("Check for Errors"),
-                "Check for Errors",
-                crate::widgets::ButtonAction::new("mailings.checkErrors", json!({}), false),
-            );
+            Button::command(CommandRef::with_params("mailings.findRecipient", json!({})))
+                .label(crate::tl!("Find Recipient"))
+                .icon(IconId::new("find"))
+                .show(ui);
+            Button::command(CommandRef::with_params("mailings.checkErrors", json!({})))
+                .label(crate::tl!("Check for Errors"))
+                .icon(IconId::new("checkErrors"))
+                .show(ui);
         });
     });
-    group(ui, "Finish", None, app, |ui, app| {
+    row.group(RibbonGroup::new("Finish", crate::tl!("Finish"), IconId::new("finish").into()), |ui| {
         menu_button(
             ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("finish", Some("Finish &\nMerge"), "Finish & Merge", true, "mailings.finish"),
-            |ui, app| {
-                mi(ui, app, "Edit Individual Documents…", "mailings.finish", json!({}));
-                mi(ui, app, "Print Documents…", "mailings.printDocuments", json!({}));
+            Button::new(crate::tl!("Finish &\nMerge"))
+                .icon(IconId::new("finish"))
+                .tooltip(crate::tl!("Finish & Merge"))
+                .arrangement(Arrangement::Stacked),
+            crate::tl!("Finish & Merge"),
+            Some("mailings.finish"),
+            |ui, _| {
+                MenuItem::command(CommandRef::with_params("mailings.finish", json!({}))).label(crate::tl!("Edit Individual Documents…")).show(ui);
+                MenuItem::command(CommandRef::with_params("mailings.printDocuments", json!({}))).label(crate::tl!("Print Documents…")).show(ui);
             },
         );
     });
 }
 
-/// Preview Results' record number: shows the previewed record; a number typed and Enter go there.
-fn record_box(ui: &mut Ui, app: &mut WordApp) {
+/// Preview Results' record number: shows the previewed record; Enter on a different number goes there.
+/// It navigates and does not edit, so a keystroke runs nothing.
+fn record_box(ui: &mut egui::Ui, app: &mut WordApp) {
     let on = !app.session.merge.rows.is_empty();
-    let shown = if on { (app.session.merge.record + 1).to_string() } else { String::new() };
-    // The draft lives in temp memory while typing (frame-local text would lose keystrokes).
-    let key = egui::Id::unique("merge_record_box");
-    let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| shown.clone());
-    let r = ui.add_enabled(on, egui::TextEdit::singleline(&mut text).desired_width(36.0).align(egui::Align2::CENTER_TOP));
-    let r = r.on_hover_text(tl!("Go to Record"));
-    if r.changed() {
-        ui.data_mut(|d| d.insert_temp(key, text.clone()));
-    }
-    if r.lost_focus() {
-        ui.data_mut(|d| d.remove::<String>(key));
-        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && text.trim() != shown {
-            let _ = app.run("mailings.goToRecord", json!({"record": text.trim()}));
-        }
+    let shown = on.then(|| (app.session.merge.record + 1) as f64);
+    let out = NumberField::new(crate::tl!("Record"), Bind::given(shown))
+        .enabled(on)
+        .range(1.0..=app.session.merge.rows.len().max(1) as f64)
+        .tooltip(crate::tl!("Go to Record"))
+        .show(ui);
+    if out.edit.submitted
+        && let Some(Some(n)) = out.edit.value().copied()
+        && Some(n) != shown
+    {
+        let _ = app.run("mailings.goToRecord", json!({"record": (n.round() as i64).to_string()}));
     }
 }
