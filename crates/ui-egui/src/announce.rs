@@ -66,7 +66,9 @@ fn describe(app: &WordApp, id: &str) -> Option<String> {
     if matches!(id, "format.growFont" | "format.shrinkFont" | "format.growFont1" | "format.shrinkFont1") {
         // A selection of mixed sizes has no one size to say.
         let size = state().get("size").and_then(Value::as_f64)?;
-        return Some(format!("{} {}", tl!("Font"), format_args!("{}{}", wordcraft_geom::Unit::Points.number(size as f32, app.session.region().decimal()), crate::options::unit_suffix(wordcraft_geom::Unit::Points))));
+        let unit = wordcraft_geom::Unit::Points;
+        let number = unit.number(size as f32, app.session.region().decimal());
+        return Some(format!("{} {number}{}", tl!("Font"), crate::options::unit_suffix(unit)));
     }
     None
 }
@@ -274,7 +276,10 @@ mod tests {
         h.state_mut().ui.language = "pseudo".into();
         let said = press(&mut h, Modifiers::COMMAND, Key::B).map(|(t, _)| t).unwrap_or_default();
         crate::i18n::apply_language(crate::i18n::Lang::EN);
-        assert!(said.split_whitespace().all(|word| word.starts_with('⟦') && word.ends_with('⟧')) && said.contains('⟦'), "every word is marked: {said:?}");
+        assert!(
+            said.split_whitespace().all(|word| word.starts_with('⟦') && word.ends_with('⟧')) && said.contains('⟦'),
+            "every word is marked: {said:?}"
+        );
     }
 
     /// Ten presses in a burst, one per frame or all in one frame (a held key, or keys typed

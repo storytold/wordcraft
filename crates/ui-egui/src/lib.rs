@@ -101,8 +101,8 @@ pub use dialogs::dialogs_ribbon;
 pub use dialogs::dialogs_smart_art;
 pub use file_dialogs::open_filters;
 
-mod app;
 mod announce;
+mod app;
 mod services;
 mod state;
 
