@@ -125,7 +125,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **Review** | Spelling and grammar with suggestions (English and Polish, by each run's language), thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
 | **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어, Svenska, Hrvatski, Nederlands, Dansk, Română, العربية (mirrored) Slovenščina or Bosanski (follows the system language by default) |
-| **Files** | .docx read/write, legacy 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
+| **Files** | .docx read/write, legacy 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images; Hangul .hwp (5.0) and .hwpx open, edit and save ([compatibility](docs/hwp/compatibility.md)) |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md), the
 [parity assessment](docs/target-app-parity.md) and the generated
@@ -459,6 +459,13 @@ do Russian, Portuguese, Czech, Italian, Croatian and Turkish spelling (how to in
 [docs/spelling-dictionaries.md](docs/spelling-dictionaries.md)), and
 Polish hyphenation the TeX patterns by Hanna Kołodziejska, Bogusław Jackowski and Marek Ryćko (MIT
 option). The sample documents and templates are original text written for WordCraft.
+
+Hangul (.hwp, .hwpx) support is clean-room: built from Hancom's published file format documents,
+the OWPML element names Hancom released under Apache-2.0, and observation of Hancom's viewer; the
+sources and rules are in [docs/hwp/cleanroom.md](docs/hwp/cleanroom.md). As Hancom's format document requires:
+본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+Hangul and HWP are trademarks of Hancom Inc. WordCraft is not affiliated with, sponsored by or
+endorsed by Hancom Inc.
 
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as

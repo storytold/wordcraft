@@ -111,6 +111,1379 @@ fn aes_encrypted_packages_open_under_any_word_extension() {
     }
 }
 
+/// The ZIP limits of these tests.
+const TEST_ZIP: craft_zip::Limits = craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 };
+
+/// Entry `name` of a ZIP package, as text.
+pub(crate) fn zip_part(bytes: &[u8], name: &str) -> String {
+    let data = craft_zip::Archive::open(bytes, TEST_ZIP).unwrap().read(name, 64 << 20).unwrap().unwrap_or_else(|| panic!("no {name}"));
+    String::from_utf8(data).unwrap()
+}
+
+/// The entry names of a ZIP package, in order.
+pub(crate) fn zip_names(bytes: &[u8]) -> Vec<String> {
+    craft_zip::Archive::open(bytes, TEST_ZIP).unwrap().names().map(|n| n.into_owned()).collect()
+}
+
+/// A minimal HWPX package whose one section holds `paragraphs` (hp:p elements).
+fn tiny_hwpx(paragraphs: &str) -> Vec<u8> {
+    let mut z = craft_zip::Writer::new();
+    let section = format!(
+        r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">{paragraphs}</hs:sec>"#
+    );
+    for (name, data) in [
+        ("mimetype", "application/hwp+zip".to_string()),
+        ("Contents/header.xml", r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#.to_string()),
+        ("Contents/section0.xml", section),
+    ] {
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
+    }
+    z.finish().unwrap()
+}
+
+/// A table whose first cell starts with a table is found by the same source mark as the inner
+/// one (its first paragraph's): a row added to the outer table is written to the outer table,
+/// not over the inner one.
+#[test]
+fn hwpx_table_starting_with_a_table_keeps_its_rows() {
+    let tbl = |inner: &str| {
+        format!(
+            r#"<hp:tbl rowCnt="1" colCnt="1"><hp:sz width="20000" height="2000"/><hp:tr><hp:tc><hp:cellAddr rowAddr="0" colAddr="0"/><hp:cellSz width="20000" height="2000"/><hp:subList>{inner}</hp:subList></hp:tc></hp:tr></hp:tbl>"#
+        )
+    };
+    let inner = tbl("<hp:p><hp:run><hp:t>안</hp:t></hp:run></hp:p>");
+    let outer = tbl(&format!("<hp:p><hp:run>{inner}</hp:run></hp:p><hp:p><hp:run><hp:t>밖</hp:t></hp:run></hp:p>"));
+    let bytes = tiny_hwpx(&format!(
+        "<hp:p><hp:run><hp:t>앞</hp:t></hp:run></hp:p><hp:p><hp:run>{outer}</hp:run></hp:p><hp:p><hp:run><hp:t>뒤</hp:t></hp:run></hp:p>"
+    ));
+    let doc = crate::io::open_bytes("x.hwpx", &bytes).unwrap();
+    let t = doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    let rows = |d: &wordcraft_doc::Document| d.body.get(t).and_then(|b| b.as_table()).map(|x| x.rows.len());
+    let mut s = Session::new(doc.clone());
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t as u32, 0, 0, 1]), 0));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    assert_eq!(rows(&s.doc), Some(2));
+    let (saved, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let back = crate::io::open_bytes("x.hwpx", &saved).unwrap();
+    assert_eq!(rows(&back), Some(2), "{report:?}");
+    let first = back.body.get(t).and_then(|b| b.as_table()).and_then(|x| x.rows.first()).and_then(|r| r.cells.first());
+    assert!(first.and_then(|c| c.blocks.first()).is_some_and(|b| b.as_table().is_some()), "the inner table stays first in its cell");
+}
+
+/// A Hancom HWPX document opens by its extension and, renamed, by its content.
+#[test]
+fn hwpx_opens_by_extension_and_by_content() {
+    let bytes = tiny_hwpx("<hp:p><hp:run><hp:t>한글 문서</hp:t></hp:run></hp:p>");
+    for name in ["a.hwpx", "noext"] {
+        let doc = crate::io::open_bytes(name, &bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(doc.plain_text(StoryRef::Body).trim(), "한글 문서", "{name}");
+    }
+    assert!(crate::io::open_bytes("x.hwpx", b"PK\x03\x04garbage").is_err());
+}
+
+/// Korean word wrapping (whole words or any syllable) has no DOCX equivalent, so it reaches the
+/// paragraphs past the DOCX reader: each keeps its own after a save as HWPX and a reopen.
+#[test]
+fn hwpx_paragraphs_keep_their_korean_word_wrapping() {
+    let mut doc = wordcraft_doc::Document::from_text("어절 단위로 나눔\n글자 단위로 나눔");
+    for (i, keep) in [(0, true), (1, false)] {
+        if let Some(wordcraft_doc::Block::Para(p)) = doc.body.get_mut(i).map(std::sync::Arc::make_mut) {
+            p.props.keep_hangul_words = Some(keep);
+        }
+    }
+    let bytes = crate::io::save_bytes("wrap.hwpx", &doc).unwrap();
+    let back = crate::io::open_bytes("wrap.hwpx", &bytes).unwrap();
+    let wraps: Vec<_> =
+        back.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.keep_hangul_words) } else { None }).collect();
+    assert_eq!(wraps, [Some(true), Some(false)]);
+}
+
+/// An HWPX opened, edited and saved keeps its format: the edit is written into the original
+/// (other paragraphs as they were), again on a second save, and a .docx copy leaves the
+/// original package out.
+#[test]
+fn hwpx_saves_edits_back_into_the_original() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("문서.hwpx");
+    let second = r#"<hp:p paraPrIDRef="3"><hp:run charPrIDRef="7"><hp:t>둘째 문단</hp:t></hp:run></hp:p>"#;
+    std::fs::write(&path, tiny_hwpx(&format!("<hp:p><hp:run><hp:t>한글 문서</hp:t></hp:run></hp:p>{second}"))).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "text.insert", json!({"text": "새 "}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert_eq!(saved["hwpx"]["modified"], 1, "{saved}");
+    assert!(!s.dirty);
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": "!"}));
+    run(&mut s, "file.save", json!({}));
+    let back = crate::io::open_path(&path).unwrap();
+    let text = back.plain_text(StoryRef::Body);
+    assert!(text.contains("새 한글 문서") && text.contains("둘째 문단!"), "{text}");
+    let z = std::fs::read(&path).unwrap();
+    let section = zip_part(&z, "Contents/section0.xml");
+    assert!(section.contains(r#"<hp:run charPrIDRef="7"><hp:t>둘째 문단!</hp:t></hp:run>"#), "{section}");
+    assert_eq!(zip_names(&z).first().map(String::as_str), Some("mimetype"));
+    let docx = crate::io::save_bytes("copy.docx", &s.doc).unwrap();
+    let names = zip_names(&docx);
+    assert!(!names.iter().any(|n| n.contains("hwp")), "{names:?}");
+    // A document that did not come from an HWPX becomes a new one.
+    let fresh = crate::io::save_bytes("new.hwpx", &wordcraft_doc::Document::from_text("새 문서")).unwrap();
+    assert_eq!(crate::io::open_bytes("new.hwpx", &fresh).unwrap().plain_text(StoryRef::Body).trim(), "새 문서");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Pictures added, resized and removed in an HWPX are written into the original: the image goes
+/// into BinData/ and the manifest, and each save reads back as edited.
+#[test]
+fn hwpx_saves_picture_edits() {
+    // a 2×1 PNG made here
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x7B, 0x40, 0xE8,
+        0xDD, 0, 0, 0, 15, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x7C, 0x36, 0x6D,
+        0x1E, 0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let bytes = {
+        let mut z = craft_zip::Writer::new();
+        for (name, data) in [
+            ("mimetype", "application/hwp+zip"),
+            (
+                "META-INF/container.xml",
+                r#"<ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#,
+            ),
+            (
+                "Contents/content.hpf",
+                r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="section0"/></opf:spine></opf:package>"#,
+            ),
+            ("Contents/header.xml", r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#),
+            (
+                "Contents/section0.xml",
+                r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><hp:p><hp:run><hp:t>그림 문단</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>끝</hp:t></hp:run></hp:p></hs:sec>"#,
+            ),
+        ] {
+            z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
+        }
+        z.finish().unwrap()
+    };
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-pictures-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("그림.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    // the pictures as read back: (paragraph, width), and the package's image parts
+    let pictures = |path: &std::path::Path| {
+        let doc = crate::io::open_path(path).unwrap();
+        let mut out = Vec::new();
+        for (i, b) in doc.body.iter().enumerate() {
+            let Some(p) = b.as_para() else { continue };
+            for (off, o) in p.objects_with_offsets() {
+                if let wordcraft_doc::InlineObject::Image { w, .. } = o {
+                    out.push((i, off, w.round()));
+                }
+            }
+        }
+        let z = std::fs::read(path).unwrap();
+        let bins: Vec<String> = zip_names(&z).into_iter().filter(|n| n.starts_with("BinData/")).collect();
+        let hpf = zip_part(&z, "Contents/content.hpf");
+        assert!(bins.iter().all(|b| hpf.contains(&format!("href=\"{b}\""))), "{bins:?} not in {hpf}");
+        (out, bins.len())
+    };
+    let open = |path: &std::path::Path| {
+        let mut s = Session::new(crate::io::open_path(path).unwrap());
+        s.path = Some(path.to_path_buf());
+        s
+    };
+
+    let mut s = open(&path);
+    run(&mut s, "caret.end", json!({}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(png), "width": 40}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwpx"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    assert_eq!(saved["hwpx"]["pictures"], 1, "{saved}");
+    let (pics, bins) = pictures(&path);
+    assert_eq!((pics.len(), bins), (1, 1), "added: {pics:?}");
+    let (block, off, w) = pics[0];
+    assert_eq!(w, 40.0);
+
+    let mut s = open(&path);
+    run(&mut s, "select.range", json!({"anchor": {"block": block, "off": off}, "focus": {"block": block, "off": off + 3}}));
+    run(&mut s, "picture.size", json!({"width": 80}));
+    run(&mut s, "file.save", json!({}));
+    let (pics, _) = pictures(&path);
+    assert_eq!(pics.iter().map(|p| p.2).collect::<Vec<_>>(), [80.0], "resized: {pics:?}");
+
+    let mut s = open(&path);
+    run(&mut s, "select.range", json!({"anchor": {"block": block, "off": off}, "focus": {"block": block, "off": off + 3}}));
+    run(&mut s, "text.delete", json!({}));
+    run(&mut s, "file.save", json!({}));
+    let (pics, _) = pictures(&path);
+    assert!(pics.is_empty(), "removed: {pics:?}");
+    assert!(crate::io::open_path(&path).unwrap().plain_text(StoryRef::Body).contains("그림 문단"));
+
+    // A picture put inside a line goes to the end of its paragraph in the file: that edit is not
+    // written as made, so the document stays marked as changed and closing it still asks.
+    let mut s = open(&path);
+    // inside "그림 문단", the first paragraph's text (after the marks reading puts before it)
+    let mid = s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.text.find("문단")).unwrap();
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": mid}}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(png), "width": 40}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwpx"]["notWritten"].as_array().is_some_and(|v| !v.is_empty()), "{saved}");
+    assert!(s.dirty, "unwritten edits keep the document marked as changed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A minimal uncompressed HWP 5.0 file: one record of a paragraph per text, the last marked last.
+fn tiny_hwp(paragraphs: &[&str]) -> Vec<u8> {
+    use std::io::Write;
+    let record = |tag: u32, level: u32, data: &[u8]| {
+        let mut out = (tag | (level << 10) | ((data.len() as u32) << 20)).to_le_bytes().to_vec();
+        out.extend_from_slice(data);
+        out
+    };
+    let mut section = Vec::new();
+    for (i, t) in paragraphs.iter().enumerate() {
+        let mut chars: Vec<u8> = t.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        chars.extend_from_slice(&13u16.to_le_bytes());
+        let mut head = [0u8; 24];
+        let last = if i + 1 == paragraphs.len() { 0x8000_0000u32 } else { 0 };
+        head[0..4].copy_from_slice(&((chars.len() / 2) as u32 | last).to_le_bytes());
+        head[12..14].copy_from_slice(&1u16.to_le_bytes());
+        section.extend(record(0x42, 0, &head));
+        section.extend(record(0x43, 1, &chars));
+        section.extend(record(0x44, 1, &[0u8; 8]));
+    }
+    let mut head = b"HWP Document File".to_vec();
+    head.resize(256, 0);
+    let mut comp = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).unwrap();
+    comp.create_storage("/BodyText").unwrap();
+    for (name, data) in [("/FileHeader", head), ("/DocInfo", tiny_doc_info()), ("/BodyText/Section0", section)] {
+        comp.create_stream(name).unwrap().write_all(&data).unwrap();
+    }
+    comp.into_inner().into_inner()
+}
+
+/// DocInfo with one font per language, one border fill, character shape and paragraph shape
+/// (10 pt, 160% line spacing), as Hancom's records lay them out.
+fn tiny_doc_info() -> Vec<u8> {
+    let record = |tag: u32, data: &[u8]| {
+        let level = u32::from(tag != 0x11);
+        let mut out = (tag | (level << 10) | ((data.len() as u32) << 20)).to_le_bytes().to_vec();
+        out.extend_from_slice(data);
+        out
+    };
+    let mut counts = [0i32; 18];
+    counts[1..8].fill(1);
+    counts[8] = 1;
+    counts[9] = 1;
+    counts[13] = 1;
+    let mut out = record(0x11, &counts.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>());
+    let face: Vec<u8> = [0u8].into_iter().chain(5u16.to_le_bytes()).chain("함초롬바탕".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    for _ in 0..7 {
+        out.extend(record(0x13, &face));
+    }
+    out.extend(record(0x14, &[0u8; 40]));
+    let mut chr = [0u8; 74];
+    chr[14..21].fill(100);
+    chr[28..35].fill(100);
+    chr[42..46].copy_from_slice(&1000i32.to_le_bytes());
+    chr[60..64].copy_from_slice(&u32::MAX.to_le_bytes());
+    out.extend(record(0x15, &chr));
+    let mut para = [0u8; 54];
+    para[50..54].copy_from_slice(&160u32.to_le_bytes());
+    out.extend(record(0x19, &para));
+    out
+}
+
+/// Formatting edited in WordCraft goes back into the HWP as new shapes: the paragraph reads back
+/// bold and centred.
+#[test]
+fn hwp_saves_formatting() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-fmt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("서식.hwp");
+    std::fs::write(&path, tiny_hwp(&["굵게 만들 문단", "그대로 둘 문단"])).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "select.paragraph", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    let paras: Vec<&wordcraft_doc::Paragraph> = back.body.iter().filter_map(|b| b.as_para()).collect();
+    let first = paras.iter().find(|p| p.text.contains("굵게")).unwrap();
+    // (the last run: a paragraph can open with the objects that hold the section's settings)
+    let text_run = |p: &wordcraft_doc::Paragraph| p.runs.last().map(|r| r.props.clone()).unwrap_or_default();
+    assert!(back.styles.resolve_char(first.props.style.as_deref(), &text_run(first)).bold, "{:?}", first.runs);
+    assert_eq!(back.styles.resolve_para(&first.props).align, wordcraft_doc::Align::Center);
+    let second = paras.iter().find(|p| p.text.contains("그대로")).unwrap();
+    assert!(!back.styles.resolve_char(second.props.style.as_deref(), &text_run(second)).bold);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A table inserted into an HWP without tables is written (its records made from scratch) and
+/// reads back with its cells.
+#[test]
+fn hwp_saves_a_new_table() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-table-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("표.hwp");
+    std::fs::write(&path, tiny_hwp(&["첫 문단", "끝 문단"])).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    run(&mut s, "text.insert", json!({"text": "칸 글"}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    let table = back.body.iter().find_map(|b| b.as_table()).expect("the table reads back");
+    assert_eq!((table.rows.len(), table.rows[0].cells.len()), (2, 3));
+    assert!(back.plain_text(StoryRef::Body).contains("칸 글"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture and a chart added to an HWP without pictures go into the file: BinData streams,
+/// their DocInfo records, and the pictures read back.
+#[test]
+fn hwp_saves_new_pictures() {
+    use wordcraft_doc::InlineObject;
+    // a 2×1 PNG made here
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x7B, 0x40, 0xE8,
+        0xDD, 0, 0, 0, 15, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x7C, 0x36, 0x6D,
+        0x1E, 0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-pics-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("그림.hwp");
+    std::fs::write(&path, tiny_hwp(&["첫 문단", "끝 문단"])).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(png), "width": 40}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "insert.chart", json!({"type": "pie", "width": 200, "height": 150}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    assert_eq!(saved["hwp"]["pictures"], 2, "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    let mut pictures = 0;
+    back.objects_in_reading_order(&mut |o| pictures += usize::from(matches!(o, InlineObject::Image { .. })));
+    assert_eq!(pictures, 2);
+    assert!(back.plain_text(StoryRef::Body).contains("끝 문단"));
+    // a picture added to the first paragraph, beside its section settings: they keep their
+    // records, the picture goes in after the text
+    let mut s = Session::new(back);
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.end", json!({}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(png), "width": 30}));
+    // and text typed into the same paragraph
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "text.insert", json!({"text": "앞 "}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    let again = crate::io::open_path(&path).unwrap();
+    let mut pictures = 0;
+    again.objects_in_reading_order(&mut |o| pictures += usize::from(matches!(o, InlineObject::Image { .. })));
+    assert_eq!(pictures, 3);
+    assert!(again.plain_text(StoryRef::Body).starts_with("앞 첫 문단"), "{}", again.plain_text(StoryRef::Body));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A text box and a shape added to an HWP go into it: the text box in a new paragraph, the
+/// ellipse in a paragraph of plain text (written again whole).
+#[test]
+fn hwp_saves_new_drawings() {
+    use wordcraft_doc::InlineObject;
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-draw-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("도형.hwp");
+    std::fs::write(&path, tiny_hwp(&["첫 문단", "끝 문단"])).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 40, "height": 20}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "insert.textBox", json!({"text": "상자 글", "width": 100, "height": 40}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    let mut shapes = 0;
+    back.objects_in_reading_order(&mut |o| shapes += usize::from(matches!(o, InlineObject::Shape { .. })));
+    assert_eq!(shapes, 2);
+    assert!(back.parts.values().any(|p| p.blocks.iter().any(|b| b.as_para().is_some_and(|q| q.text.contains("상자 글")))));
+    assert!(back.plain_text(StoryRef::Body).contains("끝 문단"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An HWP opened, edited and saved stays an HWP with the edit in it; a document that never was
+/// an HWP becomes a new one.
+#[test]
+fn hwp_saves_edits_back_into_the_original() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("문서.hwp");
+    std::fs::write(&path, tiny_hwp(&["한글 문서", "둘째 문단"])).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "text.insert", json!({"text": "새 "}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert_eq!(saved["hwp"]["modified"], 1, "{saved}");
+    assert!(!s.dirty);
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]), "still a compound file");
+    let text = crate::io::open_path(&path).unwrap().plain_text(StoryRef::Body);
+    assert!(text.contains("새 한글 문서") && text.contains("둘째 문단"), "{text}");
+    // a document that did not come from an HWP becomes a new one
+    let fresh = crate::io::save_bytes("new.hwp", &wordcraft_doc::Document::from_text("새 문서\n둘째 줄")).unwrap();
+    let text = crate::io::open_bytes("new.hwp", &fresh).unwrap().plain_text(StoryRef::Body);
+    assert!(text.contains("새 문서") && text.contains("둘째 줄"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A new document saved as HWPX keeps its header, page number, footnote, picture and text box,
+/// and reads back.
+#[test]
+fn new_hwpx_keeps_objects() {
+    // a 2×1 PNG made here
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x7B, 0x40, 0xE8,
+        0xDD, 0, 0, 0, 15, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x7C, 0x36, 0x6D,
+        0x1E, 0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "본문"}));
+    run(&mut s, "references.footnote", json!({"text": "각주 내용"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(png), "width": 40}));
+    run(&mut s, "insert.textBox", json!({"text": "상자 글", "width": 100, "height": 40}));
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom", "align": "center"}));
+    run(&mut s, "insert.header", json!({"text": "머리말"}));
+    let bytes = crate::io::save_bytes("x.hwpx", &s.doc).unwrap();
+    let z = bytes.clone();
+    assert!(zip_names(&z).into_iter().any(|n| n.starts_with("BinData/image1.")), "{:?}", zip_names(&z).into_iter().collect::<Vec<_>>());
+    let sec = zip_part(&z, "Contents/section0.xml");
+    for tag in ["<hp:header ", "<hp:footer ", "<hp:footNote ", "<hp:pic ", "<hp:rect ", r#"numType="PAGE""#] {
+        assert!(sec.contains(tag), "{tag} missing");
+    }
+    let back = crate::io::open_bytes("x.hwpx", &bytes).unwrap();
+    assert!(back.plain_text(StoryRef::Body).contains("본문"));
+    assert!(back.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::Footnote));
+    assert!(back.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::Header));
+}
+
+/// A group (scaled after grouping) and an ink stroke saved as a new HWPX become an hp:container
+/// and an hp:curve, nothing is reported left out, and they read back where they were.
+#[test]
+fn new_hwpx_keeps_groups_and_freeforms() {
+    use wordcraft_doc::InlineObject;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "도형"}));
+    run(&mut s, "insert.shape", json!({"kind": "rectangle", "width": 120, "height": 60}));
+    run(&mut s, "arrange.bounds", json!({"page": 0, "x": 100, "y": 150}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 80, "height": 50}));
+    run(&mut s, "arrange.bounds", json!({"page": 0, "x": 260, "y": 190}));
+    run(&mut s, "select.addObject", json!({"index": 0}));
+    run(&mut s, "arrange.group", json!({}));
+    run(&mut s, "picture.size", json!({"width": 360}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "draw.stroke", json!({"page": 0, "points": [[100, 330], [160, 300], [220, 360]], "width": 2}));
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let sec = zip_part(&bytes, "Contents/section0.xml");
+    assert_eq!((sec.matches("<hp:container ").count(), sec.matches("<hp:curve ").count(), sec.matches("<hp:seg ").count()), (1, 1, 2));
+    let back = crate::io::open_bytes("x.hwpx", &bytes).unwrap();
+    let mut group = None;
+    let mut freeform = false;
+    back.objects_in_reading_order(&mut |o| match o {
+        InlineObject::Group { w, ch_w, children, .. } => {
+            // unscaled: each member's place and size are as shown (the rectangle 1.5 times wider)
+            let sizes: Vec<f32> = children.iter().filter_map(|c| c.obj.frame().map(|(cw, _, _)| (cw * w / ch_w).round())).collect();
+            // and where each member is: the ellipse 160 pt right of the rectangle, scaled too
+            let at: Vec<f32> = children.iter().map(|c| (c.x * w / ch_w).round()).collect();
+            group = Some((w.round(), children.len(), sizes, at));
+        }
+        InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::Freeform, .. } => freeform = true,
+        _ => {}
+    });
+    assert_eq!(group, Some((360.0, 2, vec![180.0, 120.0], vec![0.0, 240.0])));
+    assert!(freeform, "the ink reads back as a freeform");
+}
+
+#[test]
+fn hwpx_takes_charts_as_pictures() {
+    use wordcraft_doc::InlineObject;
+    let pictures = |d: &wordcraft_doc::Document| {
+        let mut n = (0, 0);
+        d.objects_in_reading_order(&mut |o| match o {
+            InlineObject::Image { w, .. } if (*w - 300.0).abs() < 1.0 => n.0 += 1,
+            InlineObject::Graphic { .. } => n.1 += 1,
+            _ => {}
+        });
+        n
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "차트"}));
+    run(&mut s, "insert.chart", json!({"type": "column", "width": 300, "height": 200}));
+    assert_eq!(pictures(&s.doc), (0, 1));
+    // a new package: the chart is a picture of itself, in BinData
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let zip = bytes.clone();
+    let sec = zip_part(&zip, "Contents/section0.xml");
+    assert_eq!(sec.matches("<hp:pic ").count(), 1);
+    assert!(zip_names(&zip).into_iter().any(|n| n.starts_with("BinData/") && n.ends_with(".png")));
+    let back = crate::io::open_bytes("x.hwpx", &bytes).unwrap();
+    assert_eq!(pictures(&back), (1, 0));
+    assert_eq!(pictures(&s.doc), (0, 1), "the document keeps its chart");
+    // added to an opened HWPX: written into the original as a new picture
+    let mut s2 = self::s();
+    s2.doc = back;
+    run(&mut s2, "caret.end", json!({}));
+    run(&mut s2, "insert.chart", json!({"type": "pie", "width": 300, "height": 200}));
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s2.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert_eq!(report.pictures, 1);
+    assert_eq!(pictures(&crate::io::open_bytes("x.hwpx", &bytes).unwrap()), (2, 0));
+}
+
+#[test]
+fn new_hwpx_writes_comments_as_memos() {
+    let mut s = s();
+    s.author = "시험/자".into();
+    run(&mut s, "text.insert", json!({"text": "메모 시험 문단"}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 5}}));
+    run(&mut s, "review.newComment", json!({"text": "메모 내용"}));
+    let date = s.doc.comments.values().next().unwrap().date_utc.clone().unwrap();
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let zip = bytes.clone();
+    let sec = zip_part(&zip, "Contents/section0.xml");
+    assert_eq!((sec.matches("type=\"MEMO\"").count(), sec.matches("<hp:fieldEnd ").count()), (1, 1));
+    assert!(sec.contains("memoShapeIDRef=\"1\""));
+    let back = crate::io::open_bytes("x.hwpx", &bytes).unwrap();
+    let c = back.comments.values().next().expect("the memo reads back as a comment");
+    assert_eq!(c.author, "시험/자");
+    assert_eq!(c.date, date, "the memo keeps its time");
+    assert_eq!(back.plain_text(StoryRef::Part(c.part)).trim(), "메모 내용");
+    assert_eq!(back.plain_text(StoryRef::Body).trim(), "메모 시험 문단");
+    // the memo's time is the comment's, to the second (a FILETIME in the field)
+    let t = (chrono::DateTime::parse_from_rfc3339(&date).unwrap().timestamp() + 11_644_473_600) as u64 * 10_000_000;
+    assert!(sec.contains(&format!("/1/{}/{}/", t & 0xFFFF_FFFF, t >> 32)), "{date}");
+    // a new .hwp keeps it too (a memo field, its text under the section's last paragraph)
+    let (bytes, report) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let hwp = crate::io::open_bytes("x.hwp", &bytes).unwrap();
+    let c = hwp.comments.values().next().expect("the memo reads back from the .hwp");
+    assert_eq!((c.author.as_str(), hwp.plain_text(StoryRef::Part(c.part)).trim()), ("시험/자", "메모 내용"));
+}
+
+/// A picture added to the paragraph that holds the section's memos (its last) keeps the memos:
+/// the paragraph is written again from its controls, and the memo records stay under it.
+/// Before, they were dropped with its other records and the comment was gone.
+#[test]
+fn hwp_picture_beside_memos_keeps_them() {
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x7B, 0x40, 0xE8,
+        0xDD, 0, 0, 0, 15, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x7C, 0x36, 0x6D,
+        0x1E, 0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "메모 시험 문단"}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 5}}));
+    run(&mut s, "review.newComment", json!({"text": "메모 내용"}));
+    let (bytes, _) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-memo-pic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("메모.hwp");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(png), "width": 30}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    let mut pictures = 0;
+    back.objects_in_reading_order(&mut |o| pictures += usize::from(matches!(o, wordcraft_doc::InlineObject::Image { .. })));
+    assert_eq!(pictures, 1, "the picture is written");
+    let c = back.comments.values().next().expect("the memo is kept");
+    assert_eq!(back.plain_text(StoryRef::Part(c.part)).trim(), "메모 내용");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Of two same-size ellipses in one paragraph (red, then blue), deleting the red one keeps the
+/// blue one in the saved .hwp. Each drawing read from the file names its control record, so
+/// the one kept is written from its own records. Before, drawings were matched by kind only:
+/// the blue one took the red one's records, and the save wrote the red one back.
+#[test]
+fn hwp_deleting_the_first_of_two_drawings_keeps_the_second() {
+    use wordcraft_doc::InlineObject;
+    let fills = |doc: &wordcraft_doc::Document| {
+        let mut out = Vec::new();
+        doc.objects_in_reading_order(&mut |o| {
+            if let InlineObject::Shape { fill, .. } = o {
+                out.push(format!("{fill:?}"));
+            }
+        });
+        out
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "도형 둘"}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 60, "height": 40}));
+    run(&mut s, "shape.fill", json!({"color": "FF0000"}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 60, "height": 40}));
+    run(&mut s, "shape.fill", json!({"color": "0000FF"}));
+    let (bytes, report) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-two-drawings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("도형.hwp");
+    std::fs::write(&path, bytes).unwrap();
+    let doc = crate::io::open_path(&path).unwrap();
+    let both = fills(&doc);
+    assert_eq!(both.len(), 2, "{both:?}");
+    assert_ne!(both[0], both[1], "{both:?}");
+    let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    let off = p.text.char_indices().find(|(i, _)| matches!(p.object_at(*i), Some(InlineObject::Shape { .. }))).map(|(i, _)| i).expect("a drawing");
+    let block = doc.body.iter().position(|b| b.as_para().is_some()).unwrap();
+    let mut s = Session::new(doc);
+    s.path = Some(path.clone());
+    run(&mut s, "select.range", json!({"anchor": {"block": block, "off": off}, "focus": {"block": block, "off": off + '\u{FFFC}'.len_utf8()}}));
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(fills(&s.doc), [both[1].clone()], "the blue one is left in the editor");
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    assert_eq!(fills(&back), [both[1].clone()], "the blue one is saved");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture in a table cell resized in the same save that adds a row keeps its new size: the
+/// table is written again, and the cell is not taken for the unchanged original (its text and
+/// image are the same, its size isn't). Before, the original cell's records were copied and
+/// the picture went back to its old size without a notice.
+#[test]
+fn hwp_cell_picture_resized_with_a_new_row_keeps_its_size() {
+    use wordcraft_doc::{InlineObject, Path, Pos};
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x7B, 0x40, 0xE8,
+        0xDD, 0, 0, 0, 15, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x7C, 0x36, 0x6D,
+        0x1E, 0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    // the table's block, and the picture in its first cell: (offset, width)
+    let cell_picture = |doc: &wordcraft_doc::Document| {
+        let t = doc.body.iter().position(|b| b.as_table().is_some()).expect("a table");
+        let cell = doc.body[t].as_table().and_then(|x| x.rows.first()).and_then(|r| r.cells.first()).unwrap();
+        let p = cell.blocks.first().and_then(|b| b.as_para()).unwrap();
+        let pic = p.objects_with_offsets().into_iter().find_map(|(off, o)| match o {
+            InlineObject::Image { w, .. } => Some((off, w.round())),
+            _ => None,
+        });
+        (t, pic)
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "표 앞"}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    let (t, _) = cell_picture(&s.doc);
+    s.sel = crate::Selection::caret(Pos::new(StoryRef::Body, Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "text.insert", json!({"text": "칸 "}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(png), "width": 40}));
+    let (bytes, report) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-cell-pic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("표.hwp");
+    std::fs::write(&path, bytes).unwrap();
+    let doc = crate::io::open_path(&path).unwrap();
+    let (t, pic) = cell_picture(&doc);
+    let (off, w) = pic.expect("the picture reads back");
+    assert_eq!(w, 40.0);
+    let mut s = Session::new(doc);
+    s.path = Some(path.clone());
+    let at = |off: usize| Pos::new(StoryRef::Body, Path(vec![t as u32, 0, 0, 0]), off);
+    s.sel = crate::Selection { anchor: at(off), focus: at(off + '\u{FFFC}'.len_utf8()) };
+    run(&mut s, "picture.size", json!({"width": 80}));
+    s.sel = crate::Selection::caret(at(0));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    let (t, pic) = cell_picture(&back);
+    assert_eq!(back.body[t].as_table().map(|x| x.rows.len()), Some(2), "the row is added");
+    assert_eq!(pic.map(|p| p.1), Some(80.0), "the picture keeps its new size");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A drawing with a gradient fill isn't written to a new .hwp yet (only solid fills are), and
+/// the save says so; a solid one next to it is written. Before, the gradient was written as no
+/// fill, and nothing was reported.
+#[test]
+fn new_hwp_reports_gradient_fills() {
+    use wordcraft_doc::InlineObject;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "채움"}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 60, "height": 40}));
+    run(&mut s, "shape.fill", json!({"gradient": {"stops": [{"pos": 0, "color": "FF0000"}, {"pos": 100, "color": "0000FF"}]}}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 60, "height": 40}));
+    run(&mut s, "shape.fill", json!({"color": "00FF00"}));
+    let (bytes, report) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+    assert!(!report.skipped.is_empty(), "the gradient is reported");
+    let back = crate::io::open_bytes("x.hwp", &bytes).unwrap();
+    let mut fills = Vec::new();
+    back.objects_in_reading_order(&mut |o| {
+        if let InlineObject::Shape { fill, .. } = o {
+            fills.push(format!("{fill:?}"));
+        }
+    });
+    assert_eq!(fills.len(), 1, "{fills:?}");
+    assert!(fills[0].contains("Rgb(0, 255, 0)"), "{fills:?}");
+}
+
+/// Comments added or deleted in WordCraft aren't written into the original .hwp or .hwpx (the
+/// write-back changes text, not memo fields): the save says so, for a comment on existing text
+/// and one in a new paragraph, and the file keeps the memo it had, text included. Before, new
+/// comments were lost without a notice, and a deleted one left its memo without its text.
+fn comment_edits_are_reported(ext: &str) {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "첫 문단 글"}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 3}}));
+    run(&mut s, "review.newComment", json!({"text": "원래 메모"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "둘째 문단 글"}));
+    let (bytes, report) = if ext == "hwp" { crate::io::save_hwp("x.hwp", &s.doc) } else { crate::io::save_hwpx("x.hwpx", &s.doc) }.unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-{ext}-comment-edits-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("memo.{ext}"));
+    std::fs::write(&path, &bytes).unwrap();
+    let texts = |doc: &wordcraft_doc::Document| {
+        let mut t: Vec<String> = doc.comments.values().map(|c| doc.plain_text(StoryRef::Part(c.part)).trim().to_string()).collect();
+        t.sort();
+        t
+    };
+    let open = |path: &std::path::Path| {
+        let mut s = Session::new(crate::io::open_path(path).unwrap());
+        s.path = Some(path.to_path_buf());
+        s
+    };
+    let mut s = open(&path);
+    assert_eq!(texts(&s.doc), ["원래 메모"]);
+    let second = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.contains("둘째"))).expect("the second paragraph");
+    // a comment on existing text, and one in a new paragraph
+    run(&mut s, "select.range", json!({"anchor": {"block": second, "off": 0}, "focus": {"block": second, "off": 3}}));
+    run(&mut s, "review.newComment", json!({"text": "새 메모 하나"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "새 문단"}));
+    let last = s.doc.body.len() - 1;
+    run(&mut s, "select.range", json!({"anchor": {"block": last, "off": 0}, "focus": {"block": last, "off": 3}}));
+    run(&mut s, "review.newComment", json!({"text": "새 메모 둘"}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved[ext]["notWritten"].to_string().contains("2 new comment(s)"), "{saved}");
+    let back = crate::io::open_path(&path).unwrap();
+    assert_eq!(texts(&back), ["원래 메모"], "the memo the file had is kept");
+    assert!(back.plain_text(StoryRef::Body).contains("새 문단"), "the text is written");
+    // the memo the file had, deleted: it stays in the file with its text, and the save says so
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = open(&path);
+    let id = *s.doc.comments.keys().next().unwrap();
+    run(&mut s, "review.deleteComment", json!({"id": id}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved[ext]["notWritten"].to_string().contains("1 deleted comment(s)"), "{saved}");
+    assert_eq!(texts(&crate::io::open_path(&path).unwrap()), ["원래 메모"], "kept as it was");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hwp_comment_edits_are_reported() {
+    comment_edits_are_reported("hwp");
+}
+
+#[test]
+fn hwpx_comment_edits_are_reported() {
+    comment_edits_are_reported("hwpx");
+}
+
+/// A picture carrying brightness, contrast or transparency of its own (one from a Word file;
+/// WordCraft's own commands bake them into the pixels) is written to an .hwpx without them, as
+/// Hancom's values aren't read and how they map isn't known: the save says so, for a picture
+/// saved back into the original and for a new file. Before, it was written without them and
+/// counted as written.
+#[cfg(not(target_arch = "wasm32"))] // tiny_png
+#[test]
+fn hwpx_picture_corrections_are_reported() {
+    let png = tiny_png();
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "picture "}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(&png), "width": 40}));
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-picfx-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pic.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let image = |o: &wordcraft_doc::InlineObject| matches!(o, wordcraft_doc::InlineObject::Image { .. });
+    let p = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.objects_with_offsets().any(|(_, o)| image(o)))).unwrap();
+    let off = s.doc.body[p].as_para().unwrap().objects_with_offsets().find(|(_, o)| image(o)).unwrap().0;
+    let path_p = wordcraft_doc::Path(vec![p as u32]);
+    if let Ok(para) = s.doc.para_mut(StoryRef::Body, &path_p)
+        && let Some(wordcraft_doc::InlineObject::Image { fx, .. }) = para.object_at_mut(off)
+    {
+        *fx = wordcraft_doc::picfx::PicFx::new(20_000, 0, 0);
+    }
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwpx"]["notWritten"].to_string().contains("brightness"), "{saved}");
+    let (_, report) = crate::io::save_hwpx("y.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.iter().any(|x| x.contains("brightness")), "a new file: {:?}", report.skipped);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A table deleted from the paragraph that holds the section's settings (and no text) takes only
+/// the table: the paragraph and its page settings stay. Before, the whole paragraph went, and the
+/// saved file lost its page setup.
+#[test]
+fn hwpx_deleting_a_table_keeps_section_settings() {
+    let tbl = r#"<hp:tbl rowCnt="1" colCnt="1"><hp:sz width="20000" height="2000"/><hp:tr><hp:tc><hp:cellAddr rowAddr="0" colAddr="0"/><hp:cellSz width="20000" height="2000"/><hp:subList><hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>"#;
+    let sec_pr = r#"<hp:secPr id="" textDirection="HORIZONTAL"><hp:pagePr landscape="WIDELY" width="59528" height="84188"/></hp:secPr>"#;
+    let bytes = tiny_hwpx(&format!("<hp:p><hp:run>{sec_pr}{tbl}</hp:run></hp:p><hp:p><hp:run><hp:t>after</hp:t></hp:run></hp:p>"));
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-secpr-table-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).expect("the table");
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "table.deleteTable", json!({}));
+    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
+    run(&mut s, "file.save", json!({}));
+    let z = std::fs::read(&path).unwrap();
+    let sec = zip_part(&z, "Contents/section0.xml");
+    assert!(!sec.contains("<hp:tbl"), "the table is deleted: {sec}");
+    assert!(sec.contains("<hp:secPr"), "the section settings stay: {sec}");
+    assert!(sec.contains("after"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture added to an .hwpx whose section binds the paragraph namespace to another prefix
+/// (`p`, not `hp`) declares the prefixes it uses, so a namespace-aware reader can read it.
+/// Before, it was written with `hp:` and `hc:` names the section never declared.
+#[cfg(not(target_arch = "wasm32"))] // tiny_png
+#[test]
+fn hwpx_new_pictures_bind_their_prefixes() {
+    let section = r#"<hs:sec xmlns:p="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><p:p><p:run><p:t>picture here</p:t></p:run></p:p></hs:sec>"#;
+    let mut z = craft_zip::Writer::new();
+    for (name, data) in [
+        ("mimetype", "application/hwp+zip"),
+        ("Contents/header.xml", r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#),
+        ("Contents/section0.xml", section),
+        // a manifest, to list the new picture's image in
+        (
+            "Contents/content.hpf",
+            r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="s" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="s"/></opf:spine></opf:package>"#,
+        ),
+        (
+            "META-INF/container.xml",
+            r#"<ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#,
+        ),
+    ] {
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
+    }
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-prefixes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("p.hwpx");
+    std::fs::write(&path, z.finish().unwrap()).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(&tiny_png()), "width": 30}));
+    run(&mut s, "file.save", json!({}));
+    let sec = zip_part(&std::fs::read(&path).unwrap(), "Contents/section0.xml");
+    let pic = &sec[sec.find("<hp:pic").unwrap_or_else(|| panic!("a picture: {sec}"))..];
+    let tag = &pic[..pic.find('>').unwrap()];
+    assert!(tag.contains(r#"xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph""#), "{tag}");
+    assert!(tag.contains(r#"xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core""#), "{tag}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture moved within its paragraph, the text otherwise the same (after "AB", now between
+/// them), isn't written as a move: the save says it keeps its place. Before, nothing was
+/// reported and the picture silently stayed where it was.
+#[cfg(not(target_arch = "wasm32"))] // tiny_png
+#[test]
+fn hwpx_picture_moves_in_a_paragraph_are_reported() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "AB"}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(&tiny_png()), "width": 30}));
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-picture-move-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("m.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let p = s.doc.body.iter().position(|b| b.as_para().is_some_and(|q| q.text.contains('B'))).unwrap();
+    let text = s.doc.body[p].as_para().unwrap().text.clone();
+    let b = text.find('B').unwrap();
+    // "B" taken out and put back after the picture: "A", picture, "B"
+    run(&mut s, "select.range", json!({"anchor": {"block": p, "off": b}, "focus": {"block": p, "off": b + 1}}));
+    run(&mut s, "text.delete", json!({}));
+    let end = s.doc.body[p].as_para().unwrap().text.len();
+    run(&mut s, "select.range", json!({"anchor": {"block": p, "off": end}, "focus": {"block": p, "off": end}}));
+    run(&mut s, "text.insert", json!({"text": "B"}));
+    let now = s.doc.body[p].as_para().unwrap().text.clone();
+    assert!(now.find('\u{FFFC}').unwrap() < now.find('B').unwrap(), "{now:?}");
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwpx"]["notWritten"].to_string().contains("moved within its paragraph"), "{saved}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An .hwpx table written again (a row added) can't carry its paragraphs' numbering yet: the
+/// save says the numbers and bullets are left out. Before, a bulleted cell paragraph lost its
+/// bullet without a notice.
+#[test]
+fn hwpx_table_numbering_left_out_is_reported() {
+    use wordcraft_doc::{Path, Pos};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "before"}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s.sel = crate::Selection::caret(Pos::new(StoryRef::Body, Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "text.insert", json!({"text": "item"}));
+    run(&mut s, "para.bullets", json!({}));
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "a new file writes them: {:?}", report.skipped);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-table-numbers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("n.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s.sel = crate::Selection::caret(Pos::new(StoryRef::Body, Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwpx"]["notWritten"].to_string().contains("numbers and bullets"), "{saved}");
+    // the cell mark the .hwp writer reads doesn't go into the file
+    assert!(!zip_part(&std::fs::read(&path).unwrap(), "Contents/section0.xml").contains("wcNumbered"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A numbered cell of an .hwp table written again (a row added) loses its numbers, and the save
+/// says so. Before, the .hwp writer dropped that notice for every table, also for cells written
+/// again from their edited form.
+#[test]
+fn hwp_table_numbering_left_out_is_reported() {
+    use wordcraft_doc::{Path, Pos};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "before"}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s.sel = crate::Selection::caret(Pos::new(StoryRef::Body, Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "text.insert", json!({"text": "item"}));
+    run(&mut s, "para.bullets", json!({}));
+    let (bytes, report) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "a new file writes them: {:?}", report.skipped);
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwp-table-numbers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("n.hwp");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s.sel = crate::Selection::caret(Pos::new(StoryRef::Body, Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwp"]["notWritten"].to_string().contains("numbers and bullets"), "{saved}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture added to an .hwpx without a manifest can't be listed, so the save writes only the
+/// text edits and says so: no picture reference to an image the package doesn't hold. Before,
+/// the section named the new image and the image itself was left out.
+#[cfg(not(target_arch = "wasm32"))] // tiny_png
+#[test]
+fn hwpx_without_a_manifest_takes_no_new_pictures() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-no-manifest-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bare.hwpx");
+    std::fs::write(&path, tiny_hwpx("<hp:p><hp:run><hp:t>text here</hp:t></hp:run></hp:p>")).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " more"}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(&tiny_png()), "width": 30}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwpx"]["notWritten"].to_string().contains("no manifest"), "{saved}");
+    let z = std::fs::read(&path).unwrap();
+    let sec = zip_part(&z, "Contents/section0.xml");
+    assert!(sec.contains("text here more"), "the text edit is written: {sec}");
+    assert!(!sec.contains("binaryItemIDRef"), "no reference to an image the package lacks: {sec}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A chart whose picture failed to encode (an empty PNG) stays a chart: no picture without an
+/// image is staged, and the Hangul writers report the chart as not written. A PNG that encoded
+/// replaces it.
+#[cfg(not(target_arch = "wasm32"))] // tiny_png
+#[test]
+fn a_failed_chart_picture_leaves_the_chart() {
+    use wordcraft_doc::InlineObject;
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "pie", "width": 200, "height": 150}));
+    let mut chart = None;
+    s.doc.objects_in_reading_order(&mut |o| {
+        if matches!(o, InlineObject::Graphic { .. }) && chart.is_none() {
+            chart = Some(o.clone());
+        }
+    });
+    let mut o = chart.expect("a chart");
+    let mut pictures = Vec::new();
+    assert!(!crate::io_ext::swap_in_picture(&mut o, "graphic-picture1.png".into(), Vec::new(), &mut pictures));
+    assert!(matches!(o, InlineObject::Graphic { .. }) && pictures.is_empty());
+    // the document still holds the chart, as the failed swap left it: each writer reports it
+    for (format, report) in [("hwpx", wordcraft_hwp::new_hwpx(&s.doc).unwrap().1), ("hwp", wordcraft_hwp::new_hwp(&s.doc).unwrap().1)] {
+        assert!(report.skipped.iter().any(|x| x.contains("charts or diagrams")), "{format}: {report:?}");
+    }
+    assert!(crate::io_ext::swap_in_picture(&mut o, "graphic-picture1.png".into(), tiny_png(), &mut pictures));
+    assert!(matches!(o, InlineObject::Image { .. }) && pictures.len() == 1);
+}
+
+/// A run made bold keeps what its own shape has and write-back doesn't model (here a 150%
+/// character width): it gets a copy of its own shape made bold, not the shape of a bold run of
+/// the paragraph at 100%. Before, it took that run's shape and lost its width.
+#[test]
+fn hwpx_made_bold_keeps_its_own_character_width() {
+    let header = r##"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hh:refList><hh:charProperties itemCnt="2"><hh:charPr id="1" height="1000" textColor="#000000"><hh:ratio hangul="150" latin="150" hanja="150" japanese="150" other="150" symbol="150" user="150"/></hh:charPr><hh:charPr id="2" height="1000" textColor="#000000"><hh:ratio hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/><hh:bold/></hh:charPr></hh:charProperties></hh:refList></hh:head>"##;
+    let section = r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><hp:p><hp:run charPrIDRef="1"><hp:t>wide</hp:t></hp:run><hp:run charPrIDRef="2"><hp:t>bold</hp:t></hp:run></hp:p></hs:sec>"#;
+    let mut z = craft_zip::Writer::new();
+    for (name, data) in [("mimetype", "application/hwp+zip"), ("Contents/header.xml", header), ("Contents/section0.xml", section)] {
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
+    }
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-own-width-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("w.hwpx");
+    std::fs::write(&path, z.finish().unwrap()).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let p = s.doc.body.iter().position(|b| b.as_para().is_some_and(|q| q.text.contains("wide"))).unwrap();
+    let at = s.doc.body[p].as_para().unwrap().text.find("wide").unwrap();
+    run(&mut s, "select.range", json!({"anchor": {"block": p, "off": at}, "focus": {"block": p, "off": at + 4}}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "file.save", json!({}));
+    let z = std::fs::read(&path).unwrap();
+    let sec = zip_part(&z, "Contents/section0.xml");
+    let head = zip_part(&z, "Contents/header.xml");
+    let run_tag = &sec[..sec.find("wide").unwrap()];
+    let run_tag = &run_tag[run_tag.rfind("<hp:run").unwrap()..];
+    let id = &run_tag[run_tag.find("charPrIDRef=\"").unwrap() + 13..];
+    let id = &id[..id.find('"').unwrap()];
+    assert_ne!(id, "2", "not the other run's shape: {sec}");
+    let shape = &head[head.find(&format!("<hh:charPr id=\"{id}\"")).unwrap()..];
+    let shape = &shape[..shape.find("</hh:charPr>").unwrap()];
+    assert!(shape.contains(r#"hangul="150""#) && shape.contains("<hh:bold"), "{shape}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A text paragraph whose run holds the section's settings before its text, deleted: it is
+/// cleared, not removed, so the page settings stay. Before, it went whole with them.
+#[test]
+fn hwpx_deleting_text_keeps_section_settings() {
+    let sec_pr = r#"<hp:secPr id="" textDirection="HORIZONTAL"><hp:pagePr landscape="WIDELY" width="59528" height="84188"/></hp:secPr>"#;
+    let bytes = tiny_hwpx(&format!("<hp:p><hp:run>{sec_pr}<hp:t>first</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>second</hp:t></hp:run></hp:p>"));
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-secpr-text-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let first = s.doc.body.iter().position(|b| b.as_para().is_some_and(|q| q.text.contains("first"))).unwrap();
+    let second = s.doc.body.iter().position(|b| b.as_para().is_some_and(|q| q.text.contains("second"))).unwrap();
+    // the first paragraph deleted: from its start to the second one's
+    run(&mut s, "select.range", json!({"anchor": {"block": first, "off": 0}, "focus": {"block": second, "off": 0}}));
+    run(&mut s, "text.delete", json!({}));
+    assert!(!s.doc.plain_text(StoryRef::Body).contains("first"));
+    run(&mut s, "file.save", json!({}));
+    let sec = zip_part(&std::fs::read(&path).unwrap(), "Contents/section0.xml");
+    assert!(!sec.contains("first"), "the text is deleted: {sec}");
+    assert!(sec.contains("<hp:secPr"), "the section settings stay: {sec}");
+    assert!(sec.contains("second"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A comment from before a continuous section break to after it stays one memo in a new .hwpx:
+/// the two sections are one HWPX section, so its field ends where the comment does, after the
+/// break. Before, the field was closed at the break, and the comment's end found no field open.
+#[test]
+fn new_hwpx_memos_run_across_continuous_breaks() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "before break"}));
+    run(&mut s, "layout.break", json!({"kind": "continuous"}));
+    run(&mut s, "text.insert", json!({"text": "after break"}));
+    let last = s.doc.body.iter().rposition(|b| b.as_para().is_some_and(|p| p.text.contains("after"))).unwrap();
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": last, "off": 5}}));
+    run(&mut s, "review.newComment", json!({"text": "across"}));
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let sec = zip_part(&bytes, "Contents/section0.xml");
+    let end = sec.find("<hp:fieldEnd ").expect("the memo's end");
+    let after = sec.find("after").unwrap();
+    assert!(end > after, "the memo ends after the break, where the comment does");
+    assert_eq!(sec.matches("<hp:fieldEnd ").count(), 1);
+}
+
+/// A table written again into an .hwpx whose header has no shape lists (an empty `hh:head`)
+/// gets the lists made for its new shapes: every character shape, paragraph shape and border
+/// fill the section names is defined in the header. Before, the definitions were dropped for
+/// want of a list to add them to, and the section named shapes the file didn't have.
+#[test]
+fn hwpx_rewritten_tables_define_their_shapes() {
+    let tbl = r#"<hp:tbl rowCnt="1" colCnt="1"><hp:sz width="20000" height="2000"/><hp:tr><hp:tc><hp:cellAddr rowAddr="0" colAddr="0"/><hp:cellSz width="20000" height="2000"/><hp:subList><hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>"#;
+    let bytes = tiny_hwpx(&format!("<hp:p><hp:run><hp:t>before</hp:t></hp:run></hp:p><hp:p><hp:run>{tbl}</hp:run></hp:p>"));
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-bare-header-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    run(&mut s, "file.save", json!({}));
+    let z = std::fs::read(&path).unwrap();
+    let (sec, head) = (zip_part(&z, "Contents/section0.xml"), zip_part(&z, "Contents/header.xml"));
+    assert_eq!(sec.matches("<hp:tr>").count() + sec.matches("<hp:tr ").count(), 2, "the row is added: {sec}");
+    for (attr, el) in [("charPrIDRef", "charPr"), ("paraPrIDRef", "paraPr"), ("borderFillIDRef", "borderFill")] {
+        for (i, _) in sec.match_indices(&format!("{attr}=\"")) {
+            let v = &sec[i + attr.len() + 2..];
+            let id = &v[..v.find('"').unwrap()];
+            assert!(head.contains(&format!("<hh:{el} id=\"{id}\"")), "{el} {id} is defined: {head}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A two-row table whose first row is deleted is still found among the original's tables (by
+/// its other cells' marks), so the deletion is written. Before, its first mark was the second
+/// row's, no original table had it, and the row stayed.
+#[test]
+fn hwpx_deleting_a_tables_first_row_is_written() {
+    let cell = |row: u32, text: &str| {
+        format!(
+            r#"<hp:tc><hp:cellAddr rowAddr="{row}" colAddr="0"/><hp:cellSz width="20000" height="2000"/><hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"#
+        )
+    };
+    let tbl = format!(
+        r#"<hp:tbl rowCnt="2" colCnt="1"><hp:sz width="20000" height="4000"/><hp:tr>{}</hp:tr><hp:tr>{}</hp:tr></hp:tbl>"#,
+        cell(0, "first row"),
+        cell(1, "second row")
+    );
+    let bytes = tiny_hwpx(&format!("<hp:p><hp:run><hp:t>before</hp:t></hp:run></hp:p><hp:p><hp:run>{tbl}</hp:run></hp:p>"));
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-first-row-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "table.deleteRow", json!({}));
+    assert_eq!(s.doc.body[t].as_table().map(|x| x.rows.len()), Some(1));
+    let saved = run(&mut s, "file.save", json!({}));
+    let sec = zip_part(&std::fs::read(&path).unwrap(), "Contents/section0.xml");
+    assert_eq!(sec.matches("<hp:tr>").count() + sec.matches("<hp:tr ").count(), 1, "{saved} {sec}");
+    assert!(!sec.contains("first row") && sec.contains("second row"), "{sec}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A paragraph whose shape is written `paraPrIDRef='0'` (single quotes) takes its new shape when
+/// its formatting changes: the attribute is found whichever quote it stands in. Before, the
+/// new shape was made and counted but the paragraph kept the old one.
+#[test]
+fn hwpx_single_quoted_paragraph_shapes_are_restyled() {
+    let header = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><hh:refList><hh:paraProperties itemCnt="1"><hh:paraPr id="0"><hh:align horizontal="LEFT"/></hh:paraPr></hh:paraProperties></hh:refList></hh:head>"#;
+    let section = r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><hp:p paraPrIDRef='0'><hp:run><hp:t>centre me</hp:t></hp:run></hp:p></hs:sec>"#;
+    let mut z = craft_zip::Writer::new();
+    for (name, data) in [("mimetype", "application/hwp+zip"), ("Contents/header.xml", header), ("Contents/section0.xml", section)] {
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
+    }
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-quoted-para-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("q.hwpx");
+    std::fs::write(&path, z.finish().unwrap()).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    let p = s.doc.body.iter().position(|b| b.as_para().is_some_and(|q| q.text.contains("centre"))).unwrap();
+    run(&mut s, "select.range", json!({"anchor": {"block": p, "off": 0}, "focus": {"block": p, "off": 3}}));
+    run(&mut s, "para.alignCenter", json!({}));
+    run(&mut s, "file.save", json!({}));
+    let z = std::fs::read(&path).unwrap();
+    let (sec, head) = (zip_part(&z, "Contents/section0.xml"), zip_part(&z, "Contents/header.xml"));
+    let tag = &sec[sec.find("<hp:p ").unwrap()..];
+    let tag = &tag[..tag.find('>').unwrap()];
+    let id = tag_value(tag, "paraPrIDRef");
+    assert_ne!(id, "0", "the paragraph takes its new shape: {tag}");
+    let shape = &head[head.find(&format!("<hh:paraPr id=\"{id}\"")).unwrap()..];
+    assert!(shape[..shape.find("</hh:paraPr>").unwrap()].contains("CENTER"), "{shape}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The value of attribute `name` in start tag `tag`, in either quote.
+fn tag_value<'a>(tag: &'a str, name: &str) -> &'a str {
+    let at = tag.find(&format!("{name}=")).map(|i| i + name.len() + 1).unwrap_or(tag.len());
+    let q = tag.get(at..at + 1).unwrap_or("\"");
+    let rest = tag.get(at + 1..).unwrap_or("");
+    rest.get(..rest.find(q).unwrap_or(0)).unwrap_or("")
+}
+
+/// A section's page count (SECTIONPAGES) isn't written as the document's (HWPX has none of its
+/// own): its shown value is written and the save says so, while NUMPAGES stays a total-page
+/// number. Before, both became the document's total.
+#[test]
+fn new_hwpx_keeps_section_page_counts_apart() {
+    let mut s = s();
+    run(&mut s, "insert.field", json!({"instr": "NUMPAGES"}));
+    run(&mut s, "text.insert", json!({"text": " / "}));
+    run(&mut s, "insert.field", json!({"instr": "SECTIONPAGES"}));
+    let (bytes, report) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    assert!(report.skipped.iter().any(|x| x.contains("section page counts")), "{:?}", report.skipped);
+    let sec = zip_part(&bytes, "Contents/section0.xml");
+    assert_eq!(sec.matches(r#"numType="TOTAL_PAGE""#).count(), 1, "{sec}");
+}
+
+/// A table whose indent alone changes (0 to 18 pt) is written again with it, and reopens indented.
+/// Before, the indent wasn't part of the table's signature: no rewrite, no notice.
+#[test]
+fn hwpx_table_indent_alone_is_written() {
+    use wordcraft_doc::{Path, Pos};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "before"}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let (bytes, _) = crate::io::save_hwpx("x.hwpx", &s.doc).unwrap();
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-table-indent-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("i.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    let indent = |doc: &wordcraft_doc::Document| doc.body.iter().find_map(|b| b.as_table()).and_then(|t| t.props.indent).unwrap_or(0.0).round();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    assert_eq!(indent(&s.doc), 0.0);
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s.sel = crate::Selection::caret(Pos::new(StoryRef::Body, Path(vec![t as u32, 0, 0, 0]), 0));
+    run(&mut s, "table.properties", json!({"indent": 18}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert!(saved["hwpx"]["notWritten"].as_array().is_some_and(Vec::is_empty), "{saved}");
+    assert_eq!(indent(&crate::io::open_path(&path).unwrap()), 18.0, "{saved}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture added to an .hwpx whose manifest goes by another prefix (`pkg:`), after a comment
+/// that holds `</opf:manifest>`: its item goes into the real manifest, under the manifest's own
+/// prefix. Before, the comment's text was taken for the manifest's end, and the item named an
+/// `opf:` prefix the part never bound.
+#[cfg(not(target_arch = "wasm32"))] // tiny_png
+#[test]
+fn hwpx_new_items_go_into_the_real_manifest() {
+    let hpf = r#"<pkg:package xmlns:pkg="http://www.idpf.org/2007/opf/"><!-- not here: </opf:manifest> --><pkg:manifest><pkg:item id="header" href="Contents/header.xml" media-type="application/xml"/><pkg:item id="s" href="Contents/section0.xml" media-type="application/xml"/></pkg:manifest><pkg:spine><pkg:itemref idref="header"/><pkg:itemref idref="s"/></pkg:spine></pkg:package>"#;
+    let mut z = craft_zip::Writer::new();
+    for (name, data) in [
+        ("mimetype", "application/hwp+zip"),
+        (
+            "META-INF/container.xml",
+            r#"<ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#,
+        ),
+        ("Contents/content.hpf", hpf),
+        ("Contents/header.xml", r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#),
+        (
+            "Contents/section0.xml",
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><hp:p><hp:run><hp:t>text</hp:t></hp:run></hp:p></hs:sec>"#,
+        ),
+    ] {
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
+    }
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-hwpx-pkg-manifest-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("m.hwpx");
+    std::fs::write(&path, z.finish().unwrap()).unwrap();
+    let mut s = Session::new(crate::io::open_path(&path).unwrap());
+    s.path = Some(path.clone());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.picture", json!({"data": base64_encode(&tiny_png()), "width": 30}));
+    let saved = run(&mut s, "file.save", json!({}));
+    assert_eq!(saved["hwpx"]["pictures"], 1, "{saved}");
+    let out = zip_part(&std::fs::read(&path).unwrap(), "Contents/content.hpf");
+    assert!(out.contains("<!-- not here: </opf:manifest> -->"), "the comment as it was: {out}");
+    let (open, close) = (out.find("<pkg:manifest>").unwrap(), out.find("</pkg:manifest>").unwrap());
+    let inside = &out[open..close];
+    assert!(inside.contains("<pkg:item id=\"image"), "the item in the manifest, under its prefix: {out}");
+    assert!(!out.contains("<opf:item"), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A new .hwp keeps text boxes, shapes, groups and freeforms (drawing objects written as
+/// records) and reads back with them.
+#[test]
+fn new_hwp_keeps_drawings() {
+    use wordcraft_doc::InlineObject;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "도형"}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 80, "height": 50}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.shape", json!({"kind": "triangle", "width": 80, "height": 60}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.shape", json!({"kind": "rectangle", "width": 120, "height": 60}));
+    run(&mut s, "arrange.bounds", json!({"page": 0, "x": 100, "y": 250}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.shape", json!({"kind": "line", "width": 80, "height": 50}));
+    run(&mut s, "arrange.bounds", json!({"page": 0, "x": 260, "y": 290}));
+    run(&mut s, "select.addObject", json!({"index": 2}));
+    run(&mut s, "arrange.group", json!({}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "draw.stroke", json!({"page": 0, "points": [[100, 400], [160, 370], [220, 430]], "width": 2}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.textBox", json!({"text": "상자 글", "width": 100, "height": 40}));
+    let (bytes, report) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    let back = crate::io::open_bytes("x.hwp", &bytes).unwrap();
+    let mut found = (0, 0, false);
+    back.objects_in_reading_order(&mut |o| match o {
+        InlineObject::Shape { .. } => found.0 += 1,
+        InlineObject::Group { children, .. } => found.1 += children.len(),
+        _ => {}
+    });
+    let boxed = back.parts.values().any(|p| p.blocks.iter().any(|b| b.as_para().is_some_and(|q| q.text.contains("상자 글"))));
+    found.2 = boxed;
+    // ellipse, triangle, freeform, text box; the group's rectangle and line
+    assert_eq!(found, (4, 2, true));
+}
+
+fn base64_encode(b: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut o = String::new();
+    for c in b.chunks(3) {
+        let n = c.iter().enumerate().fold(0u32, |n, (i, &v)| n | (u32::from(v) << (16 - 8 * i)));
+        for i in 0..4 {
+            o.push(if i <= c.len() { A[((n >> (18 - 6 * i)) & 63) as usize] as char } else { '=' });
+        }
+    }
+    o
+}
+
 #[test]
 fn txt_open_decodes_windows_1252_and_unmarked_utf16() {
     // #433: the TXT open path sniffs encodings like the formats importer.
@@ -13226,6 +14599,63 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     let grid = st.styles.iter().find(|x| x.id == "Grid").and_then(|x| x.table.as_ref()).unwrap();
     assert_eq!(grid.header_chr.size, Some(16.0));
     assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
+}
+
+/// The notice a save gives for numbers and bullets left out of table cells written again.
+fn wordcraft_hwp_numbers() -> &'static str {
+    "numbers and bullets"
+}
+
+/// A row added to each table of the HWP samples is written into the file, keeping every
+/// picture, shape and form control of the table (cells holding them that did not change are
+/// written from their original records), its caption and its place. Numbered cells written
+/// again lose their numbers, which the save reports. Over the samples:
+/// `HWP_SAMPLES=<folder> cargo test -p wordcraft-engine hwp_tables_keep_objects -- --ignored`.
+#[test]
+#[ignore = "reads the HWP samples named by HWP_SAMPLES"]
+fn hwp_tables_keep_objects() {
+    let kinds = |d: &wordcraft_doc::Document| {
+        let mut m = std::collections::BTreeMap::<&'static str, usize>::new();
+        d.objects_in_reading_order(&mut |o| {
+            let k = match o {
+                wordcraft_doc::InlineObject::Image { .. } => "pictures",
+                wordcraft_doc::InlineObject::Shape { .. } => "shapes",
+                wordcraft_doc::InlineObject::Group { .. } => "groups",
+                _ => return,
+            };
+            *m.entry(k).or_insert(0) += 1;
+        });
+        m
+    };
+    let Ok(dir) = std::env::var("HWP_SAMPLES") else { return };
+    let mut checked = 0;
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "hwp") {
+            continue;
+        }
+        let Ok(doc) = crate::io::open_path(&path) else { continue };
+        let tables: Vec<usize> = doc.body.iter().enumerate().filter(|(_, b)| b.as_table().is_some()).map(|(i, _)| i).collect();
+        for &t in tables.iter().take(40) {
+            let mut s = Session::new(doc.clone());
+            s.sel = crate::Selection::caret(wordcraft_doc::Pos::new(StoryRef::Body, wordcraft_doc::Path(vec![t as u32, 0, 0, 0]), 0));
+            if s.run("table.insertRowBelow", &json!({})).is_err() {
+                continue;
+            }
+            let rows = |d: &wordcraft_doc::Document| d.body.get(t).and_then(|b| b.as_table()).map(|x| x.rows.len());
+            let (bytes, report) = crate::io::save_hwp("x.hwp", &s.doc).unwrap();
+            let back = crate::io::open_bytes("x.hwp", &bytes).unwrap();
+            let at = format!("{} table {t}", path.display());
+            // numbered cells written again lose their numbers, and the save says so; nothing
+            // else is left out
+            let others: Vec<&String> = report.skipped.iter().filter(|s| !s.contains(wordcraft_hwp_numbers())).collect();
+            assert!(others.is_empty(), "{at}: {others:?}");
+            assert_eq!(rows(&back), rows(&doc).map(|n| n + 1), "{at}");
+            assert_eq!(kinds(&back), kinds(&doc), "{at}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no HWP tables checked");
 }
 
 /// #4467: `document.inspect` lists a footer's fields and marks the ones each page shows its own

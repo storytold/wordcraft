@@ -69,7 +69,7 @@
 
       <!-- File associations (#295). Each document type gets a WordCraft ProgId (name, icon, open
            command) and is listed under the extension's OpenWithProgids, so WordCraft shows in
-           Explorer's "Open with". The Word, RTF and ODT types are also WordCraft's Capabilities
+           Explorer's "Open with". The Word, RTF, ODT and Hangul (HWPX, HWP) types are also WordCraft's Capabilities
            (RegisteredApplications), so it appears in Settings › Default apps, where the user
            makes it the default (File › Options › General opens that page). Nothing here sets an
            extension's default: the installer never takes over .docx from another app. Markdown and
@@ -129,6 +129,18 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\.odt\OpenWithProgids" Name="WordCraft.OpenDocumentText" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".odt" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".odt" Value="WordCraft.OpenDocumentText" Type="string" />
+
+        <ProgId Id="WordCraft.HangulDocument" Description="Hangul Document (HWPX)" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\WordCraft.HangulDocument\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.hwpx\OpenWithProgids" Name="WordCraft.HangulDocument" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".hwpx" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".hwpx" Value="WordCraft.HangulDocument" Type="string" />
+
+        <ProgId Id="WordCraft.LegacyHangulDocument" Description="Hangul Document (HWP)" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\WordCraft.LegacyHangulDocument\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.hwp\OpenWithProgids" Name="WordCraft.LegacyHangulDocument" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".hwp" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".hwp" Value="WordCraft.LegacyHangulDocument" Type="string" />
 
         <ProgId Id="WordCraft.Markdown" Description="Markdown Document" Icon="WordcraftExe" IconIndex="0" />
         <RegistryValue Root="HKMU" Key="Software\Classes\WordCraft.Markdown\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />

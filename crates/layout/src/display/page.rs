@@ -237,6 +237,12 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
     out
 }
 
+/// A chart, SmartArt diagram or ink graphic `g` drawn alone in `rect`, as its page draws it
+/// (unturned): what saving it as a picture shows.
+pub fn graphic_display(doc: &Document, g: &super::Graphic, rect: Rect) -> Vec<Draw> {
+    graphic_draws(doc, g, rect, 1.0)
+}
+
 /// The cells among `items` whose content is cut off at their edge (see [`Placed::Cell`]'s
 /// `clip`), by story and the path of their content (table, row, cell): their area, and the
 /// order they come in (the first of two that hold a line clips it).

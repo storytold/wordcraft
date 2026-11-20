@@ -574,6 +574,18 @@ fn picture_styles_and_borders_check_the_size_they_draw() {
     assert_eq!(grown(u32::MAX, 1, 1), None);
 }
 
+/// A level line keeps no height when it is made longer: 1 pt of height would slant it.
+#[test]
+fn level_lines_stay_level_when_resized() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "line", "width": 100, "height": 1})).unwrap();
+    super::select::with_obj(&mut s, |o| o.set_size(100.0, 0.0)).unwrap();
+    s.run("picture.size", &json!({"width": 200})).unwrap();
+    assert_eq!(obj_size(&selected(&s).unwrap().1), (200.0, 0.0));
+    s.run("picture.size", &json!({"height": 30})).unwrap();
+    assert_eq!(obj_size(&selected(&s).unwrap().1), (200.0, 30.0));
+}
+
 #[test]
 fn picture_pipeline() {
     let mut s = Session::new(wordcraft_doc::Document::new());

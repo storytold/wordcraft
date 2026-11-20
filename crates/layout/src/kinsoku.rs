@@ -10,6 +10,8 @@
 //!   `para::break_lines`, which can put one of these characters at the start of the line.
 //! - Kinsoku off: a line may break between any two East Asian characters, punctuation included.
 //! - Word wrap off: Latin words may break at any character.
+//! - Hangul words kept whole (Hancom Hangul paragraphs): no break inside a run of characters
+//!   with a Hangul letter beside the break, so a line breaks between Korean words only.
 //! - Automatic spacing (`autoSpaceDE`, `autoSpaceDN`): which neighbouring characters get room
 //!   between Asian text and Latin text or digits ([`auto_space`]).
 //!
@@ -51,7 +53,7 @@ pub fn is_east_asian(c: char) -> bool {
 
 /// Adjust the break opportunities `opps` (byte offsets into `text`: a line may start there) for
 /// the paragraph's kinsoku and word-wrap settings. The result is sorted and has no duplicates.
-pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) {
+pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, keep_hangul_words: bool) {
     let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
     let prev_char = |i: usize| text.get(..i).and_then(|t| t.chars().next_back());
     if kinsoku {
@@ -75,6 +77,13 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
             }
             prev = Some(g);
         }
+    }
+    if keep_hangul_words {
+        // a break with letters on both sides and Hangul on one of them is inside a Korean word
+        opps.retain(|&i| match (prev_char(i), next_char(i)) {
+            (Some(a), Some(b)) => a.is_whitespace() || b.is_whitespace() || !(is_hangul(a) || is_hangul(b)),
+            _ => true,
+        });
     }
     opps.sort_unstable();
     opps.dedup();
@@ -134,8 +143,12 @@ mod tests {
 
     /// Where a line may start, as the text from there to the next opportunity.
     fn breaks(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<String> {
+        breaks_hangul(text, kinsoku, word_wrap, false)
+    }
+
+    fn breaks_hangul(text: &str, kinsoku: bool, word_wrap: bool, keep_hangul_words: bool) -> Vec<String> {
         let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
-        apply(text, &mut opps, kinsoku, word_wrap);
+        apply(text, &mut opps, kinsoku, word_wrap, keep_hangul_words);
         opps.iter().map(|&i| text.get(i..).and_then(|t| t.chars().next()).map(String::from).unwrap_or_default()).collect()
     }
 
@@ -159,6 +172,16 @@ mod tests {
         assert_eq!(breaks(en, true, true), ["w", "(", "5"]);
         let any = breaks("Hello café", true, false);
         assert_eq!(any, ["e", "l", "l", "o", "c", "a", "f", "é"]);
+    }
+
+    /// Hangul words kept whole break only between words (after the spaces); without it a line
+    /// may break between any two syllables.
+    #[test]
+    fn hangul_words_wrap_whole_when_kept() {
+        let ko = "봄날(오후2시) 우리 정원의 해바라기";
+        assert_eq!(breaks_hangul(ko, true, true, true), ["우", "정", "해"]);
+        let loose = breaks_hangul(ko, true, true, false);
+        assert!(loose.iter().any(|s| s == "리") && loose.iter().any(|s| s == "라"), "{loose:?}");
     }
 
     #[test]

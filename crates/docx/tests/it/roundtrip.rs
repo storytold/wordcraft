@@ -221,6 +221,8 @@ fn every_para_prop_round_trips() {
         }),
         kinsoku: Some(false),
         word_wrap: Some(false),
+        // set only by the Hangul reader; DOCX has no place for it
+        keep_hangul_words: None,
         overflow_punct: Some(false),
         top_line_punct: Some(true),
         auto_space_de: Some(false),

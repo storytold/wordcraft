@@ -47,6 +47,7 @@ pub mod font_download;
 pub mod format_shape;
 pub mod frame;
 pub mod guides;
+pub(crate) mod hangul_fonts;
 pub mod i18n;
 pub mod ibeam;
 pub mod icons;
@@ -754,6 +755,8 @@ pub struct WordApp {
     recover_fonts_for: Option<u64>,
     /// The list of recent document paths [`WordApp::ensure_recent_fonts`] last looked at.
     recent_fonts_for: Vec<String>,
+    /// The status message [`WordApp::ensure_status_fonts`] last looked at.
+    status_fonts_for: Option<String>,
     /// The Find query and result count [`WordApp::ensure_find_fonts`] last looked at.
     find_fonts_for: Option<(String, usize, u64)>,
     fonts_frames: u32,

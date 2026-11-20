@@ -863,3 +863,24 @@ fn many_failed_fonts_end_with_a_count() {
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// A browser Save as .hwpx lists the edits the Hangul writer could not write, as the desktop
+/// Save does, and says so in the status line. Before, the report was dropped on this path.
+#[test]
+fn web_hangul_save_reports_what_it_could_not_write() {
+    let services = Services {
+        download: Some(Box::new(|_, bytes| if bytes.starts_with(b"PK") { Ok(()) } else { Err("not a package".into()) })),
+        ..Default::default()
+    };
+    let linked = wordcraft_doc::CharProps { link: Some("https://example.com/".into()), ..Default::default() };
+    let mut doc = wordcraft_doc::Document::from_text("");
+    doc.body.clear();
+    doc.body.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("link", linked)));
+    let mut a = WordApp::new(Session::new(doc), services);
+    let result = a.run("file.saveAs", json!({"path": "draft.hwpx"})).unwrap();
+    assert_eq!(result["downloaded"], "draft.hwpx");
+    let not_written = result["hwpx"]["notWritten"].as_array().cloned().unwrap_or_default();
+    assert!(not_written.iter().any(|s| s.as_str().is_some_and(|s| s.contains("hyperlink"))), "{result}");
+    let status = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(status.contains("could not be written"), "{status}");
+}

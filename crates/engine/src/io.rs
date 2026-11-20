@@ -22,6 +22,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "mhtml",
     "rtf",
     "odt",
+    "hwpx",
+    "hwp",
     "ott",
     "fodt",
     "tex",
@@ -33,7 +35,7 @@ pub const OPEN_EXTS: &[&str] = &[
 ];
 /// Formats WordCraft saves (Save As).
 pub const SAVE_EXTS: &[&str] =
-    &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "ott", "fodt", "tex", "png", "json", "xml"];
+    &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "ott", "fodt", "hwpx", "hwp", "tex", "png", "json", "xml"];
 
 /// Magic number for ZIP package signatures (used by .docx/.docm/.dotx/.dotm).
 const ZIP_SIG: &[u8] = b"PK\x03\x04";
@@ -246,6 +248,7 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
         }
         // Plain text goes through the formats importer: BOMs, unmarked UTF-16, Windows-1252.
         "txt" | "text" => wordcraft_formats::txt::import_on(bytes, page),
+        "hwpx" | "hwp" => read_hangul(name, bytes)?,
         "json" => {
             let mut d = serde_json::from_slice::<Document>(bytes).map_err(|e| format!("{name}: {e}"))?;
             d.normalize_runs();
@@ -258,6 +261,85 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
     };
     opened(&mut doc);
     Ok((doc, false))
+}
+
+/// `Document::passthrough` key holding the HWPX a document was opened from: saving as `.hwpx`
+/// writes the edits back into a copy of it (never written into other formats).
+pub const HWPX_SOURCE: &str = "hwp/source.hwpx";
+
+/// The same for a document opened from an HWP 5.0 file: saving as `.hwp` writes into a copy of it.
+pub const HWP_SOURCE: &str = "hwp/source.hwp";
+
+/// A Hancom Hangul document (HWPX or HWP 5.0), through its conversion to WordprocessingML. It
+/// keeps its original bytes for [`save_hwpx`] / [`save_hwp`].
+fn read_hangul(name: &str, bytes: &[u8]) -> Result<Document, String> {
+    let mut doc = hangul_as_read(bytes).map_err(|e| format!("{name}: {e}"))?;
+    // The converted package names only the styles the Hangul file uses; a table inserted later
+    // takes Table Grid, so it needs to be there to draw (and save) with borders.
+    let builtin = wordcraft_doc::StyleSheet::builtin();
+    for id in ["TableNormal", "TableGrid"] {
+        if doc.styles.get(id).is_none()
+            && let Some(st) = builtin.get(id)
+        {
+            std::sync::Arc::make_mut(&mut doc.styles).styles.push(st.clone());
+        }
+    }
+    let key = if bytes.starts_with(OLE_SIG) { HWP_SOURCE } else { HWPX_SOURCE };
+    doc.passthrough.insert(key.into(), std::sync::Arc::new(bytes.to_vec()));
+    Ok(doc)
+}
+
+/// `doc` without the Hangul originals, as DOCX bytes (what write-back compares with the original),
+/// and the original as WordCraft reads it (what formatting and table edits are measured against).
+fn edited_and_original(name: &str, doc: &Document, source: &[u8]) -> Result<(Document, Vec<u8>, Option<Document>), String> {
+    let mut edited = doc.clone();
+    edited.passthrough.remove(HWPX_SOURCE);
+    edited.passthrough.remove(HWP_SOURCE);
+    let docx = wordcraft_docx::write(&edited).map_err(|e| format!("{name}: {e}"))?;
+    let before = hangul_as_read(source).ok();
+    Ok((edited, docx, before))
+}
+
+/// A Hangul file as WordCraft reads it: converted to DOCX, read, and given the Korean word
+/// wrapping DOCX can't carry ([`wordcraft_hwp::apply_keep_words`]).
+fn hangul_as_read(bytes: &[u8]) -> Result<Document, String> {
+    let (docx, report) = wordcraft_hwp::to_docx(bytes).map_err(|e| e.to_string())?;
+    let mut doc = wordcraft_docx::read(&docx).map_err(|e| e.to_string())?;
+    wordcraft_hwp::apply_keep_words(&mut doc, &report);
+    Ok(doc)
+}
+
+/// Save a document as HWP. One opened from an HWP 5.0 file keeps it: the edits are written into
+/// a copy of the original (see [`wordcraft_hwp::write_back_hwp`]); any other document becomes a
+/// new file ([`wordcraft_hwp::new_hwp`]), with its charts and diagrams as pictures. The report
+/// lists what was not written yet.
+pub fn save_hwp(name: &str, doc: &Document) -> Result<(Vec<u8>, wordcraft_hwp::SaveReport), String> {
+    let Some(source) = doc.passthrough.get(HWP_SOURCE) else {
+        let pictured = crate::io_ext::graphics_as_pictures(doc);
+        return wordcraft_hwp::new_hwp(pictured.as_ref().unwrap_or(doc)).map_err(|e| format!("{name}: {e}"));
+    };
+    // charts and diagrams go in as pictures, as in a new file
+    let pictured = crate::io_ext::graphics_as_pictures(doc);
+    let (edited, docx, before) = edited_and_original(name, pictured.as_ref().unwrap_or(doc), source)?;
+    let docs = before.as_ref().map(|b| (b, &edited));
+    wordcraft_hwp::write_back_hwp(source, &docx, docs).map_err(|e| format!("{name}: {e}"))
+}
+
+/// Save a document as HWPX. One opened from an HWPX keeps it: the edits are written into a copy
+/// of the original (see [`wordcraft_hwp::write_back`]); any other document (a new one, a .docx,
+/// an .hwp) becomes a new package ([`wordcraft_hwp::new_hwpx`]). Charts and diagrams go in as
+/// pictures. The report lists what was not written yet.
+pub fn save_hwpx(name: &str, doc: &Document) -> Result<(Vec<u8>, wordcraft_hwp::SaveReport), String> {
+    // charts and diagrams go in as pictures (HWP reading makes none, so an opened file's charts
+    // were all added in WordCraft)
+    let pictured = crate::io_ext::graphics_as_pictures(doc);
+    let doc = pictured.as_ref().unwrap_or(doc);
+    let Some(source) = doc.passthrough.get(HWPX_SOURCE) else {
+        return wordcraft_hwp::new_hwpx(doc).map_err(|e| format!("{name}: {e}"));
+    };
+    let (edited, docx, before) = edited_and_original(name, doc, source)?;
+    let docs = before.as_ref().map(|b| (b, &edited));
+    wordcraft_hwp::write_back_with(source, &docx, docs).map_err(|e| format!("{name}: {e}"))
 }
 
 /// Read a Word package (decrypted with `password` if it is encrypted), bringing in its
@@ -415,6 +497,8 @@ fn open_by_content(
 ) -> Result<(Document, bool), String> {
     let (mut doc, encrypted) = if bytes.starts_with(OLE_SIG) && wordcraft_docx::is_encrypted(bytes) {
         (read_docx(bytes, password).map_err(|e| e.to_string())?, true)
+    } else if wordcraft_hwp::sniff(bytes) {
+        (read_hangul(name, bytes)?, false)
     } else if bytes.starts_with(ZIP_SIG) {
         (read_docx(bytes, None).map_err(|e| format!("{name}: not a document WordCraft can open ({e})"))?, false)
     } else if bytes.starts_with(OLE_SIG) {
@@ -456,11 +540,36 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
             Ok(if opts.markup && opts.comments { wordcraft_formats::comments::append("txt", doc, bytes) } else { bytes })
         }
         "json" => serde_json::to_vec_pretty(doc).map_err(|e| e.to_string()),
+        "hwpx" => save_hwpx(name, doc).map(|(bytes, _)| bytes),
+        "hwp" => save_hwp(name, doc).map(|(bytes, _)| bytes),
         other => match crate::io_ext::save(other, doc, opts) {
             Some(r) => r,
             None => Err(format!("{name}: can't save as `.{other}`")),
         },
     }
+}
+
+/// What an `.hwpx` or `.hwp` save tells about the edits it could not write (see
+/// [`crate::cmd::file::hangul_save_result`]).
+pub struct SaveNotice {
+    /// The format, "hwpx" or "hwp": the key of `result` in a save's result.
+    pub format: String,
+    /// The status line when some edits were not written.
+    pub status: Option<String>,
+    pub result: serde_json::Value,
+}
+
+/// [`save_bytes_with`], with what an `.hwpx` or `.hwp` save could not write (see [`save_hwpx`],
+/// [`save_hwp`]), as the browser's Save reports it.
+pub fn save_bytes_report(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<(Vec<u8>, Option<SaveNotice>), String> {
+    let ext = ext_of(name);
+    let hangul = match ext.as_str() {
+        "hwpx" => save_hwpx(name, doc)?,
+        "hwp" => save_hwp(name, doc)?,
+        _ => return save_bytes_with(name, doc, password, opts).map(|bytes| (bytes, None)),
+    };
+    let (status, result) = crate::cmd::file::hangul_save_result(&ext, &hangul.1);
+    Ok((hangul.0, Some(SaveNotice { format: ext, status, result })))
 }
 
 /// [`save_bytes`], encrypted with `password` when there is one and the format is a Word package
@@ -846,12 +955,46 @@ pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<(), String> {
 /// [`save_path`], encrypted with `password` as [`save_bytes_with`] does.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<(), String> {
+    save_path_report(path, doc, password, opts).map(|_| ())
+}
+
+/// [`save_path_with`], with what an `.hwpx` or `.hwp` save could not write (see [`save_hwpx`],
+/// [`save_hwp`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_path_report(
+    path: &std::path::Path,
+    doc: &Document,
+    password: Option<&str>,
+    opts: &ExportOptions,
+) -> Result<Option<wordcraft_hwp::SaveReport>, String> {
     crate::file_access::check_write(&path.to_string_lossy())?;
+    let ext = ext_of(&path.to_string_lossy());
+    if ext == "hwpx" || ext == "hwp" {
+        let name = path.to_string_lossy();
+        let (bytes, report) = if ext == "hwp" { save_hwp(&name, doc)? } else { save_hwpx(&name, doc)? };
+        safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        return Ok(Some(report));
+    }
+    save_path_plain(path, doc, password, opts).map(|()| None)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_path_plain(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<(), String> {
     let bytes = save_bytes_with(&path.to_string_lossy(), doc, password, opts)?;
     safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Saves a document to `path` with optional password and export options on web targets.
+#[cfg(target_arch = "wasm32")]
+pub fn save_path_report(
+    path: &std::path::Path,
+    _doc: &Document,
+    _password: Option<&str>,
+    _opts: &ExportOptions,
+) -> Result<Option<wordcraft_hwp::SaveReport>, String> {
+    Err(format!("{}: files are saved through the browser on the web", path.display()))
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<(), String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
