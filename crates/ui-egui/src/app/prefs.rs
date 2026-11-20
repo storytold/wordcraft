@@ -276,13 +276,11 @@ mod autosave_preference_tests {
         let saved = std::fs::read(&path).unwrap();
         a.run("text.insert", json!({"text": "Still unsaved"})).unwrap();
         a.last_autosave = 0.0;
-        a.canvas.caret_visible_since = 0.0;
-        a.autosave_tick(10_000.0);
+        a.autosave_tick(craft::platform::clock::monotonic_ms() + 10_000.0);
         assert_eq!(std::fs::read(&path).unwrap(), saved, "manual Save must not permit later automatic writes");
         assert!(a.session.dirty && !a.autosave && !a.session.autosave);
         a.run("file.autosave", json!({"value": true})).unwrap();
-        a.canvas.caret_visible_since = 0.0;
-        a.autosave_tick(20_000.0);
+        a.autosave_tick(craft::platform::clock::monotonic_ms() + 20_000.0);
         assert_ne!(std::fs::read(&path).unwrap(), saved, "explicit On covers the same saved file");
         assert!(!a.session.dirty && a.autosaves());
     }
