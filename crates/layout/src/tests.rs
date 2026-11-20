@@ -8055,10 +8055,10 @@ fn a_paragraph_of_only_a_page_break_moves_when_it_does_not_fit() {
     // Exactly 24 pt lines, 10 pt left: the break's own paragraph moves, a blank page follows.
     assert_eq!(pages(&doc(LineSpacing::Exactly(24.0), 10.0, &only)), 3, "exact, break only");
     assert_eq!(pages(&doc(LineSpacing::Exactly(24.0), 10.0, &start)), 2, "exact, break before text");
-    // Double spacing: the break's paragraph moves when not even its text fits, and stays when the
-    // whole line does. (Word also keeps it once only its text fits, the leading hanging into the
-    // bottom margin: that is #1172's last-line rule.)
+    // Double spacing: the paragraph moves when its text cannot fit. Its leading can hang into
+    // the bottom margin once the paragraph mark fits.
     assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single - 0.2, &only)), 3, "double, text doesn't fit");
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single + 0.2, &only)), 2, "double, leading hangs");
     assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), 2.0 * single + 0.2, &only)), 2, "double, line fits");
     assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single - 0.2, &start)), 2, "double, break before text");
 }
