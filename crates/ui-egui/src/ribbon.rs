@@ -74,8 +74,8 @@ fn no_ribbon() -> RibbonOutput<String> {
 }
 
 /// The icon sides of the ribbon buttons, in points: the old ribbon drew its large icons 32
-/// points square and the rest 17.
-const RIBBON_ICONS: RibbonIcons = RibbonIcons::new(32, 17);
+/// points square and the rest 17, and its menu arrows as filled triangles in 10 points.
+const RIBBON_ICONS: RibbonIcons = RibbonIcons::new(32, 17).arrow(10);
 
 /// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
 /// Outlining tabs and showing the available tab strip. The output carries the record of the ribbon's

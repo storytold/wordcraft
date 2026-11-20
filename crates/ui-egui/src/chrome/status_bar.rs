@@ -249,8 +249,10 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
             let _ = app.run(if plus { "view.zoomIn" } else { "view.zoomOut" }, json!({}));
         }
     };
-    let out =
-        IconButton::new(IconId::new("wordcraft.minus")).label(tl!("Zoom Out").to_string()).tooltip(TooltipSpec::new(tl!("Zoom Out").to_string())).show(ui);
+    let out = IconButton::new(IconId::new("wordcraft.minus"))
+        .label(tl!("Zoom Out").to_string())
+        .tooltip(TooltipSpec::new(tl!("Zoom Out").to_string()))
+        .show(ui);
     rects.push(out.response.rect);
     if out.response.clicked() {
         step(app, false);
@@ -271,7 +273,10 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
             let _ = app.run(command, json!({"value": (*v * 100.0).round()}));
         }
     }
-    let out = IconButton::new(IconId::new("wordcraft.plus")).label(tl!("Zoom In").to_string()).tooltip(TooltipSpec::new(tl!("Zoom In").to_string())).show(ui);
+    let out = IconButton::new(IconId::new("wordcraft.plus"))
+        .label(tl!("Zoom In").to_string())
+        .tooltip(TooltipSpec::new(tl!("Zoom In").to_string()))
+        .show(ui);
     rects.push(out.response.rect);
     if out.response.clicked() {
         step(app, true);

@@ -164,7 +164,11 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
         Stack::new().show(ui, |ui, _| {
             for (icon, label, id) in [("cut", "Cut", "edit.cut"), ("copy", "Copy", "edit.copy")] {
-                Button::command(CommandRef::new(id)).icon(crate::icons::id(icon)).label(tl!(label).to_string()).tooltip(tl!(label).to_string()).show(ui);
+                Button::command(CommandRef::new(id))
+                    .icon(crate::icons::id(icon))
+                    .label(tl!(label).to_string())
+                    .tooltip(tl!(label).to_string())
+                    .show(ui);
             }
             format_painter_button(ui, app);
         });
@@ -189,7 +193,10 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     let _ = app.run("format.size", json!({"size": x}));
                 }
                 for (icon, tip, id) in [("grow", "Increase Font Size", "format.growFont"), ("shrink", "Decrease Font Size", "format.shrinkFont")] {
-                    IconButton::command(crate::icons::id(icon), CommandRef::new(id)).label(tl!(tip).to_string()).tooltip(tl!(tip).to_string()).show(ui);
+                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        .label(tl!(tip).to_string())
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
                 }
                 let face = Button::new(tl!("Change Case").to_string()).icon(IconId::new("case")).tooltip(tl!("Change Case").to_string());
                 menu_button(ui, face, tl!("Change Case").to_string(), Some("format.changeCase"), |ui, _| {
@@ -204,7 +211,10 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     }
                 });
                 for (icon, tip, id) in [("clear", "Clear All Formatting", "format.clear"), ("phonetic", "Phonetic Guide", "format.phonetic")] {
-                    IconButton::command(crate::icons::id(icon), CommandRef::new(id)).label(tl!(tip).to_string()).tooltip(tl!(tip).to_string()).show(ui);
+                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        .label(tl!(tip).to_string())
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
                 }
             });
             Row::new().gap(Gap::None).show(ui, |ui, _| {
@@ -328,7 +338,10 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 for (icon, tip, id) in
                     [("outdent", "Decrease Indent", "para.outdent"), ("indent", "Increase Indent", "para.indent"), ("sort", "Sort", "para.sort")]
                 {
-                    IconButton::command(crate::icons::id(icon), CommandRef::new(id)).label(tl!(tip).to_string()).tooltip(tl!(tip).to_string()).show(ui);
+                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        .label(tl!(tip).to_string())
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
                 }
                 ToggleButton::command(CommandRef::new("view.marks"))
                     .icon(IconId::new("wordcraft.pilcrow"))

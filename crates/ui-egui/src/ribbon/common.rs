@@ -8,6 +8,7 @@ use craft::ui::controls::disclosure::DisclosureGlyph;
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::{Menu, MenuItem, MenuOutput};
+use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
 use craft::ui::text::NumberField;
 
@@ -22,6 +23,9 @@ pub(super) fn about_enabled(ctx: &egui::Context, about: &str) -> bool {
     about.is_empty() || craft::ui::runtime::commands::resolve(ctx, CommandRef::new(about)).enabled
 }
 
+/// The arrow after the label of a ribbon menu button: the small filled triangle of the old ribbon.
+static MENU_ARROW: DisclosureGlyph = DisclosureGlyph::new(1.0);
+
 /// A button that opens a menu, greyed out (and not opening) while the command the menu is about cannot run.
 /// `face` is the caller's button; `about` is that command's id, `None` for a menu about no command.
 pub(crate) fn menu_button(
@@ -32,7 +36,7 @@ pub(crate) fn menu_button(
     body: impl FnMut(&mut Ui, &mut BodyCx<'_>),
 ) -> MenuOutput {
     let enabled = about_enabled(ui.ctx(), about.unwrap_or(""));
-    let opener = face.trailing_icon(DisclosureGlyph::menu_button()).enabled(enabled).show(ui);
+    let opener = face.trailing_icon(IconSpec::glyph(&MENU_ARROW)).enabled(enabled).show(ui);
     Menu::new(name).opened_by(&opener.response, Trigger::Click).show(ui, body).output
 }
 

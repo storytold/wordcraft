@@ -74,7 +74,8 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         |ui| {
             // Text Direction works on what the caret is in: table cells, a text box, else the section.
             let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
-            let stacked = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon)).arrangement(Arrangement::Stacked);
+            let stacked =
+                |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon)).arrangement(Arrangement::Stacked);
             menu_button(ui, stacked("Text\nDirection", "textDirection"), tl!("Text Direction"), Some("layout.textDirection"), |ui, _| {
                 use wordcraft_doc::props::TextDirection;
                 for (label, d) in [
