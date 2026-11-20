@@ -173,7 +173,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         ctx.fields.page = pb.number;
     }
     let width = pb.col_w();
-    let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1, false);
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
         // so the edge sits a cell margin further out.
