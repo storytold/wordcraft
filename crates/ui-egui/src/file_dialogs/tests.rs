@@ -815,7 +815,7 @@ fn add_font_imports_every_selected_file() {
     let families = font_families(&mut a);
     assert!(families.iter().any(|f| f == ALPHA) && families.iter().any(|f| f == BRAVO), "both valid fonts were added");
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-    assert_eq!(msg, "Added 2 fonts; 1 couldn't be read: Junk.ttf");
+    assert_eq!(msg, "Added 2 fonts; 1 couldn't be added: Junk.ttf");
     for f in [ALPHA, BRAVO] {
         a.run("font.remove", json!({"family": f})).unwrap();
     }
@@ -851,7 +851,7 @@ fn a_huge_font_selection_is_capped() {
     assert_eq!(r["failed"].as_array().map(Vec::len), Some(MAX_FONTS_PER_PICK));
     assert_eq!(r["skipped"], 50);
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-    assert_eq!(msg, "Added 0 fonts; 2000 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 1997 more; 50 skipped (limit 2000)");
+    assert_eq!(msg, "Added 0 fonts; 2000 couldn't be added: f0.ttf, f1.ttf, f2.ttf and 1997 more; 50 skipped (limit 2000)");
 }
 
 /// Past three failures the status line names three and counts the rest.
@@ -861,5 +861,5 @@ fn many_failed_fonts_end_with_a_count() {
     let paths: Vec<String> = (0..5).map(|i| format!("/nonexistent/f{i}.ttf")).collect();
     a.add_fonts(paths).unwrap();
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-    assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
+    assert_eq!(msg, "Added 0 fonts; 5 couldn't be added: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }

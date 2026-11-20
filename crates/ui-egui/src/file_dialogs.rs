@@ -235,7 +235,7 @@ impl WordApp {
                 let more = (failed.len() - 3).to_string();
                 names = crate::i18n::fmt(tl!("{names} and {n} more"), &[("names", &names), ("n", &more)]);
             }
-            msg = crate::i18n::fmt(tl!("{added}; {count} couldn't be read: {names}"), &[("added", &msg), ("count", &count), ("names", &names)]);
+            msg = crate::i18n::fmt(tl!("{added}; {count} couldn't be added: {names}"), &[("added", &msg), ("count", &count), ("names", &names)]);
         }
         if skipped > 0 {
             let (n, max) = (skipped.to_string(), MAX_FONTS_PER_PICK.to_string());
