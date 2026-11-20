@@ -2,17 +2,21 @@ use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
 use super::ctx::{Ctx, Pass, with_pct_base};
-use super::floats::{EarlyFloats, WrapArea, early_covered};
+use super::fields::{BOOKMARK_NOT_DEFINED, BookmarkPages};
+use super::floats::{EarlyFloats, WrapArea, early_covered, left_out_objects};
 use super::flow::{OutlinePass, place_outline_para, place_para};
-use super::headers::{HfLinks, bookmark_pages, headers_footers, headers_footers_refer_to_pages, marks_key, mirror_even_pages, section_side};
+use super::headers::{
+    HfLinks, bookmark_names, bookmark_pages, headers_footers, headers_footers_refer_to_pages, marks_key, mirror_even_pages, section_side,
+};
 use super::notes::{MAX_NOTE_PAGES, NoteSeps, note_info, place_endnotes};
 use super::page::{PageBuilder, body_top_for, foot_top_for, item_bottom};
 use super::placed::Placed;
 use super::table_flow::place_table;
 use super::{
-    Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, LayoutOptions, Page, Path, SectionProps, SectionStart, StoryRef, TextDirection,
-    ViewMode, balloons, para, vertical,
+    Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, InlineObject, LayoutOptions, Page, Paragraph, Path, SectionProps, SectionStart,
+    StoryRef, TextDirection, ViewMode, balloons, para, vertical,
 };
+use wordcraft_doc::legacy_form::LegacyForm;
 
 /// How the view lays the document out: `web` for the continuous views, `reflow` for those and
 /// the reading view, which both ignore the sections' page geometry.
@@ -43,6 +47,7 @@ struct Tops {
 struct Sec<'p> {
     si: usize,
     sect: &'p SectionProps,
+    page_format: wordcraft_doc::section::NumFormat,
     start: SectionStart,
     tops: Tops,
 }
@@ -58,12 +63,13 @@ fn reset_cache(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) {
     cache.used.clear();
 }
 
-/// The walk state at the start of a pass, with the note references the body shows.
+/// The walk state at the start of a pass, with the note references the body shows and the pages
+/// of the bookmarks its `PAGEREF`s show (`None` until output has found them).
 fn new_ctx<'a>(
     doc: &'a Document,
     cache: &'a mut LayoutCache,
     opts: &'a LayoutOptions,
-    (note_pages, totals): (&HashMap<u32, usize>, &Totals),
+    (note_pages, marks, totals): (&HashMap<u32, usize>, Option<&Arc<BookmarkPages>>, &Totals),
 ) -> Ctx<'a> {
     let notes = note_info(doc, opts.hides_deleted(StoryRef::Body), note_pages);
     let notes_hash = hash_of(&{
@@ -87,6 +93,11 @@ fn new_ctx<'a>(
             author: doc.core.creator.as_str().into(),
             filename: opts.filename.clone().unwrap_or_else(|| "".into()),
             filepath: opts.filepath.clone().unwrap_or_else(|| "".into()),
+            bookmark_pages: marks.cloned().unwrap_or_default(),
+            bookmarks_key: marks_key(marks.map(|m| &**m)),
+            output: opts.output_page_refs && marks.is_some(),
+            bookmarks: if opts.output_page_refs { Arc::new(bookmark_names(doc)) } else { Arc::default() },
+            bookmark_error: opts.bookmark_error.clone().unwrap_or_else(|| BOOKMARK_NOT_DEFINED.into()),
             ..Default::default()
         },
         notes_hash,
@@ -126,16 +137,33 @@ fn section_marks(doc: &Document, opts: &LayoutOptions, sections: &[(usize, &Sect
             end.checked_sub(1).and_then(|i| doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some() && p.text.is_empty())
         });
     if !opts.show_hidden {
-        quiet.extend(
-            doc.body
-                .iter()
-                .enumerate()
-                .filter_map(|(i, b)| b.as_para().filter(|p| p.mark.hidden == Some(true) && p.plain_text().is_empty()).map(|_| i)),
-        );
+        quiet.extend(doc.body.iter().enumerate().filter_map(|(i, b)| {
+            b.as_para().filter(|p| p.mark.hidden == Some(true) && p.plain_text().is_empty() && !has_inline_content(doc, opts, p)).map(|_| i)
+        }));
     }
     quiet.sort_unstable();
     quiet.dedup();
     (stacked, quiet)
+}
+
+/// An in-line picture, shape or chart, a note reference mark, or a field shown as something other
+/// than its result, is visible content with no plain text, so its line keeps its room even when
+/// the paragraph mark is hidden (#5288). Not one the layout leaves out (a hidden drawing, or one
+/// in hidden or deleted text).
+fn has_inline_content(doc: &Document, opts: &LayoutOptions, p: &Paragraph) -> bool {
+    let left_out = left_out_objects(doc, p, None, opts.show_hidden, opts.hides_deleted(StoryRef::Body));
+    // As the paragraph layout shows a field: its code, a legacy check box, a drop-down's entry.
+    let shown_field = |o: &InlineObject| match o {
+        InlineObject::Field { code, .. } => {
+            *code != opts.field_codes
+                || o.legacy_form().is_some_and(|f| matches!(f, LegacyForm::CheckBox { .. }) || f.shown_text().is_some_and(|t| !t.is_empty()))
+        }
+        _ => false,
+    };
+    p.objects
+        .iter()
+        .enumerate()
+        .any(|(k, o)| !left_out(k) && (matches!(o, InlineObject::NoteRef { .. }) || (o.frame().is_some() && !o.is_floating()) || shown_field(o)))
 }
 
 /// The page the continuous views lay out on: the first section's, as wide as the window (and as
@@ -158,10 +186,17 @@ fn reflow_sect(first: &SectionProps, opts: &LayoutOptions) -> SectionProps {
     s
 }
 
-fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: bool, settle: bool) -> PageBuilder<'p> {
+fn new_page_builder<'p>(
+    sect: &'p SectionProps,
+    page_format: wordcraft_doc::section::NumFormat,
+    early: &'p EarlyFloats,
+    web: bool,
+    settle: bool,
+) -> PageBuilder<'p> {
     PageBuilder {
         pages: Vec::new(),
         sect,
+        page_format,
         sect_idx: 0,
         col: 0,
         cols: Vec::new(),
@@ -221,6 +256,7 @@ fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool
         .iter()
         .map(|(_, s)| {
             (!web && s.text_direction.is_turned()).then(|| {
+                ctx.fields.page_format = s.page_num_format;
                 let top = body_top_for(ctx, s, s.headers.default);
                 vertical::unturned_sect(s, top)
             })
@@ -232,6 +268,7 @@ fn turned_sections(ctx: &mut Ctx, sections: &[(usize, &SectionProps)], web: bool
 /// previous section's, and take its room. `fixed`: the margins are the room (continuous views and
 /// turned sections).
 fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps), fixed: bool) -> Tops {
+    ctx.fields.page_format = sect.page_num_format;
     let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
     let hb = |i: Option<u32>| hf.defining_width(false, si, i);
     let fb = |i: Option<u32>| hf.defining_width(true, si, i);
@@ -242,10 +279,21 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     Tops { body, first, foot, first_foot }
 }
 
-/// Set up the walk state for a section: its grid, field values and footnote separators.
-fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p>, totals: &Totals, web: bool) {
-    let (doc, sect, si) = (ctx.doc, sec.sect, sec.si);
+/// Set up the walk state for a section before its header and footer room is measured: no grid yet
+/// (the previous section's must not leak into headers, footers and separators), the field values
+/// and the footnote separators.
+fn begin_section_state<'p>(
+    ctx: &mut Ctx,
+    pb: &mut PageBuilder<'p>,
+    (si, sect, page_format): (usize, &'p SectionProps, wordcraft_doc::section::NumFormat),
+    totals: &Totals,
+    web: bool,
+) {
+    let doc = ctx.doc;
+    ctx.grid = para::Grid::default();
     pb.sect = sect;
+    pb.page_format = page_format;
+    ctx.fields.page_format = page_format;
     pb.sect_idx = si;
     pb.sect_beneath = doc.note_options(sect, false).pos == wordcraft_doc::section::NotePos::BeneathText;
     if !web && !doc.footnote_separators.is_empty() {
@@ -253,7 +301,11 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
     }
     ctx.fields.section = u32::try_from(si).unwrap_or(u32::MAX).saturating_add(1);
     ctx.fields.section_pages = totals.section(si);
-    ctx.grid = para::Grid::of(doc, sect);
+}
+
+/// The section's own grid and line numbering, once its header and footer room is known.
+fn apply_section_grid(ctx: &mut Ctx, pb: &mut PageBuilder<'_>, sect: &SectionProps) {
+    ctx.grid = para::Grid::of(ctx.doc, sect);
     if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
         pb.line_no = 0;
     }
@@ -263,6 +315,8 @@ fn begin_section_state<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, sec: &Sec<'p
 fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, si: usize, block: usize) {
     let Some((_, prev)) = si.checked_sub(1).and_then(|k| hf.sections.get(k)) else { return };
     pb.sect = prev;
+    pb.page_format = prev.page_num_format;
+    ctx.fields.page_format = prev.page_num_format;
     pb.sect_idx = si - 1;
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
     let top = body_top_for(ctx, prev, ph.default);
@@ -281,6 +335,8 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
     if filler && !mode.web {
         end_previous_section(ctx, pb, hf, sec.si, block);
         pb.sect = sec.sect;
+        pb.page_format = sec.page_format;
+        ctx.fields.page_format = sec.page_format;
         pb.sect_idx = sec.si;
     }
     if restart.is_some() {
@@ -435,8 +491,10 @@ fn fill_headers_footers(
     ctx.track_totals = false;
     if headers_footers_refer_to_pages(ctx.doc) {
         let marks = bookmark_pages(ctx.doc, pages, sections);
-        ctx.fields.bookmarks_key = marks_key(&marks);
+        ctx.fields.bookmarks_key = marks_key(Some(&marks));
         ctx.fields.bookmark_pages = Arc::new(marks);
+        // The pages are known now: output shows a reference to a missing bookmark as Word does.
+        ctx.fields.output = ctx.opts.output_page_refs;
     }
     headers_footers(ctx, pages, sections, &found);
     if ctx.doc.settings.mirror_margins {
@@ -468,20 +526,21 @@ fn index_lines(pages: &[Page]) -> HashMap<(StoryRef, Path), Vec<(usize, usize)>>
 }
 
 /// One layout pass, numbering footnotes restarted on each page by `note_pages` ([`note_info`]),
-/// with `totals` assumed for the page totals in the body. With `may_repeat`, a pass whose body
-/// shows totals that turn out different asks to be done again. Pages start with the wrap areas
-/// of the `early` floats; with `may_rewrap`, a pass that finds others asks to be done again.
+/// with `totals` assumed for the page totals in the body and `marks` for the pages its `PAGEREF`s
+/// show. With `may_repeat`, a pass whose body shows totals that turn out different asks to be
+/// done again. Pages start with the wrap areas of the `early` floats; with `may_rewrap`, a pass
+/// that finds others asks to be done again.
 pub(crate) fn layout_pass(
     doc: &Document,
     cache: &mut LayoutCache,
     opts: &LayoutOptions,
-    note_pages: &HashMap<u32, usize>,
+    (note_pages, marks): (&HashMap<u32, usize>, Option<&Arc<BookmarkPages>>),
     totals: &Totals,
     may_repeat: bool,
     (early, may_rewrap): (&EarlyFloats, bool),
 ) -> Pass {
     reset_cache(doc, cache, opts);
-    let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals));
+    let mut ctx = new_ctx(doc, cache, opts, (note_pages, marks, totals));
     let hf = Arc::clone(&ctx.hf);
     let sections = &hf.sections;
     let mode = Mode::of(opts.view);
@@ -492,7 +551,7 @@ pub(crate) fn layout_pass(
     let first_sect = sections.first().map_or(&default_sect, |(_, s)| *s);
     let web_sect = mode.reflow.then(|| reflow_sect(first_sect, opts));
     let sect_ref = web_sect.as_ref().unwrap_or(first_sect);
-    let mut pb = new_page_builder(sect_ref, early, mode.web, !may_rewrap && !mode.reflow);
+    let mut pb = new_page_builder(sect_ref, first_sect.page_num_format, early, mode.web, !may_rewrap && !mode.reflow);
     let mut endnotes = endnote_queue(&ctx);
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
@@ -500,22 +559,29 @@ pub(crate) fn layout_pass(
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
     for (si, (end, sect)) in sections.iter().enumerate() {
+        let page_format = sect.page_num_format;
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
         let sect: &SectionProps = match turned.get(si) {
             Some(Some(t)) => t,
             _ if mode.reflow => sect_ref,
             _ => sect,
         };
-        let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
-        let sec = Sec { si, sect, start, tops };
         if !mode.web && !pb.pages.is_empty() && (start != SectionStart::Continuous || turn != prev_turn) {
             // The page the section before ends on is finished with its own margins and footnote
             // separators, before this section's replace them: the footnotes pending on it
             // belong to the section whose page it is (#5289).
             pb.finish_page();
         }
-        begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
+        // This section's fields and separators, without the previous section's grid, before its
+        // header and footer room is measured; its own grid once that room is known (#4501).
+        begin_section_state(&mut ctx, &mut pb, (si, sect, page_format), totals, mode.web);
+        let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
+        // Measuring the room took the (reflow) section's own number format; the body keeps the
+        // document section's.
+        ctx.fields.page_format = page_format;
+        apply_section_grid(&mut ctx, &mut pb, sect);
+        let sec = Sec { si, sect, page_format, start, tops };
         if mode.web && si > 0 {
             // one long page
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {

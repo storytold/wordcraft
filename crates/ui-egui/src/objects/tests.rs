@@ -423,6 +423,109 @@ fn floating_rect(w: f32, h: f32) -> InlineObject {
     }
 }
 
+/// A floating line `w` wide and `h` tall (0: level, as Word files often store a rule).
+fn floating_line(w: f32, h: f32, flip_v: bool) -> InlineObject {
+    InlineObject::Shape {
+        kind: ShapeKind::Line,
+        w,
+        h,
+        fill: None,
+        stroke: Some(wordcraft_doc::Rgb(0, 0, 0)),
+        stroke_width: 0.75,
+        float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 60.0, y: 120.0, flip_v, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    }
+}
+
+/// A selected level line, pressed in its middle and dragged, moves and stays level: its
+/// middle is its body, not a resize handle (a level line's top and bottom edge handles sit on
+/// it there, and grabbing one gave it a height, so it came out slanted).
+#[test]
+fn a_level_line_dragged_by_its_middle_moves_and_stays_level() {
+    use crate::table_resize::tests::{H, button, steps};
+    for flip_v in [false, true] {
+        let (mut app, hit) = app_with(floating_line(300.0, 0.0, flip_v));
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        app.run("select.range", json!({"anchor": hit.pos(), "focus": Pos { off: hit.off + OBJ.len_utf8(), ..hit.pos() }})).unwrap();
+        let mut h: H = rotation_window(app);
+        let r = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+        let at = |h: &mut H, x: f32, y: f32| crate::canvas::page_to_screen(h.state_mut(), 0, x, y).unwrap();
+        let start = at(&mut h, r.x + r.w / 2.0, r.y);
+        // Along the page and a little down, as a hand drags.
+        let end = start + egui::vec2(60.0, 3.0);
+        h.event(egui::Event::PointerMoved(start));
+        button(&h, start, true);
+        h.step();
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 4.0)));
+            h.step();
+        }
+        assert_eq!(h.state().canvas.obj_drag.as_ref().map(|d| d.drag.grab), Some(Grab::Move), "flip_v {flip_v}: the middle moves it");
+        // While it moves, it shows where the pointer has it (the page leaves it out
+        // meanwhile), not only as its end handles back where it was: something is drawn along
+        // the line's new place, between its ends.
+        h.step();
+        let img = h.render().unwrap();
+        let ppp = h.ctx.pixels_per_point();
+        let (x0, x1) = (((end.x - 100.0) * ppp) as u32, ((end.x + 100.0) * ppp) as u32);
+        let (y0, y1) = (((end.y - 3.0) * ppp) as u32, ((end.y + 3.0) * ppp) as u32);
+        let pointer = Rect::from_min_size(end - egui::vec2(2.0, 2.0), egui::vec2(20.0, 26.0));
+        let drawn = (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| !pointer.contains(egui::pos2(x as f32 / ppp, y as f32 / ppp)))
+            .filter(|&(x, y)| img.get_pixel(x, y).0[..3].iter().any(|c| *c < 200))
+            .count();
+        assert!(drawn > 50, "flip_v {flip_v}: the dragged line shows at its new place ({drawn} pixels)");
+        button(&h, end, false);
+        steps(&mut h, 3);
+        let n = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+        assert!(n.h.abs() < 0.01 && (n.w - r.w).abs() < 0.01, "flip_v {flip_v}: still a level line as long: {r:?} -> {n:?}");
+        assert!(n.x > r.x + 10.0, "flip_v {flip_v}: moved along: {r:?} -> {n:?}");
+        // Its end is a handle: dragged down, that end goes there and the other stays.
+        let right = at(&mut h, n.right(), n.y);
+        let down = right + egui::vec2(0.0, 40.0);
+        h.event(egui::Event::PointerMoved(right));
+        button(&h, right, true);
+        h.step();
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(right + (down - right) * (k as f32 / 4.0)));
+            h.step();
+        }
+        button(&h, down, false);
+        steps(&mut h, 3);
+        let e = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+        // Screen points per page point.
+        let scale = (at(&mut h, n.x + 100.0, n.y).x - at(&mut h, n.x, n.y).x) / 100.0;
+        assert!((e.x - n.x).abs() < 0.5 && (e.y - n.y).abs() < 0.5, "flip_v {flip_v}: the left end stays: {n:?} -> {e:?}");
+        assert!(
+            (e.right() - n.right()).abs() < 0.5 && (e.bottom() - (n.y + 40.0 / scale)).abs() < 0.5,
+            "flip_v {flip_v}: the right end follows: {e:?}"
+        );
+    }
+}
+
+/// End handles go only to the lines and connectors `shape.connect` moves: floating ones in the
+/// body text. One In Line with Text keeps its frame's handles, so it can still be resized on the
+/// page.
+#[test]
+fn only_floating_lines_and_connectors_take_end_handles() {
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (wrap, ends) in [(Wrap::InFrontOfText, true), (Wrap::Inline, false)] {
+            let mut obj = floating_line(200.0, 40.0, false);
+            if let InlineObject::Shape { kind: k, float, .. } = &mut obj {
+                (*k, float.wrap) = (kind, wrap);
+            }
+            let (mut app, hit) = app_with(obj);
+            app.run("select.range", json!({"anchor": hit.pos(), "focus": Pos { off: hit.off + OBJ.len_utf8(), ..hit.pos() }})).unwrap();
+            let layout = app.session.layout();
+            assert_eq!(connector_ends(&app, &layout).is_some(), ends, "{kind:?} {wrap:?}");
+        }
+    }
+}
+
 /// A text box doesn't snap to the objects inside it (they move with it).
 #[test]
 fn a_text_box_does_not_snap_to_its_own_contents() {
@@ -833,8 +936,7 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
             };
             image::Rgba(colours[quadrant])
         });
-        let mut bytes = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+        let bytes = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image.clone()), image::ImageFormat::Png).unwrap();
         let picture = InlineObject::Image {
             media: "rotation-test".into(),
             w: 200.0,
@@ -976,8 +1078,7 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     use crate::table_resize::tests::{H, button, steps};
     use egui::Event;
     let image = image::RgbaImage::from_pixel(16, 16, image::Rgba([30, 120, 210, 255]));
-    let mut bytes = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    let bytes = wordcraft_geom::picture::encode_format(&image::DynamicImage::from(image.clone()), image::ImageFormat::Png).unwrap();
     let picture = InlineObject::Image {
         media: "large-preview-test".into(),
         w: 14_400.0,
@@ -1016,6 +1117,89 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     let preview = drag.preview.as_ref().expect("large picture preview is generated");
     let [width, height] = preview.size();
     assert!(width <= max_side && height <= max_side, "preview is {width}×{height}, texture limit is {max_side}");
+}
+
+/// #6027: a click, or a double-click, in the text of a text box inside a group puts the caret
+/// there, and typing edits that text; the group stays. Before, the click selected the whole
+/// group and typing replaced it.
+#[test]
+fn typing_after_a_click_in_a_grouped_text_box_edits_its_text() {
+    use egui::{Event, PointerButton};
+    for clicks in [1, 2] {
+        let mut d = Document::new();
+        let id = d.add_part(
+            wordcraft_doc::PartKind::TextBox,
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Card", Default::default()))],
+        );
+        let shape = |kind, h, story| InlineObject::Shape {
+            kind,
+            w: 200.0,
+            h,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: Default::default(),
+            story,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let float = wordcraft_doc::para::Float {
+            wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Page,
+            v_rel: wordcraft_doc::para::Anchor::Page,
+            x: 150.0,
+            y: 200.0,
+            ..Default::default()
+        };
+        let group = InlineObject::Group {
+            w: 200.0,
+            h: 100.0,
+            float,
+            ch_w: 200.0,
+            ch_h: 100.0,
+            children: vec![
+                wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Rectangle, 30.0, None) },
+                wordcraft_doc::para::GroupChild { x: 0.0, y: 40.0, obj: shape(ShapeKind::TextBox, 60.0, Some(id)) },
+            ],
+            canvas: None,
+        };
+        d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(d), crate::Services::default());
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        // In the box's text, right of "Card" (the box starts 40 pt into the group).
+        let at = crate::canvas::page_to_screen(h.state_mut(), 0, 150.0 + 120.0, 200.0 + 52.0).unwrap();
+        h.event(Event::PointerMoved(at));
+        for _ in 0..clicks {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        }
+        for _ in 0..3 {
+            h.step();
+        }
+        h.event(Event::Text("!".into()));
+        for _ in 0..3 {
+            h.step();
+        }
+        let doc = &h.state().session.doc;
+        let text: String = doc.parts.get(&id).unwrap().blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect();
+        assert!(text.contains('!'), "{clicks} click(s): typed into the box: {text:?}");
+        assert!(
+            matches!(doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.objects.first()), Some(InlineObject::Group { .. })),
+            "{clicks} click(s): the group is still there"
+        );
+    }
 }
 
 /// #2637: inside a Drawing Canvas the mouse works on the members, as in Word. A click on a
