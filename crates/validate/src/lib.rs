@@ -4136,7 +4136,7 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                     Err(_) => {
                         // An adapter can report a refusal as plain malformed data. Name the layouts
                         // that the header alone shows the codec declines by construction.
-                        if let Some(reason) = media_boundary::declined_layout(format, bytes) {
+                        if let Some(reason) = media_boundary::declined_layout(format, media_boundary::coded_image(format, bytes)) {
                             acc.note(format!("MEDIA-MAGIC: pixels in {} were not assessed because the codec declined the layout ({reason})", e.name));
                         }
                         false
@@ -5028,14 +5028,31 @@ mod budget_tests {
         let mut interframe = keyframe.clone();
         interframe[20] |= 1;
         assert_eq!(grade(&interframe), declined(1));
-        let mut extended = keyframe[..12].to_vec();
-        extended.extend(b"VP8X\x0a\0\0\0\0\0\0\0\0\0\0\0\0\0");
-        extended.extend(&interframe[12..]);
-        assert_eq!(grade(&extended), declined(1));
-        let mut animated = keyframe[..12].to_vec();
-        animated.extend(b"ANMF\x10\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
-        animated.extend(&interframe[12..]);
-        assert_eq!(grade(&animated), declined(1));
+        // Containers are rebuilt with their declared sizes: a RIFF whose size is stale hides chunks.
+        // Every chunk is padded to an even length.
+        let even = |chunk: &[u8]| [chunk, &[0u8; 1][..chunk.len() % 2]].concat();
+        let (frame, key) = (&even(&interframe[12..])[..], &even(&keyframe[12..])[..]);
+        let riff = |chunks: &[&[u8]]| {
+            let body = [b"WEBP".as_slice()].iter().chain(chunks).flat_map(|chunk| chunk.iter().copied()).collect::<Vec<u8>>();
+            [b"RIFF".as_slice(), &(body.len() as u32).to_le_bytes(), &body].concat()
+        };
+        let anmf = |frame: &[u8]| {
+            [b"ANMF".as_slice(), &(16 + frame.len() as u32).to_le_bytes(), &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 1, 0, 0, 0, 0, 0], frame].concat()
+        };
+        // A 1x512 canvas; flag 2 announces an animation.
+        let vp8x = |flags: u8| [b"VP8X".as_slice(), &10u32.to_le_bytes(), &[flags, 0, 0, 0, 0, 0, 0, 0xff, 1, 0]].concat();
+        let (still, vp8x) = (vp8x(0), vp8x(2));
+        let anim = [b"ANIM".as_slice(), &6u32.to_le_bytes(), &[0; 6]].concat();
+        assert_eq!(grade(&riff(&[&still, frame])), declined(1));
+        assert_eq!(grade(&riff(&[&vp8x, &anim, &anmf(frame)])), declined(1));
+        // The first frame of an animation is the one assessed: a later interframe is neither claimed
+        // nor denied by the note, and the verdict is the first frame's.
+        assert_eq!(grade(&riff(&[&vp8x, &anim, &anmf(key), &anmf(frame)])), (Verdict::Pass, vec![("MEDIA-MAGIC", Severity::Warning)], 0));
+        // The note is a function of the bytes the decoder was given: a VP8-looking chunk after the
+        // declared RIFF end is padding, and an image-less RIFF is a plain error.
+        let empty = riff(&[b"JUNK\x02\0\0\0xx"]);
+        assert_eq!(grade(&empty), declined(0));
+        assert_eq!(grade(&[empty.clone(), frame.to_vec()].concat()), declined(0));
         // A keyframe whose data is damaged is genuinely malformed, and stays unexplained.
         let mut damaged = keyframe.clone();
         let last = damaged.len() - 1;
@@ -5065,6 +5082,12 @@ mod budget_tests {
         }
         let truncated = &jpeg[..jpeg.len() / 2];
         assert_eq!(grade(truncated), declined(0));
+        // A frame marker needs its 0xFF introducer: a bare 0xC5 between segments is not one, and a
+        // frame marker inside a segment's payload is skipped with it.
+        let after_app0 = 4 + usize::from(u16::from_be_bytes([jpeg[4], jpeg[5]]));
+        for stray in [0xc5u8, 0xc7, 0xcf] {
+            assert_eq!(grade(&[&jpeg[..after_app0], &[stray], &jpeg[after_app0..]].concat()).2, 0, "bare {stray:#x}");
+        }
     }
 
     #[test]

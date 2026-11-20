@@ -198,8 +198,14 @@ fn webp_end(bytes: &[u8]) -> Option<usize> {
 /// whose adapter reports the refusal as plain malformed data. Genuinely damaged data in a layout
 /// the decoder supports is not named here, so it stays an unexplained decoding error.
 ///
+/// `bytes` is exactly what the decoder was given ([`coded_image`]'s output), so the name is a
+/// function of the decoder's input: a chunk after the RIFF end is not part of it. Both walks follow
+/// the real structure (chunk and segment lengths, the `0xFF` marker introducer).
+///
 /// WebP: `image-webp` decodes only VP8 keyframes. A frame tag with the keyframe bit set is an
-/// interframe, which every `UnsupportedFeature` it raises is about (`decoder.rs`, `vp8.rs`).
+/// interframe, which every `UnsupportedFeature` it raises is about (`decoder.rs`, `vp8.rs`). The
+/// adapter decodes the first frame of an animation (`webp.rs`), so only the first `VP8 ` chunk is
+/// named; whatever a later frame holds is not claimed.
 ///
 /// JPEG: `zune-jpeg` reads the sequential and progressive Huffman frames (SOF0 to SOF2) and
 /// `craft-jpeg` the arithmetic, lossless and non-8-bit ones, so the differential (hierarchical)
@@ -210,7 +216,7 @@ fn webp_end(bytes: &[u8]) -> Option<usize> {
 /// which has no unsupported-layout error.
 pub(crate) fn declined_layout(format: Format, bytes: &[u8]) -> Option<&'static str> {
     match format {
-        Format::WebP => (webp_frame_tag(bytes)? & 1 != 0).then_some("a VP8 frame that is not a keyframe"),
+        Format::WebP => (webp_frame_tag(bytes)? & 1 != 0).then_some("a first VP8 frame that is not a keyframe"),
         Format::Jpeg => matches!(jpeg_frame_marker(bytes)?, 0xc5..=0xc7 | 0xcd..=0xcf).then_some("a differential (hierarchical) JPEG frame"),
         _ => None,
     }
@@ -231,7 +237,7 @@ fn webp_frame_tag(bytes: &[u8]) -> Option<u32> {
                 return Some(u32::from_le_bytes([*bytes.get(body)?, *bytes.get(body.checked_add(1)?)?, *bytes.get(body.checked_add(2)?)?, 0]));
             }
             // An animation frame holds its own chunks after sixteen bytes of frame geometry.
-            b"ANMF" => at = body.checked_add(16)?,
+            b"ANMF" if size >= 16 => at = body.checked_add(16)?,
             _ => at = body.checked_add(size)?.checked_add(size & 1)?,
         }
     }
@@ -244,6 +250,10 @@ fn jpeg_frame_marker(bytes: &[u8]) -> Option<u8> {
     }
     let mut at = 2usize;
     loop {
+        // A marker is introduced by 0xFF, possibly repeated as fill; any other byte is not one.
+        if *bytes.get(at)? != 0xff {
+            return None;
+        }
         while bytes.get(at) == Some(&0xff) {
             at += 1;
         }
