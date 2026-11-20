@@ -303,6 +303,20 @@ pub(crate) fn title_drag_rect(ctx: &egui::Context) -> Option<Rect> {
     ctx.data(|d| d.get_temp::<(Rect, u64)>(key)).filter(|(_, p)| *p == pass).map(|(r, _)| r)
 }
 
+/// The AutoSave label's colour: the title bar greys the switch's text while AutoSave is off, so
+/// the control doesn't read as active (#6734); a document AutoSave can't cover greys it further.
+/// The off colour is the greyer `autosave_off` rather than `text_disabled`: the label is part of
+/// the switch, so it still has to read at 4.5:1.
+fn autosave_label_color(t: &Tokens, blocked: bool, on: bool) -> egui::Color32 {
+    if blocked {
+        t.text_dim.gamma_multiply(0.6)
+    } else if on {
+        t.text_dim
+    } else {
+        t.autosave_off
+    }
+}
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -343,7 +357,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     // cover the document (#196, #176); clicking it then offers Save As where that helps.
                     let block = app.autosave_block();
                     let on = app.autosaves();
-                    let color = if block.is_some() { t.text_dim.gamma_multiply(0.6) } else { t.text_dim };
+                    let color = autosave_label_color(&t, block.is_some(), on);
                     // The text is part of the switch (#3370): clicking it toggles AutoSave, and chrome
                     // text is not document text to select (double-clicking it copied "AutoSave").
                     let text = ui.add(

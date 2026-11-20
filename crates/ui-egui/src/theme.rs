@@ -283,6 +283,10 @@ pub struct Tokens {
     pub text: Color32,
     pub text_dim: Color32,
     pub text_disabled: Color32,
+    /// The title bar's AutoSave label while the switch is off (#6734): greyer than `text_dim`, so
+    /// the control doesn't read as active, but still at 4.5:1 on `title_bar` — it is part of a
+    /// clickable switch, not an inactive control.
+    pub autosave_off: Color32,
     pub icon: Color32,
     pub hover: Color32,
     pub pressed: Color32,
@@ -354,6 +358,7 @@ impl Tokens {
             text: Color32::from_rgb(0x24, 0x24, 0x24),
             text_dim: Color32::from_rgb(0x61, 0x61, 0x61),
             text_disabled: Color32::from_rgb(0xA8, 0xA8, 0xA8),
+            autosave_off: Color32::from_rgb(0x6A, 0x6A, 0x6A),
             icon: Color32::from_rgb(0x42, 0x42, 0x42),
             hover: Color32::from_rgb(0xE6, 0xE6, 0xE6),
             pressed: Color32::from_rgb(0xD6, 0xD6, 0xD6),
@@ -419,6 +424,7 @@ impl Tokens {
             text: Color32::from_rgb(0xEE, 0xEE, 0xEE),
             text_dim: Color32::from_rgb(0xC8, 0xC8, 0xC8),
             text_disabled: Color32::from_rgb(0x6A, 0x6A, 0x6A),
+            autosave_off: Color32::from_rgb(0x8E, 0x8E, 0x8E),
             icon: Color32::from_rgb(0xDD, 0xDD, 0xDD),
             hover: Color32::from_rgb(0x3D, 0x3D, 0x3D),
             pressed: Color32::from_rgb(0x4A, 0x4A, 0x4A),
@@ -1047,6 +1053,19 @@ mod tests {
         };
         let (x, y) = (lum(a), lum(b));
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// #6734: the AutoSave label's colours — `text_dim` while on, the greyer `autosave_off` while
+    /// off — read on the title bar in both themes. The label is part of a clickable switch, so it
+    /// is WCAG normal text, not an inactive control.
+    #[test]
+    fn the_autosave_label_colours_read_on_the_title_bar() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            for (name, c) in [("on", t.text_dim), ("off", t.autosave_off)] {
+                let r = contrast(c, t.title_bar);
+                assert!(r >= 4.5, "dark={}: the {name} AutoSave label on the title bar is {r:.2}:1", t.dark);
+            }
+        }
     }
 
     /// #1885: the ✕ on a window's close box reads on its hover and pressed reds in both themes.
