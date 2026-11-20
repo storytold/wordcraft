@@ -5512,10 +5512,12 @@ mod budget_tests {
         // `u` is the main namespace spelled through an entity this part cannot expand, so a `u:` element
         // may be any main-namespace element. Each shape claims something is absent (outside a
         // paragraph, unpaired, no block content, outside a deletion, no field begin) once it is
-        // spelled plainly, and must not once the element that could refute it is unresolved.
+        // spelled plainly, and must not once the element that could refute it is unresolved: by its
+        // LOCAL name. An unrelated unresolved element (`u:vendor`) is no counterpart of anything, so the
+        // claim holds beside it, in the same part and in every story.
         let year = format!("<!DOCTYPE w:document [<!ENTITY ns \"{NS_W}\">]>");
         let validate = |body: &str| {
-            let document = format!(r#"{year}<w:document xmlns:w="{NS_W}" xmlns:m="{NS_M}"><w:body>{body}</w:body></w:document>"#);
+            let document = format!(r#"{year}<w:document xmlns:w="{NS_W}" xmlns:m="{NS_M}" xmlns:r="{NS_R}"><w:body>{body}</w:body></w:document>"#);
             validate_bytes(&tiny_zip(&[
                 ("[Content_Types].xml", content_types()),
                 ("_rels/.rels", package_rels()),
@@ -5546,7 +5548,52 @@ mod budget_tests {
             assert!(claim.findings.iter().any(|f| f.rule == rule), "{rule} control: {claim:?}");
             let unknown = validate(&refuted);
             assert!(!unknown.findings.iter().any(|f| f.rule == rule), "{rule}: {unknown:?}");
+            let unrelated = validate(&format!("{claimed}<u:vendor {u}/>"));
+            assert!(unrelated.findings.iter().any(|f| f.rule == rule), "{rule} beside an unrelated element: {unrelated:?}");
         }
+        // A reference whose ID and complete declaration set are both established still fires.
+        let hyperlink = validate(&format!(r#"<w:p><w:hyperlink r:id="rAbsent"/></w:p><u:vendor {u}/>"#));
+        assert!(hyperlink.findings.iter().any(|f| f.rule == "REL-REF-MISSING"), "{hyperlink:?}");
+        // Another story: an unrelated element in the comments part does not hide the dangling reference, and one
+        // that may be the definition (`u:comment`) does.
+        for (element, reported) in [("u:vendor", true), ("u:comment", false)] {
+            let comments = format!(r#"{year}<w:comments xmlns:w="{NS_W}"><w:comment w:id="1"/><{element} {u} w:id="5"/></w:comments>"#);
+            let report = validate_bytes(&tiny_zip(&[
+                (
+                    "[Content_Types].xml",
+                    content_types_with_override("word/comments.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"),
+                ),
+                ("_rels/.rels", package_rels()),
+                (
+                    "word/document.xml",
+                    format!(r#"<w:document xmlns:w="{NS_W}"><w:body><w:p><w:r><w:commentReference w:id="5"/></w:r></w:p></w:body></w:document>"#)
+                        .into_bytes(),
+                ),
+                ("word/_rels/document.xml.rels", rels(&format!(r#"<Relationship Id="rC" Type="{NS_R}/comments" Target="comments.xml"/>"#))),
+                ("word/comments.xml", comments.into_bytes()),
+            ]));
+            assert_eq!(report.findings.iter().any(|f| f.rule == "ID-COMMENT-REF"), reported, "{element}: {report:?}");
+        }
+        // An unresolved element never converts a media part between consumed and unused: with no
+        // relationship-valued attribute in the story the drawn image stays unused (a Warning, not an Error).
+        for body in ["<w:p/>", "<w:p/><u:vendor xmlns:u=\"&ns;\"/>"] {
+            let document = format!(r#"{year}<w:document xmlns:w="{NS_W}"><w:body>{body}</w:body></w:document>"#);
+            let report = validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types_with_override("word/media/drawn.png", "image/png")),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.into_bytes()),
+                ("word/_rels/document.xml.rels", rels(&format!(r#"<Relationship Id="rImg" Type="{NS_R}/image" Target="media/drawn.png"/>"#))),
+                ("word/media/drawn.png", b"text".to_vec()),
+            ]));
+            assert!(report.findings.iter().any(|f| (f.rule, f.severity) == ("MEDIA-MAGIC", Severity::Warning)), "{body}: {report:?}");
+        }
+        // An unresolved `fldChar` AFTER a known end cannot be its begin: the end is established, and an unresolved
+        // one BEFORE it is undecidable (Incomplete, with a note).
+        let after = validate(&format!(r#"<w:p><w:fldChar w:fldCharType="end"/><u:fldChar {u} w:fldCharType="begin"/></w:p>"#));
+        assert!(after.findings.iter().any(|f| f.rule == "FLD-UNBALANCED"), "{after:?}");
+        let before = validate(&format!(r#"<w:p><u:fldChar {u} w:fldCharType="begin"/><w:fldChar w:fldCharType="end"/></w:p>"#));
+        assert!(before.coverage_notes.iter().any(|n| n.contains("namespace is not resolved")), "{before:?}");
+        assert_eq!(before.verdict, Verdict::Incomplete, "{before:?}");
         // An unresolved `Relationship` element may be a relationship the drawn image uses, so its
         // target is not "missing": the drawn image keeps its Error instead of degrading to a Warning.
         let rel = format!(r#"<Relationship Id="rImg" Type="{NS_R}/image" Target="media/drawn.png" xmlns="&ns;"/>"#);
