@@ -123,6 +123,20 @@ fn next_and_previous_visit_the_formatted_matches() {
 }
 
 #[test]
+fn advanced_find_clips_format_only_runs_to_the_selection() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "alpha beta gamma"}));
+    format_text(&mut s, "alpha beta gamma", "format.bold", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    let result = run(&mut s, "edit.advancedFind", json!({"text": "", "format": {"bold": true}, "in": "selection"}));
+    assert_eq!(result["count"], 1);
+    assert_eq!(found(&s), ["beta"]);
+
+    let result = run(&mut s, "edit.advancedFind", json!({"text": "beta gamma", "format": {"bold": true}, "in": "selection"}));
+    assert_eq!(result["count"], 0, "a text match must fit completely within the selection");
+}
+
+#[test]
 fn replace_all_with_only_formats_changes_the_formatting_and_is_one_undo_step() {
     let mut s = sample();
     let before = text(&s);

@@ -192,6 +192,7 @@ pub fn specs() -> Vec<CommandSpec> {
             refresh(s);
             Ok(json!({"record": idx + 1}))
         })
+        .params(r#"{"text": string}"#)
         .when(has_recipients),
         CommandSpec::new("mailings.checkErrors", "Check for Errors", "Mailings › Finish", |s, _| {
             let mut missing = Vec::new();
