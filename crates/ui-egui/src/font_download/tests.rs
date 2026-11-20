@@ -233,3 +233,23 @@ fn only_so_many_documents_are_remembered() {
     assert_eq!(a.font_notice_seen.len(), REMEMBERED);
     assert_eq!(a.font_notice_seen.last(), Some(&(REMEMBERED as u64 + 49)));
 }
+
+/// The box takes the keyboard when it comes up, on its Download button, as a dialog does, so a screen reader reads it
+/// (storytold/wordcraft#7149, item 9: it came up with nothing focused, and NVDA named only the window). Closed with
+/// Escape, it gives the keyboard back to the page.
+#[test]
+fn the_box_takes_the_keyboard_and_gives_it_back_to_the_page() {
+    use egui_kittest::kittest::NodeT;
+    if aptos_installed() {
+        return;
+    }
+    let mut h = harness(app(true));
+    assert_eq!(shown(&h).as_deref(), Some("fontDownload"), "the box came up");
+    let focused = h.query_by(|n| n.is_focused()).map(|n| (n.accesskit_node().role(), n.accesskit_node().label()));
+    assert_eq!(focused, Some((egui::accesskit::Role::Button, Some("Download".to_owned()))), "the box's first control has the keyboard");
+    assert!(!h.state().canvas.focused(&h.ctx.clone()), "the page behind the box doesn't");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert_eq!(shown(&h), None, "Escape closes the box");
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "the page has the keyboard again");
+}

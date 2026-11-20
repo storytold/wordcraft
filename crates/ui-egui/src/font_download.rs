@@ -19,6 +19,7 @@ use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog
 use craft::ui::display::{Badge, Icon, Shade, Text};
 use craft::ui::layout_components::Row as Line;
 use craft::ui::primitives::IconSpec;
+use craft::ui::runtime::focus::Initial;
 use craft::ui::sections::{DialogRole, FooterButton, GroupBox};
 use egui::Ui;
 use serde::Serialize;
@@ -246,7 +247,10 @@ impl StackDialog for FontBox {
         let opted = Cell::new(None::<bool>);
         let add = Cell::new(false);
         let current = *dont_show;
+        // The box has no field and no default button, so a dialog's own first focus (a field, else the default)
+        // would leave nothing focused: its first control, the first Download, takes the keyboard.
         let shown = Dialog::new(tl!("Get the Missing Fonts"))
+            .initial_focus(Initial::First)
             .footer(|ui, _| {
                 let box_state = Checkbox::new(Bind::given(current)).label(tl!("Don't show this again")).id_salt("dont_show").show(ui);
                 if let Some(on) = box_state.value().copied() {
