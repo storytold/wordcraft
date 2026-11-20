@@ -326,7 +326,7 @@ fn fan_out(story: Vec<Arc<Block>>, refs: usize) -> Fragment {
     }
     let mut parts = BTreeMap::new();
     parts.insert(1, crate::Part { kind: PartKind::TextBox, blocks: story, body: Default::default() });
-    Fragment { blocks: vec![Block::Para(p)], parts }
+    Fragment { blocks: vec![Block::Para(p)], parts, ..Default::default() }
 }
 
 #[test]
@@ -413,6 +413,24 @@ fn pasted_box_copies_are_capped_in_bytes() {
     // The boxes past the cap keep no story rather than a shared one.
     let got = boxes_in(&d, &Path::top(0));
     assert_eq!(got.iter().flatten().count(), added);
+}
+
+#[test]
+fn pasted_box_copies_count_the_formatting_they_copy() {
+    // A story holding a text box and a run whose font name is 1 MiB: each copy clones the
+    // formatting too, so 64 copies used to copy 64 MiB of it past the 32 MiB cap.
+    let props = CharProps { font: Some("f".repeat(1 << 20)), ..CharProps::default() };
+    let mut p = Paragraph::with_text("x", props);
+    p.insert_object(0, box_shape(Some(999)), &CharProps::default()).unwrap();
+    let f = fan_out(vec![para_block(p)], 64);
+    let mut d = doc(&["x"]);
+    let before = d.parts.len();
+    d.insert_fragment(&Pos::body(0, 1), &f).unwrap();
+    let added = d.parts.len() - before;
+    let font = |p: &Paragraph| p.runs.iter().map(|r| r.props.font.as_ref().map_or(0, String::len)).sum::<usize>();
+    let copied: usize = d.parts.values().flat_map(|p| p.blocks.iter()).map(|b| if let Block::Para(p) = &**b { font(p) } else { 0 }).sum();
+    assert!((1..64).contains(&added), "{added}");
+    assert!(copied <= MAX_PASTED_BOX_BYTES, "{copied}");
 }
 
 #[test]
@@ -645,13 +663,15 @@ fn removing_a_whole_table_keeps_a_control_the_range_only_partly_covers() {
 
 #[test]
 fn a_table_nested_deeper_than_the_paragraph_walk_is_never_removed_whole() {
-    // 20 tables, each in the first cell of the one around it, ahead of that cell's paragraph:
-    // the innermost paragraphs come first in the document but the paragraph walk stops short.
+    // The deepest nesting allowed, each table in the first cell of the one around it, ahead of
+    // that cell's paragraph: the innermost paragraphs come first in the document but the
+    // paragraph walk stops short.
+    const { assert!(MAX_TABLE_DEPTH > crate::PARA_WALK_DEPTH) };
     let mut t = Table::new(1, 1, 200.0);
     if let Some(cell) = t.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
         cell.blocks = vec![para_block(Paragraph::with_text("deep", CharProps::default()))];
     }
-    for _ in 0..20 {
+    for _ in 1..MAX_TABLE_DEPTH {
         let mut outer = Table::new(1, 1, 200.0);
         if let Some(cell) = outer.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
             cell.blocks.insert(0, Arc::new(Block::Table(t)));
@@ -672,19 +692,19 @@ fn adopting_a_document_renumbers_what_it_refers_to() {
     let mut ours = doc(&["ours"]);
     let our_note = ours.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("our note", CharProps::default()))]);
     ours.comments.insert(0, Comment { part: our_note, ..Comment::default() });
-    let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
+    let our_list = Arc::make_mut(&mut ours.numbering).add_list(crate::numbering::ListKind::Bullet);
     ours.revisions.push(Revision { kind: RevisionKind::Insert, ..Revision::default() });
 
     let mut theirs = doc(&["theirs"]);
     let note = theirs.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("their note", CharProps::default()))]);
     let said = theirs.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("their comment", CharProps::default()))]);
     theirs.comments.insert(0, Comment { author: "Them".into(), part: said, durable_id: Some("0A0B0C0D".into()), ..Comment::default() });
-    let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
+    let list = Arc::make_mut(&mut theirs.numbering).add_list(crate::numbering::ListKind::Bullet);
     assert_eq!(list, our_list);
     theirs.revisions.push(Revision { kind: RevisionKind::Delete, ..Revision::default() });
     let mut style = crate::styles::Style { id: "TheirList".into(), name: "Their List".into(), ..Default::default() };
     style.para.numbering = Some(crate::props::NumRef { num: list, level: 0 });
-    theirs.styles.upsert(style);
+    Arc::make_mut(&mut theirs.styles).upsert(style);
     let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     p.props.numbering = Some(crate::props::NumRef { num: list, level: 0 });
     p.runs[0].props.del = Some(0);
@@ -728,11 +748,11 @@ fn a_kept_character_style_leaves_what_it_doesnt_set_to_the_paragraph_style() {
     use crate::styles::{Style, StyleKind, StyleSheet};
     let mut ours = doc(&["ours"]);
     let mut theirs = doc(&["theirs"]);
-    theirs.styles = StyleSheet::empty();
-    theirs.styles.default_chr = CharProps { size: Some(9.0), ..Default::default() };
+    theirs.styles = Arc::new(StyleSheet::empty());
+    Arc::make_mut(&mut theirs.styles).default_chr = CharProps { size: Some(9.0), ..Default::default() };
     let big = CharProps { size: Some(20.0), ..Default::default() };
-    theirs.styles.upsert(Style { id: "Big".into(), name: "Big".into(), chr: big, ..Default::default() });
-    theirs.styles.upsert(Style { id: "Link".into(), name: "Link".into(), kind: StyleKind::Character, ..Default::default() });
+    Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Big".into(), name: "Big".into(), chr: big, ..Default::default() });
+    Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Link".into(), name: "Link".into(), kind: StyleKind::Character, ..Default::default() });
     let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     p.props.style = Some("Big".into());
     p.runs[0].props.style = Some("Link".into());
@@ -746,15 +766,15 @@ fn a_kept_character_style_leaves_what_it_doesnt_set_to_the_paragraph_style() {
 fn kept_styles_renamed_on_adoption_are_renamed_in_list_levels_too() {
     use crate::styles::Style;
     let mut ours = doc(&["ours"]);
-    ours.styles.upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
+    Arc::make_mut(&mut ours.styles).upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
     let mut theirs = doc(&["theirs"]);
-    theirs.styles.upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
-    let list = theirs.numbering.add_list(crate::numbering::ListKind::Numbered);
+    Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
+    let list = Arc::make_mut(&mut theirs.numbering).add_list(crate::numbering::ListKind::Numbered);
     let abs = theirs.numbering.nums.iter().find(|n| n.id == list).map(|n| n.abstract_id).unwrap();
-    let a = theirs.numbering.abstracts.iter_mut().find(|a| a.id == abs).unwrap();
+    let a = Arc::make_mut(&mut theirs.numbering).abstracts.iter_mut().find(|a| a.id == abs).unwrap();
     a.levels[0].style = Some("Heading1".into());
     let level = a.levels[0].clone();
-    theirs.numbering.nums.iter_mut().find(|n| n.id == list).unwrap().level_overrides.push((1, level));
+    Arc::make_mut(&mut theirs.numbering).nums.iter_mut().find(|n| n.id == list).unwrap().level_overrides.push((1, level));
 
     let before = ours.numbering.abstracts.len();
     ours.adopt_with(theirs, true);
@@ -794,10 +814,10 @@ fn an_adopted_tracked_format_change_keeps_its_old_styles_and_list() {
     use crate::{Revision, RevisionKind};
     for keep in [false, true] {
         let mut ours = doc(&["ours"]);
-        let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
+        let our_list = Arc::make_mut(&mut ours.numbering).add_list(crate::numbering::ListKind::Bullet);
         let mut theirs = doc(&["theirs"]);
         theirs.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
-        let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
+        let list = Arc::make_mut(&mut theirs.numbering).add_list(crate::numbering::ListKind::Bullet);
         assert_eq!(list, our_list);
         let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
         // Live and old props name the same styles (ours has them too) and their list.
@@ -825,8 +845,8 @@ fn adopted_styles_never_become_our_defaults() {
         let mut ours = doc(&["ours"]);
         let mut theirs = doc(&["theirs"]);
         // A localized default character style, and one whose id we have too.
-        theirs.styles.upsert(Style { id: "Absatz".into(), kind: StyleKind::Character, default: true, ..Default::default() });
-        theirs.styles.upsert(Style { id: "Strong".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+        Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Absatz".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+        Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Strong".into(), kind: StyleKind::Character, default: true, ..Default::default() });
         ours.adopt_with(theirs, keep);
         assert!(ours.styles.styles.iter().all(|s| !s.default), "keep_styles {keep}");
     }
@@ -890,4 +910,116 @@ fn an_adopted_notes_text_box_gets_a_story_of_its_own() {
     let part = &ours.parts[&story];
     assert_eq!(part.kind, PartKind::TextBox);
     assert!(matches!(part.blocks.first().map(|b| &**b), Some(Block::Para(p)) if p.text == "their box"));
+}
+
+#[test]
+fn media_of_blocks_collects_graphic_and_group_images() {
+    let mut d = doc(&["test"]);
+    d.media.insert("graphic_img.png".into(), Arc::new(vec![1, 2, 3]));
+    d.media.insert("group_img.png".into(), Arc::new(vec![4, 5, 6]));
+
+    let graphic = crate::graphic::Graphic {
+        kind: crate::graphic::GraphicKind::Diagram,
+        items: vec![crate::graphic::GraphicItem::Image { rect: [0.0, 0.0, 10.0, 10.0], media: "graphic_img.png".into() }],
+        ..Default::default()
+    };
+    let group = InlineObject::Group {
+        w: 50.0,
+        h: 50.0,
+        float: Default::default(),
+        ch_w: 50.0,
+        ch_h: 50.0,
+        canvas: None,
+        children: vec![crate::para::GroupChild {
+            x: 0.0,
+            y: 0.0,
+            obj: InlineObject::Image {
+                media: "group_img.png".into(),
+                w: 10.0,
+                h: 10.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+        }],
+    };
+    let mut p = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p.objects.push(InlineObject::Graphic { w: 100.0, h: 100.0, float: Default::default(), alt: String::new(), graphic: Arc::new(graphic) });
+    p.objects.push(group);
+    let blocks = vec![Block::Para(p)];
+    let collected = d.media_of_blocks(&blocks);
+    assert!(collected.contains_key("graphic_img.png"));
+    assert!(collected.contains_key("group_img.png"));
+}
+
+#[test]
+fn insert_fragment_remaps_conflicting_media_keys() {
+    let mut d = doc(&["destination"]);
+    d.media.insert("image1.png".into(), Arc::new(vec![1, 1, 1]));
+
+    let mut frag_media = std::collections::BTreeMap::new();
+    frag_media.insert("image1.png".into(), Arc::new(vec![2, 2, 2]));
+
+    let mut p = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p.objects.push(InlineObject::Image {
+        media: "image1.png".into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    let frag = Fragment { blocks: vec![Block::Para(p)], parts: Default::default(), media: frag_media };
+
+    let pos = Pos::body(0, 0);
+    d.insert_fragment(&pos, &frag).unwrap();
+    // The original destination media is preserved.
+    assert_eq!(d.media["image1.png"].as_slice(), &[1, 1, 1]);
+    // A second media key was created for the conflicting fragment media.
+    assert_eq!(d.media.len(), 2);
+    let other_key = d.media.keys().find(|k| k.as_str() != "image1.png").unwrap();
+    assert_eq!(d.media[other_key].as_slice(), &[2, 2, 2]);
+    // The inserted paragraph references the remapped key.
+    let para = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let remapped = para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
+    assert_eq!(remapped, other_key);
+}
+
+/// #6788: splitting a paragraph after its first letters leaves the drop cap on the first
+/// paragraph only; the new one (also when it is empty) is plain. A split at offset 0 is unchanged.
+#[test]
+fn split_paragraph_keeps_the_drop_cap_on_the_first_paragraph_only() {
+    let drop_cap = |d: &Document, i: usize| {
+        let p = d.body.get(i).and_then(|b| b.as_para()).map(|p| p.props.clone()).unwrap_or_default();
+        (p.drop_cap, p.drop_cap_margin, p.drop_cap_distance, p.drop_cap_font)
+    };
+    let capped = |text: &str| {
+        let mut d = doc(&[text]);
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.props.drop_cap = Some(3);
+            p.props.drop_cap_margin = Some(true);
+            p.props.drop_cap_distance = Some(4.0);
+            p.props.drop_cap_font = Some("Serif".into());
+        }
+        d
+    };
+    let cap = (Some(3), Some(true), Some(4.0), Some("Serif".to_string()));
+    let plain = (None, None, None, None);
+
+    let mut d = capped("Sugar and knowledge");
+    d.split_paragraph(&Pos::body(0, 10)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
+
+    let mut d = capped("Sugar");
+    d.split_paragraph(&Pos::body(0, 5)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), plain.clone()));
+
+    // At offset 0 nothing changes: both paragraphs keep the properties, as before.
+    let mut d = capped("Sugar");
+    d.split_paragraph(&Pos::body(0, 0)).unwrap();
+    assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), cap));
 }

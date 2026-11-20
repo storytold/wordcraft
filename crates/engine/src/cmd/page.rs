@@ -10,6 +10,7 @@ use wordcraft_doc::{Block, Pos, StoryRef};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+/// Returns the command specifications for the Layout tab (page setup, breaks, line numbers).
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(
@@ -39,6 +40,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.manualHyphenation", "Manual Hyphenation", "Layout › Page Setup › Hyphenation", manual_hyphenation)
             .params(r#"{"from"?: Pos (default: the caret)} → the next word at a line end that could be hyphenated: {"word", "pos", "points": [char index], "suggest": char index} or {"done": true}"#)
             .pure(),
+        CommandSpec::new("layout.fitOnePage", "Fit One Page", "Layout › Page Setup", fit_page::fit_one_page)
+            .params(r#"{"maxDeltaPt"?: pt (default: 2.0), "stepPt"?: pt (default: the built-in discrete candidate table; when given, up to 20 fine steps), "adjustSpacing"?: bool (default: true)}"#),
         CommandSpec::new("layout.pageSetup", "Page Setup", "Layout › Page Setup", |s, v| {
             if let Some(props) = v.get("section") {
                 let mut new: SectionProps = serde_json::from_value(props.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
@@ -764,6 +767,8 @@ fn shifted_by_split(p: &Pos, at: &Pos, new: &Pos) -> Pos {
     }
     q
 }
+
+mod fit_page;
 
 #[cfg(test)]
 mod tests;

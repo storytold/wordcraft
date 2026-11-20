@@ -90,7 +90,8 @@ pub fn alt_text(app: &mut WordApp, ui: &mut Ui) {
         let decorative = obj.is_decorative();
         ui.label(egui::RichText::new(tl!("Describe what this object shows, for people who can't see it.")).weak());
         ui.add_space(4.0);
-        if let Some(text) = draft_box(ui, ("alt_obj", &pos), obj.alt_text(), !decorative, true)
+        let label = ui.label(tl!("Description:"));
+        if let Some(text) = draft_box(ui, ("alt_obj", &pos), label.id, obj.alt_text(), !decorative, true)
             && still_selected(app, &pos)
         {
             let _ = app.run("object.altText", json!({"text": text}));
@@ -111,13 +112,13 @@ pub fn alt_text(app: &mut WordApp, ui: &mut Ui) {
     if let Some((tp, caption, description)) = table {
         ui.label(egui::RichText::new(tl!("Describe what this table shows, for people who can't see it.")).weak());
         ui.add_space(4.0);
-        ui.label(tl!("Title:"));
-        if let Some(t) = draft_box(ui, ("alt_table_title", &tp), caption.as_deref().unwrap_or(""), true, false) {
+        let label = ui.label(tl!("Title:"));
+        if let Some(t) = draft_box(ui, ("alt_table_title", &tp), label.id, caption.as_deref().unwrap_or(""), true, false) {
             let _ = app.run("table.altText", json!({"title": t}));
         }
         ui.add_space(4.0);
-        ui.label(tl!("Description:"));
-        if let Some(t) = draft_box(ui, ("alt_table_text", &tp), description.as_deref().unwrap_or(""), true, true) {
+        let label = ui.label(tl!("Description:"));
+        if let Some(t) = draft_box(ui, ("alt_table_text", &tp), label.id, description.as_deref().unwrap_or(""), true, true) {
             let _ = app.run("table.altText", json!({"text": t}));
         }
         return;
@@ -131,11 +132,18 @@ fn still_selected(app: &WordApp, pos: &Pos) -> bool {
 
 /// A text box editing `current`; the draft lives in egui memory while it has focus (frame-local
 /// buffers lose keystrokes). Returns the new text when editing ends with a change.
-fn draft_box(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, current: &str, enabled: bool, multiline: bool) -> Option<String> {
+fn draft_box(
+    ui: &mut Ui,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    label: egui::Id,
+    current: &str,
+    enabled: bool,
+    multiline: bool,
+) -> Option<String> {
     let key = egui::Id::unique(key);
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| current.to_string());
     let edit = if multiline { egui::TextEdit::multiline(&mut text).desired_rows(5) } else { egui::TextEdit::singleline(&mut text) };
-    let r = ui.add_enabled(enabled, edit.desired_width(f32::INFINITY));
+    let r = ui.add_enabled(enabled, edit.desired_width(f32::INFINITY)).labelled_by(label);
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(key, text.clone()));
     }
@@ -147,4 +155,71 @@ fn draft_box(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, current: 
         ui.data_mut(|d| d.remove::<String>(key));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                if fonts {
+                    alt_text(app, ui);
+                } else {
+                    crate::theme::install_fonts_for(ui.ctx(), false);
+                    fonts = true;
+                }
+            },
+            app,
+        );
+        h.run_steps(4);
+        h
+    }
+
+    #[test]
+    fn object_description_is_named_commits_and_disables_when_decorative() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.shape", json!({"kind": "ellipse"})).unwrap();
+        let mut h = harness(app);
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").type_text("A green circle");
+        h.run_steps(2);
+        assert_eq!(h.get_by_role_and_label(Role::MultilineTextInput, "Description:").value().as_deref(), Some("A green circle"));
+        h.get_by_role_and_label(Role::CheckBox, "Mark as decorative").click();
+        h.run_steps(2);
+        let (_, object) = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap();
+        assert_eq!(object.alt_text(), "A green circle");
+        assert!(object.is_decorative());
+        assert!(h.get_by_role_and_label(Role::MultilineTextInput, "Description:").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn table_title_and_description_are_named_and_commit_independently() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+        let mut h = harness(app);
+        h.get_by_role_and_label(Role::TextInput, "Title:").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::TextInput, "Title:").type_text("Prices");
+        h.run_steps(2);
+        assert_eq!(h.get_by_role_and_label(Role::TextInput, "Title:").value().as_deref(), Some("Prices"));
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::MultilineTextInput, "Description:").type_text("Prices by year");
+        h.run_steps(2);
+        assert_eq!(h.get_by_role_and_label(Role::MultilineTextInput, "Description:").value().as_deref(), Some("Prices by year"));
+        h.get_by_role_and_label(Role::TextInput, "Title:").click();
+        h.run_steps(2);
+        let app = h.state();
+        let focus = &app.session.sel.focus;
+        let (path, _, _) = focus.path.cell().unwrap();
+        let table = app.session.doc.table(focus.story, &path).unwrap();
+        assert_eq!(table.props.caption.as_deref(), Some("Prices"));
+        assert_eq!(table.props.description.as_deref(), Some("Prices by year"));
+    }
 }

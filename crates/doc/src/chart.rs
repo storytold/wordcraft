@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::props::Rgb;
+
 /// Most series in a chart.
 pub const MAX_SERIES: usize = 255;
 /// Most categories (points per series) in a chart.
@@ -123,17 +125,119 @@ impl LegendPos {
     }
 }
 
-/// One series: its name and a value per category (`None` = no value, a gap).
+/// One series: its name, a value per category (`None` = no value, a gap) and how it is drawn:
+/// fill, line, markers, smooth lines, its own data labels and number format. Unset fields follow
+/// the chart's defaults.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartSeries {
     pub name: String,
     #[serde(default)]
     pub values: Vec<Option<f64>>,
+    /// Fill color; `None`: the chart's accent color for the series.
+    #[serde(default)]
+    pub fill: Option<Rgb>,
+    /// "None" fill: the series draws no fill.
+    #[serde(default)]
+    pub no_fill: bool,
+    /// Line width in points; `None`: the chart's default.
+    #[serde(default)]
+    pub line_w: Option<f32>,
+    /// "None" line: the series draws no line.
+    #[serde(default)]
+    pub no_line: bool,
+    /// Markers on points; `None`: unset (scatter charts draw them; a saved scatter series then has
+    /// no `c:marker`).
+    #[serde(default)]
+    pub markers: Option<bool>,
+    /// Draw the line as a smooth curve.
+    #[serde(default)]
+    pub smooth: bool,
+    /// Data labels for this series; `None`: follow the chart's setting.
+    #[serde(default)]
+    pub labels: Option<bool>,
+    /// Number format of this series's labels and values; `None`: linked to the source.
+    #[serde(default)]
+    pub fmt: Option<String>,
+}
+
+impl ChartSeries {
+    /// A new series of a `kind` chart: a scatter series is drawn as markers without a line.
+    pub fn new(kind: ChartType, name: String, values: Vec<Option<f64>>) -> ChartSeries {
+        ChartSeries { name, values, no_line: kind == ChartType::Scatter, ..Default::default() }
+    }
+}
+
+/// One chart axis: title, scale bounds, tick-label number format, gridlines, tick labels and the
+/// axis line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartAxis {
+    /// `None`: no axis title; text cut to [`MAX_TEXT`] characters.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Fixed lower bound; `None`: automatic.
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// Fixed upper bound; `None`: automatic.
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// Tick-label number format (`#,##0`, `0.00`, `0%`…); `None`: linked to the source data.
+    #[serde(default)]
+    pub fmt: Option<String>,
+    /// Major gridlines drawn along this axis.
+    #[serde(default)]
+    pub gridlines: bool,
+    /// Tick labels; `false` hides them.
+    #[serde(default = "the_true")]
+    pub labels: bool,
+    /// The axis line.
+    #[serde(default = "the_true")]
+    pub line: bool,
+}
+
+fn the_true() -> bool {
+    true
+}
+
+impl Default for ChartAxis {
+    fn default() -> Self {
+        ChartAxis { title: None, min: None, max: None, fmt: None, gridlines: false, labels: true, line: true }
+    }
+}
+
+/// The value axis as a new chart has it: gridlines, labels, no axis line.
+pub fn value_axis() -> ChartAxis {
+    ChartAxis { gridlines: true, line: false, ..ChartAxis::default() }
+}
+
+impl ChartAxis {
+    /// Make the axis safe to store: texts cleaned, bounds finite, `min` under `max` (an
+    /// impossible pair drops both), the format code cut to [`MAX_FMT`] characters.
+    pub fn sanitize(&mut self) {
+        self.title = self.title.as_deref().map(clean_text).filter(|t| !t.is_empty());
+        self.min = self.min.filter(|v| v.is_finite());
+        self.max = self.max.filter(|v| v.is_finite());
+        if matches!((self.min, self.max), (Some(lo), Some(hi)) if lo >= hi) {
+            self.min = None;
+            self.max = None;
+        }
+        self.fmt = self.fmt.as_deref().map(clean_fmt).filter(|f| !f.is_empty());
+    }
+}
+
+/// Longest axis number format kept, characters.
+pub const MAX_FMT: usize = 128;
+
+/// A number format code: control characters as spaces, ends trimmed, at most [`MAX_FMT`]
+/// characters.
+pub fn clean_fmt(s: &str) -> String {
+    let s: String = s.chars().take(MAX_FMT * 4).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    s.trim().chars().take(MAX_FMT).collect::<String>().trim_end().to_string()
 }
 
 /// A chart WordCraft can edit.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartSpec {
     #[serde(rename = "type")]
@@ -151,6 +255,78 @@ pub struct ChartSpec {
     /// Show each point's value next to it.
     #[serde(default)]
     pub data_labels: bool,
+    /// The category axis (scatter charts: the x axis).
+    #[serde(default)]
+    pub cat_axis: ChartAxis,
+    /// The value axis (scatter charts: the y axis); gridlines on and no axis line in a new chart.
+    #[serde(default = "value_axis")]
+    pub val_axis: ChartAxis,
+}
+
+/// A [`ChartSpec`] as stored. A scatter series saved without `noLine` (by a version without
+/// series formatting) is drawn as markers without a line, as that version drew it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSpec {
+    #[serde(rename = "type")]
+    kind: ChartType,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    series: Vec<StoredSeries>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    legend: Option<LegendPos>,
+    #[serde(default)]
+    data_labels: bool,
+    #[serde(default)]
+    cat_axis: ChartAxis,
+    #[serde(default = "value_axis")]
+    val_axis: ChartAxis,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSeries {
+    #[serde(default)]
+    no_line: Option<bool>,
+    #[serde(flatten)]
+    series: ChartSeries,
+}
+
+impl<'de> Deserialize<'de> for ChartSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = StoredSpec::deserialize(deserializer)?;
+        let scatter = s.kind == ChartType::Scatter;
+        Ok(ChartSpec {
+            kind: s.kind,
+            categories: s.categories,
+            series: s.series.into_iter().map(|x| ChartSeries { no_line: x.no_line.unwrap_or(scatter), ..x.series }).collect(),
+            title: s.title,
+            legend: s.legend,
+            data_labels: s.data_labels,
+            cat_axis: s.cat_axis,
+            val_axis: s.val_axis,
+        })
+    }
+}
+
+impl Default for ChartSpec {
+    /// An empty chart whose value axis is the one a new chart (and a missing JSON field) has:
+    /// gridlines on, no axis line.
+    fn default() -> Self {
+        ChartSpec {
+            kind: ChartType::default(),
+            categories: Vec::new(),
+            series: Vec::new(),
+            title: None,
+            legend: None,
+            data_labels: false,
+            cat_axis: ChartAxis::default(),
+            val_axis: value_axis(),
+        }
+    }
 }
 
 impl ChartSpec {
@@ -168,10 +344,14 @@ impl ChartSpec {
         ChartSpec {
             kind,
             categories: categories.into_iter().map(str::to_string).collect(),
-            series: series.into_iter().map(|(n, v)| ChartSeries { name: n.to_string(), values: v.into_iter().map(Some).collect() }).collect(),
+            series: series.into_iter().map(|(n, v)| ChartSeries::new(kind, n.to_string(), v.into_iter().map(Some).collect())).collect(),
             title: None,
             legend: Some(LegendPos::Bottom),
             data_labels: false,
+            cat_axis: ChartAxis::default(),
+            // Pie and doughnut charts have no axes: their axes stay plain, so the chart reads back
+            // as the same model.
+            val_axis: if kind.is_round() { ChartAxis::default() } else { value_axis() },
         }
     }
 
@@ -203,8 +383,12 @@ impl ChartSpec {
                 *v = v.filter(|x| x.is_finite());
             }
             s.values.resize(n, None);
+            s.fmt = s.fmt.as_deref().map(clean_fmt).filter(|f| !f.is_empty());
+            s.line_w = s.line_w.filter(|w| w.is_finite()).map(|w| w.clamp(0.0, 20.0));
         }
         self.title = self.title.as_deref().map(clean_text).filter(|t| !t.is_empty());
+        self.cat_axis.sanitize();
+        self.val_axis.sanitize();
     }
 
     /// The chart after `sanitize`.
@@ -229,7 +413,11 @@ mod tests {
         let mut c = ChartSpec {
             categories: vec!["a".into(); MAX_POINTS + 10],
             series: (0..MAX_SERIES + 5)
-                .map(|i| ChartSeries { name: format!("{}\n{}", "x".repeat(400), i), values: vec![Some(f64::NAN), Some(f64::INFINITY), Some(1.0)] })
+                .map(|i| ChartSeries {
+                    name: format!("{}\n{}", "x".repeat(400), i),
+                    values: vec![Some(f64::NAN), Some(f64::INFINITY), Some(1.0)],
+                    ..Default::default()
+                })
                 .collect(),
             title: Some("  ".into()),
             ..Default::default()
@@ -250,12 +438,78 @@ mod tests {
     fn short_categories_are_padded_to_the_longest_series() {
         let c = ChartSpec {
             categories: vec!["a".into()],
-            series: vec![ChartSeries { name: "s".into(), values: vec![Some(1.0), Some(2.0)] }],
+            series: vec![ChartSeries { name: "s".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() }],
             ..Default::default()
         }
         .sanitized();
         assert_eq!(c.categories, vec!["a".to_string(), String::new()]);
         assert_eq!(ChartType::from_id("BARSTACKED"), Some(ChartType::BarStacked));
         assert_eq!(LegendPos::from_id("top"), Some(LegendPos::Top));
+    }
+
+    /// A scatter series stored without `noLine` reads as markers without a line; a stored value
+    /// and the other chart types keep theirs.
+    #[test]
+    fn stored_scatter_series_without_a_line_setting_draw_no_line() {
+        let read = |json: &str| -> Vec<bool> { serde_json::from_str::<ChartSpec>(json).unwrap().series.iter().map(|s| s.no_line).collect() };
+        let series = r#"[{"name":"a","values":[1,null,2.5]},{"name":"b","values":[3],"noLine":false}]"#;
+        assert_eq!(read(&format!(r#"{{"type":"scatter","series":{series}}}"#)), [true, false]);
+        assert_eq!(read(&format!(r#"{{"type":"line","series":{series}}}"#)), [false, false]);
+        let c: ChartSpec = serde_json::from_str(&format!(r#"{{"type":"scatter","series":{series}}}"#)).unwrap();
+        assert_eq!(c.series[0].values, [Some(1.0), None, Some(2.5)]);
+        // What this version writes reads back as itself.
+        for kind in ChartType::ALL {
+            let spec = ChartSpec::sample(kind);
+            assert_eq!(serde_json::from_str::<ChartSpec>(&serde_json::to_string(&spec).unwrap()).unwrap(), spec, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn default_and_missing_json_axis_fields_agree() {
+        let from_json: ChartSpec = serde_json::from_str(r#"{"type":"column"}"#).unwrap();
+        let d = ChartSpec::default();
+        assert_eq!((d.cat_axis.clone(), d.val_axis.clone()), (from_json.cat_axis, from_json.val_axis));
+        assert!(d.val_axis.gridlines && !d.val_axis.line);
+    }
+
+    #[test]
+    fn axis_bounds_and_formats_are_cleaned() {
+        let mut a = ChartAxis {
+            title: Some(" Sales\n".into()),
+            min: Some(f64::NAN),
+            max: Some(50.0),
+            fmt: Some("x".repeat(MAX_FMT + 40)),
+            gridlines: true,
+            labels: false,
+            line: true,
+        };
+        a.sanitize();
+        assert_eq!(a.title.as_deref(), Some("Sales"));
+        assert_eq!(a.min, None);
+        assert_eq!(a.max, Some(50.0));
+        assert_eq!(a.fmt.as_deref().map(|f| f.chars().count()), Some(MAX_FMT));
+
+        // min not under max drops the pair; a format of only spaces is no format.
+        let mut b = ChartAxis { min: Some(50.0), max: Some(50.0), fmt: Some("  ".into()), ..Default::default() };
+        b.sanitize();
+        assert_eq!((b.min, b.max), (None, None));
+        assert_eq!(b.fmt, None);
+
+        let mut spec = ChartSpec {
+            series: vec![ChartSeries { name: "s".into(), values: vec![Some(1.0)], ..Default::default() }],
+            categories: vec!["a".into()],
+            ..Default::default()
+        };
+        spec.series[0].line_w = Some(f32::NAN);
+        spec.series[0].fmt = Some("0.00".into());
+        spec.sanitize();
+        assert_eq!(spec.series[0].line_w, None);
+        assert_eq!(spec.series[0].fmt.as_deref(), Some("0.00"));
+        let mut spec = ChartSpec {
+            series: vec![ChartSeries { name: "s".into(), values: vec![], line_w: Some(100.0), ..Default::default() }],
+            ..Default::default()
+        };
+        spec.sanitize();
+        assert_eq!(spec.series[0].line_w, Some(20.0), "a wild width clamps to 20 pt");
     }
 }
