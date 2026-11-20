@@ -7190,6 +7190,41 @@ fn paragraph_in_its_own_window_stays_open_and_closes_on_escape() {
     assert!(d.ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
 }
 
+/// #5124 for the panel: behind the Paragraph panel in its own window the document still moves by
+/// its title bar on macOS — the backdrop forwards the drag — while the panel stays open.
+#[test]
+fn the_window_moves_by_its_title_bar_behind_the_paragraph_panel() {
+    let mut a = typed();
+    a.integrated_titlebar = cfg!(target_os = "macos");
+    a.services.paragraph_window = true;
+    let mut d = FrameDriver { ctx: egui::Context::default(), t: 0.0 };
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+    a.run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+    for _ in 0..4 {
+        d.frame(&mut a, vec![], screen);
+    }
+    assert_eq!(prompt(&a), Some("paragraph"));
+    let at = egui::pos2(300.0, 12.0);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let events = [egui::Event::PointerMoved(at), button(at, true)]
+        .into_iter()
+        .chain([10.0, 20.0, 30.0].map(|dx| egui::Event::PointerMoved(at + egui::vec2(dx, 0.0))))
+        .chain([button(at + egui::vec2(30.0, 0.0), false)]);
+    let mut drags = 0;
+    for e in events {
+        d.t += 1.0 / 60.0;
+        let input = egui::RawInput { events: vec![e], time: Some(d.t), screen_rect: Some(screen), ..Default::default() };
+        let out = d.ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        });
+        drags += out.viewport_output.values().flat_map(|v| &v.commands).filter(|c| matches!(c, egui::ViewportCommand::StartDrag)).count();
+        out.drop_without_applying_deltas();
+    }
+    assert_eq!(drags, usize::from(cfg!(target_os = "macos")), "the title bar still drags the window");
+    assert_eq!(prompt(&a), Some("paragraph"), "the panel stays open");
+}
+
 /// A text field outside any dialog (the Navigation pane's search) with focus takes the input:
 /// the page is not focused, and the picture is dropped (#1349).
 #[test]

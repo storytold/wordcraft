@@ -197,6 +197,10 @@ fn paragraph_window(app: &mut WordApp, ctx: &egui::Context, mut d: Dialog, title
             .fixed_pos(screen.min)
             .show(ctx, |ui| ui.allocate_rect(screen, Sense::CLICK | Sense::DRAG))
             .inner;
+        // The window still moves by its title bar, as behind an in-window modal (#5124). The
+        // panel is a separate viewport, so a press on it never reaches this context; an empty
+        // window rect keeps every title-bar origin forwardable.
+        drag_by_title_bar(ctx, &backdrop, egui::Rect::NOTHING);
         ctx.move_to_top(backdrop.layer_id);
         ctx.memory_mut(|m| m.set_modal_layer(backdrop.layer_id));
         release_keyboard(app, ctx);
