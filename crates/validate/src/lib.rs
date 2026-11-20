@@ -4143,9 +4143,11 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                         tiff_directory_incomplete_at.get_or_insert(&e.name);
                         false
                     }
+                    // A budget stop is a lost assessment, never evidence the pixels failed to decode: no verdict
+                    // is made from it in either direction (neither the Error nor the Warning grade).
                     Err(CodecError::LimitExceeded(_)) => {
                         decode_limited_at.get_or_insert(&e.name);
-                        false
+                        continue;
                     }
                     // Compare variants without binding the external enum's named fields.
                     // The observation recognizer only admits patterns that keep those fields opaque.
@@ -4178,7 +4180,7 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     }
     if let Some(part) = decode_limited_at {
         acc.note(format!(
-            "MEDIA-MAGIC: alternate image decoding exceeded its byte budget at {part}; affected signature mismatches kept their Error grade"
+            "MEDIA-MAGIC: alternate image decoding exceeded its byte budget at {part}; the pixels there were not assessed, so the signature mismatch was not graded"
         ));
         acc.set_incomplete();
     }
@@ -5066,6 +5068,62 @@ mod budget_tests {
     }
 
     #[test]
+    fn media_magic_tiff_jpeg_worker_is_charged_from_the_jpeg_header_not_the_directory() {
+        // zune-jpeg allocates from the JPEG's own header (SOF dimensions, component layout, scan kind), not from the
+        // strip or tile size the TIFF directory declares: an 8x8 strip holding a 64x64 progressive JPEG costs what a
+        // 64x64 one does, an 8192x8192 tile holding an 8x8 JPEG costs what an 8x8 one does, and a JPEG whose
+        // geometry matches the directory (a single-scan baseline strip has no coefficient planes) stays a Pass.
+        let header = |marker: u8, side: u16| {
+            [&[0xff, 0xd8, 0xff, marker, 0, 11, 8][..], &side.to_be_bytes(), &side.to_be_bytes(), &[1, 1, 0x11, 0, 0xff, 0xd9]].concat()
+        };
+        let gray = |width: u32, height: u32| {
+            let image = codecs::Image::from_u8(width, height, codecs::ChannelLayout::Gray, vec![128; (width * height) as usize]).unwrap();
+            codecs::encode(&image, Format::Jpeg, &codecs::EncodeOptions::default()).unwrap()
+        };
+        // A one-chunk TIFF: a `width` x `height` strip, or (`tile`) a 1x1 page with a `width` x `height` tile.
+        let tiff = |width: u32, height: u32, tile: bool, jpeg: &[u8]| {
+            let directory = |at: u32| {
+                let mut entries = vec![(256u16, 4u16, None, if tile { 1 } else { width }), (257, 4, None, if tile { 1 } else { height })];
+                entries.extend([(258, 3, None, 8), (259, 3, None, 7), (262, 3, None, 1)]);
+                if tile {
+                    entries.extend([
+                        (277, 3, None, 1),
+                        (322, 4, None, width),
+                        (323, 4, None, height),
+                        (324, 4, None, at),
+                        (325, 4, None, jpeg.len() as u32),
+                    ]);
+                } else {
+                    entries.extend([(273, 4, None, at), (277, 3, None, 1), (278, 4, None, height), (279, 4, None, jpeg.len() as u32)]);
+                }
+                graph_tiff(&[entries])
+            };
+            let mut bytes = directory(directory(0).len() as u32 - 1);
+            bytes.pop();
+            bytes.extend(jpeg);
+            bytes
+        };
+        let debit = |bytes: &[u8]| {
+            let page = probe_page(bytes);
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap()
+                .install(|| media_workspace::decode(Format::Tiff, bytes, page.width, page.height, Some(&page)))
+        };
+        let (small, large) = (debit(&tiff(8, 8, false, &header(0xc2, 8))), debit(&tiff(8, 8, false, &header(0xc2, 64))));
+        // An output byte and a 16-bit coefficient for every sample of the larger frame, however small the strip.
+        assert!(large - small >= 3 * (64 * 64 - 8 * 8), "{small} {large}");
+        let (read, unread) = (debit(&tiff(8192, 8192, true, &gray(8, 8))), debit(&tiff(8192, 8192, true, b"not a jpeg")));
+        assert!(unread - read >= 2 * 8192 * 8192, "{read} {unread}");
+        let validate = |bytes: &[u8]| validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
+        for bytes in [tiff(8192, 8192, true, &gray(8, 8)), tiff(2048, 3072, false, &gray(2048, 3072))] {
+            let report = validate(&bytes);
+            assert_eq!((report.verdict, report.findings.first().map(|f| f.severity)), (Verdict::Pass, Some(Severity::Warning)), "{report:?}");
+        }
+    }
+
+    #[test]
     fn media_magic_tiff_workspace_charges_each_worker_its_decoder_state() {
         // The codec opens one `tiff` decoder per band worker, and each rebuilds the directory and
         // both strip tables (and expands them through 32-byte values on the way). The debit must
@@ -5336,8 +5394,9 @@ mod budget_tests {
         assert!(jpeg.len() < 4096);
         let zip = media_zip(&[("word/media/drawn.png", &jpeg)], DRAWN, "png");
         let report = validate_bytes_limited(&zip, Limits { part_bytes: 4096, ..Limits::default() });
-        assert_eq!(report.verdict, Verdict::Fail);
-        assert!(report.findings.iter().any(|f| f.rule == "MEDIA-MAGIC" && f.severity == Severity::Error));
+        // A budget stop is a lost assessment: neither the Error nor the Warning grade is made from it.
+        assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+        assert!(report.findings.iter().all(|f| f.rule != "MEDIA-MAGIC"), "{report:?}");
         assert!(report.coverage_notes.iter().any(|n| n.starts_with("MEDIA-MAGIC: alternate image decoding exceeded its byte budget")));
     }
 

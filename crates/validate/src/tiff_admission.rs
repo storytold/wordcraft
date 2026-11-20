@@ -309,6 +309,40 @@ pub(crate) fn chunk_dimensions(bytes: &[u8], page: &craft_image_codecs::TiffPage
     (width, height)
 }
 
+/// The stored `(offset, length)` ranges of the page's strips or tiles, from its offset and byte-count tables: at
+/// most `limit` of them, in order.
+pub(crate) fn chunks(bytes: &[u8], page: &craft_image_codecs::TiffPage, limit: usize) -> Vec<(usize, usize)> {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*4";
+        scope: "the selected TIFF directory's offset and byte-count tables";
+        loss: "unreadable directory or table";
+        fallback: "return no ranges";
+        package_loss: "independent";
+    }
+
+    let Some((order, big)) = Tiff::sniff(bytes) else { return Vec::new() };
+    let Ok(dir) = directory_entries(bytes, page.ifd_offset, order, big, ParseOptions::default().max_entries) else { return Vec::new() };
+    let (offsets_tag, counts_tag) =
+        if page.tiled { (tags::TILE_OFFSETS, tags::TILE_BYTE_COUNTS) } else { (tags::STRIP_OFFSETS, tags::STRIP_BYTE_COUNTS) };
+    let (mut offsets, mut counts) = (None, None);
+    for pos in dir.positions() {
+        let Some(span) = entry_span(bytes, pos, order, big, 0) else { continue };
+        if span.tag == offsets_tag {
+            offsets = Some(span);
+        } else if span.tag == counts_tag {
+            counts = Some(span);
+        }
+    }
+    let (Some(offsets), Some(counts)) = (offsets, counts) else { return Vec::new() };
+    (0..offsets.count.min(counts.count).min(limit as u64))
+        .filter_map(|index| {
+            let start = usize::try_from(span_uint(bytes, order, offsets, index)?).ok()?;
+            Some((start, usize::try_from(span_uint(bytes, order, counts, index)?).ok()?))
+        })
+        .collect()
+}
+
 /// Bytes one band-decoder worker holds while it opens the selected page, beyond its scratch
 /// buffers. The codec builds a `tiff` decoder per worker (`bands.rs` `decode_bands`, through
 /// `Prepared::open`), and that decoder re-reads the directory:
