@@ -1,1686 +1,460 @@
-//! WordCraft's icon set, drawn in code (original artwork; no external icon assets).
-//!
-//! Icons are designed on a 20×20 grid in two colours: line work (`c`) and an accent (`a`).
+//! WordCraft's icon set: SVG documents on a 20×20 view box, registered as the app icon set beside
+//! the framework's catalog, plus the Insert › Icons library glyph.
 
-use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use std::borrow::Cow;
 
-struct Pen<'a> {
-    p: &'a Painter,
-    r: Rect,
-    c: Color32,
-    a: Color32,
-    w: f32,
+use craft::behavior::IconId;
+use craft::ui::primitives::{AppIcons, Glyph, IconSpec, register_app_icons};
+use craft::ui::style::UiTokens;
+use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+
+/// One row per file in `crates/ui-egui/icons/`, in sorted order: the icon's name and its document.
+///
+/// The names come from the exporter's file names, so a reader names an icon exactly as its file does.
+static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
+    ("accept", include_bytes!("../icons/accept.svg")),
+    ("accessibility", include_bytes!("../icons/accessibility.svg")),
+    ("addNote", include_bytes!("../icons/addNote.svg")),
+    ("addPen", include_bytes!("../icons/addPen.svg")),
+    ("addShape", include_bytes!("../icons/addShape.svg")),
+    ("addText", include_bytes!("../icons/addText.svg")),
+    ("addins", include_bytes!("../icons/addins.svg")),
+    ("addressBlock", include_bytes!("../icons/addressBlock.svg")),
+    ("align", include_bytes!("../icons/align.svg")),
+    ("alignCenter", include_bytes!("../icons/alignCenter.svg")),
+    ("alignLeft", include_bytes!("../icons/alignLeft.svg")),
+    ("alignRight", include_bytes!("../icons/alignRight.svg")),
+    ("alignText", include_bytes!("../icons/alignText.svg")),
+    ("altText", include_bytes!("../icons/altText.svg")),
+    ("arrangeAll", include_bytes!("../icons/arrangeAll.svg")),
+    ("autofit", include_bytes!("../icons/autofit.svg")),
+    ("bibliography", include_bytes!("../icons/bibliography.svg")),
+    ("blankPage", include_bytes!("../icons/blankPage.svg")),
+    ("blockAuthors", include_bytes!("../icons/blockAuthors.svg")),
+    ("bold", include_bytes!("../icons/bold.svg")),
+    ("wordcraft.bookmark", include_bytes!("../icons/bookmark.svg")),
+    ("borderPainter", include_bytes!("../icons/borderPainter.svg")),
+    ("borders", include_bytes!("../icons/borders.svg")),
+    ("breaks", include_bytes!("../icons/breaks.svg")),
+    ("bringForward", include_bytes!("../icons/bringForward.svg")),
+    ("bullets", include_bytes!("../icons/bullets.svg")),
+    ("canvas", include_bytes!("../icons/canvas.svg")),
+    ("caption", include_bytes!("../icons/caption.svg")),
+    ("case", include_bytes!("../icons/case.svg")),
+    ("ccCheckBox", include_bytes!("../icons/ccCheckBox.svg")),
+    ("ccComboBox", include_bytes!("../icons/ccComboBox.svg")),
+    ("ccDate", include_bytes!("../icons/ccDate.svg")),
+    ("ccDropDown", include_bytes!("../icons/ccDropDown.svg")),
+    ("ccGallery", include_bytes!("../icons/ccGallery.svg")),
+    ("ccPicture", include_bytes!("../icons/ccPicture.svg")),
+    ("ccPlainText", include_bytes!("../icons/ccPlainText.svg")),
+    ("ccRepeat", include_bytes!("../icons/ccRepeat.svg")),
+    ("ccRichText", include_bytes!("../icons/ccRichText.svg")),
+    ("cellAlign", include_bytes!("../icons/cellAlign.svg")),
+    ("cellMargins", include_bytes!("../icons/cellMargins.svg")),
+    ("changeChartType", include_bytes!("../icons/changeChartType.svg")),
+    ("charborder", include_bytes!("../icons/charborder.svg")),
+    ("chart", include_bytes!("../icons/chart.svg")),
+    ("chartData", include_bytes!("../icons/chartData.svg")),
+    ("chartTitle", include_bytes!("../icons/chartTitle.svg")),
+    ("wordcraft.check", include_bytes!("../icons/check.svg")),
+    ("checkErrors", include_bytes!("../icons/checkErrors.svg")),
+    ("chevronDoubleRight", include_bytes!("../icons/chevronDoubleRight.svg")),
+    ("chevronDown", include_bytes!("../icons/chevronDown.svg")),
+    ("chevronLeft", include_bytes!("../icons/chevronLeft.svg")),
+    ("chevronRight", include_bytes!("../icons/chevronRight.svg")),
+    ("chevronUp", include_bytes!("../icons/chevronUp.svg")),
+    ("citation", include_bytes!("../icons/citation.svg")),
+    ("clear", include_bytes!("../icons/clear.svg")),
+    ("wordcraft.close", include_bytes!("../icons/close.svg")),
+    ("closeOutline", include_bytes!("../icons/closeOutline.svg")),
+    ("colWidth", include_bytes!("../icons/colWidth.svg")),
+    ("colors", include_bytes!("../icons/colors.svg")),
+    ("columns", include_bytes!("../icons/columns.svg")),
+    ("combine", include_bytes!("../icons/combine.svg")),
+    ("comment", include_bytes!("../icons/comment.svg")),
+    ("compare", include_bytes!("../icons/compare.svg")),
+    ("wordcraft.copy", include_bytes!("../icons/copy.svg")),
+    ("coverPage", include_bytes!("../icons/coverPage.svg")),
+    ("wordcraft.crop", include_bytes!("../icons/crop.svg")),
+    ("crossRef", include_bytes!("../icons/crossRef.svg")),
+    ("cut", include_bytes!("../icons/cut.svg")),
+    ("darkMode", include_bytes!("../icons/darkMode.svg")),
+    ("dataLabels", include_bytes!("../icons/dataLabels.svg")),
+    ("dateTime", include_bytes!("../icons/dateTime.svg")),
+    ("deleteComment", include_bytes!("../icons/deleteComment.svg")),
+    ("deleteTable", include_bytes!("../icons/deleteTable.svg")),
+    ("demote", include_bytes!("../icons/demote.svg")),
+    ("designMode", include_bytes!("../icons/designMode.svg")),
+    ("dictate", include_bytes!("../icons/dictate.svg")),
+    ("discord", include_bytes!("../icons/discord.svg")),
+    ("distributeCols", include_bytes!("../icons/distributeCols.svg")),
+    ("distributeRows", include_bytes!("../icons/distributeRows.svg")),
+    ("docPrefs", include_bytes!("../icons/docPrefs.svg")),
+    ("documentTemplate", include_bytes!("../icons/documentTemplate.svg")),
+    ("draft", include_bytes!("../icons/draft.svg")),
+    ("draw", include_bytes!("../icons/draw.svg")),
+    ("drawTable", include_bytes!("../icons/drawTable.svg")),
+    ("dropCap", include_bytes!("../icons/dropCap.svg")),
+    ("dropdown", include_bytes!("../icons/dropdown.svg")),
+    ("editRecipients", include_bytes!("../icons/editRecipients.svg")),
+    ("editor", include_bytes!("../icons/editor.svg")),
+    ("effects", include_bytes!("../icons/effects.svg")),
+    ("effectsDesign", include_bytes!("../icons/effectsDesign.svg")),
+    ("enclose", include_bytes!("../icons/enclose.svg")),
+    ("endnote", include_bytes!("../icons/endnote.svg")),
+    ("envelope", include_bytes!("../icons/envelope.svg")),
+    ("equation", include_bytes!("../icons/equation.svg")),
+    ("wordcraft.eraser", include_bytes!("../icons/eraser.svg")),
+    ("export", include_bytes!("../icons/export.svg")),
+    ("wordcraft.file", include_bytes!("../icons/file.svg")),
+    ("find", include_bytes!("../icons/find.svg")),
+    ("finish", include_bytes!("../icons/finish.svg")),
+    ("first", include_bytes!("../icons/first.svg")),
+    ("fitOnePage", include_bytes!("../icons/fitOnePage.svg")),
+    ("focus", include_bytes!("../icons/focus.svg")),
+    ("wordcraft.folder", include_bytes!("../icons/folder.svg")),
+    ("fontMissing", include_bytes!("../icons/fontMissing.svg")),
+    ("fontcolor", include_bytes!("../icons/fontcolor.svg")),
+    ("fontdialog", include_bytes!("../icons/fontdialog.svg")),
+    ("fonts", include_bytes!("../icons/fonts.svg")),
+    ("footer", include_bytes!("../icons/footer.svg")),
+    ("footnote", include_bytes!("../icons/footnote.svg")),
+    ("formula", include_bytes!("../icons/formula.svg")),
+    ("fullScreen", include_bytes!("../icons/fullScreen.svg")),
+    ("greetingLine", include_bytes!("../icons/greetingLine.svg")),
+    ("gridlines", include_bytes!("../icons/gridlines.svg")),
+    ("group", include_bytes!("../icons/group.svg")),
+    ("grow", include_bytes!("../icons/grow.svg")),
+    ("header", include_bytes!("../icons/header.svg")),
+    ("help", include_bytes!("../icons/help.svg")),
+    ("hideInk", include_bytes!("../icons/hideInk.svg")),
+    ("highlight", include_bytes!("../icons/highlight.svg")),
+    ("highlightFields", include_bytes!("../icons/highlightFields.svg")),
+    ("highlightNoColor", include_bytes!("../icons/highlightNoColor.svg")),
+    ("homeFolder", include_bytes!("../icons/homeFolder.svg")),
+    ("hyphenation", include_bytes!("../icons/hyphenation.svg")),
+    ("icons", include_bytes!("../icons/icons.svg")),
+    ("immersive", include_bytes!("../icons/immersive.svg")),
+    ("indent", include_bytes!("../icons/indent.svg")),
+    ("indentLeft", include_bytes!("../icons/indentLeft.svg")),
+    ("indentRight", include_bytes!("../icons/indentRight.svg")),
+    ("index", include_bytes!("../icons/index.svg")),
+    ("wordcraft.info", include_bytes!("../icons/info.svg")),
+    ("inkToMath", include_bytes!("../icons/inkToMath.svg")),
+    ("inkToShape", include_bytes!("../icons/inkToShape.svg")),
+    ("insertAbove", include_bytes!("../icons/insertAbove.svg")),
+    ("insertBelow", include_bytes!("../icons/insertBelow.svg")),
+    ("insertLeft", include_bytes!("../icons/insertLeft.svg")),
+    ("insertRight", include_bytes!("../icons/insertRight.svg")),
+    ("interfaceTheme", include_bytes!("../icons/interfaceTheme.svg")),
+    ("italic", include_bytes!("../icons/italic.svg")),
+    ("justify", include_bytes!("../icons/justify.svg")),
+    ("labels", include_bytes!("../icons/labels.svg")),
+    ("language", include_bytes!("../icons/language.svg")),
+    ("wordcraft.lasso", include_bytes!("../icons/lasso.svg")),
+    ("last", include_bytes!("../icons/last.svg")),
+    ("launcher", include_bytes!("../icons/launcher.svg")),
+    ("legend", include_bytes!("../icons/legend.svg")),
+    ("lineNumbers", include_bytes!("../icons/lineNumbers.svg")),
+    ("lineSpacing", include_bytes!("../icons/lineSpacing.svg")),
+    ("wordcraft.link", include_bytes!("../icons/link.svg")),
+    ("macros", include_bytes!("../icons/macros.svg")),
+    ("mailMerge", include_bytes!("../icons/mailMerge.svg")),
+    ("margins", include_bytes!("../icons/margins.svg")),
+    ("markCitation", include_bytes!("../icons/markCitation.svg")),
+    ("markEntry", include_bytes!("../icons/markEntry.svg")),
+    ("markdownSource", include_bytes!("../icons/markdownSource.svg")),
+    ("markup", include_bytes!("../icons/markup.svg")),
+    ("matchFields", include_bytes!("../icons/matchFields.svg")),
+    ("merge", include_bytes!("../icons/merge.svg")),
+    ("mergeField", include_bytes!("../icons/mergeField.svg")),
+    ("wordcraft.minus", include_bytes!("../icons/minus.svg")),
+    ("models3d", include_bytes!("../icons/models3d.svg")),
+    ("wordcraft.more", include_bytes!("../icons/more.svg")),
+    ("multilevel", include_bytes!("../icons/multilevel.svg")),
+    ("multiplePages", include_bytes!("../icons/multiplePages.svg")),
+    ("navPane", include_bytes!("../icons/navPane.svg")),
+    ("newComment", include_bytes!("../icons/newComment.svg")),
+    ("newWindow", include_bytes!("../icons/newWindow.svg")),
+    ("next", include_bytes!("../icons/next.svg")),
+    ("nextChange", include_bytes!("../icons/nextChange.svg")),
+    ("nextComment", include_bytes!("../icons/nextComment.svg")),
+    ("nextFootnote", include_bytes!("../icons/nextFootnote.svg")),
+    ("numbering", include_bytes!("../icons/numbering.svg")),
+    ("object", include_bytes!("../icons/object.svg")),
+    ("onePage", include_bytes!("../icons/onePage.svg")),
+    ("onlinePicture", include_bytes!("../icons/onlinePicture.svg")),
+    ("wordcraft.open", include_bytes!("../icons/open.svg")),
+    ("options", include_bytes!("../icons/options.svg")),
+    ("orientation", include_bytes!("../icons/orientation.svg")),
+    ("outdent", include_bytes!("../icons/outdent.svg")),
+    ("outline", include_bytes!("../icons/outline.svg")),
+    ("outlineBody", include_bytes!("../icons/outlineBody.svg")),
+    ("outlineCollapse", include_bytes!("../icons/outlineCollapse.svg")),
+    ("outlineDemote", include_bytes!("../icons/outlineDemote.svg")),
+    ("outlineDown", include_bytes!("../icons/outlineDown.svg")),
+    ("outlineExpand", include_bytes!("../icons/outlineExpand.svg")),
+    ("outlinePromote", include_bytes!("../icons/outlinePromote.svg")),
+    ("outlineTop", include_bytes!("../icons/outlineTop.svg")),
+    ("outlineUp", include_bytes!("../icons/outlineUp.svg")),
+    ("pageBorders", include_bytes!("../icons/pageBorders.svg")),
+    ("pageBreak", include_bytes!("../icons/pageBreak.svg")),
+    ("pageColor", include_bytes!("../icons/pageColor.svg")),
+    ("pageNumber", include_bytes!("../icons/pageNumber.svg")),
+    ("pageWidth", include_bytes!("../icons/pageWidth.svg")),
+    ("painter", include_bytes!("../icons/painter.svg")),
+    ("paraSpacing", include_bytes!("../icons/paraSpacing.svg")),
+    ("pastCitation", include_bytes!("../icons/pastCitation.svg")),
+    ("paste", include_bytes!("../icons/paste.svg")),
+    ("pen", include_bytes!("../icons/pen.svg")),
+    ("wordcraft.pencil", include_bytes!("../icons/pencil.svg")),
+    ("phonetic", include_bytes!("../icons/phonetic.svg")),
+    ("picture", include_bytes!("../icons/picture.svg")),
+    ("wordcraft.pilcrow", include_bytes!("../icons/pilcrow.svg")),
+    ("wordcraft.pin", include_bytes!("../icons/pin.svg")),
+    ("wordcraft.plus", include_bytes!("../icons/plus.svg")),
+    ("position", include_bytes!("../icons/position.svg")),
+    ("prevChange", include_bytes!("../icons/prevChange.svg")),
+    ("prevComment", include_bytes!("../icons/prevComment.svg")),
+    ("preview", include_bytes!("../icons/preview.svg")),
+    ("previous", include_bytes!("../icons/previous.svg")),
+    ("print", include_bytes!("../icons/print.svg")),
+    ("printLayout", include_bytes!("../icons/printLayout.svg")),
+    ("promote", include_bytes!("../icons/promote.svg")),
+    ("properties", include_bytes!("../icons/properties.svg")),
+    ("protect", include_bytes!("../icons/protect.svg")),
+    ("quickParts", include_bytes!("../icons/quickParts.svg")),
+    ("readAloud", include_bytes!("../icons/readAloud.svg")),
+    ("readMode", include_bytes!("../icons/readMode.svg")),
+    ("recipients", include_bytes!("../icons/recipients.svg")),
+    ("recover", include_bytes!("../icons/recover.svg")),
+    ("wordcraft.redo", include_bytes!("../icons/redo.svg")),
+    ("reject", include_bytes!("../icons/reject.svg")),
+    ("repeatHeader", include_bytes!("../icons/repeatHeader.svg")),
+    ("replace", include_bytes!("../icons/replace.svg")),
+    ("replay", include_bytes!("../icons/replay.svg")),
+    ("replayForward", include_bytes!("../icons/replayForward.svg")),
+    ("replayPause", include_bytes!("../icons/replayPause.svg")),
+    ("replayPlay", include_bytes!("../icons/replayPlay.svg")),
+    ("replayRewind", include_bytes!("../icons/replayRewind.svg")),
+    ("researcher", include_bytes!("../icons/researcher.svg")),
+    ("resetGraphic", include_bytes!("../icons/resetGraphic.svg")),
+    ("resolve", include_bytes!("../icons/resolve.svg")),
+    ("restrict", include_bytes!("../icons/restrict.svg")),
+    ("reviewingPane", include_bytes!("../icons/reviewingPane.svg")),
+    ("rotate", include_bytes!("../icons/rotate.svg")),
+    ("rowHeight", include_bytes!("../icons/rowHeight.svg")),
+    ("wordcraft.ruler", include_bytes!("../icons/ruler.svg")),
+    ("rules", include_bytes!("../icons/rules.svg")),
+    ("wordcraft.save", include_bytes!("../icons/save.svg")),
+    ("saveAs", include_bytes!("../icons/saveAs.svg")),
+    ("screenshot", include_bytes!("../icons/screenshot.svg")),
+    ("wordcraft.search", include_bytes!("../icons/search.svg")),
+    ("select", include_bytes!("../icons/select.svg")),
+    ("selectTable", include_bytes!("../icons/selectTable.svg")),
+    ("selectionPane", include_bytes!("../icons/selectionPane.svg")),
+    ("sendBackward", include_bytes!("../icons/sendBackward.svg")),
+    ("setDefault", include_bytes!("../icons/setDefault.svg")),
+    ("shading", include_bytes!("../icons/shading.svg")),
+    ("shadingNoBar", include_bytes!("../icons/shadingNoBar.svg")),
+    ("shape.arrow", include_bytes!("../icons/shape.arrow.svg")),
+    ("shape.curvedArrowConnector", include_bytes!("../icons/shape.curvedArrowConnector.svg")),
+    ("shape.curvedConnector", include_bytes!("../icons/shape.curvedConnector.svg")),
+    ("shape.diamond", include_bytes!("../icons/shape.diamond.svg")),
+    ("shape.elbowArrowConnector", include_bytes!("../icons/shape.elbowArrowConnector.svg")),
+    ("shape.elbowConnector", include_bytes!("../icons/shape.elbowConnector.svg")),
+    ("shape.ellipse", include_bytes!("../icons/shape.ellipse.svg")),
+    ("shape.heart", include_bytes!("../icons/shape.heart.svg")),
+    ("shape.line", include_bytes!("../icons/shape.line.svg")),
+    ("shape.rectangle", include_bytes!("../icons/shape.rectangle.svg")),
+    ("shape.roundedRectangle", include_bytes!("../icons/shape.roundedRectangle.svg")),
+    ("shape.star", include_bytes!("../icons/shape.star.svg")),
+    ("shape.straightArrowConnector", include_bytes!("../icons/shape.straightArrowConnector.svg")),
+    ("shape.straightConnector", include_bytes!("../icons/shape.straightConnector.svg")),
+    ("shape.triangle", include_bytes!("../icons/shape.triangle.svg")),
+    ("shapeEffects", include_bytes!("../icons/shapeEffects.svg")),
+    ("shapes", include_bytes!("../icons/shapes.svg")),
+    ("share", include_bytes!("../icons/share.svg")),
+    ("showComments", include_bytes!("../icons/showComments.svg")),
+    ("showNotes", include_bytes!("../icons/showNotes.svg")),
+    ("shrink", include_bytes!("../icons/shrink.svg")),
+    ("sideBySide", include_bytes!("../icons/sideBySide.svg")),
+    ("sideToSide", include_bytes!("../icons/sideToSide.svg")),
+    ("signature", include_bytes!("../icons/signature.svg")),
+    ("size", include_bytes!("../icons/size.svg")),
+    ("smartArt", include_bytes!("../icons/smartArt.svg")),
+    ("smartArtColors", include_bytes!("../icons/smartArtColors.svg")),
+    ("sort", include_bytes!("../icons/sort.svg")),
+    ("sources", include_bytes!("../icons/sources.svg")),
+    ("spaceAfter", include_bytes!("../icons/spaceAfter.svg")),
+    ("spaceBefore", include_bytes!("../icons/spaceBefore.svg")),
+    ("spelling", include_bytes!("../icons/spelling.svg")),
+    ("wordcraft.split", include_bytes!("../icons/split.svg")),
+    ("splitCells", include_bytes!("../icons/splitCells.svg")),
+    ("splitTable", include_bytes!("../icons/splitTable.svg")),
+    ("strike", include_bytes!("../icons/strike.svg")),
+    ("styles", include_bytes!("../icons/styles.svg")),
+    ("stylesPane", include_bytes!("../icons/stylesPane.svg")),
+    ("subscript", include_bytes!("../icons/subscript.svg")),
+    ("superscript", include_bytes!("../icons/superscript.svg")),
+    ("switchWindows", include_bytes!("../icons/switchWindows.svg")),
+    ("symbol", include_bytes!("../icons/symbol.svg")),
+    ("syncScroll", include_bytes!("../icons/syncScroll.svg")),
+    ("table", include_bytes!("../icons/table.svg")),
+    ("tableOfAuthorities", include_bytes!("../icons/tableOfAuthorities.svg")),
+    ("tableOfFigures", include_bytes!("../icons/tableOfFigures.svg")),
+    ("textBox", include_bytes!("../icons/textBox.svg")),
+    ("textBoxLink", include_bytes!("../icons/textBoxLink.svg")),
+    ("textBoxUnlink", include_bytes!("../icons/textBoxUnlink.svg")),
+    ("textDirection", include_bytes!("../icons/textDirection.svg")),
+    ("textFill", include_bytes!("../icons/textFill.svg")),
+    ("textLtr", include_bytes!("../icons/textLtr.svg")),
+    ("textOutline", include_bytes!("../icons/textOutline.svg")),
+    ("textPane", include_bytes!("../icons/textPane.svg")),
+    ("textRtl", include_bytes!("../icons/textRtl.svg")),
+    ("themes", include_bytes!("../icons/themes.svg")),
+    ("thesaurus", include_bytes!("../icons/thesaurus.svg")),
+    ("thickness", include_bytes!("../icons/thickness.svg")),
+    ("toText", include_bytes!("../icons/toText.svg")),
+    ("toc", include_bytes!("../icons/toc.svg")),
+    ("trackChanges", include_bytes!("../icons/trackChanges.svg")),
+    ("transform", include_bytes!("../icons/transform.svg")),
+    ("translate", include_bytes!("../icons/translate.svg")),
+    ("underline", include_bytes!("../icons/underline.svg")),
+    ("wordcraft.undo", include_bytes!("../icons/undo.svg")),
+    ("unlinkCitations", include_bytes!("../icons/unlinkCitations.svg")),
+    ("update", include_bytes!("../icons/update.svg")),
+    ("updateTable", include_bytes!("../icons/updateTable.svg")),
+    ("user", include_bytes!("../icons/user.svg")),
+    ("vertical", include_bytes!("../icons/vertical.svg")),
+    ("video", include_bytes!("../icons/video.svg")),
+    ("watermark", include_bytes!("../icons/watermark.svg")),
+    ("webLayout", include_bytes!("../icons/webLayout.svg")),
+    ("wordArt", include_bytes!("../icons/wordArt.svg")),
+    ("wordCount", include_bytes!("../icons/wordCount.svg")),
+    ("wrapText", include_bytes!("../icons/wrapText.svg")),
+    ("zoom", include_bytes!("../icons/zoom.svg")),
+    ("zoom100", include_bytes!("../icons/zoom100.svg")),
+    ("zoomIn", include_bytes!("../icons/zoomIn.svg")),
+    ("zoomOut", include_bytes!("../icons/zoomOut.svg")),
+];
+
+/// The app icon set. Every document is drawn with the pen width 1.25 of the 20-unit view box,
+/// which the framework scales to its own stroke.
+pub static WORDCRAFT_ICONS: AppIcons = AppIcons::new("wordcraft", Some(1.25), WORDCRAFT_ICONS_TABLE);
+
+/// Registers the app icon set beside the framework's catalog; runs before the first pass.
+pub fn register() {
+    register_app_icons(&WORDCRAFT_ICONS);
 }
 
-impl Pen<'_> {
-    fn s(&self) -> f32 {
-        self.r.width().min(self.r.height()) / 20.0
-    }
-    fn pt(&self, x: f32, y: f32) -> Pos2 {
-        let s = self.s();
-        let o = self.r.center() - vec2(10.0 * s, 10.0 * s);
-        pos2(o.x + x * s, o.y + y * s)
-    }
-    fn stroke(&self, c: Color32) -> Stroke {
-        Stroke::new(self.w * self.s(), c)
-    }
-    fn line(&self, pts: &[(f32, f32)]) {
-        self.line_c(pts, self.c);
-    }
-    fn line_c(&self, pts: &[(f32, f32)], c: Color32) {
-        let v: Vec<Pos2> = pts.iter().map(|&(x, y)| self.pt(x, y)).collect();
-        self.p.add(Shape::line(v, self.stroke(c)));
-    }
-    fn closed(&self, pts: &[(f32, f32)], c: Color32) {
-        let v: Vec<Pos2> = pts.iter().map(|&(x, y)| self.pt(x, y)).collect();
-        self.p.add(Shape::closed_line(v, self.stroke(c)));
-    }
-    fn fill(&self, pts: &[(f32, f32)], c: Color32) {
-        let v: Vec<Pos2> = pts.iter().map(|&(x, y)| self.pt(x, y)).collect();
-        self.p.add(Shape::convex_polygon(v, c, Stroke::NONE));
-    }
-    fn rect(&self, x0: f32, y0: f32, x1: f32, y1: f32, c: Color32) {
-        self.p.rect_stroke(Rect::from_min_max(self.pt(x0, y0), self.pt(x1, y1)), 1.0, self.stroke(c), egui::StrokeKind::Middle);
-    }
-    fn frect(&self, x0: f32, y0: f32, x1: f32, y1: f32, c: Color32) {
-        self.p.rect_filled(Rect::from_min_max(self.pt(x0, y0), self.pt(x1, y1)), 0.5, c);
-    }
-    fn circle(&self, x: f32, y: f32, r: f32, c: Color32) {
-        self.p.circle_stroke(self.pt(x, y), r * self.s(), self.stroke(c));
-    }
-    fn fcircle(&self, x: f32, y: f32, r: f32, c: Color32) {
-        self.p.circle_filled(self.pt(x, y), r * self.s(), c);
-    }
-    fn text(&self, x: f32, y: f32, size: f32, t: &str, c: Color32, bold: bool) {
-        let font = if bold { crate::theme::semibold(size * self.s()) } else { FontId::proportional(size * self.s()) };
-        self.p.text(self.pt(x, y), egui::Align2::CENTER_CENTER, t, font, c);
-    }
-    /// Horizontal text lines (a paragraph).
-    fn lines(&self, x0: f32, x1: f32, ys: &[f32]) {
-        for y in ys {
-            self.line(&[(x0, *y), (x1, *y)]);
-        }
-    }
-    /// A page outline with a folded corner.
-    fn page(&self, x0: f32, y0: f32, x1: f32, y1: f32) {
-        self.closed(&[(x0, y0), (x1 - 4.0, y0), (x1, y0 + 4.0), (x1, y1), (x0, y1)], self.c);
-        self.line(&[(x1 - 4.0, y0), (x1 - 4.0, y0 + 4.0), (x1, y0 + 4.0)]);
-    }
-    fn arrow_down(&self, x: f32, y: f32, c: Color32) {
-        self.fill(&[(x - 2.5, y - 1.2), (x + 2.5, y - 1.2), (x, y + 1.5)], c);
+/// The app icons whose names the framework's catalog also has. The catalog wins a clash, so the
+/// app registers its own drawings of these as `wordcraft.<name>`, and [`id`] names them so.
+const OWN_OVER_CATALOG: &[(&str, &str)] = &[
+    ("bookmark", "wordcraft.bookmark"),
+    ("check", "wordcraft.check"),
+    ("close", "wordcraft.close"),
+    ("copy", "wordcraft.copy"),
+    ("crop", "wordcraft.crop"),
+    ("eraser", "wordcraft.eraser"),
+    ("file", "wordcraft.file"),
+    ("folder", "wordcraft.folder"),
+    ("info", "wordcraft.info"),
+    ("lasso", "wordcraft.lasso"),
+    ("link", "wordcraft.link"),
+    ("minus", "wordcraft.minus"),
+    ("more", "wordcraft.more"),
+    ("open", "wordcraft.open"),
+    ("pencil", "wordcraft.pencil"),
+    ("pilcrow", "wordcraft.pilcrow"),
+    ("pin", "wordcraft.pin"),
+    ("plus", "wordcraft.plus"),
+    ("redo", "wordcraft.redo"),
+    ("ruler", "wordcraft.ruler"),
+    ("save", "wordcraft.save"),
+    ("search", "wordcraft.search"),
+    ("split", "wordcraft.split"),
+    ("undo", "wordcraft.undo"),
+];
+
+/// The icon WordCraft draws for `name`: its own drawing where the framework's catalog has the
+/// same name, else `name` itself.
+pub fn id(name: &'static str) -> IconId {
+    match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
+        Some((_, own)) => IconId::new(own),
+        None => IconId::new(name),
     }
 }
 
-/// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
-pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
-    let pen = Pen { p, r, c, a: accent, w: 1.25 };
-    if let Some(kind) = name.strip_prefix("shape.")
-        && shape(&pen, kind)
-    {
-        return;
-    }
-    if paint_clipboard_to_insert(&pen, name)
-        || paint_draw_to_review(&pen, name)
-        || paint_view_and_tables(&pen, name)
-        || paint_file_and_tools(&pen, name)
-    {
-        return;
-    }
-    // Fallback: a rounded tile with the first letter.
-    p.rect_stroke(r.shrink(r.width() * 0.12), 3.0, Stroke::new(1.0, c), egui::StrokeKind::Middle);
-    let ch = name.chars().next().map(|x| x.to_ascii_uppercase().to_string()).unwrap_or_default();
-    p.text(r.center(), egui::Align2::CENTER_CENTER, ch, FontId::proportional(r.height() * 0.45), accent);
-}
-
-/// Icons of one section of the set; false when `name` is not one of them.
-fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
-    let (c, a) = (pen.c, pen.a);
-    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
-    let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
-    let green = Color32::from_rgb(0x2E, 0x8B, 0x57);
-    let orange = Color32::from_rgb(0xE0, 0x7B, 0x1F);
-    match name {
-        // Clipboard
-        "paste" => {
-            pen.rect(4.0, 3.5, 14.0, 17.0, c);
-            pen.frect(7.0, 2.0, 11.0, 5.0, a);
-            pen.frect(9.0, 8.0, 17.5, 18.5, pen.a.linear_multiply(0.18));
-            pen.rect(9.0, 8.0, 17.5, 18.5, a);
-            pen.lines(10.8, 15.8, &[11.0, 13.5, 16.0]);
-        }
-        "cut" => {
-            pen.circle(6.0, 15.0, 2.5, c);
-            pen.circle(14.0, 15.0, 2.5, c);
-            pen.line(&[(7.5, 13.0), (14.0, 3.0)]);
-            pen.line(&[(12.5, 13.0), (6.0, 3.0)]);
-        }
-        "copy" => {
-            pen.rect(3.5, 3.0, 12.5, 14.0, c);
-            pen.frect(7.5, 6.5, 16.5, 17.5, Color32::TRANSPARENT);
-            pen.rect(7.5, 6.5, 16.5, 17.5, a);
-        }
-        "painter" => {
-            pen.frect(4.0, 3.0, 16.0, 8.0, yellow);
-            pen.rect(4.0, 3.0, 16.0, 8.0, c);
-            pen.line(&[(16.0, 5.5), (17.5, 5.5), (17.5, 10.0), (10.0, 10.0), (10.0, 12.0)]);
-            pen.frect(8.8, 12.0, 11.2, 18.0, c);
-        }
-        // Font
-        "bold" => pen.text(10.0, 10.5, 15.0, "B", c, true),
-        "italic" => pen.text(10.0, 10.5, 15.0, "I", c, false),
-        "underline" => {
-            pen.text(10.0, 9.0, 14.0, "U", c, false);
-            pen.line(&[(5.0, 17.0), (15.0, 17.0)]);
-        }
-        "strike" => {
-            pen.text(10.0, 10.0, 12.0, "ab", c, false);
-            pen.line_c(&[(3.0, 10.5), (17.0, 10.5)], c);
-        }
-        "charborder" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, a);
-            pen.text(10.0, 6.0, 9.0, "A", c, false);
-        }
-        "enclose" => {
-            pen.circle(10.0, 10.5, 7.5, a);
-            pen.text(10.0, 10.5, 9.0, "A", c, false);
-        }
-        "subscript" => {
-            pen.text(8.0, 9.0, 13.0, "x", c, false);
-            pen.text(15.0, 14.5, 8.0, "2", a, true);
-        }
-        "superscript" => {
-            pen.text(8.0, 11.0, 13.0, "x", c, false);
-            pen.text(15.0, 5.0, 8.0, "2", a, true);
-        }
-        "grow" => {
-            pen.text(8.0, 11.0, 15.0, "A", c, false);
-            pen.fill(&[(14.5, 6.0), (18.5, 6.0), (16.5, 3.0)], a);
-        }
-        "shrink" => {
-            pen.text(8.0, 12.0, 11.0, "A", c, false);
-            pen.fill(&[(14.5, 4.0), (18.5, 4.0), (16.5, 7.0)], a);
-        }
-        "case" => pen.text(10.0, 10.5, 12.0, "Aa", c, false),
-        "clear" => {
-            pen.text(8.0, 9.0, 13.0, "A", c, false);
-            pen.fill(&[(10.0, 15.0), (14.0, 11.0), (18.0, 15.0), (14.0, 19.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
-        }
-        // Small letters over a large one: text with a reading above it.
-        "phonetic" => {
-            pen.text(10.0, 5.0, 7.5, "abc", a, false);
-            pen.text(10.0, 13.5, 12.5, "A", c, false);
-        }
-        "highlight" => {
-            pen.fill(&[(5.0, 12.0), (11.0, 4.0), (14.0, 7.0), (8.0, 15.0)], c);
-            pen.line(&[(5.0, 12.0), (3.5, 15.0), (8.0, 15.0)]);
-            pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
-        }
-        "highlightNoColor" => {
-            pen.fill(&[(5.0, 12.0), (11.0, 4.0), (14.0, 7.0), (8.0, 15.0)], c);
-            pen.line(&[(5.0, 12.0), (3.5, 15.0), (8.0, 15.0)]);
-        }
-        "fontcolor" => {
-            pen.text(10.0, 9.0, 14.0, "A", c, false);
-            pen.frect(2.0, 16.5, 18.0, 19.0, red);
-        }
-        "effects" => {
-            pen.text(10.0, 10.0, 15.0, "A", a, true);
-            pen.text(10.5, 10.5, 15.0, "A", Color32::from_rgba_unmultiplied(0, 0, 0, 40), true);
-        }
-        "fontdialog" => pen.line(&[(13.0, 13.0), (17.0, 17.0), (17.0, 13.0)]),
-        // Paragraph
-        "bullets" => {
-            for (i, y) in [5.0, 10.0, 15.0].iter().enumerate() {
-                pen.fcircle(4.0, *y, 1.4, if i == 0 { a } else { c });
-                pen.line(&[(7.5, *y), (17.0, *y)]);
-            }
-        }
-        "numbering" => {
-            for (i, y) in [5.0, 10.0, 15.0].iter().enumerate() {
-                pen.text(4.0, *y, 6.0, &(i + 1).to_string(), if i == 0 { a } else { c }, true);
-                pen.line(&[(7.5, *y), (17.0, *y)]);
-            }
-        }
-        "multilevel" => {
-            pen.text(3.5, 4.5, 5.5, "1", a, true);
-            pen.line(&[(6.5, 4.5), (17.0, 4.5)]);
-            pen.text(6.5, 10.0, 5.5, "a", c, true);
-            pen.line(&[(9.5, 10.0), (17.0, 10.0)]);
-            pen.text(9.5, 15.5, 5.5, "i", c, true);
-            pen.line(&[(12.0, 15.5), (17.0, 15.5)]);
-        }
-        "outdent" | "indent" => {
-            pen.lines(9.0, 17.0, &[7.0, 10.0, 13.0]);
-            pen.lines(3.0, 17.0, &[3.5, 16.5]);
-            if name == "indent" {
-                pen.fill(&[(3.0, 7.0), (3.0, 13.0), (6.5, 10.0)], a);
-            } else {
-                pen.fill(&[(6.5, 7.0), (6.5, 13.0), (3.0, 10.0)], a);
-            }
-        }
-        "sort" => {
-            pen.text(6.0, 5.5, 7.0, "A", c, true);
-            pen.text(6.0, 14.5, 7.0, "Z", c, true);
-            pen.line_c(&[(14.0, 3.0), (14.0, 17.0)], a);
-            pen.line_c(&[(11.5, 14.5), (14.0, 17.0), (16.5, 14.5)], a);
-        }
-        "pilcrow" => pen.text(10.0, 10.5, 15.0, "¶", c, false),
-        "alignLeft" => {
-            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(pen, 3.0, 12.0, &[7.0, 13.0])
-        }
-        "alignCenter" => {
-            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(pen, 6.0, 14.0, &[7.0, 13.0])
-        }
-        "alignRight" => {
-            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(pen, 8.0, 17.0, &[7.0, 13.0])
-        }
-        "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
-        // Text direction: lines set from the start edge, an arrow in the reading direction.
-        "textLtr" => {
-            pen.lines(3.0, 14.0, &[4.0, 8.0]);
-            pen.lines(3.0, 10.0, &[12.0]);
-            pen.line_c(&[(3.0, 16.5), (16.5, 16.5)], a);
-            pen.line_c(&[(13.5, 14.0), (16.5, 16.5), (13.5, 19.0)], a);
-        }
-        "textRtl" => {
-            pen.lines(6.0, 17.0, &[4.0, 8.0]);
-            pen.lines(10.0, 17.0, &[12.0]);
-            pen.line_c(&[(17.0, 16.5), (3.5, 16.5)], a);
-            pen.line_c(&[(6.5, 14.0), (3.5, 16.5), (6.5, 19.0)], a);
-        }
-        "lineSpacing" => {
-            pen.lines(9.0, 17.0, &[5.0, 10.0, 15.0]);
-            pen.line_c(&[(4.5, 3.0), (4.5, 17.0)], a);
-            pen.line_c(&[(2.5, 5.0), (4.5, 3.0), (6.5, 5.0)], a);
-            pen.line_c(&[(2.5, 15.0), (4.5, 17.0), (6.5, 15.0)], a);
-        }
-        "shading" => {
-            pen.fill(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], Color32::TRANSPARENT);
-            pen.closed(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], c);
-            pen.fcircle(16.5, 13.5, 1.6, a);
-            pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
-        }
-        // The Shading buttons draw the last colour as their own bar, so this has no bar of its own.
-        "shadingNoBar" => {
-            pen.fill(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], Color32::TRANSPARENT);
-            pen.closed(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], c);
-            pen.fcircle(16.5, 13.5, 1.6, a);
-        }
-        "borders" => {
-            for y in [3.0, 10.0, 17.0] {
-                for x in [3.0, 6.5, 10.0, 13.5, 17.0] {
-                    pen.fcircle(x, y, 0.6, c);
-                }
-            }
-            for x in [3.0, 10.0, 17.0] {
-                for y in [6.5, 13.5] {
-                    pen.fcircle(x, y, 0.6, c);
-                }
-            }
-            pen.line_c(&[(3.0, 17.0), (17.0, 17.0)], a);
-        }
-        // Editing
-        "find" => {
-            pen.circle(8.0, 8.0, 5.0, c);
-            pen.line_c(&[(11.5, 11.5), (17.0, 17.0)], a);
-        }
-        "replace" => {
-            pen.text(6.0, 6.0, 8.0, "ab", c, false);
-            pen.text(13.0, 15.0, 8.0, "ac", a, false);
-            pen.line(&[(13.0, 3.5), (16.0, 3.5), (16.0, 8.5)]);
-            pen.line(&[(14.5, 7.0), (16.0, 8.5), (17.5, 7.0)]);
-        }
-        "select" => {
-            // Overlapping convex pieces keep the concave arrow intact without antialiasing seams.
-            pen.fill(&[(5.0, 3.0), (5.0, 16.0), (14.0, 12.0)], c);
-            pen.fill(&[(8.0, 13.0), (10.5, 18.0), (12.5, 17.0), (10.0, 12.0)], c);
-        }
-        "dictate" => {
-            pen.rect(7.5, 2.5, 12.5, 12.0, c);
-            pen.line(&[(5.0, 9.5), (5.0, 11.0), (10.0, 15.0), (15.0, 11.0), (15.0, 9.5)]);
-            pen.line(&[(10.0, 15.0), (10.0, 18.0)]);
-        }
-        "editor" | "spelling" => {
-            pen.text(8.0, 7.0, 9.0, "abc", c, true);
-            pen.line_c(&[(5.0, 13.0), (8.5, 16.5), (16.0, 9.0)], green);
-        }
-        "styles" => {
-            pen.text(10.0, 10.0, 14.0, "A", a, false);
-            pen.line(&[(13.0, 15.0), (17.0, 11.0)]);
-        }
-        "stylesPane" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.line(&[(11.0, 3.0), (11.0, 17.0)]);
-            pen.text(7.0, 10.0, 8.0, "A", a, false);
-        }
-        // Insert
-        "coverPage" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.frect(5.5, 7.0, 14.5, 10.0, a);
-        }
-        "blankPage" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.line_c(&[(10.0, 7.0), (10.0, 13.0)], a);
-            pen.line_c(&[(7.0, 10.0), (13.0, 10.0)], a);
-        }
-        "pageBreak" => {
-            pen.line(&[(4.0, 2.0), (4.0, 7.0), (16.0, 7.0), (16.0, 2.0)]);
-            pen.line(&[(4.0, 18.0), (4.0, 13.0), (16.0, 13.0), (16.0, 18.0)]);
-            pen.line_c(&[(2.0, 10.0), (18.0, 10.0)], a);
-        }
-        "drawTable" => {
-            pen.rect(2.5, 3.0, 14.0, 14.5, c);
-            pen.line(&[(2.5, 8.5), (14.0, 8.5)]);
-            pen.line(&[(8.0, 3.0), (8.0, 14.5)]);
-            pen.line(&[(9.5, 18.0), (17.0, 10.5), (18.5, 12.0), (11.0, 19.5), (9.0, 19.8), (9.5, 18.0)]);
-            pen.fill(&[(17.0, 10.5), (18.0, 9.5), (19.5, 11.0), (18.5, 12.0)], a);
-        }
-        "table" => {
-            pen.frect(3.0, 3.0, 17.0, 7.0, a);
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.line(&[(3.0, 7.0), (17.0, 7.0)]);
-            pen.line(&[(3.0, 12.0), (17.0, 12.0)]);
-            pen.line(&[(8.0, 3.0), (8.0, 17.0)]);
-            pen.line(&[(12.5, 3.0), (12.5, 17.0)]);
-        }
-        "picture" => {
-            pen.rect(2.5, 4.0, 17.5, 16.0, c);
-            pen.fill(&[(4.0, 14.5), (8.5, 8.0), (12.0, 14.5)], a);
-            pen.fill(&[(9.5, 14.5), (13.0, 10.0), (16.0, 14.5)], green);
-            pen.fcircle(13.5, 7.0, 1.5, yellow);
-        }
-        "onlinePicture" => {
-            paint(pen.p, Rect::from_min_size(pen.r.min, pen.r.size() * 0.8), "picture", c, a);
-            pen.circle(15.0, 15.0, 3.5, a);
-        }
-        "shapes" => {
-            pen.rect(3.0, 3.0, 11.0, 11.0, c);
-            pen.fcircle(13.0, 13.0, 4.5, a);
-        }
-        // Shape Effects: a square casting a soft shadow down and to the right.
-        "shapeEffects" => {
-            for (k, alpha) in [(2.0, 30), (1.0, 50), (0.0, 80)] {
-                pen.frect(7.0 - k, 7.0 - k, 18.0 + k, 18.0 + k, Color32::from_rgba_unmultiplied(0, 0, 0, alpha));
-            }
-            pen.frect(3.0, 3.0, 14.0, 14.0, a);
-            pen.rect(3.0, 3.0, 14.0, 14.0, c);
-        }
-        "icons" => {
-            pen.circle(10.0, 10.0, 7.5, c);
-            pen.fcircle(7.5, 8.0, 1.0, c);
-            pen.fcircle(12.5, 8.0, 1.0, c);
-            pen.line_c(&[(6.5, 12.0), (10.0, 14.5), (13.5, 12.0)], a);
-        }
-        "models3d" => {
-            pen.closed(&[(10.0, 2.5), (17.0, 6.0), (17.0, 14.0), (10.0, 17.5), (3.0, 14.0), (3.0, 6.0)], c);
-            pen.line_c(&[(3.0, 6.0), (10.0, 9.5), (17.0, 6.0)], a);
-            pen.line_c(&[(10.0, 9.5), (10.0, 17.5)], a);
-        }
-        "smartArt" => {
-            pen.frect(7.0, 2.5, 13.0, 6.5, a);
-            pen.rect(2.5, 13.0, 8.0, 17.0, c);
-            pen.rect(12.0, 13.0, 17.5, 17.0, c);
-            pen.line(&[(10.0, 6.5), (10.0, 10.0), (5.0, 10.0), (5.0, 13.0)]);
-            pen.line(&[(10.0, 10.0), (15.0, 10.0), (15.0, 13.0)]);
-        }
-        "addShape" => {
-            pen.frect(2.5, 3.0, 9.5, 8.0, a);
-            pen.rect(2.5, 12.0, 9.5, 17.0, c);
-            pen.line(&[(6.0, 8.0), (6.0, 12.0)]);
-            pen.line_c(&[(14.5, 10.5), (14.5, 17.5)], green);
-            pen.line_c(&[(11.0, 14.0), (18.0, 14.0)], green);
-        }
-        "promote" => {
-            pen.lines(9.0, 17.5, &[5.0, 10.0, 15.0]);
-            pen.line_c(&[(6.5, 7.5), (3.0, 10.0), (6.5, 12.5)], a);
-        }
-        "demote" => {
-            pen.lines(9.0, 17.5, &[5.0, 10.0, 15.0]);
-            pen.line_c(&[(3.0, 7.5), (6.5, 10.0), (3.0, 12.5)], a);
-        }
-        "textPane" => {
-            pen.rect(2.5, 3.0, 17.5, 17.0, c);
-            pen.line(&[(9.0, 3.0), (9.0, 17.0)]);
-            pen.lines(4.0, 7.5, &[6.5, 10.0, 13.5]);
-            pen.frect(11.0, 6.0, 16.0, 9.0, a);
-            pen.frect(11.0, 11.5, 16.0, 14.5, a);
-        }
-        "smartArtColors" => {
-            pen.fcircle(7.0, 7.5, 4.0, a);
-            pen.fcircle(13.0, 7.5, 4.0, orange);
-            pen.fcircle(10.0, 13.0, 4.0, green);
-            pen.circle(10.0, 10.0, 8.0, c);
-        }
-        "resetGraphic" => {
-            pen.rect(7.5, 6.5, 16.5, 15.5, c);
-            pen.frect(9.5, 8.5, 14.5, 13.5, a);
-            pen.line(&[(3.5, 13.0), (3.5, 4.0), (11.0, 4.0)]);
-            pen.line(&[(1.5, 6.0), (3.5, 4.0), (5.5, 6.0)]);
-        }
-        "chart" => {
-            pen.frect(3.5, 11.0, 6.5, 17.0, a);
-            pen.frect(8.5, 6.0, 11.5, 17.0, orange);
-            pen.frect(13.5, 9.0, 16.5, 17.0, green);
-            pen.line(&[(2.0, 17.5), (18.0, 17.5)]);
-        }
-        "changeChartType" => {
-            pen.frect(3.0, 11.0, 5.5, 17.0, a);
-            pen.frect(7.0, 7.0, 9.5, 17.0, orange);
-            pen.line(&[(2.0, 17.5), (11.0, 17.5)]);
-            pen.fill(&[(15.0, 10.0), (15.0, 5.0), (19.0, 8.5)], green);
-            pen.circle(15.0, 10.0, 4.0, c);
-            pen.line_c(&[(4.0, 5.0), (9.0, 2.5), (12.0, 4.5)], a);
-        }
-        "chartData" => {
-            pen.rect(2.5, 3.0, 17.5, 17.0, c);
-            pen.frect(2.5, 3.0, 17.5, 6.5, a);
-            pen.line(&[(2.5, 10.0), (17.5, 10.0)]);
-            pen.line(&[(2.5, 13.5), (17.5, 13.5)]);
-            pen.line(&[(7.5, 3.0), (7.5, 17.0)]);
-            pen.line(&[(12.5, 3.0), (12.5, 17.0)]);
-            pen.frect(9.0, 14.5, 11.0, 16.0, orange);
-        }
-        "chartTitle" => {
-            pen.frect(5.0, 2.5, 15.0, 4.5, a);
-            pen.frect(4.0, 11.0, 7.0, 17.0, c);
-            pen.frect(8.5, 8.0, 11.5, 17.0, c);
-            pen.frect(13.0, 12.5, 16.0, 17.0, c);
-            pen.line(&[(2.5, 17.5), (17.5, 17.5)]);
-        }
-        "legend" => {
-            for (k, col) in [a, orange, green].into_iter().enumerate() {
-                let y = 5.0 + 5.0 * k as f32;
-                pen.frect(3.0, y - 1.5, 6.0, y + 1.5, col);
-                pen.line(&[(8.0, y), (17.0, y)]);
-            }
-        }
-        "dataLabels" => {
-            pen.frect(3.5, 11.0, 7.0, 17.5, a);
-            pen.frect(12.0, 8.0, 15.5, 17.5, orange);
-            pen.rect(2.5, 5.5, 8.0, 9.0, c);
-            pen.rect(11.0, 2.5, 16.5, 6.0, c);
-        }
-        "screenshot" => {
-            pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
-            pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);
-            pen.line(&[(17.0, 13.0), (17.0, 17.0), (13.0, 17.0)]);
-            pen.line(&[(7.0, 17.0), (3.0, 17.0), (3.0, 13.0)]);
-            pen.fcircle(10.0, 10.0, 3.0, a);
-        }
-        "video" => {
-            pen.rect(2.5, 5.0, 14.0, 15.0, c);
-            pen.fill(&[(14.0, 10.0), (18.0, 6.5), (18.0, 13.5)], a);
-        }
-        "link" => {
-            pen.closed(
-                &[(3.0, 10.0), (7.0, 6.0), (9.5, 6.0), (9.5, 8.0), (7.5, 8.0), (5.0, 10.5), (7.5, 13.0), (9.5, 13.0), (9.5, 15.0), (7.0, 15.0)],
-                c,
-            );
-            pen.line_c(&[(7.5, 10.5), (12.5, 10.5)], a);
-            pen.closed(
-                &[
-                    (17.0, 10.5),
-                    (13.0, 14.5),
-                    (10.5, 14.5),
-                    (10.5, 12.5),
-                    (12.5, 12.5),
-                    (15.0, 10.0),
-                    (12.5, 7.5),
-                    (10.5, 7.5),
-                    (10.5, 5.5),
-                    (13.0, 5.5),
-                ],
-                c,
-            );
-        }
-        "bookmark" => {
-            pen.closed(&[(5.5, 2.5), (14.5, 2.5), (14.5, 17.5), (10.0, 13.5), (5.5, 17.5)], c);
-            pen.fill(&[(7.0, 4.0), (13.0, 4.0), (13.0, 8.0), (7.0, 8.0)], a);
-        }
-        "crossRef" => {
-            pen.page(3.0, 2.0, 12.0, 14.0);
-            pen.line_c(&[(9.0, 12.0), (17.0, 17.0)], a);
-            pen.line_c(&[(14.0, 17.5), (17.0, 17.0), (16.5, 14.0)], a);
-        }
-        "comment" | "newComment" => {
-            pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.0, 13.5), (2.5, 13.5)], c);
-            if name == "newComment" {
-                pen.line_c(&[(10.0, 6.0), (10.0, 11.0)], a);
-                pen.line_c(&[(7.5, 8.5), (12.5, 8.5)], a);
-            } else {
-                pen.lines(5.5, 14.5, &[7.0, 10.0]);
-            }
-        }
-        "header" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.frect(5.5, 5.0, 14.5, 7.5, a);
-            pen.lines(6.0, 14.0, &[11.0, 13.5]);
-        }
-        "footer" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.lines(6.0, 14.0, &[6.5, 9.0]);
-            pen.frect(5.5, 13.0, 14.5, 15.5, a);
-        }
-        "pageNumber" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.text(10.0, 13.0, 7.0, "#", a, true);
-        }
-        "textBox" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.text(10.0, 10.0, 10.0, "A", a, false);
-        }
-        "quickParts" => {
-            pen.rect(3.0, 3.0, 9.0, 9.0, c);
-            pen.frect(11.0, 3.0, 17.0, 9.0, a);
-            pen.rect(3.0, 11.0, 9.0, 17.0, c);
-            pen.rect(11.0, 11.0, 17.0, 17.0, c);
-        }
-        "wordArt" => {
-            pen.text(10.0, 10.5, 15.0, "A", a, true);
-            pen.line_c(&[(3.0, 17.5), (17.0, 17.5)], orange);
-        }
-        "textFill" => {
-            pen.text(10.0, 8.5, 13.0, "A", c, true);
-            pen.frect(3.0, 15.0, 17.0, 18.5, a);
-        }
-        "textOutline" => {
-            pen.text(10.0, 8.5, 13.0, "A", a, false);
-            pen.rect(3.0, 15.0, 17.0, 18.5, c);
-        }
-        "transform" => {
-            // Letters along an arch.
-            let arc: Vec<(f32, f32)> = (0..=12)
-                .map(|i| {
-                    let t = std::f32::consts::PI * (1.0 - i as f32 / 12.0);
-                    (10.0 + 7.5 * t.cos(), 15.0 - 9.0 * t.sin())
-                })
-                .collect();
-            pen.line_c(&arc, a);
-            pen.text(10.0, 13.0, 8.0, "A", c, true);
-            pen.line(&[(2.5, 17.5), (17.5, 17.5)]);
-        }
-        "dropCap" => {
-            pen.text(6.0, 8.0, 12.0, "A", a, true);
-            pen.lines(11.0, 17.0, &[4.0, 8.0, 12.0]);
-            pen.lines(3.0, 17.0, &[16.0]);
-        }
-        "signature" => {
-            pen.line_c(&[(3.0, 13.0), (6.0, 7.0), (8.0, 12.0), (11.0, 6.0), (13.0, 12.0)], a);
-            pen.line(&[(3.0, 16.5), (17.0, 16.5)]);
-        }
-        "dateTime" => {
-            pen.rect(3.0, 4.0, 17.0, 17.0, c);
-            pen.frect(3.0, 4.0, 17.0, 7.5, a);
-            pen.lines(5.0, 15.0, &[11.0, 14.0]);
-        }
-        "object" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.fcircle(10.0, 10.0, 3.5, a);
-        }
-        "equation" => pen.text(10.0, 10.0, 17.0, "π", a, false),
-        "symbol" => pen.text(10.0, 10.0, 17.0, "Ω", c, false),
-        _ => return false,
-    }
-    true
-}
-
-/// Icons of one section of the set; false when `name` is not one of them.
-fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
-    let (c, a) = (pen.c, pen.a);
-    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
-    let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
-    let green = Color32::from_rgb(0x2E, 0x8B, 0x57);
-    let orange = Color32::from_rgb(0xE0, 0x7B, 0x1F);
-    match name {
-        // Draw
-        "pen" => {
-            pen.line(&[(4.0, 16.0), (14.0, 6.0), (16.0, 8.0), (6.0, 18.0), (3.5, 18.5), (4.0, 16.0)]);
-            pen.fill(&[(14.0, 6.0), (15.5, 4.5), (17.5, 6.5), (16.0, 8.0)], a);
-        }
-        "pencil" => {
-            pen.line(&[(4.0, 16.0), (14.0, 6.0), (16.0, 8.0), (6.0, 18.0), (3.5, 18.5), (4.0, 16.0)]);
-            pen.fill(&[(14.0, 6.0), (15.5, 4.5), (17.5, 6.5), (16.0, 8.0)], orange);
-        }
-        "eraser" => {
-            pen.closed(&[(3.0, 13.0), (11.0, 5.0), (17.0, 11.0), (11.0, 17.0), (7.0, 17.0)], c);
-            pen.fill(&[(3.0, 13.0), (7.0, 9.0), (13.0, 15.0), (11.0, 17.0), (7.0, 17.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
-        }
-        // Ink thickness: three strokes, thin to thick.
-        "thickness" => {
-            pen.frect(3.0, 4.5, 17.0, 5.5, c);
-            pen.frect(3.0, 9.0, 17.0, 11.0, c);
-            pen.frect(3.0, 14.0, 17.0, 17.0, a);
-        }
-        "lasso" => {
-            pen.closed(&[(4.0, 7.0), (9.0, 3.0), (16.0, 5.0), (16.0, 11.0), (10.0, 13.0), (4.0, 11.0)], c);
-            pen.line_c(&[(6.0, 12.5), (5.0, 17.5)], a);
-        }
-        "inkToShape" => {
-            pen.line_c(&[(3.0, 10.0), (5.0, 6.0), (8.0, 12.0), (10.0, 7.0)], a);
-            pen.rect(11.0, 9.0, 17.0, 15.0, c);
-        }
-        "inkToMath" => {
-            pen.line_c(&[(3.0, 12.0), (5.0, 7.0), (7.0, 12.0)], a);
-            pen.text(13.5, 10.0, 11.0, "√", c, false);
-        }
-        "canvas" => {
-            pen.rect(2.5, 4.0, 17.5, 16.0, c);
-            pen.line_c(&[(5.0, 13.0), (9.0, 8.0), (12.0, 11.0), (15.0, 7.0)], a);
-        }
-        "replay" => {
-            pen.circle(10.0, 10.0, 6.5, c);
-            pen.fill(&[(8.5, 7.0), (8.5, 13.0), (13.0, 10.0)], a);
-        }
-        // Add Pen: a pen with a plus.
-        "addPen" => {
-            pen.line(&[(3.0, 17.0), (11.0, 9.0), (13.0, 11.0), (5.0, 19.0), (2.5, 19.5), (3.0, 17.0)]);
-            pen.fill(&[(11.0, 9.0), (12.5, 7.5), (14.5, 9.5), (13.0, 11.0)], a);
-            pen.line_c(&[(15.0, 2.0), (15.0, 8.0)], a);
-            pen.line_c(&[(12.0, 5.0), (18.0, 5.0)], a);
-        }
-        // Ink Replay's controls.
-        "replayRewind" => {
-            pen.frect(4.0, 5.0, 5.5, 15.0, c);
-            pen.fill(&[(16.0, 5.0), (16.0, 15.0), (6.5, 10.0)], c);
-        }
-        "replayPlay" => pen.fill(&[(6.0, 4.0), (6.0, 16.0), (16.0, 10.0)], a),
-        "replayPause" => {
-            pen.frect(5.5, 4.5, 8.5, 15.5, a);
-            pen.frect(11.5, 4.5, 14.5, 15.5, a);
-        }
-        "replayForward" => {
-            pen.fill(&[(4.0, 5.0), (4.0, 15.0), (13.5, 10.0)], c);
-            pen.frect(14.5, 5.0, 16.0, 15.0, c);
-        }
-        // Design
-        "themes" => {
-            pen.frect(3.0, 3.0, 10.0, 10.0, a);
-            pen.frect(10.0, 3.0, 17.0, 10.0, orange);
-            pen.frect(3.0, 10.0, 10.0, 17.0, green);
-            pen.frect(10.0, 10.0, 17.0, 17.0, yellow);
-        }
-        "colors" => {
-            pen.fcircle(7.0, 7.5, 3.5, red);
-            pen.fcircle(13.0, 7.5, 3.5, a);
-            pen.fcircle(10.0, 13.0, 3.5, green);
-        }
-        "fonts" => pen.text(10.0, 10.0, 13.0, "Aa", a, false),
-        "paraSpacing" => {
-            pen.lines(8.0, 17.0, &[4.0, 7.0, 13.0, 16.0]);
-            pen.line_c(&[(4.0, 8.0), (4.0, 12.0)], a);
-            pen.line_c(&[(2.5, 9.5), (4.0, 8.0), (5.5, 9.5)], a);
-            pen.line_c(&[(2.5, 10.5), (4.0, 12.0), (5.5, 10.5)], a);
-        }
-        "effectsDesign" => {
-            pen.fcircle(10.0, 10.0, 6.0, a.linear_multiply(0.5));
-            pen.circle(10.0, 10.0, 6.0, c);
-        }
-        "setDefault" => {
-            pen.line_c(&[(4.0, 10.5), (8.5, 15.0), (16.5, 5.0)], green);
-        }
-        "watermark" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.text(10.0, 11.0, 7.0, "W", a.linear_multiply(0.6), true);
-        }
-        "pageColor" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.frect(5.0, 9.0, 15.0, 17.0, a.linear_multiply(0.5));
-        }
-        "pageBorders" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.rect(6.0, 6.5, 14.0, 15.5, a);
-        }
-        // Layout
-        "margins" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.frect(6.0, 4.5, 14.0, 15.5, a.linear_multiply(0.3));
-        }
-        "orientation" => {
-            pen.page(3.0, 3.0, 11.0, 15.0);
-            pen.rect(9.0, 10.0, 18.0, 17.0, a);
-        }
-        "size" => {
-            pen.page(5.0, 2.0, 15.0, 18.0);
-            pen.line_c(&[(2.5, 2.5), (2.5, 17.5)], a);
-            pen.line_c(&[(5.0, 19.0), (15.0, 19.0)], a);
-        }
-        "columns" => {
-            pen.lines(3.0, 9.0, &[4.0, 7.0, 10.0, 13.0, 16.0]);
-            pen.lines(11.0, 17.0, &[4.0, 7.0, 10.0, 13.0]);
-        }
-        "breaks" => {
-            pen.page(4.0, 1.5, 16.0, 8.5);
-            pen.page(4.0, 11.5, 16.0, 18.5);
-            pen.line_c(&[(2.0, 10.0), (18.0, 10.0)], a);
-        }
-        "lineNumbers" => {
-            for (i, y) in [4.0, 8.0, 12.0, 16.0].iter().enumerate() {
-                pen.text(4.0, *y, 5.0, &(i + 1).to_string(), a, true);
-                pen.line(&[(7.0, *y), (17.0, *y)]);
-            }
-        }
-        "hyphenation" => {
-            pen.text(7.0, 7.0, 8.0, "ab-", c, false);
-            pen.text(9.0, 14.5, 8.0, "cd", a, false);
-        }
-        "position" | "wrapText" => {
-            pen.lines(3.0, 17.0, &[3.0, 17.0]);
-            pen.lines(3.0, 6.0, &[7.0, 10.0, 13.0]);
-            pen.frect(7.5, 6.0, 12.5, 14.0, a);
-            pen.lines(14.0, 17.0, &[7.0, 10.0, 13.0]);
-        }
-        "bringForward" => {
-            pen.rect(3.0, 3.0, 12.0, 12.0, c);
-            pen.frect(8.0, 8.0, 17.0, 17.0, a);
-        }
-        "sendBackward" => {
-            pen.frect(3.0, 3.0, 12.0, 12.0, a);
-            pen.rect(8.0, 8.0, 17.0, 17.0, c);
-        }
-        "selectionPane" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.lines(6.0, 14.0, &[7.0, 10.0, 13.0]);
-        }
-        "align" => {
-            pen.line_c(&[(3.0, 2.0), (3.0, 18.0)], a);
-            pen.rect(4.5, 4.0, 15.0, 8.0, c);
-            pen.rect(4.5, 11.0, 11.0, 15.0, c);
-        }
-        "group" => {
-            pen.rect(2.5, 2.5, 17.5, 17.5, a);
-            pen.rect(5.0, 5.0, 11.0, 11.0, c);
-            pen.fcircle(13.0, 13.0, 3.0, c);
-        }
-        "rotate" => {
-            pen.circle(10.0, 10.0, 6.0, c);
-            pen.fill(&[(14.5, 3.0), (17.5, 6.0), (13.5, 7.0)], a);
-        }
-        "indentLeft" | "indentRight" | "spaceBefore" | "spaceAfter" => {
-            pen.lines(3.0, 17.0, &[6.0, 10.0, 14.0]);
-            pen.fcircle(if name.contains("Right") { 15.0 } else { 5.0 }, 10.0, 1.6, a);
-        }
-        // References
-        "toc" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.lines(6.0, 11.0, &[7.0, 10.0, 13.0]);
-            for y in [7.0, 10.0, 13.0] {
-                pen.fcircle(13.5, y, 0.8, a);
-            }
-        }
-        "addText" => {
-            pen.lines(3.0, 13.0, &[5.0, 9.0, 13.0]);
-            pen.line_c(&[(15.0, 11.0), (15.0, 17.0)], a);
-            pen.line_c(&[(12.0, 14.0), (18.0, 14.0)], a);
-        }
-        "updateTable" | "update" => {
-            pen.circle(10.0, 10.0, 6.0, c);
-            pen.fill(&[(14.5, 3.0), (17.5, 6.0), (13.5, 7.0)], green);
-        }
-        "footnote" => {
-            pen.text(6.5, 7.0, 10.0, "ab", c, false);
-            pen.text(13.5, 4.5, 6.0, "1", a, true);
-            pen.line(&[(3.0, 13.0), (9.0, 13.0)]);
-            pen.lines(3.0, 17.0, &[16.0]);
-        }
-        "endnote" => {
-            pen.text(6.5, 7.0, 10.0, "ab", c, false);
-            pen.text(13.5, 4.5, 6.0, "i", a, true);
-            pen.lines(3.0, 17.0, &[13.0, 16.0]);
-        }
-        "nextFootnote" => {
-            pen.text(7.0, 7.0, 8.0, "ab", c, false);
-            pen.text(13.0, 5.0, 6.0, "1", a, true);
-            pen.line_c(&[(6.0, 15.0), (14.0, 15.0)], a);
-            pen.line_c(&[(11.5, 12.5), (14.0, 15.0), (11.5, 17.5)], a);
-        }
-        "showNotes" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.frect(5.5, 13.0, 14.5, 16.5, a.linear_multiply(0.5));
-        }
-        "researcher" => {
-            pen.circle(9.0, 9.0, 5.0, c);
-            pen.line_c(&[(12.5, 12.5), (17.0, 17.0)], a);
-            pen.lines(6.5, 11.5, &[8.0, 10.0]);
-        }
-        // Zotero
-        "docPrefs" => {
-            pen.page(3.0, 2.5, 13.0, 17.5);
-            pen.lines(5.0, 10.0, &[7.5, 10.0]);
-            // A small gear: ring and teeth.
-            pen.circle(14.0, 14.0, 2.2, a);
-            for k in 0..6 {
-                let t = k as f32 * std::f32::consts::PI / 3.0;
-                let (dx, dy) = (t.cos(), t.sin());
-                pen.line_c(&[(14.0 + 2.8 * dx, 14.0 + 2.8 * dy), (14.0 + 4.2 * dx, 14.0 + 4.2 * dy)], a);
-            }
-        }
-        "unlinkCitations" => {
-            // Two chain links pulled apart, with a break between them.
-            pen.closed(
-                &[(2.5, 12.5), (6.0, 9.0), (8.5, 9.0), (8.5, 10.8), (6.8, 10.8), (4.6, 13.0), (6.8, 15.2), (8.5, 15.2), (8.5, 17.0), (6.0, 17.0)],
-                c,
-            );
-            pen.closed(
-                &[(17.5, 7.5), (14.0, 11.0), (11.5, 11.0), (11.5, 9.2), (13.2, 9.2), (15.4, 7.0), (13.2, 4.8), (11.5, 4.8), (11.5, 3.0), (14.0, 3.0)],
-                c,
-            );
-            pen.line_c(&[(9.0, 6.5), (7.5, 5.0)], a);
-            pen.line_c(&[(11.0, 13.5), (12.5, 15.0)], a);
-            pen.line_c(&[(10.0, 5.5), (10.0, 3.5)], a);
-            pen.line_c(&[(10.0, 14.5), (10.0, 16.5)], a);
-        }
-        "addNote" => {
-            pen.closed(&[(3.0, 3.0), (17.0, 3.0), (17.0, 12.5), (12.5, 17.0), (3.0, 17.0)], c);
-            pen.line(&[(12.5, 17.0), (12.5, 12.5), (17.0, 12.5)]);
-            pen.line_c(&[(6.0, 8.0), (11.0, 8.0)], a);
-            pen.line_c(&[(8.5, 5.5), (8.5, 10.5)], a);
-            pen.lines(6.0, 11.0, &[13.5]);
-        }
-        "citation" => {
-            pen.text(6.0, 9.0, 14.0, "“", a, true);
-            pen.lines(9.0, 17.0, &[6.0, 10.0, 14.0]);
-        }
-        "sources" | "bibliography" => {
-            pen.rect(4.0, 3.0, 9.0, 17.0, c);
-            pen.rect(9.0, 3.0, 13.0, 17.0, a);
-            pen.closed(&[(13.5, 4.0), (16.5, 3.5), (18.0, 16.5), (15.0, 17.0)], c);
-        }
-        "caption" => {
-            pen.rect(3.0, 2.5, 17.0, 11.5, c);
-            pen.fill(&[(4.5, 10.0), (8.0, 5.5), (11.0, 10.0)], a);
-            pen.lines(3.0, 13.0, &[15.0, 17.5]);
-        }
-        "tableOfFigures" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.frect(6.0, 5.0, 10.0, 8.0, a);
-            pen.lines(6.0, 14.0, &[11.0, 14.0]);
-        }
-        "markEntry" | "index" | "markCitation" | "tableOfAuthorities" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.text(10.0, 10.0, 8.0, if name == "index" || name == "markEntry" { "A" } else { "§" }, a, true);
-        }
-        // Mailings
-        "envelope" => {
-            pen.rect(2.5, 5.0, 17.5, 15.5, c);
-            pen.line_c(&[(2.5, 5.0), (10.0, 11.0), (17.5, 5.0)], a);
-        }
-        "labels" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.frect(5.0, 5.0, 9.5, 9.0, a);
-            pen.frect(10.5, 5.0, 15.0, 9.0, a);
-            pen.frect(5.0, 11.0, 9.5, 15.0, a);
-            pen.frect(10.5, 11.0, 15.0, 15.0, a);
-        }
-        "mailMerge" | "recipients" | "editRecipients" => {
-            pen.fcircle(7.0, 7.0, 2.5, a);
-            pen.line(&[(3.0, 15.0), (3.0, 13.0), (7.0, 10.5), (11.0, 13.0), (11.0, 15.0)]);
-            pen.fcircle(13.5, 6.0, 2.0, c);
-            pen.line(&[(11.5, 10.0), (13.5, 9.0), (17.0, 11.0), (17.0, 14.0)]);
-        }
-        "mergeField" | "addressBlock" | "greetingLine" | "rules" | "matchFields" | "highlightFields" => {
-            pen.rect(2.5, 6.0, 17.5, 14.0, c);
-            pen.text(10.0, 10.0, 7.0, "«»", a, true);
-        }
-        "preview" => {
-            pen.text(10.0, 10.0, 8.0, "ABC", a, true);
-            pen.rect(2.5, 5.0, 17.5, 15.0, c);
-        }
-        "next" | "previous" | "first" | "last" => {
-            let pts: &[(f32, f32)] =
-                if name == "next" || name == "last" { &[(7.0, 4.0), (13.0, 10.0), (7.0, 16.0)] } else { &[(13.0, 4.0), (7.0, 10.0), (13.0, 16.0)] };
-            pen.line_c(pts, a);
-            // First and Last: a bar at the end the chevron points to.
-            match name {
-                "first" => pen.line_c(&[(5.0, 4.0), (5.0, 16.0)], a),
-                "last" => pen.line_c(&[(15.0, 4.0), (15.0, 16.0)], a),
-                _ => {}
-            }
-        }
-        "finish" => {
-            pen.page(3.0, 2.0, 13.0, 15.0);
-            pen.line_c(&[(10.0, 15.0), (13.0, 18.0), (18.0, 11.0)], green);
-        }
-        "checkErrors" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.fcircle(14.0, 14.0, 3.5, red);
-        }
-        // Review
-        "thesaurus" => {
-            pen.rect(3.5, 2.5, 16.5, 17.5, c);
-            pen.text(10.0, 9.5, 8.0, "Aa", a, true);
-        }
-        "wordCount" => pen.text(10.0, 10.0, 9.0, "123", a, true),
-        "readAloud" => {
-            pen.text(6.0, 10.0, 10.0, "A", c, false);
-            pen.line_c(&[(12.0, 7.0), (13.5, 10.0), (12.0, 13.0)], a);
-            pen.line_c(&[(14.5, 5.0), (17.0, 10.0), (14.5, 15.0)], a);
-        }
-        "accessibility" => {
-            pen.fcircle(10.0, 4.0, 1.6, a);
-            pen.line(&[(4.0, 7.0), (16.0, 7.0)]);
-            pen.line(&[(10.0, 7.0), (10.0, 12.0), (7.0, 17.5)]);
-            pen.line(&[(10.0, 12.0), (13.0, 17.5)]);
-        }
-        "altText" => {
-            // A small picture with lines of text beside and below it.
-            pen.rect(2.5, 3.5, 11.5, 11.0, c);
-            pen.line_c(&[(3.5, 10.0), (6.0, 6.5), (8.0, 8.5), (9.0, 7.5), (10.5, 10.0)], a);
-            for (x0, x1, y) in [(13.5, 17.5, 5.0), (13.5, 17.5, 8.0), (2.5, 17.5, 14.0), (2.5, 13.0, 17.0)] {
-                pen.line_c(&[(x0, y), (x1, y)], c);
-            }
-        }
-        "translate" | "language" => {
-            pen.text(6.5, 7.0, 9.0, "A", c, true);
-            // あ drawn as strokes, like the rest of the icon set: the interface fonts need not
-            // carry Japanese (craft-fonts is optional), and a letter without a glyph drew a box.
-            pen.line_c(&[(11.6, 10.8), (15.4, 10.8)], a);
-            pen.line_c(&[(13.5, 8.8), (13.5, 13.9)], a);
-            pen.line_c(&[(11.0, 13.9), (16.2, 13.9)], a);
-            pen.circle(13.5, 16.1, 1.8, a);
-            pen.line_c(&[(15.0, 17.1), (15.8, 18.0)], a);
-        }
-        "deleteComment" => {
-            pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.0, 13.5), (2.5, 13.5)], c);
-            pen.line_c(&[(7.5, 6.0), (12.5, 11.0)], red);
-            pen.line_c(&[(12.5, 6.0), (7.5, 11.0)], red);
-        }
-        "prevComment" | "nextComment" => {
-            pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.0, 13.5), (2.5, 13.5)], c);
-            let pts: &[(f32, f32)] =
-                if name == "nextComment" { &[(8.0, 6.0), (12.0, 8.5), (8.0, 11.0)] } else { &[(12.0, 6.0), (8.0, 8.5), (12.0, 11.0)] };
-            pen.line_c(pts, a);
-        }
-        "showComments" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.frect(12.0, 3.0, 17.0, 17.0, a.linear_multiply(0.4));
-        }
-        "resolve" => {
-            pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.0, 13.5), (2.5, 13.5)], c);
-            pen.line_c(&[(6.5, 8.5), (9.0, 11.0), (13.5, 6.0)], green);
-        }
-        "trackChanges" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.line_c(&[(6.0, 7.0), (14.0, 7.0)], red);
-            pen.line_c(&[(6.0, 11.0), (14.0, 11.0)], a);
-            pen.lines(6.0, 11.0, &[15.0]);
-        }
-        "markup" | "reviewingPane" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.line_c(&[(6.0, 8.0), (13.0, 8.0)], red);
-            pen.lines(6.0, 13.0, &[12.0]);
-        }
-        "accept" => {
-            pen.page(4.0, 2.0, 15.0, 17.0);
-            pen.line_c(&[(10.0, 14.5), (12.5, 17.0), (18.0, 11.0)], green);
-        }
-        "reject" => {
-            pen.page(4.0, 2.0, 15.0, 17.0);
-            pen.line_c(&[(11.0, 12.0), (17.0, 18.0)], red);
-            pen.line_c(&[(17.0, 12.0), (11.0, 18.0)], red);
-        }
-        "prevChange" | "nextChange" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            let pts: &[(f32, f32)] =
-                if name == "nextChange" { &[(8.5, 7.0), (11.5, 10.0), (8.5, 13.0)] } else { &[(11.5, 7.0), (8.5, 10.0), (11.5, 13.0)] };
-            pen.line_c(pts, a);
-        }
-        "compare" | "combine" => {
-            pen.page(2.0, 3.0, 10.0, 15.0);
-            pen.page(10.0, 5.0, 18.0, 17.0);
-            pen.line_c(&[(6.0, 18.5), (14.0, 18.5)], a);
-        }
-        "protect" | "restrict" | "blockAuthors" => {
-            pen.rect(5.0, 9.0, 15.0, 17.5, c);
-            pen.line_c(&[(7.0, 9.0), (7.0, 6.0), (10.0, 3.0), (13.0, 6.0), (13.0, 9.0)], a);
-        }
-        "hideInk" => {
-            pen.line_c(&[(3.0, 13.0), (6.0, 8.0), (9.0, 13.0), (12.0, 8.0)], a);
-            pen.line(&[(3.0, 3.0), (17.0, 17.0)]);
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// Icons of one section of the set; false when `name` is not one of them.
-fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
-    let (c, a) = (pen.c, pen.a);
-    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
-    match name {
-        // View
-        "readMode" => {
-            pen.closed(&[(2.0, 4.0), (9.5, 5.0), (9.5, 17.0), (2.0, 16.0)], c);
-            pen.closed(&[(18.0, 4.0), (10.5, 5.0), (10.5, 17.0), (18.0, 16.0)], a);
-        }
-        "printLayout" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.lines(6.0, 14.0, &[7.0, 10.0, 13.0]);
-        }
-        "webLayout" => {
-            pen.circle(10.0, 10.0, 7.0, c);
-            pen.line_c(&[(3.0, 10.0), (17.0, 10.0)], a);
-            pen.line_c(&[(10.0, 3.0), (7.0, 10.0), (10.0, 17.0)], a);
-            pen.line_c(&[(10.0, 3.0), (13.0, 10.0), (10.0, 17.0)], a);
-        }
-        "outline" => {
-            pen.fcircle(4.0, 4.5, 1.2, a);
-            pen.line(&[(6.5, 4.5), (17.0, 4.5)]);
-            pen.fcircle(7.0, 10.0, 1.2, a);
-            pen.line(&[(9.5, 10.0), (17.0, 10.0)]);
-            pen.fcircle(10.0, 15.5, 1.2, a);
-            pen.line(&[(12.5, 15.5), (17.0, 15.5)]);
-        }
-        "draft" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
-        "focus" => {
-            pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
-            pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);
-            pen.line(&[(17.0, 13.0), (17.0, 17.0), (13.0, 17.0)]);
-            pen.line(&[(7.0, 17.0), (3.0, 17.0), (3.0, 13.0)]);
-            pen.lines(7.0, 13.0, &[8.5, 11.5]);
-        }
-        "immersive" => {
-            pen.closed(&[(2.0, 4.0), (9.5, 5.0), (9.5, 17.0), (2.0, 16.0)], c);
-            pen.closed(&[(18.0, 4.0), (10.5, 5.0), (10.5, 17.0), (18.0, 16.0)], c);
-            pen.fcircle(14.0, 10.0, 2.0, a);
-        }
-        "vertical" => {
-            pen.page(5.0, 1.0, 15.0, 9.0);
-            pen.page(5.0, 11.0, 15.0, 19.0);
-        }
-        "sideToSide" => {
-            pen.page(1.5, 4.0, 9.5, 16.0);
-            pen.page(10.5, 4.0, 18.5, 16.0);
-        }
-        "ruler" => {
-            pen.rect(2.0, 7.0, 18.0, 13.0, c);
-            for x in [4.5, 7.0, 9.5, 12.0, 14.5] {
-                pen.line_c(&[(x, 7.0), (x, 10.0)], a);
-            }
-        }
-        "gridlines" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            for k in [6.5, 10.0, 13.5] {
-                pen.line_c(&[(k, 3.0), (k, 17.0)], a.linear_multiply(0.6));
-                pen.line_c(&[(3.0, k), (17.0, k)], a.linear_multiply(0.6));
-            }
-        }
-        "navPane" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.frect(3.0, 3.0, 8.0, 17.0, a.linear_multiply(0.5));
-        }
-        "zoom" => {
-            pen.circle(8.5, 8.5, 5.5, c);
-            pen.line_c(&[(12.5, 12.5), (17.5, 17.5)], a);
-            pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
-            pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
-        }
-        "zoomIn" | "zoomOut" => {
-            pen.circle(8.5, 8.5, 5.5, c);
-            pen.line_c(&[(12.5, 12.5), (17.5, 17.5)], a);
-            pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
-            if name == "zoomIn" {
-                pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
-            }
-        }
-        "zoom100" => pen.text(10.0, 10.0, 7.5, "100", a, true),
-        "onePage" => pen.page(5.0, 2.0, 15.0, 18.0),
-        "multiplePages" => {
-            pen.page(1.5, 4.0, 9.5, 16.0);
-            pen.page(10.5, 4.0, 18.5, 16.0);
-        }
-        "pageWidth" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.line_c(&[(1.5, 10.0), (18.5, 10.0)], a);
-        }
-        "darkMode" => {
-            pen.fcircle(10.0, 10.0, 7.0, c);
-            pen.fcircle(13.0, 8.0, 6.0, Color32::from_rgba_unmultiplied(255, 255, 255, 230));
-        }
-        "interfaceTheme" => {
-            // A window, its right half dark: light, dark or both (follow the system).
-            pen.frect(10.0, 3.5, 17.5, 16.5, c);
-            pen.rect(2.5, 3.5, 17.5, 16.5, c);
-            pen.line_c(&[(2.5, 6.5), (10.0, 6.5)], a);
-        }
-        "newWindow" => {
-            pen.rect(2.5, 5.0, 13.0, 15.0, c);
-            pen.rect(7.0, 2.5, 17.5, 12.5, a);
-        }
-        "arrangeAll" => {
-            pen.rect(3.0, 2.5, 17.0, 9.0, c);
-            pen.rect(3.0, 11.0, 17.0, 17.5, a);
-        }
-        "split" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.line_c(&[(3.0, 10.0), (17.0, 10.0)], a);
-        }
-        "fullScreen" => {
-            // A screen with arrows out to its four corners.
-            pen.rect(2.0, 3.5, 18.0, 16.5, c);
-            pen.line_c(&[(5.0, 8.5), (5.0, 6.0), (7.5, 6.0)], a);
-            pen.line_c(&[(12.5, 6.0), (15.0, 6.0), (15.0, 8.5)], a);
-            pen.line_c(&[(15.0, 11.5), (15.0, 14.0), (12.5, 14.0)], a);
-            pen.line_c(&[(7.5, 14.0), (5.0, 14.0), (5.0, 11.5)], a);
-            pen.line_c(&[(5.0, 6.0), (8.0, 8.5)], a);
-            pen.line_c(&[(15.0, 6.0), (12.0, 8.5)], a);
-            pen.line_c(&[(15.0, 14.0), (12.0, 11.5)], a);
-            pen.line_c(&[(5.0, 14.0), (8.0, 11.5)], a);
-        }
-        "sideBySide" | "syncScroll" | "switchWindows" => {
-            pen.rect(2.0, 4.0, 9.5, 16.0, c);
-            pen.rect(10.5, 4.0, 18.0, 16.0, a);
-        }
-        "macros" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.fill(&[(8.0, 6.5), (8.0, 13.5), (14.0, 10.0)], a);
-        }
-        // A page with a filled band at the top and a style mark: the document's template.
-        "documentTemplate" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.frect(6.0, 5.0, 11.5, 7.0, a);
-            pen.text(10.0, 13.0, 8.0, "A", a, false);
-        }
-        "properties" | "info" => {
-            pen.circle(10.0, 10.0, 7.0, c);
-            pen.line_c(&[(10.0, 9.0), (10.0, 14.5)], a);
-            pen.fcircle(10.0, 6.3, 1.0, a);
-        }
-        // Table tools
-        "insertAbove" | "insertBelow" | "insertLeft" | "insertRight" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            match name {
-                "insertAbove" => pen.frect(3.0, 3.0, 17.0, 8.0, a),
-                "insertBelow" => pen.frect(3.0, 12.0, 17.0, 17.0, a),
-                "insertLeft" => pen.frect(3.0, 3.0, 8.0, 17.0, a),
-                _ => pen.frect(12.0, 3.0, 17.0, 17.0, a),
-            }
-        }
-        "deleteTable" => {
-            pen.rect(3.0, 3.0, 15.0, 15.0, c);
-            pen.line(&[(3.0, 9.0), (15.0, 9.0)]);
-            pen.line(&[(9.0, 3.0), (9.0, 15.0)]);
-            pen.line_c(&[(12.0, 12.0), (18.0, 18.0)], red);
-            pen.line_c(&[(18.0, 12.0), (12.0, 18.0)], red);
-        }
-        "merge" => {
-            pen.rect(3.0, 5.0, 17.0, 15.0, c);
-            pen.line_c(&[(5.0, 10.0), (15.0, 10.0)], a);
-            pen.line_c(&[(7.0, 8.0), (5.0, 10.0), (7.0, 12.0)], a);
-            pen.line_c(&[(13.0, 8.0), (15.0, 10.0), (13.0, 12.0)], a);
-        }
-        "splitCells" | "splitTable" => {
-            pen.rect(3.0, 5.0, 17.0, 15.0, c);
-            pen.line_c(&[(10.0, 5.0), (10.0, 15.0)], a);
-        }
-        "autofit" | "distributeRows" | "distributeCols" | "rowHeight" | "colWidth" => {
-            pen.rect(3.0, 4.0, 17.0, 16.0, c);
-            pen.line_c(&[(5.0, 10.0), (15.0, 10.0)], a);
-            pen.line_c(&[(7.0, 8.0), (5.0, 10.0), (7.0, 12.0)], a);
-            pen.line_c(&[(13.0, 8.0), (15.0, 10.0), (13.0, 12.0)], a);
-        }
-        "cellAlign" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.lines(6.0, 14.0, &[8.5, 11.5]);
-        }
-        "textDirection" => {
-            pen.text(9.0, 10.0, 10.0, "A", c, false);
-            pen.line_c(&[(15.5, 4.0), (15.5, 16.0)], a);
-            pen.line_c(&[(13.5, 14.0), (15.5, 16.0), (17.5, 14.0)], a);
-        }
-        "cellMargins" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.rect(6.0, 6.0, 14.0, 14.0, a);
-        }
-        "repeatHeader" => {
-            pen.frect(3.0, 3.0, 17.0, 7.0, a);
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.line(&[(3.0, 12.0), (17.0, 12.0)]);
-        }
-        "toText" => {
-            pen.rect(3.0, 3.0, 11.0, 11.0, c);
-            pen.lines(9.0, 17.0, &[14.0, 17.0]);
-        }
-        "formula" => pen.text(10.0, 10.0, 12.0, "fx", a, false),
-        "selectTable" => {
-            pen.rect(3.0, 3.0, 17.0, 17.0, c);
-            pen.fill(&[(8.0, 7.0), (8.0, 15.0), (10.0, 13.0), (11.5, 16.0), (12.5, 15.5), (11.0, 12.5), (13.5, 12.5)], a);
-        }
-        "draw" => {
-            pen.rect(3.0, 3.0, 13.0, 13.0, c);
-            pen.line_c(&[(10.0, 17.0), (17.0, 10.0)], a);
-        }
-        "borderPainter" => {
-            pen.line(&[(4.0, 16.0), (14.0, 6.0), (16.0, 8.0), (6.0, 18.0), (3.5, 18.5), (4.0, 16.0)]);
-            pen.line_c(&[(3.0, 3.0), (11.0, 3.0)], a);
-        }
-        // Chrome
-        "save" => {
-            pen.closed(&[(3.0, 3.0), (14.0, 3.0), (17.0, 6.0), (17.0, 17.0), (3.0, 17.0)], c);
-            pen.frect(6.0, 3.0, 13.0, 7.5, a);
-            pen.rect(6.0, 11.0, 14.0, 17.0, c);
-        }
-        "undo" => {
-            pen.line(&[(5.0, 8.0), (13.0, 8.0)]);
-            pen.p.add(Shape::line(
-                (0..=12)
-                    .map(|i| {
-                        let t = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 12.0;
-                        pen.pt(13.0 + 4.5 * t.cos(), 12.5 + 4.5 * t.sin())
-                    })
-                    .collect(),
-                pen.stroke(c),
-            ));
-            pen.line(&[(13.0, 17.0), (8.0, 17.0)]);
-            pen.fill(&[(2.5, 8.0), (6.5, 4.5), (6.5, 11.5)], a);
-        }
-        "redo" => {
-            pen.line(&[(15.0, 8.0), (7.0, 8.0)]);
-            pen.p.add(Shape::line(
-                (0..=12)
-                    .map(|i| {
-                        let t = std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * i as f32 / 12.0;
-                        pen.pt(7.0 + 4.5 * t.cos(), 12.5 - 4.5 * t.sin())
-                    })
-                    .collect(),
-                pen.stroke(c),
-            ));
-            pen.line(&[(7.0, 17.0), (12.0, 17.0)]);
-            pen.fill(&[(17.5, 8.0), (13.5, 4.5), (13.5, 11.5)], a);
-        }
-        "search" => {
-            pen.circle(8.5, 8.5, 5.0, c);
-            pen.line(&[(12.0, 12.0), (16.5, 16.5)]);
-        }
-        "share" => {
-            pen.line(&[(10.0, 3.0), (10.0, 12.0)]);
-            pen.line(&[(6.5, 6.5), (10.0, 3.0), (13.5, 6.5)]);
-            pen.line(&[(5.0, 9.0), (3.5, 9.0), (3.5, 17.0), (16.5, 17.0), (16.5, 9.0), (15.0, 9.0)]);
-        }
-        "user" => {
-            pen.fcircle(10.0, 7.0, 3.5, a);
-            pen.p.add(Shape::convex_polygon(
-                (0..=16)
-                    .map(|i| {
-                        let t = std::f32::consts::PI * i as f32 / 16.0;
-                        pen.pt(10.0 - 6.5 * t.cos(), 18.0 - 6.0 * t.sin())
-                    })
-                    .collect(),
-                a,
-                Stroke::NONE,
-            ));
-        }
-        "close" => {
-            pen.line(&[(5.0, 5.0), (15.0, 15.0)]);
-            pen.line(&[(15.0, 5.0), (5.0, 15.0)]);
-        }
-        // A triangle filling most of its box: it is drawn at 9–12 pt beside combos and split
-        // buttons, where a smaller one shrank to a dot (#535).
-        "dropdown" => pen.fill(&[(3.0, 7.0), (17.0, 7.0), (10.0, 14.0)], c),
-        "more" => {
-            for x in [5.0, 10.0, 15.0] {
-                pen.fcircle(x, 10.0, 1.3, c);
-            }
-        }
-        "launcher" => {
-            pen.line(&[(5.0, 5.0), (5.0, 15.0), (15.0, 15.0)]);
-            pen.line(&[(8.0, 8.0), (15.0, 15.0)]);
-            pen.line(&[(11.0, 15.0), (15.0, 15.0), (15.0, 11.0)]);
-        }
-        "pin" => {
-            pen.line(&[(10.0, 12.0), (10.0, 18.0)]);
-            pen.rect(7.0, 2.0, 13.0, 9.0, c);
-            pen.line(&[(5.0, 12.0), (15.0, 12.0)]);
-        }
-        "plus" => {
-            pen.line(&[(10.0, 4.0), (10.0, 16.0)]);
-            pen.line(&[(4.0, 10.0), (16.0, 10.0)]);
-        }
-        "minus" => pen.line(&[(4.0, 10.0), (16.0, 10.0)]),
-        "check" => pen.line_c(&[(4.0, 10.5), (8.5, 15.0), (16.5, 5.0)], c),
-        "chevronLeft" => pen.line(&[(13.0, 4.0), (7.0, 10.0), (13.0, 16.0)]),
-        "chevronRight" => pen.line(&[(7.0, 4.0), (13.0, 10.0), (7.0, 16.0)]),
-        "chevronUp" => pen.line(&[(4.0, 13.0), (10.0, 7.0), (16.0, 13.0)]),
-        "chevronDown" => pen.line(&[(4.0, 7.0), (10.0, 13.0), (16.0, 7.0)]),
-        // Read Aloud player
-        "mediaPlay" => pen.fill(&[(6.0, 4.0), (16.0, 10.0), (6.0, 16.0)], c),
-        "mediaPause" => {
-            pen.frect(5.5, 4.0, 8.5, 16.0, c);
-            pen.frect(11.5, 4.0, 14.5, 16.0, c);
-        }
-        "mediaStop" => pen.frect(5.0, 5.0, 15.0, 15.0, c),
-        "mediaPrev" => {
-            pen.frect(4.0, 5.0, 6.0, 15.0, c);
-            pen.fill(&[(16.0, 5.0), (7.0, 10.0), (16.0, 15.0)], c);
-        }
-        "mediaNext" => {
-            pen.frect(14.0, 5.0, 16.0, 15.0, c);
-            pen.fill(&[(4.0, 5.0), (13.0, 10.0), (4.0, 15.0)], c);
-        }
-        // Move past citation: a bracketed citation with an arrow hopping over it to the caret.
-        "pastCitation" => {
-            pen.line_c(&[(4.5, 9.0), (3.0, 9.0), (3.0, 17.0), (4.5, 17.0)], c);
-            pen.line_c(&[(11.5, 9.0), (13.0, 9.0), (13.0, 17.0), (11.5, 17.0)], c);
-            pen.lines(5.5, 10.5, &[12.0, 14.5]);
-            pen.line_c(&[(4.0, 6.0), (8.0, 2.5), (14.0, 2.5), (16.5, 7.0)], a);
-            pen.line_c(&[(14.0, 6.0), (16.5, 7.0), (17.5, 4.5)], a);
-            pen.line_c(&[(17.0, 9.0), (17.0, 17.5)], a);
-        }
-        "chevronDoubleRight" => {
-            pen.line(&[(4.0, 4.0), (9.0, 10.0), (4.0, 16.0)]);
-            pen.line(&[(11.0, 4.0), (16.0, 10.0), (11.0, 16.0)]);
-        }
-        "addins" => {
-            pen.rect(3.0, 3.0, 9.0, 9.0, c);
-            pen.rect(11.0, 3.0, 17.0, 9.0, c);
-            pen.rect(3.0, 11.0, 9.0, 17.0, c);
-            pen.line_c(&[(14.0, 11.0), (14.0, 17.0)], a);
-            pen.line_c(&[(11.0, 14.0), (17.0, 14.0)], a);
-        }
-        "discord" => {
-            pen.fill(&[(3.0, 6.0), (7.0, 3.5), (13.0, 3.5), (17.0, 6.0), (17.5, 14.0), (13.5, 16.5), (6.5, 16.5), (2.5, 14.0)], a);
-            pen.fcircle(7.5, 10.5, 1.5, Color32::WHITE);
-            pen.fcircle(12.5, 10.5, 1.5, Color32::WHITE);
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// Icons of one section of the set; false when `name` is not one of them.
-fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
-    let (c, a) = (pen.c, pen.a);
-    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
-    let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
-    match name {
-        // Open: a folder with its flap lifted.
-        "open" => {
-            pen.closed(&[(2.5, 5.0), (7.5, 5.0), (9.0, 6.5), (15.5, 6.5), (15.5, 9.0)], c);
-            pen.line(&[(2.5, 5.0), (2.5, 16.0)]);
-            pen.closed(&[(2.5, 16.0), (5.0, 9.0), (18.0, 9.0), (15.5, 16.0)], a);
-        }
-        // Print: a printer with a sheet coming out.
-        "print" => {
-            pen.rect(6.0, 2.5, 14.0, 7.0, c);
-            pen.rect(2.5, 7.0, 17.5, 14.0, c);
-            pen.closed(&[(6.0, 11.5), (14.0, 11.5), (14.0, 17.5), (6.0, 17.5)], a);
-            pen.fcircle(15.0, 9.5, 0.8, c);
-        }
-        "alignText" => {
-            // A box with its text lines in the middle, arrows to the top and bottom edges.
-            pen.rect(3.0, 2.5, 17.0, 17.5, c);
-            pen.lines(5.5, 11.0, &[9.0, 11.5]);
-            pen.line_c(&[(14.0, 5.0), (14.0, 15.0)], a);
-            pen.line_c(&[(12.5, 6.5), (14.0, 5.0), (15.5, 6.5)], a);
-            pen.line_c(&[(12.5, 13.5), (14.0, 15.0), (15.5, 13.5)], a);
-        }
-        "crop" => {
-            // Two right angles overlapping: the crop marks.
-            pen.line_c(&[(6.0, 2.0), (6.0, 14.0), (18.0, 14.0)], c);
-            pen.line_c(&[(2.0, 6.0), (14.0, 6.0), (14.0, 18.0)], a);
-        }
-        "textBoxLink" | "textBoxUnlink" => {
-            // Two boxes, the text running from the first into the second (broken: cut through).
-            pen.rect(2.0, 3.0, 8.5, 11.0, c);
-            pen.rect(11.5, 9.0, 18.0, 17.0, c);
-            pen.lines(3.5, 7.0, &[5.5, 8.0]);
-            pen.line_c(&[(5.0, 11.0), (5.0, 14.0), (11.5, 14.0)], a);
-            pen.line_c(&[(9.5, 12.5), (11.5, 14.0), (9.5, 15.5)], a);
-            if name == "textBoxUnlink" {
-                pen.line_c(&[(6.5, 16.5), (9.0, 11.5)], c);
-            }
-        }
-
-        // The built-in file browser (#576): a folder, a file and the home folder.
-        "folder" => {
-            pen.frect(2.5, 4.5, 8.5, 7.0, yellow);
-            pen.frect(2.5, 6.5, 17.5, 16.0, yellow);
-            pen.closed(&[(2.5, 4.5), (8.0, 4.5), (9.5, 6.5), (17.5, 6.5), (17.5, 16.0), (2.5, 16.0)], c);
-        }
-        "file" => {
-            pen.page(4.5, 2.0, 15.5, 18.0);
-            pen.lines(7.0, 13.0, &[9.0, 12.0, 15.0]);
-        }
-        "homeFolder" => {
-            pen.closed(&[(3.0, 9.5), (10.0, 3.5), (17.0, 9.5)], c);
-            pen.closed(&[(5.0, 8.5), (5.0, 17.0), (15.0, 17.0), (15.0, 8.5)], c);
-            pen.frect(8.5, 12.0, 11.5, 17.0, a);
-        }
-        // File (Backstage) side menu (#1714). Save As: the save disk with a pencil across its corner.
-        "saveAs" => {
-            pen.closed(&[(2.5, 2.5), (11.5, 2.5), (14.5, 5.5), (14.5, 14.5), (2.5, 14.5)], c);
-            pen.frect(5.0, 2.5, 10.5, 6.0, a);
-            pen.rect(5.0, 9.5, 12.0, 14.5, c);
-            pen.fill(&[(11.0, 17.0), (17.0, 11.0), (18.5, 12.5), (12.5, 18.5)], a);
-            pen.fill(&[(11.0, 17.0), (12.5, 18.5), (10.0, 19.5)], c);
-        }
-        // Export: a page with an arrow leaving it.
-        "export" => {
-            pen.page(2.5, 2.0, 12.5, 18.0);
-            pen.line_c(&[(7.5, 10.0), (18.0, 10.0)], a);
-            pen.line_c(&[(15.0, 7.0), (18.0, 10.0), (15.0, 13.0)], a);
-        }
-        // Options: a gear.
-        "options" => {
-            for k in 0..8 {
-                let t = k as f32 * std::f32::consts::FRAC_PI_4;
-                let at = |radius: f32, dt: f32| (10.0 + radius * (t + dt).cos(), 10.0 + radius * (t + dt).sin());
-                pen.fill(&[at(5.0, -0.28), at(8.2, -0.17), at(8.2, 0.17), at(5.0, 0.28)], c);
-            }
-            pen.circle(10.0, 10.0, 5.5, c);
-            pen.circle(10.0, 10.0, 2.2, a);
-        }
-        // Recover: a page with a turning arrow, a copy brought back.
-        "recover" => {
-            pen.page(2.5, 2.0, 12.5, 15.5);
-            pen.p.add(Shape::line(
-                (0..=14)
-                    .map(|i| {
-                        let t = -std::f32::consts::FRAC_PI_2 + 1.5 * std::f32::consts::PI * i as f32 / 14.0;
-                        pen.pt(13.5 + 4.0 * t.cos(), 13.5 + 4.0 * t.sin())
-                    })
-                    .collect(),
-                pen.stroke(a),
-            ));
-            pen.fill(&[(11.0, 9.5), (14.5, 7.3), (14.5, 11.7)], a);
-        }
-
-        // Outlining tab: arrows moving a paragraph between outline levels and along the outline.
-        "outlinePromote" | "outlineDemote" => {
-            pen.lines(9.0, 17.0, &[6.0, 10.0, 14.0]);
-            if name == "outlinePromote" {
-                pen.line_c(&[(7.0, 10.0), (2.5, 10.0)], a);
-                pen.line_c(&[(5.0, 7.5), (2.5, 10.0), (5.0, 12.5)], a);
-            } else {
-                pen.line_c(&[(2.5, 10.0), (7.0, 10.0)], a);
-                pen.line_c(&[(4.5, 7.5), (7.0, 10.0), (4.5, 12.5)], a);
-            }
-        }
-        "outlineTop" | "outlineBody" => {
-            pen.lines(11.0, 17.0, &[6.0, 10.0, 14.0]);
-            let (x, d) = if name == "outlineTop" { (3.0, 1.0) } else { (9.0, -1.0) };
-            for k in [0.0, 3.5] {
-                pen.line_c(&[(x + d * k + d * 2.5, 7.0), (x + d * k, 10.0), (x + d * k + d * 2.5, 13.0)], a);
-            }
-        }
-        "outlineUp" | "outlineDown" => {
-            pen.lines(3.0, 11.0, &[6.0, 10.0, 14.0]);
-            let up = name == "outlineUp";
-            let (tip, tail) = if up { (3.0, 17.0) } else { (17.0, 3.0) };
-            pen.line_c(&[(15.0, tail), (15.0, tip)], a);
-            let wing = if up { tip + 3.0 } else { tip - 3.0 };
-            pen.line_c(&[(12.0, wing), (15.0, tip), (18.0, wing)], a);
-        }
-        "outlineExpand" | "outlineCollapse" => {
-            pen.fcircle(10.0, 10.0, 6.5, c);
-            pen.line_c(&[(6.5, 10.0), (13.5, 10.0)], Color32::WHITE);
-            if name == "outlineExpand" {
-                pen.line_c(&[(10.0, 6.5), (10.0, 13.5)], Color32::WHITE);
-            }
-        }
-        "closeOutline" => {
-            pen.page(4.0, 2.0, 16.0, 18.0);
-            pen.line_c(&[(7.0, 8.0), (13.0, 14.0)], red);
-            pen.line_c(&[(13.0, 8.0), (7.0, 14.0)], red);
-        }
-        "help" => {
-            pen.circle(10.0, 10.0, 7.0, c);
-            pen.text(10.0, 10.0, 10.0, "?", a, true);
-        }
-        // Developer › Controls: a field's frame with what it holds.
-        "ccRichText" => {
-            pen.rect(2.5, 5.0, 17.5, 15.0, a);
-            pen.text(7.5, 10.0, 8.0, "A", c, true);
-            pen.text(13.0, 10.5, 7.0, "a", c, false);
-        }
-        "ccPlainText" => {
-            pen.rect(2.5, 5.0, 17.5, 15.0, a);
-            pen.text(8.0, 10.0, 8.0, "A", c, false);
-            pen.line(&[(12.0, 7.5), (12.0, 12.5)]);
-        }
-        "ccPicture" => {
-            pen.rect(2.5, 4.0, 17.5, 16.0, a);
-            pen.line(&[(4.5, 14.0), (8.5, 9.5), (11.5, 12.5), (13.5, 10.5), (15.5, 14.0)]);
-            pen.fcircle(13.5, 7.0, 1.2, c);
-        }
-        "ccGallery" => {
-            pen.rect(2.5, 3.0, 17.5, 17.0, a);
-            pen.frect(5.0, 5.5, 9.0, 9.5, c);
-            pen.frect(11.0, 5.5, 15.0, 9.5, c);
-            pen.lines(5.0, 15.0, &[12.5, 15.0]);
-        }
-        "ccCheckBox" => {
-            pen.rect(4.0, 4.0, 16.0, 16.0, c);
-            pen.line_c(&[(6.5, 10.0), (9.0, 13.0), (14.0, 6.5)], a);
-        }
-        "ccComboBox" => {
-            pen.rect(2.5, 6.0, 17.5, 14.0, c);
-            pen.line(&[(13.0, 6.0), (13.0, 14.0)]);
-            pen.lines(4.5, 10.5, &[10.0]);
-            pen.arrow_down(15.25, 10.0, a);
-        }
-        "ccDropDown" => {
-            pen.rect(2.5, 3.0, 17.5, 9.0, c);
-            pen.line(&[(13.0, 3.0), (13.0, 9.0)]);
-            pen.arrow_down(15.25, 6.0, a);
-            pen.rect(2.5, 9.0, 13.0, 17.0, c);
-            pen.lines(4.5, 11.0, &[11.5, 14.5]);
-        }
-        "ccDate" => {
-            pen.rect(3.0, 4.5, 17.0, 17.0, c);
-            pen.frect(3.0, 4.5, 17.0, 8.0, a);
-            pen.line(&[(6.5, 3.0), (6.5, 6.0)]);
-            pen.line(&[(13.5, 3.0), (13.5, 6.0)]);
-            for (x, y) in [(6.5, 11.0), (10.0, 11.0), (13.5, 11.0), (6.5, 14.5), (10.0, 14.5)] {
-                pen.fcircle(x, y, 0.9, c);
-            }
-        }
-        "ccRepeat" => {
-            pen.rect(2.5, 3.0, 17.5, 17.0, a);
-            pen.rect(5.0, 5.5, 15.0, 9.5, c);
-            pen.rect(5.0, 11.0, 15.0, 15.0, c);
-            pen.line_c(&[(10.0, 15.0), (10.0, 18.5)], a);
-        }
-        // A warning triangle: a document font that isn't installed (shown in another font).
-        "fontMissing" => {
-            pen.fill(&[(10.0, 2.5), (18.5, 17.5), (1.5, 17.5)], Color32::from_rgb(0xE0, 0x7B, 0x1F));
-            pen.line_c(&[(10.0, 7.5), (10.0, 12.5)], Color32::WHITE);
-            pen.fcircle(10.0, 15.0, 1.0, Color32::WHITE);
-        }
-        "designMode" => {
-            pen.line(&[(4.0, 16.0), (16.0, 16.0), (4.0, 4.0), (4.0, 16.0)]);
-            pen.line_c(&[(4.0, 12.0), (8.0, 16.0)], a);
-            pen.line(&[(7.0, 13.0), (7.0, 12.0)]);
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// The Insert › Shapes menu's icons: each shape kind (`insert.shape` ids) as a small outline.
-fn shape(pen: &Pen, kind: &str) -> bool {
-    let (c, a) = (pen.c, pen.a);
-    let tint = a.linear_multiply(0.25);
-    let solid = |pts: &[(f32, f32)]| {
-        pen.fill(pts, tint);
-        pen.closed(pts, c);
+/// The icon a command's button shows outside its own ribbon group (custom groups, the Quick
+/// Access Toolbar): the one its ribbon button uses, which is usually named after the id's last
+/// part. A name the set doesn't have draws the framework's fallback tile.
+pub fn for_command(id: &str) -> IconSpec<'static> {
+    const ICONS: &[(&str, &str)] = &[
+        ("arrange.wrap", "wrapText"),
+        ("draw.highlighter", "highlight"),
+        ("format.border", "charborder"),
+        ("format.color", "fontcolor"),
+        ("format.growFont", "grow"),
+        ("format.shrinkFont", "shrink"),
+        ("format.strikethrough", "strike"),
+        ("format.highlight", "highlight"),
+        ("insert.signatureLine", "signature"),
+        ("mailings.envelopes", "envelope"),
+        ("mailings.insertField", "mergeField"),
+        ("para.ltr", "textLtr"),
+        ("para.rtl", "textRtl"),
+        ("para.bullets", "bullets"),
+        ("para.numbering", "numbering"),
+        ("table.insertRowAbove", "insertAbove"),
+        ("view.commentsPane", "showComments"),
+        ("view.marks", "pilcrow"),
+        ("edit.repeat", "redo"),
+        ("file.new", "blankPage"),
+        ("tools.customizeRibbon", "more"),
+    ];
+    let name: Cow<'static, str> = match ICONS.iter().find(|(c, _)| *c == id) {
+        Some((_, icon)) => Cow::Borrowed(icon),
+        None => Cow::Owned(id.rsplit('.').next().unwrap_or(id).to_owned()),
     };
-    let head = |tip: (f32, f32), from: (f32, f32)| {
-        let (dx, dy) = (tip.0 - from.0, tip.1 - from.1);
-        let len = (dx * dx + dy * dy).sqrt().max(0.01);
-        let (ux, uy) = (dx / len, dy / len);
-        let back = (tip.0 - ux * 4.5, tip.1 - uy * 4.5);
-        pen.fill(&[tip, (back.0 - uy * 2.5, back.1 + ux * 2.5), (back.0 + uy * 2.5, back.1 - ux * 2.5)], c);
+    let name = match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
+        Some((_, own)) => Cow::Borrowed(*own),
+        None => name,
     };
-    let ends = |pts: &[(f32, f32)], arrow: bool| {
-        pen.line(pts);
-        if let Some(&first) = pts.first() {
-            pen.fcircle(first.0, first.1, 1.6, a);
-        }
-        if let [.., from, tip] = pts {
-            if arrow {
-                head(*tip, *from);
-            } else {
-                pen.fcircle(tip.0, tip.1, 1.6, a);
-            }
-        }
-    };
-    let curve = || -> Vec<(f32, f32)> {
-        let (p0, p1, p2, p3) = ((4.0, 15.0), (12.0, 15.0), (8.0, 5.0), (16.0, 5.0));
-        (0..=16)
-            .map(|i| {
-                let s = i as f32 / 16.0;
-                let m = 1.0 - s;
-                let w = [m * m * m, 3.0 * m * m * s, 3.0 * m * s * s, s * s * s];
-                (w[0] * p0.0 + w[1] * p1.0 + w[2] * p2.0 + w[3] * p3.0, w[0] * p0.1 + w[1] * p1.1 + w[2] * p2.1 + w[3] * p3.1)
-            })
-            .collect()
-    };
-    match kind {
-        "rectangle" => solid(&[(3.0, 5.0), (17.0, 5.0), (17.0, 15.0), (3.0, 15.0)]),
-        "roundedRectangle" => {
-            let r = Rect::from_min_max(pen.pt(3.0, 5.0), pen.pt(17.0, 15.0));
-            let radius = 3.0 * pen.s();
-            pen.p.rect_filled(r, radius, tint);
-            pen.p.rect_stroke(r, radius, pen.stroke(c), egui::StrokeKind::Middle);
-        }
-        "ellipse" => {
-            let (center, radius) = (pen.pt(10.0, 10.0), vec2(7.5, 5.5) * pen.s());
-            pen.p.add(Shape::ellipse_filled(center, radius, tint));
-            pen.p.add(Shape::ellipse_stroke(center, radius, pen.stroke(c)));
-        }
-        "triangle" => solid(&[(10.0, 3.5), (17.0, 16.5), (3.0, 16.5)]),
-        "diamond" => solid(&[(10.0, 3.0), (17.0, 10.0), (10.0, 17.0), (3.0, 10.0)]),
-        "line" => pen.line(&[(4.0, 16.0), (16.0, 4.0)]),
-        "arrow" => {
-            pen.line(&[(4.0, 16.0), (14.5, 5.5)]);
-            head((16.5, 3.5), (4.0, 16.0));
-        }
-        "star" => {
-            let pts: Vec<(f32, f32)> = (0..10)
-                .map(|i| {
-                    let ang = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
-                    let rad = if i % 2 == 0 { 8.0 } else { 3.3 };
-                    (10.0 + rad * ang.cos(), 10.8 + rad * ang.sin())
-                })
-                .collect();
-            // Concave: the tinted core, then the outline.
-            pen.fill(&pts.iter().skip(1).step_by(2).copied().collect::<Vec<_>>(), tint);
-            pen.closed(&pts, c);
-        }
-        "heart" => {
-            let pts: Vec<(f32, f32)> = (0..32)
-                .map(|i| {
-                    let s = i as f32 / 32.0 * std::f32::consts::TAU;
-                    let x = 16.0 * s.sin().powi(3);
-                    let y = 13.0 * s.cos() - 5.0 * (2.0 * s).cos() - 2.0 * (3.0 * s).cos() - (4.0 * s).cos();
-                    (10.0 + x * 0.44, 9.6 - y * 0.44)
-                })
-                .collect();
-            pen.closed(&pts, c);
-        }
-        "straightConnector" => ends(&[(4.0, 15.0), (16.0, 5.0)], false),
-        "straightArrowConnector" => ends(&[(4.0, 15.0), (16.0, 5.0)], true),
-        "elbowConnector" => ends(&[(4.0, 15.0), (10.0, 15.0), (10.0, 5.0), (16.0, 5.0)], false),
-        "elbowArrowConnector" => ends(&[(4.0, 15.0), (10.0, 15.0), (10.0, 5.0), (16.0, 5.0)], true),
-        "curvedConnector" => ends(&curve(), false),
-        "curvedArrowConnector" => ends(&curve(), true),
-        _ => return false,
-    }
-    true
+    IconSpec::svg(IconId::from(name))
 }
 
-trait ThenLines {
-    fn then_lines(self, pen: &Pen, x0: f32, x1: f32, ys: &[f32]);
-}
-
-impl ThenLines for () {
-    fn then_lines(self, pen: &Pen, x0: f32, x1: f32, ys: &[f32]) {
-        pen.lines(x0, x1, ys);
-    }
-}
-
-/// Draw an Insert › Icons library icon into `r` in `c`, from the same path data the inserted
+/// An Insert › Icons library icon as a value glyph, drawn from the same path data the inserted
 /// picture is rendered from (`wordcraft_render::icon_lib`).
-pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c: Color32) {
-    use wordcraft_render::icon_lib::{GRID, STROKE};
-    let s = r.width().min(r.height()) / GRID;
-    let o = r.center() - vec2(GRID / 2.0 * s, GRID / 2.0 * s);
-    let stroke = Stroke::new(STROKE * s, c);
-    for piece in icon.pieces() {
-        let pts: Vec<Pos2> = piece.points.iter().map(|q| pos2(o.x + q[0] * s, o.y + q[1] * s)).collect();
-        if piece.fill {
-            p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
-        } else if piece.closed {
-            p.add(Shape::closed_line(pts, stroke));
-        } else {
-            // Round caps, as on the inserted picture.
-            for end in [pts.first(), pts.last()].into_iter().flatten() {
-                p.circle_filled(*end, stroke.width / 2.0, c);
+pub struct LibraryGlyph<'a> {
+    icon: &'a wordcraft_render::icon_lib::Icon,
+}
+
+/// The glyph of a library icon; bind it to a local so `IconSpec::glyph(&glyph)` can borrow it.
+pub fn library_glyph(icon: &wordcraft_render::icon_lib::Icon) -> impl Glyph + '_ {
+    LibraryGlyph { icon }
+}
+
+impl Glyph for LibraryGlyph<'_> {
+    fn paint(&self, p: &Painter, _tokens: &UiTokens, r: Rect, c: Color32, _mirrored: bool) {
+        use wordcraft_render::icon_lib::{GRID, STROKE};
+        let s = r.width().min(r.height()) / GRID;
+        let o = r.center() - vec2(GRID / 2.0 * s, GRID / 2.0 * s);
+        let stroke = Stroke::new(STROKE * s, c);
+        for piece in self.icon.pieces() {
+            let pts: Vec<Pos2> = piece.points.iter().map(|q| pos2(o.x + q[0] * s, o.y + q[1] * s)).collect();
+            if piece.fill {
+                p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
+            } else if piece.closed {
+                p.add(Shape::closed_line(pts, stroke));
+            } else {
+                // Round caps, as on the inserted picture.
+                for end in [pts.first(), pts.last()].into_iter().flatten() {
+                    p.circle_filled(*end, stroke.width / 2.0, c);
+                }
+                p.add(Shape::line(pts, stroke));
             }
-            p.add(Shape::line(pts, stroke));
         }
     }
 }
@@ -1689,28 +463,50 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
 mod tests {
     use super::*;
 
-    fn has_default_highlight_bar(name: &str) -> bool {
-        let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), name, Color32::BLACK, Color32::BLACK);
-        });
-        let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
-        let found = output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Rect(rect) if rect.fill == yellow));
-        output.drop_without_applying_deltas();
-        found
+    /// The numbers of the outline path's `d` attribute, in order (the arrow's paths are only M, L, Z). The
+    /// icon fills the tail and the head as two translucent paths and ends with the stroked outline of the
+    /// whole arrow, which is the last.
+    fn path_points(svg: &str) -> Vec<(f32, f32)> {
+        let d = svg.split(" d=\"").last().and_then(|rest| rest.split('"').next()).expect("the arrow has a path");
+        let nums: Vec<f32> = d
+            .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+            .filter(|t| !t.is_empty())
+            .map(|t| t.parse().expect("a number"))
+            .collect();
+        nums.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect()
     }
 
-    /// #4087: No Color uses the pen-only icon, not the ordinary icon's yellow fallback bar.
+    /// Every app drawing is registered under a name the framework's catalog does not have, so none
+    /// is refused and replaced by the catalog's icon of the same name.
     #[test]
-    fn no_colour_highlight_icon_has_no_yellow_bar() {
-        assert!(has_default_highlight_bar("highlight"));
-        assert!(!has_default_highlight_bar("highlightNoColor"));
+    fn no_app_icon_is_shadowed_by_the_catalog() {
+        let catalog = craft::ui::primitives::icon_names();
+        let names: Vec<&str> = WORDCRAFT_ICONS.icons.iter().map(|(name, _)| *name).collect();
+        let shadowed: Vec<&&str> = names.iter().filter(|name| catalog.binary_search(name).is_ok()).collect();
+        assert!(shadowed.is_empty(), "the catalog has these names: {shadowed:?}");
+        for (plain, own) in OWN_OVER_CATALOG {
+            assert!(names.contains(own), "{own} is not registered");
+            assert_eq!(id(plain).name(), *own);
+        }
+        let undo = match for_command("edit.undo").source {
+            craft::ui::primitives::IconSource::Svg(id) => id.name().to_owned(),
+            _ => String::new(),
+        };
+        assert_eq!(undo, "wordcraft.undo");
     }
 
-    /// #4412: the Shading buttons paint the last colour as their bar, so their icon has none of its own.
+    /// #6768: the Insert › Shapes Arrow tile is the block arrow that tile inserts, outlined as the
+    /// document draws it, not a thin line with a head.
     #[test]
-    fn the_shading_button_icon_has_no_bar_of_its_own() {
-        assert!(has_default_highlight_bar("shading"));
-        assert!(!has_default_highlight_bar("shadingNoBar"));
+    fn the_arrow_tile_is_the_block_arrow_it_inserts() {
+        let (_, bytes) = WORDCRAFT_ICONS.icons.iter().find(|(name, _)| *name == "shape.arrow").expect("shape.arrow is registered");
+        let svg = std::str::from_utf8(bytes).expect("an SVG document is text");
+        let got = path_points(svg);
+        let want = wordcraft_doc::wrap::arrow_outline(wordcraft_doc::para::ShapeKind::Arrow, 14.0, 10.0);
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for ((x, y), (u, v)) in got.iter().zip(want) {
+            let (ex, ey) = (3.0 + u * 14.0, 5.0 + v * 10.0);
+            assert!((x - ex).abs() < 0.05 && (y - ey).abs() < 0.05, "({x}, {y}) vs ({ex}, {ey})");
+        }
     }
 }
