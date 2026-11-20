@@ -938,15 +938,11 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
- fix/5840-custom-dic
-
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-11-18 | trivial | Progress log: border boxes close their corners |
 | 2026-10-30 | trivial | Progress log: under Track Changes a list item deleted whole shows its number as deleted text, in the deletion's colour and mark (#4828); readiness unchanged |
- main
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
 | 2026-11-08 | trivial | Progress log: freestanding custom.dic dictionary file support in File › Options › Proofing (#5840) |
-| 2026-10-30 | trivial | Progress log: under Track Changes a list item deleted whole shows its number as deleted text, in the deletion's colour and mark (#4828); readiness unchanged |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
