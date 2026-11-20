@@ -14,6 +14,8 @@ use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod fontconfig;
 pub(crate) mod user;
 pub use user::{FONT_FILE_EXTS, FontFormat, Installed, MAX_FONT_FILE_BYTES, UserFont, UserFontError, decode_font_file, is_font_file_name, sniff};
 
@@ -61,7 +63,8 @@ pub struct FontDb {
     catalog: RwLock<Vec<CatalogEntry>>,
     /// Fonts the user added at run time, and the folder they are stored in (#582).
     user: RwLock<user::UserFonts>,
-    /// Bumped whenever user fonts are added or removed ([`FontDb::generation`]).
+    /// Bumped whenever user fonts are added or removed, or the system font folders are scanned
+    /// again ([`FontDb::generation`]).
     generation: AtomicU64,
     /// The folders the system font scan reads (the platform's font folders for [`FontDb::global`]).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
