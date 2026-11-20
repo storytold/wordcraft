@@ -5917,6 +5917,71 @@ mod budget_tests {
     }
 
     #[test]
+    fn diagnostics_are_never_made_from_unknowns() {
+        // `q` is bound to a namespace spelled through an entity this part cannot expand; `mc` to the markup
+        // compatibility namespace through another. A diagnostic that needs the unknown value is not made.
+        let mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+        let entities = format!(r#"<!DOCTYPE w:document [<!ENTITY year "2006"><!ENTITY u "zz"><!ENTITY mcns "{mc}">]>"#);
+        let run = |root: &str, body: &str| {
+            let text = format!(
+                r#"{entities}<w:document xmlns:w="{NS_W}" xmlns:mc="{mc}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" {root}><w:body>{body}</w:body></w:document>"#
+            );
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", text.into_bytes()),
+            ]))
+        };
+        let rules = |report: &Report| report.findings.iter().map(|f| f.rule).collect::<Vec<_>>();
+        // The element's own declaration scopes its own name even though collecting its attributes failed.
+        let broken = run("", r#"<w:p/><q:vendor xmlns:q="urn:&year;" a="1" a="2"/>"#);
+        assert_eq!(rules(&broken), ["XML-MALFORMED"], "{broken:?}");
+        // An `mc:Ignorable` value that cannot be read is undecided, never a silent pass or a false failure.
+        let ignorable = run(r#"mc:Ignorable="&u;""#, "<w:p/>");
+        assert!(rules(&ignorable).is_empty() && ignorable.verdict == Verdict::Incomplete, "{ignorable:?}");
+        assert_eq!(rules(&run(r#"mc:Ignorable="zz""#, "<w:p/>")), ["XML-UNDECLARED-PREFIX"]);
+        // A repeated paraId in a Choice and its Fallback is excused under every spelling of the markup
+        // compatibility namespace (undecided where the spelling is unknown), and a repeat in one branch is not.
+        let branches = |alt: &str, choice: &str, fallback: &str| {
+            let paragraph = r#"<w:p w14:paraId="00000012"/>"#;
+            format!(
+                r#"<mc:AlternateContent {alt}><mc:Choice {choice} Requires="w14">{paragraph}</mc:Choice><mc:Fallback {fallback}>{paragraph}</mc:Fallback></mc:AlternateContent>"#
+            )
+        };
+        let spelled = r#"xmlns:mc="&mcns;""#;
+        let literal = run("", &branches("", "", ""));
+        assert!(rules(&literal).is_empty() && literal.verdict == Verdict::Pass, "{literal:?}");
+        for body in [branches(spelled, "", ""), branches("", spelled, ""), branches("", "", spelled)] {
+            let report = run("", &body);
+            assert!(rules(&report).is_empty() && report.verdict == Verdict::Incomplete, "{body}: {report:?}");
+        }
+        let same = run(
+            "",
+            r#"<mc:AlternateContent><mc:Choice Requires="w14"><w:p w14:paraId="00000012"/><w:p w14:paraId="00000012"/></mc:Choice></mc:AlternateContent>"#,
+        );
+        assert_eq!(rules(&same), ["PARAID-DUP"], "{same:?}");
+        // A password attribute of unresolved namespace is not a missing one.
+        let protection = |attribute: &str| {
+            let settings = format!(
+                r#"{entities}<w:settings xmlns:w="{NS_W}" xmlns:q="{NS_W}&year;"><w:documentProtection w:algorithmName="SHA-512" w:hashValue="AA==" {attribute}/></w:settings>"#
+            );
+            validate_bytes(&tiny_zip(&[
+                (
+                    "[Content_Types].xml",
+                    content_types_with_override("word/settings.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"),
+                ),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document()),
+                ("word/_rels/document.xml.rels", rels(&format!(r#"<Relationship Id="rS" Type="{NS_R}/settings" Target="settings.xml"/>"#))),
+                ("word/settings.xml", settings.into_bytes()),
+            ]))
+        };
+        assert_eq!(rules(&protection("")), ["PROTECTION-PASSWORD"]);
+        let unknown = protection(r#"q:spinCount="1""#);
+        assert!(rules(&unknown).is_empty() && unknown.verdict == Verdict::Incomplete, "{unknown:?}");
+    }
+
+    #[test]
     fn malformed_relationship_sources_withhold_both_ct_demotions() {
         for (manifest, part, bytes, rule, target) in [
             (content_types(), "[trash]/00af.dat", vec![0xff; 4], "CT-UNDECLARED", "../[trash]/00af.dat"),

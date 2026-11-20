@@ -406,6 +406,8 @@ pub(crate) struct PartScan {
     pub content_part_exemptions_capped: bool,
     /// The fact budget dropped at least one contentPart id in this part.
     pub content_part_capped: bool,
+    /// An `mc:Ignorable` value could not be read (an entity reference): its prefixes were not checked.
+    pub ignorable_unread: bool,
     /// An element of unresolved namespace named `contentPart` was met: it may be a consumer of a customXml part.
     pub content_part_unresolved: bool,
     /// This (settings) part carries `w:uiCompat97to2003`.
@@ -638,6 +640,8 @@ struct Frame {
     /// Which ancestor roles this frame could play if its namespace is unresolved (`U_*`): decided by its LOCAL name,
     /// so an unresolved `q:vendor` is no unknown ancestor of anything (see `unresolved_roles`).
     unresolved: u8,
+    /// An `AlternateContent`, `Choice` or `Fallback` of unresolved namespace: the branches below it are unknown.
+    unresolved_mc: bool,
     is_tc: bool,
     /// A `w:p` frame: math placement is judged against paragraph ancestry.
     is_p: bool,
@@ -708,6 +712,7 @@ struct State {
     unresolved_families: u8,
     /// An unresolved `fldChar` was seen: a `w:fldChar` end that follows it may close a begin the scan never saw.
     fld_unresolved_seen: bool,
+
     /// An unresolved `contentPart` was seen (see `PartScan::content_part_unresolved`).
     content_part_unresolved: bool,
     /// A `w:fldChar` end at depth 0 was not counted because an unresolved `fldChar` precedes it.
@@ -906,7 +911,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
         rules: "-";
-        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
+        collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.para_ids*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -928,6 +933,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         ink_content_part_capped: false,
         content_part_exemptions_capped: false,
         content_part_capped: false,
+        ignorable_unread: false,
         content_part_unresolved: false,
         compat_97_2003: false,
         special_notes: Vec::new(),
@@ -977,7 +983,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 }
                 let mut id = resolve_elem(reader.resolver(), e.name());
                 let Some(attrs) = open_attributes(&e, &mut out) else {
-                    push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
+                    push_unknown_prefix(&mut out, &state.declared, &own_declarations(&e), id.unknown.as_deref());
                     break;
                 };
                 scan_attr_refs(part, &attrs, acc);
@@ -1020,7 +1026,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 }
                 let mut id = resolve_elem(reader.resolver(), e.name());
                 let Some(attrs) = open_attributes(&e, &mut out) else {
-                    push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
+                    push_unknown_prefix(&mut out, &state.declared, &own_declarations(&e), id.unknown.as_deref());
                     break;
                 };
                 scan_attr_refs(part, &attrs, acc);
@@ -1138,6 +1144,16 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     } else if skipped_content {
         state.facts.invalidate("mc:AlternateContent subtree skipped");
     }
+    if out.ignorable_unread {
+        acc.note(format!("{part} has an mc:Ignorable value that could not be read; its prefixes were not checked"));
+        acc.set_incomplete();
+    }
+    if state.para_ids.values().any(|occ| occ.undecided && !occ.conflict) {
+        acc.note(format!(
+            "{part} repeats a w14:paraId value in content under an mc:AlternateContent, mc:Choice or mc:Fallback of unresolved namespace; whether the repeats can coexist was not decided"
+        ));
+        acc.set_incomplete();
+    }
     finish_prefix(&state, part, acc);
     note_scan_incomplete(part, &state, &out, scan_complete, skipped_content, acc);
     out.facts = state.facts;
@@ -1221,6 +1237,22 @@ fn note_scan_incomplete(part: &str, state: &State, out: &PartScan, scan_complete
     }
 }
 
+/// The namespace declarations an element carries even when collecting its attributes failed (a duplicate or
+/// malformed attribute): they still scope its own name, so its prefix is not reported undeclared on their account.
+fn own_declarations(e: &BytesStart<'_>) -> Vec<String> {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*2";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    let attrs: Vec<Attribute> = e.attributes().with_checks(false).flatten().collect();
+    declarations(&attrs)
+}
+
 /// Collect an element's attributes, turning an iterator error (a duplicate or malformed attribute)
 /// into a malformed-part message rather than silently dropping it.
 fn open_attributes<'a>(e: &'a BytesStart<'_>, out: &mut PartScan) -> Option<Vec<Attribute<'a>>> {
@@ -1285,6 +1317,7 @@ fn frame_for(id: &ElemId) -> Frame {
     let local = id.local.as_str();
     Frame {
         unresolved: unresolved_roles(id),
+        unresolved_mc: id.unresolved && matches!(local, "AlternateContent" | "Choice" | "Fallback"),
         is_tc: w && local == "tc",
         is_p: w && local == "p",
         is_footnote_pr: w && local == "footnotePr",
@@ -1560,7 +1593,18 @@ fn check_protection(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, r
         );
         return;
     }
-    let missing: Vec<&str> = ["algorithmName", "hashValue", "spinCount"].into_iter().filter(|n| count(n) == 0).collect();
+    // An attribute of unresolved namespace may be the one that is "missing": its presence is not decided.
+    let unknown = |name: &str| {
+        attrs.iter().any(|a| matches!(res.resolve_attribute(a.key).0, ResolveResult::Unknown(_)) && a.key.local_name().as_ref() == name.as_bytes())
+    };
+    if ["algorithmName", "hashValue", "spinCount"].into_iter().any(|n| count(n) == 0 && unknown(n)) {
+        acc.note(format!(
+            "w:{} in {part} has a password attribute of unresolved namespace; whether a required one is missing was not decided",
+            id.local
+        ));
+        acc.set_incomplete();
+    }
+    let missing: Vec<&str> = ["algorithmName", "hashValue", "spinCount"].into_iter().filter(|n| count(n) == 0 && !unknown(n)).collect();
     if !missing.is_empty() {
         acc.add(
             "PROTECTION-PASSWORD",
@@ -1706,14 +1750,20 @@ struct ParaOcc {
     /// More mutually excused occurrences arrived than are retained;
     /// uniqueness is unprovable for this value.
     overflow: bool,
+    /// An occurrence inside content whose branch structure is unknown was seen (never recorded as a path: it may be
+    /// mutually exclusive with any other).
+    unknown_seen: bool,
+    /// Such an occurrence met another of the value: whether they can coexist is undecided.
+    undecided: bool,
 }
 
 impl ParaOcc {
-    /// Record one occurrence at the given ancestry path.
-    fn record(&mut self, path: ParaPath) {
+    /// Record one occurrence at the given ancestry path. An occurrence whose branches are `unknown` is never counted
+    /// as a repeat; meeting another occurrence of the value leaves the repeat undecided.
+    fn record(&mut self, path: ParaPath, unknown: bool) {
         observation_contract! {
             rules: "-";
-            collections: "field.reps*3";
+            collections: "field.reps*4";
             scope: "source-local bounded extraction; no implicit document owner";
             loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
             fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1723,6 +1773,12 @@ impl ParaOcc {
         if self.conflict {
             return;
         }
+        if unknown {
+            self.undecided |= self.unknown_seen || !self.reps.is_empty();
+            self.unknown_seen = true;
+            return;
+        }
+        self.undecided |= self.unknown_seen;
         if self.reps.iter().any(|r| paths_conflict(r, &path)) {
             self.conflict = true;
             return;
@@ -1762,7 +1818,7 @@ struct AltCtx {
 fn check_para_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole, part: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "PARAID-VALUE";
-        collections: "field.alt_stack*1,field.para_ids*3";
+        collections: "field.alt_stack*1,field.frames*1,field.para_ids*3";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1786,12 +1842,15 @@ fn check_para_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Nam
             );
         }
         let key = raw.clone();
+        // Inside an `AlternateContent`, `Choice` or `Fallback` of unresolved namespace the branches are unknown.
+        let unknown_branches = (id.unresolved && matches!(id.local.as_str(), "AlternateContent" | "Choice" | "Fallback"))
+            || state.frames.iter().any(|f| f.unresolved_mc);
         if state.para_ids.len() >= state.fact_cap && !state.para_ids.contains_key(&key) {
             state.fact_capped = true;
         } else {
             let path: ParaPath = state.alt_stack.iter().map(|ctx| (ctx.seq, ctx.branch)).collect();
             let occ = state.para_ids.entry(key).or_default();
-            occ.record(path);
+            occ.record(path, unknown_branches);
             if occ.overflow {
                 state.fact_capped = true;
             }
@@ -2689,6 +2748,8 @@ fn check_prefixes(declared: &[Vec<String>], attrs: &[Attribute], res: &Namespace
                             out.unknown_prefixes.push(pfx.to_string());
                         }
                     }
+                } else {
+                    out.ignorable_unread = true;
                 }
             }
             _ => {}
