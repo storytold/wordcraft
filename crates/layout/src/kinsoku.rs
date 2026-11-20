@@ -31,6 +31,20 @@ const NO_START: &str = "ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッ�
 /// East Asian characters a line may not end with: opening brackets and quotes, currency signs.
 const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥";
 
+/// The closing punctuation [`closing_punct`] covers: [`NO_START`]'s marks without the small kana
+/// and the prolonged sound mark, which 行頭禁則 also forbids at a line's start but are not marks
+/// that end text.
+const CLOSING_PUNCT: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉》」』】〕〗〙〛〞〟）］｝｠｡｣､･ﾞﾟ％￠";
+
+/// Whether `c` is closing punctuation: a mark that ends text and may not start a line — the
+/// ideographic comma and full stop, the closing brackets and quotes, the middle dot and the other
+/// marks of [`CLOSING_PUNCT`]. The paragraph's `w:overflowPunct` lets one that would start the next
+/// line hang past the line's right margin instead, and `w:topLinePunct` sets one that does start a
+/// line at half width.
+pub fn closing_punct(c: char) -> bool {
+    CLOSING_PUNCT.contains(c)
+}
+
 /// Whether `c` is East Asian text: CJK ideographs, kana, bopomofo, CJK punctuation, and
 /// fullwidth/halfwidth forms (not spaces, not combining sound marks).
 pub fn is_east_asian(c: char) -> bool {
@@ -118,7 +132,18 @@ fn is_hangul(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AsianSide, apply, auto_space};
+    use super::{AsianSide, apply, auto_space, closing_punct};
+
+    #[test]
+    fn closing_punctuation_is_the_no_start_set() {
+        for c in ['、', '。', '，', '．', '・', '：', '；', '？', '！', '」', '』', '】', '〕', '）', '｡', '｣', '％'] {
+            assert!(closing_punct(c), "{c} closes text");
+        }
+        // Opening brackets, ideographs, kana and Latin punctuation are not closing punctuation.
+        for c in ['「', '『', '【', '（', '〈', '漢', 'あ', 'ー', '.', ',', 'A', '1', ' '] {
+            assert!(!closing_punct(c), "{c} does not close text");
+        }
+    }
 
     #[test]
     fn auto_space_pairs() {
