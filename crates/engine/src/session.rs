@@ -51,6 +51,11 @@ pub struct Session {
     pub view: ViewState,
     /// Formatting picked with a collapsed caret, applied to the next typed text.
     pub pending: Option<CharProps>,
+    /// Where the caret was when Backspace carried [`Self::pending`] over from the character it
+    /// deleted (#6518), moved on as typing advances the caret. That formatting is for typing
+    /// there only: once the caret is anywhere else (a paste, Find, Go To or a click put it
+    /// there) it is dropped (see [`Self::waiting`]). `None` for formatting picked at the caret.
+    pub(crate) pending_at: Option<Pos>,
     /// Last highlighter choice for the shortcut; palette state, outside document undo.
     pub(crate) last_highlight: wordcraft_doc::props::Highlight,
     pub path: Option<std::path::PathBuf>,

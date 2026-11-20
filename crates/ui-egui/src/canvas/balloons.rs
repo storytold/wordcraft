@@ -76,7 +76,7 @@ fn apply(app: &mut WordApp, cards: &[Card], edit: CommentEdit) {
                 _ => None,
             });
             if let Some(pos) = pos {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             }
         }
         CommentEdit::Edit { thread, index, text, .. } => {

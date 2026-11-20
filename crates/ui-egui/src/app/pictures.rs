@@ -22,7 +22,7 @@ impl WordApp {
         let Some(off) = end.off.checked_sub(wordcraft_doc::para::OBJ.len_utf8()) else { return };
         let start = wordcraft_doc::Pos { off, ..end.clone() };
         if self.session.doc.para_at(&start).and_then(|p| p.object_at(off)).is_some_and(|o| o.is_drawing()) {
-            self.session.sel = wordcraft_engine::Selection { anchor: start, focus: end };
+            self.session.set_selection(wordcraft_engine::Selection { anchor: start, focus: end });
         }
     }
 
@@ -38,7 +38,7 @@ impl WordApp {
     /// arrive in one drop, put the caret after the picture placed by the previous file (#1592).
     pub(super) fn caret_after_placed_picture(&mut self, placed: bool) {
         if placed {
-            self.session.sel.anchor = self.session.sel.focus.clone();
+            self.session.set_selection(wordcraft_engine::Selection::caret(self.session.sel.focus.clone()));
         }
     }
 
