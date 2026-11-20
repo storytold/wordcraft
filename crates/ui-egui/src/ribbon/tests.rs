@@ -10,9 +10,14 @@ use wordcraft_engine::Session;
 type Harness = egui_kittest::Harness<'static, WordApp>;
 
 /// An English app window of `size`, settled and ready for clicks through the real frame.
-fn app_harness(mut app: WordApp, size: egui::Vec2) -> Harness {
+fn app_harness(app: WordApp, size: egui::Vec2) -> Harness {
+    app_harness_with(app, size, crate::test_harness::install_spec)
+}
+
+/// [`app_harness`] on the runtime that `spec` installs (a memory clipboard).
+fn app_harness_with(mut app: WordApp, size: egui::Vec2, spec: impl FnOnce() -> craft::ui::InstallSpec + 'static) -> Harness {
     app.ui.language = "en".into();
-    let mut h = crate::test_harness::builder().with_size(size).build_ui_state(
+    let mut h = crate::test_harness::builder_with(spec).with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -769,19 +774,50 @@ fn accept_and_reject_buttons_move_to_the_next_change() {
     }
 }
 
+/// Click the button named `name` and step as the app's driver does, answering a paste request the
+/// way eframe does: Paste is an edit command, so with the page focused the runtime sends
+/// `ViewportCommand::RequestPaste`, and the platform replies with the clipboard's text as a paste
+/// event. A kittest harness does not reply. Returns whether the click asked to paste.
+fn click_answering_paste(h: &mut Harness, name: &str) -> bool {
+    h.query_all(By::new().role(egui::accesskit::Role::Button).label(name)).next().unwrap_or_else(|| panic!("a button named {name}")).click();
+    let mut asked = false;
+    for _ in 0..3 {
+        crate::test_harness::frame(h);
+        if h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::RequestPaste))) {
+            asked = true;
+            let text = craft::ui::runtime::commands::ClipboardHandle::of(&h.ctx).read_text().ok().flatten().unwrap_or_default();
+            h.event(egui::Event::Paste(text));
+        }
+    }
+    crate::test_harness::frames(h, 2);
+    asked
+}
+
 /// Home › Paste is a split button: the face is one button and the arrow another, named "Paste
-/// options"; only the arrow opens the paste options, and opening them pastes nothing.
+/// options". The face pastes the clipboard without opening the menu; the arrow opens the paste
+/// options, and opening them pastes nothing.
 #[test]
 fn paste_button_face_and_arrow_are_separate_buttons() {
-    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Copy me")), crate::Services::default());
-    let mut h = tab_harness(app, "Home");
+    use craft::platform::clipboard::{Clipboard, MemoryClipboard};
+    use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Copy me")), crate::Services::default());
+    app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+    let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
+    let mut h = app_harness_with(app, vec2(2560.0, 900.0), spec);
     let options = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Paste"))]);
     for name in [tl!("Paste"), options.as_str()] {
         assert_eq!(h.query_all(By::new().role(egui::accesskit::Role::Button).label(name)).count(), 1, "one button named {name}");
     }
-    click_button(&mut h, tl!("Paste"));
+    let body = |h: &Harness| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    let _ = ClipboardHandle::of(&h.ctx).offer(&[ClipItem::Text(std::sync::Arc::from(" pasted"))]).unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    h.state_mut().run("caret.docEnd", json!({})).unwrap();
+    crate::test_harness::frames(&mut h, 2);
+    assert!(click_answering_paste(&mut h, tl!("Paste")), "the face asks to paste");
+    assert_eq!(body(&h), "Copy me pasted", "the face pastes the clipboard");
     assert!(h.query_by_label_contains("Keep Text Only").is_none(), "the face does not open the menu");
-    click_button(&mut h, &options);
+    assert!(!click_answering_paste(&mut h, &options), "the arrow does not ask to paste");
     assert!(h.query_by_label_contains("Keep Text Only").is_some(), "the arrow opens the menu");
-    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Copy me", "opening the menu pastes nothing");
+    assert_eq!(body(&h), "Copy me pasted", "opening the menu pastes nothing");
 }
