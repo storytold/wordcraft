@@ -185,9 +185,11 @@ Required prerequisites, all in the approved revisions above:
 
 The root `[patch.crates-io]` must contain every crate whose crates.io identity would otherwise
 pull a second egui/winit. A dependency's own `[patch]` table is ignored when it is a dependency,
-so the wordcraft root must repeat the patches. At minimum: `egui`, `eframe`, `egui-winit`,
-`egui-wgpu`, `egui_glow`, `egui_kittest`, `egui_extras`, `epaint`, `emath`, `ecolor`,
-`epaint_default_fonts`, `egui_system_font_provider`, and `winit`. Keep the existing
+so the wordcraft root must repeat the patches for every one of these crates in its graph:
+`egui`, `eframe`, `egui-winit`, `egui-wgpu`, `egui_glow`, `egui_kittest`, `epaint`, `emath`,
+`ecolor`, `epaint_default_fonts`, and `winit`. A crate that leaves the graph also leaves the
+patch table, as `egui_extras` and `egui_system_font_provider` did, because Cargo warns about
+unused patches; add its patch back if a dependency brings it in again. Keep the existing
 `krilla` patch only because `craft-pdf` requires it; it is unrelated to this migration.
 The published manifest must not contain any absolute path patch, branch, `path = "/home/..."`,
 or machine-local checkout.
