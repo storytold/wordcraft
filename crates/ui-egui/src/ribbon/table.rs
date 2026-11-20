@@ -1,158 +1,129 @@
-use super::common::{mi, stack};
-use super::language::mi_check;
-use super::{
-    Align2, MeasureExt, Rect, Remember, Sense, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, pos2, regular, small,
-    split, vec2,
-};
+use craft::behavior::IconId;
+use craft::keymap::CommandRef;
+use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::display::Divider;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::menu::MenuItem;
+use craft::ui::text::NumberField;
+use egui::{Rect, Stroke, pos2};
 use wordcraft_doc::props::BorderStyle;
 
-pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
+use super::common::menu_button;
+use super::{Ui, WordApp, json};
+use crate::colors::{Remember, Target};
+use crate::table_pen::TableTool;
+use crate::undo_marks::apply_edits;
+
+/// The row height and column width a Cell Size field accepts, in points (0.02 to 22 inches).
+const CELL_SIZE_RANGE: std::ops::RangeInclusive<f64> = 1.44..=1584.0;
+
+pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
-    group(ui, "Table Style Options", None, app, |ui, app| {
-        let Some(l) = look else { return };
-        crate::rtl::grid(ui, egui::Grid::new("look"), |ui| {
-            for (row, items) in [
-                [("Header Row", "headerRow", l.header_row), ("First Column", "firstColumn", l.first_column)],
-                [("Total Row", "totalRow", l.total_row), ("Last Column", "lastColumn", l.last_column)],
-                [("Banded Rows", "bandedRows", l.banded_rows), ("Banded Columns", "bandedColumns", l.banded_columns)],
-            ]
-            .iter()
-            .enumerate()
-            {
-                let _ = row;
-                for (label, key, val) in items {
-                    let mut v = *val;
-                    if ui.checkbox(&mut v, tl!(label)).changed() {
-                        let _ = app.run("table.look", json!({ *key: v }));
-                    }
+    if let Some(l) = look {
+        // Three rows of two, so Tab runs Header Row, First Column, Total Row, Last Column, Banded Rows, Banded Columns.
+        let options = [
+            [("Header Row", "headerRow", l.header_row), ("First Column", "firstColumn", l.first_column)],
+            [("Total Row", "totalRow", l.total_row), ("Last Column", "lastColumn", l.last_column)],
+            [("Banded Rows", "bandedRows", l.banded_rows), ("Banded Columns", "bandedColumns", l.banded_columns)],
+        ];
+        row.group(RibbonGroup::new("tableStyleOptions", tl!("Table Style Options").to_string(), IconId::new("tableStyleOptions").into()), |ui| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                for line in options {
+                    Row::new().show(ui, |ui, _| {
+                        for (label, key, value) in line {
+                            let out = Checkbox::new(Bind::given(value)).label(tl!(label).to_string()).show(ui);
+                            apply_edits(app, out.events, |app, v| {
+                                let _ = app.run("table.look", json!({ key: v }));
+                            });
+                        }
+                    });
                 }
-                ui.end_row();
-            }
+            });
         });
-    });
-    group(ui, "Table Styles", None, app, |ui, app| {
-        // The document's own styles first, so a new one shows without scrolling.
-        let mut styles: Vec<(bool, String, String)> = app
-            .session
+    }
+    let current = look.and_then(|_| {
+        let (tp, _, _) = app.session.sel.focus.path.cell()?;
+        let id = app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone()?;
+        app.session
             .doc
             .styles
-            .styles
-            .iter()
-            .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
-            .map(|s| (s.builtin, s.id.clone(), crate::i18n::style_name(s)))
-            .collect();
-        styles.sort_by_key(|(builtin, _, _)| *builtin);
-        crate::rtl::island(ui, |ui| {
-            egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (_, id, name) in styles {
-                        if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
-                            let _ = app.run("table.style", json!({"style": id}));
-                        }
-                    }
-                });
-            })
-        });
-        stack(ui, |ui| {
-            let current = look.and_then(|_| {
-                let (tp, _, _) = app.session.sel.focus.path.cell()?;
-                let id = app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone()?;
-                app.session
-                    .doc
-                    .styles
-                    .get(&id)
-                    .filter(|st| st.kind == wordcraft_doc::StyleKind::Table)
-                    .map(wordcraft_engine::cmd::table_style::is_builtin_table_style)
+            .get(&id)
+            .filter(|st| st.kind == wordcraft_doc::StyleKind::Table)
+            .map(wordcraft_engine::cmd::table_style::is_builtin_table_style)
+    });
+    let can_modify = current.is_some();
+    // Built-in table styles can't be deleted.
+    let can_delete = current == Some(false);
+    row.group(RibbonGroup::new("tableStyles", tl!("Table Styles").to_string(), IconId::new("tableStyles").into()), |ui| {
+        super::galleries::table_styles(ui, app);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            let _ = menu_button(ui, Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")), tl!("Styles").to_string(), None, |ui, _| {
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
+                    .label(tl!("New Table Style…").to_string())
+                    .show(ui);
+                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
+                    .label(tl!("Modify Table Style…").to_string())
+                    .enabled(can_modify)
+                    .show(ui);
+                MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
+                    .label(tl!("Delete Table Style").to_string())
+                    .enabled(can_delete)
+                    .show(ui);
             });
-            let can_modify = current.is_some();
-            // Built-in table styles can't be deleted.
-            let can_delete = current == Some(false);
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("styles", Some("Styles"), "Table Styles", false, "table.style"),
-                |ui, app| {
-                    mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
-                    if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
-                        let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
-                        ui.close();
-                    }
-                    if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete Table Style")).min_size(vec2(200.0, 0.0))).clicked() {
-                        if let Err(e) = app.run("table.deleteStyle", json!({})) {
-                            app.status(e);
-                        }
-                        ui.close();
-                    }
-                },
-            );
-            let sw = wordcraft_doc::Rgb::parse(&app.canvas.last_shading).map(crate::theme::c32);
-            split(
-                ui,
-                app,
-                "shadingNoBar",
-                "Shading",
-                crate::widgets::ButtonAction::new("table.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                sw,
-                |ui, app| {
-                    mi(ui, app, "No Color", "table.shading", json!({"color": null}));
-                    let theme = app.session.doc.settings.theme_colors.clone();
-                    crate::colors::menu(ui, app, &theme, Target::cmd("table.shading").remember(Remember::Shading));
-                },
-            );
+            let _ = crate::colors::shading_split(ui, app, tl!("Shading").to_string(), Target::cmd("table.shading").remember(Remember::Shading));
         });
     });
-    group(ui, "Borders", None, app, |ui, app| {
-        // Line Style, Line Weight and Pen Color set the pen; the Borders menu and the Border
-        // Painter draw with it (#1740).
+    row.group(RibbonGroup::new("borders", tl!("Borders").to_string(), IconId::new("borders").into()), |ui| {
+        // Include the active pen in each border command so recorded macro steps keep it.
         let pen = app.session.table_pen;
-        stack(ui, |ui| {
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("lineStyle", Some("Line Style"), "Line Style", false, "table.borderStyle"),
-                |ui, app| {
-                    for (style, label) in std::iter::once((BorderStyle::None, "No Border")).chain(crate::dialogs_table_style::LINE_STYLES) {
-                        mi_sample(ui, app, tl!(label), pen.style == style, "table.borderStyle", json!({"value": style.name()}), |p, r, c| {
-                            line_sample(p, r, style, 1.0, c);
-                        });
-                    }
-                },
-            );
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("lineWeight", Some("Line Weight"), "Line Weight", false, "table.borderWidth"),
-                |ui, app| {
-                    for w in wordcraft_engine::cmd::table::BORDER_WIDTHS {
-                        mi_sample(ui, app, &weight_label(w), (pen.width - w).abs() < 0.01, "table.borderWidth", json!({"value": w}), |p, r, c| {
-                            line_sample(p, r, BorderStyle::Single, (w * 1.4).clamp(1.0, 8.0), c);
-                        });
-                    }
-                },
-            );
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("penColor", Some("Pen Color"), "Pen Color", false, "table.borderColor"),
-                |ui, app| {
-                    mi_check(ui, app, "Automatic", pen.color.is_none(), "table.borderColor", json!({"color": null}));
-                    let theme = app.session.doc.settings.theme_colors.clone();
-                    crate::colors::menu(ui, app, &theme, Target::cmd("table.borderColor"));
-                },
-            );
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            menu_button(ui, Button::new(tl!("Line Style")).icon(IconId::new("borders")), tl!("Line Style"), Some("table.borderStyle"), |ui, _| {
+                for (style, label) in std::iter::once((BorderStyle::None, "No Border")).chain(crate::dialogs::dialogs_table_style::LINE_STYLES) {
+                    MenuItem::command(CommandRef::with_params("table.borderStyle", json!({"value": style.name()})))
+                        .label(tl!(label))
+                        .check(pen.style == style)
+                        .sample(move |cx, rect| line_sample(&cx.painter, rect, style, 1.0, cx.ink()))
+                        .show(ui);
+                }
+            });
+            menu_button(ui, Button::new(tl!("Line Weight")).icon(IconId::new("borders")), tl!("Line Weight"), Some("table.borderWidth"), |ui, _| {
+                let pixel = 1.0 / ui.ctx().pixels_per_point();
+                for w in wordcraft_engine::cmd::table::BORDER_WIDTHS {
+                    MenuItem::command(CommandRef::with_params("table.borderWidth", json!({"value": w})))
+                        .label(weight_label(w))
+                        .check((pen.width - w).abs() < 0.01)
+                        .sample(move |cx, rect| line_sample(&cx.painter, rect, BorderStyle::Single, w.max(pixel), cx.ink()))
+                        .show(ui);
+                }
+            });
+            menu_button(ui, Button::new(tl!("Pen Color")).icon(IconId::new("pen")), tl!("Pen Color"), Some("table.borderColor"), |ui, cx| {
+                MenuItem::command(CommandRef::with_params("table.borderColor", json!({"color": null})))
+                    .label(tl!("Automatic"))
+                    .check(pen.color.is_none())
+                    .show(ui);
+                let pick = crate::colors::menu(ui, app, Target::cmd("table.borderColor"));
+                if pick.picked.is_some() || clicked(&pick.response) {
+                    cx.request_close();
+                }
+            });
         });
-        // Each entry carries the pen, so a recorded macro step draws the same line when played.
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("borders", Some("Borders"), "Borders", true, "table.borders"), |ui, app| {
-            for (l, k) in BORDER_SIDES {
-                mi(ui, app, l, "table.borders", pen.params(k));
+        let face = Button::new(tl!("Borders").to_string()).icon(IconId::new("borders")).arrangement(Arrangement::Stacked);
+        menu_button(ui, face, tl!("Borders"), None, |ui, _| {
+            for (label, kind) in BORDER_SIDES {
+                MenuItem::command(CommandRef::with_params("table.borders", pen.params(kind))).label(tl!(label)).show(ui);
             }
-            ui.separator();
-            let drawing = app.canvas.table_tool == Some(crate::table_pen::TableTool::Draw);
-            mi_check(ui, app, "Draw Table", drawing, "table.draw", json!({}));
-            let gridlines = app.session.view.table_gridlines;
-            mi_check(ui, app, "View Gridlines", gridlines, "table.viewGridlines", json!({}));
+            Divider::horizontal().show(ui);
+            MenuItem::command(CommandRef::new("table.draw")).label(tl!("Draw Table")).check(app.canvas.table_tool == Some(TableTool::Draw)).show(ui);
+            MenuItem::command(CommandRef::new("table.viewGridlines")).label(tl!("View Gridlines")).check(app.session.view.table_gridlines).show(ui);
         });
-        big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", pen.params("all"), false);
+        Button::command(CommandRef::with_params("table.borderPainter", pen.params("all")))
+            .label(tl!("Border\nPainter").to_string())
+            .icon(IconId::new("borderPainter"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
 }
 
@@ -233,37 +204,9 @@ fn line_sample(p: &egui::Painter, r: Rect, style: BorderStyle, width: f32, c: eg
     }
 }
 
-/// A menu item with a drawn sample before its (already translated) text; `checked` marks the
-/// current choice.
-fn mi_sample(
-    ui: &mut Ui,
-    app: &mut WordApp,
-    text: &str,
-    checked: bool,
-    id: &str,
-    params: Value,
-    sample: impl FnOnce(&egui::Painter, Rect, egui::Color32),
-) {
-    let t = Tokens::get(ui.ctx());
-    let enabled = crate::widgets::enabled(app, id);
-    let (r, resp) = ui.allocate_exact_size(vec2(220.0, 22.0), Sense::click());
-    crate::widgets::bg(ui, r, &resp, checked, &t);
-    let c = if enabled { t.text } else { t.text_disabled };
-    if checked {
-        ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, "✓", regular(12.0), c);
-    }
-    sample(ui.painter(), Rect::from_min_size(pos2(r.min.x + 22.0, r.min.y + 3.0), vec2(60.0, 16.0)), c);
-    ui.painter().text(pos2(r.min.x + 92.0, r.center().y), Align2::LEFT_CENTER, text, egui::TextStyle::Button.resolve(ui.style()), c);
-    resp.widget_info(|| egui::WidgetInfo { selected: Some(checked), ..egui::WidgetInfo::labeled(egui::Role::Button, enabled, text) });
-    if enabled && resp.clicked() {
-        crate::widgets::run_from_ribbon(app, id, params);
-        ui.close();
-    }
-}
-
-/// Table Layout › Cell Size: the caret cell's row height and column width, in inches. They show
-/// the size on the page (a row without a set height shows the height its text gives it) and
-/// editing runs `table.rowHeight` / `table.columnWidth`; dragging one is a single Undo.
+/// Table Layout › Cell Size: the caret cell's row height and column width. They show the size on the
+/// page (a row without a set height shows the height its text gives it) and editing runs
+/// `table.rowHeight` / `table.columnWidth`; a drag is one undo step.
 fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let story = app.session.sel.focus.story;
     let Some((tp, r, c)) = app.session.sel.focus.path.cell() else { return };
@@ -289,182 +232,155 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
             _ => None,
         })
         .reduce(f32::min);
-    let unit = crate::options::unit();
-    let k = unit.pt_per_unit();
     let h0 = row.height.or(row_h).unwrap_or(0.0);
     let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
     let exact = row.height_rule == wordcraft_doc::props::HeightRule::Exact;
-    // The edited value in points, and whether it continues a drag (joins the previous Undo step).
-    let boxed = |ui: &mut Ui, label: &str, pt: f32| -> Option<(f32, bool)> {
-        let mut out = None;
-        crate::widgets::row(ui, |ui| {
-            ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
-            let mut v = pt / k;
-            let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).measure(unit).max_decimals(2));
-            if r.changed() {
-                out = Some((v * k, r.dragged() && !r.drag_started()));
+    let (height_units, width_units) = (crate::options::lengths(app.session.units()), crate::options::lengths(app.session.units()));
+    Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+        let out = NumberField::length(tl!("Height:").to_string(), Bind::given(Some(f64::from(h0))), height_units).range(CELL_SIZE_RANGE).show(ui);
+        apply_edits(app, out.edit.events, |app, v| {
+            if let Some(h) = v {
+                let _ = app.run("table.rowHeight", json!({"height": h, "rule": if exact { "exact" } else { "atLeast" }}));
             }
         });
-        ui.add_space(2.0);
-        out
-    };
-    stack(ui, |ui| {
-        if let Some((h, join)) = boxed(ui, "Height:", h0) {
-            if join {
-                app.session.join_next_undo();
+        let out = NumberField::length(tl!("Width:").to_string(), Bind::given(Some(f64::from(w0))), width_units).range(CELL_SIZE_RANGE).show(ui);
+        apply_edits(app, out.edit.events, |app, v| {
+            if let Some(w) = v {
+                let _ = app.run("table.columnWidth", json!({"width": w}));
             }
-            let _ = app.run("table.rowHeight", json!({"height": h, "rule": if exact { "exact" } else { "atLeast" }}));
-        }
-        if let Some((w, join)) = boxed(ui, "Width:", w0) {
-            if join {
-                app.session.join_next_undo();
-            }
-            let _ = app.run("table.columnWidth", json!({"width": w}));
-        }
+        });
     });
 }
 
-pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Table", None, app, |ui, app| {
-        stack(ui, |ui| {
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("selectTable", Some("Select"), "Select", false, "table.selectTable"),
-                |ui, app| {
-                    mi(ui, app, "Select Cell", "table.selectCell", json!({}));
-                    mi(ui, app, "Select Column", "table.selectColumn", json!({}));
-                    mi(ui, app, "Select Row", "table.selectRow", json!({}));
-                    mi(ui, app, "Select Table", "table.selectTable", json!({}));
-                },
-            );
-            let g = app.session.view.table_gridlines;
-            small(
-                ui,
-                app,
-                "gridlines",
-                Some("View Gridlines"),
-                "View Gridlines",
-                crate::widgets::ButtonAction::new("table.viewGridlines", json!({}), g),
-            );
-            small(
-                ui,
-                app,
-                "properties",
-                Some("Properties"),
-                "Table Properties",
-                crate::widgets::ButtonAction::new("table.properties", json!({}), false),
-            );
+pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    row.group(RibbonGroup::new("table", tl!("Table").to_string(), IconId::new("table").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            let _ =
+                menu_button(ui, Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")), tl!("Select").to_string(), None, |ui, _| {
+                    for (label, id) in [
+                        ("Select Cell", "table.selectCell"),
+                        ("Select Column", "table.selectColumn"),
+                        ("Select Row", "table.selectRow"),
+                        ("Select Table", "table.selectTable"),
+                    ] {
+                        MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+                    }
+                });
+            ToggleButton::command(CommandRef::new("table.viewGridlines"))
+                .label(tl!("View Gridlines").to_string())
+                .icon(IconId::new("gridlines"))
+                .selected(app.session.view.table_gridlines)
+                .show(ui);
+            Button::command(CommandRef::new("table.properties")).label(tl!("Properties").to_string()).icon(IconId::new("properties")).show(ui);
         });
     });
-    group(ui, "Draw", None, app, |ui, app| {
-        use crate::table_pen::TableTool;
-        let tool = app.canvas.table_tool;
-        crate::widgets::big_toggle(ui, app, "drawTable", "Draw\nTable", "table.draw", tool == Some(TableTool::Draw));
-        crate::widgets::big_toggle(ui, app, "eraser", "Eraser", "table.eraser", tool == Some(TableTool::Erase));
+    row.group(RibbonGroup::new("draw", tl!("Draw").to_string(), IconId::new("drawTable").into()), |ui| {
+        ToggleButton::command(CommandRef::new("table.draw"))
+            .label(tl!("Draw\nTable").to_string())
+            .icon(IconId::new("drawTable"))
+            .arrangement(Arrangement::Stacked)
+            .selected(app.canvas.table_tool == Some(TableTool::Draw))
+            .show(ui);
+        ToggleButton::command(CommandRef::new("table.eraser"))
+            .label(tl!("Eraser").to_string())
+            .icon(IconId::new("wordcraft.eraser"))
+            .arrangement(Arrangement::Stacked)
+            .selected(app.canvas.table_tool == Some(TableTool::Erase))
+            .show(ui);
     });
-    group(ui, "Rows & Columns", None, app, |ui, app| {
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("deleteTable", Some("Delete"), "Delete", true, "table.deleteTable"),
-            |ui, app| {
-                mi(ui, app, "Delete Cells", "table.deleteCells", json!({}));
-                mi(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
-                mi(ui, app, "Delete Rows", "table.deleteRow", json!({}));
-                mi(ui, app, "Delete Table", "table.deleteTable", json!({}));
-            },
-        );
-        big(ui, app, "insertAbove", "Insert\nAbove", "table.insertRowAbove", json!({}), false);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "insertBelow",
-                Some("Insert Below"),
-                "Insert Below",
-                crate::widgets::ButtonAction::new("table.insertRowBelow", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "insertLeft",
-                Some("Insert Left"),
-                "Insert Left",
-                crate::widgets::ButtonAction::new("table.insertColumnLeft", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "insertRight",
-                Some("Insert Right"),
-                "Insert Right",
-                crate::widgets::ButtonAction::new("table.insertColumnRight", json!({}), false),
-            );
+    row.group(RibbonGroup::new("rowsColumns", tl!("Rows & Columns").to_string(), IconId::new("insertAbove").into()), |ui| {
+        let face = Button::new(tl!("Delete").to_string()).icon(IconId::new("deleteTable")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Delete").to_string(), None, |ui, _| {
+            for (label, id) in [
+                ("Delete Cells", "table.deleteCells"),
+                ("Delete Columns", "table.deleteColumn"),
+                ("Delete Rows", "table.deleteRow"),
+                ("Delete Table", "table.deleteTable"),
+            ] {
+                MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+            }
+        });
+        Button::command(CommandRef::new("table.insertRowAbove"))
+            .label(tl!("Insert\nAbove").to_string())
+            .icon(IconId::new("insertAbove"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("table.insertRowBelow")).label(tl!("Insert Below").to_string()).icon(IconId::new("insertBelow")).show(ui);
+            Button::command(CommandRef::new("table.insertColumnLeft")).label(tl!("Insert Left").to_string()).icon(IconId::new("insertLeft")).show(ui);
+            Button::command(CommandRef::new("table.insertColumnRight"))
+                .label(tl!("Insert Right").to_string())
+                .icon(IconId::new("insertRight"))
+                .show(ui);
         });
     });
-    group(ui, "Merge", None, app, |ui, app| {
-        stack(ui, |ui| {
-            small(ui, app, "merge", Some("Merge Cells"), "Merge Cells", crate::widgets::ButtonAction::new("table.merge", json!({}), false));
-            small(ui, app, "splitCells", Some("Split Cells"), "Split Cells", crate::widgets::ButtonAction::new("table.split", json!({}), false));
-            small(ui, app, "splitTable", Some("Split Table"), "Split Table", crate::widgets::ButtonAction::new("table.splitTable", json!({}), false));
+    row.group(RibbonGroup::new("merge", tl!("Merge").to_string(), IconId::new("merge").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("table.merge")).label(tl!("Merge Cells").to_string()).icon(IconId::new("merge")).show(ui);
+            Button::command(CommandRef::new("table.split")).label(tl!("Split Cells").to_string()).icon(IconId::new("splitCells")).show(ui);
+            Button::command(CommandRef::new("table.splitTable")).label(tl!("Split Table").to_string()).icon(IconId::new("splitTable")).show(ui);
         });
     });
-    group(ui, "Cell Size", None, app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("autofit", Some("AutoFit"), "AutoFit", true, "table.autofit"), |ui, app| {
-            mi(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
-            mi(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
-            mi(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
+    row.group(RibbonGroup::new("cellSize", tl!("Cell Size").to_string(), IconId::new("autofit").into()), |ui| {
+        let face = Button::new(tl!("AutoFit").to_string()).icon(IconId::new("autofit")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("AutoFit").to_string(), None, |ui, _| {
+            for (label, mode) in [("AutoFit Contents", "contents"), ("AutoFit Window", "window"), ("Fixed Column Width", "fixed")] {
+                MenuItem::command(CommandRef::with_params("table.autofit", json!({"mode": mode}))).label(tl!(label).to_string()).show(ui);
+            }
         });
         cell_size_boxes(ui, app);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "distributeRows",
-                Some("Distribute Rows"),
-                "Distribute Rows",
-                crate::widgets::ButtonAction::new("table.distributeRows", json!({}), false),
-            );
-            small(
-                ui,
-                app,
-                "distributeCols",
-                Some("Distribute Columns"),
-                "Distribute Columns",
-                crate::widgets::ButtonAction::new("table.distributeColumns", json!({}), false),
-            );
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("table.distributeRows"))
+                .label(tl!("Distribute Rows").to_string())
+                .icon(IconId::new("distributeRows"))
+                .show(ui);
+            Button::command(CommandRef::new("table.distributeColumns"))
+                .label(tl!("Distribute Columns").to_string())
+                .icon(IconId::new("distributeCols"))
+                .show(ui);
         });
     });
-    group(ui, "Alignment", None, app, |ui, app| {
-        crate::rtl::grid(ui, egui::Grid::new("cellalign").spacing(vec2(1.0, 1.0)), |ui| {
-            for row in [
+    row.group(RibbonGroup::new("alignment", tl!("Alignment").to_string(), IconId::new("cellAlign").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for line in [
                 [("topLeft", "Align Top Left"), ("topCenter", "Align Top Center"), ("topRight", "Align Top Right")],
                 [("centerLeft", "Align Center Left"), ("center", "Align Center"), ("centerRight", "Align Center Right")],
                 [("bottomLeft", "Align Bottom Left"), ("bottomCenter", "Align Bottom Center"), ("bottomRight", "Align Bottom Right")],
             ] {
-                for (v, tip) in row {
-                    small(ui, app, "cellAlign", None, tip, crate::widgets::ButtonAction::new("table.cellAlign", json!({"value": v}), false));
-                }
-                ui.end_row();
+                Row::new().show(ui, |ui, _| {
+                    for (v, tip) in line {
+                        IconButton::command(IconId::new("cellAlign"), CommandRef::with_params("table.cellAlign", json!({"value": v})))
+                            .label(tl!(tip).to_string())
+                            .tooltip(tl!(tip).to_string())
+                            .show(ui);
+                    }
+                });
             }
         });
-        big(ui, app, "textDirection", "Text\nDirection", "table.textDirection", json!({}), false);
-        big(ui, app, "cellMargins", "Cell\nMargins", "table.cellMargins", json!({}), false);
+        Button::command(CommandRef::new("table.textDirection"))
+            .label(tl!("Text\nDirection").to_string())
+            .icon(IconId::new("textDirection"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Button::command(CommandRef::new("table.cellMargins"))
+            .label(tl!("Cell\nMargins").to_string())
+            .icon(IconId::new("cellMargins"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Data", None, app, |ui, app| {
-        big(ui, app, "sort", "Sort", "table.sort", json!({}), false);
-        stack(ui, |ui| {
-            small(
-                ui,
-                app,
-                "repeatHeader",
-                Some("Repeat Header Rows"),
-                "Repeat Header Rows",
-                crate::widgets::ButtonAction::new("table.repeatHeader", json!({}), false),
-            );
-            small(ui, app, "toText", Some("Convert to Text"), "Convert to Text", crate::widgets::ButtonAction::new("table.toText", json!({}), false));
-            small(ui, app, "formula", Some("Formula"), "Formula", crate::widgets::ButtonAction::new("table.formula", json!({}), false));
+    row.group(RibbonGroup::new("data", tl!("Data").to_string(), IconId::new("sort").into()), |ui| {
+        Button::command(CommandRef::new("table.sort"))
+            .label(tl!("Sort").to_string())
+            .icon(IconId::new("sort"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("table.repeatHeader"))
+                .label(tl!("Repeat Header Rows").to_string())
+                .icon(IconId::new("repeatHeader"))
+                .show(ui);
+            Button::command(CommandRef::new("table.toText")).label(tl!("Convert to Text").to_string()).icon(IconId::new("toText")).show(ui);
+            Button::command(CommandRef::new("table.formula")).label(tl!("Formula").to_string()).icon(IconId::new("formula")).show(ui);
         });
     });
 }

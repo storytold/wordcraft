@@ -1,14 +1,13 @@
-use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, WordApp, json, pos2};
-use std::collections::HashMap;
+use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Rect, WordApp, json};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
-/// Taken once per frame.
-pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hinted: bool) -> u64 {
+/// Taken once per pass.
+// lean: a hash of the view inputs stands in for the page-raster revision; the upgrade is an engine render-inputs
+// revision that the pages' pictures key on directly.
+pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]).
-    hinted.hash(&mut h);
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
@@ -67,7 +66,7 @@ pub(crate) struct PageKeys {
 }
 
 impl PageKeys {
-    fn content(&mut self, layout: &std::sync::Arc<DocLayout>, i: usize) -> u64 {
+    pub(super) fn content(&mut self, layout: &std::sync::Arc<DocLayout>, i: usize) -> u64 {
         if !self.layout.as_ref().is_some_and(|l| std::sync::Arc::ptr_eq(l, layout)) {
             self.layout = Some(layout.clone());
             self.keys = vec![None; layout.pages.len()];
@@ -85,166 +84,18 @@ impl PageKeys {
     }
 }
 
-/// What page `i` shows, whatever its size: its content and the view (`view_key` with the
-/// hinting fixed). A raster that showed this may be stretched to stand in for the page.
-pub(super) fn page_shows(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
+/// What page `i` shows, whatever its size: its content and the view (`view_key`). The page's picture is versioned
+/// by it.
+pub(super) fn page_shows(keys: &mut PageKeys, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, app.canvas.page_keys.content(layout, i)).hash(&mut h);
+    (view, keys.content(layout, i)).hash(&mut h);
     h.finish()
-}
-
-/// The texture cache key of page `i`: its content, the view, and the raster scale.
-pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64, scale_px: f32) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, scale_px.to_bits(), app.canvas.page_keys.content(layout, i)).hash(&mut h);
-    h.finish()
-}
-
-pub(super) fn to_screen(origin: Pos2, page_rect: Rect, scale: f32, x: f32, y: f32) -> Pos2 {
-    pos2(origin.x + page_rect.min.x + x * scale, origin.y + page_rect.min.y + y * scale)
-}
-
-/// A page raster as an egui image. Both hold premultiplied RGBA8, so the pixels go across as they
-/// are: un-premultiplying them for egui to premultiply again gave the same image for two more
-/// passes over every pixel of the page, on each keystroke.
-pub(super) fn page_image(img: &wordcraft_render::Rendered) -> egui::ColorImage {
-    egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels)
-}
-
-/// Place a raster at a physical-pixel-aligned origin and its exact device-pixel size.
-pub(super) fn texel_aligned_rect(layout: Rect, texture_px: egui::Vec2, ppp: f32) -> Rect {
-    let snap = |v: f32| (v * ppp).round() / ppp;
-    Rect::from_min_size(pos2(snap(layout.min.x), snap(layout.min.y)), texture_px / ppp)
-}
-
-/// Tile indices intersecting the view, in a fixed grid of raster pixels. The grid follows the
-/// document, not the viewport, so scrolling never changes tile contents or their cache keys.
-pub(super) fn visible_tiles(page_rect: Rect, clip: Rect, screen_scale: f32, raster_scale: f32, tile_height_px: usize) -> std::ops::Range<usize> {
-    if !page_rect.intersects(clip)
-        || !screen_scale.is_finite()
-        || !raster_scale.is_finite()
-        || screen_scale <= 0.0
-        || raster_scale <= 0.0
-        || tile_height_px == 0
-    {
-        return 0..0;
-    }
-    let total_px = (page_rect.height() / screen_scale * raster_scale).ceil() as usize;
-    let count = total_px.div_ceil(tile_height_px);
-    let at = |y: f32| ((y - page_rect.min.y).clamp(0.0, page_rect.height()) / screen_scale * raster_scale) / tile_height_px as f32;
-    let first = (at(clip.top()).floor() as usize).min(count);
-    let last = (at(clip.bottom()).ceil() as usize).min(count);
-    first..last.max(first)
 }
 
 pub(crate) fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {
     if page.w > 0.0 { rect.width() / page.w } else { fallback }
 }
 
-/// Closest the drawing grid's lines get on screen; zoomed far out, every other line is skipped.
-pub(super) const DRAWING_GRID_MIN_PX: f32 = 4.0;
-
-/// Most grid lines drawn each way on one page (page sizes come from files).
-pub(super) const DRAWING_GRID_MAX_LINES: usize = 2000;
-
-/// The View › Gridlines drawing grid over a page's text area, in document points: the x of each
-/// vertical line and the y of each horizontal line, starting at the margins and `step` (across,
-/// down) apart, never outside the margins. Drawn on screen only — never printed or exported.
-pub(super) fn drawing_grid(body: wordcraft_geom::Rect, step: (f32, f32)) -> (Vec<f32>, Vec<f32>) {
-    let axis = |start: f32, len: f32, step: f32| -> Vec<f32> {
-        if !(step.is_finite() && step > 0.0 && start.is_finite() && len.is_finite() && len >= 0.0) {
-            return Vec::new();
-        }
-        let end = start + len + 0.01;
-        (0..DRAWING_GRID_MAX_LINES).map(|k| start + k as f32 * step).take_while(|p| *p <= end).collect()
-    };
-    (axis(body.x, body.w, step.0), axis(body.y, body.h, step.1))
-}
-
-/// Global View Gridlines outlines every table (#1628). While editing a header/footer, also
-/// outline that story's cells (#2197), without adding printable borders or changing the view flag.
-pub(super) fn gridline_cells(page: &Page, all: bool, editing: Option<StoryRef>) -> impl Iterator<Item = wordcraft_geom::Rect> + '_ {
-    // Automatic header/footer guides need not scan a potentially large body placement list.
-    let body = if all { page.items.as_slice() } else { &[] };
-    body.iter().chain(&page.header).chain(&page.footer).filter_map(move |it| match it {
-        Placed::Cell { rect, covered: false, story, .. } if all || Some(*story) == editing => Some(*rect),
-        _ => None,
-    })
-}
-
-/// The pieces of cell edges View Gridlines draws on a page, in document points: each edge of
-/// [`gridline_cells`] less the parts a visible border line already covers, as Word shows
-/// gridlines only where a cell has no border (#1740).
-pub(super) fn gridline_edges(page: &Page, all: bool, editing: Option<StoryRef>) -> Vec<[(f32, f32); 2]> {
-    // Border lines bucketed by their position (quarter points): horizontal by y, vertical by x.
-    let key = |v: f32| (v * 4.0).round() as i64;
-    let (mut across, mut down): (HashMap<i64, Vec<(f32, f32, f32)>>, HashMap<i64, Vec<(f32, f32, f32)>>) = Default::default();
-    for it in page.items.iter().chain(&page.header).chain(&page.footer) {
-        if let Placed::Rule { x0, y0, x1, y1, border } = it
-            && border.is_visible()
-        {
-            if (y0 - y1).abs() < 0.05 {
-                across.entry(key(*y0)).or_default().push((*y0, x0.min(*x1), x0.max(*x1)));
-            } else if (x0 - x1).abs() < 0.05 {
-                down.entry(key(*x0)).or_default().push((*x0, y0.min(*y1), y0.max(*y1)));
-            }
-        }
-    }
-    let covering = |lines: &HashMap<i64, Vec<(f32, f32, f32)>>, at: f32| -> Vec<(f32, f32)> {
-        (key(at) - 1..=key(at) + 1).filter_map(|k| lines.get(&k)).flatten().filter(|l| (l.0 - at).abs() < 0.3).map(|l| (l.1, l.2)).collect()
-    };
-    let mut out = Vec::new();
-    for r in gridline_cells(page, all, editing) {
-        for y in [r.y, r.bottom()] {
-            out.extend(uncovered(r.x, r.right(), covering(&across, y)).into_iter().map(|(a, b)| [(a, y), (b, y)]));
-        }
-        for x in [r.x, r.right()] {
-            out.extend(uncovered(r.y, r.bottom(), covering(&down, x)).into_iter().map(|(a, b)| [(x, a), (x, b)]));
-        }
-    }
-    out
-}
-
-/// The parts of `a..b` that none of the intervals in `cover` overlaps.
-fn uncovered(a: f32, b: f32, mut cover: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
-    cover.retain(|(s, e)| *e > a && *s < b);
-    cover.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let mut out = Vec::new();
-    let mut at = a;
-    for (s, e) in cover {
-        if s > at + 0.05 {
-            out.push((at, s.min(b)));
-        }
-        at = at.max(e);
-        if at >= b {
-            return out;
-        }
-    }
-    if at < b - 0.05 {
-        out.push((at, b));
-    }
-    out
-}
-
-/// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
-/// ECMA-376's 1/8 inch when it doesn't say), doubled until the lines are at least
-/// [`DRAWING_GRID_MIN_PX`] apart on screen.
-pub(super) fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
-    let mut step = if spacing.is_finite() && spacing > 0.0 { spacing } else { wordcraft_doc::DEFAULT_GRID };
-    if !(scale.is_finite() && scale > 0.0) {
-        return step;
-    }
-    for _ in 0..16 {
-        if step * scale >= DRAWING_GRID_MIN_PX {
-            break;
-        }
-        step *= 2.0;
-    }
-    step
-}
-
-/// Draw the document canvas in the space `ui` has left, one frame: the pages, caret, selection
-/// and rulers, with the mouse editing and the pointer shape over them.
 /// The layout the page shows: the document's own, or with the table Insert › Table's grid is
 /// hovering over (#3931). The preview is laid out on a copy, so the document and its undo history
 /// change only when a square is clicked.

@@ -422,8 +422,8 @@ fn border_stroke(s: BorderStyle) -> Stroke {
     }
 }
 
-/// The width a border is drawn at.
-fn rule_width(b: &Border) -> f32 {
+/// The width a border line is drawn at.
+pub(crate) fn rule_width(b: &Border) -> f32 {
     if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) }
 }
 
@@ -441,8 +441,10 @@ fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
 // Note: border drawn outside text advance, reserve width in line breaking if overlap shows.
 pub(super) fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out: &mut Vec<Draw>) {
     let (l, r) = (x0 - b.space, x1 + b.space);
-    out.push(rule(l, top, r, top, b, alpha));
-    out.push(rule(l, bottom, r, bottom, b, alpha));
+    // The top and bottom lines run on over half the side lines, closing the corners.
+    let half = rule_width(b) / 2.0;
+    out.push(rule(l - half, top, r + half, top, b, alpha));
+    out.push(rule(l - half, bottom, r + half, bottom, b, alpha));
     out.push(rule(l, top, l, bottom, b, alpha));
     out.push(rule(r, top, r, bottom, b, alpha));
 }
