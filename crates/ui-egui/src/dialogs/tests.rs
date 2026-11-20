@@ -1744,7 +1744,7 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     }
 
     // Draw the shared app field directly: the app frame selects its configured language.
-    crate::i18n::set_current(crate::i18n::fixture_lang(
+    crate::i18n::apply_language(crate::i18n::fixture_lang(
         "x-fixture",
         "\tFont color:\tFont-color-FX:\n\tAutomatic\tAutomatic-FX\n\tFill\tFill-FX\n\tNo Color\tNo-Color-FX\n",
     ));
@@ -1771,7 +1771,7 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
         .into_iter()
         .map(|name| (name, h.query_all_by_role_and_label(Role::Button, name).next().is_some()))
         .collect();
-    crate::i18n::set_current(crate::i18n::Lang::EN);
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
     for (name, present) in found {
         assert!(present, "the translated field is {name}");
     }
