@@ -14,6 +14,7 @@ use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
 use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
 use craft::ui::runtime::memory::Remember;
+#[cfg(not(target_arch = "wasm32"))]
 use craft::ui::runtime::windows::WindowHost;
 use craft::ui::style::TypeRole;
 use craft::ui::text::TextField;
@@ -310,7 +311,10 @@ impl PreferencesModel for OptionsModel<'_> {
         let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
         let b = |key, label, on| RowSpec::new(key, label, RowKind::Bool(on));
         let custom = |key, label| RowSpec::new(key, label, RowKind::Custom);
+        #[cfg(not(target_arch = "wasm32"))]
         let can_default = app.services.make_default_app.is_some() || cfg!(target_os = "macos");
+        #[cfg(target_arch = "wasm32")]
+        let can_default = false;
 
         let general = page_of(
             "general",
@@ -826,6 +830,7 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
 /// File ▸ Options ▸ General: make WordCraft the default app for Word documents (#295). Only where
 /// the host can (`Services::make_default_app`: Windows opens Default apps, Linux and BSD use
 /// `xdg-mime`); macOS shows how to do it in Finder, the web shows nothing.
+#[cfg(not(target_arch = "wasm32"))]
 fn default_app_row(app: &mut WordApp, ui: &mut Ui) {
     if app.services.make_default_app.is_some() {
         let hint = if cfg!(target_os = "windows") {
@@ -845,6 +850,10 @@ fn default_app_row(app: &mut WordApp, ui: &mut Ui) {
             .show(ui);
     }
 }
+
+/// The web has no system default apps to change: nothing to show.
+#[cfg(target_arch = "wasm32")]
+fn default_app_row(_app: &mut WordApp, _ui: &mut Ui) {}
 
 /// The Options page.
 pub fn page(app: &mut WordApp, ui: &mut Ui) {

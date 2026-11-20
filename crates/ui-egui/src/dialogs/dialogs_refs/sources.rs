@@ -1,4 +1,5 @@
 use craft::behavior::{Mixed, Selection, SelectionChange, keyed};
+#[cfg(not(target_arch = "wasm32"))]
 use craft::host::PickRequest;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
@@ -19,6 +20,7 @@ use wordcraft_doc::Source;
 
 use crate::WordApp;
 use crate::dialogs::host::{Asks, DialogHooks, Filed, FormHost, WordForm, open_form, open_form_with};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::file_dialogs::{AfterPick, Asked};
 
 // ---------------------------------------------------------------------------------------------
@@ -320,7 +322,8 @@ impl WordForm for SourceManagerForm {
             }
         }
         let tag = self.picked().cloned();
-        let can_import = Env::of(ui).view().host().is_some_and(|h| h.files().can_pick());
+        // Importing reads a path, which the web has no way to hand over.
+        let can_import = cfg!(not(target_arch = "wasm32")) && Env::of(ui).view().host().is_some_and(|h| h.files().can_pick());
         if Button::new(Label::from(tl!("New…").to_string())).show(ui).clicked() {
             asks.push(Asks::Open("createSource".to_string(), Value::Null));
         }
@@ -344,11 +347,14 @@ impl WordForm for SourceManagerForm {
     /// Import…: a Word bibliography file (`b:Sources`, Word's own Sources.xml) adds its sources to this document
     /// (#2640); the list follows on the next run.
     fn applied(&mut self, app: &mut WordApp, filed: Filed, _outcome: Result<&[Value], &str>) {
+        #[cfg(not(target_arch = "wasm32"))]
         if matches!(filed, Filed::Act(IMPORT))
             && let Asked::Done(Err(e)) = app.ask_file(PickRequest::open("sources"), AfterPick::Sources)
         {
             app.status(e);
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (app, filed);
     }
 }
 

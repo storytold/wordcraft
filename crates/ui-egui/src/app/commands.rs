@@ -1,4 +1,5 @@
 use craft::host::PickRequest;
+#[cfg(not(target_arch = "wasm32"))]
 use craft::platform::default_app::{DefaultApp, DefaultAppError};
 use craft::quit::{CloseAnswer, CloseScope};
 
@@ -952,6 +953,7 @@ impl WordApp {
     /// [`Services::make_default_app`] and say in the status bar what happened. An error when the
     /// host has no hook (web, macOS). Only the button calls this: it is deliberately not a
     /// command, so nothing programmatic (control channel, MCP, macros) can change system defaults.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn make_default_app(&mut self) -> Result<Value, String> {
         let Some(hook) = self.services.make_default_app.as_ref() else {
             return Err("WordCraft can't change the default apps here; use your system's settings".into());

@@ -428,6 +428,7 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page. The shell
     /// owns the flag while it draws; the app reads it back after each pass.
     pub(crate) ribbon_dropped: bool,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) updates_rt: updates_ui::Runtime,
     /// The documents (by id) the missing-fonts download box has been considered for
     /// ([`font_download::tick`]), in every window.

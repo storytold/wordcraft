@@ -19,4 +19,5 @@ pub fn is_cjk(c: char) -> bool {
 /// The tables skrifa reads glyph outlines from: TrueType, CFF, CFF2 and VARC. A face with
 /// outlines only in Apple's `hvgl` table has none of them, and the interface draws its characters
 /// as blank space.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const OUTLINE_TABLES: [&[u8; 4]; 4] = [b"glyf", b"CFF ", b"CFF2", b"VARC"];

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use craft::automation::control::{ControlRequest, Reply};
+#[cfg(not(target_arch = "wasm32"))]
 use craft::automation::dialogs;
 use craft::automation::synthetic::input_method;
 use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
@@ -51,7 +52,7 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "view": app.session.view,
         "windows": app.session.windows,
         "proofing": app.spelling_review,
-        "dialogs": dialogs::inspect(&app.dialog_host),
+        "dialogs": open_dialogs(app),
         "window": [r.width(), r.height()],
         "canvasRect": app.canvas.canvas_rect().map(rect),
         "pages": app.canvas.page_rects().map(|(_, r)| rect(r)).collect::<Vec<_>>(),
@@ -229,8 +230,20 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> R
     outcome
 }
 
+/// The open dialogs for `ui.inspect`. The control library's dialog methods do not build for wasm32, so the web lists none.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_dialogs(app: &WordApp) -> Value {
+    dialogs::inspect(&app.dialog_host)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_dialogs(_app: &WordApp) -> Value {
+    json!([])
+}
+
 /// The input and dialog methods the control library implements.
 fn library_method(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Option<Reply> {
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(r) = dialogs::dialog_method(&mut app.dialog_host, ctx, &req.method, &req.params) {
         return Some(Reply::from_result(r));
     }
