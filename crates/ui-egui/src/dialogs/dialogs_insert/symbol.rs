@@ -106,6 +106,157 @@ pub const SPECIAL: &[(&str, char, Option<&str>)] = &[
     ("No-Width Non Break", '\u{2060}', None),
 ];
 
+/// The Symbol dialog's "from:" list: how the Character code box reads and which characters the
+/// grid shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SymbolFrom {
+    /// Every character of the font; codes are Unicode code points in hex.
+    #[default]
+    UnicodeHex,
+    /// The Windows-1252 code page in byte order; codes are decimal bytes.
+    AsciiDecimal,
+    /// The Windows-1252 code page in byte order; codes are hex bytes.
+    AsciiHex,
+}
+
+impl SymbolFrom {
+    pub const ALL: [SymbolFrom; 3] = [SymbolFrom::UnicodeHex, SymbolFrom::AsciiDecimal, SymbolFrom::AsciiHex];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SymbolFrom::UnicodeHex => "Unicode (hex)",
+            SymbolFrom::AsciiDecimal => "ASCII (decimal)",
+            SymbolFrom::AsciiHex => "ASCII (hex)",
+        }
+    }
+}
+
+/// Windows-1252 bytes 0x80-0x9F (`None` = undefined in the code page).
+const CP1252_HIGH: [Option<char>; 32] = [
+    Some('\u{20AC}'),
+    None,
+    Some('\u{201A}'),
+    Some('\u{0192}'),
+    Some('\u{201E}'),
+    Some('\u{2026}'),
+    Some('\u{2020}'),
+    Some('\u{2021}'),
+    Some('\u{02C6}'),
+    Some('\u{2030}'),
+    Some('\u{0160}'),
+    Some('\u{2039}'),
+    Some('\u{0152}'),
+    None,
+    Some('\u{017D}'),
+    None,
+    None,
+    Some('\u{2018}'),
+    Some('\u{2019}'),
+    Some('\u{201C}'),
+    Some('\u{201D}'),
+    Some('\u{2022}'),
+    Some('\u{2013}'),
+    Some('\u{2014}'),
+    Some('\u{02DC}'),
+    Some('\u{2122}'),
+    Some('\u{0161}'),
+    Some('\u{203A}'),
+    Some('\u{0153}'),
+    None,
+    Some('\u{017E}'),
+    Some('\u{0178}'),
+];
+
+/// The character a Windows-1252 byte (0x20..=0xFF) stands for.
+fn cp1252_char(b: u8) -> Option<char> {
+    match b {
+        0x20..=0x7F | 0xA0..=0xFF => Some(char::from(b)),
+        0x80..=0x9F => CP1252_HIGH.get(usize::from(b - 0x80)).copied().flatten(),
+        _ => None,
+    }
+}
+
+/// The Windows-1252 byte of `c`, if it has one (0x20..=0xFF).
+pub fn cp1252_byte(c: char) -> Option<u8> {
+    let cp = c as u32;
+    if (0x20..=0x7F).contains(&cp) || (0xA0..=0xFF).contains(&cp) {
+        return u8::try_from(cp).ok();
+    }
+    CP1252_HIGH.iter().position(|x| *x == Some(c)).and_then(|i| u8::try_from(i).ok()).map(|i| 0x80 + i)
+}
+
+/// The Character code box text for `c` in mode `from`; None when `c` has no code there.
+pub fn code_text(c: char, from: SymbolFrom) -> Option<String> {
+    match from {
+        SymbolFrom::UnicodeHex => Some(format!("{:04X}", c as u32)),
+        SymbolFrom::AsciiDecimal => cp1252_byte(c).map(|b| b.to_string()),
+        SymbolFrom::AsciiHex => cp1252_byte(c).map(|b| format!("{b:02X}")),
+    }
+}
+
+/// The character a typed code names in mode `from` (inverse of [`code_text`]; trims spaces).
+pub fn char_from_code(code: &str, from: SymbolFrom) -> Option<char> {
+    let code = code.trim();
+    match from {
+        SymbolFrom::UnicodeHex => {
+            let hex = code.strip_prefix("U+").or_else(|| code.strip_prefix("u+")).unwrap_or(code);
+            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+        }
+        SymbolFrom::AsciiDecimal => code.parse::<u8>().ok().and_then(cp1252_char),
+        SymbolFrom::AsciiHex => u8::from_str_radix(code, 16).ok().and_then(cp1252_char),
+    }
+}
+
+/// The Shortcut key line: `bound` (a command's shortcut) wins; else the mode's typing method
+/// (`2665, ` and `toggle_key`, the Toggle Unicode key, or `Alt+0189`); "" if none.
+pub fn symbol_shortcut(c: char, from: SymbolFrom, bound: Option<&str>, toggle_key: Option<&str>) -> String {
+    if let Some(k) = bound.filter(|k| !k.is_empty()) {
+        return k.to_string();
+    }
+    match from {
+        SymbolFrom::UnicodeHex => match (code_text(c, from), toggle_key.filter(|k| !k.is_empty())) {
+            (Some(code), Some(key)) => format!("{code}, {key}"),
+            _ => String::new(),
+        },
+        SymbolFrom::AsciiDecimal | SymbolFrom::AsciiHex => cp1252_byte(c).map(|b| format!("Alt+0{b:03}")).unwrap_or_default(),
+    }
+}
+
+/// The from: mode that shows `c`: `from` when `c` has a code there, else Unicode (hex).
+pub fn from_showing(c: char, from: SymbolFrom) -> SymbolFrom {
+    if code_text(c, from).is_some() { from } else { SymbolFrom::UnicodeHex }
+}
+
+/// The characters the grid shows in mode `from`, from the font's sorted `chars`: all of them in
+/// Unicode (hex); the code page's, in byte order, in the ASCII modes.
+pub fn grid_chars(chars: &[char], from: SymbolFrom) -> Vec<char> {
+    match from {
+        SymbolFrom::UnicodeHex => chars.to_vec(),
+        SymbolFrom::AsciiDecimal | SymbolFrom::AsciiHex => {
+            let mut v: Vec<(u8, char)> = chars.iter().filter_map(|c| cp1252_byte(*c).map(|b| (b, *c))).collect();
+            v.sort_unstable();
+            v.dedup();
+            v.into_iter().map(|(_, c)| c).collect()
+        }
+    }
+}
+
+/// AutoCorrect…: open the AutoCorrect dialog (AutoCorrect tab) with With = `c` and Replace
+/// empty. It replaces the Symbol dialog.
+pub fn symbol_autocorrect(app: &mut WordApp, c: char) {
+    let mut form = crate::dialogs_review::AutoCorrectForm::new(app);
+    form.tab = 0;
+    form.from = String::new();
+    form.to = c.to_string();
+    app.dialog = Some(crate::dialogs::Dialog::Review(Box::new(crate::dialogs_review::ReviewDialog::AutoCorrect(Box::new(form)))));
+}
+
+/// The command (from the Special Characters table) that inserts `c`, when there is one.
+fn special_command(c: char) -> Option<&'static str> {
+    SPECIAL.iter().find(|(_, ch, _)| *ch == c).and_then(|(_, _, cmd)| *cmd)
+}
+
 /// The Symbol dialog: the Symbols tab (a font's characters by Unicode subset) and the Special
 /// Characters tab.
 #[derive(Clone, Debug, Serialize)]
@@ -116,8 +267,10 @@ pub struct SymbolForm {
     /// The chosen font; empty = (normal text), the text's own font.
     pub font: String,
     pub selected: Option<char>,
-    /// Character code, hexadecimal Unicode.
+    /// Character code, as the from: list reads it.
     pub code: String,
+    /// The from: list: Unicode (hex), ASCII (decimal) or ASCII (hex).
+    pub from: SymbolFrom,
     /// Selected row on the Special Characters tab.
     pub special: usize,
     /// The caret's font: what (normal text) shows.
@@ -125,6 +278,9 @@ pub struct SymbolForm {
     /// The characters the shown font has, sorted.
     #[serde(skip)]
     chars: Vec<char>,
+    /// The characters the grid shows for `from` (byte order in the ASCII modes).
+    #[serde(skip)]
+    grid: Vec<char>,
     /// The font `chars` was read from.
     #[serde(skip)]
     chars_of: Option<String>,
@@ -160,9 +316,11 @@ impl SymbolForm {
             font,
             selected,
             code: String::new(),
+            from: SymbolFrom::default(),
             special: 0,
             text_font,
             chars: Vec::new(),
+            grid: Vec::new(),
             chars_of: None,
             scroll_to: None,
             bullet: None,
@@ -209,27 +367,58 @@ impl SymbolForm {
         let face = wordcraft_fonts::word::resolve(&family, false, false).face.get();
         self.chars = face.chars().into_iter().map(|(c, _)| c).filter(|c| !c.is_control() && !(0xD800..=0xDFFF).contains(&(*c as u32))).collect();
         self.chars_of = Some(family);
-        // Keep the selection when the new font has it; otherwise its first character.
-        if self.selected.is_none_or(|c| self.chars.binary_search(&c).is_err()) {
-            self.selected = self.chars.iter().copied().find(|c| *c > ' ').or(self.chars.first().copied());
+        self.regrid();
+    }
+
+    /// Rebuild the shown grid for the font and the from: mode; keep the selection when the grid
+    /// has it, otherwise select its first character.
+    fn regrid(&mut self) {
+        self.grid = grid_chars(&self.chars, self.from);
+        if self.selected.is_none_or(|c| !self.grid.contains(&c)) {
+            self.selected = self.grid.iter().copied().find(|c| *c > ' ').or(self.grid.first().copied());
         }
         self.sync_code();
         self.scroll_to = self.selected.and_then(|c| self.row_of(c));
     }
 
+    /// Pick a recently used symbol `c`, inserted in `font` ("" = the text's): show its font, and
+    /// switch to Unicode (hex) first when the from: mode has no code for it, so it stays selected.
+    pub fn pick_recent(&mut self, font: &str, c: char) {
+        let from = from_showing(c, self.from);
+        let regrid = from != self.from;
+        self.from = from;
+        self.font = font.to_string();
+        self.selected = Some(c);
+        let before = self.chars_of.clone();
+        self.load();
+        if regrid && before == self.chars_of {
+            self.regrid();
+        }
+        self.sync_code();
+        self.scroll_to = self.row_of(c);
+    }
+
+    /// Change the from: mode.
+    pub fn set_from(&mut self, from: SymbolFrom) {
+        if self.from != from {
+            self.from = from;
+            self.regrid();
+        }
+    }
+
     fn row_of(&self, c: char) -> Option<usize> {
-        self.chars.binary_search(&c).ok().map(|i| i / GRID_COLS)
+        self.grid.iter().position(|x| *x == c).map(|i| i / GRID_COLS)
     }
 
     fn sync_code(&mut self) {
-        self.code = self.selected.map(|c| format!("{:04X}", c as u32)).unwrap_or_default();
+        self.code = self.selected.and_then(|c| code_text(c, self.from)).unwrap_or_default();
     }
 
-    /// Select by typed character code (hex): the character, when the font has it.
+    /// Select by typed character code (read by the from: mode): the character, when the grid
+    /// shows it.
     pub fn select_code(&mut self, code: &str) -> bool {
-        let cp = u32::from_str_radix(code.trim().trim_start_matches("U+").trim_start_matches("u+"), 16).ok();
-        let Some(c) = cp.and_then(char::from_u32) else { return false };
-        if self.chars.binary_search(&c).is_err() {
+        let Some(c) = char_from_code(code, self.from) else { return false };
+        if !self.grid.contains(&c) {
             return false;
         }
         self.selected = Some(c);
@@ -240,9 +429,8 @@ impl SymbolForm {
     /// Jump to a Unicode subset: its first character in this font.
     pub fn jump_to(&mut self, subset: &str) {
         let Some((_, a, b)) = SUBSETS.iter().find(|(n, _, _)| *n == subset) else { return };
-        let i = self.chars.partition_point(|c| (*c as u32) < *a);
-        if let Some(c) = self.chars.get(i).filter(|c| (**c as u32) <= *b) {
-            self.selected = Some(*c);
+        if let Some(i) = self.grid.iter().position(|c| (*a..=*b).contains(&(*c as u32))) {
+            self.selected = self.grid.get(i).copied();
             self.sync_code();
             self.scroll_to = Some(i / GRID_COLS);
         }
@@ -348,6 +536,9 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
                 f.font = if v == normal || v.trim().is_empty() { String::new() } else { v.trim().to_string() };
                 f.load();
             }
+            if f.from != SymbolFrom::UnicodeHex {
+                return;
+            }
             ui.add_space(8.0);
             ui.label(tl!("Subset:"));
             let current = f.selected.and_then(subset_of).unwrap_or("");
@@ -365,7 +556,7 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
             }
         });
         ui.add_space(4.0);
-        let rows = f.chars.len().div_ceil(GRID_COLS);
+        let rows = f.grid.len().div_ceil(GRID_COLS);
         let mut area = egui::ScrollArea::vertical().id_salt("symbol_grid").max_height(CELL * GRID_ROWS as f32).auto_shrink([false, false]);
         if let Some(row) = f.scroll_to.take() {
             // Keep the row in view: it lands on the grid's second row when there is room. Rows
@@ -374,7 +565,7 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
             area = area.vertical_scroll_offset(row.saturating_sub(1) as f32 * pitch);
         }
         let font = f.shown_font().to_string();
-        let chars = f.chars.clone();
+        let chars = f.grid.clone();
         let mut picked = None;
         let mut double = false;
         area.show_rows(ui, CELL, rows, |ui, range| {
@@ -411,11 +602,7 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
                 let rfont = if r.font.is_empty() { f.text_font.clone() } else { r.font.clone() };
                 let resp = symbol_cell(app, ui, &rfont, c, false, &t);
                 if resp.clicked() || resp.double_clicked() {
-                    f.font = r.font.clone();
-                    f.selected = Some(c);
-                    f.load();
-                    f.sync_code();
-                    f.scroll_to = f.row_of(c);
+                    f.pick_recent(&r.font, c);
                 }
                 if resp.double_clicked() {
                     double = true;
@@ -430,7 +617,16 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
             let name = f.selected.map(|c| format!("U+{:04X}", c as u32)).unwrap_or_default();
             ui.label(egui::RichText::new(name).font(semibold(12.0)));
             ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-                ui.label(tl!("from Unicode (hex)"));
+                let mut from = f.from;
+                craft_ui::ComboBox::from_id_salt("symbol_from").selected_text(tl!(from.label())).width(120.0).show_ui(ui, |ui| {
+                    for m in SymbolFrom::ALL {
+                        ui.selectable_value(&mut from, m, tl!(m.label()));
+                    }
+                });
+                if from != f.from {
+                    f.set_from(from);
+                }
+                ui.label(tl!("from:"));
                 let resp = ui.add(egui::TextEdit::singleline(&mut f.code).desired_width(70.0).font(egui::TextStyle::Monospace));
                 if resp.changed() {
                     let code = f.code.clone();
@@ -439,6 +635,24 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
                 ui.label(tl!("Character code:"));
             });
         });
+        let shortcut = f
+            .selected
+            .map(|c| {
+                let bound = special_command(c).map(|id| crate::widgets::shortcut_text(app, id)).filter(|k| !k.is_empty());
+                let toggle = Some(crate::widgets::shortcut_text(app, "text.toggleUnicode")).filter(|k| !k.is_empty());
+                symbol_shortcut(c, f.from, bound.as_deref(), toggle.as_deref())
+            })
+            .unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.label(tl!("Shortcut key:"));
+            ui.label(shortcut);
+        });
+        ui.add_space(4.0);
+        let autocorrect = ui.add_enabled(f.selected.is_some(), egui::Button::new(tl!("AutoCorrect…"))).clicked();
+        if autocorrect && let Some(c) = f.selected {
+            symbol_autocorrect(app, c);
+            return true;
+        }
         if double && let Some(p) = f.params() {
             insert = Some((p, f.selected.map(String::from).unwrap_or_default(), f.font.clone()));
         }
