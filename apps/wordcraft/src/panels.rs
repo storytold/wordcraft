@@ -4,8 +4,8 @@
 //! document's window with it, and hides while WordCraft is in the background. It is not listed
 //! in the Window menu.
 //!
-//! The one exception to the workspace's no-`unsafe` rule (AGENTS.md): AppKit marks
-//! `addChildWindow:ordered:` unsafe, and nothing else in these bindings ties two windows.
+//! The one exception to the workspace's no-`unsafe` rule (AGENTS.md names this module): AppKit
+//! marks `addChildWindow:ordered:` unsafe, and nothing else in these bindings ties two windows.
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSWindow, NSWindowOrderingMode};
