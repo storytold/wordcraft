@@ -18,6 +18,22 @@ pub const LABEL_PITCH: f32 = 13.0;
 
 pub const LABEL_LINE_H: f32 = 14.0;
 
+/// The command the keytip ring is on takes real keyboard focus, so a screen reader announces the
+/// button the arrow keys walked to, and the arrows keep belonging to the ribbon (#1012).
+fn ring_focus(ui: &Ui, app: &WordApp, resp: &Response, id: &str) {
+    if !crate::keytips::wants_command_focus(app, id) {
+        return;
+    }
+    if !resp.has_focus() {
+        resp.request_focus();
+    }
+    if resp.has_focus() {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+        });
+    }
+}
+
 /// Whether a command exists and is enabled.
 pub fn enabled(app: &WordApp, id: &str) -> bool {
     // No document open (#1129): only what opens one, Help and the settings.
@@ -124,6 +140,10 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     }
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
     command_menu(&resp, app, id);
+    // A large button had no name of its own, so a screen reader read an unnamed button (#1012);
+    // it now has its label, and a toggle says whether it is on.
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, label.replace('\n', " ")));
+    ring_focus(ui, app, &resp, id);
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
     }
@@ -167,7 +187,10 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    // The name and, for a toggle, whether it is on (#1012): a reader says "Bold, pressed" rather
+    // than just "Bold".
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, tip));
+    ring_focus(ui, app, &resp, id);
     resp
 }
 
@@ -251,12 +274,13 @@ fn split_button(
     icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
+    ring_focus(ui, app, &resp, id);
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
     let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, tip));
     // The arrow opens the choices beside the button: it says whose, so it is not just "button"
     // (#3172).
     aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
@@ -339,6 +363,7 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
     let (title, notes) = tooltip_lines(tip, &shortcut_text(app, id), "", reason);
     show_hint(&resp, &title, &notes);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    ring_focus(ui, app, &resp, id);
     if !on {
         return;
     }

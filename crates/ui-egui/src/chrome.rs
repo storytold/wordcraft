@@ -76,6 +76,18 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
         };
         let enabled = qat_enabled(app, id);
         let resp = qat_button(ui, app, crate::widgets::command_icon(id), &tip, id, enabled);
+        // The ring on the Quick Access Toolbar is real keyboard focus, so a screen reader says
+        // which button the arrows are on (#1012).
+        if app.ui.keytip_qat == Some(index) {
+            if !resp.has_focus() {
+                resp.request_focus();
+            }
+            if resp.has_focus() {
+                ui.memory_mut(|m| {
+                    m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+                });
+            }
+        }
         if app.ui.keytips == crate::keytips::Phase::Tabs && ui.is_rect_visible(resp.rect) {
             let label = crate::keytips::qat_label(index, ids.len());
             if label.starts_with(&app.ui.keytip_prefix) {
