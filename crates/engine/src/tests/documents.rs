@@ -408,3 +408,41 @@ fn a_window_view_put_back_follows_the_spelling_setting() {
     s.put_view(held);
     assert!(s.view.proofing);
 }
+
+/// #6953: Creating a new document or closing the last document while Developer › Design Mode
+/// is active does not carry Design Mode over to the new document.
+#[test]
+fn new_document_resets_design_mode() {
+    let mut s = s();
+    let first = s.document_id();
+    run(&mut s, "developer.designMode", json!({"value": true}));
+    assert!(s.view.design_mode);
+
+    run(&mut s, "file.new", json!({}));
+    let second = s.document_id();
+    assert!(!s.view.design_mode, "new document should not inherit Design Mode");
+
+    s.activate(first).unwrap();
+    assert!(s.view.design_mode, "original document keeps Design Mode");
+
+    // Closing the last document leaves a fresh blank document with Design Mode off.
+    s.close_document(second).unwrap();
+    s.close_document(first).unwrap();
+    assert!(!s.view.design_mode, "fresh blank document after closing last should have Design Mode off");
+}
+
+#[test]
+fn open_replacing_untouched_blank_resets_design_mode() {
+    let dir = temp_dir("open_design_mode");
+    let one = dir.join("one.txt");
+    std::fs::write(&one, "One").unwrap();
+
+    let mut s = s();
+    run(&mut s, "developer.designMode", json!({"value": true}));
+    assert!(s.view.design_mode);
+    assert!(s.is_untouched_blank());
+
+    run(&mut s, "file.open", json!({"path": one.to_string_lossy()}));
+    assert!(!s.view.design_mode, "opening a file into an untouched blank document should clear Design Mode");
+    let _ = std::fs::remove_dir_all(dir);
+}

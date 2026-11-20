@@ -176,7 +176,7 @@ fn underline_at(u: &Underline, now: f64) -> (f32, f32) {
 }
 
 pub(super) fn slide_underline(ui: &egui::Ui, tab: &str, target: egui::Rect, color: egui::Color32, now: f64, animate: bool) {
-    let id = egui::Id::unique("tab_underline");
+    let id = egui::Id::unique(("tab_underline", ui.ctx().viewport_id()));
     let prev: Option<Underline> = ui.ctx().data(|d| d.get_temp(id));
     let snap = Underline { tab: tab.to_owned(), from: (target.center().x, target.width()), to: (target.center().x, target.width()), start: now };
     let next = match prev {
@@ -201,7 +201,7 @@ struct TabChange {
 }
 
 pub(super) fn tab_content_entry(ctx: &egui::Context, tab: &str, index: usize, now: f64, animate: bool) -> (f32, f32) {
-    let id = egui::Id::unique("ribbon_tab_change");
+    let id = egui::Id::unique(("ribbon_tab_change", ctx.viewport_id()));
     let prev: Option<TabChange> = ctx.data(|d| d.get_temp(id));
     let next = match prev {
         Some(p) if p.tab != tab => TabChange {
@@ -232,7 +232,8 @@ pub(super) fn tab_content_entry(ctx: &egui::Context, tab: &str, index: usize, no
 
 /// Track contextual tabs between frames and return those still animating out.
 pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)], now: f64, animate: bool) -> Vec<(String, usize, f64)> {
-    let (shown_id, leaving_id) = (egui::Id::unique("contextual_tabs_shown"), egui::Id::unique("contextual_tabs_leaving"));
+    let viewport = ctx.viewport_id();
+    let (shown_id, leaving_id) = (egui::Id::unique(("contextual_tabs_shown", viewport)), egui::Id::unique(("contextual_tabs_leaving", viewport)));
     let prev: Option<Vec<(String, usize)>> = ctx.data(|d| d.get_temp(shown_id));
     let mut leaving: Vec<(String, usize, f64)> = ctx.data(|d| d.get_temp(leaving_id)).unwrap_or_default();
     leaving.retain(|(n, _, start)| animate && now - start < TAB_ENTRY_SECS && !shown.iter().any(|(s, _)| s == n));
@@ -246,7 +247,7 @@ pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)],
         .collect();
     if let Some(prev) = prev {
         for (tab, _) in shown_with_ghosts.iter().filter(|(t, _)| !prev.iter().any(|(p, _)| p == t)) {
-            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("contextual_tab_entry", *tab)), now));
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("contextual_tab_entry", viewport, *tab)), now));
         }
         for (tab, at) in prev.iter().filter(|(p, _)| animate && !shown_with_ghosts.iter().any(|(s, _)| s == p)) {
             if !leaving.iter().any(|(n, _, _)| n == tab) {
@@ -263,7 +264,7 @@ pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)],
 
 /// Return a newly shown contextual tab's progress, requesting frames until it settles.
 pub(super) fn tab_entry(ctx: &egui::Context, tab: &str, now: f64, animate: bool) -> f32 {
-    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::unique(("contextual_tab_entry", tab))));
+    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::unique(("contextual_tab_entry", ctx.viewport_id(), tab))));
     let Some(start) = start.filter(|_| animate) else { return 1.0 };
     let p = ((now - start) / TAB_ENTRY_SECS).clamp(0.0, 1.0) as f32;
     if p < 1.0 {
@@ -453,5 +454,73 @@ mod transition_tests {
         assert!(p < 1.0);
         assert_eq!(dir, -1.0);
         assert_eq!(tab_content_entry(&ctx, "Draw", 3, 3.0, false), (1.0, 0.0));
+    }
+
+    /// #6953: Two windows on different tabs share one `egui::Context` and must not overwrite each
+    /// other's tab-content fade, tab underline, or contextual-tab animations.
+    #[test]
+    fn ribbon_tab_transitions_are_isolated_per_viewport() {
+        let ctx = egui::Context::default();
+        let vp_one = egui::ViewportId::ROOT;
+        let vp_two = egui::ViewportId::from_hash_of("second_window");
+
+        let raw_for = |vp: egui::ViewportId, now: f64| -> egui::RawInput {
+            let mut raw = egui::RawInput { viewport_id: vp, time: Some(now), ..Default::default() };
+            raw.viewports.entry(vp).or_default();
+            raw
+        };
+        let run_entry = |vp: egui::ViewportId, tab: &str, idx: usize, now: f64| -> (f32, f32) {
+            let mut out = (0.0, 0.0);
+            ctx.run_ui(raw_for(vp, now), |ui| {
+                out = tab_content_entry(ui.ctx(), tab, idx, now, true);
+            })
+            .drop_without_applying_deltas();
+            out
+        };
+
+        // Window 1 is on Developer, Window 2 opens on Home.
+        assert_eq!(run_entry(vp_one, "Developer", 9, 1.0), (1.0, 0.0));
+        assert_eq!(run_entry(vp_two, "Home", 1, 1.0), (1.0, 0.0));
+
+        // On subsequent frames, neither window should re-trigger a tab-switch fade.
+        assert_eq!(run_entry(vp_one, "Developer", 9, 1.5), (1.0, 0.0));
+        assert_eq!(run_entry(vp_two, "Home", 1, 1.5), (1.0, 0.0));
+
+        // Underline rect for Window 1 must stay at Developer's target rect, not slide from Home's.
+        let dev_rect = egui::Rect::from_min_size(egui::pos2(500.0, 10.0), egui::vec2(70.0, 3.0));
+        let home_rect = egui::Rect::from_min_size(egui::pos2(50.0, 10.0), egui::vec2(50.0, 3.0));
+        let draw_underline = |vp: egui::ViewportId, tab: &str, rect: egui::Rect, now: f64| -> egui::Rect {
+            let out = ctx.run_ui(raw_for(vp, now), |ui| {
+                slide_underline(ui, tab, rect, egui::Color32::WHITE, now, true);
+            });
+            let painted = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::epaint::Shape::Rect(r) => Some(r.rect),
+                    _ => None,
+                })
+                .expect("underline rect painted");
+            out.drop_without_applying_deltas();
+            painted
+        };
+        assert_eq!(draw_underline(vp_one, "Developer", dev_rect, 2.0), dev_rect);
+        assert_eq!(draw_underline(vp_two, "Home", home_rect, 2.0), home_rect);
+        assert_eq!(draw_underline(vp_one, "Developer", dev_rect, 2.01), dev_rect);
+        assert_eq!(draw_underline(vp_two, "Home", home_rect, 2.01), home_rect);
+
+        // Contextual tabs in Window 1 must not trigger exit ghosts or entry slides in Window 2.
+        let note = |vp: egui::ViewportId, shown: &[(&str, usize)], now: f64| {
+            let mut leaving = Vec::new();
+            ctx.run_ui(raw_for(vp, now), |ui| {
+                leaving = note_contextual_tabs(ui.ctx(), shown, now, true);
+            })
+            .drop_without_applying_deltas();
+            leaving
+        };
+        assert!(note(vp_one, &[("Table Design", 1)], 3.0).is_empty());
+        assert!(note(vp_two, &[], 3.0).is_empty());
+        assert!(note(vp_one, &[("Table Design", 1)], 3.1).is_empty());
+        assert!(note(vp_two, &[], 3.1).is_empty());
     }
 }
