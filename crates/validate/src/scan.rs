@@ -418,6 +418,9 @@ pub(crate) struct PartScan {
     pub note_listings: (Vec<DecimalId>, Vec<DecimalId>),
     /// A note definition or listing was dropped at the fact budget.
     pub note_capped: bool,
+    /// Which note collections an element or attribute of unresolved namespace left unestablished (`NOTE_*`): per
+    /// family and per member, never part-wide.
+    pub note_loss: u8,
     /// The generic fact budget dropped at least one fact in this part.
     pub fact_capped: bool,
     /// The per-part reference budget dropped at least one `r:id`/`r:embed`/`r:link`.
@@ -713,6 +716,10 @@ struct State {
     note_listings_e: Vec<DecimalId>,
     /// A note definition or listing was dropped at the fact budget.
     note_capped: bool,
+    /// A `footnote` / `endnote` element of unresolved namespace was met (folded by role into `note_loss`).
+    unresolved_note: (bool, bool),
+    /// The `NOTE_*` collections an attribute or parent of unresolved namespace left unestablished.
+    note_loss: u8,
     declared: Vec<Vec<String>>,
     /// The pairing families (`FAMILY_*`) an element of unresolved namespace could belong to, by its local name: a
     /// counterpart of that family may hide in it, so that family's completion reports cannot run (`ElemId::unresolved`).
@@ -946,6 +953,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         special_notes: Vec::new(),
         note_listings: (Vec::new(), Vec::new()),
         note_capped: false,
+        note_loss: 0,
         fact_capped: false,
         refs_capped: false,
         facts_complete: false,
@@ -1170,6 +1178,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     note_withheld(&state, part, acc);
     finish_prefix(&state, part, acc);
     note_scan_incomplete(part, &state, &out, scan_complete, skipped_content, acc);
+    out.note_loss = note_loss(&state, role);
     out.facts = state.facts;
     out.compat_97_2003 = state.compat_97;
     out.special_notes = std::mem::take(&mut state.special_notes);
@@ -1702,7 +1711,7 @@ fn record_compat_flag(state: &mut State, id: &ElemId, attrs: &[Attribute], res: 
 fn record_note_pr(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, role: PartRole) {
     observation_contract! {
         rules: "-";
-        collections: "field.frames*1,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2";
+        collections: "field.frames*2,field.note_listings_e*1,field.note_listings_f*1,field.special_notes*2";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1713,6 +1722,13 @@ fn record_note_pr(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Nam
         return;
     }
     let is_end = id.local == "endnote";
+    // An identifier this part could not read is an unknown identifier: the collection it belongs to is unestablished.
+    if attr_unknown(attrs, res, NS_W, b"id") {
+        state.note_loss |= if role.is_settings() { if is_end { NOTE_LIST_E } else { NOTE_LIST_F } } else { NOTE_DEFS };
+    }
+    if role.is_settings() && state.frames.last().is_some_and(|f| f.unresolved & if is_end { U_ENDNOTEPR } else { U_FOOTNOTEPR } != 0) {
+        state.note_loss |= if is_end { NOTE_LIST_E } else { NOTE_LIST_F };
+    }
     if ((is_end && role.is_endnotes()) || (!is_end && role.is_footnotes()))
         && let Some(t) = attr_ns(attrs, res, NS_W, b"type")
         && matches!(t.as_str(), "separator" | "continuationSeparator" | "continuationNotice")
@@ -2788,6 +2804,44 @@ const U_MATH: u8 = 8;
 const U_MAILMERGE: u8 = 16;
 /// An unresolved `txbxContent`: comment ranges inside it may be ones Word ignores.
 const U_TXBX: u8 = 32;
+/// An unresolved `footnotePr` / `endnotePr`: it may be the parent whose `w:footnote` / `w:endnote` children are listings.
+const U_FOOTNOTEPR: u8 = 64;
+const U_ENDNOTEPR: u8 = 128;
+
+/// Note collections left unestablished (`PartScan::note_loss`): the footnote listing, the endnote listing, and the
+/// special note definitions of the part.
+pub(crate) const NOTE_LIST_F: u8 = 1;
+pub(crate) const NOTE_LIST_E: u8 = 2;
+pub(crate) const NOTE_DEFS: u8 = 4;
+pub(crate) const NOTE_ALL: u8 = 7;
+
+/// What an unresolved `footnote` / `endnote` element could be in a part of this role: a listing entry in settings, a
+/// definition in the matching notes part. An unresolved `endnote` is nothing to the footnote listing.
+fn note_loss(state: &State, role: PartRole) -> u8 {
+    let (footnote, endnote) = state.unresolved_note;
+    let any = role.conflicting();
+    let mut loss = state.note_loss | if state.note_capped { NOTE_ALL } else { 0 };
+    if role.is_settings() || any {
+        loss |= if footnote { NOTE_LIST_F } else { 0 } | if endnote { NOTE_LIST_E } else { 0 };
+    }
+    if (footnote && (role.is_footnotes() || any)) || (endnote && (role.is_endnotes() || any)) {
+        loss |= NOTE_DEFS;
+    }
+    loss
+}
+
+/// Whether an attribute with this local name is present but cannot be read as the namespace's: an unresolved prefix, or
+/// a value spelled through an entity this scan does not expand. Its value is unknown, never absent.
+fn attr_unknown(attrs: &[Attribute], res: &NamespaceResolver, uri: &str, local: &[u8]) -> bool {
+    attrs.iter().any(|a| {
+        a.key.as_namespace_binding().is_none()
+            && a.key.local_name().as_ref() == local
+            && match res.resolve_attribute(a.key).0 {
+                ResolveResult::Unknown(_) => true,
+                r => ns_matches(r, uri) && a.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_err(),
+            }
+    })
+}
 
 /// The local names of Office Math (ECMA-376 Part 1 §22.1.2) elements: an unresolved ancestor is a possible math
 /// ancestor of a stray `m:*` element only when it is named like one.
@@ -2929,6 +2983,8 @@ fn unresolved_roles(id: &ElemId) -> u8 {
         "p" => U_P,
         "del" => U_DEL,
         "mailMerge" => U_MAILMERGE,
+        "footnotePr" => U_FOOTNOTEPR,
+        "endnotePr" => U_ENDNOTEPR,
         "txbxContent" => U_BLOCK | U_TXBX,
         "body" | "comment" | "docPartBody" | "endnote" | "footnote" | "ftr" | "hdr" | "tbl" | "tc" | "tr" | "sdtContent" | "customXml" => U_BLOCK,
         _ => 0,
@@ -3091,7 +3147,8 @@ fn note_unresolved_element(state: &mut State, id: &mut ElemId, own: &[String]) {
         state.fld_unresolved_seen |= id.local == "fldChar";
         state.content_part_unresolved |= id.local == "contentPart";
         // A note definition or listing entry cannot be told from the unresolved element: the note join is incomplete.
-        state.note_capped |= matches!(id.local.as_str(), "footnote" | "endnote");
+        state.unresolved_note.0 |= id.local == "footnote";
+        state.unresolved_note.1 |= id.local == "endnote";
         state.facts.invalidate_local(&id.local);
     }
 }
@@ -3729,8 +3786,18 @@ fn aux_open<'a>(
     if alt.open(&id, empty) {
         return Some(AuxOpen::Skip);
     }
-    guard.unresolved |= id.unknown.is_some() && guard.watch.iter().any(|w| *w == id.local);
+    let watched = guard.watch.iter().any(|w| *w == id.local);
+    guard.unresolved |= id.unknown.is_some() && watched;
     let attrs = attrs_of(e)?;
+    // The identifier of a definition is a join input: one this parse cannot read (an unresolved prefix, or a value
+    // spelled through an entity) is an unknown definition, never an absent one.
+    guard.unresolved |= watched
+        && id.w()
+        && attrs.iter().any(|a| {
+            a.key.as_namespace_binding().is_none()
+                && (matches!(res.resolve_attribute(a.key).0, ResolveResult::Unknown(_))
+                    || a.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_err())
+        });
     Some(AuxOpen::Process(id, attrs))
 }
 

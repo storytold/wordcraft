@@ -1244,6 +1244,21 @@ impl XmlScan {
 
         self.parts.get(&PartId::new(part)).is_some_and(|p| p.listings.0.is_complete() && p.listings.1.is_complete() && p.special_notes.is_complete())
     }
+    /// Completeness of one family's settings listing (`end` selects endnotes) and of the part's note definitions.
+    fn listing_complete(&self, part: &str, end: bool) -> bool {
+        observation_contract! {
+            rules: "-";
+            collections: "access.is_complete*2,field.listings*2,field.parts*1,field.special_notes*1";
+            scope: "source-local bounded extraction; no implicit document owner";
+            loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+            fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+            package_loss: "independent";
+        }
+
+        self.parts
+            .get(&PartId::new(part))
+            .is_some_and(|p| (if end { &p.listings.1 } else { &p.listings.0 }).is_complete() && p.special_notes.is_complete())
+    }
     /// A fact family carries the completeness of its exact source, including pooled-budget loss.
     fn category_complete<K>(&self, part: &str, category: fn(&scan::StoryFacts) -> &Observed<Vec<(K, String)>>) -> bool {
         observation_contract! {
@@ -1277,7 +1292,7 @@ fn xml_source_complete(xml: &XmlScan, entry: &package::Entry) -> bool {
 fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     observation_contract! {
         rules: "HEADERSOURCE-PRESENT,MATH-PLACEMENT,PROTECTION-PASSWORD,STRUCT-END-P,XML-INVALID-CHAR,XML-MALFORMED,XML-UNDECLARED-PREFIX";
-        collections: "access.prefix*1,access.retain_budget*1,field.comment_para_ids*1,field.content_part_exemptions*2,field.content_parts*2,field.entries*1,field.ink_content_parts*2,field.note_listings*1,field.refs*5,field.special_notes*1,field.unknown_prefixes*1,type.BTreeMap*1,type.HashSet*3,type.Vec*13";
+        collections: "access.prefix*1,access.retain_budget*1,field.comment_para_ids*1,field.content_part_exemptions*2,field.content_parts*2,field.entries*1,field.ink_content_parts*2,field.note_listings*1,field.refs*5,field.special_notes*1,field.unknown_prefixes*1,type.BTreeMap*1,type.HashMap*2,type.HashSet*2,type.Vec*13";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1313,7 +1328,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut compat_unknown = false;
     let mut note_listings = (Vec::new(), Vec::new());
     let mut special_notes: Vec<(String, DecimalId, bool, String)> = Vec::new();
-    let mut note_incomplete_parts = HashSet::new();
+    let mut note_incomplete_parts: HashMap<String, u8> = HashMap::new();
     let mut pooled_capped = false;
     let mut facts_pooled_part: Option<String> = None;
     let mut pooled_refs = 0usize;
@@ -1327,10 +1342,10 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         let role = roles.get(&l).copied().unwrap_or_default();
         if role.is_settings() && e.decode_error.is_some() {
             compat_unknown = true;
-            note_incomplete_parts.insert(l.clone());
+            *note_incomplete_parts.entry(l.clone()).or_default() |= scan::NOTE_ALL;
         }
         if (role.is_footnotes() || role.is_endnotes()) && e.decode_error.is_some() {
-            note_incomplete_parts.insert(l.clone());
+            *note_incomplete_parts.entry(l.clone()).or_default() |= scan::NOTE_ALL;
         }
         if let Some(err) = &e.decode_error {
             match err {
@@ -1351,14 +1366,14 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         let Some(text) = &e.decoded else { continue };
         let mut scanned = scan::scan_part(&e.name, text, role, acc);
 
-        note_incomplete_parts.extend(scanned.note_capped.then(|| l.clone()));
+        *note_incomplete_parts.entry(l.clone()).or_default() |= scanned.note_loss;
         if append_note_items(&mut note_listings, &mut special_notes, &e.name, scanned.note_listings, scanned.special_notes, acc.limits.facts) {
-            note_incomplete_parts.insert(l.clone());
+            *note_incomplete_parts.entry(l.clone()).or_default() |= scan::NOTE_ALL;
         }
         if role.is_settings() {
             if scanned.malformed.is_some() {
                 compat_unknown = true;
-                note_incomplete_parts.insert(l.clone());
+                *note_incomplete_parts.entry(l.clone()).or_default() |= scan::NOTE_ALL;
             }
             // Only a settings part that scanned clean establishes On: a flag
             // seen before a malformation proves nothing about the document.
@@ -1524,12 +1539,12 @@ fn store_note_observations(
     parts: &mut std::collections::BTreeMap<PartId, PartFacts>,
     note_listings: (Vec<(DecimalId, String)>, Vec<(DecimalId, String)>),
     special_notes: Vec<(String, DecimalId, bool, String)>,
-    note_incomplete_parts: HashSet<String>,
+    note_incomplete_parts: HashMap<String, u8>,
     cap: usize,
 ) {
     observation_contract! {
         rules: "-";
-        collections: "access.invalidate*3,access.push_bounded*3,field.listings*4,field.special_notes*2,type.BTreeMap*1,type.HashSet*1,type.Vec*3";
+        collections: "access.invalidate*3,access.push_bounded*3,field.listings*4,field.special_notes*2,type.BTreeMap*1,type.HashMap*1,type.Vec*3";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1551,11 +1566,17 @@ fn store_note_observations(
             facts.special_notes.push_bounded((part, id, end, kind), cap);
         }
     }
-    for name in note_incomplete_parts {
+    for (name, loss) in note_incomplete_parts {
         if let Some(part) = parts.get_mut(&PartId::new(&name)) {
-            part.listings.0.invalidate("note collection budget or source");
-            part.listings.1.invalidate("note collection budget or source");
-            part.special_notes.invalidate("note collection budget or source");
+            if loss & scan::NOTE_LIST_F != 0 {
+                part.listings.0.invalidate("note collection budget or source");
+            }
+            if loss & scan::NOTE_LIST_E != 0 {
+                part.listings.1.invalidate("note collection budget or source");
+            }
+            if loss & scan::NOTE_DEFS != 0 {
+                part.special_notes.invalidate("note collection budget or source");
+            }
         }
     }
 }
@@ -1718,24 +1739,29 @@ fn check_note_pr(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
         let complete =
             |source: Option<&package::Entry>| source.is_none_or(|entry| xml_source_complete(xml, entry) && xml.notes_complete(&entry.name));
         let (forward_ok, reverse_ok) = if owner.root().is_some() {
-            let forward = discovered
-                && matches!(selected[0], Resolution::One(_) | Resolution::Absent)
-                && match selected[0] {
-                    Resolution::One(entry) => complete(Some(entry)),
-                    Resolution::Absent => true,
-                    Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,
-                };
+            // Each family's listing is established on its own: an unresolved `endnote` in settings says nothing about
+            // the footnote listing.
+            let forward_of = |end: bool| {
+                discovered
+                    && matches!(selected[0], Resolution::One(_) | Resolution::Absent)
+                    && match selected[0] {
+                        Resolution::One(entry) => xml_source_complete(xml, entry) && xml.listing_complete(&entry.name, end),
+                        Resolution::Absent => true,
+                        Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,
+                    }
+            };
+            let forward = [forward_of(false), forward_of(true)];
             (
                 forward,
                 [
-                    forward
+                    forward[0]
                         && matches!(selected[1], Resolution::One(_) | Resolution::Absent)
                         && match selected[1] {
                             Resolution::One(entry) => complete(Some(entry)) && xml.category_complete(&entry.name, |f| &f.footnote_defs),
                             Resolution::Absent => true,
                             Resolution::Ambiguous(_) | Resolution::Unknown(_) => false,
                         },
-                    forward
+                    forward[1]
                         && matches!(selected[2], Resolution::One(_) | Resolution::Absent)
                         && match selected[2] {
                             Resolution::One(entry) => complete(Some(entry)) && xml.category_complete(&entry.name, |f| &f.endnote_defs),
@@ -1748,14 +1774,14 @@ fn check_note_pr(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             let discovered = discovered && !descendant_discovery_incomplete(pkg, owner_map, index);
             let forward = discovered && note_sources_complete(pkg, xml, owner_map, &roles, index, |r| r.is_settings());
             (
-                forward,
+                [forward; 2],
                 [
                     forward && note_sources_complete(pkg, xml, owner_map, &roles, index, |r| r.is_footnotes()),
                     forward && note_sources_complete(pkg, xml, owner_map, &roles, index, |r| r.is_endnotes()),
                 ],
             )
         };
-        if !forward_ok || reverse_ok.contains(&false) {
+        if !(forward_ok[0] && forward_ok[1]) || reverse_ok.contains(&false) {
             acc.note(format!("the footnotePr/endnotePr listings for {} could not be fully joined (ownership, declarations, or source facts were not fully examined)", owner.root().unwrap_or("the package")));
             acc.set_incomplete();
         }
@@ -1769,8 +1795,8 @@ fn check_note_pr(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                 Resolution::Ambiguous(_) | Resolution::Unknown(_) => None,
             })),
             [
-                forward_ok && matches!(selected[1], Resolution::One(_) | Resolution::Absent),
-                forward_ok && matches!(selected[2], Resolution::One(_) | Resolution::Absent),
+                forward_ok[0] && matches!(selected[1], Resolution::One(_) | Resolution::Absent),
+                forward_ok[1] && matches!(selected[2], Resolution::One(_) | Resolution::Absent),
             ],
             reverse_ok,
             acc,
@@ -3496,7 +3522,7 @@ fn process_numbering_part(pkg: &Package, xml: &XmlScan, name: &str, cap: usize, 
         acc.note(format!("{name} could not be read; list numbering references were not checked"));
         return None;
     };
-    let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth).watching(&["num", "abstractNum"]);
+    let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth).watching(&["num", "abstractNum", "abstractNumId"]);
     let defs = scan::parse_numbering(text, cap, &mut guard);
     if !guard.exhausted() && guard.unresolved() {
         acc.note(format!("{name} has a numbering definition whose namespace is not resolved; list numbering absence was not checked"));
@@ -6083,6 +6109,70 @@ mod budget_tests {
         assert_eq!(rules(&range("w:txbxContent", "w:txbxContent")), Vec::<&str>::new());
         let hidden = range(&format!("q:txbxContent {q}"), "q:txbxContent");
         assert_eq!((rules(&hidden), hidden.verdict), (vec![], Verdict::Incomplete), "{hidden:?}");
+    }
+
+    #[test]
+    fn auxiliary_joins_are_decided_per_family_and_per_value() {
+        let wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
+        let dtd = |root: &str| format!(r#"<!DOCTYPE {root} [<!ENTITY year "2006"><!ENTITY a "A"><!ENTITY one "1">]>"#);
+        let q = r#"xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/&year;/main""#;
+        let package = |body: &str, kind: &str, part: &str, xml: String, extra: Option<(&str, String)>| {
+            let mut types = content_types_with_override(&format!("word/{part}.xml"), &format!("{wml}{part}+xml"));
+            let mut declarations = format!(r#"<Relationship Id="r1" Type="{NS_R}/{kind}" Target="{part}.xml"/>"#);
+            let mut entries = vec![
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", format!(r#"<w:document xmlns:w="{NS_W}"><w:body>{body}</w:body></w:document>"#).into_bytes()),
+            ];
+            if let Some((name, text)) = extra {
+                types = String::from_utf8(types)
+                    .unwrap()
+                    .replace("</Types>", &format!(r#"<Override PartName="/word/{name}.xml" ContentType="{wml}{name}+xml"/></Types>"#))
+                    .into_bytes();
+                declarations.push_str(&format!(r#"<Relationship Id="r2" Type="{NS_R}/{name}" Target="{name}.xml"/>"#));
+                entries.push((if name == "footnotes" { "word/footnotes.xml" } else { "word/settings.xml" }, text.into_bytes()));
+            }
+            entries.extend([
+                ("[Content_Types].xml", types),
+                ("word/_rels/document.xml.rels", rels(&declarations)),
+                (
+                    if part == "styles" {
+                        "word/styles.xml"
+                    } else if part == "numbering" {
+                        "word/numbering.xml"
+                    } else {
+                        "word/settings.xml"
+                    },
+                    xml.into_bytes(),
+                ),
+            ]);
+            validate_bytes(&tiny_zip(&entries))
+        };
+        let rules = |report: &Report| report.findings.iter().map(|f| f.rule).collect::<Vec<_>>();
+        // A footnote listing is missing (its absence is established); only a footnote-family element could be it.
+        let footnotes = format!(r#"<w:footnotes xmlns:w="{NS_W}"><w:footnote w:type="separator" w:id="0"><w:p/></w:footnote></w:footnotes>"#);
+        let settings = |inner: &str| format!(r#"<?xml version="1.0"?>{}<w:settings xmlns:w="{NS_W}" {q}>{inner}</w:settings>"#, dtd("w:settings"));
+        let listing = |inner: &str| package("<w:p/>", "settings", "settings", settings(inner), Some(("footnotes", footnotes.clone())));
+        assert_eq!(rules(&listing("")), ["NOTE-PR-LISTING"]);
+        assert_eq!(rules(&listing("<q:endnote/>")), ["NOTE-PR-LISTING"], "an unresolved endnote is nothing to the footnote listing");
+        assert_eq!(listing("<q:footnote/>").verdict, Verdict::Incomplete);
+        // The parent's spelling and the identifier's spelling are join inputs too: unknown, not absent.
+        for inner in [r#"<q:footnotePr><w:footnote w:id="0"/></q:footnotePr>"#, r#"<w:footnotePr><w:footnote q:id="0"/></w:footnotePr>"#] {
+            let report = listing(inner);
+            assert_eq!((rules(&report), report.verdict), (vec![], Verdict::Incomplete), "{inner}: {report:?}");
+        }
+        // An identifier spelled through an entity is an unknown definition, in either direction.
+        let styles = |style: &str| format!(r#"<?xml version="1.0"?>{}<w:styles xmlns:w="{NS_W}">{style}</w:styles>"#, dtd("w:styles"));
+        let used = |value: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{value}"/></w:pPr></w:p>"#);
+        assert_eq!(rules(&package(&used("A"), "styles", "styles", styles(""), None)), ["REF-STYLE"]);
+        let defined = package(&used("A"), "styles", "styles", styles(r#"<w:style w:styleId="&a;"/>"#), None);
+        assert_eq!((rules(&defined), defined.verdict), (vec![], Verdict::Incomplete), "{defined:?}");
+        let referenced = package(&used("&a;"), "styles", "styles", styles(r#"<w:style w:styleId="B"/>"#), None);
+        assert!(!rules(&referenced).contains(&"REF-STYLE"), "{referenced:?}");
+        let numbering = |num: &str| format!(r#"<?xml version="1.0"?>{}<w:numbering xmlns:w="{NS_W}">{num}</w:numbering>"#, dtd("w:numbering"));
+        let numbered = r#"<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr></w:p>"#;
+        assert_eq!(rules(&package(numbered, "numbering", "numbering", numbering(""), None)), ["NUM-DANGLING"]);
+        let defined = package(numbered, "numbering", "numbering", numbering(r#"<w:num w:numId="&one;"><w:abstractNumId w:val="0"/></w:num>"#), None);
+        assert_eq!((rules(&defined), defined.verdict), (vec![], Verdict::Incomplete), "{defined:?}");
     }
 
     #[test]
