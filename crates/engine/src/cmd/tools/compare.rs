@@ -511,26 +511,31 @@ pub(super) fn sample_chars(key: &str, limit: usize) -> Vec<char> {
     chars
 }
 
+/// Builds a precomputed token representation for a single block.
+///
+/// Pre-scans for CJK ideographs and extracts word and character samples bounded by
+/// `MAX_SIM_WORDS` and `MAX_SIM_CHARS`. Non-paragraph blocks are marked as `NonPara`.
+fn precompute_block<'a>(block: &Block, key: Option<&'a str>) -> PrecomputedBlock<'a> {
+    match (block, key) {
+        (Block::Para(_), Some(key)) => {
+            let chars = sample_chars(key, MAX_SIM_CHARS);
+            let has_cjk = chars.iter().copied().any(wordcraft_fonts::is_cjk);
+            let words = sample_words(key, MAX_SIM_WORDS);
+            PrecomputedBlock::Para { key, has_cjk, words, chars }
+        }
+        _ => PrecomputedBlock::NonPara,
+    }
+}
+
 /// Extracts precomputed token representations for a sequence of blocks.
 ///
 /// Normalizes paragraph plain text via `opts.key`, pre-scans for CJK ideographs,
 /// and extracts word and character tokens bounded by `MAX_SIM_WORDS` and `MAX_SIM_CHARS`
 /// (sampling from both head and tail for oversized paragraphs). Non-paragraph blocks
 /// are marked as `NonPara`.
+#[cfg(test)]
 pub(super) fn precompute_blocks<'a>(blocks: &'a [Arc<Block>], keys: &'a [Option<String>]) -> Vec<PrecomputedBlock<'a>> {
-    blocks
-        .iter()
-        .zip(keys)
-        .map(|(b, k)| match (&**b, k) {
-            (Block::Para(_), Some(key)) => {
-                let chars = sample_chars(key, MAX_SIM_CHARS);
-                let has_cjk = chars.iter().copied().any(wordcraft_fonts::is_cjk);
-                let words = sample_words(key.as_str(), MAX_SIM_WORDS);
-                PrecomputedBlock::Para { key: key.as_str(), has_cjk, words, chars }
-            }
-            _ => PrecomputedBlock::NonPara,
-        })
-        .collect()
+    blocks.iter().zip(keys).map(|(b, k)| precompute_block(b, k.as_deref())).collect()
 }
 
 /// Builds a 1-to-1 positional pairing fallback for a block run.
@@ -593,25 +598,7 @@ pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block
         return positional_fallback(n, m, old_blocks, new_blocks);
     }
 
-    let old_keys: Vec<Option<String>> = old_blocks
-        .iter()
-        .map(|b| match &**b {
-            Block::Para(p) => Some(opts.key(&p.plain_text())),
-            _ => None,
-        })
-        .collect();
-    let new_keys: Vec<Option<String>> = new_blocks
-        .iter()
-        .map(|b| match &**b {
-            Block::Para(p) => Some(opts.key(&p.plain_text())),
-            _ => None,
-        })
-        .collect();
-
-    let pre_old = precompute_blocks(old_blocks, &old_keys);
-    let pre_new = precompute_blocks(new_blocks, &new_keys);
-
-    let scores = match compute_align_scores(&pre_old, &pre_new, opts, budget) {
+    let scores = match compute_align_scores(old_blocks, new_blocks, opts, budget) {
         Some(s) => s,
         None => return positional_fallback(n, m, old_blocks, new_blocks),
     };
@@ -651,25 +638,40 @@ pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block
 ///
 /// Stores scores in a flat `Vec<u32>` of length `n * m`. Pairs scoring below
 /// `SIMILARITY_THRESHOLD` or involving non-paragraph blocks are stored as zero.
+/// Paragraph keys and token samples are computed lazily on first use and cached for
+/// reuse across candidate pairs so unscored paragraphs never allocate if the budget
+/// is exhausted early.
 ///
 /// Returns `None` if the total similarity computation exceeds the available `budget`,
 /// signaling that alignment should fall back to 1-to-1 positional pairing.
 /// Runs in worst-case `O(n * m)` time and space.
-fn compute_align_scores(
-    old_blocks: &[PrecomputedBlock<'_>],
-    new_blocks: &[PrecomputedBlock<'_>],
-    opts: &CompareOptions,
-    budget: &mut u64,
-) -> Option<Vec<u32>> {
+fn compute_align_scores(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &CompareOptions, budget: &mut u64) -> Option<Vec<u32>> {
     let n = old_blocks.len();
     let m = new_blocks.len();
     let total_cells = n.saturating_mul(m);
     let mut scores = vec![0u32; total_cells];
+    let new_keys: Vec<std::cell::OnceCell<String>> = std::iter::repeat_with(std::cell::OnceCell::new).take(m).collect();
+    let mut new_cache: Vec<Option<PrecomputedBlock<'_>>> = vec![None; m];
     let mut dp_buf = Vec::new();
 
-    for (u, a) in old_blocks.iter().enumerate() {
-        for (v, b) in new_blocks.iter().enumerate() {
-            let score = para_similarity(a, b, opts, &mut dp_buf, budget)?;
+    for (u, old_block) in old_blocks.iter().enumerate() {
+        let Block::Para(pa) = &**old_block else {
+            continue;
+        };
+        let key_a = opts.key(&pa.plain_text());
+        let a = precompute_block(old_block, Some(&key_a));
+        for (v, new_block) in new_blocks.iter().enumerate() {
+            let Block::Para(pb) = &**new_block else {
+                continue;
+            };
+            let Some(new_slot) = new_cache.get_mut(v) else {
+                continue;
+            };
+            let b = new_slot.get_or_insert_with(|| {
+                let key = new_keys.get(v).map(|cell| cell.get_or_init(|| opts.key(&pb.plain_text())).as_str());
+                precompute_block(new_block, key)
+            });
+            let score = para_similarity(&a, b, opts, &mut dp_buf, budget)?;
             if let Some(cell) = scores.get_mut(u.saturating_mul(m).saturating_add(v)) {
                 *cell = score;
             }

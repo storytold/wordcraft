@@ -1898,9 +1898,9 @@ fn compare_inserted_paragraph_clears_foreign_paragraph_and_section_fmt_change() 
         move_name: None,
     });
     if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
-        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(42, wordcraft_doc::ParaProps::default());
+        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::ParaProps::default());
         let sec = wordcraft_doc::SectionProps {
-            fmt_change: wordcraft_doc::props::PropChange::boxed(42, wordcraft_doc::SectionProps::default()),
+            fmt_change: wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::SectionProps::default()),
             ..Default::default()
         };
         p.section = Some(Box::new(sec));
@@ -1915,9 +1915,8 @@ fn compare_inserted_paragraph_clears_foreign_paragraph_and_section_fmt_change() 
     let p = s.doc.body[0].as_para().unwrap();
     assert_eq!(p.text, "Inserted paragraph with formatting.");
     assert_eq!(p.props.fmt_change, None, "foreign paragraph fmt_change must be cleared on inserted paragraphs");
-    if let Some(sec) = &p.section {
-        assert_eq!(sec.fmt_change, None, "foreign section fmt_change must be cleared on inserted paragraphs");
-    }
+    let sec = p.section.as_ref().expect("inserted paragraph must keep its section after comparison");
+    assert_eq!(sec.fmt_change, None, "foreign section fmt_change must be cleared on inserted paragraphs");
     assert!(p.mark.ins.is_some(), "inserted paragraph mark must have comparison insertion marker");
 }
 
