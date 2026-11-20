@@ -5932,6 +5932,49 @@ mod budget_tests {
     }
 
     #[test]
+    fn attlist_defaults_prevent_expansion_and_preserve_external_mode() {
+        // An ATTLIST default is not modeled, so the part is unexamined rather than silently altered.
+        // The external relationship with a defaulted TargetMode must not become a dangling internal.
+        let rels_ns = "http://schemas.openxmlformats.org/package/2006/relationships";
+        let document =
+            format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body></w:document>"#);
+        let report = |relationships: String| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.clone().into_bytes()),
+                ("word/_rels/document.xml.rels", relationships.into_bytes()),
+            ]))
+        };
+        // Literal external relationship passes.
+        let literal = report(format!(
+            r#"<Relationships xmlns="{rels_ns}"><Relationship Id="rExt" Type="{NS_R}/hyperlink" Target="https://example.com/" TargetMode="External"/></Relationships>"#
+        ));
+        assert_eq!(literal.verdict, Verdict::Pass, "{literal:?}");
+        assert!(!literal.findings.iter().any(|f| f.rule == "REL-DANGLING"), "{literal:?}");
+        // Entity-spelled relationship with ATTLIST-defaulted TargetMode is unexamined (Incomplete),
+        // not silently converted to internal and then marked dangling.
+        let entity_with_attlist = report(format!(
+            r#"<!DOCTYPE Relationships [
+<!ENTITY item '<Relationship Id="rExt" Type="{NS_R}/hyperlink" Target="https://example.com/"/>'>
+<!ATTLIST Relationship TargetMode CDATA "External">
+]><Relationships xmlns="{rels_ns}">&item;</Relationships>"#
+        ));
+        // The ATTLIST makes the subset unresolvable, so expansion does not happen.
+        // Without the fix, the TargetMode would be lost and the relationship treated as internal.
+        assert!(
+            !entity_with_attlist.findings.iter().any(|f| f.rule == "REL-DANGLING"),
+            "ATTLIST default should not be lost: {entity_with_attlist:?}"
+        );
+        assert_eq!(entity_with_attlist.verdict, Verdict::Incomplete, "{entity_with_attlist:?}");
+        // The diagnostics read the original source: a second DOCTYPE is still reported after expansion.
+        let doubled = report(format!(
+            r#"<!DOCTYPE Relationships [<!ENTITY item '<Relationship Id="rExt" Type="{NS_R}/hyperlink" Target="https://example.com/" TargetMode="External"/>'>]><!DOCTYPE Relationships []><Relationships xmlns="{rels_ns}">&item;</Relationships>"#
+        ));
+        assert!(doubled.findings.iter().any(|f| f.rule == "XML-MALFORMED"), "{doubled:?}");
+    }
+
+    #[test]
     fn diagnostics_are_never_made_from_unknowns() {
         // `q` is bound to a namespace spelled through an entity this part cannot expand; `mc` to the markup
         // compatibility namespace through another. A diagnostic that needs the unknown value is not made.

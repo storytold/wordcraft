@@ -953,6 +953,9 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     let mut entity_status = HashMap::new();
     let mut entity_work = acc.limits.events;
     let mut entity_notes = (false, false);
+    // A relationships part's entity-wrapped content is examined by the relationship walk, which reads the
+    // expansion (`package::load_rels`); the markup it delivers is not unexamined here.
+    let rels_content_modelled = part.to_ascii_lowercase().ends_with(".rels") && expand_content_entities(text).is_some();
     loop {
         if events >= acc.limits.events {
             acc.note(format!("{part} has more than {} XML events; the rest of the part was not checked", acc.limits.events));
@@ -1108,7 +1111,10 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     None
                 };
                 if handle_general_ref_event(part, outside_err, &mut entity_notes, &mut state.fld_state_unknown, &mut out, acc, |acc| {
-                    scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), &entity_decls, &mut entity_status, &mut entity_work, acc)
+                    match scan_general_ref(part, e.as_ref(), complete_entities.as_ref(), &entity_decls, &mut entity_status, &mut entity_work, acc) {
+                        GeneralRefOutcome::UncheckedReplacement if rels_content_modelled => GeneralRefOutcome::Ok,
+                        outcome => outcome,
+                    }
                 }) {
                     break;
                 }
@@ -3092,6 +3098,11 @@ fn parse_doctype_entities(raw: &[u8], cap: usize) -> (Observed<HashSet<String>>,
                 }
                 set.insert(name.to_string());
                 decl_texts.entry(name.to_string()).or_insert_with(|| replacement.to_string());
+            } else {
+                // Any declaration other than <!ENTITY> makes the subset unresolvable
+                // (ATTLIST defaults, parameter entities, etc. are not modelled).
+                unresolved = true;
+                break;
             }
             pos = decl_end + 1;
             continue;
@@ -3137,13 +3148,25 @@ pub(crate) fn expand_content_entities(text: &str) -> Option<String> {
         buf.clear();
     };
     let mut out = String::from(text.get(..start)?);
-    expand_into(text.get(end..)?, &entities, 0, text.len().saturating_mul(2).saturating_add(8192), &mut out)?;
+    // Work bound: total bytes walked including intermediates, not just output size.
+    let work_limit = text.len().saturating_mul(2).saturating_add(8192);
+    let mut work_done = out.len();
+    expand_into(text.get(end..)?, &entities, 0, work_limit, &mut work_done, &mut out)?;
     Some(out)
 }
 
 /// Append `src` with its entity references in content replaced by their replacement text (see
 /// [`expand_content_entities`]); `None` when it cannot be done within the bounds.
-fn expand_into(src: &str, entities: &BTreeMap<String, String>, depth: usize, limit: usize, out: &mut String) -> Option<()> {
+/// `work_done` is incremented by the total bytes walked (source + intermediate expansions),
+/// and must not exceed `work_limit`.
+fn expand_into(
+    src: &str,
+    entities: &BTreeMap<String, String>,
+    depth: usize,
+    work_limit: usize,
+    work_done: &mut usize,
+    out: &mut String,
+) -> Option<()> {
     observation_contract! {
         rules: "-";
         collections: "field.bytes*1,type.BTreeMap*1";
@@ -3196,10 +3219,12 @@ fn expand_into(src: &str, entities: &BTreeMap<String, String>, depth: usize, lim
                 if value.contains('%') || value.contains("&#") {
                     return None;
                 }
-                expand_into(value, entities, depth + 1, limit, out)?;
-                if out.len() > limit {
+                // Charge work for the source reference and the replacement text.
+                *work_done = work_done.saturating_add(semi + 1).saturating_add(value.len());
+                if *work_done > work_limit {
                     return None;
                 }
+                expand_into(value, entities, depth + 1, work_limit, work_done, out)?;
                 at += semi + 1;
                 continue;
             }
@@ -3208,7 +3233,9 @@ fn expand_into(src: &str, entities: &BTreeMap<String, String>, depth: usize, lim
             rest.find(['<', '&']).unwrap_or(rest.len())
         };
         out.push_str(rest.get(..span)?);
-        if out.len() > limit {
+        // Charge work for bytes walked in source.
+        *work_done = work_done.saturating_add(span);
+        if *work_done > work_limit {
             return None;
         }
         at += span;

@@ -602,9 +602,6 @@ fn text_entry(name: String, bytes: Vec<u8>) -> Entry {
 
     let (decoded, decode_error) = if is_text_part(&name) {
         match crate::scan::decode_strict(&bytes) {
-            // A relationships part is read as expat delivers it: an internal entity whose replacement text is a
-            // declaration is that declaration, so the examined text is the expanded one.
-            Ok(t) if name.to_ascii_lowercase().ends_with(".rels") => (Some(crate::scan::expand_content_entities(&t).unwrap_or(t)), None),
             Ok(t) => (Some(t), None),
             Err(e) => (None, Some(e)),
         }
@@ -1293,7 +1290,11 @@ fn load_rels(entries: &[Entry], acc: &mut Acc) -> Vec<RelsPart> {
             continue;
         };
         let mut guard = ParseGuard::new(limits.events, limits.depth);
-        let (parsed, c, complete, inventory_complete) = parse_rels(&dir, text, cap, &mut guard);
+        // A relationships part is read as expat delivers it: an internal entity whose replacement text is a
+        // declaration is that declaration. The expansion is a read-only view for this walk; the part's decoded
+        // source (what the XML diagnostics and the duplicate-DOCTYPE check read) stays the original.
+        let expanded = crate::scan::expand_content_entities(text);
+        let (parsed, c, complete, inventory_complete) = parse_rels(&dir, expanded.as_deref().unwrap_or(text), cap, &mut guard);
         if c {
             acc.note(format!("{} declares more than {cap} relationships; later ones were not recorded", e.name));
             acc.set_incomplete();
