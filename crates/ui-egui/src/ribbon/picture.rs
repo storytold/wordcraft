@@ -19,7 +19,7 @@ use crate::undo_marks::apply_edits;
 
 /// Fills the Picture Format tab's Adjust, Picture Styles, Accessibility (Alt Text), Arrange and Size groups.
 pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
-    row.group(RibbonGroup::new("picture.adjust", tl!("Adjust"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("picture.adjust", tl!("Adjust"), IconId::new("wordcraft.more").into()), |ui| {
         let stacked = |label: &'static str, tip: &'static str| {
             Button::new(tl!(label)).icon(IconId::new("picture")).tooltip(tl!(tip)).arrangement(Arrangement::Stacked)
         };
@@ -75,7 +75,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             Button::command(CommandRef::new("picture.reset")).label(tl!("Reset")).icon(IconId::new("picture")).tooltip(tl!("Reset Picture")).show(ui);
         });
     });
-    row.group(RibbonGroup::new("picture.styles", tl!("Picture Styles"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("picture.styles", tl!("Picture Styles"), IconId::new("wordcraft.more").into()), |ui| {
         let styles = Button::new(tl!("Styles")).icon(IconId::new("picture")).tooltip(tl!("Frames and effects")).arrangement(Arrangement::Stacked);
         menu_button(ui, styles, tl!("Styles"), Some("picture.style"), |ui, _| {
             for (l, s) in [
@@ -96,7 +96,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     alt_text_group(row);
-    row.group(RibbonGroup::new("picture.arrange", tl!("Arrange"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("picture.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
         Stack::new().show(ui, |ui, _| {
@@ -106,7 +106,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     // The launcher opens the Size dialog: scale, Lock aspect ratio, the original size (#2573).
-    row.group(RibbonGroup::new("picture.size", tl!("Size"), IconId::new("more").into()).launcher(CommandRef::new("picture.size")), |ui| {
+    row.group(RibbonGroup::new("picture.size", tl!("Size"), IconId::new("wordcraft.more").into()).launcher(CommandRef::new("picture.size")), |ui| {
         let (media, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
             Some((_, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, w, h, crop, alt),
             _ => (String::new(), 0.0, 0.0, [0.0; 4], String::new()),
@@ -121,7 +121,7 @@ pub(super) fn picture_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             Row::new().show(ui, |ui, _| {
                 ToggleButton::command(CommandRef::new("ui.crop"))
                     .label(tl!("Crop"))
-                    .icon(IconId::new("crop"))
+                    .icon(IconId::new("wordcraft.crop"))
                     .selected(crate::crop::active(app).is_some())
                     .show(ui);
                 for (i, side) in ["L", "T", "R", "B"].into_iter().enumerate() {

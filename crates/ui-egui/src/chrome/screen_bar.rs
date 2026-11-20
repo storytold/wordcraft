@@ -15,7 +15,7 @@ use crate::WordApp;
 pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     inspect::record(ui, crate::keytips::screen_bar_region(), |ui| match Screen::of(&app.session.view) {
         Screen::Focus => {
-            let out = IconButton::new(IconId::new("more"))
+            let out = IconButton::new(IconId::new("wordcraft.more"))
                 .label(tl!("Show the ribbon").to_string())
                 .tooltip(TooltipSpec::new(tl!("Show the ribbon").to_string()))
                 .show(ui);

@@ -174,7 +174,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         ToggleButton::command(CommandRef::new("table.eraser"))
             .label(tl!("Eraser").to_string())
-            .icon(IconId::new("eraser"))
+            .icon(IconId::new("wordcraft.eraser"))
             .arrangement(Arrangement::Stacked)
             .selected(app.canvas.table_tool == Some(TableTool::Erase))
             .show(ui);

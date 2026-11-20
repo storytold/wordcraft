@@ -427,7 +427,7 @@ fn recipient_body(ui: &mut egui::Ui, d: &mut RecipientDraft, editing: &mut bool,
                 row = row.cell_muted(ColumnKey::index(j as u32));
             }
         }
-        row.trailing_part(TrailingPart::new(0), TrailingFace::Icon(IconSpec::svg(IconId::new("close"))), tl!("Remove recipient"))
+        row.trailing_part(TrailingPart::new(0), TrailingFace::Icon(IconSpec::svg(IconId::new("wordcraft.close"))), tl!("Remove recipient"))
     });
     for event in response.events {
         match event {

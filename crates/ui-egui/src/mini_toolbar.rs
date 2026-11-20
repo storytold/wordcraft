@@ -2,7 +2,7 @@
 //! formatting controls. The framework's selection task bar places it (above the selection, flipped
 //! and clamped inside the document area); this module decides when it shows and what it holds.
 
-use craft::behavior::{EditEvent, IconId, Preview};
+use craft::behavior::{EditEvent, Preview};
 use craft::keymap::CommandRef;
 use craft::pages::ui::PageBody;
 use craft::ui::buttons::{IconButton, ToggleButton};
@@ -173,7 +173,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
         }
 
         for (id, icon) in [("format.growFont", "grow"), ("format.shrinkFont", "shrink")] {
-            let b = IconButton::command(IconId::new(icon), CommandRef::new(id)).show(ui);
+            let b = IconButton::command(crate::icons::id(icon), CommandRef::new(id)).show(ui);
             preview_on_hover(app, b.hover, b.response.enabled(), id, json!({}), preview);
         }
     });
@@ -239,7 +239,7 @@ fn follow_list<T>(app: &mut WordApp, preview: bool, event: &Preview<T>, command:
 /// command carries no checked state, so the value is bound here and only draws the button.
 fn toggle(ui: &mut Ui, app: &mut WordApp, id: &str, icon: &'static str, on: bool, preview: bool) {
     let r = <ToggleButton as Props>::command(ToggleButton::new(Label::Empty, Bind::given(on)), CommandRef::new(id))
-        .icon(IconId::new(icon))
+        .icon(crate::icons::id(icon))
         .icon_only()
         .show(ui);
     preview_on_hover(app, r.hover, r.response.enabled(), id, json!({}), preview);

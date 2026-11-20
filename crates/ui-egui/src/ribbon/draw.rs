@@ -33,7 +33,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         ] {
             ToggleButton::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
-                .icon(IconId::new(key))
+                .icon(crate::icons::id(key))
                 .arrangement(Arrangement::Stacked)
                 .selected(on)
                 .show(ui);
@@ -165,7 +165,7 @@ fn gallery_pen(ui: &mut egui::Ui, i: usize, pen: wordcraft_engine::cmd::draw::Cu
     let tip = format!("{kind}: {size}, #{}", pen.color.hex());
     let response = ToggleButton::command(CommandRef::with_params(pen_command(pen.kind), json!({"color": pen.color.hex(), "width": pen.width})))
         .label(kind)
-        .icon(IconSpec::from(IconId::new(glyph)).with_mark(IconMark::weighted_bar(DataColor::new(color), bar)))
+        .icon(IconSpec::from(crate::icons::id(glyph)).with_mark(IconMark::weighted_bar(DataColor::new(color), bar)))
         .arrangement(Arrangement::Stacked)
         .tooltip(tip)
         .selected(active)

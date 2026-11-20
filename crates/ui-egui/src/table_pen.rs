@@ -210,7 +210,7 @@ impl CanvasTool for TablePenCanvasTool<'_> {
 
     /// A crosshair with the tool's icon riding beside it.
     fn cursor(&self, _cx: &ToolContext<'_>) -> Cursor {
-        let icon = if self.app.canvas.table_tool == Some(TableTool::Erase) { IconId::new("eraser") } else { IconId::new("pencil") };
+        let icon = if self.app.canvas.table_tool == Some(TableTool::Erase) { IconId::new("wordcraft.eraser") } else { IconId::new("wordcraft.pencil") };
         Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Crosshair, icon))
     }
 

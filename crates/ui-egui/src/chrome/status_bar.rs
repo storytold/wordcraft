@@ -231,7 +231,7 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
         // No command carries a checked state, so the view is given at the button (S-L415).
         let out = ToggleButton::new(name.to_string(), Bind::given(on))
             .command(CommandRef::new(id))
-            .icon(IconId::new(icon))
+            .icon(crate::icons::id(icon))
             .icon_only()
             .tooltip(TooltipSpec::new(name.to_string()))
             .show(ui);
@@ -250,7 +250,7 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
         }
     };
     let out =
-        IconButton::new(IconId::new("minus")).label(tl!("Zoom Out").to_string()).tooltip(TooltipSpec::new(tl!("Zoom Out").to_string())).show(ui);
+        IconButton::new(IconId::new("wordcraft.minus")).label(tl!("Zoom Out").to_string()).tooltip(TooltipSpec::new(tl!("Zoom Out").to_string())).show(ui);
     rects.push(out.response.rect);
     if out.response.clicked() {
         step(app, false);
@@ -271,7 +271,7 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
             let _ = app.run(command, json!({"value": (*v * 100.0).round()}));
         }
     }
-    let out = IconButton::new(IconId::new("plus")).label(tl!("Zoom In").to_string()).tooltip(TooltipSpec::new(tl!("Zoom In").to_string())).show(ui);
+    let out = IconButton::new(IconId::new("wordcraft.plus")).label(tl!("Zoom In").to_string()).tooltip(TooltipSpec::new(tl!("Zoom In").to_string())).show(ui);
     rects.push(out.response.rect);
     if out.response.clicked() {
         step(app, true);

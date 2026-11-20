@@ -1,7 +1,7 @@
 //! The ribbon's galleries: Styles, Style Sets, Table Styles (on the framework `Gallery`) and the
 //! Shapes and WordArt grids of the menus (on `TileGrid`). Previews are images from the real engine.
 
-use craft::behavior::{DisplayOrder, IconId, ItemSource};
+use craft::behavior::{DisplayOrder, ItemSource};
 use craft::keymap::CommandRef;
 use craft::menu::{Gallery, GalleryFace, GalleryItem, GalleryMore};
 use craft::theme::Mode;
@@ -277,7 +277,7 @@ pub(crate) fn shapes(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .enabled(enabled)
         .show_items(ui, &Indexed(SHAPE_TILES.len()), &mut |at, _| {
             let (label, _, icon) = SHAPE_TILES.get(*at).copied().unwrap_or(("", "", "shape.rectangle"));
-            Tile::new(crate::tl!(label)).icon(IconSpec::svg(IconId::new(icon)))
+            Tile::new(crate::tl!(label)).icon(IconSpec::svg(crate::icons::id(icon)))
         });
     if let Some((_, kind, _)) = picked(&out.response.events).and_then(|at| SHAPE_TILES.get(at))
         && app.run("insert.shape", json!({"kind": kind})).is_ok()

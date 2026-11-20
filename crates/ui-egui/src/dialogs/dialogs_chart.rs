@@ -408,7 +408,7 @@ fn data_body(ui: &mut Ui, f: &mut ChartDataForm) {
         }
         row.cell_field(
             remove_row_column.clone(),
-            IconButton::new(IconId::new("close")).label(tl!("Remove row").to_string()).enabled(can_remove_row),
+            IconButton::new(IconId::new("wordcraft.close")).label(tl!("Remove row").to_string()).enabled(can_remove_row),
             move |out| {
                 if out.clicked() {
                     edits.borrow_mut().push(Edit::RemoveRow(at));

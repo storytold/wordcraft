@@ -38,7 +38,7 @@ pub(super) fn clipboard(app: &mut WordApp, ui: &mut Ui) {
                     let _ = app.run("edit.pasteClipboardItem", json!({"index": i}));
                     app.canvas.focus_page(&ctx);
                 }
-                if IconButton::new(IconSpec::svg(IconId::new("close"))).label(tl!("Delete").to_owned()).show(ui).clicked() {
+                if IconButton::new(IconSpec::svg(IconId::new("wordcraft.close"))).label(tl!("Delete").to_owned()).show(ui).clicked() {
                     let _ = app.run("edit.deleteClipboardItem", json!({"index": i}));
                     app.canvas.focus_page(&ctx);
                 }

@@ -70,11 +70,11 @@ pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
 /// Fills the Layout ribbon tab (Page Setup, Paragraph, Arrange).
 pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(
-        RibbonGroup::new("layout.pageSetup", tl!("Page Setup"), IconId::new("more").into()).launcher(CommandRef::new("layout.pageSetup")),
+        RibbonGroup::new("layout.pageSetup", tl!("Page Setup"), IconId::new("wordcraft.more").into()).launcher(CommandRef::new("layout.pageSetup")),
         |ui| {
             // Text Direction works on what the caret is in: table cells, a text box, else the section.
             let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
-            let stacked = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(IconId::new(icon)).arrangement(Arrangement::Stacked);
+            let stacked = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon)).arrangement(Arrangement::Stacked);
             menu_button(ui, stacked("Text\nDirection", "textDirection"), tl!("Text Direction"), Some("layout.textDirection"), |ui, _| {
                 use wordcraft_doc::props::TextDirection;
                 for (label, d) in [
@@ -95,7 +95,7 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             menu_button(ui, stacked("Size", "size"), tl!("Size"), Some("layout.size"), |ui, _| size_menu(ui, app));
             menu_button(ui, stacked("Columns", "columns"), tl!("Columns"), Some("layout.columns"), |ui, _| columns_items(ui, app));
             Stack::new().show(ui, |ui, _| {
-                let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(IconId::new(icon));
+                let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon));
                 menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| {
                     MenuItem::heading(tl!("Page Breaks")).show(ui);
                     for (l, k) in [("Page", "page"), ("Column", "column"), ("Text Wrapping", "textWrapping")] {
@@ -203,7 +203,7 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             });
         },
     );
-    row.group(RibbonGroup::new("layout.arrange", tl!("Arrange"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("layout.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
         Stack::new().show(ui, |ui, _| {

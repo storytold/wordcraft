@@ -32,7 +32,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("blankPage", include_bytes!("../icons/blankPage.svg")),
     ("blockAuthors", include_bytes!("../icons/blockAuthors.svg")),
     ("bold", include_bytes!("../icons/bold.svg")),
-    ("bookmark", include_bytes!("../icons/bookmark.svg")),
+    ("wordcraft.bookmark", include_bytes!("../icons/bookmark.svg")),
     ("borderPainter", include_bytes!("../icons/borderPainter.svg")),
     ("borders", include_bytes!("../icons/borders.svg")),
     ("breaks", include_bytes!("../icons/breaks.svg")),
@@ -57,7 +57,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("chart", include_bytes!("../icons/chart.svg")),
     ("chartData", include_bytes!("../icons/chartData.svg")),
     ("chartTitle", include_bytes!("../icons/chartTitle.svg")),
-    ("check", include_bytes!("../icons/check.svg")),
+    ("wordcraft.check", include_bytes!("../icons/check.svg")),
     ("checkErrors", include_bytes!("../icons/checkErrors.svg")),
     ("chevronDoubleRight", include_bytes!("../icons/chevronDoubleRight.svg")),
     ("chevronDown", include_bytes!("../icons/chevronDown.svg")),
@@ -66,7 +66,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("chevronUp", include_bytes!("../icons/chevronUp.svg")),
     ("citation", include_bytes!("../icons/citation.svg")),
     ("clear", include_bytes!("../icons/clear.svg")),
-    ("close", include_bytes!("../icons/close.svg")),
+    ("wordcraft.close", include_bytes!("../icons/close.svg")),
     ("closeOutline", include_bytes!("../icons/closeOutline.svg")),
     ("colWidth", include_bytes!("../icons/colWidth.svg")),
     ("colors", include_bytes!("../icons/colors.svg")),
@@ -74,9 +74,9 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("combine", include_bytes!("../icons/combine.svg")),
     ("comment", include_bytes!("../icons/comment.svg")),
     ("compare", include_bytes!("../icons/compare.svg")),
-    ("copy", include_bytes!("../icons/copy.svg")),
+    ("wordcraft.copy", include_bytes!("../icons/copy.svg")),
     ("coverPage", include_bytes!("../icons/coverPage.svg")),
-    ("crop", include_bytes!("../icons/crop.svg")),
+    ("wordcraft.crop", include_bytes!("../icons/crop.svg")),
     ("crossRef", include_bytes!("../icons/crossRef.svg")),
     ("cut", include_bytes!("../icons/cut.svg")),
     ("darkMode", include_bytes!("../icons/darkMode.svg")),
@@ -105,15 +105,15 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("endnote", include_bytes!("../icons/endnote.svg")),
     ("envelope", include_bytes!("../icons/envelope.svg")),
     ("equation", include_bytes!("../icons/equation.svg")),
-    ("eraser", include_bytes!("../icons/eraser.svg")),
+    ("wordcraft.eraser", include_bytes!("../icons/eraser.svg")),
     ("export", include_bytes!("../icons/export.svg")),
-    ("file", include_bytes!("../icons/file.svg")),
+    ("wordcraft.file", include_bytes!("../icons/file.svg")),
     ("find", include_bytes!("../icons/find.svg")),
     ("finish", include_bytes!("../icons/finish.svg")),
     ("first", include_bytes!("../icons/first.svg")),
     ("fitOnePage", include_bytes!("../icons/fitOnePage.svg")),
     ("focus", include_bytes!("../icons/focus.svg")),
-    ("folder", include_bytes!("../icons/folder.svg")),
+    ("wordcraft.folder", include_bytes!("../icons/folder.svg")),
     ("fontMissing", include_bytes!("../icons/fontMissing.svg")),
     ("fontcolor", include_bytes!("../icons/fontcolor.svg")),
     ("fontdialog", include_bytes!("../icons/fontdialog.svg")),
@@ -140,7 +140,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("indentLeft", include_bytes!("../icons/indentLeft.svg")),
     ("indentRight", include_bytes!("../icons/indentRight.svg")),
     ("index", include_bytes!("../icons/index.svg")),
-    ("info", include_bytes!("../icons/info.svg")),
+    ("wordcraft.info", include_bytes!("../icons/info.svg")),
     ("inkToMath", include_bytes!("../icons/inkToMath.svg")),
     ("inkToShape", include_bytes!("../icons/inkToShape.svg")),
     ("insertAbove", include_bytes!("../icons/insertAbove.svg")),
@@ -152,13 +152,13 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("justify", include_bytes!("../icons/justify.svg")),
     ("labels", include_bytes!("../icons/labels.svg")),
     ("language", include_bytes!("../icons/language.svg")),
-    ("lasso", include_bytes!("../icons/lasso.svg")),
+    ("wordcraft.lasso", include_bytes!("../icons/lasso.svg")),
     ("last", include_bytes!("../icons/last.svg")),
     ("launcher", include_bytes!("../icons/launcher.svg")),
     ("legend", include_bytes!("../icons/legend.svg")),
     ("lineNumbers", include_bytes!("../icons/lineNumbers.svg")),
     ("lineSpacing", include_bytes!("../icons/lineSpacing.svg")),
-    ("link", include_bytes!("../icons/link.svg")),
+    ("wordcraft.link", include_bytes!("../icons/link.svg")),
     ("macros", include_bytes!("../icons/macros.svg")),
     ("mailMerge", include_bytes!("../icons/mailMerge.svg")),
     ("margins", include_bytes!("../icons/margins.svg")),
@@ -169,9 +169,9 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("matchFields", include_bytes!("../icons/matchFields.svg")),
     ("merge", include_bytes!("../icons/merge.svg")),
     ("mergeField", include_bytes!("../icons/mergeField.svg")),
-    ("minus", include_bytes!("../icons/minus.svg")),
+    ("wordcraft.minus", include_bytes!("../icons/minus.svg")),
     ("models3d", include_bytes!("../icons/models3d.svg")),
-    ("more", include_bytes!("../icons/more.svg")),
+    ("wordcraft.more", include_bytes!("../icons/more.svg")),
     ("multilevel", include_bytes!("../icons/multilevel.svg")),
     ("multiplePages", include_bytes!("../icons/multiplePages.svg")),
     ("navPane", include_bytes!("../icons/navPane.svg")),
@@ -185,7 +185,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("object", include_bytes!("../icons/object.svg")),
     ("onePage", include_bytes!("../icons/onePage.svg")),
     ("onlinePicture", include_bytes!("../icons/onlinePicture.svg")),
-    ("open", include_bytes!("../icons/open.svg")),
+    ("wordcraft.open", include_bytes!("../icons/open.svg")),
     ("options", include_bytes!("../icons/options.svg")),
     ("orientation", include_bytes!("../icons/orientation.svg")),
     ("outdent", include_bytes!("../icons/outdent.svg")),
@@ -208,12 +208,12 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("pastCitation", include_bytes!("../icons/pastCitation.svg")),
     ("paste", include_bytes!("../icons/paste.svg")),
     ("pen", include_bytes!("../icons/pen.svg")),
-    ("pencil", include_bytes!("../icons/pencil.svg")),
+    ("wordcraft.pencil", include_bytes!("../icons/pencil.svg")),
     ("phonetic", include_bytes!("../icons/phonetic.svg")),
     ("picture", include_bytes!("../icons/picture.svg")),
-    ("pilcrow", include_bytes!("../icons/pilcrow.svg")),
-    ("pin", include_bytes!("../icons/pin.svg")),
-    ("plus", include_bytes!("../icons/plus.svg")),
+    ("wordcraft.pilcrow", include_bytes!("../icons/pilcrow.svg")),
+    ("wordcraft.pin", include_bytes!("../icons/pin.svg")),
+    ("wordcraft.plus", include_bytes!("../icons/plus.svg")),
     ("position", include_bytes!("../icons/position.svg")),
     ("prevChange", include_bytes!("../icons/prevChange.svg")),
     ("prevComment", include_bytes!("../icons/prevComment.svg")),
@@ -229,7 +229,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("readMode", include_bytes!("../icons/readMode.svg")),
     ("recipients", include_bytes!("../icons/recipients.svg")),
     ("recover", include_bytes!("../icons/recover.svg")),
-    ("redo", include_bytes!("../icons/redo.svg")),
+    ("wordcraft.redo", include_bytes!("../icons/redo.svg")),
     ("reject", include_bytes!("../icons/reject.svg")),
     ("repeatHeader", include_bytes!("../icons/repeatHeader.svg")),
     ("replace", include_bytes!("../icons/replace.svg")),
@@ -245,12 +245,12 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("reviewingPane", include_bytes!("../icons/reviewingPane.svg")),
     ("rotate", include_bytes!("../icons/rotate.svg")),
     ("rowHeight", include_bytes!("../icons/rowHeight.svg")),
-    ("ruler", include_bytes!("../icons/ruler.svg")),
+    ("wordcraft.ruler", include_bytes!("../icons/ruler.svg")),
     ("rules", include_bytes!("../icons/rules.svg")),
-    ("save", include_bytes!("../icons/save.svg")),
+    ("wordcraft.save", include_bytes!("../icons/save.svg")),
     ("saveAs", include_bytes!("../icons/saveAs.svg")),
     ("screenshot", include_bytes!("../icons/screenshot.svg")),
-    ("search", include_bytes!("../icons/search.svg")),
+    ("wordcraft.search", include_bytes!("../icons/search.svg")),
     ("select", include_bytes!("../icons/select.svg")),
     ("selectTable", include_bytes!("../icons/selectTable.svg")),
     ("selectionPane", include_bytes!("../icons/selectionPane.svg")),
@@ -290,7 +290,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("spaceAfter", include_bytes!("../icons/spaceAfter.svg")),
     ("spaceBefore", include_bytes!("../icons/spaceBefore.svg")),
     ("spelling", include_bytes!("../icons/spelling.svg")),
-    ("split", include_bytes!("../icons/split.svg")),
+    ("wordcraft.split", include_bytes!("../icons/split.svg")),
     ("splitCells", include_bytes!("../icons/splitCells.svg")),
     ("splitTable", include_bytes!("../icons/splitTable.svg")),
     ("strike", include_bytes!("../icons/strike.svg")),
@@ -322,7 +322,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("transform", include_bytes!("../icons/transform.svg")),
     ("translate", include_bytes!("../icons/translate.svg")),
     ("underline", include_bytes!("../icons/underline.svg")),
-    ("undo", include_bytes!("../icons/undo.svg")),
+    ("wordcraft.undo", include_bytes!("../icons/undo.svg")),
     ("unlinkCitations", include_bytes!("../icons/unlinkCitations.svg")),
     ("update", include_bytes!("../icons/update.svg")),
     ("updateTable", include_bytes!("../icons/updateTable.svg")),
@@ -347,6 +347,44 @@ pub static WORDCRAFT_ICONS: AppIcons = AppIcons::new("wordcraft", Some(1.25), WO
 /// Registers the app icon set beside the framework's catalog; runs before the first pass.
 pub fn register() {
     register_app_icons(&WORDCRAFT_ICONS);
+}
+
+/// The app icons whose names the framework's catalog also has. The catalog wins a clash, so the
+/// app registers its own drawings of these as `wordcraft.<name>`, and [`id`] names them so.
+const OWN_OVER_CATALOG: &[(&str, &str)] = &[
+    ("bookmark", "wordcraft.bookmark"),
+    ("check", "wordcraft.check"),
+    ("close", "wordcraft.close"),
+    ("copy", "wordcraft.copy"),
+    ("crop", "wordcraft.crop"),
+    ("eraser", "wordcraft.eraser"),
+    ("file", "wordcraft.file"),
+    ("folder", "wordcraft.folder"),
+    ("info", "wordcraft.info"),
+    ("lasso", "wordcraft.lasso"),
+    ("link", "wordcraft.link"),
+    ("minus", "wordcraft.minus"),
+    ("more", "wordcraft.more"),
+    ("open", "wordcraft.open"),
+    ("pencil", "wordcraft.pencil"),
+    ("pilcrow", "wordcraft.pilcrow"),
+    ("pin", "wordcraft.pin"),
+    ("plus", "wordcraft.plus"),
+    ("redo", "wordcraft.redo"),
+    ("ruler", "wordcraft.ruler"),
+    ("save", "wordcraft.save"),
+    ("search", "wordcraft.search"),
+    ("split", "wordcraft.split"),
+    ("undo", "wordcraft.undo"),
+];
+
+/// The icon WordCraft draws for `name`: its own drawing where the framework's catalog has the
+/// same name, else `name` itself.
+pub fn id(name: &'static str) -> IconId {
+    match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
+        Some((_, own)) => IconId::new(own),
+        None => IconId::new(name),
+    }
 }
 
 /// The icon a command's button shows outside its own ribbon group (custom groups, the Quick
@@ -379,6 +417,10 @@ pub fn for_command(id: &str) -> IconSpec<'static> {
     let name: Cow<'static, str> = match ICONS.iter().find(|(c, _)| *c == id) {
         Some((_, icon)) => Cow::Borrowed(icon),
         None => Cow::Owned(id.rsplit('.').next().unwrap_or(id).to_owned()),
+    };
+    let name = match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
+        Some((_, own)) => Cow::Borrowed(*own),
+        None => name,
     };
     IconSpec::svg(IconId::from(name))
 }
@@ -432,6 +474,25 @@ mod tests {
             .map(|t| t.parse().expect("a number"))
             .collect();
         nums.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect()
+    }
+
+    /// Every app drawing is registered under a name the framework's catalog does not have, so none
+    /// is refused and replaced by the catalog's icon of the same name.
+    #[test]
+    fn no_app_icon_is_shadowed_by_the_catalog() {
+        let catalog = craft::ui::primitives::icon_names();
+        let names: Vec<&str> = WORDCRAFT_ICONS.icons.iter().map(|(name, _)| *name).collect();
+        let shadowed: Vec<&&str> = names.iter().filter(|name| catalog.binary_search(name).is_ok()).collect();
+        assert!(shadowed.is_empty(), "the catalog has these names: {shadowed:?}");
+        for (plain, own) in OWN_OVER_CATALOG {
+            assert!(names.contains(own), "{own} is not registered");
+            assert_eq!(id(plain).name(), *own);
+        }
+        let undo = match for_command("edit.undo").source {
+            craft::ui::primitives::IconSource::Svg(id) => id.name().to_owned(),
+            _ => String::new(),
+        };
+        assert_eq!(undo, "wordcraft.undo");
     }
 
     /// #6768: the Insert › Shapes Arrow tile is the block arrow that tile inserts, outlined as the

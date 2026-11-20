@@ -67,7 +67,7 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
-    row.group(RibbonGroup::new("view.show", tl!("Show").to_string(), IconId::new("ruler").into()), |ui| {
+    row.group(RibbonGroup::new("view.show", tl!("Show").to_string(), IconId::new("wordcraft.ruler").into()), |ui| {
         // Three rows fill the group's height; a fourth check box would run into its label.
         Stack::new().show(ui, |ui, _| {
             show_check(ui, app, "Ruler", "view.ruler", v.ruler);
@@ -141,7 +141,7 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         Button::command(CommandRef::new("view.split"))
             .label(tl!("Split").to_string())
-            .icon(IconId::new("split"))
+            .icon(IconId::new("wordcraft.split"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         // Across the app's windows (#322; `windows`), read in this pass.

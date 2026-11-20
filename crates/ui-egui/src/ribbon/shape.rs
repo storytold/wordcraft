@@ -78,7 +78,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         _ => (None, None),
     };
     let theme = app.session.doc.settings.theme_colors.clone();
-    row.group(RibbonGroup::new("shape.styles", tl!("Shape Styles"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("shape.styles", tl!("Shape Styles"), IconId::new("wordcraft.more").into()), |ui| {
         Stack::new().show(ui, |ui, _| {
             menu_button(ui, Button::new(tl!("Shape Fill")).icon(IconId::new("shading")), tl!("Shape Fill"), Some("shape.fill"), |ui, _| {
                 MenuItem::command(CommandRef::with_params("shape.fill", json!({"color": null}))).label(tl!("No Color")).show(ui);
@@ -98,7 +98,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     alt_text_group(row);
     if wordcraft_engine::cmd::canvas::selected_canvas(&app.session).is_some() {
-        row.group(RibbonGroup::new("shape.canvas", tl!("Drawing Canvas"), IconId::new("more").into()), |ui| {
+        row.group(RibbonGroup::new("shape.canvas", tl!("Drawing Canvas"), IconId::new("wordcraft.more").into()), |ui| {
             let face =
                 Button::new(tl!("Drawing\nCanvas")).icon(IconId::new("canvas")).tooltip(tl!("Drawing Canvas")).arrangement(Arrangement::Stacked);
             menu_button(ui, face, tl!("Drawing Canvas"), None, |ui, _| {
@@ -115,7 +115,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             });
         });
     }
-    row.group(RibbonGroup::new("shape.wordart", tl!("Decorative Text Styles"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("shape.wordart", tl!("Decorative Text Styles"), IconId::new("wordcraft.more").into()), |ui| {
         let styles = Button::new(tl!("Styles")).icon(IconId::new("wordArt")).tooltip(tl!("Decorative Text Styles")).arrangement(Arrangement::Stacked);
         menu_button(ui, styles, tl!("Decorative Text Styles"), None, |ui, cx| super::galleries::wordart(ui, cx, app, "wordArt.style"));
         let outline = crate::wordart_menus::current_outline(app);
@@ -132,7 +132,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     shape_text_group(row, app);
-    row.group(RibbonGroup::new("shape.arrange", tl!("Arrange"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("shape.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
         Stack::new().show(ui, |ui, _| {
@@ -140,7 +140,7 @@ pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             align_menu(ui);
         });
     });
-    row.group(RibbonGroup::new("shape.size", tl!("Size"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("shape.size", tl!("Size"), IconId::new("wordcraft.more").into()), |ui| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
         // As Picture Format › Size, each side on its own.
@@ -160,7 +160,7 @@ fn shape_text_group(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     use wordcraft_doc::props::{TextVert, VAlign};
     let target = wordcraft_engine::cmd::objects::text_box_target(&app.session);
     let body = target.and_then(|(_, id)| app.session.doc.parts.get(&id).map(|p| p.body)).unwrap_or_default();
-    row.group(RibbonGroup::new("shape.text", tl!("Text"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("shape.text", tl!("Text"), IconId::new("wordcraft.more").into()), |ui| {
         Stack::new().show(ui, |ui, _| {
             menu_button(ui, Button::new(tl!("Text Direction")).icon(IconId::new("textDirection")), tl!("Text Direction"), None, |ui, _| {
                 for (label, vert) in [
@@ -198,7 +198,7 @@ fn shape_text_group(row: &mut RibbonRow<'_>, app: &mut WordApp) {
 
 /// Picture/Shape Format › Accessibility: Alt Text opens the Alt Text pane.
 pub(super) fn alt_text_group(row: &mut RibbonRow<'_>) {
-    row.group(RibbonGroup::new("accessibility", tl!("Accessibility"), IconId::new("more").into()), |ui| {
+    row.group(RibbonGroup::new("accessibility", tl!("Accessibility"), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::with_params("view.altTextPane", json!({"value": true})))
             .label(tl!("Alt\nText"))
             .icon(IconId::new("altText"))

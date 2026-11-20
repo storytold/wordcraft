@@ -69,7 +69,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("nextFootnote", "Next Footnote", "references.nextFootnote"),
                 ("showNotes", "Show Notes", "references.notes"),
             ] {
-                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(IconId::new(key)).show(ui);
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
             }
         });
     });
@@ -144,7 +144,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             ] {
                 Button::command(CommandRef::with_params(id, json!({})))
                     .label(crate::tl!(label))
-                    .icon(IconId::new(key))
+                    .icon(crate::icons::id(key))
                     .tooltip(crate::tl!(tip))
                     .show(ui);
             }
@@ -158,7 +158,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         Stack::new().show(ui, |ui, _| {
             for (key, label, id) in [("index", "Insert Index", "references.index"), ("update", "Update Index", "references.updateIndex")] {
-                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(IconId::new(key)).show(ui);
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
             }
         });
     });
@@ -173,7 +173,7 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("tableOfAuthorities", "Insert Table of Authorities", "references.tableOfAuthorities"),
                 ("update", "Update Table", "references.updateAuthorities"),
             ] {
-                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(IconId::new(key)).show(ui);
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
             }
         });
     });
@@ -184,7 +184,7 @@ pub(super) fn zotero(row: &mut RibbonRow<'_>, _app: &mut WordApp) {
     let big = |ui: &mut egui::Ui, key: &'static str, label: &'static str, id: &'static str| {
         Button::command(CommandRef::with_params(id, json!({})))
             .label(crate::tl!(label))
-            .icon(IconId::new(key))
+            .icon(crate::icons::id(key))
             .arrangement(Arrangement::Stacked)
             .show(ui);
     };

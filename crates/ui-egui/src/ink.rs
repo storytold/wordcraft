@@ -489,7 +489,7 @@ fn show_replay(app: &mut WordApp, ui: &mut Ui, body: &PageBody) {
             }
             let playing = r.playing_from.is_some();
             let (icon, name) = if playing { ("replayPause", tl!("Pause")) } else { ("replayPlay", tl!("Play")) };
-            if IconButton::new(IconId::new(icon)).label(name.to_string()).show(ui).clicks > 0 {
+            if IconButton::new(crate::icons::id(icon)).label(name.to_string()).show(ui).clicks > 0 {
                 let here = r.at(now);
                 if playing {
                     r.pause_at(here);
@@ -511,7 +511,7 @@ fn show_replay(app: &mut WordApp, ui: &mut Ui, body: &PageBody) {
                 }
             }
             let _ = craft::ui::display::Text::new(label.clone()).show(ui);
-            if IconButton::new(IconId::new("close")).label(tl!("Close").to_string()).show(ui).clicks > 0 {
+            if IconButton::new(IconId::new("wordcraft.close")).label(tl!("Close").to_string()).show(ui).clicks > 0 {
                 close = true;
             }
         });

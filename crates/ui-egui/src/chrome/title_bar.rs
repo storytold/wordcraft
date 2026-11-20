@@ -196,7 +196,7 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
 
 /// The menu button (…): common commands to show or hide, More Commands…, and Hide. Returns the button's rect.
 fn qat_menu(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
-    let out = IconButton::new(IconId::new("more")).label(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
+    let out = IconButton::new(IconId::new("wordcraft.more")).label(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
     let shown: Vec<(&'static str, String, bool)> = QAT_MENU
         .iter()
         .filter_map(|id| {

@@ -58,7 +58,7 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect 
     let ((rect, out), _) = inspect::record(ui, crate::keytips::search_region(), |ui| {
         let mut rect = None;
         if compact {
-            let button = IconButton::new(IconId::new("search")).label(name.clone()).tooltip(TooltipSpec::new(name.clone())).show(ui);
+            let button = IconButton::new(IconId::new("wordcraft.search")).label(name.clone()).tooltip(TooltipSpec::new(name.clone())).show(ui);
             if button.response.clicked() {
                 open = true;
             }

@@ -15,7 +15,7 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         for (key, label, id) in [("envelope", "Envelopes", "mailings.envelopes"), ("labels", "Labels", "mailings.labels")] {
             Button::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
-                .icon(IconId::new(key))
+                .icon(crate::icons::id(key))
                 .arrangement(Arrangement::Stacked)
                 .show(ui);
         }
@@ -79,7 +79,7 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         ] {
             Button::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
-                .icon(IconId::new(key))
+                .icon(crate::icons::id(key))
                 .arrangement(Arrangement::Stacked)
                 .show(ui);
         }
@@ -113,7 +113,7 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         Stack::new().show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 let nav = |ui: &mut egui::Ui, key: &'static str, tip: &'static str, id: &'static str| {
-                    IconButton::command(IconSpec::from(IconId::new(key)), CommandRef::with_params(id, json!({})))
+                    IconButton::command(IconSpec::from(crate::icons::id(key)), CommandRef::with_params(id, json!({})))
                         .label(crate::tl!(tip))
                         .tooltip(crate::tl!(tip))
                         .show(ui);

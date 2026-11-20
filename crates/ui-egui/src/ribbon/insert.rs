@@ -125,7 +125,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ] {
                     MenuItem::command(CommandRef::with_params("insert.shape", json!({"kind": kind, "arrow": arrow})))
                         .label(crate::tl!(label))
-                        .icon(IconId::new(glyph))
+                        .icon(crate::icons::id(glyph))
                         .show(ui);
                 }
                 let _ = cx;
@@ -135,19 +135,19 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             for (key, label, id) in
                 [("icons", "Icons", "insert.icon"), ("smartArt", "Diagram", "insert.smartArt"), ("chart", "Chart", "insert.chart")]
             {
-                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(IconId::new(key)).show(ui);
+                Button::command(CommandRef::with_params(id, json!({}))).label(crate::tl!(label)).icon(crate::icons::id(key)).show(ui);
             }
         });
     });
-    row.group(RibbonGroup::new("Links", crate::tl!("Links"), IconId::new("link").into()), |ui| {
+    row.group(RibbonGroup::new("Links", crate::tl!("Links"), IconId::new("wordcraft.link").into()), |ui| {
         Stack::new().show(ui, |ui, _| {
             Button::command(CommandRef::with_params("ui.dialog", json!({"name": "link"})))
                 .label(crate::tl!("Link"))
-                .icon(IconId::new("link"))
+                .icon(IconId::new("wordcraft.link"))
                 .show(ui);
             Button::command(CommandRef::with_params("ui.dialog", json!({"name": "bookmark"})))
                 .label(crate::tl!("Bookmark"))
-                .icon(IconId::new("bookmark"))
+                .icon(IconId::new("wordcraft.bookmark"))
                 .show(ui);
             Button::command(CommandRef::with_params("insert.crossReference", json!({})))
                 .label(crate::tl!("Cross-reference"))
@@ -263,7 +263,7 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("dateTime", "Date & Time", "ui.dialog", json!({"name": "dateTime"})),
                 ("object", "Object", "insert.object", json!({})),
             ] {
-                IconButton::command(IconSpec::from(IconId::new(key)), CommandRef::with_params(id, params))
+                IconButton::command(IconSpec::from(crate::icons::id(key)), CommandRef::with_params(id, params))
                     .label(crate::tl!(tip))
                     .tooltip(crate::tl!(tip))
                     .show(ui);
