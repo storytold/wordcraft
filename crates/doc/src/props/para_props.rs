@@ -11,9 +11,20 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+    /// Word's "Thai Distributed" (`w:jc="thaiDistribute"`): the extra space of a wrapped line is
+    /// spread evenly between the character clusters of Thai and Khmer text, which has no spaces.
+    ThaiDistribute,
+    /// WordCraft's Khmer Justify: phrase spaces first, then word boundaries, then orthographic
+    /// syllables, never inside one. Saved as `thaiDistribute` plus a `wc:khmer` mark.
+    KhmerJustify,
 }
 
 impl Align {
+    /// Does this alignment stretch the lines of a wrapped paragraph to both margins?
+    pub fn stretches(self) -> bool {
+        matches!(self, Align::Justify | Align::Distribute | Align::ThaiDistribute | Align::KhmerJustify)
+    }
+
     /// Alignment is logical (`Left` is the start edge, ISO 29500 `start`): the alignment as seen
     /// on the page, or the logical one for a visual choice, in a paragraph that reads right to
     /// left when `rtl` (Left and Right swap; the swap is its own inverse).
