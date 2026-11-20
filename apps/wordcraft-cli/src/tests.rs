@@ -235,6 +235,29 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     }
 }
 
+/// An exclusively created scratch folder, removed on drop even when an assertion fails.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        loop {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("wc-cli-{tag}-{}-{n}", std::process::id()));
+            // `create_dir` fails when the path exists, so a leftover or a planted folder is never reused.
+            if std::fs::create_dir(&dir).is_ok() {
+                return Self(dir);
+            }
+        }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Shared rule 18 (#7124): every agent entry point, a subcommand that serves a client's requests
 /// rather than running what the person typed and exiting, refuses to start without both
 /// automation roots. Each subcommand has a row, so a new one fails here until it is classified,
@@ -260,7 +283,8 @@ fn every_agent_entry_point_refuses_to_start_without_both_roots() {
     ];
     assert_eq!(table.iter().map(|(name, _)| *name).collect::<Vec<_>>(), SUBCOMMANDS);
 
-    let base = std::env::temp_dir().join(format!("wc-cli-entry-{}", std::process::id()));
+    let scratch = Scratch::new("entry");
+    let base = scratch.0.clone();
     std::fs::create_dir_all(base.join("in")).unwrap();
     std::fs::create_dir_all(base.join("out")).unwrap();
     let read = format!("--automation-read-root={}", base.join("in").display());
@@ -276,7 +300,6 @@ fn every_agent_entry_point_refuses_to_start_without_both_roots() {
             assert!(e.contains("--automation-read-root") && e.contains("--automation-write-root"), "{line:?}: {e}");
         }
     }
-    let _ = std::fs::remove_dir_all(base);
 }
 
 /// The desktop app doesn't confine its control channel to roots yet (#3695, #5819), so the bridge
@@ -289,6 +312,19 @@ fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
         args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"]),
         args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir, "--automation-write-root", &dir]),
     ] {
+        let e = run(&line).unwrap_err().to_string();
+        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
+    }
+}
+
+/// `--connect` is refused whether or not it has a value, even with both roots valid.
+#[test]
+fn mcp_connect_is_refused_without_a_value_too() {
+    let scratch = Scratch::new("connect-bare");
+    let dir = scratch.0.to_string_lossy().into_owned();
+    let roots = ["--automation-read-root", &dir, "--automation-write-root", &dir];
+    for tail in [vec!["--connect"], vec!["--connect", "--author", "Claude"]] {
+        let line = args(&[&["mcp"][..], &roots, &tail].concat());
         let e = run(&line).unwrap_err().to_string();
         assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
     }

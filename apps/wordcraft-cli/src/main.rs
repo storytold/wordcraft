@@ -721,7 +721,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         "mcp" => {
             let (roots, rest) = automation_roots("mcp", &rest)?;
             validate_options("mcp", &rest, MCP_OPTIONS)?;
-            if arg_value(&rest, "--connect").is_some() {
+            // Refused with or without a value: a bare trailing `--connect` must not slip past.
+            if rest.iter().any(|a| a == "--connect" || a.starts_with("--connect=")) {
                 return Err(MCP_CONNECT_REFUSED.into());
             }
             // Shared rule 18 (#7124): an agent entry point never runs unconfined.

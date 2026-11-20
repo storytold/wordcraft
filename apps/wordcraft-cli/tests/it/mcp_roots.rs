@@ -6,20 +6,39 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
-/// A fresh folder holding `in` (the read root, with `a.txt`), `out` (the write root) and
-/// `outside` (with `secret.txt`).
-fn folders(tag: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!("wc-cli-mcp-roots-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
-    for d in ["in", "out", "outside"] {
-        std::fs::create_dir_all(base.join(d)).unwrap();
+/// An exclusively created folder holding `in` (the read root, with `a.txt`), `out` (the write
+/// root) and `outside` (with `secret.txt`). Removed on drop, even when an assertion fails.
+struct Folders(PathBuf);
+
+impl Folders {
+    fn new(tag: &str) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let base = loop {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("wc-cli-mcp-roots-{tag}-{}-{n}", std::process::id()));
+            // `create_dir` fails when the path exists, so a leftover or a planted folder is never reused.
+            if std::fs::create_dir(&dir).is_ok() {
+                break dir;
+            }
+        };
+        let folders = Self(base);
+        for d in ["in", "out", "outside"] {
+            std::fs::create_dir_all(folders.0.join(d)).unwrap();
+        }
+        std::fs::write(folders.0.join("in/a.txt"), "Inside text").unwrap();
+        std::fs::write(folders.0.join("outside/secret.txt"), "TOP SECRET").unwrap();
+        folders
     }
-    std::fs::write(base.join("in/a.txt"), "Inside text").unwrap();
-    std::fs::write(base.join("outside/secret.txt"), "TOP SECRET").unwrap();
-    base
+}
+
+impl Drop for Folders {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn s(p: &Path) -> String {
@@ -60,7 +79,8 @@ fn refused_at_start(args: &[String], why: &[&str]) {
 
 #[test]
 fn mcp_refuses_to_start_without_both_roots() {
-    let base = folders("start");
+    let folders = Folders::new("start");
+    let base = folders.0.clone();
     let (read, write) = (s(&base.join("in")), s(&base.join("out")));
     let both = ["--automation-read-root", "--automation-write-root"];
     refused_at_start(&[], &both);
@@ -74,12 +94,12 @@ fn mcp_refuses_to_start_without_both_roots() {
     let reply: Value = serde_json::from_slice(out.stdout.split(|b| *b == b'\n').next().unwrap()).unwrap();
     assert_eq!(reply["id"], 1, "{reply}");
     assert!(reply.get("error").is_none(), "{reply}");
-    let _ = std::fs::remove_dir_all(base);
 }
 
 #[test]
 fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
-    let base = folders("connect");
+    let folders = Folders::new("connect");
+    let base = folders.0.clone();
     let (read, write) = (s(&base.join("in")), s(&base.join("out")));
     let why = ["--connect", "#3695", "#5819"];
     refused_at_start(&["--connect".into(), "127.0.0.1:9".into()], &why);
@@ -87,7 +107,6 @@ fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
         &["--connect".into(), "127.0.0.1:9".into(), "--automation-read-root".into(), read, "--automation-write-root".into(), write],
         &why,
     );
-    let _ = std::fs::remove_dir_all(base);
 }
 
 /// `tools/call` request `id` for `name` with `arguments`.
@@ -101,7 +120,8 @@ fn execute(id: u64, command: &str, params: Value) -> Value {
 
 #[test]
 fn mcp_with_both_roots_refuses_files_outside_them() {
-    let base = folders("files");
+    let folders = Folders::new("files");
+    let base = folders.0.clone();
     let sep = std::path::MAIN_SEPARATOR;
     let (inside, outside) = (base.join("in"), base.join("outside"));
     let secret = s(&outside.join("secret.txt"));
@@ -153,5 +173,4 @@ fn mcp_with_both_roots_refuses_files_outside_them() {
     assert_eq!(written, ["secret.txt"], "nothing was written outside the roots");
     assert!(!inside.join("f.docx").exists());
     assert!(base.join("out/g.docx").is_file());
-    let _ = std::fs::remove_dir_all(base);
 }
