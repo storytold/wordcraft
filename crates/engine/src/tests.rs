@@ -1502,6 +1502,141 @@ fn copying_symbol_font_text_puts_the_unicode_symbols_on_the_clipboard() {
     assert_eq!(text(&s), "ok J\u{F0FC}ok J\u{F0FC}");
 }
 
+/// A session holding "Intro", a numbered list (Item 1, Item 2) and a bulleted one (Point A,
+/// Point B).
+fn session_with_lists() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro\nItem 1\nItem 2\nPoint A\nPoint B"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(2, 6)}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(3, 0), "focus": Pos::body(4, 7)}));
+    run(&mut s, "para.bullets", json!({}));
+    s
+}
+
+/// #2015 review: with Track Changes (and Track Moves) on, numbered items cut and pasted elsewhere
+/// are a tracked move, though the clipboard's text has their labels; and `^c` in Replace puts in
+/// the copied text without them.
+#[test]
+fn a_cut_list_item_pasted_elsewhere_is_a_tracked_move() {
+    let mut s = session_with_lists();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(3, 0)}));
+    run(&mut s, "edit.cut", json!({}));
+    assert!(s.clipboard_text.starts_with("1.\tItem 1"), "{:?}", s.clipboard_text);
+    run(&mut s, "caret.docEnd", json!({}));
+    let clip = s.clipboard_text.clone();
+    run(&mut s, "edit.paste", json!({"text": clip}));
+    let moves: Vec<wordcraft_doc::RevisionKind> = s.doc.revisions.iter().filter(|r| r.move_name.is_some()).map(|r| r.kind).collect();
+    assert_eq!(moves, [wordcraft_doc::RevisionKind::Delete, wordcraft_doc::RevisionKind::Insert], "a move, its source and its destination");
+
+    let mut s = session_with_lists();
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(1, 6)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tItem 1");
+    run(&mut s, "edit.replaceAll", json!({"text": "Intro", "with": "^c"}));
+    assert!(text(&s).starts_with("Item 1\n"), "{:?}", text(&s));
+}
+
+/// #2015: Copy puts each list paragraph's number or bullet, and the tab after it, in the
+/// clipboard's text, as Word's plain-text copy has them. Pasting that copy back here still pastes
+/// our own copy: the lists, not their labels typed out as text.
+#[test]
+fn copying_a_list_puts_its_numbers_and_bullets_on_the_clipboard() {
+    let mut s = session_with_lists();
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "Intro\n1.\tItem 1\n2.\tItem 2\n•\tPoint A\n•\tPoint B");
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    let clip = s.clipboard_text.clone();
+    run(&mut s, "edit.paste", json!({"text": clip}));
+    assert!(!text(&s).contains('\t') && !text(&s).contains('•'), "{}", text(&s));
+    let numbered = |s: &Session, i: usize| s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(i)).and_then(|p| p.props.numbering).is_some();
+    assert!(numbered(&s, 6) && numbered(&s, 7), "the pasted items are list items");
+
+    // A bullet stored as a Symbol-font character (as Word documents have them) reads as •.
+    let mut s = session_with_lists();
+    let num = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(3)).and_then(|p| p.props.numbering).map(|n| n.num).unwrap();
+    let abs = s.doc.numbering.num(num).map(|n| n.abstract_id).unwrap();
+    let level = std::sync::Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|a| a.id == abs).and_then(|a| a.levels.first_mut()).unwrap();
+    level.text = "\u{F0B7}".into();
+    level.chr.font = Some("Symbol".into());
+    run(&mut s, "select.range", json!({"anchor": Pos::body(3, 0), "focus": Pos::body(4, 7)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "•\tPoint A\n•\tPoint B");
+
+    // Paste Special › Unformatted Text with no system clipboard text (a command, not the app)
+    // pastes the copy's text as Copy put it: the labels typed out.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "text"}));
+    assert!(text(&s).ends_with("•\tPoint A\n•\tPoint B"), "{:?}", text(&s));
+}
+
+/// #2015: a list paragraph gets its label only when its start is copied with some of it: not one
+/// copied from its middle, nor one the selection only reaches; inside one paragraph only when it
+/// is all of it.
+#[test]
+fn copied_list_labels_follow_what_the_selection_covers() {
+    let mut s = session_with_lists();
+    let copy = |s: &mut Session, a: Pos, b: Pos| {
+        run(s, "select.range", json!({"anchor": a, "focus": b}));
+        run(s, "edit.copy", json!({}));
+        s.clipboard_text.clone()
+    };
+    assert_eq!(copy(&mut s, Pos::body(1, 2), Pos::body(2, 6)), "em 1\n2.\tItem 2", "from the middle of an item");
+    assert_eq!(copy(&mut s, Pos::body(1, 1), Pos::body(1, 4)), "tem", "inside one item");
+    assert_eq!(copy(&mut s, Pos::body(1, 0), Pos::body(1, 6)), "1.\tItem 1", "all of one item");
+    let up_to_next = copy(&mut s, Pos::body(1, 0), Pos::body(3, 0));
+    assert!(up_to_next.starts_with("1.\tItem 1\n2.\tItem 2") && !up_to_next.contains('•'), "{up_to_next:?}");
+    assert_eq!(copy(&mut s, Pos::body(0, 0), Pos::body(0, 5)), "Intro", "no list, no label");
+}
+
+/// #2015: a nested list item's copy has its own level's label, and the item after it on the
+/// first level goes on counting from the one before the nested item.
+#[test]
+fn a_copied_nested_list_item_has_its_level_s_label() {
+    let mut s = session_with_lists();
+    run(&mut s, "document.setText", json!({"text": "Item 1\nSub item\nItem 2"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    let path = wordcraft_doc::Path::top(1);
+    let sub = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+    sub.props.numbering = sub.props.numbering.map(|n| wordcraft_doc::props::NumRef { level: 1, ..n });
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tItem 1\na.\tSub item\n2.\tItem 2");
+}
+
+/// #2015: a selection that crosses a table (Select All in a document that starts with one, or a
+/// list down into a table) keeps the labels of the list paragraphs outside the table; the
+/// paragraphs in its cells keep their text without labels.
+#[test]
+fn copied_list_labels_survive_a_selection_across_a_table() {
+    use wordcraft_doc::{Block, Path, Table};
+    let cell_table = |s: &mut Session, at: usize| {
+        s.doc.insert_block(StoryRef::Body, &Path::top(at), Block::Table(Table::new(1, 1, 300.0))).unwrap();
+        let cell = Path(vec![at as u32, 0, 0, 0]);
+        s.doc.para_mut(StoryRef::Body, &cell).unwrap().insert_text(0, "Cell", &Default::default()).unwrap();
+        Pos { story: StoryRef::Body, path: cell, off: 0 }
+    };
+    let copy = |s: &mut Session, a: Pos, b: Pos| {
+        run(s, "select.range", json!({"anchor": a, "focus": b}));
+        run(s, "edit.copy", json!({}));
+        s.clipboard_text.clone()
+    };
+    // A table first: from its cell to the end of the last bullet.
+    let mut s = session_with_lists();
+    let cell = cell_table(&mut s, 0);
+    assert_eq!(copy(&mut s, cell, Pos::body(5, 7)), "Cell\nIntro\n1.\tItem 1\n2.\tItem 2\n•\tPoint A\n•\tPoint B");
+    // A table last: from the first item down into its cell.
+    let mut s = session_with_lists();
+    let cell = cell_table(&mut s, 5);
+    assert_eq!(copy(&mut s, Pos::body(1, 0), Pos { off: 4, ..cell }), "1.\tItem 1\n2.\tItem 2\n•\tPoint A\n•\tPoint B\nCell");
+}
+
 /// The text drawn on the first page.
 fn drawn_text(s: &mut Session) -> String {
     let layout = s.layout();

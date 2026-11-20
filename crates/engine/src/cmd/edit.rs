@@ -200,12 +200,13 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
         (None, Some(r)) => s.doc.copy_table_cells(r.story, &r.table, r.rows, r.cols),
         (None, None) => None,
     };
-    let f = match table {
-        Some(f) => f,
+    let (f, range) = match table {
+        Some(f) => (f, false),
         None if a == b => return Ok(json!({"text": ""})),
-        None => s.doc.copy_range(&a, &b),
+        None => (s.doc.copy_range(&a, &b), true),
     };
-    s.clipboard_text = f.clipboard_text();
+    // A range copies with its list labels, as Word's plain-text copy has them (#2015).
+    s.clipboard_text = if range { s.doc.copy_text(&f, &a, &b) } else { f.clipboard_text() };
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
     Ok(copy_result(s))
@@ -584,6 +585,8 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
             Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
         };
         cuts.push(hay.len());
+        // `^c`: the copied text without the list labels the plain-text clipboard has (#2015 review).
+        let clip = s.clipboard.as_ref().map_or_else(|| s.clipboard_text.clone(), |f| f.clipboard_text());
         let mut from = 0;
         for cut in cuts {
             if cut <= from {
@@ -610,7 +613,7 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
                 let rep = pieces.as_ref().map(|pc| {
                     let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
-                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
+                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &clip)
                 });
                 out.push(Found { a, b, rep });
                 if out.len() >= 100_000 {

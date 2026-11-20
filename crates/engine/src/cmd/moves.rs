@@ -53,7 +53,10 @@ fn in_use(s: &Session, rev: u32) -> bool {
 /// done) when it isn't such a cut.
 pub fn cut_tracked(s: &mut Session) -> Result<bool, CmdError> {
     let (a, b) = s.sel.ordered();
-    if !s.doc.settings.track_changes || !s.doc.settings.track_moves || a == b || a.story != b.story || !move_sized(&s.clipboard_text) {
+    // The cut's own text, as the paste compares it (`take_paste`): the plain-text clipboard also
+    // has the list labels of the paragraphs cut (#2015 review).
+    let text = s.clipboard.as_ref().map_or_else(|| s.clipboard_text.clone(), Fragment::plain_text);
+    if !s.doc.settings.track_changes || !s.doc.settings.track_moves || a == b || a.story != b.story || !move_sized(&text) {
         return Ok(false);
     }
     s.doc.revisions.push(Revision::new(RevisionKind::Delete, s.author.clone(), now_iso()));
@@ -62,7 +65,7 @@ pub fn cut_tracked(s: &mut Session) -> Result<bool, CmdError> {
     s.sel = Selection::caret(at);
     // Only the author's own insertions were cut: they are gone, not moved.
     if in_use(s, rid) {
-        s.pending_move = Some(PendingMove { rev: rid, text: s.clipboard_text.clone(), author: s.author.clone() });
+        s.pending_move = Some(PendingMove { rev: rid, text, author: s.author.clone() });
     }
     Ok(true)
 }
