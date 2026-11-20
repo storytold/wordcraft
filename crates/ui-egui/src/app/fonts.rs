@@ -11,7 +11,7 @@ impl WordApp {
         }
         self.font_generation = generation;
         self.session.relayout();
-        self.previews.fonts_changed(ctx, db.user_fonts().iter().flat_map(|f| f.families()));
+        self.previews.fonts_changed();
         ctx.request_repaint();
     }
 
@@ -155,21 +155,22 @@ impl WordApp {
     /// face has changed since the last install.
     pub(super) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
-        if !self.styled || lang.prefers_hans() != self.fonts_hans || lang.prefers_korean() != self.fonts_korean || system_cjk != self.fonts_system_cjk
+        // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
+        // another interface language, asks for an installed Arabic font when none is embedded.
+        let system_arabic = lang.rtl() || self.want_system_arabic;
+        if !self.styled
+            || lang.prefers_hans() != self.fonts_hans
+            || lang.prefers_korean() != self.fonts_korean
+            || lang.prefers_hant() != self.fonts_hant
+            || system_cjk != self.fonts_system_cjk
+            || system_arabic != self.fonts_system_arabic
         {
-            // Every window's borrowed faces: the fonts are the app's.
-            let mut faces = self.canvas.ime_faces.clone();
-            for w in self.other_windows() {
-                for face in &w.canvas.ime_faces {
-                    if !faces.iter().any(|f| f.id() == face.id()) {
-                        faces.push(face.clone());
-                    }
-                }
-            }
-            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), system_cjk, &faces);
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
+            self.fonts_hant = lang.prefers_hant();
             self.fonts_system_cjk = system_cjk;
+            self.fonts_system_arabic = system_arabic;
+            self.apply_ui_fonts(ctx);
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             // egui quits on Command-Q, which is Ctrl+Q off the Mac: Word's Reset Paragraph
@@ -183,5 +184,34 @@ impl WordApp {
             });
             self.styled = true;
         }
+    }
+
+    /// Install the interface fonts [`Self::install_ui_fonts`] chose, with every window's borrowed
+    /// faces and each window's composition face. The fonts are the app's, one set for every
+    /// window: fonts made from one window's faces would draw another window's caption or
+    /// comments as boxes, and its composition in the wrong face.
+    pub(crate) fn apply_ui_fonts(&self, ctx: &egui::Context) {
+        let mut fonts = theme::font_definitions_language_arabic(
+            self.fonts_hans,
+            self.fonts_korean,
+            self.fonts_hant,
+            self.fonts_system_cjk,
+            self.fonts_system_arabic,
+        );
+        // Every window's borrowed faces: the fonts are the app's.
+        let mut faces = self.canvas.ime_faces.clone();
+        for w in self.other_windows() {
+            for face in &w.canvas.ime_faces {
+                if !faces.iter().any(|f| f.id() == face.id()) {
+                    faces.push(face.clone());
+                }
+            }
+        }
+        theme::add_fallback_faces(&mut fonts, &faces);
+        theme::set_composition_face(&mut fonts, self.windows.shown(), self.canvas.ime_face);
+        for (window, w) in self.other_windows_by_key() {
+            theme::set_composition_face(&mut fonts, window, w.canvas.ime_face);
+        }
+        ctx.set_fonts(fonts);
     }
 }

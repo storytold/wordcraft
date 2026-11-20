@@ -82,5 +82,5 @@ impl AutoSaveBlock {
 /// AutoSave writes only these formats.
 pub fn keeps_everything(name: &str) -> bool {
     let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "rtf" | "json" | "xml")
+    matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "ott" | "fodt" | "rtf" | "json" | "xml")
 }

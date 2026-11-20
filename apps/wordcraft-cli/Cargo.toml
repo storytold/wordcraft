@@ -21,3 +21,9 @@ wordcraft-mcp = { workspace = true }
 wordcraft-zotero = { workspace = true }
 serde_json = { workspace = true }
 sys-locale = "0.3"
+
+[dev-dependencies]
+wordcraft-fonts = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
+image = { workspace = true }
+craft-zip = { workspace = true }
