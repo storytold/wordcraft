@@ -151,6 +151,41 @@ pub(super) fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<E
         .collect()
 }
 
+/// Compute the label's `x` position and where text starts after the label and its suffix on the
+/// first line for a span starting at `left`.
+pub(super) fn label_placement(
+    rp: &wordcraft_doc::resolve::ResolvedPara,
+    (default_tab, hanging_at, tab_origin): (f32, Option<f32>, f32),
+    level: Option<&Level>,
+    lab: &super::model::Label,
+    styles: &[super::model::StyleRun],
+    left: f32,
+) -> (f32, f32) {
+    // The number is aligned at the first-line indent: its left edge, centre or right edge.
+    let lx = match level.map(|l| l.align) {
+        Some(Align::Center) => left - lab.width / 2.0,
+        Some(Align::Right) => left - lab.width,
+        _ => left,
+    };
+    let end = lx + lab.width;
+    let text_start = match level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
+        // An empty label (a "none" level with no text) that ends right at the left indent takes
+        // no tab: the text starts there, as in Word (#4985), and not at the next stop.
+        LevelSuffix::Tab if lab.width <= 0.01 && (end - rp.indent_left).abs() <= 0.01 => end,
+        LevelSuffix::Tab => {
+            let t = next_tab(end, &rp.tabs, default_tab, hanging_at, tab_origin).pos;
+            // The level's own tab stop after the number, when it comes first.
+            match level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
+                Some(p) if p < t => p,
+                _ => t,
+            }
+        }
+        LevelSuffix::Space => end + styles.get(lab.style as usize).map(|s| s.size * 0.25).unwrap_or(3.0),
+        LevelSuffix::Nothing => end,
+    };
+    (lx, text_start)
+}
+
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
 pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
@@ -315,29 +350,12 @@ impl<'e> Breaker<'e> {
     /// Place the label on the first line, `left` being the first-line indent. Returns where the
     /// text starts.
     fn place_label(&self, pl: &mut ParaLayout, left: f32) -> f32 {
-        let Some(lab) = pl.label.as_mut() else { return left };
-        // The number is aligned at the first-line indent: its left edge, centre or right edge.
-        lab.x = match self.level.map(|l| l.align) {
-            Some(Align::Center) => left - lab.width / 2.0,
-            Some(Align::Right) => left - lab.width,
-            _ => left,
-        };
-        let end = lab.x + lab.width;
-        match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
-            // An empty label (a "none" level with no text) that ends right at the left indent takes
-            // no tab: the text starts there, as in Word (#4985), and not at the next stop.
-            LevelSuffix::Tab if lab.width <= 0.01 && (end - self.rp.indent_left).abs() <= 0.01 => end,
-            LevelSuffix::Tab => {
-                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at, self.tab_origin).pos;
-                // The level's own tab stop after the number, when it comes first.
-                match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
-                    Some(p) if p < t => p,
-                    _ => t,
-                }
-            }
-            LevelSuffix::Space => end + pl.styles.get(lab.style as usize).map(|s| s.size * 0.25).unwrap_or(3.0),
-            LevelSuffix::Nothing => end,
+        let Some(lab) = pl.label.as_ref() else { return left };
+        let (lx, text_start) = label_placement(&self.rp, (self.default_tab, self.hanging_at, self.tab_origin), self.level, lab, &pl.styles, left);
+        if let Some(lab) = pl.label.as_mut() {
+            lab.x = lx;
         }
+        text_start
     }
 
     /// The first word doesn't fit the span beside a floating object: try the row's next span,

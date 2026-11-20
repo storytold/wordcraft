@@ -4348,7 +4348,7 @@ fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
 /// stale continuation line (#5838 review).
 #[test]
 fn wrapped_field_affinity_clears_on_logical_moves_and_edits() {
-    use wordcraft_doc::{Document, InlineObject, Paragraph, StoryRef, para_block};
+    use wordcraft_doc::{Document, InlineObject, Paragraph, para_block};
 
     let make_session = |with_next_para: bool| {
         let mut doc = Document::new();
@@ -4440,9 +4440,43 @@ fn wrapped_field_affinity_clears_on_logical_moves_and_edits() {
     run(&mut s, "caret.paraDown", json!({}));
     assert_eq!(s.sel.focus.affinity, None);
     assert!((s.layout().caret(&s.sel.focus).unwrap().top - *tops.last().unwrap()).abs() < 2.0, "paraDown draws caret on the final line");
+}
 
-    // 6. Click line 1 of wrapped field, then shift-click line 2 of the same field: collapsed caret, so Ctrl+B sets pending bold.
-    let (mut s, _, _) = make_session(false);
+/// Pending-formatting-only changes (`format.bold`), `Home`/`End`, and `Escape` (`select.collapse`)
+/// on a wrapped field continuation line preserve visual-line affinity so the caret stays on that line.
+#[test]
+fn wrapped_field_affinity_preserved_by_pending_formatting_and_collapse() {
+    use wordcraft_doc::{Document, InlineObject, Paragraph, StoryRef, para_block};
+
+    let make_session = || {
+        let mut doc = Document::new();
+        doc.last_section.margin_left = 200.0;
+        doc.last_section.margin_right = 200.0;
+        let prefix = "Intro ";
+        let mut p0 = Paragraph::with_text(prefix, Default::default());
+        let long_text = "The quick brown fox jumps over the lazy dog and runs across the wide open fields ".repeat(4);
+        p0.insert_object(
+            prefix.len(),
+            InlineObject::Field { instr: "MERGEFIELD body".into(), result: long_text, locked: false, dirty: false, code: false, form: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        let field_end = p0.len();
+        p0.insert_text(field_end, " tail", &Default::default()).unwrap();
+        doc.body = vec![para_block(p0), para_block(Paragraph::with_text("Next paragraph", Default::default()))];
+        Session::new(doc)
+    };
+
+    let line_tops = |s: &mut Session| -> Vec<f32> {
+        let l = s.layout();
+        let wordcraft_layout::Placed::Lines { para, y, l0, .. } = &l.pages[0].items[0] else { panic!("expected paragraph lines") };
+        let base = para.lines[*l0].top;
+        para.lines.iter().map(|ln| y + (ln.top - base)).collect()
+    };
+
+    // 1. Click line 1 of wrapped field, then shift-click line 2 of the same field: collapsed caret, so Ctrl+B sets pending bold and keeps affinity.
+    let mut s = make_session();
+    let tops = line_tops(&mut s);
     let (hit1, hit2) = {
         let l = s.layout();
         let wordcraft_layout::Placed::Lines { para, x, y, .. } = &l.pages[0].items[0] else { panic!("expected paragraph lines") };
@@ -4455,17 +4489,25 @@ fn wrapped_field_affinity_clears_on_logical_moves_and_edits() {
     run(&mut s, "caret.set", json!({"pos": hit1}));
     run(&mut s, "caret.set", json!({"pos": hit2, "extend": true}));
     assert!(s.sel.is_collapsed(), "same field offset with different visual-line affinities is still a collapsed caret");
+    run(&mut s, "select.collapse", json!({}));
+    assert_eq!(s.sel.focus.affinity, Some(2), "Escape on already-collapsed selection preserves focus affinity");
     run(&mut s, "format.bold", json!({}));
     assert_eq!(s.pending.as_ref().and_then(|p| p.bold), Some(true), "Ctrl+B sets pending bold at collapsed field caret");
+    assert_eq!(s.sel.focus.affinity, Some(2), "pending-formatting-only changes preserve continuation-line affinity");
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[2]).abs() < 2.0, "collapsed Ctrl+B keeps caret on line 2");
 
-    // 7. Home and End on a middle continuation line keep the caret on that visual line.
-    let (mut s, _, _) = make_session(true);
+    // 2. Home, End, and Escape (`select.collapse`) on a middle continuation line keep the caret on that visual line.
+    let mut s = make_session();
     let tops = line_tops(&mut s);
     run(&mut s, "caret.down", json!({}));
     run(&mut s, "caret.home", json!({}));
     assert_eq!(s.sel.focus.affinity, Some(1), "Home on continuation line 1 stays on line 1");
     assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[1]).abs() < 2.0);
-    run(&mut s, "caret.end", json!({}));
-    assert_eq!(s.sel.focus.affinity, Some(1), "End on continuation line 1 stays on line 1");
+    run(&mut s, "caret.end", json!({"extend": true}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    assert_eq!(s.sel.focus.affinity, Some(1), "Escape collapsing to end on continuation line 1 preserves affinity");
+    assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[1]).abs() < 2.0);
+    run(&mut s, "select.collapse", json!({"end": false}));
+    assert_eq!(s.sel.focus.affinity, Some(1), "Escape collapsing to start on continuation line 1 preserves affinity");
     assert!((s.layout().caret(&s.sel.focus).unwrap().top - tops[1]).abs() < 2.0);
 }

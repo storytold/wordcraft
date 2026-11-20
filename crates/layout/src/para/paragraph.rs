@@ -71,6 +71,7 @@ impl Slot {
 /// The paragraph as shaped so far, with what the layout takes from its contents.
 struct Shaped<'a> {
     b: Builder<'a>,
+    mark_style: u32,
     has_page_fields: bool,
     notes: Vec<(usize, u32)>,
     obj_index: usize,
@@ -178,9 +179,10 @@ fn linked(rc: &Arc<ResolvedChar>, instr: &str) -> Arc<ResolvedChar> {
 }
 
 impl<'a> Shaped<'a> {
-    fn new(b: Builder<'a>, eq_counter: u32) -> Self {
+    fn new(b: Builder<'a>, mark_style: u32, eq_counter: u32) -> Self {
         Shaped {
             b,
+            mark_style,
             has_page_fields: false,
             notes: Vec::new(),
             obj_index: 0,
@@ -454,6 +456,9 @@ impl<'a> Shaped<'a> {
         match wordcraft_doc::eq::parse_overstrike(instr) {
             Some(o) => overstrike(&mut self.b, &o, instr, start, end, rc, &mut self.enclosures),
             None => {
+                if self.b.label.is_none() && cx.env.label.is_some() {
+                    self.b.label = shape_list_label(cx, &mut self.b, self.mark_style);
+                }
                 let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
                 self.has_page_fields |= page_dep;
                 self.b.shape_field(&t, start, end, &linked(rc, instr), cx.rp);
@@ -545,10 +550,17 @@ fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &Resol
 /// on from the line of the paragraph before (#3986): Word hides it there. The list counter has
 /// already advanced, so the following item keeps its number.
 fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
-    let (p, rp) = (cx.p, cx.rp);
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
-    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only && !cx.env.joined)?;
+    if break_only || cx.env.joined {
+        return None;
+    }
+    b.label.take().or_else(|| shape_list_label(cx, b, mark_style))
+}
+
+fn shape_list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
+    let (p, rp) = (cx.p, cx.rp);
+    let (text, lvl) = cx.env.label.as_ref()?;
     let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
@@ -663,7 +675,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let b = Builder {
+    let mut b = Builder {
         env,
         styles: Vec::new(),
         style_index: Default::default(),
@@ -674,13 +686,14 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         substituted: Vec::new(),
         span_bound: None,
         drop_cap_indent: None,
+        label: None,
     };
     let mut cx =
         Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp), shown: None };
     cx.shown = shown_text(&cx);
-    let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
-    let mark_style = sh.b.style(&mark_rc, None, false);
+    let mark_style = b.style(&mark_rc, None, false);
+    let mut sh = Shaped::new(b, mark_style, env.eq_number);
     for (range, props) in p.run_ranges() {
         sh.run(&cx, range, props);
     }

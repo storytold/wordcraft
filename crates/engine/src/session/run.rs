@@ -347,6 +347,7 @@ impl Session {
             sel_before,
         } = context;
         let mut no_op = false;
+        let mut doc_changed = false;
         if spec.mutates {
             // Formatting changed while tracking becomes a formatting revision.
             if let Some((before, ..)) = before_doc {
@@ -381,6 +382,11 @@ impl Session {
             // stack alone. What it left behind is compared with what it started from,
             // after the reroute: a reroute that moved a connector is an edit of its own.
             no_op = !changed && !rerouted && unchanged(self);
+            doc_changed = replaces_document
+                || self.document_id != document_id_before
+                || rerouted
+                || before_doc.as_ref().is_none_or(|(doc, ..)| !doc.same_content(&self.doc))
+                || self.md_source.as_ref().is_some_and(|src| src.is_pending());
             if no_op {
                 // The step the dispatch pushed is not an edit: put the stacks back as
                 // they were, so the redo stack survives and no step is evicted. The
@@ -405,7 +411,7 @@ impl Session {
                 }
             }
         }
-        if spec.mutates && !no_op && !matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
+        if spec.mutates && !no_op && doc_changed && !matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo") {
             self.sel.anchor.affinity = None;
             self.sel.focus.affinity = None;
         }

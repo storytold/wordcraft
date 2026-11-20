@@ -409,6 +409,110 @@ fn hyphenation_options_and_manual_hyphenation() {
     assert!(found > 0, "no candidates");
     assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).matches('\u{ad}').count(), found);
     assert!(s.run("layout.manualHyphenation", &json!({"from": {"block": 999, "off": 0}})).unwrap()["done"] == true);
+
+    // When a wrapped field finishes on line 0 and a hyphenatable word starts line 1,
+    // manual_hyphenation suggests that word at `field_end`.
+    let mut doc = wordcraft_doc::Document::new();
+    doc.last_section.margin_left = 206.0;
+    doc.last_section.margin_right = 206.0;
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(
+        0,
+        wordcraft_doc::InlineObject::Field {
+            instr: "DOCVARIABLE lead".into(),
+            result: "alpha beta gamma delta 1234 ".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let field_end = p.len();
+    p.insert_text(field_end, "uncharacteristically", &Default::default()).unwrap();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+    let mut s_field = Session::new(doc);
+    {
+        let l = s_field.layout();
+        let crate::layout::Placed::Lines { para, .. } = &l.pages[0].items[0] else { panic!("expected paragraph lines") };
+        assert!(para.line_has_start(1, field_end), "line 1 starts with the following hyphenatable word");
+    }
+    let cand = s_field.run("layout.manualHyphenation", &json!({})).unwrap();
+    assert_ne!(cand["done"], json!(true), "expected hyphenation candidate after field: {cand}");
+    assert_eq!(cand["pos"]["off"].as_u64(), Some(field_end as u64), "candidate pos must point after field");
+    assert_eq!(cand["word"].as_str(), Some("uncharacteristically"));
+
+    // Negative control 1: when a wrapped field continuation precedes the hyphenatable word on
+    // line 1, that continuation already did not fit on line 0; manual_hyphenation must include the
+    // continuation width in its fit check and reject the candidate rather than falsely accepting.
+    let mut doc_wide = wordcraft_doc::Document::new();
+    doc_wide.last_section.margin_left = 206.0;
+    doc_wide.last_section.margin_right = 206.0;
+    let mut p_wide = wordcraft_doc::Paragraph::new();
+    p_wide
+        .insert_object(
+            0,
+            wordcraft_doc::InlineObject::Field {
+                instr: "DOCVARIABLE lead".into(),
+                result: "alpha beta gamma delta epsilon 123456789 ".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+    let wide_field_end = p_wide.len();
+    p_wide.insert_text(wide_field_end, "thoughtfulness", &Default::default()).unwrap();
+    doc_wide.body = vec![wordcraft_doc::para_block(p_wide)];
+    let mut s_wide = Session::new(doc_wide);
+    {
+        let l = s_wide.layout();
+        let crate::layout::Placed::Lines { para, .. } = &l.pages[0].items[0] else { panic!("expected paragraph lines") };
+        let line1_start = para.line_start_pos(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path::top(0), 1).expect("line 1 start pos");
+        assert_eq!(line1_start.affinity, Some(1), "expected line 1 to start with a wrapped field continuation");
+        assert_eq!(para.lines[1].start, 0, "Line.start on continuation line 1 is the field start offset");
+        assert!(para.line_has_start(1, wide_field_end), "line 1 displays the word after the continuation");
+    }
+    let wide_cand = s_wide.run("layout.manualHyphenation", &json!({})).unwrap();
+    assert_eq!(wide_cand["done"], json!(true), "wide continuation before word must not falsely fit on line 0: {wide_cand}");
+
+    // Negative control 2: when line 1 is a field-only continuation and the hyphenatable word starts on
+    // line 2 with line 1 too full to accept its first syllable, manual_hyphenation must not measure
+    // the later word on field-only line 1 and falsely report it as fitting on line 0.
+    let mut doc_neg = wordcraft_doc::Document::new();
+    doc_neg.last_section.margin_left = 206.0;
+    doc_neg.last_section.margin_right = 206.0;
+    let mut p_neg = wordcraft_doc::Paragraph::new();
+    p_neg
+        .insert_object(
+            0,
+            wordcraft_doc::InlineObject::Field {
+                instr: "DOCVARIABLE lead".into(),
+                result: "alpha 1234567890123456789012345678 ".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+    let neg_field_end = p_neg.len();
+    p_neg.insert_text(neg_field_end, "thoughtfulness", &Default::default()).unwrap();
+    doc_neg.body = vec![wordcraft_doc::para_block(p_neg)];
+    let mut s_neg = Session::new(doc_neg);
+    {
+        let l = s_neg.layout();
+        let crate::layout::Placed::Lines { para, .. } = &l.pages[0].items[0] else { panic!("expected paragraph lines") };
+        assert!(para.lines.len() >= 3, "expected field-only middle continuation line");
+        assert!(!para.line_has_start(1, neg_field_end), "field-only line 1 must not claim the later word");
+        assert!(para.line_has_start(2, neg_field_end), "word starts on line 2");
+    }
+    let neg_cand = s_neg.run("layout.manualHyphenation", &json!({})).unwrap();
+    assert_eq!(neg_cand["done"], json!(true), "field-only line 1 must not trigger a false hyphenation suggestion: {neg_cand}");
 }
 
 /// `layout.pageNumberFormat` sets the section's number format and start; a call without
