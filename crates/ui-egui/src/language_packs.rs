@@ -1619,11 +1619,12 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // Inside the dialog: with downloading off again, an agent's click on a row's Install is refused. Off, each row
+        // gains a licence line and its Install moves down, so the click is aimed at the rows as they are then.
+        backend.network.store(false, Ordering::Relaxed);
         let tree = settled(&mut a, &ctx);
         assert!(has(&tree, "Search") && has(&tree, "Refresh"), "{:?}", labels(&tree));
         assert!(labels(&tree).iter().any(|l| l.starts_with("Catalan")), "the packs are listed by name: {:?}", labels(&tree));
-        // Inside the dialog: with downloading off again, an agent's click on a row's Install is refused.
-        backend.network.store(false, Ordering::Relaxed);
         let install = spot(&tree, "Install").expect("a row offers Install");
         as_agent(&mut a, &ctx, "ui.click", json!({"x": install.0, "y": install.1}));
         assert!(!backend.network.load(Ordering::Relaxed), "an agent's click in the picker leaves downloading off");

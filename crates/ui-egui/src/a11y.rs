@@ -525,10 +525,19 @@ mod tests {
 
         // AccessKit's levels are zero-based (#3173): Heading 1 is level 0, Heading 2 level 1, which the Windows
         // adapter reports to UI Automation as levels 1 and 2.
-        let headings = tree.with_role(role(accesskit::Role::Heading));
+        // In tree order: `with_role` lists the nodes in egui's update order, which follows its id map, not the page.
+        let headings: Vec<NodeKey> = f.by_role(role(accesskit::Role::Heading)).iter().map(|t| t.node).collect();
         // PLAN: assumed `AccessTree::level_of(&self, NodeKey) -> Option<usize>` and `url_of(&self, NodeKey) -> Option<&str>` (chrome-w7)
         assert_eq!(headings.iter().map(|h| tree.level_of(*h)).collect::<Vec<_>>(), [Some(0), Some(1)]);
-        assert_eq!(texts(tree, accesskit::Role::Heading), ["Title here\n", "Section here\n"]);
+        let heading_texts: Vec<String> = headings
+            .iter()
+            .map(|h| {
+                let mut s = String::new();
+                text(tree, *h, &mut s);
+                s
+            })
+            .collect();
+        assert_eq!(heading_texts, ["Title here\n", "Section here\n"]);
         assert!(texts(tree, accesskit::Role::Paragraph).contains(&"Read this link\n".to_string()), "{:?}", texts(tree, accesskit::Role::Paragraph));
         assert_eq!(texts(tree, accesskit::Role::Link), ["link"]);
         let links = tree.with_role(role(accesskit::Role::Link));
