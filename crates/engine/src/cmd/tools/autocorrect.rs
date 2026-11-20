@@ -322,7 +322,7 @@ pub fn lenient_autocorrect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Aut
 /// `tools.autocorrect`: change AutoCorrect Options and report them.
 pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
     let ac = &mut s.prefs.autocorrect;
-    for (k, f) in [
+    let switches = [
         ("enabled", &mut ac.enabled as &mut bool),
         ("replaceText", &mut ac.replace_text),
         ("twoInitialCaps", &mut ac.two_initial_caps),
@@ -345,7 +345,12 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         ("doubleSpacePeriod", &mut ac.double_space_period),
         ("autoAddFirstLetter", &mut ac.auto_add_first_letter),
         ("autoAddInitialCaps", &mut ac.auto_add_initial_caps),
-    ] {
+    ];
+    // A supplied option that isn't true or false is an error, and no option changes.
+    if let Some((k, _)) = switches.iter().find(|(k, _)| v.get(*k).is_some_and(|x| !x.is_boolean())) {
+        return Err(CmdError::Params(format!("`{k}` must be true or false")));
+    }
+    for (k, f) in switches {
         if let Some(b) = p::bool(v, k) {
             *f = b;
         }

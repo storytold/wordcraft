@@ -1883,6 +1883,16 @@ fn the_list_item_option_is_reported_and_set_through_autocorrect_options() {
     let r = s.run("tools.autocorrect", &json!({"formatListItemStart": true})).unwrap();
     assert_eq!(r["formatListItemStart"], json!(true));
     assert!(s.prefs.autocorrect.format_list_item_start);
+    // A value that isn't true or false is an error, and no option changes.
+    for bad in [
+        json!({"formatListItemStart": "no"}),
+        json!({"capDays": false, "formatListItemStart": 0}),
+        json!({"capDays": false, "formatListItemStart": null}),
+    ] {
+        assert!(matches!(s.run("tools.autocorrect", &bad), Err(crate::CmdError::Params(_))), "{bad}");
+        assert!(s.prefs.autocorrect.format_list_item_start);
+        assert!(s.prefs.autocorrect.cap_days);
+    }
 }
 
 #[test]
