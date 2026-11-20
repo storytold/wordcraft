@@ -309,6 +309,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-29 | trivial | A list item deleted whole under Track Changes shows its number in the deletion's colour and with its mark (struck through by default) with markup, and not at all without (#4828) |
+| 2026-11-12 | trivial | List numbers draw their strikethrough, highlight and border from the paragraph mark or the level, and their underline and shading from the level only, as Word does; a list number is never small caps; readiness estimates unchanged |
 | 2026-11-04 | trivial | Headers, footers and note separators of the second and later sections are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's; a regression from the #4501 refactor (#4683). `layout::tests::pages::a_sections_header_is_measured_without_the_previous_sections_grid` |
 | 2026-11-08 | trivial | Turned inline pictures with no recorded effect extent keep their line to the frame (exchanged near a quarter turn in Word 2013+ layout) and overhang it, cut at the line's top and bottom, as in Word |
 | 2026-11-04 | trivial | PAGEREF in text boxes and notes shows pages in output; PAGEREF's and REF's missing-bookmark errors in the interface language; readiness estimates unchanged |
