@@ -13365,8 +13365,8 @@ fn a_merged_cell_skips_its_inherited_line_under_its_neighbours_own() {
     let mut t = Table::new(3, 3, 450.0);
     t.merge(1, 1, 0, 1);
     let double = Border { style: BorderStyle::Double, width: 1.5, color: None, space: 0.0 };
-    for c in 0..2 {
-        t.rows[0].cells[c].props.borders = Some(Borders { bottom: Some(double), ..Default::default() });
+    for cell in t.rows[0].cells.iter_mut().take(2) {
+        cell.props.borders = Some(Borders { bottom: Some(double), ..Default::default() });
     }
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     let l = lay(&d);
