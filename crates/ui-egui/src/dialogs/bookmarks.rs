@@ -236,6 +236,9 @@ fn translated_groups() -> std::rc::Rc<Vec<IconPickerGroup<String>>> {
     })
 }
 
+/// The size of the Icons dialog body, in points: the same for every category.
+const ICONS_BODY: egui::Vec2 = egui::vec2(520.0, 320.0);
+
 /// Insert › Icons: the library as a searchable grid with a filter row; Insert runs `insert.icon`.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct IconsForm {
@@ -263,10 +266,17 @@ impl WordForm for IconsForm {
 
     fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let groups = translated_groups();
-        let out = IconPicker::new(Label::from(tl!("Icons")), Bind::bound(&mut self.picked), groups.as_slice())
-            .group_display(IconPickerGroups::Filter)
-            .empty(Label::from(tl!("No icons match your search.")))
-            .show(ui);
+        // A fixed body: the grid asks for the height of its rows at the narrowest width, so left to itself the dialog
+        // grows and shrinks with the category picked (#7167).
+        let out = ui
+            .allocate_ui(ICONS_BODY, |ui| {
+                ui.set_min_size(ICONS_BODY);
+                IconPicker::new(Label::from(tl!("Icons")), Bind::bound(&mut self.picked), groups.as_slice())
+                    .group_display(IconPickerGroups::Filter)
+                    .empty(Label::from(tl!("No icons match your search.")))
+                    .show(ui)
+            })
+            .inner;
         if out.picked.is_some() && out.response.double_clicked() {
             // PLAN: assumed FormCx::accept (dialogs-w5, S-L285)
             cx.accept();
