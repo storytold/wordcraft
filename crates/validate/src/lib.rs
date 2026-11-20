@@ -4855,6 +4855,21 @@ mod budget_tests {
             longer.extend([0; 9]);
             assert_eq!(media_boundary::coded_image(Format::Bmp, &longer).len(), plain.len() + 4, "{plain:?}");
         }
+        // Overlapping layout: the pixel data starts INSIDE the two-entry colour table the decoder also reads (the
+        // command stream ends at byte 58, the table at 62). The boundary covers what the decoder reads, whatever the
+        // declared size says, so the image is as decodable as with a declared size of 62.
+        let mut overlap = windows(8, 1, 2, 2, &[2, 1, 0, 0, 0, 1]);
+        overlap.truncate(62);
+        overlap[10..14].copy_from_slice(&le(54));
+        overlap[54..58].copy_from_slice(&[2, 1, 0, 1]);
+        for declared in [0, 58, 62] {
+            overlap[2..6].copy_from_slice(&le(declared));
+            let mut bytes = overlap.clone();
+            bytes.extend(b"XXXX");
+            assert_eq!(media_boundary::coded_image(Format::Bmp, &bytes), &overlap[..], "declared {declared}");
+            assert_eq!(outcome(&bytes), outcome(&overlap), "declared {declared}");
+            assert_eq!(outcome(&overlap).0, Ok(true), "declared {declared}");
+        }
     }
 
     #[test]

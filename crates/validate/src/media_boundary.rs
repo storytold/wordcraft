@@ -153,14 +153,33 @@ fn bmp_layout_end(bytes: &[u8]) -> Option<usize> {
     let offset = le32(bytes, 10)?;
     let (width, height) = craft_image_codecs::bmp_probe::dimensions(bytes)?;
     let (width, height) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
-    let (bits, compression) = if le32(bytes, 14)? == 12 { (le16(24)?, 0) } else { (le16(28)?, le32(bytes, 30)?) };
-    match compression {
-        1 | 2 => bmp_rle_end(bytes, offset, compression == 2, height),
+    let header = le32(bytes, 14)?;
+    let (bits, compression) = if header == 12 { (le16(24)?, 0) } else { (le16(28)?, le32(bytes, 30)?) };
+    let pixels = match compression {
+        1 | 2 => bmp_rle_end(bytes, offset, compression == 2, height)?,
         _ => {
             let stride = width.checked_mul(bits.max(1))?.checked_add(31)? / 32 * 4;
-            offset.checked_add(stride.checked_mul(height)?)
+            offset.checked_add(stride.checked_mul(height)?)?
         }
-    }
+    };
+    // The decoder also reads the colour table (and the bit masks of a bitfields image) that follow the header,
+    // wherever the pixel offset points: a layout whose pixels start inside them overlaps, and the boundary
+    // covers both. Entries are 3 bytes after a core header and 4 after any other; an image of at most 8 bits
+    // has `biClrUsed` of them, or all `1 << bits` when that is 0.
+    let entries = match (header, bits) {
+        (_, 0) => 0,
+        (12, 1..=8) => 1usize << bits,
+        (12, _) => 0,
+        (_, 1..=8) => match le32(bytes, 46)? {
+            0 => 1usize << bits,
+            used => used.min(1usize << bits),
+        },
+        _ => 0,
+    };
+    let masks = if header == 40 && matches!(compression, 3 | 6) { 12 + 4 * usize::from(compression == 6) } else { 0 };
+    let table = 14usize.checked_add(header)?.checked_add(entries.checked_mul(if header == 12 { 3 } else { 4 })?)?.checked_add(masks)?;
+    // Never past the data the part holds: a cut-off table is the decoder's failure, not a larger image.
+    Some(pixels.max(table.min(bytes.len())))
 }
 
 /// The end of an RLE8 or RLE4 command stream: its end-of-bitmap code, or the last row's commands
