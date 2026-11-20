@@ -53,3 +53,39 @@ fn page_break_from_the_menu_adds_a_page() {
     let after = h.state_mut().session.layout().pages.len();
     assert!(after > before, "the menu Page break added a page (was {before}, now {after})");
 }
+
+/// The menu's group headings are headings, not rows to run; each break says what it does.
+#[test]
+fn headings_are_not_items_and_breaks_are_described() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = layout_tab();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Breaks").click();
+    for _ in 0..3 {
+        crate::harness::frame(&mut h);
+    }
+    let named = |h: &egui_kittest::Harness<'static, WordApp>, name: &str| {
+        h.query_all(egui_kittest::kittest::By::new().label_contains(name))
+            .filter(|n| n.accesskit_node().label().as_deref().map(str::trim) == Some(name))
+            .map(|n| (n.accesskit_node().role(), n.accesskit_node().description().map(|d| d.to_string())))
+            .collect::<Vec<_>>()
+    };
+    for heading in ["Page Breaks", "Section Breaks"] {
+        let nodes = named(&h, heading);
+        assert!(!nodes.is_empty(), "{heading} is shown");
+        assert!(nodes.iter().all(|(role, _)| *role == egui::accesskit::Role::Heading), "{heading} is a heading, not a row: {nodes:?}");
+    }
+    // Each break says what it does, in a description of its own: without one, every row would
+    // only repeat the command's shared place on the ribbon.
+    let mut descriptions = std::collections::BTreeSet::new();
+    let items = ["Page", "Column", "Text Wrapping", "Next Page", "Continuous", "Even Page", "Odd Page"];
+    for item in items {
+        let nodes = named(&h, item);
+        let description = nodes
+            .iter()
+            .find(|(role, _)| *role != egui::accesskit::Role::Heading)
+            .and_then(|(_, d)| d.clone())
+            .unwrap_or_else(|| panic!("{item} is a row with a description: {nodes:?}"));
+        descriptions.insert(description);
+    }
+    assert_eq!(descriptions.len(), items.len(), "every break is described differently: {descriptions:?}");
+}

@@ -19,6 +19,42 @@ use crate::undo_marks::apply_edits;
 /// The columns of each half of the Paragraph group: a label and its field.
 const PARAGRAPH_GRID: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
 
+/// Layout › Breaks: the page breaks, then the section breaks, each group under a heading and
+/// each break with a picture and a line on what it does to the text after it (the row's
+/// accessible description).
+pub(super) fn breaks_items(ui: &mut Ui) {
+    type Break = (&'static str, &'static str, &'static str, &'static str);
+    let groups: [(&str, &[Break]); 2] = [
+        (
+            "Page Breaks",
+            &[
+                ("pageBreak", "Page", "page", "Ends the page here: the text that follows starts on the next page."),
+                ("breakColumn", "Column", "column", "Ends the column here: the text that follows starts in the next column."),
+                ("breakTextWrapping", "Text Wrapping", "textWrapping", "Moves the text that follows below the objects it flows around."),
+            ],
+        ),
+        (
+            "Section Breaks",
+            &[
+                ("sectionNextPage", "Next Page", "nextPage", "Starts a new section on the next page."),
+                ("sectionContinuous", "Continuous", "continuous", "Starts a new section on the same page."),
+                ("sectionEvenPage", "Even Page", "evenPage", "Starts a new section on the next even-numbered page."),
+                ("sectionOddPage", "Odd Page", "oddPage", "Starts a new section on the next odd-numbered page."),
+            ],
+        ),
+    ];
+    for (heading, items) in groups {
+        MenuItem::heading(tl!(heading)).show(ui);
+        for &(icon, label, kind, description) in items {
+            MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": kind})))
+                .label(tl!(label))
+                .icon(crate::icons::id(icon))
+                .detail(tl!(description))
+                .show(ui);
+        }
+    }
+}
+
 // Layout › Margins, Orientation, Size and Columns: the caret section's setting is marked, as
 // Text Direction's is (#1206).
 pub(super) fn margins_items(ui: &mut Ui, app: &mut WordApp) {
@@ -97,16 +133,7 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             menu_button(ui, stacked("Columns", "columns"), tl!("Columns"), Some("layout.columns"), |ui, _| columns_items(ui, app));
             Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
                 let inline = |label: &'static str, icon: &'static str| Button::new(tl!(label)).icon(crate::icons::id(icon));
-                menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| {
-                    MenuItem::heading(tl!("Page Breaks")).show(ui);
-                    for (l, k) in [("Page", "page"), ("Column", "column"), ("Text Wrapping", "textWrapping")] {
-                        MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
-                    }
-                    MenuItem::heading(tl!("Section Breaks")).show(ui);
-                    for (l, k) in [("Next Page", "nextPage"), ("Continuous", "continuous"), ("Even Page", "evenPage"), ("Odd Page", "oddPage")] {
-                        MenuItem::command(CommandRef::with_params("layout.break", json!({"kind": k}))).label(tl!(l)).show(ui);
-                    }
-                });
+                menu_button(ui, inline("Breaks", "breaks"), tl!("Breaks"), Some("layout.break"), |ui, _| breaks_items(ui));
                 menu_button(ui, inline("Line Numbers", "lineNumbers"), tl!("Line Numbers"), Some("layout.lineNumbers"), |ui, _| {
                     for (l, v) in [
                         ("None", "none"),
