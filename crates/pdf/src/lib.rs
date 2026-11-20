@@ -56,6 +56,7 @@ use wordcraft_layout::{DocLayout, LayoutCache, NumeralMode, Page, Placed, layout
 
 mod export;
 mod exporter;
+mod forms;
 mod glyphs;
 mod metadata;
 mod options;
