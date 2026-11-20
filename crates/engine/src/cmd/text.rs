@@ -19,8 +19,8 @@ use delete::{backspace, delete, delete_sentence_back, delete_word_back, delete_w
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};
 pub(crate) use lead_in::{LeadIn, finish as end_lead_in, put_back as put_back_lead_in, resync as resync_lead_in, type_text_lead};
-pub use unicode::{alt_code_char, oem_code_page, system_code_pages, system_oem_code_page, windows_code_pages};
 use unicode::{ins_char, insert_code, toggle_unicode};
+pub use unicode::{oem_code_page, system_code_pages, system_oem_code_page};
 
 /// The text-entry commands: typing, Enter, breaks, Tab, deleting and typed symbols.
 pub fn specs() -> Vec<CommandSpec> {

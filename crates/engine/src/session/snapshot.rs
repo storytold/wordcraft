@@ -154,6 +154,8 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            // Derived from `document_id` and `rev`: rebuilt on the next read, not an edit.
+            findings: _,
             ribbon: _,
             // A preference for new documents, like `prefs`: not part of this document.
             editing_lang: _,
