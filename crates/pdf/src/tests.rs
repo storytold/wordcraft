@@ -2799,32 +2799,33 @@ fn legacy_font_effects_keep_their_text() {
     assert_eq!(text.matches("Effect").count(), 4, "{text}");
 }
 
-/// Everything a PDF paints, in order: whether it is a glyph, whether it is stroked, and its RGBA colour.
-fn painted(bytes: &[u8]) -> Vec<(bool, bool, [u8; 4])> {
+/// Everything a PDF paints, in order: whether it is a glyph, whether it is stroked, its RGBA colour
+/// and, for a path, how many elements it has (a line has 2; letter outlines have many).
+fn painted(bytes: &[u8]) -> Vec<(bool, bool, [u8; 4], usize)> {
     use hayro_interpret::font::Glyph;
     use hayro_interpret::{
         BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
         interpret_page,
     };
     use hayro_syntax::Pdf;
-    struct Ex(Vec<(bool, bool, [u8; 4])>);
+    struct Ex(Vec<(bool, bool, [u8; 4], usize)>);
     impl Ex {
-        fn paint(&mut self, glyph: bool, stroke: bool, paint: &Paint<'_>) {
+        fn paint(&mut self, glyph: bool, stroke: bool, paint: &Paint<'_>, elements: usize) {
             if let Paint::Color(c) = paint {
-                self.0.push((glyph, stroke, c.to_rgba().to_rgba8()));
+                self.0.push((glyph, stroke, c.to_rgba().to_rgba8(), elements));
             }
         }
     }
     impl Device<'_> for Ex {
         fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
         fn set_blend_mode(&mut self, _: BlendMode) {}
-        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, paint: &Paint<'_>, mode: &PathDrawMode) {
-            self.paint(false, matches!(mode, PathDrawMode::Stroke(_)), paint);
+        fn draw_path(&mut self, path: &kurbo::BezPath, _: kurbo::Affine, paint: &Paint<'_>, mode: &PathDrawMode) {
+            self.paint(false, matches!(mode, PathDrawMode::Stroke(_)), paint, path.elements().len());
         }
         fn push_clip_path(&mut self, _: &ClipPath) {}
         fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
         fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, paint: &Paint<'_>, mode: &GlyphDrawMode) {
-            self.paint(true, matches!(mode, GlyphDrawMode::Stroke(_)), paint);
+            self.paint(true, matches!(mode, GlyphDrawMode::Stroke(_)), paint, 0);
         }
         fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
         fn pop_clip_path(&mut self) {}
@@ -2864,14 +2865,15 @@ fn tracked_wordart_run_keeps_its_legacy_outline_in_pdf() {
     let pdf = |include_markup| export(&d, &PdfOptions { include_markup, compress: false, ..Default::default() }).unwrap();
 
     let plain = painted(&pdf(false));
-    assert!(plain.iter().any(|&(glyph, stroke, c)| !glyph && !stroke && c == GREEN), "without markup the WordArt fill is painted: {plain:?}");
+    assert!(plain.iter().any(|&(glyph, stroke, c, _)| !glyph && !stroke && c == GREEN), "without markup the WordArt fill is painted: {plain:?}");
 
     let marked = pdf(true);
     let drawn = painted(&marked);
-    assert!(drawn.iter().all(|&(_, _, c)| c != GREEN), "with markup the WordArt fill is dropped: {drawn:?}");
+    assert!(drawn.iter().all(|&(_, _, c, _)| c != GREEN), "with markup the WordArt fill is dropped: {drawn:?}");
     // Without the legacy outline the letters would be painted as ordinary, opaque glyphs.
-    assert!(drawn.iter().all(|&(glyph, _, c)| !glyph || c[3] == 0), "with markup the letters are hollow outlines: {drawn:?}");
-    assert!(drawn.iter().any(|&(glyph, stroke, _)| !glyph && stroke), "the outline is stroked: {drawn:?}");
+    assert!(drawn.iter().all(|&(glyph, _, c, _)| !glyph || c[3] == 0), "with markup the letters are hollow outlines: {drawn:?}");
+    // The insertion underline is a stroked line too; the letters' outlines are one path of many curves.
+    assert!(drawn.iter().any(|&(glyph, stroke, _, n)| !glyph && stroke && n > 20), "the letter outlines are stroked: {drawn:?}");
     assert_eq!(squash(&extract_text(&marked).concat()), "Outlined");
 }
 
