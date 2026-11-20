@@ -2,6 +2,39 @@ use super::pages::gridline_cells;
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+#[test]
+fn section_badges_are_painted_when_editing_header_or_footer() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("insert.header", json!({"text": "Head"})).unwrap();
+    app.run("insert.footer", json!({"text": "Foot"})).unwrap();
+    app.run("insert.closeHeader", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 2200.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    steps(&mut h, 6);
+    let count =
+        |h: &H| h.output().shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Section 1")).count();
+    assert_eq!(count(&h), 0, "the body has no editing badges");
+    for command in ["insert.editHeader", "insert.editFooter"] {
+        h.state_mut().run(command, json!({"page": 0})).unwrap();
+        steps(&mut h, 6);
+        assert!(matches!(h.state().session.sel.focus.story, StoryRef::Part(_)));
+        assert_eq!(count(&h), 0, "single-section document hides section badges");
+    }
+    h.state_mut().run("insert.closeHeader", json!({})).unwrap();
+    h.state_mut().run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    for command in ["insert.editHeader", "insert.editFooter"] {
+        h.state_mut().run(command, json!({"page": 0})).unwrap();
+        steps(&mut h, 6);
+        assert_eq!(count(&h), 2, "multi-section document shows section badges on both header and footer lines");
+    }
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.

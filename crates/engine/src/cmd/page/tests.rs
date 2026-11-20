@@ -411,6 +411,39 @@ fn hyphenation_options_and_manual_hyphenation() {
     assert!(s.run("layout.manualHyphenation", &json!({"from": {"block": 999, "off": 0}})).unwrap()["done"] == true);
 }
 
+/// Format Page Numbers while the caret is in a later section's footer changes that section's
+/// numbering. The footer is stored on the first section ("Link to Previous") and the caret's
+/// path inside the part is local to it, so both used to point the change at section 1 while the
+/// number in front of the person stayed as it was.
+#[test]
+fn page_number_format_in_a_linked_footer_targets_the_pages_section() {
+    use wordcraft_doc::section::NumFormat;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "One"})).unwrap();
+    s.run("insert.footer", &json!({"text": "Foot"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    // A second section on a new page, still showing the first section's footer.
+    s.run("text.insert", &json!({"text": " Two"})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Three"})).unwrap();
+    let last = s.layout().pages.len() - 1;
+    assert!(last >= 1, "a second page");
+    let footer = s.doc.sections()[0].1.footers.default.expect("a footer");
+    let page = s.layout().pages.get(last).cloned().unwrap();
+    assert_eq!((page.section, page.footer_story), (1, Some(footer)), "the last page links to the first section's footer");
+    // A double-click there puts the caret in that footer, on the page it is shown on.
+    let r = s.run("insert.editFooter", &json!({"page": last})).unwrap();
+    assert_eq!(r["story"].as_u64(), Some(footer as u64));
+    assert_eq!((s.page_hint, section_index_of_focus(&s)), (last, 1));
+    let r = s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 1})).unwrap();
+    assert_eq!((r["pageNumFormat"].as_str(), r["pageNumStart"].as_u64()), (Some("lowerRoman"), Some(1)), "the dialog reads the page's section");
+    let sections = s.doc.sections();
+    assert_eq!((sections[0].1.page_num_format, sections[0].1.page_num_start), (NumFormat::Decimal, None), "the first section keeps its numbering");
+    assert_eq!((sections[1].1.page_num_format, sections[1].1.page_num_start), (NumFormat::LowerRoman, Some(1)));
+    // And the page in front of the person numbers as asked.
+    assert_eq!(s.layout().pages.get(last).map(|p| p.number), Some(1));
+}
+
 /// `layout.pageNumberFormat` sets the section's number format and start; a call without
 /// `start` keeps it (the ribbon's old plain call cleared it), and a null `start` numbers on
 /// from the section before — the Format Page Numbers dialog's "Continue from previous

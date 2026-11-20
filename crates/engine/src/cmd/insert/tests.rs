@@ -214,6 +214,46 @@ fn new_header_links_to_previous_and_even_pages_edit_what_they_show() {
     assert_eq!(s.doc.sections()[0].1.headers.even, None, "nothing made");
 }
 
+/// Insert › Footer › Page Number while a later section's page shows the first section's footer
+/// (the "Link to Previous" default) writes into that footer, the one in front of the person; it
+/// does not make a second one for the page's own section and leave theirs untouched.
+#[test]
+fn a_page_number_goes_into_the_footer_the_page_shows() {
+    let mut s = two_pages();
+    s.run("insert.footer", &json!({"text": "Foot"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    let foot = s.doc.sections()[0].1.footers.default.expect("a footer");
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Three"})).unwrap();
+    let last = s.layout().pages.len() - 1;
+    assert_eq!(s.layout().pages[last].section, 1, "a second section");
+    // A file saved this way links the section: it names no footer and shows the first one's.
+    s.doc.section_mut(crate::cmd::page::section_block(&s, 1)).footers = Default::default();
+    assert_eq!(s.layout().pages[last].footer_story, Some(foot), "it shows the first section's footer");
+    // A double-click there edits that footer, and the page number goes into it.
+    assert_eq!(s.run("insert.editFooter", &json!({"page": last})).unwrap()["story"].as_u64(), Some(foot as u64));
+    let parts = s.doc.parts.len();
+    let r = s.run("insert.footer", &json!({"preset": "pageNumber"})).unwrap();
+    assert_eq!(r["story"].as_u64(), Some(foot as u64), "the footer being edited");
+    assert_eq!(s.doc.parts.len(), parts, "no second footer");
+    assert_eq!(s.doc.sections()[1].1.footers.default, None, "the second section still links to the first one's");
+    let has_page = s.doc.story(StoryRef::Part(foot)).is_some_and(|blocks| {
+        blocks
+            .iter()
+            .any(|b| matches!(&**b, Block::Para(p) if p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if instr == "PAGE"))))
+    });
+    assert!(has_page, "the page number went into the footer");
+}
+
+#[test]
+fn inserting_header_or_footer_sets_page_hint_to_the_body_page() {
+    let mut s = two_pages();
+    s.run("select.text", &json!({"text": "Two"})).unwrap();
+    assert_eq!(s.layout().page_of(&s.sel.focus), Some(1));
+    s.run("insert.header", &json!({"text": "Head"})).unwrap();
+    assert_eq!(s.page_hint, 1, "page_hint updated to page 2 when inserting header");
+}
+
 #[test]
 fn base64_round_trip() {
     let data = b"hello world!?";
