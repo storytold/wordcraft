@@ -4080,34 +4080,35 @@ fn line_spacing_menu_shows_add_or_remove_for_the_paragraph() {
     };
     open_menu(&mut h);
     assert!(
-        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Remove Space Before Paragraph")).is_some(),
+        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Remove Space Before Paragraph")).is_some(),
         "12 pt before: Remove"
     );
     assert!(
-        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Add Space After Paragraph")).is_some(),
+        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Add Space After Paragraph")).is_some(),
         "0 pt after: Add"
     );
     assert!(
-        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Add Space Before Paragraph")).is_none()
-            && h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Remove Space After Paragraph")).is_none()
+        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Add Space Before Paragraph")).is_none()
+            && h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Remove Space After Paragraph"))
+                .is_none()
     );
 
     // Clicking an item applies it and closes the menu; reopened, both labels have flipped.
-    h.get(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Remove Space Before Paragraph")).click();
+    h.get(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Remove Space Before Paragraph")).click();
     h.run_steps(3);
     h.get_by_label("Line and Paragraph Spacing").click();
     h.run_steps(3);
-    h.get(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Add Space After Paragraph")).click();
+    h.get(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Add Space After Paragraph")).click();
     h.run_steps(3);
     let para = wordcraft_engine::cmd::para::selection_para(&h.state().session);
     assert!(para.space_before == 0.0 && para.space_after > 0.0, "the clicks removed the space before and added some after");
     open_menu(&mut h);
     assert!(
-        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Add Space Before Paragraph")).is_some(),
+        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Add Space Before Paragraph")).is_some(),
         "no space before now: Add"
     );
     assert!(
-        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Remove Space After Paragraph")).is_some(),
+        h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::MenuItem).label_contains("Remove Space After Paragraph")).is_some(),
         "space after now: Remove"
     );
 }
