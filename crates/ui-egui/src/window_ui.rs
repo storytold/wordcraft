@@ -220,6 +220,7 @@ impl WordApp {
             // running.
             ribbon_collapsed: _,
             quick_access_toolbar: _,
+            autosave: _,
             recent: _,
             recent_symbols: _,
             date_time_format: _,

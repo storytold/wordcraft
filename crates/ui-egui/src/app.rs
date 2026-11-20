@@ -40,7 +40,9 @@ static APP_SIZES: std::sync::LazyLock<std::sync::Arc<craft::theme::AppSizes>> = 
 impl WordApp {
     /// Creates the app: adopts the system locale, then initializes the document session, UI state,
     /// services, printing, canvas, dialogs, previews and font tracking.
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, services: Services) -> Self {
+        // A manual save grants a file target; automatic writes still need an explicit opt-in.
+        session.autosave = false;
         // The app's own icons (ribbon, menus) sit beside the framework's catalog; registering twice is a no-op.
         crate::icons::register();
         // Numeral › System follows the system locale, found here rather than in layout.
@@ -117,7 +119,7 @@ impl WordApp {
             applied_editing: None,
             frame_ms: 0.0,
             quit_requested: false,
-            autosave: true,
+            autosave: false,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             ime_origin: false,

@@ -436,3 +436,33 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     let focus = wide.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").rect();
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
+
+/// A saved .docx after explicitly opting in to AutoSave.
+fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-autosave-label-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("draft.docx");
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::new());
+    let host = craft::host::Host::builder(crate::APP).files(files).build();
+    let mut a = new_app().with_host(std::sync::Arc::new(host));
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    a.run("file.autosave", json!({"value": true})).unwrap();
+    assert!(a.autosaves(), "an explicit opt-in covers the saved .docx");
+    (harness(a), dir)
+}
+
+/// #3370: clicking the AutoSave label toggles the switch.
+#[test]
+fn clicking_the_autosave_label_toggles_autosave() {
+    let (mut h, dir) = autosave_harness();
+    assert!(h.state().autosaves());
+    h.get_by_label("AutoSave").click();
+    crate::test_harness::frames(&mut h, 3);
+    assert!(!h.state().autosaves(), "clicking the text turns AutoSave off");
+    h.get_by_label("AutoSave").click();
+    crate::test_harness::frames(&mut h, 3);
+    assert!(h.state().autosaves(), "and clicking it again turns it back on");
+    let _ = std::fs::remove_dir_all(dir);
+}

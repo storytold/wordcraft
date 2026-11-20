@@ -102,6 +102,8 @@ impl WordApp {
         {
             log::error!("couldn't show document {to}: {e}");
         }
+        // The app's choice is global; native window activation swaps the engine's mirror too.
+        self.session.autosave = self.autosave;
         if from == to {
             return false;
         }
