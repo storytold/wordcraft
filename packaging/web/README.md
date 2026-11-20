@@ -9,6 +9,7 @@ static site in `wordcraft-web-<version>/`:
 | `wordcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `wordcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
+| `fonts/manifest.sample.json` | Sample list of server fonts. It isn't read; copy it to `fonts/manifest.json` to use it (see [Server fonts](#server-fonts)) |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
@@ -49,6 +50,46 @@ location /wordcraft/ {
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+## Server fonts
+
+A browser can't read the server's disk, and visitors' own fonts (Add Font) stay in their browser. To
+give everyone the same extra fonts, such as Khmer fonts the app doesn't bundle, upload them
+next to the app. The release ships only `fonts/manifest.sample.json`, which the app ignores, so
+unzipping a newer release over your site never replaces your own manifest. On first setup, copy
+the sample to `fonts/manifest.json` and edit it:
+
+```
+index.html
+fonts/manifest.json        <- the list (copied from manifest.sample.json)
+fonts/NotoSansKhmer-Regular.ttf
+fonts/my-fonts/Moul.woff2
+```
+
+```json
+{
+  "fonts": [
+    "NotoSansKhmer-Regular.ttf",
+    { "file": "KhmerOSBattambang-Regular.ttf" },
+    "my-fonts/Moul.woff2"
+  ]
+}
+```
+
+- At start-up the app fetches `fonts/manifest.json` (relative to the page, so any path works),
+  then each listed file, and adds the fonts the way Add Font does. They show in the font list and
+  documents that name their family use them. No `fonts/manifest.json` means no server fonts.
+- Files: TTF, OTF, TTC, OTC, WOFF or WOFF2, at most 50 MB each, 200 fonts and 256 MB in all.
+  Paths are relative to `fonts/`; `..`, absolute paths and URLs are skipped. Names with spaces
+  are fine.
+- A font whose family and style the app already has (the bundled ones) is skipped, as with Add
+  Font. A missing or broken file is skipped and the browser console says why.
+- Fonts download on every visit, so serve them compressed (`woff2` is already) and cacheable,
+  and keep the list short. Give `manifest.json` a short cache time (`no-cache` is fine), since
+  it is what changes when you add a font. Replacing a font file under the same name needs a
+  cache bust, or a new name.
+- Same origin only. If the fonts live on a CDN, put the app there too, or the CDN needs CORS.
+- Only list fonts whose licence lets you serve them to your visitors.
 
 ## Embedding in a page (iframe)
 

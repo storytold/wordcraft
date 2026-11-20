@@ -7,6 +7,7 @@
 //! Differences from the desktop app: no TCP control channel; Open and Insert › Pictures use the
 //! browser file picker (bytes arrive through `Services::inbox`); Save and Export download.
 //! Preferences (theme, interface size, editing options…) are kept in `localStorage` (`prefs`).
+//! Fonts an admin uploads next to the app (`fonts/manifest.json`) load at start-up (`server_fonts`).
 //! URL flags: `?webgl` forces WebGL2; `?sample` opens the sample document.
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
 //! document to open and stores what WordCraft saves (`host`). A page can also host WordCraft in
@@ -19,6 +20,8 @@
 mod prefs;
 #[cfg(any(target_arch = "wasm32", test))]
 mod save_fallback;
+#[cfg(any(target_arch = "wasm32", test))]
+mod server_fonts;
 
 #[cfg(target_arch = "wasm32")]
 mod api;

@@ -1,0 +1,8 @@
+{
+  "fonts": [
+    "NotoSansKhmer-Regular.ttf",
+    "NotoSansKhmer-Bold.ttf",
+    { "file": "KhmerOSBattambang-Regular.ttf" },
+    "my-fonts/Moul.woff2"
+  ]
+}
