@@ -2302,3 +2302,15 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// `viewed_page` with the sliver of the page above that Go To leaves at the top of the window: it is not the page in view.
+#[test]
+fn a_sliver_of_the_page_above_is_not_the_page_in_view() {
+    let rects: Vec<craft::behavior::kurbo::Rect> =
+        (0..4).map(|i| craft::behavior::kurbo::Rect::new(0.0, f64::from(i) * 110.0, 80.0, f64::from(i) * 110.0 + 100.0)).collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 1, bands: vec![(0.0, 100.0); 4] };
+    // The gap between pages is 10; page 2 ends at 320. A window top 4 above its end shows 4 of it: a sliver.
+    assert_eq!(viewed_page(None, 316.0, &layout, 100.0), 3, "4 points of page 2 is a sliver");
+    assert_eq!(viewed_page(None, 310.0, &layout, 100.0), 3, "as much as the gap is still a sliver");
+    assert_eq!(viewed_page(None, 300.0, &layout, 100.0), 2, "20 points of page 2 is the page in view");
+}
