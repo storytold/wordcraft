@@ -16,7 +16,7 @@ craft = { workspace = true, features = [
     "color", "color-ui", "control", "draw", "font-manager", "gpu", "menu", "pages", "print", "review", "table", "text",
     "text-find", "web-api", "web-host", "window",
 ] }
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38" }
+craft-fonts-build = { git = "https://github.com/mocenigo/craft-libs-mine", branch = "windowed-dialogs" }
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
@@ -71,7 +71,7 @@ craft-zip = { workspace = true }
 craft-ui-test-kit = { workspace = true }
 
 [build-dependencies]
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", features = ["subset"] }
+craft-fonts-build = { git = "https://github.com/mocenigo/craft-libs-mine", branch = "windowed-dialogs", features = ["subset"] }
 serde_json = { workspace = true }
 toml = "1"
 

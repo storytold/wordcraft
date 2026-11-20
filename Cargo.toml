@@ -31,8 +31,8 @@ wordcraft-formats = { path = "crates/formats" }
 wordcraft-render = { path = "crates/render" }
 wordcraft-pdf = { path = "crates/pdf" }
 # Until storytold/craft-libs#2658 (windowed dialogs on DialogHost, for this PR) merges into
-# craft-libs next, the craft-libs crates come from mocenigo/craft-libs-mine @ windowed-dialogs
-# (upstream next + that one commit); then they move back to a storytold rev, as one rev.
+# craft-libs, the craft-libs crates come from mocenigo/craft-libs-mine @ windowed-dialogs (the
+# 243d68e + that PR's commits); then they move back to a storytold rev, as one rev.
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
