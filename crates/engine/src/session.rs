@@ -36,7 +36,7 @@ use ime_state::ImeCaretState;
 pub use locale::set_system_locale;
 pub(crate) use locale::system_locale;
 pub use prefs::Prefs;
-pub use query::blank_document;
+pub use query::{blank_document, normal_document};
 pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
