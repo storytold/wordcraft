@@ -6636,6 +6636,34 @@ fn a_bound_ctrl_shift_0_beats_the_interface_size_reset() {
     assert!(h.state().session.view.focus_mode, "the user's binding runs");
 }
 
+/// #3910 review: a Ctrl+Shift+0 bound to a style applies the style instead of resetting the
+/// interface size.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_style_bound_ctrl_shift_0_beats_the_interface_size_reset() {
+    let mut a = app();
+    a.run("document.setText", json!({"text": "Chapter"})).unwrap();
+    a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
+    a.run("tools.customizeKeyboard", json!({"assign": {"style": "Heading 2", "key": "Mod+Shift+0"}})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
+    assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
+    let style = h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).and_then(|p| p.props.style.clone());
+    assert_eq!(style.as_deref(), Some("Heading2"), "the user's style key applies it");
+}
+
 /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.
 #[test]
 fn interface_theme_resolves_against_the_os_appearance() {

@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("tools.customizeKeyboard", "Customize Keyboard", "File › Options", customize_keyboard)
             .params(
-                r#"{"command"?: id (its keys), "key"?: "Mod+Shift+K" (the command it runs), "assign"?: {"command": id, "key": string}, "remove"?: {"command": id, "key": string}, "reset"?: true (built-in keys only)} → {custom: {assigned: {key: id}, removed: [key]}, …}; no params opens the dialog"#,
+                r#"{"command"?: id (its keys), "style"?: name or id (its keys), "key"?: string (assignedTo command and assignedToStyle), "assign"?: {"command" or "style": string, "key": string}, "remove"?: {"command" or "style": string, "key": string}, "reset"?: true (built-in keys only)} → {custom: {assigned: {key: id}, removed: [key], styles: {key: style}}, replaced?: command id or (for style assignment) {command: id} / {style: name} / null, …}; assign/remove require exactly one target; no params opens the dialog"#,
             )
             .pure(),
         CommandSpec::new("tools.customizeRibbon", "Customize Ribbon", "File › Options", customize_ribbon)

@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 pub use io::Password;
-pub use keymap::KeyMap;
+pub use keymap::{KeyMap, KeyTarget};
 pub use locale::{set_bookmark_error, set_reference_error};
 pub use ribbon::RibbonLayout;
 pub use session::{
