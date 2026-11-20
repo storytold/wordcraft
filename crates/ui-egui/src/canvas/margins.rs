@@ -33,13 +33,14 @@ pub(super) const MIN_TEXT: f32 = 72.0;
 
 /// The margin (points) after dragging `edge` of the text area on a ruler to `at` points from the
 /// page's left (or top) edge: snapped to 1/16 inch, never negative, and leaving at least an inch
-/// of text between it and the opposite margin.
+/// of text between it and the opposite margin. An exact (negative) opposite top or bottom margin
+/// counts at its size, as `layout.margins` checks it.
 pub(crate) fn dragged_margin(edge: MarginEdge, at: f32, s: &wordcraft_doc::section::SectionProps) -> f32 {
     let (raw, room, cur) = match edge {
         MarginEdge::Left => (at - s.gutter, s.page_w - s.margin_right - s.gutter - MIN_TEXT, s.margin_left),
         MarginEdge::Right => (s.page_w - at, s.page_w - s.margin_left - s.gutter - MIN_TEXT, s.margin_right),
-        MarginEdge::Top => (at, s.page_h - s.margin_bottom - MIN_TEXT, s.margin_top),
-        MarginEdge::Bottom => (s.page_h - at, s.page_h - s.margin_top - MIN_TEXT, s.margin_bottom),
+        MarginEdge::Top => (at, s.page_h - s.margin_bottom.abs() - MIN_TEXT, s.margin_top),
+        MarginEdge::Bottom => (s.page_h - at, s.page_h - s.margin_top.abs() - MIN_TEXT, s.margin_bottom),
     };
     if !raw.is_finite() || !room.is_finite() {
         return cur;

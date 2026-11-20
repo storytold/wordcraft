@@ -488,6 +488,34 @@ fn margin_drags_are_clamped() {
     assert_eq!(wordcraft_engine::cmd::page::sect(&app.session).margin_left, sect.margin_left);
 }
 
+/// #7107: an exact (negative) top or bottom margin counts at its size when a ruler drag of the
+/// opposite edge is clamped, so the drag keeps an inch of text and `layout.margins` accepts it.
+#[test]
+fn margin_drags_clamp_against_an_exact_opposite_margin() {
+    let s = wordcraft_doc::section::SectionProps {
+        page_w: 612.0,
+        page_h: 792.0,
+        margin_left: 72.0,
+        margin_right: 72.0,
+        margin_top: -72.0,
+        margin_bottom: -72.0,
+        gutter: 0.0,
+        ..Default::default()
+    };
+    assert_eq!(dragged_margin(MarginEdge::Bottom, 72.0, &s), 792.0 - 72.0 - 72.0);
+    assert_eq!(dragged_margin(MarginEdge::Top, 720.0, &s), 792.0 - 72.0 - 72.0);
+
+    // Through the command: the clamped value fits beside the exact top margin, which stays exact.
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.session.doc.last_section.margin_top = -72.0;
+    let sect = wordcraft_engine::cmd::page::sect(&app.session);
+    let v = dragged_margin(MarginEdge::Bottom, 72.0, &sect);
+    app.run("layout.margins", json!({"bottom": v})).unwrap();
+    let after = wordcraft_engine::cmd::page::sect(&app.session);
+    assert_eq!(after.margin_top, -72.0);
+    assert!(after.page_h - after.margin_top.abs() - after.margin_bottom >= MIN_TEXT - 0.01);
+}
+
 /// #2914: on an even page of a mirrored layout the page is the odd page reflected, so dragging
 /// its visible left edge edits the stored right margin and the visible right edge the left one.
 #[test]
