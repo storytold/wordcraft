@@ -125,6 +125,10 @@ A body floating table with `tblOverlap=never` clears floating header tables.
 Allowed overlap retains its requested position. Original native controls confirm
 both cases. Earlier-body reflow around late tables remains separate.
 
+An inline table also clears a horizontally overlapping floating table that starts one twip
+below it (`w:vertAnchor="text" w:tblpY="1"`, #3282). A float farther down the page does
+not push the inline table's first row down just because the table spans several pages.
+
 ## List-label line spacing
 
 Controlled original DOCX probes against Word for Mac 16.113.3 (26092714), macOS 26.6.2,

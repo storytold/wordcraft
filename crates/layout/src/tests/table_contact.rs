@@ -60,6 +60,37 @@ fn add_shape(d: &mut Document, top: f32, left: f32, width: f32, height: f32) {
     d.insert_object(&Pos::body(block, 0), shape, &Default::default()).unwrap();
 }
 
+#[test]
+fn a_flow_table_clears_a_floating_table_one_twip_below_its_start() {
+    for (offset, rows) in [(wordcraft_geom::twips(1), 1), (200.0, 80)] {
+        let mut floating = Table::new(1, 1, 300.0);
+        floating.props.float = Some(TableFloat { v_rel: Anchor::Paragraph, y: offset, overlap: false, ..Default::default() });
+        floating.rows[0].props.height = Some(40.0);
+        floating.rows[0].props.height_rule = HeightRule::Exact;
+        let mut doc = Document::new();
+        doc.body = vec![Arc::new(Block::Table(floating)), Arc::new(Block::Table(Table::new(rows, 1, 300.0)))];
+        let layout = super::lay(&doc);
+        let first_cell = |block| {
+            layout.pages[0]
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Placed::Cell { table, row: 0, rect, .. } if *table == crate::Path::top(block) => Some(*rect),
+                    _ => None,
+                })
+                .expect("first row on page one")
+        };
+        let (float, flow) = (first_cell(0), first_cell(1));
+        if rows == 1 {
+            assert!(flow.y >= float.bottom() - 0.01, "inline {flow:?} overlaps float {float:?}");
+        } else {
+            // Looking ahead by the table's full height would move its first row unnecessarily.
+            assert!(layout.pages.len() > 1);
+            assert!(flow.bottom() < float.y, "first row {flow:?} should fit above float {float:?}");
+        }
+    }
+}
+
 fn line_positions(d: &Document) -> Vec<(f32, f32, f32)> {
     let l = layout(d, &mut LayoutCache::new(), &LayoutOptions::default());
     assert_eq!(l.pages.len(), 1);
