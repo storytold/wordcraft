@@ -1422,8 +1422,9 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             ));
             acc.set_incomplete();
         }
-        if !scanned.syntax_complete || scanned.fact_capped || scanned.refs_capped {
-            // A scan stopped by events/depth cannot establish non-consumption, even when no
+        if !scanned.syntax_complete || scanned.fact_capped || scanned.refs_capped || scanned.content_part_unresolved {
+            // An element of unresolved namespace named `contentPart` may be the consumer that exempts a customXml
+            // part, so it too cannot establish non-consumption. A scan stopped by events/depth cannot establish non-consumption, even when no
             // contentPart id was reached. Fact caps also conservatively invalidate this source.
             content_part_incomplete_owners.insert(e.name.clone());
         }
@@ -3100,8 +3101,14 @@ fn check_style_refs(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             per_owner.push(None);
             continue;
         }
-        let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth);
+        let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth).watching(&["style"]);
         let parsed = entry.decoded.as_deref().map(|text| scan::parse_style_ids(text, cap, &mut guard));
+        if !guard.exhausted() && guard.unresolved() {
+            acc.note(format!("{} has a style definition whose namespace is not resolved; style-reference absence was not checked", entry.name));
+            acc.set_incomplete();
+            per_owner.push(None);
+            continue;
+        }
         if guard.exhausted() {
             acc.note(format!("{} exceeded the XML {} budget; style definitions were not checked", entry.name, guard.budget()));
             acc.set_incomplete();
@@ -3489,8 +3496,13 @@ fn process_numbering_part(pkg: &Package, xml: &XmlScan, name: &str, cap: usize, 
         acc.note(format!("{name} could not be read; list numbering references were not checked"));
         return None;
     };
-    let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth);
+    let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth).watching(&["num", "abstractNum"]);
     let defs = scan::parse_numbering(text, cap, &mut guard);
+    if !guard.exhausted() && guard.unresolved() {
+        acc.note(format!("{name} has a numbering definition whose namespace is not resolved; list numbering absence was not checked"));
+        acc.set_incomplete();
+        return None;
+    }
     if guard.exhausted() {
         acc.note(format!("{name} exceeded the XML {} budget; list numbering references were not checked", guard.budget()));
         acc.set_incomplete();
@@ -3949,8 +3961,18 @@ fn check_custom_xml(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             per_owner.push(None);
             continue;
         };
-        let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth);
-        match scan::parse_attached_schemas(text, cap, &mut guard) {
+        let mut guard = scan::ParseGuard::new(acc.limits.events, acc.limits.depth).watching(&["attachedSchema"]);
+        let parsed = scan::parse_attached_schemas(text, cap, &mut guard);
+        if parsed.is_some() && !guard.exhausted() && guard.unresolved() {
+            acc.note(format!(
+                "{} has an attached-schema element whose namespace is not resolved; attached-schema absence was not checked",
+                entry.name
+            ));
+            acc.set_incomplete();
+            per_owner.push(None);
+            continue;
+        }
+        match parsed {
             Some((vals, capped)) if !guard.exhausted() => {
                 if capped {
                     acc.note(format!("{} exceeded the {cap}-entry budget; attached-schema absence was not checked", entry.name));
@@ -5614,6 +5636,107 @@ mod budget_tests {
             let grade = if missing { Severity::Warning } else { Severity::Error };
             assert!(report.findings.iter().any(|f| (f.rule, f.severity) == ("MEDIA-MAGIC", grade)), "{report:?}");
         }
+    }
+
+    #[test]
+    fn unresolved_definitions_never_establish_an_absence_in_auxiliary_joins() {
+        // `q` is the main namespace with only its year spelled through an entity this part cannot expand, so a `q:`
+        // element may be any main-namespace element. Each join claims a definition or consumer is absent. Spelled
+        // `w:` the element is there (no finding); spelled `q:` it may be there (no finding, and the run is
+        // Incomplete rather than a silent Pass); replaced by an unrelated element the claim is produced.
+        let dtd = r#"<!DOCTYPE w:document [<!ENTITY year "2006">]>"#;
+        let q = r#"xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/&year;/main""#;
+        let wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
+        // (rule, the element's local name, document body, [(part, content type, relationship kind, template)])
+        let cases = [
+            (
+                "NOTE-PR-LISTING",
+                "footnote",
+                "<w:p/>",
+                vec![
+                    (
+                        "word/footnotes.xml",
+                        "footnotes+xml",
+                        "footnotes",
+                        r#"<w:footnotes xmlns:w="@W@"><w:footnote w:type="separator" w:id="0"><w:p/></w:footnote></w:footnotes>"#,
+                    ),
+                    (
+                        "word/settings.xml",
+                        "settings+xml",
+                        "settings",
+                        r#"@DTD@<w:settings xmlns:w="@W@" @Q@><w:footnotePr><@E@ w:id="0"/></w:footnotePr></w:settings>"#,
+                    ),
+                ],
+            ),
+            ("CT-MISMATCH", "contentPart", r#"<w:p/><@E@ r:id="data" @Q@/>"#, vec![("customXml/item1.xml", "", "customXml", "<root/>")]),
+            (
+                "REF-STYLE",
+                "style",
+                r#"<w:p><w:pPr><w:pStyle w:val="A"/></w:pPr></w:p>"#,
+                vec![("word/styles.xml", "styles+xml", "styles", r#"@DTD@<w:styles xmlns:w="@W@" @Q@><@E@ w:styleId="A"/></w:styles>"#)],
+            ),
+            (
+                "NUM-DANGLING",
+                "num",
+                r#"<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr></w:p>"#,
+                vec![(
+                    "word/numbering.xml",
+                    "numbering+xml",
+                    "numbering",
+                    r#"@DTD@<w:numbering xmlns:w="@W@" @Q@><w:abstractNum w:abstractNumId="0"/><@E@ w:numId="1"><w:abstractNumId w:val="0"/></@E@></w:numbering>"#,
+                )],
+            ),
+        ];
+        for (rule, local, body, parts) in &cases {
+            for (prefix, local, claimed, incomplete) in [("w", *local, false, false), ("q", local, false, true), ("w", "vendor", true, false)] {
+                let fill = |template: &str| {
+                    let (dtd, declaration) = if prefix == "q" { (dtd, q) } else { ("", "") };
+                    template.replace("@DTD@", dtd).replace("@Q@", declaration).replace("@W@", NS_W).replace("@E@", &format!("{prefix}:{local}"))
+                };
+                let mut types = String::new();
+                let mut declarations = String::new();
+                let mut entries = vec![("_rels/.rels", package_rels())];
+                for (part, ct, kind, template) in parts {
+                    let ct = if ct.is_empty() { "text/xml".to_string() } else { format!("{wml}{ct}") };
+                    types.push_str(&format!(r#"<Override PartName="/{part}" ContentType="{ct}"/>"#));
+                    let (id, target) = if *kind == "customXml" { ("data", format!("../{part}")) } else { (*kind, part.replace("word/", "")) };
+                    declarations.push_str(&format!(r#"<Relationship Id="{id}" Type="{NS_R}/{kind}" Target="{target}"/>"#));
+                    entries.push((*part, fill(template).into_bytes()));
+                }
+                let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body>{}</w:body></w:document>"#, fill(body));
+                let types = format!(
+                    r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/>{types}</Types>"#,
+                    package::MAIN_CONTENT_TYPE
+                );
+                entries.extend([
+                    ("[Content_Types].xml", types.into_bytes()),
+                    ("word/document.xml", document.into_bytes()),
+                    ("word/_rels/document.xml.rels", rels(&declarations)),
+                ]);
+                let report = validate_bytes(&tiny_zip(&entries));
+                assert_eq!(report.findings.iter().any(|f| f.rule == *rule), claimed, "{rule} spelled {prefix}:{local}: {report:?}");
+                assert_eq!(report.verdict == Verdict::Incomplete, incomplete, "{rule} spelled {prefix}:{local}: {report:?}");
+            }
+        }
+        // A relationship declaration spelled through an internal entity is examined as expat delivers it: the report
+        // is the literal spelling's (the drawn image's Error, no missing relationship, no note).
+        let declaration = format!(r#"<Relationship Id="rImg" Type="{NS_R}/image" Target="media/drawn.png"/>"#);
+        let rels_ns = "http://schemas.openxmlformats.org/package/2006/relationships";
+        let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"><w:body>{DRAWN}</w:body></w:document>"#);
+        let report = |relationships: String| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types_with_override("word/media/drawn.png", "image/png")),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.clone().into_bytes()),
+                ("word/_rels/document.xml.rels", relationships.into_bytes()),
+                ("word/media/drawn.png", b"text".to_vec()),
+            ]))
+        };
+        let literal = report(format!(r#"<Relationships xmlns="{rels_ns}">{declaration}</Relationships>"#));
+        let entity =
+            report(format!(r#"<!DOCTYPE Relationships [<!ENTITY item '{declaration}'>]><Relationships xmlns="{rels_ns}">&item;</Relationships>"#));
+        assert!(literal.findings.iter().any(|f| (f.rule, f.severity) == ("MEDIA-MAGIC", Severity::Error)), "{literal:?}");
+        assert_eq!(serde_json::to_value(&entity).unwrap(), serde_json::to_value(&literal).unwrap());
     }
 
     #[test]

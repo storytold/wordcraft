@@ -602,6 +602,9 @@ fn text_entry(name: String, bytes: Vec<u8>) -> Entry {
 
     let (decoded, decode_error) = if is_text_part(&name) {
         match crate::scan::decode_strict(&bytes) {
+            // A relationships part is read as expat delivers it: an internal entity whose replacement text is a
+            // declaration is that declaration, so the examined text is the expanded one.
+            Ok(t) if name.to_ascii_lowercase().ends_with(".rels") => (Some(crate::scan::expand_content_entities(&t).unwrap_or(t)), None),
             Ok(t) => (Some(t), None),
             Err(e) => (None, Some(e)),
         }

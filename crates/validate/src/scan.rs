@@ -406,6 +406,8 @@ pub(crate) struct PartScan {
     pub content_part_exemptions_capped: bool,
     /// The fact budget dropped at least one contentPart id in this part.
     pub content_part_capped: bool,
+    /// An element of unresolved namespace named `contentPart` was met: it may be a consumer of a customXml part.
+    pub content_part_unresolved: bool,
     /// This (settings) part carries `w:uiCompat97to2003`.
     pub compat_97_2003: bool,
     /// Special note definitions in this part: (id, is_endnote, w:type).
@@ -473,12 +475,28 @@ pub(crate) struct ParseGuard {
     depth: usize,
     exhausted: bool,
     reason: Option<Exhaustion>,
+    /// The local names of the definitions this parse collects (empty: none are watched).
+    watch: &'static [&'static str],
+    /// An element of unknown namespace with a watched local name was met: it may be a definition the parse
+    /// could not collect, so the collected set cannot establish an absence.
+    unresolved: bool,
 }
 
 impl ParseGuard {
     /// Create a new parse guard with the given event and depth limits.
     pub(crate) fn new(max_events: usize, max_depth: usize) -> ParseGuard {
-        ParseGuard { max_events, max_depth, events: 0, depth: 0, exhausted: false, reason: None }
+        ParseGuard { max_events, max_depth, events: 0, depth: 0, exhausted: false, reason: None, watch: &[], unresolved: false }
+    }
+
+    /// Name the definition elements this parse collects: one of unresolved namespace may be another of them.
+    pub(crate) fn watching(mut self, locals: &'static [&'static str]) -> ParseGuard {
+        self.watch = locals;
+        self
+    }
+
+    /// Whether a watched definition element could not be collected because its namespace is unresolved.
+    pub(crate) fn unresolved(&self) -> bool {
+        self.unresolved
     }
 
     /// Count one event; returns `false` once a budget is spent, before another event is read.
@@ -690,6 +708,8 @@ struct State {
     unresolved_families: u8,
     /// An unresolved `fldChar` was seen: a `w:fldChar` end that follows it may close a begin the scan never saw.
     fld_unresolved_seen: bool,
+    /// An unresolved `contentPart` was seen (see `PartScan::content_part_unresolved`).
+    content_part_unresolved: bool,
     /// A `w:fldChar` end at depth 0 was not counted because an unresolved `fldChar` precedes it.
     fld_end_withheld: bool,
     frames: Vec<Frame>,
@@ -908,6 +928,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         ink_content_part_capped: false,
         content_part_exemptions_capped: false,
         content_part_capped: false,
+        content_part_unresolved: false,
         compat_97_2003: false,
         special_notes: Vec::new(),
         note_listings: (Vec::new(), Vec::new()),
@@ -1124,6 +1145,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
     out.special_notes = std::mem::take(&mut state.special_notes);
     out.note_listings = (std::mem::take(&mut state.note_listings_f), std::mem::take(&mut state.note_listings_e));
     out.note_capped = state.note_capped;
+    out.content_part_unresolved = state.content_part_unresolved;
     out.fact_capped = state.fact_capped;
     out.refs_capped = state.refs_capped;
     out.unknown_prefixes.sort_unstable();
@@ -2798,6 +2820,9 @@ fn note_unresolved_element(state: &mut State, id: &mut ElemId, own: &[String]) {
         // name can be that counterpart: an unrelated unresolved element establishes and refutes nothing.
         state.unresolved_families |= pairing_family(&id.local);
         state.fld_unresolved_seen |= id.local == "fldChar";
+        state.content_part_unresolved |= id.local == "contentPart";
+        // A note definition or listing entry cannot be told from the unresolved element: the note join is incomplete.
+        state.note_capped |= matches!(id.local.as_str(), "footnote" | "endnote");
         state.facts.invalidate_local(&id.local);
     }
 }
@@ -3016,6 +3041,118 @@ fn parse_doctype_entities(raw: &[u8], cap: usize) -> (Observed<HashSet<String>>,
     let declared =
         if unresolved { Observed::with_status(set, Completeness::Incomplete("unresolvable DOCTYPE subset")) } else { Observed::complete(set) };
     (declared, decl_texts)
+}
+
+/// Expand the internal general entities a part references in element CONTENT, so a part whose declarations are
+/// spelled through an entity (`<!ENTITY item '<Relationship .../>'>` ... `&item;`) is read as expat delivers it.
+/// `None` (the part is left as it is) when anything lies outside what this models: an external or parameter
+/// entity, a declaration other than `<!ENTITY>`, a reference inside a tag, an undeclared entity, a replacement
+/// text with a character reference, recursion, or an expansion past the bound.
+pub(crate) fn expand_content_entities(text: &str) -> Option<String> {
+    observation_contract! {
+        rules: "-";
+        collections: "access.is_complete*1,parser.parse_doctype_entities*1,type.Vec*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    let mut reader = quick_xml::Reader::from_reader(text.as_bytes());
+    let mut buf = Vec::new();
+    let (entities, start, end) = loop {
+        let at = usize::try_from(reader.buffer_position()).ok()?;
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::DocType(e) => {
+                let (declared, entities) = parse_doctype_entities(e.as_ref(), 4096);
+                if !declared.is_complete() {
+                    return None;
+                }
+                break (entities, at, usize::try_from(reader.buffer_position()).ok()?);
+            }
+            Event::Eof | Event::Start(_) | Event::Empty(_) => return None,
+            _ => {}
+        }
+        buf.clear();
+    };
+    let mut out = String::from(text.get(..start)?);
+    expand_into(text.get(end..)?, &entities, 0, text.len().saturating_mul(2).saturating_add(8192), &mut out)?;
+    Some(out)
+}
+
+/// Append `src` with its entity references in content replaced by their replacement text (see
+/// [`expand_content_entities`]); `None` when it cannot be done within the bounds.
+fn expand_into(src: &str, entities: &BTreeMap<String, String>, depth: usize, limit: usize, out: &mut String) -> Option<()> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.bytes*1,type.BTreeMap*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
+    let predefined = |name: &str| name.starts_with('#') || matches!(name, "lt" | "gt" | "amp" | "apos" | "quot");
+    if depth > 4 {
+        return None;
+    }
+    let mut at = 0;
+    while at < src.len() {
+        let rest = src.get(at..)?;
+        let span = if let Some(body) = rest.strip_prefix("<!--") {
+            body.find("-->")? + 7
+        } else if let Some(body) = rest.strip_prefix("<![CDATA[") {
+            body.find("]]>")? + 12
+        } else if let Some(body) = rest.strip_prefix("<?") {
+            body.find("?>")? + 4
+        } else if rest.starts_with('<') {
+            // A tag: a reference in an attribute value is not modelled.
+            let mut quote = None;
+            let mut length = None;
+            for (index, byte) in rest.bytes().enumerate().skip(1) {
+                match (quote, byte) {
+                    (None, b'>') => {
+                        length = Some(index + 1);
+                        break;
+                    }
+                    (None, b'"' | b'\'') => quote = Some(byte),
+                    (Some(q), _) if q == byte => quote = None,
+                    (Some(_), b'&') => {
+                        let name = rest.get(index + 1..)?.split(';').next()?;
+                        if !predefined(name) {
+                            return None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            length?
+        } else if rest.starts_with('&') {
+            let semi = rest.find(';')?;
+            let name = rest.get(1..semi)?;
+            if !predefined(name) {
+                let value = entities.get(name)?;
+                if value.contains('%') || value.contains("&#") {
+                    return None;
+                }
+                expand_into(value, entities, depth + 1, limit, out)?;
+                if out.len() > limit {
+                    return None;
+                }
+                at += semi + 1;
+                continue;
+            }
+            semi + 1
+        } else {
+            rest.find(['<', '&']).unwrap_or(rest.len())
+        };
+        out.push_str(rest.get(..span)?);
+        if out.len() > limit {
+            return None;
+        }
+        at += span;
+    }
+    Some(())
 }
 
 /// Extract the quoted literal of an internal general entity declaration (`"..."` or `'...'`),
@@ -3302,6 +3439,7 @@ fn aux_open<'a>(
     if alt.open(&id, empty) {
         return Some(AuxOpen::Skip);
     }
+    guard.unresolved |= id.unknown.is_some() && guard.watch.iter().any(|w| *w == id.local);
     let attrs = attrs_of(e)?;
     Some(AuxOpen::Process(id, attrs))
 }
