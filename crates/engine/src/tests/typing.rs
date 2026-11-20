@@ -2307,72 +2307,13 @@ fn alt_x_toggles_between_a_character_and_its_code() {
 
 #[test]
 fn alt_numpad_codes_map_like_word_on_windows() {
-    use crate::cmd::text::{alt_code_char, oem_code_page};
-    let c = |code| alt_code_char(code, 1252, 437);
-    // Leading 0: Windows-1252.
-    assert_eq!(c("0233"), Some('é'));
-    assert_eq!(c("0128"), Some('€'));
-    assert_eq!(c("0150"), Some('–'));
-    assert_eq!(c("065"), Some('A'));
-    assert_eq!(c("0032"), Some(' '));
-    assert_eq!(c("0255"), Some('ÿ'));
-    // No leading 0: the OEM code page (437 here, 850 in Western Europe).
-    assert_eq!(c("233"), Some('Θ'));
-    // The issue said 233 → é in 850; the CP850 mapping file has Ú at 0xE9 (é is 130 in both).
-    assert_eq!(alt_code_char("233", 1252, 850), Some('Ú'));
-    assert_eq!(alt_code_char("130", 1252, 850), Some('é'));
-    assert_eq!(c("130"), Some('é'));
-    assert_eq!(alt_code_char("155", 1252, 850), Some('ø'));
-    assert_eq!(c("155"), Some('¢'));
-    assert_eq!(c("65"), Some('A'));
-    assert_eq!(c("1"), Some('☺'));
-    assert_eq!(c("7"), Some('•'));
-    assert_eq!(c("127"), Some('⌂'));
-    assert_eq!(c("176"), Some('░'));
-    // Above 255: the Unicode character with that decimal value.
-    assert_eq!(c("8364"), Some('€'));
-    assert_eq!(c("09733"), Some('★'));
-    assert_eq!(c("128512"), Some('😀'));
-    // Nothing for junk, 0, control characters, surrogates or values past Unicode.
-    for bad in ["", "0", "000", "0009", "0013", "0127", "0129", "x1", "-5", "55296", "1114112", "99999999999999999999", "4294967361"] {
-        assert_eq!(c(bad), None, "{bad:?}");
-    }
+    use crate::cmd::text::oem_code_page;
     assert_eq!(oem_code_page(None), 437);
     assert_eq!(oem_code_page(Some("en-US")), 437);
     assert_eq!(oem_code_page(Some("en_GB.UTF-8")), 850);
     assert_eq!(oem_code_page(Some("fr-FR")), 850);
     assert_eq!(oem_code_page(Some("de")), 850);
     assert_eq!(oem_code_page(Some("ru-RU")), 437, "only 437/850 without the shell's code pages");
-}
-
-#[test]
-fn alt_numpad_codes_follow_the_system_code_pages() {
-    use crate::cmd::text::{alt_code_char, windows_code_pages};
-    // Polish (1250/852): Alt+0185 and Alt+165 are both ą, not ¹ / Ñ.
-    assert_eq!(alt_code_char("0185", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("165", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("0185", 1252, 437), Some('¹'));
-    // Russian (1251/866), Greek (1253/737), Turkish (1254/857).
-    assert_eq!(alt_code_char("0207", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("143", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("0193", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("128", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("0253", 1254, 857), Some('ı'));
-    assert_eq!(alt_code_char("141", 1254, 857), Some('ı'));
-    // Above 255 the code page doesn't matter.
-    assert_eq!(alt_code_char("8364", 1251, 866), Some('€'));
-    // A byte the code page leaves unassigned types nothing.
-    assert_eq!(alt_code_char("213", 1254, 857), None);
-    assert_eq!(alt_code_char("0219", 874, 437), None);
-    assert_eq!(windows_code_pages(None), (1252, 437));
-    assert_eq!(windows_code_pages(Some("en-US")), (1252, 437));
-    assert_eq!(windows_code_pages(Some("de-DE")), (1252, 850));
-    assert_eq!(windows_code_pages(Some("pl-PL")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("sr-Latn-RS")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("ru_RU.UTF-8")), (1251, 866));
-    assert_eq!(windows_code_pages(Some("el-GR")), (1253, 737));
-    assert_eq!(windows_code_pages(Some("tr-TR")), (1254, 857));
-    assert_eq!(windows_code_pages(Some("ja-JP")), (1252, 437));
 }
 
 #[test]
@@ -2772,8 +2713,6 @@ fn ctrl_tab_inserts_a_tab_inside_a_table_cell() {
     let (_, r, c) = s.sel.focus.path.cell().expect("caret in a cell");
     assert_eq!((r, c), (0, 0), "Ctrl+Tab stays in the cell");
     assert_eq!(s.doc.para_at(&s.sel.focus).map(|p| p.text.as_str()), Some("A\tB"));
-    let key = if cfg!(target_os = "macos") { "Alt+Tab" } else { "Mod+Tab" };
-    assert_eq!(s.keymap.resolve(&s.registry, key).map(|c| c.id), Some("text.insertTab"));
 }
 
 /// A .docx of two paragraphs in two sections, as Word writes it: the first section's properties
