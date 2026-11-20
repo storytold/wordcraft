@@ -76,8 +76,8 @@ fn no_ribbon() -> RibbonOutput<String> {
 /// How the ribbon buttons look, in points: the old ribbon drew its large icons 32
 /// points square and the rest 17, its menu arrows as filled triangles in 10 points, and its small
 /// rows 22 points apart (20-point buttons a tight gap apart); its tabs rest in the text colour
-/// over a 3-point underline.
-const RIBBON_LOOK: RibbonLook = RibbonLook::new(32, 17).arrow(10).row(20).tabs(3);
+/// over a 3-point underline; its body stands on its own lighter fill, ruled above and below.
+const RIBBON_LOOK: RibbonLook = RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body();
 
 /// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
 /// Outlining tabs and showing the available tab strip. The output carries the record of the ribbon's
