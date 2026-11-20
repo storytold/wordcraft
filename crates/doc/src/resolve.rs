@@ -41,6 +41,9 @@ pub struct ResolvedChar {
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
     pub kern: f32,
+    /// A mark over or under each character (Font › Emphasis mark).
+    #[serde(default)]
+    pub emphasis: crate::props::EmphasisMark,
     /// OpenType ligatures (`w14:ligatures`); `None` = the shaper's default (standard and
     /// contextual).
     #[serde(default)]
@@ -97,6 +100,7 @@ impl ResolvedChar {
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
+            emphasis: c.emphasis.unwrap_or_default(),
             ligatures: c.ligatures,
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),
@@ -133,9 +137,12 @@ impl ResolvedChar {
     pub fn uses_complex(&self, c: char) -> bool {
         self.rtl || self.cs || crate::bidi::is_complex_script(c)
     }
-    /// The size glyphs are drawn at (super/subscript shrink to ~2/3).
+    /// The size glyphs are drawn and measured at. Word sets superscript and subscript text at
+    /// 0.65 of the run's size rounded to the half point, a font size the format can store
+    /// (measured in Word for Mac from digit advances: 8 pt → 5, 9 → 6, 11 → 7, 12 → 8,
+    /// 16 → 10.5, 24 → 15.5, 36 → 23.5).
     pub fn draw_size(&self) -> f32 {
-        if self.vert_align == VertAlign::Baseline { self.size } else { self.size * 0.65 }
+        if self.vert_align == VertAlign::Baseline { self.size } else { (self.size * 0.65 * 2.0).round() / 2.0 }
     }
     /// Baseline shift, points (positive = up).
     pub fn baseline_shift(&self) -> f32 {
@@ -149,6 +156,10 @@ impl ResolvedChar {
 }
 
 /// Concrete paragraph formatting.
+fn default_adjust_right_indent() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedPara {
@@ -169,6 +180,9 @@ pub struct ResolvedPara {
     pub contextual_spacing: bool,
     /// Left/right indents are inside/outside: they swap on even pages.
     pub mirror_indents: bool,
+    /// Automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
+    #[serde(default = "default_adjust_right_indent")]
+    pub adjust_right_indent: bool,
     pub keep_next: bool,
     pub keep_lines: bool,
     pub page_break_before: bool,
@@ -178,6 +192,10 @@ pub struct ResolvedPara {
     pub tabs: Vec<TabStop>,
     pub shading: Option<Rgb>,
     pub borders: Option<Borders>,
+    /// Padding on the sides without a line (top, left, bottom, right), points. ODF's box model
+    /// (XSL's) keeps it for documents opened from ODF (`Settings::odf`); Word drops it.
+    #[serde(default)]
+    pub padding: [f32; 4],
     pub bidi: bool,
     pub drop_cap: u8,
     /// The drop cap hangs in the margin (see `ParaProps::drop_cap_margin`).
@@ -256,6 +274,7 @@ impl ResolvedPara {
             },
             contextual_spacing: p.contextual_spacing.unwrap_or(false),
             mirror_indents: p.mirror_indents.unwrap_or(false),
+            adjust_right_indent: p.adjust_right_indent.unwrap_or(true),
             keep_next: p.keep_next.unwrap_or(false),
             keep_lines: p.keep_lines.unwrap_or(false),
             page_break_before: p.page_break_before.unwrap_or(false),
@@ -265,6 +284,10 @@ impl ResolvedPara {
             tabs,
             shading: p.shading,
             borders: p.borders.filter(Borders::any_visible),
+            padding: p.borders.map_or([0.0; 4], |b| {
+                [b.top, b.left, b.bottom, b.right]
+                    .map(|s| s.filter(|l| !l.is_visible() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
+            }),
             bidi: p.bidi.unwrap_or(false),
             drop_cap: p.drop_cap.unwrap_or(0).min(10),
             drop_cap_margin: p.drop_cap_margin.unwrap_or(false),
@@ -321,6 +344,38 @@ impl StyleSheet {
         }
         pp.style = None;
         (pp, cp)
+    }
+
+    /// What a table style's paragraph formatting `table` changes for a paragraph with `p`, once
+    /// the paragraph style chain is applied over it (ECMA-376 §17.7.2): each property it gives
+    /// that the chain doesn't set. Formats without table styles state these directly.
+    pub fn table_para_patch(&self, p: &ParaProps, table: &ParaProps) -> ParaProps {
+        let style = p.style.clone().unwrap_or_else(|| "Normal".into());
+        let mut with = self.default_para.clone();
+        with.overlay(&ParaProps { style: None, ..table.clone() });
+        let (with, _) = self.para_style_props_over(&style, with, CharProps::default());
+        let (without, _) = self.para_style_props_over(&style, self.default_para.clone(), CharProps::default());
+        diff_patch(&with, &without)
+    }
+
+    /// What a table style's run formatting `table` changes for a run of character style
+    /// `run_style` in a paragraph of style `para_style`, once the paragraph and character style
+    /// chains are applied over it (ECMA-376 §17.7.2).
+    pub fn table_char_patch(&self, para_style: Option<&str>, run_style: Option<&str>, table: &CharProps) -> CharProps {
+        let chain = |defaults: CharProps| {
+            let (_, mut cp) = self.para_style_props_over(para_style.unwrap_or("Normal"), ParaProps::default(), defaults);
+            if let Some(cs) = run_style {
+                for s in self.chain(cs) {
+                    if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
+                        cp.overlay(&s.chr);
+                    }
+                }
+            }
+            cp
+        };
+        let mut with = self.default_chr.clone();
+        with.overlay(&CharProps { style: None, ..table.clone() });
+        diff_patch(&chain(with), &chain(self.default_chr.clone()))
     }
 
     /// Resolve a paragraph's properties.
@@ -387,9 +442,45 @@ impl StyleSheet {
     }
 }
 
+/// The properties of `with` that differ from `without` (both fully resolved property sets of one
+/// kind), as a set of only those; empty when serialisation fails.
+fn diff_patch<T: Serialize + serde::de::DeserializeOwned + Default>(with: &T, without: &T) -> T {
+    let (Ok(serde_json::Value::Object(w)), Ok(serde_json::Value::Object(o))) = (serde_json::to_value(with), serde_json::to_value(without)) else {
+        return T::default();
+    };
+    let patch: serde_json::Map<String, serde_json::Value> = w.into_iter().filter(|(k, v)| o.get(k) != Some(v)).collect();
+    serde_json::from_value(serde_json::Value::Object(patch)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Superscript and subscript sizes as Word for Mac sets them (measured from digit advances in
+    /// its PDF export): 0.65 of the size, rounded to the half point.
+    #[test]
+    fn raised_and_lowered_text_is_sized_to_the_half_point() {
+        for (size, want) in [
+            (8.0, 5.0),
+            (9.0, 6.0),
+            (10.0, 6.5),
+            (11.0, 7.0),
+            (12.0, 8.0),
+            (13.0, 8.5),
+            (14.0, 9.0),
+            (16.0, 10.5),
+            (20.0, 13.0),
+            (24.0, 15.5),
+            (36.0, 23.5),
+        ] {
+            for vert_align in [VertAlign::Superscript, VertAlign::Subscript] {
+                let rc = ResolvedChar { size, vert_align, ..StyleSheet::builtin().resolve_char(None, &CharProps::default()) };
+                assert_eq!(rc.draw_size(), want, "{size} pt {vert_align:?}");
+            }
+        }
+        let rc = StyleSheet::builtin().resolve_char(None, &CharProps { size: Some(11.0), ..Default::default() });
+        assert_eq!(rc.draw_size(), 11.0, "baseline text keeps its size");
+    }
 
     /// #2036: only a character itself (direct formatting) has a symbol font of its own; a
     /// style never gives one to its text.
@@ -523,5 +614,16 @@ mod tests {
         });
         assert_eq!(p.tabs.len(), 3);
         assert_eq!(p.tabs[0].pos, 100.0);
+    }
+
+    /// Resolved formatting saved before paragraph padding existed still reads: no padding.
+    #[test]
+    fn resolved_para_without_padding_reads() {
+        let p = StyleSheet::builtin().resolve_para(&ParaProps::default());
+        let mut v = serde_json::to_value(&p).unwrap();
+        v.as_object_mut().unwrap().remove("padding");
+        let back: ResolvedPara = serde_json::from_value(v).unwrap();
+        assert_eq!(back.padding, [0.0; 4]);
+        assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
     }
 }
