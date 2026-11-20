@@ -125,9 +125,12 @@ pub(super) fn icons_body(app: &mut WordApp, ui: &mut Ui, query: &mut String, cat
             for icon in &hits {
                 let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::click());
                 let on = *selected == icon.id;
-                // A tile is a picture: a screen reader hears the icon's name and whether it is the
-                // one picked, not a nameless control (the name was only a hover tip).
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, icon.name));
+                // A tile is a picture: a screen reader hears the icon's name, in the interface
+                // language as the hover tip and the name under the tiles, and whether it is the one
+                // picked, not a nameless control (the name was only a hover tip). The alt text the
+                // document gets stays English.
+                let name = tl!(icon.name);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
                 let fill = if on {
                     t.checked
                 } else if resp.hovered() {
@@ -138,7 +141,7 @@ pub(super) fn icons_body(app: &mut WordApp, ui: &mut Ui, query: &mut String, cat
                 let edge = if on { egui::Stroke::new(1.5, t.accent) } else { egui::Stroke::new(1.0, t.border) };
                 ui.painter().rect(rect, 4.0, fill, edge, egui::StrokeKind::Inside);
                 crate::icons::library(ui.painter(), rect.shrink(12.0), icon, t.text);
-                let resp = resp.on_hover_text(icon.name);
+                let resp = resp.on_hover_text(name);
                 if resp.clicked() {
                     *selected = icon.id.to_string();
                 }
@@ -149,7 +152,7 @@ pub(super) fn icons_body(app: &mut WordApp, ui: &mut Ui, query: &mut String, cat
             }
         });
     });
-    let name = icon_lib::find(selected).map(|i| i.name).unwrap_or("");
+    let name = icon_lib::find(selected).map(|i| tl!(i.name)).unwrap_or("");
     ui.add_space(4.0);
     ui.label(egui::RichText::new(name).color(t.text_dim));
     let (ok, cancel) = buttons(ui, tl!("Insert"));

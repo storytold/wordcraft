@@ -460,6 +460,14 @@ fn icon_tiles_are_named_by_their_icons() {
         Some(egui::accesskit::Toggled::True),
         "the picked tile"
     );
+    // The name is in the interface language: in the pseudo-language every string looked up in the
+    // catalogs comes back marked.
+    crate::i18n::pseudo::set(true);
+    h.run_steps(2);
+    let marked = crate::i18n::t(first).to_string();
+    let named = h.query_by_role_and_label(egui::accesskit::Role::Button, &marked).is_some();
+    crate::i18n::pseudo::set(false);
+    assert!(marked != first && named, "the tile's name is looked up in the catalogs: {marked:?}");
 }
 
 /// #4327: View › Macros opens a dialog that runs, deletes and records macros; the command with
