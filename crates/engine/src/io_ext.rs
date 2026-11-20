@@ -98,6 +98,15 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
     }
 }
 
+/// How a page image is drawn: the printed page, headers and footers at full strength, tracked
+/// changes marked as Track Changes Options mark them. One place for `file.exportPng`,
+/// `file.strictReport`'s page check and a downloaded page image.
+pub(crate) fn page_image_options(opts: &crate::io::ExportOptions) -> wordcraft_render::RenderOptions {
+    let mut ro = wordcraft_render::RenderOptions { display: crate::strict::png_display(), ..Default::default() };
+    ro.display.revisions = opts.revisions.clone();
+    ro
+}
+
 /// Render page `page` as PNG at `scale` px/pt. With Print Markup's comments the page has its
 /// markup area with the comments in balloons (page images always show tracked changes).
 pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::ExportOptions) -> Result<Vec<u8>, String> {
@@ -105,6 +114,7 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
     let doc = out.as_ref().unwrap_or(doc);
     let lo = wordcraft_layout::LayoutOptions {
         comment_balloons: opts.markup && opts.comments,
+        hide_marked: opts.revisions.hidden_deletions(),
         numeral: opts.numeral,
         output_page_refs: true,
         bookmark_error: crate::locale::bookmark_error(),
@@ -113,11 +123,55 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
     if opts.strict {
-        let report = crate::strict::strict_report(doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png);
+        let display = page_image_options(opts).display;
+        let report = crate::strict::strict_report(doc, &l, &display, Some(page..=page), wordcraft_layout::StrictOutput::Png);
         if !report.passed() {
             return Err(report.refusal());
         }
     }
-    let img = wordcraft_render::render_page(doc, p, scale, &Default::default());
+    let img = wordcraft_render::render_page(doc, p, scale, &page_image_options(opts));
     Ok(img.to_png())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A page image is the printed page: headers and footers draw at full strength (#6267).
+    #[test]
+    fn a_page_image_draws_headers_at_full_strength() {
+        let opts = crate::io::ExportOptions::default();
+        let ro = page_image_options(&opts);
+        assert!(!ro.display.dim_header, "a page image is the printed page");
+        assert_eq!(ro.display.revisions, opts.revisions, "the Track Changes Options reach the image");
+
+        let mut d = Document::from_text("body");
+        let png = wordcraft_geom::picture::encode_format(
+            &image::DynamicImage::from(image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255]))),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let media = d.add_media(png, "png");
+        let mut hp = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 40.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        hp.insert_object(0, obj, &Default::default()).unwrap();
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        d.last_section.headers.default = Some(id);
+
+        let rendered = render_png(&d, 0, 1.0, &opts).unwrap();
+        let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+        let full = wordcraft_render::render_page(&d, &l.pages[0], 1.0, &ro).to_png();
+        let dimmed = wordcraft_render::render_page(&d, &l.pages[0], 1.0, &wordcraft_render::RenderOptions::default()).to_png();
+        assert_eq!(rendered, full, "render_png draws headers at full strength");
+        assert_ne!(rendered, dimmed, "render_png does not dim headers");
+    }
 }
