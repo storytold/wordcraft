@@ -112,7 +112,6 @@ fn script() -> Vec<Step> {
         br#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"x"}}"#,
         br#"{"jsonrpc":"2.0","id":7}"#,
         br#"{"jsonrpc":"2.0","id":7,"method":5}"#,
-        br#"{"id":8,"method":"ping"}"#,
         br#"[]"#,
         br#"42"#,
         br#""text""#,
@@ -314,6 +313,20 @@ fn prompts_list_is_empty_and_prompts_get_is_not_found() {
     // And capabilities do not advertise prompts or completions.
     let r = new.handle(json!({"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {}})).unwrap();
     assert_eq!(r["result"]["capabilities"], json!({"tools": {"listChanged": false}, "resources": {"listChanged": false}}));
+}
+
+/// Difference 7 (accepted, stricter): a request without `"jsonrpc": "2.0"` is refused as an
+/// invalid request (-32600, no id) before dispatch; the old server answered it.
+#[test]
+fn a_request_without_the_jsonrpc_version_is_refused() {
+    let mut old = oracle::Server::new(Box::new(Headless::default()));
+    let mut new = Server::new(Box::new(Headless::default()));
+    let line = r#"{"id":8,"method":"ping"}"#;
+    let o: Value = serde_json::from_str(&old.handle_line(line).unwrap()).unwrap();
+    let n: Value = serde_json::from_str(&new.handle_line(line).unwrap()).unwrap();
+    assert_eq!(o["result"], json!({}));
+    assert_eq!(n["error"]["code"], -32600);
+    assert_eq!(n["id"], Value::Null);
 }
 
 /// Difference 4 (accepted hardening): a batch of more than 1000 messages is refused whole; the old

@@ -1,19 +1,51 @@
-use super::common::{mi, mi_text, stack};
-use super::underline::underline_menu;
-use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, small, split, vec2};
+use craft::behavior::{IconId, keyed};
+use craft::menu::{CommandRef, RibbonGroup, RibbonRow};
+use craft::theme::variant::Tone;
+use craft::theme::{Emphasis, Variant};
+use craft::ui::buttons::{Arrangement, Button, IconButton, SplitButton, SplitMenu, ToggleButton};
+use craft::ui::contract::{
+    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+};
+use craft::ui::display::Divider;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::ThumbAspect;
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::primitives::{HAlign, TextRun};
+use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
+use wordcraft_doc::props::Align;
 
-/// The Format Painter button. A click arms it for one use (blue border only); a double-click keeps
-/// it on across several uses (full checked look), like Word. Esc or another click turns it off.
+use super::common::menu_button;
+use super::underline::underline_menu;
+use egui::vec2;
+use serde_json::Value;
+
+use super::{Ui, WordApp, json};
+use crate::colors::{Remember, Target};
+
+/// A ribbon group titled `title`, with the Dialog Launcher `launcher` when it has one.
+fn ribbon_group(key: &'static str, title: &str, icon: &'static str, launcher: Option<&str>) -> RibbonGroup<'static> {
+    let group = RibbonGroup::new(key, tl!(title).to_string(), crate::icons::id(icon).into());
+    match launcher {
+        Some(id) => group.launcher(CommandRef::new(id)),
+        None => group,
+    }
+}
+
+/// The Format Painter button. A click arms it for one use (outlined); a double-click keeps
+/// it on across several uses (selected look), like Word. Esc or another click turns it off.
 fn format_painter_button(ui: &mut Ui, app: &mut WordApp) {
     let sticky = matches!(app.session.painter, Some((_, _, true)));
     let armed = app.session.painter.is_some();
-    let resp =
-        small(ui, app, "painter", Some("Format"), "Format Painter", crate::widgets::ButtonAction::new("edit.formatPainter", json!({}), sticky));
-    if resp.double_clicked() {
+    let mut button = Button::command(CommandRef::with_params("edit.formatPainter", json!({})))
+        .icon(IconId::new("painter"))
+        .label(tl!("Format").to_string())
+        .tooltip(tl!("Format Painter").to_string())
+        .selected(sticky);
+    if armed && !sticky {
+        button = button.variant(Variant::look(Emphasis::Outline, Tone::Accent));
+    }
+    if button.show(ui).clicks == 2 {
         painter_double_click(app);
-    } else if armed && !sticky {
-        let t = Tokens::get(ui.ctx());
-        ui.painter().rect_stroke(resp.rect, egui::CornerRadius::same(4), Stroke::new(1.0, t.accent.linear_multiply(0.5)), egui::StrokeKind::Inside);
     }
 }
 
@@ -26,204 +58,227 @@ pub(super) fn painter_double_click(app: &mut WordApp) {
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
 }
 
+/// The bullets of the Bullet Library, in tile order.
+const BULLETS: [&str; 7] = ["•", "○", "▪", "◆", "➢", "✓", "–"];
+
 /// Change List Level › and Define New Bullet… at the foot of the Bullets drop-down (#2786).
 /// Change List Level is for a paragraph in a list of its own numbering, the one `para.listLevel`
 /// changes (a style's numbering it leaves alone).
 fn bullet_list_items(ui: &mut Ui, app: &mut WordApp) {
-    ui.separator();
+    Divider::horizontal().show(ui);
     let in_list = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.numbering).is_some_and(|n| n.num != 0);
-    ui.add_enabled_ui(in_list, |ui| {
-        ui.menu_button(tl!("Change List Level"), |ui| {
-            for level in 0..9u8 {
-                let label = format!("{} {}", tl!("Level"), level + 1);
-                mi_text(ui, app, &label, "para.listLevel", json!({"level": level}));
-            }
-        });
+    Menu::submenu_row_enabled(ui, tl!("Change List Level").to_string(), in_list, |ui, _| {
+        for level in 0..9u8 {
+            let label = format!("{} {}", tl!("Level"), level + 1);
+            MenuItem::command(CommandRef::with_params("para.listLevel", json!({"level": level}))).label(label).show(ui);
+        }
     });
-    mi(ui, app, "Define New Bullet…", "ui.dialog", json!({"name": "defineBullet"}));
+    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "defineBullet"}))).label(tl!("Define New Bullet…").to_string()).show(ui);
 }
 
-pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
-    let st = app.session.run("format.state", &json!({})).unwrap_or_default();
-    let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
-    group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
-        // The hint adds the platform's key ("Paste (Ctrl+V)"); the name screen readers read is "Paste".
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("paste", Some("Paste"), "Paste", true, "edit.paste"), |ui, app| {
-            mi(ui, app, "Paste", "edit.paste", json!({}));
-            mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
-            mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));
-            mi(ui, app, "Paste Special…", "edit.pasteSpecial", json!({}));
+/// The Bullets drop-down: the Bullet Library as tiles, None, and the list-level rows.
+fn bullets_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
+    MenuItem::heading(tl!("Bullet Library").to_string()).show(ui);
+    let source = keyed(&BULLETS, |c| *c);
+    let out = TileGrid::new(tl!("Bullet Library").to_string())
+        .caption(CaptionPlace::None)
+        .select(SelectMode::None)
+        .activate(ActivateOn::Click)
+        .card_columns(BULLETS.len())
+        .content_cells()
+        // One row, all shown; the menu's body is the one scroll.
+        .natural_height(true)
+        .show_items(ui, &source, &mut |c, _| {
+            let c: &'static str = c;
+            Tile::new(c).thumb(ThumbAspect::SQUARE, move |cx, r| paint_bullet(cx, r, c))
         });
-        stack(ui, |ui| {
-            small(ui, app, "cut", Some("Cut"), "Cut", crate::widgets::ButtonAction::new("edit.cut", json!({}), false));
-            small(ui, app, "copy", Some("Copy"), "Copy", crate::widgets::ButtonAction::new("edit.copy", json!({}), false));
+    for event in &out.response.events {
+        if let CollectionEvent::Activate(c) = event {
+            let _ = app.run("para.bullets", json!({"kind": c}));
+            cx.request_close();
+        }
+    }
+    MenuItem::command(CommandRef::with_params("para.bullets", json!({"off": true}))).label(tl!("None").to_string()).show(ui);
+    bullet_list_items(ui, app);
+}
+
+/// One Bullet Library tile. The interface fonts have no ➢, so its tile draws the arrowhead, scaled from the tile.
+fn paint_bullet(cx: &craft::ui::primitives::ContentPainterCx<'_>, r: egui::Rect, c: &str) {
+    let ink = cx.ink();
+    if c == "➢" {
+        let m = r.center();
+        let s = r.height() * 0.2;
+        let pts = [(-0.8, -1.0), (1.0, 0.0), (-0.8, 1.0), (-0.3, 0.0)].map(|(x, y)| m + vec2(x * s, y * s));
+        cx.painter.add(egui::Shape::convex_polygon(vec![pts[0], pts[1], pts[3]], ink, egui::Stroke::NONE));
+        cx.painter.add(egui::Shape::convex_polygon(vec![pts[3], pts[1], pts[2]], ink, egui::Stroke::NONE));
+    } else {
+        cx.with_draw(|d| {
+            d.text(r, &TextRun::new(c).role(craft::theme::TypeRole::Body).align(HAlign::Center));
+        });
+    }
+}
+
+/// The Text Effects and Typography menu.
+fn text_effects_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
+    super::galleries::wordart(ui, cx, app, "format.textEffects");
+    Divider::horizontal().show(ui);
+    let theme = app.session.doc.settings.theme_colors.clone();
+    Menu::submenu_row(ui, tl!("Text Fill").to_string(), |ui, cx| crate::wordart_menus::fill_menu(ui, cx, app, &theme));
+    let outline = crate::wordart_menus::current_outline(app);
+    Menu::submenu_row(ui, tl!("Text Outline").to_string(), |ui, _| crate::wordart_menus::outline_menu(ui, app, outline));
+    crate::wordart_menus::effects_menu(ui, app, false);
+    Divider::horizontal().show(ui);
+    for (label, id) in [
+        ("Outline", "format.outline"),
+        ("Shadow", "format.shadow"),
+        ("Small Caps", "format.smallCaps"),
+        ("All Caps", "format.allCaps"),
+        ("Double Strikethrough", "format.doubleStrikethrough"),
+    ] {
+        MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+    }
+}
+
+pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    // Read directly, not as a command: every command consumes the engine's pending undo joins, and
+    // the ribbon draws between an input method's deletion and the commit that replaces it.
+    let st = wordcraft_engine::cmd::format::state(&app.session);
+    let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
+    row.group(ribbon_group("clipboard", "Clipboard", "paste", Some("edit.clipboardPane")), |ui| {
+        // The face opens the menu and runs no command, so its tooltip adds Paste's key itself, as this
+        // platform writes it ("Paste (Ctrl+V)", "Paste (⌘V)" on macOS). The name screen readers read is "Paste".
+        let paste_tip = match craft::ui::runtime::commands::resolve(ui.ctx(), CommandRef::new("edit.paste")).chord {
+            Some(chord) => craft::ui::contract::tooltip::with_chord(tl!("Paste"), &chord, craft::ui::runtime::windows::os_of(ui.ctx())),
+            None => tl!("Paste").to_string(),
+        };
+        let face = Button::new(tl!("Paste").to_string()).icon(IconId::new("paste")).tooltip(paste_tip).arrangement(Arrangement::Stacked);
+        menu_button(ui, face, tl!("Paste").to_string(), Some("edit.paste"), |ui, _| {
+            for (label, id) in [
+                ("Paste", "edit.paste"),
+                ("Keep Text Only", "edit.pasteText"),
+                ("Merge Formatting", "edit.pasteMerge"),
+                ("Paste Special…", "edit.pasteSpecial"),
+            ] {
+                MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+            }
+        });
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for (icon, label, id) in [("cut", "Cut", "edit.cut"), ("copy", "Copy", "edit.copy")] {
+                Button::command(CommandRef::new(id))
+                    .icon(crate::icons::id(icon))
+                    .label(tl!(label).to_string())
+                    .tooltip(tl!(label).to_string())
+                    .show(ui);
+            }
             format_painter_button(ui, app);
         });
     });
-    group(ui, "Font", Some("format.fontDialog"), app, |ui, app| {
-        stack(ui, |ui| {
-            crate::widgets::row(ui, |ui| {
-                let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
-                let warning = app.font_box_warning(&font);
-                let font = app.previews.font_shown(&font);
-                let fams = app.previews.families();
-                let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
-                let prev = app.previews.font_preview_fn();
-                if let Some(f) = crate::widgets::font_combo_with_recent_hint(
-                    ui,
-                    crate::widgets::FontComboOptions {
-                        id: "font",
-                        width: 150.0,
-                        current: &font,
-                        items: &fams,
-                        recent: &recent,
-                        preview: Some(&*prev),
-                        tip: tl!("Font"),
-                        shown_as: warning.as_deref(),
-                    },
-                ) {
-                    let _ = if f == crate::widgets::ADD_FONT {
-                        app.run("font.add", json!({}))
-                    } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
-                        app.run("font.loadSystem", json!({}))
-                    } else {
-                        let f = app.previews.font_stored(&f);
-                        app.run("format.font", json!({"name": f}))
-                    };
+    row.group(ribbon_group("font", "Font", "font", Some("format.fontDialog")), |ui| {
+        // The Font and Paragraph groups' small buttons sit side by side with no gap, as the old ribbon's (1 pt apart).
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
+                let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                let out = crate::widgets::font_box(ui, app, tl!("Font").to_string(), &mut family);
+                if let Some(f) = out.picked {
+                    let _ = app.run("format.font", json!({"name": f}));
                 }
-                let size = st
-                    .get("size")
-                    .and_then(Value::as_f64)
-                    .map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") })
-                    .unwrap_or_default();
-                let sizes: Vec<String> =
-                    wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
-                if let Some(v) = crate::widgets::combo_hint(ui, "size", 52.0, &size, &sizes, None, tl!("Font Size"))
+                let fmt = |s: f64| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") };
+                let mut size = st.get("size").and_then(Value::as_f64).map(fmt).unwrap_or_default();
+                let sizes: Vec<Entry<String>> =
+                    wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(fmt(f64::from(*s)), fmt(f64::from(*s)))).collect();
+                let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes).show(ui);
+                if let Some(v) = out.edit.events.committed()
                     && let Ok(x) = v.trim().parse::<f64>()
                 {
                     let _ = app.run("format.size", json!({"size": x}));
                 }
-                ui.add_space(3.0);
-                small(ui, app, "grow", None, "Increase Font Size", crate::widgets::ButtonAction::new("format.growFont", json!({}), false));
-                small(ui, app, "shrink", None, "Decrease Font Size", crate::widgets::ButtonAction::new("format.shrinkFont", json!({}), false));
-                menu_button(ui, app, crate::widgets::MenuButtonOptions::new("case", None, "Change Case", false, "format.changeCase"), |ui, app| {
-                    mi(ui, app, "Sentence case.", "format.changeCase", json!({"mode": "sentence"}));
-                    mi(ui, app, "lowercase", "format.changeCase", json!({"mode": "lower"}));
-                    mi(ui, app, "UPPERCASE", "format.changeCase", json!({"mode": "upper"}));
-                    mi(ui, app, "Capitalize Each Word", "format.changeCase", json!({"mode": "title"}));
-                    mi(ui, app, "tOGGLE cASE", "format.changeCase", json!({"mode": "toggle"}));
+                for (icon, tip, id) in [("grow", "Increase Font Size", "format.growFont"), ("shrink", "Decrease Font Size", "format.shrinkFont")] {
+                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        .label(tl!(tip).to_string())
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
+                }
+                let face = Button::new(tl!("Change Case").to_string()).icon(IconId::new("case")).tooltip(tl!("Change Case").to_string());
+                menu_button(ui, face, tl!("Change Case").to_string(), Some("format.changeCase"), |ui, _| {
+                    for (label, mode) in [
+                        ("Sentence case.", "sentence"),
+                        ("lowercase", "lower"),
+                        ("UPPERCASE", "upper"),
+                        ("Capitalize Each Word", "title"),
+                        ("tOGGLE cASE", "toggle"),
+                    ] {
+                        MenuItem::command(CommandRef::with_params("format.changeCase", json!({"mode": mode}))).label(tl!(label).to_string()).show(ui);
+                    }
                 });
-                small(ui, app, "clear", None, "Clear All Formatting", crate::widgets::ButtonAction::new("format.clear", json!({}), false));
-                small(ui, app, "phonetic", None, "Phonetic Guide", crate::widgets::ButtonAction::new("format.phonetic", json!({}), false));
+                for (icon, tip, id) in [("clear", "Clear All Formatting", "format.clear"), ("phonetic", "Phonetic Guide", "format.phonetic")] {
+                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        .label(tl!(tip).to_string())
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
+                }
             });
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| {
-                small(ui, app, "bold", None, "Bold", crate::widgets::ButtonAction::new("format.bold", json!({}), flag("bold")));
-                small(ui, app, "italic", None, "Italic", crate::widgets::ButtonAction::new("format.italic", json!({}), flag("italic")));
-                split(
-                    ui,
-                    app,
-                    "underline",
-                    "Underline",
-                    crate::widgets::ButtonAction::new("format.underline", json!({}), flag("underline")),
-                    None,
-                    underline_menu,
-                );
-                small(ui, app, "strike", None, "Strikethrough", crate::widgets::ButtonAction::new("format.strikethrough", json!({}), flag("strike")));
-                small(ui, app, "subscript", None, "Subscript", crate::widgets::ButtonAction::new("format.subscript", json!({}), flag("subscript")));
-                small(
-                    ui,
-                    app,
-                    "superscript",
-                    None,
-                    "Superscript",
-                    crate::widgets::ButtonAction::new("format.superscript", json!({}), flag("superscript")),
-                );
-                small(ui, app, "charborder", None, "Character Border", crate::widgets::ButtonAction::new("format.border", json!({}), flag("border")));
-                small(ui, app, "enclose", None, "Enclose Characters", crate::widgets::ButtonAction::new("format.enclose", json!({}), false));
-                ui.add_space(4.0);
-                menu_button(ui, app, crate::widgets::MenuButtonOptions::new("effects", None, "Text Effects and Typography", false, ""), |ui, app| {
-                    let theme = app.session.doc.settings.theme_colors.clone();
-                    crate::wordart_menus::style_gallery(ui, app, "format.textEffects");
-                    ui.separator();
-                    ui.menu_button(tl!("Text Fill"), |ui| crate::wordart_menus::fill_menu(ui, app, &theme));
-                    let outline = crate::wordart_menus::current_outline(app);
-                    ui.menu_button(tl!("Text Outline"), |ui| crate::wordart_menus::outline_menu(ui, app, &theme, outline));
-                    crate::wordart_menus::effects_menu(ui, app, &theme, false);
-                    ui.separator();
-                    mi(ui, app, "Outline", "format.outline", json!({}));
-                    mi(ui, app, "Shadow", "format.shadow", json!({}));
-                    mi(ui, app, "Small Caps", "format.smallCaps", json!({}));
-                    mi(ui, app, "All Caps", "format.allCaps", json!({}));
-                    mi(ui, app, "Double Strikethrough", "format.doubleStrikethrough", json!({}));
-                });
-                let hl = app.canvas.last_highlight.clone();
-                let (icon, sw, color) = crate::mini_toolbar::highlight_button_appearance(&hl);
-                split(
-                    ui,
-                    app,
-                    icon,
-                    "Text Highlight Color",
-                    crate::widgets::ButtonAction::new("format.highlight", json!({"color": color}), false),
-                    sw,
-                    crate::mini_toolbar::highlight_menu,
-                );
-                let fc = app.canvas.last_font_color.clone();
-                let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
-                split(
-                    ui,
-                    app,
-                    "fontcolor",
-                    "Font Color",
-                    crate::widgets::ButtonAction::new("format.color", json!({"color": fc}), false),
-                    sw,
-                    |ui, app| {
-                        mi(ui, app, "Automatic", "format.color", json!({"color": "auto"}));
-                        let theme = app.session.doc.settings.theme_colors.clone();
-                        crate::colors::menu(ui, app, &theme, Target::cmd("format.color").remember(Remember::FontColor));
-                    },
-                );
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
+                for (icon, tip, id, on) in [("bold", "Bold", "format.bold", flag("bold")), ("italic", "Italic", "format.italic", flag("italic"))] {
+                    ToggleButton::command(CommandRef::new(id))
+                        .icon(crate::icons::id(icon))
+                        .icon_only()
+                        .selected(on)
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
+                }
+                SplitButton::<String>::command(
+                    CommandRef::with_params("format.underline", json!({})),
+                    SplitMenu::Body(Box::new(|ui, _| underline_menu(ui, app))),
+                )
+                .icon(IconId::new("underline"))
+                .selected(flag("underline"))
+                .tooltip(tl!("Underline").to_string())
+                .show(ui);
+                for (icon, tip, id, on) in [
+                    ("strike", "Strikethrough", "format.strikethrough", flag("strike")),
+                    ("subscript", "Subscript", "format.subscript", flag("subscript")),
+                    ("superscript", "Superscript", "format.superscript", flag("superscript")),
+                    ("charborder", "Character Border", "format.border", flag("border")),
+                ] {
+                    ToggleButton::command(CommandRef::new(id))
+                        .icon(crate::icons::id(icon))
+                        .icon_only()
+                        .selected(on)
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
+                }
+                IconButton::command(IconId::new("enclose"), CommandRef::new("format.enclose"))
+                    .label(tl!("Enclose Characters").to_string())
+                    .tooltip(tl!("Enclose Characters").to_string())
+                    .show(ui);
+                let face = Button::new(tl!("Text Effects and Typography").to_string())
+                    .icon(IconId::new("effects"))
+                    .tooltip(tl!("Text Effects and Typography").to_string());
+                menu_button(ui, face, tl!("Text Effects and Typography").to_string(), None, |ui, cx| text_effects_menu(ui, cx, app));
+                crate::colors::highlight_split(ui, app, tl!("Text Highlight Color"));
+                crate::colors::font_color_split(ui, app, tl!("Font Color"), Target::cmd("format.color").remember(Remember::FontColor));
             });
         });
     });
-    group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
+    row.group(ribbon_group("paragraph", "Paragraph", "paragraph", Some("para.dialog")), |ui| {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
-        // The buttons show alignment as seen on the page (Align Right is a right-to-left paragraph's start).
-        let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
-        let rtl = rp.as_ref().is_some_and(|r| r.bidi);
         let lists = wordcraft_engine::cmd::para::list_buttons(&app.session.doc, rp.as_ref().and_then(|r| r.numbering));
-        stack(ui, |ui| {
-            crate::widgets::row(ui, |ui| {
-                split(ui, app, "bullets", "Bullets", crate::widgets::ButtonAction::new("para.bullets", json!({}), lists.bullets), None, |ui, app| {
-                    ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
-                    ui.horizontal(|ui| {
-                        for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
-                            // The interface fonts have no ➢, so its tile draws the arrowhead.
-                            let label = if c == "➢" { " " } else { c };
-                            let resp = ui.button(egui::RichText::new(label).size(16.0));
-                            if c == "➢" {
-                                let m = resp.rect.center();
-                                let pts = [(-4.0, -5.0), (5.0, 0.0), (-4.0, 5.0), (-1.5, 0.0)].map(|(x, y)| m + vec2(x, y));
-                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[0], pts[1], pts[3]], Tokens::get(ui.ctx()).text, Stroke::NONE));
-                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[3], pts[1], pts[2]], Tokens::get(ui.ctx()).text, Stroke::NONE));
-                            }
-                            if resp.clicked() {
-                                let _ = app.run("para.bullets", json!({"kind": c}));
-                                ui.close();
-                            }
-                        }
-                    });
-                    mi(ui, app, "None", "para.bullets", json!({"off": true}));
-                    bullet_list_items(ui, app);
-                });
-                split(
-                    ui,
-                    app,
-                    "numbering",
-                    "Numbering",
-                    crate::widgets::ButtonAction::new("para.numbering", json!({}), lists.numbering),
-                    None,
-                    |ui, app| {
+        // Alignment is shown as it reads on the page, so Left and Right swap in a right-to-left paragraph.
+        let (align, rtl) = rp.as_ref().map_or((Align::Left, false), |r| (r.align.visual(r.bidi), r.bidi));
+        let marks = app.session.view.marks;
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
+                SplitButton::<String>::command(
+                    CommandRef::with_params("para.bullets", json!({})),
+                    SplitMenu::Body(Box::new(|ui, cx| bullets_menu(ui, cx, app))),
+                )
+                .icon(IconId::new("bullets"))
+                .selected(lists.bullets)
+                .tooltip(tl!("Bullets").to_string())
+                .show(ui);
+                SplitButton::<String>::command(
+                    CommandRef::with_params("para.numbering", json!({})),
+                    SplitMenu::Body(Box::new(|ui, _| {
                         for (l, k) in [
                             ("1. 2. 3.", "numbered"),
                             ("1) 2) 3)", "numberedParen"),
@@ -232,24 +287,24 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                             ("a) b) c)", "lowerLetter"),
                             ("i. ii. iii.", "lowerRoman"),
                         ] {
-                            mi(ui, app, l, "para.numbering", json!({"kind": k}));
+                            MenuItem::command(CommandRef::with_params("para.numbering", json!({"kind": k}))).label(tl!(l).to_string()).show(ui);
                         }
-                        ui.separator();
-                        mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
-                        mi(ui, app, "None", "para.numbering", json!({"off": true}));
-                    },
-                );
-                split(
-                    ui,
-                    app,
-                    "multilevel",
-                    "Multilevel List",
-                    crate::widgets::ButtonAction::new("para.multilevel", json!({}), lists.multilevel),
-                    None,
-                    |ui, app| {
-                        mi(ui, app, "1. 1.1. 1.1.1.", "para.multilevel", json!({"kind": "legal"}));
-                        mi(ui, app, "I. A. 1. a.", "para.multilevel", json!({"kind": "outline"}));
-                        ui.separator();
+                        Divider::horizontal().show(ui);
+                        MenuItem::command(CommandRef::new("para.restartNumbering")).label(tl!("Restart at 1").to_string()).show(ui);
+                        MenuItem::command(CommandRef::with_params("para.numbering", json!({"off": true}))).label(tl!("None").to_string()).show(ui);
+                    })),
+                )
+                .icon(IconId::new("numbering"))
+                .selected(lists.numbering)
+                .tooltip(tl!("Numbering").to_string())
+                .show(ui);
+                SplitButton::<String>::command(
+                    CommandRef::with_params("para.multilevel", json!({})),
+                    SplitMenu::Body(Box::new(|ui, _| {
+                        for (l, k) in [("1. 1.1. 1.1.1.", "legal"), ("I. A. 1. a.", "outline")] {
+                            MenuItem::command(CommandRef::with_params("para.multilevel", json!({"kind": k}))).label(tl!(l).to_string()).show(ui);
+                        }
+                        Divider::horizontal().show(ui);
                         // Lists linked to the heading styles: the headings carry the numbers. Each item
                         // reads as its first three levels, number then (translated) style name.
                         for (numbers, k) in [
@@ -264,71 +319,73 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                                 .map(|(n, h)| if n.is_empty() { tl!(h).to_string() } else { format!("{} {}", tl!(n), tl!(h)) })
                                 .collect::<Vec<_>>()
                                 .join(" / ");
-                            mi_text(ui, app, &text, "list.multilevelPreset", json!({"preset": k}));
+                            MenuItem::command(CommandRef::with_params("list.multilevelPreset", json!({"preset": k}))).label(text).show(ui);
                         }
-                        ui.separator();
-                        mi(ui, app, "Define New Multilevel List…", "list.define", json!({}));
-                        ui.separator();
+                        Divider::horizontal().show(ui);
+                        MenuItem::command(CommandRef::new("list.define")).label(tl!("Define New Multilevel List…").to_string()).show(ui);
+                        Divider::horizontal().show(ui);
                         for lv in 0..5u64 {
-                            mi(ui, app, &format!("Change to Level {}", lv + 1), "para.listLevel", json!({"level": lv}));
+                            MenuItem::command(CommandRef::with_params("para.listLevel", json!({"level": lv})))
+                                .label(format!("Change to Level {}", lv + 1))
+                                .show(ui);
                         }
-                    },
-                );
-                ui.add_space(4.0);
-                small(ui, app, "outdent", None, "Decrease Indent", crate::widgets::ButtonAction::new("para.outdent", json!({}), false));
-                small(ui, app, "indent", None, "Increase Indent", crate::widgets::ButtonAction::new("para.indent", json!({}), false));
-                ui.add_space(4.0);
-                small(ui, app, "sort", None, "Sort", crate::widgets::ButtonAction::new("para.sort", json!({}), false));
-                let marks = app.session.view.marks;
-                small(ui, app, "pilcrow", None, "Show/Hide ¶", crate::widgets::ButtonAction::new("view.marks", json!({}), marks));
+                    })),
+                )
+                .icon(IconId::new("multilevel"))
+                .selected(lists.multilevel)
+                .tooltip(tl!("Multilevel List").to_string())
+                .show(ui);
+                for (icon, tip, id) in
+                    [("outdent", "Decrease Indent", "para.outdent"), ("indent", "Increase Indent", "para.indent"), ("sort", "Sort", "para.sort")]
+                {
+                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                        .label(tl!(tip).to_string())
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
+                }
+                ToggleButton::command(CommandRef::new("view.marks"))
+                    .icon(IconId::new("wordcraft.pilcrow"))
+                    .icon_only()
+                    .selected(marks)
+                    .tooltip(tl!("Show/Hide ¶").to_string())
+                    .show(ui);
             });
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| {
-                use wordcraft_doc::Align as A;
-                small(ui, app, "alignLeft", None, "Align Left", crate::widgets::ButtonAction::new("para.alignLeft", json!({}), align == A::Left));
-                small(ui, app, "alignCenter", None, "Center", crate::widgets::ButtonAction::new("para.alignCenter", json!({}), align == A::Center));
-                small(ui, app, "alignRight", None, "Align Right", crate::widgets::ButtonAction::new("para.alignRight", json!({}), align == A::Right));
-                small(ui, app, "justify", None, "Justify", crate::widgets::ButtonAction::new("para.justify", json!({}), align == A::Justify));
-                ui.add_space(4.0);
-                small(ui, app, "textLtr", None, "Left-to-Right Text Direction", crate::widgets::ButtonAction::new("para.ltr", json!({}), !rtl));
-                small(ui, app, "textRtl", None, "Right-to-Left Text Direction", crate::widgets::ButtonAction::new("para.rtl", json!({}), rtl));
-                ui.add_space(4.0);
-                menu_button(
-                    ui,
-                    app,
-                    crate::widgets::MenuButtonOptions::new("lineSpacing", None, "Line and Paragraph Spacing", false, "para.lineSpacing"),
-                    |ui, app| {
-                        for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
-                            mi(ui, app, &format!("{v}"), "para.lineSpacing", json!({"value": v}));
-                        }
-                        ui.separator();
-                        mi(ui, app, "Add Space Before Paragraph", "para.addSpaceBefore", json!({}));
-                        mi(ui, app, "Remove Space After Paragraph", "para.removeSpaceAfter", json!({}));
-                        mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
-                    },
-                );
-                let sw = wordcraft_doc::Rgb::parse(&app.canvas.last_shading).map(crate::theme::c32);
-                split(
-                    ui,
-                    app,
-                    "shadingNoBar",
-                    "Shading",
-                    crate::widgets::ButtonAction::new("para.shading", json!({"color": app.canvas.last_shading.clone()}), false),
-                    sw,
-                    |ui, app| {
-                        mi(ui, app, "No Color", "para.shading", json!({"color": null}));
-                        let theme = app.session.doc.settings.theme_colors.clone();
-                        crate::colors::menu(ui, app, &theme, Target::cmd("para.shading").remember(Remember::Shading));
-                    },
-                );
-                split(
-                    ui,
-                    app,
-                    "borders",
-                    "Borders",
-                    crate::widgets::ButtonAction::new("para.borders", json!({"kind": "bottom"}), false),
-                    None,
-                    |ui, app| {
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
+                for (icon, tip, id, on) in [
+                    ("alignLeft", "Align Left", "para.alignLeft", align == Align::Left),
+                    ("alignCenter", "Center", "para.alignCenter", align == Align::Center),
+                    ("alignRight", "Align Right", "para.alignRight", align == Align::Right),
+                    ("justify", "Justify", "para.justify", align == Align::Justify),
+                    ("textLtr", "Left-to-Right Text Direction", "para.ltr", !rtl),
+                    ("textRtl", "Right-to-Left Text Direction", "para.rtl", rtl),
+                ] {
+                    ToggleButton::command(CommandRef::new(id))
+                        .icon(crate::icons::id(icon))
+                        .icon_only()
+                        .selected(on)
+                        .tooltip(tl!(tip).to_string())
+                        .show(ui);
+                }
+                let face = Button::new(tl!("Line and Paragraph Spacing").to_string())
+                    .icon(IconId::new("lineSpacing"))
+                    .tooltip(tl!("Line and Paragraph Spacing").to_string());
+                menu_button(ui, face, tl!("Line and Paragraph Spacing").to_string(), Some("para.lineSpacing"), |ui, _| {
+                    for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
+                        MenuItem::command(CommandRef::with_params("para.lineSpacing", json!({"value": v}))).label(format!("{v}")).show(ui);
+                    }
+                    Divider::horizontal().show(ui);
+                    for (label, id) in [
+                        ("Add Space Before Paragraph", "para.addSpaceBefore"),
+                        ("Remove Space After Paragraph", "para.removeSpaceAfter"),
+                        ("Line Spacing Options…", "para.dialog"),
+                    ] {
+                        MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+                    }
+                });
+                crate::colors::shading_split(ui, app, tl!("Shading"), Target::cmd("para.shading").remember(Remember::Shading));
+                SplitButton::<String>::command(
+                    CommandRef::with_params("para.borders", json!({"kind": "bottom"})),
+                    SplitMenu::Body(Box::new(|ui, _| {
                         for (l, k) in [
                             ("Bottom Border", "bottom"),
                             ("Top Border", "top"),
@@ -339,65 +396,93 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                             ("Outside Borders", "outside"),
                             ("Inside Borders", "inside"),
                         ] {
-                            mi(ui, app, l, "para.borders", json!({"kind": k}));
+                            MenuItem::command(CommandRef::with_params("para.borders", json!({"kind": k}))).label(tl!(l).to_string()).show(ui);
                         }
-                        ui.separator();
-                        mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
-                        mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
-                    },
-                );
+                        Divider::horizontal().show(ui);
+                        MenuItem::command(CommandRef::new("insert.horizontalLine")).label(tl!("Horizontal Line").to_string()).show(ui);
+                        MenuItem::command(CommandRef::new("para.borders")).label(tl!("Borders and Shading…").to_string()).show(ui);
+                    })),
+                )
+                .icon(IconId::new("borders"))
+                .tooltip(tl!("Borders").to_string())
+                .show(ui);
             });
         });
     });
     // Advanced paragraph tools (#5043): conversions and cleanup over the selection, or the
     // whole document with Ctrl+A first (the commands take `scope: "all"` for that as well).
-    group(ui, "Paragraph Tools", None, app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("pilcrow", Some("Paragraph\nTools"), "Paragraph Tools", true, ""), |ui, app| {
-            mi(ui, app, "Split Lines into Paragraphs", "para.convertBreaks", json!({}));
-            mi(ui, app, "Add Blank Paragraphs Between", "para.blankBetween", json!({}));
-            mi(ui, app, "Separate Paragraphs", "para.separateParagraphs", json!({}));
-            ui.separator();
-            mi(ui, app, "Delete Blank Paragraphs", "para.removeBlank", json!({}));
-            mi(ui, app, "Remove Leading Spaces", "para.trimLeadingSpaces", json!({}));
-            mi(ui, app, "Remove Extra Spaces", "para.removeExtraSpaces", json!({}));
-            ui.separator();
-            mi(ui, app, "Indent Leading Spaces", "para.spacesToIndent", json!({}));
-            mi(ui, app, "Indents to Leading Spaces", "para.indentToSpaces", json!({}));
-            mi(ui, app, "Join Lines", "para.removeLineBreaks", json!({}));
-            ui.separator();
+    row.group(ribbon_group("paragraphTools", "Paragraph Tools", "pilcrow", None), |ui| {
+        let face = Button::new(tl!("Paragraph\nTools").to_string())
+            .icon(IconId::new("wordcraft.pilcrow"))
+            .tooltip(tl!("Paragraph Tools").to_string())
+            .arrangement(Arrangement::Stacked);
+        menu_button(ui, face, tl!("Paragraph Tools").to_string(), None, |ui, _| {
+            let run = |ui: &mut Ui, label: &str, id: &str, params: Value| {
+                MenuItem::command(CommandRef::with_params(id, params)).label(tl!(label).to_string()).show(ui);
+            };
+            run(ui, "Split Lines into Paragraphs", "para.convertBreaks", json!({}));
+            run(ui, "Add Blank Paragraphs Between", "para.blankBetween", json!({}));
+            run(ui, "Separate Paragraphs", "para.separateParagraphs", json!({}));
+            Divider::horizontal().show(ui);
+            run(ui, "Delete Blank Paragraphs", "para.removeBlank", json!({}));
+            run(ui, "Remove Leading Spaces", "para.trimLeadingSpaces", json!({}));
+            run(ui, "Remove Extra Spaces", "para.removeExtraSpaces", json!({}));
+            Divider::horizontal().show(ui);
+            run(ui, "Indent Leading Spaces", "para.spacesToIndent", json!({}));
+            run(ui, "Indents to Leading Spaces", "para.indentToSpaces", json!({}));
+            run(ui, "Join Lines", "para.removeLineBreaks", json!({}));
+            Divider::horizontal().show(ui);
             // The whole document, not just the selection.
             for (l, id) in [
                 ("Delete Blank Paragraphs in the Whole Document", "para.removeBlank"),
                 ("Remove Leading Spaces in the Whole Document", "para.trimLeadingSpaces"),
                 ("Remove Extra Spaces in the Whole Document", "para.removeExtraSpaces"),
             ] {
-                mi(ui, app, l, id, json!({"scope": "all"}));
+                run(ui, l, id, json!({"scope": "all"}));
             }
         });
     });
-    group(ui, "Styles", Some("styles.pane"), app, |ui, app| {
-        crate::previews::style_gallery(app, ui, &st);
+    row.group(ribbon_group("styles", "Styles", "styles", Some("styles.pane")), |ui| {
+        super::galleries::styles(ui, app, st.get("style").and_then(Value::as_str));
     });
-    group(ui, "Editing", None, app, |ui, app| {
-        stack(ui, |ui| {
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("find", Some("Find"), "Find", false, "edit.find"), |ui, app| {
+    row.group(ribbon_group("editing", "Editing", "find", None), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            let face = Button::new(tl!("Find").to_string()).icon(IconId::new("find")).tooltip(tl!("Find").to_string());
+            menu_button(ui, face, tl!("Find").to_string(), Some("edit.find"), |ui, _| {
                 // As in Word: Find searches in the Navigation pane; Advanced Find is the dialog (#712).
-                mi(ui, app, "Find", "edit.find", json!({}));
-                mi(ui, app, "Advanced Find…", "edit.advancedFind", json!({}));
-                mi(ui, app, "Go To…", "ui.dialog", json!({"name": "goto"}));
+                for (label, id, params) in [
+                    ("Find", "edit.find", json!({})),
+                    ("Advanced Find…", "edit.advancedFind", json!({})),
+                    ("Go To…", "ui.dialog", json!({"name": "goto"})),
+                ] {
+                    MenuItem::command(CommandRef::with_params(id, params)).label(tl!(label).to_string()).show(ui);
+                }
             });
-            small(ui, app, "replace", Some("Replace"), "Replace", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "replace"}), false));
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("select", Some("Select"), "Select", false, "select.all"), |ui, app| {
-                mi(ui, app, "Select All", "select.all", json!({}));
-                mi(ui, app, "Select Paragraph", "select.paragraph", json!({}));
-                mi(ui, app, "Select Sentence", "select.sentence", json!({}));
+            Button::command(CommandRef::with_params("ui.dialog", json!({"name": "replace"})))
+                .icon(IconId::new("replace"))
+                .label(tl!("Replace").to_string())
+                .tooltip(tl!("Replace").to_string())
+                .show(ui);
+            let face = Button::new(tl!("Select").to_string()).icon(IconId::new("select")).tooltip(tl!("Select").to_string());
+            menu_button(ui, face, tl!("Select").to_string(), Some("select.all"), |ui, _| {
+                for (label, id) in [("Select All", "select.all"), ("Select Paragraph", "select.paragraph"), ("Select Sentence", "select.sentence")] {
+                    MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+                }
             });
         });
     });
-    group(ui, "Voice", None, app, |ui, app| {
-        big(ui, app, "dictate", "Dictate", "tools.dictate", json!({}), false);
+    row.group(ribbon_group("voice", "Voice", "dictate", None), |ui| {
+        Button::command(CommandRef::new("tools.dictate"))
+            .icon(IconId::new("dictate"))
+            .label(tl!("Dictate").to_string())
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Editor", None, app, |ui, app| {
-        big(ui, app, "editor", "Editor", "review.spelling", json!({}), false);
+    row.group(ribbon_group("editor", "Editor", "editor", None), |ui| {
+        Button::command(CommandRef::new("review.spelling"))
+            .icon(IconId::new("editor"))
+            .label(tl!("Editor").to_string())
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
 }
