@@ -252,6 +252,29 @@ fn a_user_bound_f6_runs_its_command() {
     }
 }
 
+/// #3910 review: an F6 bound to a style applies the style instead of cycling the panes; plain F6
+/// still cycles when only Shift+F6 is bound to one.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_style_bound_f6_applies_the_style() {
+    for key in ["F6", "Shift+F6"] {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Chapter")), crate::Services::default());
+        app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+        app.run("tools.customizeKeyboard", serde_json::json!({"assign": {"style": "Heading 2", "key": key}})).unwrap();
+        let mut h = pane_harness(app);
+        assert!(h.state().canvas.focused);
+        let m = if key == "F6" { egui::Modifiers::NONE } else { egui::Modifiers::SHIFT };
+        press(&mut h, egui::Key::F6, m);
+        let style = h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).and_then(|p| p.props.style.clone());
+        assert_eq!(style.as_deref(), Some("Heading2"), "{key} applied the style");
+        assert!(h.state().canvas.focused, "{key} left the keyboard in the document");
+        if key == "Shift+F6" {
+            press(&mut h, egui::Key::F6, egui::Modifiers::NONE);
+            assert!(!h.state().canvas.focused, "plain F6 moved the keyboard to the pane");
+        }
+    }
+}
+
 /// Every pane's body fits a pane at the 200 pt minimum width (the host clips what doesn't):
 /// button rows wrap and fields narrow. Restrict Editing shows its style list and password
 /// fields.

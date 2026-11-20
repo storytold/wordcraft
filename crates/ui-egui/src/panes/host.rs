@@ -29,7 +29,7 @@ fn route_f6(app: &WordApp, ctx: &egui::Context) {
         return;
     }
     let reg = &app.session.registry;
-    let bound = |m: egui::Modifiers| app.session.keymap.resolve(reg, &crate::keys::combo(m, "F6", true)).is_some();
+    let bound = |m: egui::Modifiers| app.session.keymap.is_bound(reg, &crate::keys::combo(m, "F6", true));
     let mut cycle = None;
     ctx.input_mut(|input| {
         input.events.retain(|e| match e {
