@@ -305,9 +305,9 @@ pub struct TextToTableForm {
 }
 
 impl TextToTableForm {
-    /// The selected paragraphs; none when the selection can't be converted (a table inside it).
-    pub fn read(app: &WordApp) -> Option<TextToTableForm> {
-        let lines = wordcraft_engine::cmd::table::text_table_lines(&app.session).ok()?;
+    /// The selected paragraphs, or the reason the status bar shows when conversion is refused.
+    pub fn read(app: &WordApp) -> Result<TextToTableForm, wordcraft_engine::CmdError> {
+        let lines = wordcraft_engine::cmd::table::text_table_lines(&app.session)?;
         // Tabs when the text has them, else paragraphs (Word doesn't guess commas).
         let separator = if lines.iter().any(|l| l.contains('\t')) { "tab" } else { "paragraph" };
         let mut f = TextToTableForm {
@@ -321,7 +321,7 @@ impl TextToTableForm {
             error: None,
         };
         f.guess_columns();
-        Some(f)
+        Ok(f)
     }
 
     fn sep(&self) -> Option<char> {

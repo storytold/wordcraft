@@ -75,6 +75,10 @@ Set Proofing Language › Set As Default now persists in user preferences and ap
 
 Text context menus now include the existing formatting mini toolbar (#2959), including at a caret. Object, equation and whole-cell menus keep their own controls; Read Mode and the mini-toolbar preference suppress it. The toolbar reuses the selection toolbar's commands; additional controls from Word's toolbar are not added. Context-menu paste choices remain tracked by #2583 / PR #2599.
 
+Convert Text to Table refuses conversions that would split a content control across cells (#5585). Complete controls within one cell and selected interior paragraphs of an enclosing control remain supported. Refusal preserves the document, selection and Undo/Redo. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+
+Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available; a selection ending at the next paragraph's start leaves that paragraph and its section break outside conversion. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+
 Page drawing indexes text-box warp lookups by paragraph and story for the current call (#3614). Ordinary text boxes no longer rescan every preceding marker to find that they have no warp. Only requested offsets are retained; traversal stops after the last requested character. Original Linux display and save/reopen checks cover the correction; other drawing and command scans remain open. Gap and readiness estimates are unchanged.
 
 ## Ranked
@@ -198,6 +202,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Convert Text to Table refuses cross-cell content-control boundaries before form data can be lost (#5585); cell-local controls and selected enclosing-control interiors remain supported. |
+| 2026-11-04 | trivial | Convert Text to Table refuses selected section breaks before discarding their page setup (#5548); same-section conversions remain available. |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
 | 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |

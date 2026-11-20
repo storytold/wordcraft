@@ -111,7 +111,13 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "tableFormula" => LayoutDialog::Formula(FormulaForm::read(app)?),
         "tableSort" => LayoutDialog::Sort(SortForm::read(app)?),
         "splitCells" => LayoutDialog::SplitCells(SplitCellsForm::read(app)?),
-        "textToTable" => LayoutDialog::TextToTable(TextToTableForm::read(app)?),
+        "textToTable" => LayoutDialog::TextToTable(match TextToTableForm::read(app) {
+            Ok(form) => form,
+            Err(error) => {
+                app.status(error.to_string());
+                return None;
+            }
+        }),
         "tableToText" => LayoutDialog::TableToText(TableToTextForm::read(app)?),
         "pictureSize" => LayoutDialog::Size(SizeForm::read(app)?),
         "pageNumbers" => LayoutDialog::PageNumbers(PageNumbersForm::read(app)),

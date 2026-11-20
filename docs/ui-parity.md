@@ -99,6 +99,10 @@ Evidence: engine `screen_paper_color_is_a_persistent_preference_not_document_for
 canvas `screen_paper_color_changes_raster_and_cache_without_changing_export_paper`, and
 options `screen_paper_color_options_round_trip_and_work_without_a_document` tests.
 
+Convert Text to Table refuses conversions that would split a content control across cells (#5585). Complete controls within one cell and selected interior paragraphs of an enclosing control remain supported. Refusal preserves the document, selection and Undo/Redo. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+
+Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available; a selection ending at the next paragraph's start leaves that paragraph and its section break outside conversion. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+
 ## Find and Replace: regular expressions (#4177)
 
 With **Regular expressions** on (Search Options), Replace with expands capture groups: `$1`…`$n`, `${n}`, `${name}` and `$name` (the longest run of letters, digits and `_`), `$0` / `${0}` (the whole match), and `\1`…`\9` as in wildcard Replace; `$$` is a dollar sign, `\t` a tab, `\\` a backslash, `\$` and `\^` a `$` or `^` as typed, and `\n` a paragraph mark, which splits the paragraph as `^p` does (Replace All stays one undo step). Word's `^&`, `^p`, `^t`, `^c` and the other `^` codes work there too (with Special characters off, only the `^` codes are taken literally). A group that doesn't exist, didn't take part in the match or is out of range expands to nothing; a `$` that starts no group, an unclosed `${`, and other `\` escapes stay as written. Plain and wildcard Replace are unchanged. Word has no regular-expression mode; this follows the Rust `regex` crate's Replace syntax.
@@ -128,6 +132,8 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Convert Text to Table refuses cross-cell content-control boundaries before form data can be lost (#5585); cell-local controls and selected enclosing-control interiors remain supported. |
+| 2026-11-04 | trivial | Convert Text to Table refuses selected section breaks before discarding their page setup (#5548); same-section conversions remain available. |
 | 2026-10-30 | trivial | Screen readers: Home › Paste is named "Paste"; its hint adds the key as the platform writes it ("Paste (Ctrl+V)"), where the name carried macOS's "⌘V" on every platform (UI Automation named it "Incolla (⌘V)" in the Italian build on Windows). The status bar's page count hints Go To with the platform's key too (it showed "⌘⌥G") |
 | 2026-10-28 | trivial | Screen readers: headings and list items are given AccessKit's zero-based level, so a Heading 1 reaches UI Automation as level 1 and a Heading 2 as level 2; they came one level too deep (#3173) |
 | 2026-11-16 | trivial | Insert › Shapes: the Arrow tile is drawn as the block arrow it inserts, from the outline the document draws it with, instead of a thin line with a head (#6768) |

@@ -667,6 +667,19 @@ fn split_cells_defaults_follow_the_selection() {
 
 /// #2592: Convert Text to Table opens its dialog; the separator and column count are guessed
 /// from the text, the row count follows the columns, and OK converts with the settings.
+/// A section break prevents the conversion and shows the engine's reason in the status bar.
+#[test]
+fn text_to_table_across_a_section_break_reports_in_the_status_bar() {
+    let mut a = app();
+    assert!(open("textToTable", &mut a).is_some(), "opens within one section");
+    a.session.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section =
+        Some(Box::new(wordcraft_doc::section::SectionProps { page_w: 432.0, page_h: 648.0, ..Default::default() }));
+    a.run("select.all", json!({})).unwrap();
+    assert!(open("textToTable", &mut a).is_none(), "does not open across a section break");
+    let (message, _) = a.status_msg.as_ref().expect("the refusal is reported");
+    assert!(message.contains("section break"), "{message}");
+}
+
 #[test]
 fn text_to_table_opens_its_dialog() {
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("a\tb\tc\nd")), Services::default());

@@ -151,6 +151,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-04: Convert Text to Table refuses conversions that would split a content control across cells (#5585). Complete controls within one cell and selected interior paragraphs of an enclosing control remain supported. Refusal preserves the document, selection and Undo/Redo. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+- 2026-11-04: Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available; a selection ending at the next paragraph's start leaves that paragraph and its section break outside conversion. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
 - 2026-10-30: Home › Paste is named "Paste" for screen readers: its hint adds the key as the platform writes it ("Paste (Ctrl+V)" on Windows and Linux), where the name carried macOS's "⌘V" on every platform. The status bar's page count hints Go To with the platform's key too. Readiness estimates unchanged.
 
 - 2026-11-17: File formats, codecs and protocols now come from the shared libraries (storytold/craft-libs#778): legacy code pages (craft-codepage, #6785), plain-text encoding detection (craft-mime, #6950), the ZIP entry-count guard (craft-zip, #6948), Read Aloud's Speech Dispatcher wire format (craft-ssip, #6951), picture probes for clipboard DIBs, JPEG memory, PNG and WebP (craft-image-codecs, #6949, #6955) and the MCP stdio server (craft-mcp-server, #6956), all with craft-libs pinned at main `93dac78c` (#6954, #6960). Opening documents and pictures behaves as before, except that large non-interleaved JPEGs are refused sooner (a 4:4:4 picture from about 60 Mpx, was 67 Mpx), invalid PNGs are refused more strictly, a lossless WebP's transparency is now seen, and MCP clients get tool errors for unknown or mistyped arguments and a 1,000-message batch cap (docs/mcp.md). The old code stays as test-only references the shared code is checked against.
@@ -937,6 +939,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Convert Text to Table refuses cross-cell content-control boundaries before form data can be lost (#5585); cell-local controls and selected enclosing-control interiors remain supported. |
+| 2026-11-04 | trivial | Convert Text to Table refuses selected section breaks before discarding their page setup (#5548); same-section conversions remain available. |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-11-18 | trivial | Progress log: border boxes close their corners |
 | 2026-10-30 | trivial | Progress log: under Track Changes a list item deleted whole shows its number as deleted text, in the deletion's colour and mark (#4828); readiness unchanged |
