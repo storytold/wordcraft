@@ -2314,3 +2314,17 @@ fn a_sliver_of_the_page_above_is_not_the_page_in_view() {
     assert_eq!(viewed_page(None, 310.0, &layout, 100.0), 3, "as much as the gap is still a sliver");
     assert_eq!(viewed_page(None, 300.0, &layout, 100.0), 2, "20 points of page 2 is the page in view");
 }
+
+/// In Columns and Two Up the pages are stored row by row: the gap to measure is the one to the page below, not to the
+/// page beside.
+#[test]
+fn a_sliver_of_a_row_above_is_not_the_page_in_view_with_columns() {
+    let rects: Vec<craft::behavior::kurbo::Rect> = [(0.0, 0.0), (90.0, 0.0), (0.0, 110.0), (90.0, 110.0)]
+        .iter()
+        .map(|&(x, y)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + 100.0))
+        .collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 2, bands: vec![(0.0, 100.0); 4] };
+    // The first row ends at 100 and the next starts at 110: a window top at 96 shows 4 points of it, a sliver.
+    assert_eq!(viewed_page(None, 96.0, &layout, 100.0), 2, "4 points of the row above is a sliver");
+    assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the first row is the page in view");
+}
