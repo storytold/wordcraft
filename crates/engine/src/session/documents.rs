@@ -251,6 +251,8 @@ impl Session {
             edit_marks: _,
             go_back_step: _,
             // Shared by every open document.
+            // Names the document it belongs to, so it never applies to another one.
+            review_style: _,
             user_dict_path: _,
             clipboard: _,
             clipboard_text: _,
@@ -261,6 +263,7 @@ impl Session {
             author: _,
             initials: _,
             painter: _,
+            copied_format: _,
             // What the drawn window knows of the others: its front end sets it as it draws.
             windows: _,
             status: _,

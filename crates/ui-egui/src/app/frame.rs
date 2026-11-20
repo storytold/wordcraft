@@ -130,6 +130,7 @@ impl WordApp {
         let moved = |app: &WordApp| app.windows.shown() != window;
         content_controls::popup(self, ctx);
         crate::paste_options::show(self, ctx);
+        crate::font_download::tick(self);
         dialogs::show(self, ctx);
         if moved(self) {
             return;
