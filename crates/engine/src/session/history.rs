@@ -80,6 +80,12 @@ impl Session {
         self.ime_text_join = Some(self.sel.clone());
     }
 
+    /// Whether a body `DeleteSurrounding`'s replacement join is still promised: no command has
+    /// consumed it since. The page keeps the erased text's formatting only while this holds.
+    pub fn ime_text_join_pending(&self) -> bool {
+        self.ime_text_join.is_some()
+    }
+
     /// Discard a body replacement join that received no replacement (an empty or refused
     /// commit, a new request or a refusal), so it cannot join a later composition.
     pub fn clear_ime_text_join(&mut self) {
@@ -162,6 +168,16 @@ impl Session {
     pub fn merge_undo_since(&mut self, mark: u64) {
         let keep = mark.saturating_sub(self.undo_evicted).saturating_add(1);
         self.history.truncate(usize::try_from(keep).unwrap_or(usize::MAX));
+    }
+
+    /// Takes back every step recorded since `mark` and drops them from redo, so a cancelled gesture leaves no trace.
+    /// Does nothing when `mark` has already left the history (evicted steps cannot be undone).
+    pub fn revert_since(&mut self, mark: u64) {
+        if mark < self.undo_evicted {
+            return;
+        }
+        while self.undo_mark() > mark && self.undo() {}
+        self.redo.clear();
     }
 
     pub fn undo_labels(&self) -> Vec<String> {
