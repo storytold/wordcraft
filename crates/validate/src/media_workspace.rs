@@ -7,10 +7,12 @@ use craft_image_codecs::{Format, TiffPage};
 const KIB: u64 = 1024;
 const JPEG_FIXED: u64 = 96 * KIB;
 
-pub(crate) fn decode(format: Format, bytes: &[u8], width: u32, height: u32, tiff: Option<&TiffPage>) -> u64 {
+/// The workspace debit, or `None` when the inspection that sets it hit a limit of its own (more chunks than are
+/// examined): the assessment is then not made, never graded from a guess.
+pub(crate) fn decode(format: Format, bytes: &[u8], width: u32, height: u32, tiff: Option<&TiffPage>) -> Option<u64> {
     let row = u64::from(width);
     let encoded = bytes.len() as u64;
-    match format {
+    Some(match format {
         // png/fdeflate: two live table pairs at an APNG frame reset, inflater
         // state, buffered input, and transformed/unfiltered scratch rows.
         Format::Png => 64 * KIB + 16 * row,
@@ -23,12 +25,15 @@ pub(crate) fn decode(format: Format, bytes: &[u8], width: u32, height: u32, tiff
         // image BMP: palette and bitfield state, aligned row and RLE scratch.
         Format::Bmp => 8 * KIB + 8 * row,
         Format::WebP => webp(bytes, width, height),
-        Format::Tiff => tiff.map_or(0, |page| tiff_workspace(bytes, page)),
+        Format::Tiff => match tiff {
+            Some(page) => tiff_workspace(bytes, page)?,
+            None => 0,
+        },
         _ => 0,
-    }
+    })
 }
 
-fn tiff_workspace(bytes: &[u8], page: &TiffPage) -> u64 {
+fn tiff_workspace(bytes: &[u8], page: &TiffPage) -> Option<u64> {
     let (chunk_width, chunk_height) = crate::tiff_admission::chunk_dimensions(bytes, page);
     let bands = u64::from(page.height).div_ceil(chunk_height.max(1)).max(1);
     #[cfg(not(target_arch = "wasm32"))]
@@ -60,7 +65,7 @@ fn tiff_workspace(bytes: &[u8], page: &TiffPage) -> u64 {
     let compression = match page.compression {
         8 | 32946 => 128 * KIB,
         5 => 64 * KIB,
-        7 => jpeg_strip_decoder(bytes, page, (chunk_width, chunk_height), samples, chunk),
+        7 => jpeg_strip_decoder(bytes, page, (chunk_width, chunk_height), samples, chunk)?,
         4 => (16 * KIB).saturating_add(8u64.saturating_mul(chunk_width)),
         _ => 8 * KIB,
     };
@@ -70,7 +75,7 @@ fn tiff_workspace(bytes: &[u8], page: &TiffPage) -> u64 {
     let palette = if page.photometric == Some(3) { 6u64 << page.bits_per_sample.min(16) } else { 0 };
     let extra_planes =
         u64::from(page.width).saturating_mul(u64::from(page.height)).saturating_mul(samples.saturating_sub(1)).saturating_mul(sample_bytes);
-    (24 * KIB + palette).saturating_add(per_worker.saturating_mul(workers.min(bands))).saturating_add(extra_planes)
+    Some((24 * KIB + palette).saturating_add(per_worker.saturating_mul(workers.min(bands))).saturating_add(extra_planes))
 }
 
 /// What one worker's nested zune-jpeg decoder holds for a strip or tile, from the JPEG's OWN header: its SOF
@@ -80,11 +85,11 @@ fn tiff_workspace(bytes: &[u8], page: &TiffPage) -> u64 {
 /// directory declares, so charging the directory's geometry under- or over-charges whenever they differ. The output
 /// is charged only beyond the chunk-sized scratch the caller charges beside this (a JPEG that fills its strip adds
 /// nothing; one larger than its strip adds the difference). A worker
-/// may meet any chunk, so the largest is charged. Only where a chunk's header cannot be read (or more chunks than
-/// are examined exist) does the directory's geometry stand in, as a bound over every layout kind.
-fn jpeg_strip_decoder(bytes: &[u8], page: &TiffPage, directory: (u64, u64), samples: u64, scratch: u64) -> u64 {
-    // The header of a real JPEG is within its first segments; a longer prefix is not read.
-    const PREFIX: usize = 64 * KIB as usize;
+/// may meet any chunk, so the largest is charged. The marker walk runs from the chunk's start to its SOF wherever
+/// that lies, bounded by the chunk. Only where a chunk's header is not there to be read (the chunk really is cut off)
+/// does the directory's geometry stand in, as a bound over every layout kind; more chunks than are examined is a
+/// limit of the inspection, so no charge is made (`None`: not assessed).
+fn jpeg_strip_decoder(bytes: &[u8], page: &TiffPage, directory: (u64, u64), samples: u64, scratch: u64) -> Option<u64> {
     const CHUNKS: usize = 1 << 16;
     let state =
         |width: u64| JPEG_FIXED.saturating_add(width.div_ceil(32).saturating_mul(256 * 32)).saturating_add((bytes.len() as u64).saturating_mul(2));
@@ -95,20 +100,23 @@ fn jpeg_strip_decoder(bytes: &[u8], page: &TiffPage, directory: (u64, u64), samp
         .saturating_add(padded(width).saturating_mul(padded(height)).saturating_mul(samples).saturating_mul(2));
     let chunks = crate::tiff_admission::chunks(bytes, page, CHUNKS);
     let mut most = 0u64;
-    let mut unread = chunks.is_empty() || chunks.len() >= CHUNKS;
+    if chunks.len() >= CHUNKS {
+        return None;
+    }
+    let mut unread = chunks.is_empty();
     for (start, length) in chunks {
-        let prefix = start.checked_add(length.min(PREFIX)).and_then(|end| bytes.get(start..end));
-        let Some(info) = prefix.and_then(craft_image_codecs::jpeg_info) else {
+        let whole = bytes.get(start..start.saturating_add(length).min(bytes.len()));
+        let Some(info) = whole.and_then(craft_image_codecs::jpeg_info) else {
             unread = true;
             continue;
         };
         let (frame_width, frame_height) = (u64::from(info.width), u64::from(info.height));
         let output = frame_width.saturating_mul(frame_height).saturating_mul(info.layout.channels() as u64);
-        let coefficients = prefix.map_or(0, craft_image_codecs::jpeg_worst_case_coefficients);
+        let coefficients = whole.map_or(0, craft_image_codecs::jpeg_worst_case_coefficients);
         // The output the worker's chunk-sized scratch (charged beside this) already covers is not charged twice.
         most = most.max(state(frame_width).saturating_add(output.saturating_sub(scratch)).saturating_add(coefficients));
     }
-    if unread { most.max(declared) } else { most }
+    Some(if unread { most.max(declared) } else { most })
 }
 
 fn webp(bytes: &[u8], width: u32, height: u32) -> u64 {

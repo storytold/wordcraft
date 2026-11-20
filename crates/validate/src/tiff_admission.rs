@@ -5,6 +5,12 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque, hash_map::Entry};
 use craft_image_codecs::CodecError;
 use craft_tiff::{ByteOrder, EntrySpan, FieldType, ParseOptions, Tiff, directory_entries, entry_span, tags};
 
+/// A bound of the validator's own admission (depth, directory count, entry count) was reached: the graph was not
+/// assessed, which is no evidence that it is malformed, so it is a lost assessment (`LimitExceeded`), never a grade.
+fn bound(what: &str) -> CodecError {
+    CodecError::LimitExceeded(format!("TIFF directory {what} bound"))
+}
+
 /// What the codec will read for a complete TIFF: everything up to its last referenced byte (bytes after that are
 /// padding of any content and any length), with the directories of its main chain in order: the first directory and
 /// each `next` target. This is the ONE authority for which directories are main-chain pages; the page the validator
@@ -73,7 +79,8 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
     }
 
     /// The main chain of the directory graph reachable from `first` when it can be admitted: every directory reads,
-    /// the directory, entry and depth budgets hold, and no directory is reachable from itself. `None` otherwise.
+    /// the directory, entry and depth budgets hold, and no directory is reachable from itself. `None` when the graph is
+    /// malformed or cyclic; a budget that does not hold is `Err(LimitExceeded)`, a lost assessment.
     ///
     /// This is the ONLY cycle computation. The graph's edges are every SubIFD, Exif, GPS and Interop
     /// pointer, and the `next` pointer of every directory that is read as a chain member (the first
@@ -105,7 +112,7 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
                 continue;
             }
             if *nearest.entry(offset).or_insert(depth) > self.limits.max_depth {
-                return Ok(None);
+                return Err(bound("depth"));
             }
             let Some((tags, next)) = self.directory(offset)? else { return Ok(None) };
             if let Entry::Vacant(slot) = children_of.entry(offset) {
@@ -154,7 +161,7 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
     fn directory(&mut self, offset: u64) -> Result<Option<(BTreeMap<u16, EntrySpan>, u64)>, CodecError> {
         observation_contract! {
             rules: "-";
-            collections: "field.bytes*2,field.declared*4,field.entries*3,field.parsed*3,field.value_spans*1,type.BTreeMap*2";
+            collections: "field.bytes*2,field.declared*5,field.entries*3,field.parsed*3,field.value_spans*1,type.BTreeMap*2";
             scope: "TIFF directory table and physical value spans, bounded before directory or decoder allocations";
             loss: "malformed directory, incomplete value or pointer, directory cycle, work/byte budget";
             fallback: "do not assess pixels from an incomplete preflight";
@@ -165,12 +172,15 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
             return Ok(Some(known.clone()));
         }
         if self.parsed.len() >= self.limits.max_ifds {
-            return Ok(None);
+            return Err(bound("count"));
         }
         (self.reserve)(512)?;
         let Ok(dir) = directory_entries(self.bytes, offset, self.order, self.big, self.limits.max_entries) else { return Ok(None) };
         self.entries = self.entries.saturating_add(dir.read());
-        if dir.declared() != dir.read() as u64 || self.entries > self.limits.max_entries_total {
+        if self.entries > self.limits.max_entries_total || (dir.read() >= self.limits.max_entries && dir.declared() > dir.read() as u64) {
+            return Err(bound("entry"));
+        }
+        if dir.declared() != dir.read() as u64 {
             return Ok(None);
         }
         // Bound the indexes here and the directory inventory in the codec. Use actual

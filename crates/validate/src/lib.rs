@@ -4171,8 +4171,8 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
                     }
                     // A budget stop is a lost assessment, never evidence the pixels failed to decode: no verdict
                     // is made from it in either direction (neither the Error nor the Warning grade).
-                    Err(CodecError::LimitExceeded(_)) => {
-                        decode_limited_at.get_or_insert(&e.name);
+                    Err(CodecError::LimitExceeded(reason)) => {
+                        decode_limited_at.get_or_insert((&e.name, reason));
                         continue;
                     }
                     // Compare variants without binding the external enum's named fields.
@@ -4204,17 +4204,16 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
             acc.add("MEDIA-MAGIC", Some(e.name.clone()), format!("{} does not have the magic bytes of a {kind} file", e.name));
         }
     }
-    if let Some(part) = decode_limited_at {
+    if let Some((part, reason)) = decode_limited_at {
         acc.note(format!(
-            "MEDIA-MAGIC: alternate image decoding exceeded its byte budget at {part}; the pixels there were not assessed, so the signature mismatch was not graded"
+            "MEDIA-MAGIC: alternate image assessment stopped at {part} at a validator bound ({reason}); the pixels there were not assessed, so the signature mismatch was not graded"
         ));
         acc.set_incomplete();
     }
     if let Some(part) = tiff_directory_incomplete_at {
-        // Both shared TIFF readers can report an incomplete walk without distinguishing
-        // malformed directories from a cap. Explain the lost assessment in either case.
+        // Only a malformed or cyclic graph reaches here: every bound of the walk is a lost assessment above.
         acc.note(format!(
-            "MEDIA-MAGIC: TIFF directory assessment stopped at {part} because of malformed directories or decoder limits; affected signature mismatches kept their Error grade"
+            "MEDIA-MAGIC: TIFF directory assessment stopped at {part} because its directories are malformed or cyclic; affected signature mismatches kept their Error grade"
         ));
         acc.set_incomplete();
     }
@@ -4354,7 +4353,10 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     // TIFF also supports wider samples and CMYK with alpha.
     let bytes_per_pixel = if format == Format::Tiff { 20 } else { 8 };
     let allocation = pixels.saturating_mul(bytes_per_pixel).max(encoded).max(4096);
-    let workspace = media_workspace::decode(format, bytes, width, height, tiff_page.as_ref());
+    // A limit of the header inspection is a lost assessment, never a grade.
+    let Some(workspace) = media_workspace::decode(format, bytes, width, height, tiff_page.as_ref()) else {
+        return Err(CodecError::LimitExceeded("alternate image header inspection limit".into()));
+    };
     let decode_charge = allocation.saturating_mul(2).saturating_add(encoded).saturating_add(coefficients).saturating_add(workspace);
     let charge = if format == Format::Tiff { preflight.saturating_add(decode_charge) } else { decode_charge.max(preflight) };
     if charge > budget {
@@ -4403,8 +4405,10 @@ fn probe_alternate_tiff(bytes: &[u8], main_chain: &[u64]) -> Result<Option<(usiz
 
     let directories = codecs::tiff_info(bytes)?;
     let listed: Vec<Option<usize>> = main_chain.iter().map(|&offset| directories.pages.iter().position(|page| page.ifd_offset == offset)).collect();
+    // The codec's listing stopped short of a directory the admission walk reached: which page to assess is not
+    // established, a lost assessment rather than evidence of a failed decode.
     if listed.iter().any(Option::is_none) {
-        return Ok(None);
+        return Err(CodecError::LimitExceeded("TIFF page listing".into()));
     }
     let full = |index: &usize| {
         directories.pages.get(*index).is_some_and(|page| page.kind == codecs::TiffPageKind::Page && page.width > 0 && page.height > 0)
@@ -4714,11 +4718,10 @@ mod budget_tests {
         assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Warning));
         assert_eq!(serde_json::to_value(report).unwrap(), serde_json::to_value(validate(&padded)).unwrap());
 
+        // A directory bound is a lost assessment, not a failed decode: no grade, and the note names the bound.
         let report = validate(&tiff(1025));
-        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
-        assert_eq!(report.findings.len(), 1);
-        assert_eq!((report.findings[0].rule, report.findings[0].severity), ("MEDIA-MAGIC", Severity::Error));
-        assert!(report.coverage_notes.iter().any(|note| note.contains("TIFF") && note.contains("limit")), "{report:?}");
+        assert_eq!((report.verdict, report.findings.len()), (Verdict::Incomplete, 0), "{report:?}");
+        assert!(report.coverage_notes.iter().any(|note| note.contains("TIFF directory") && note.contains("bound")), "{report:?}");
     }
 
     /// A classic little-endian TIFF built from explicit directories. A `None` value is
@@ -5102,9 +5105,16 @@ mod budget_tests {
             }
             graph_tiff(&directories)
         };
+        // The depth bound is a bound of the assessment: past it the graph is not assessed (a lost assessment, never a
+        // grade), however valid its pages are.
         for (chain, back, admitted) in [(10, false, true), (10, true, true), (11, false, false), (11, true, false)] {
             let bytes = graph(chain, back);
-            assert_eq!(tiff_admission::payload(&bytes, |_| Ok(())).unwrap().is_some(), admitted, "{chain} edges, back edge {back}");
+            match tiff_admission::payload(&bytes, |_| Ok(())) {
+                Ok(admission) => assert!(admitted && admission.is_some(), "{chain} edges, back edge {back}"),
+                Err(error) => assert!(!admitted && matches!(error, CodecError::LimitExceeded(_)), "{chain} edges, back edge {back}: {error}"),
+            }
+            let report = validate_bytes(&media_zip(&[("word/media/drawn.png", &bytes)], DRAWN, "png"));
+            assert_eq!(report.verdict == Verdict::Incomplete && report.findings.is_empty(), !admitted, "{chain} edges, back edge {back}: {report:?}");
         }
     }
 
@@ -5150,11 +5160,27 @@ mod budget_tests {
                 .num_threads(1)
                 .build()
                 .unwrap()
-                .install(|| media_workspace::decode(Format::Tiff, bytes, page.width, page.height, Some(&page)))
+                .install(|| media_workspace::decode(Format::Tiff, bytes, page.width, page.height, Some(&page)).unwrap())
         };
         let (small, large) = (debit(&tiff(8, 8, false, &header(0xc2, 8))), debit(&tiff(8, 8, false, &header(0xc2, 64))));
         // An output byte and a 16-bit coefficient for every sample of the larger frame, however small the strip.
         assert!(large - small >= 3 * (64 * 64 - 8 * 8), "{small} {large}");
+        // The coefficient planes are pinned on their own: the same 64x64 frame as a progressive and as a baseline
+        // image has the same width state and decoded output, so the difference is the planes (two bytes a sample).
+        let baseline = debit(&tiff(8, 8, false, &header(0xc0, 64)));
+        assert!(large - baseline >= 2 * 64 * 64, "{baseline} {large}");
+        // The marker walk runs to the SOF wherever it lies: a comment pushing it past the first 64 KiB changes nothing
+        // (the same bytes, in another order, are charged the same), where a fixed prefix fell back to the directory.
+        let comment = [&[0xff, 0xfe][..], &65535u16.to_be_bytes(), &vec![0; 65533]].concat();
+        let ordered = |marker: u8, late: bool| {
+            let frame = header(marker, 64);
+            let (soi, rest) = frame.split_at(2);
+            let (frame, eoi) = rest.split_at(rest.len() - 2);
+            tiff(8, 8, false, &if late { [soi, &comment, frame, eoi].concat() } else { [soi, frame, &comment, eoi].concat() })
+        };
+        let (late, early) = (debit(&ordered(0xc2, true)), debit(&ordered(0xc2, false)));
+        assert_eq!(late, early, "the header past the 64 KiB mark is read");
+        assert!(late - debit(&ordered(0xc0, true)) >= 2 * 64 * 64, "{late}");
         let (read, unread) = (debit(&tiff(8192, 8192, true, &gray(8, 8))), debit(&tiff(8192, 8192, true, b"not a jpeg")));
         assert!(unread - read >= 2 * 8192 * 8192, "{read} {unread}");
         let validate = |bytes: &[u8]| validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
@@ -5175,7 +5201,7 @@ mod budget_tests {
             assert_eq!((page.width, page.height), (1, rows));
             let in_pool =
                 |threads: usize, work: &(dyn Fn() -> u64 + Sync)| rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(work);
-            let debit = |threads: usize| in_pool(threads, &|| media_workspace::decode(Format::Tiff, &bytes, 1, rows, Some(&page)));
+            let debit = |threads: usize| in_pool(threads, &|| media_workspace::decode(Format::Tiff, &bytes, 1, rows, Some(&page)).unwrap());
             let workers = |threads: usize| threads.min(rows as usize) as u64;
             let one = debit(1);
             for threads in [2usize, 4, 16] {
@@ -5228,7 +5254,7 @@ mod budget_tests {
                         .num_threads(threads)
                         .build()
                         .unwrap()
-                        .install(|| media_workspace::decode(Format::Tiff, &bytes, 256, 1024, Some(&page)))
+                        .install(|| media_workspace::decode(Format::Tiff, &bytes, 256, 1024, Some(&page)).unwrap())
                 };
                 let held = 3 * 256 * u64::from(rows_per_strip) * threads.min(bands) as u64;
                 assert!(debit(7) - debit(1) >= held, "{rows_per_strip} rows a strip, {threads} threads: {} < {held}", debit(7) - debit(1));
@@ -5453,7 +5479,7 @@ mod budget_tests {
         // A budget stop is a lost assessment: neither the Error nor the Warning grade is made from it.
         assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
         assert!(report.findings.iter().all(|f| f.rule != "MEDIA-MAGIC"), "{report:?}");
-        assert!(report.coverage_notes.iter().any(|n| n.starts_with("MEDIA-MAGIC: alternate image decoding exceeded its byte budget")));
+        assert!(report.coverage_notes.iter().any(|n| n.starts_with("MEDIA-MAGIC: alternate image assessment stopped")));
     }
 
     #[test]
