@@ -126,11 +126,6 @@ fn author_flag_names_the_headless_session() {
     assert_eq!(s.author, "Claude (copyedit)");
     assert!(set_author(&mut s, "   ").is_err_and(|e| e.starts_with("--author:")));
     assert!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])).is_ok());
-    // The app's user name is the person's own; a bridge flag must not rewrite it.
-    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"])).is_err_and(|e| e.to_string().contains("--author")));
-    // A malformed address fails at startup, not on every retried call.
-    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
-    assert!(run(&args(&["mcp", "--connect", "notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
     // The flag goes through the same protection check as the command.
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
@@ -240,11 +235,63 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     }
 }
 
+/// Shared rule 18 (#7124): every agent entry point, a subcommand that serves a client's requests
+/// rather than running what the person typed and exiting, refuses to start without both
+/// automation roots. Each subcommand has a row, so a new one fails here until it is classified,
+/// and a new agent entry point fails until it refuses.
 #[test]
-fn automation_roots_are_an_error_with_connect() {
+fn every_agent_entry_point_refuses_to_start_without_both_roots() {
+    enum Kind {
+        Agent,
+        NotAgent(&'static str),
+    }
+    use Kind::{Agent, NotAgent};
+    let table = [
+        ("convert", NotAgent("converts the files named on its command line, then exits")),
+        ("info", NotAgent("reads the one file named on its command line, then exits")),
+        ("text", NotAgent("reads the one file named on its command line, then exits")),
+        ("inspect", NotAgent("reads the one file named on its command line, then exits")),
+        ("render", NotAgent("renders the file named on its command line, then exits")),
+        ("run", NotAgent("runs the commands and script named on its command line, then exits")),
+        ("commands", NotAgent("lists the commands; touches no file")),
+        ("parity", NotAgent("prints the feature catalog; touches no file")),
+        ("mcp", Agent),
+        ("zotero", NotAgent("runs one named Zotero command; Zotero's replies edit citations and name no file")),
+    ];
+    assert_eq!(table.iter().map(|(name, _)| *name).collect::<Vec<_>>(), SUBCOMMANDS);
+
+    let base = std::env::temp_dir().join(format!("wc-cli-entry-{}", std::process::id()));
+    std::fs::create_dir_all(base.join("in")).unwrap();
+    std::fs::create_dir_all(base.join("out")).unwrap();
+    let read = format!("--automation-read-root={}", base.join("in").display());
+    let write = format!("--automation-write-root={}", base.join("out").display());
+    for (name, kind) in table {
+        if let NotAgent(why) = kind {
+            assert!(!why.is_empty(), "{name}: say why it is not an agent entry point");
+            continue;
+        }
+        for given in [vec![], vec![read.clone()], vec![write.clone()], vec!["--author".to_string(), "Claude".to_string()]] {
+            let line = [vec![name.to_string()], given].concat();
+            let e = run(&line).unwrap_err().to_string();
+            assert!(e.contains("--automation-read-root") && e.contains("--automation-write-root"), "{line:?}: {e}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// The desktop app doesn't confine its control channel to roots yet (#3695, #5819), so the bridge
+/// to it is refused, with roots or without, before anything connects.
+#[test]
+fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
     let dir = std::env::temp_dir().to_string_lossy().into_owned();
-    let e = run(&args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir])).unwrap_err().to_string();
-    assert!(e.contains("--automation-read-root") && e.contains("headless"), "{e}");
+    for line in [
+        args(&["mcp", "--connect", "127.0.0.1:9"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir, "--automation-write-root", &dir]),
+    ] {
+        let e = run(&line).unwrap_err().to_string();
+        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
+    }
 }
 
 #[test]
