@@ -497,7 +497,7 @@ fn box_float_table_rect(
             Anchor::Page => Some((0.0, s.page_h)),
             Anchor::Margin => {
                 let mut reference = s.clone();
-                reference.margin_top = fr.margin_top.unwrap_or(s.margin_top);
+                reference.margin_top = fr.margin_top.unwrap_or(s.margin_top.abs());
                 Some((reference.margin_top, reference.text_height()))
             }
             _ => None,

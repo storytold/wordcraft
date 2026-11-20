@@ -343,7 +343,7 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         // The text a table anchored to it stands in: where the next paragraph starts.
         let v_area = match f.v_rel {
             Anchor::Page => (0.0, s.page_h),
-            Anchor::Margin => (s.margin_top, s.text_height()),
+            Anchor::Margin => (s.margin_top.abs(), s.text_height()),
             _ => (pb.y, 0.0),
         };
         let x = float_table_x(pb, w, f, legacy, ctx.mirror);
