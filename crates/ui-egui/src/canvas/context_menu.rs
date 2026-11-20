@@ -152,7 +152,7 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
                 if MenuItem::new(w.to_string()).show(ui).ran {
                     // The word the synonyms were looked up for: quotes around it stay (#6517).
                     if let Some((a, b)) = wordcraft_engine::cmd::review::thesaurus_word(&app.session) {
-                        app.session.sel = wordcraft_engine::Selection { anchor: a, focus: b };
+                        app.session.set_selection(wordcraft_engine::Selection { anchor: a, focus: b });
                         let _ = app.run("text.insert", json!({"text": w, "raw": true}));
                     }
                 }
