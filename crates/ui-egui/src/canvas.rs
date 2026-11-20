@@ -188,9 +188,9 @@ pub struct CanvasState {
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
-    /// The document face this window's composition is drawn in, as the fonts were last installed
-    /// (its [`crate::theme::composition_family`]).
-    pub(crate) ime_face: Option<wordcraft_fonts::FaceRef>,
+    /// The document faces this window's composition is drawn in, as the fonts were last
+    /// installed (its [`crate::theme::composition_family`]).
+    pub(crate) ime_face: crate::theme::CompositionFaces,
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
@@ -433,7 +433,7 @@ impl Default for CanvasState {
             ime_preedit: String::new(),
             ime_preedit_range: None,
             ime_faces: Vec::new(),
-            ime_face: None,
+            ime_face: Default::default(),
             want_focus: true,
             context_issue: None,
             context_synonyms: None,
@@ -1976,36 +1976,53 @@ fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Pai
     let new = crate::theme::faces_for_preedit(&app.canvas.ime_preedit, &app.canvas.ime_faces, crate::theme::caption_char_covered, |c| {
         wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
     });
-    // Word draws the composition in the font and size of the text it goes into: take the
-    // face, size and baseline the layout gives text typed here (not in turned text). The
-    // face is the one the run's font asks for, not a fallback face that drew the
-    // character before the caret (a Chinese character in a Latin font).
-    let typing = if at.turned { None } else { layout.typing_style(&app.session.sel.focus, app.session.page_hint) };
-    let face = typing.as_ref().map(|(run, _)| run.requested_face);
-    if !new.is_empty() || face != app.canvas.ime_face {
+    // Word draws the composition in the font and size the text will have: the formatting typing
+    // takes (picked at the caret, the first selected character's, body text after a note
+    // number), resolved in the paragraph the text goes into, with the faces, size and baseline
+    // the layout gives it (not in turned text). The faces are the ones its fonts ask for, not a
+    // fallback face that drew the character before the caret (a Chinese character in a Latin
+    // font).
+    let typing = if at.turned {
+        None
+    } else {
+        let (into, _) = app.session.sel.ordered();
+        let props = app.session.typing_props();
+        let typed = wordcraft_layout::hit::Typed { props: &props, into: &into, text: &app.canvas.ime_preedit };
+        layout.typing_at(&app.session.doc, &app.session.sel.focus, &typed, app.session.page_hint)
+    };
+    let faces =
+        typing.as_ref().map_or_else(Default::default, |(t, _)| crate::theme::CompositionFaces { face: Some(t.face), east_asian: t.east_asian });
+    if !new.is_empty() || faces != app.canvas.ime_face {
         app.canvas.ime_faces.extend(new);
-        app.canvas.ime_face = face;
+        app.canvas.ime_face = faces;
         // With every other window's faces too: the fonts are the app's.
         app.apply_ui_fonts(ctx);
         ctx.request_repaint();
     }
-    // New fonts apply from the next frame; until the window's composition family is bound (or
+    // New fonts apply from the next frame; until the window's composition families are bound (or
     // without a style run) the composition is drawn as before, in the interface font.
     let family = crate::theme::composition_family(app.windows.shown());
-    let bound = ctx.fonts(|f| f.definitions().families.contains_key(&family));
+    let east_asian = crate::theme::composition_family_east_asian(app.windows.shown());
+    let bound = ctx.fonts(|f| {
+        let defs = f.definitions();
+        defs.families.contains_key(&family) && defs.families.contains_key(&east_asian)
+    });
     // egui draws each glyph into its font atlas and panics on one wider than the atlas
     // (1,638-point text at 500% is about 11,000 points): keep the composition's glyphs
     // within a quarter of the atlas side, and at most 1,024 pixels, as each glyph stays
     // in the atlas. Larger text gets a smaller composition.
     let most = (at.max_tex / 4.0).min(1024.0) / at.ppp;
     let size = |s: f32| s.min(most).max(1.0);
-    let (font, base) = match &typing {
-        Some((run, base)) if bound && run.size.is_finite() && run.size > 0.0 => {
-            (egui::FontId::new(size(run.size * at.scale), family), Some(at.pr.min.y + base * at.scale))
+    let (job, base) = match &typing {
+        Some((t, base)) if bound && t.size.is_finite() && t.size > 0.0 => {
+            (composition_job(&app.canvas.ime_preedit, size(t.size * at.scale), &family, &east_asian), Some(at.pr.min.y + base * at.scale))
         }
-        _ => (regular(size(at.height * at.scale * 0.8)), None),
+        _ => (
+            egui::text::LayoutJob::simple_singleline(app.canvas.ime_preedit.clone(), regular(size(at.height * at.scale * 0.8)), Color32::PLACEHOLDER),
+            None,
+        ),
     };
-    let g = painter.layout_no_wrap(app.canvas.ime_preedit.clone(), font, Color32::PLACEHOLDER);
+    let g = painter.layout_job(job);
     let cursor = preedit_cursor_chars(&app.canvas.ime_preedit, app.canvas.ime_preedit_range.as_ref());
     let dx = g.pos_from_cursor(egui::text::CCursor::new(cursor)).min.x;
     // The galley's first baseline sits on the line's baseline, as typed text would.
@@ -2015,6 +2032,35 @@ fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Pai
     painter.galley(r.min, g, at.color);
     painter.line_segment([pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, at.color));
     dx
+}
+
+/// The composition `text` at `size`, in pieces by script, as committed text is drawn: Chinese,
+/// Japanese and Korean characters in the window's `east_asian` composition family (its East Asian
+/// face first), the rest in `family` (its font's face first; [`crate::theme::set_composition_face`]).
+/// Spaces, joiners and combining or variation marks stay with the piece before them.
+fn composition_job(text: &str, size: f32, family: &egui::FontFamily, east_asian: &egui::FontFamily) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let push = |job: &mut egui::text::LayoutJob, piece: &str, ea: bool| {
+        let font_id = egui::FontId::new(size, if ea { east_asian.clone() } else { family.clone() });
+        job.append(piece, 0.0, egui::TextFormat { font_id, color: Color32::PLACEHOLDER, ..Default::default() });
+    };
+    let continues = |c: char| c.is_whitespace() || matches!(u32::from(c), 0x0300..=0x036F | 0x200C..=0x200D | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF);
+    let (mut start, mut cur) = (0, None);
+    for (i, c) in text.char_indices() {
+        let ea = wordcraft_layout::para::takes_east_asian_font(c);
+        match cur {
+            None => cur = Some(ea),
+            Some(prev) if prev != ea && !continues(c) => {
+                push(&mut job, text.get(start..i).unwrap_or_default(), prev);
+                (start, cur) = (i, Some(ea));
+            }
+            Some(_) => {}
+        }
+    }
+    if let Some(prev) = cur {
+        push(&mut job, text.get(start..).unwrap_or_default(), prev);
+    }
+    job
 }
 
 #[cfg(test)]

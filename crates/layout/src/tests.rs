@@ -10765,39 +10765,129 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
-/// Text typed after a raised or lowered character sits where that character does: an input
-/// method's composition there is drawn on the line's baseline shifted as the run is (positive up),
-/// as the committed text is drawn, not on the line's own baseline.
+/// Text typed with some formatting is drawn as laid-out text with that formatting is: in the face
+/// its font asks for (not a fallback face for characters it lacks), at its size, on the line's
+/// baseline shifted as the run is (positive up), with the paragraph's style and its table cell's
+/// style too. An input method's composition is drawn with them, before it is text.
 #[test]
-fn typing_style_takes_the_runs_baseline_shift() {
+fn typing_at_resolves_formatting_as_laid_out_text_is() {
+    crate::test_fonts();
     use wordcraft_doc::props::VertAlign;
+    let props = |d: &Document, pos: &Pos| d.para_at(pos).map(|p| p.props_at(pos.off).clone()).unwrap_or_default();
     let mut d = Document::from_text("x2");
     d.format_range(&Pos::body(0, 1), &Pos::body(0, 2), &|c| c.vert_align = Some(VertAlign::Superscript)).unwrap();
     let l = lay(&d);
-    let (plain, line) = l.typing_style(&Pos::body(0, 1), 0).expect("after the x");
-    let (raised, base) = l.typing_style(&Pos::body(0, 2), 0).expect("after the superscript 2");
-    assert_eq!(plain.shift, 0.0);
+    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let run_at = |off: usize| para.clusters.iter().find(|c| c.start == off).and_then(|c| para.styles.get(c.style as usize)).unwrap();
+    let (plain, line) = l.typing_at(&d, &Pos::body(0, 1), &l_typed(&props(&d, &Pos::body(0, 1)), &Pos::body(0, 1)), 0).expect("after the x");
+    let (raised, base) =
+        l.typing_at(&d, &Pos::body(0, 2), &l_typed(&props(&d, &Pos::body(0, 2)), &Pos::body(0, 2)), 0).expect("after the superscript 2");
+    assert!(plain.face == run_at(0).requested_face && plain.size == run_at(0).size && plain.shift == 0.0);
+    assert!(raised.face == run_at(1).requested_face && raised.size == run_at(1).size && raised.shift == run_at(1).shift);
     assert!(raised.shift > 0.0, "a superscript is raised: {}", raised.shift);
     assert!((line - raised.shift - base).abs() < 0.01, "line {line}, shift {}, baseline {base}", raised.shift);
+    // Formatting the text there doesn't have (picked at the caret): its own font, size and shift.
+    let picked = CharProps { font: Some("Source Serif 4".into()), size: Some(30.0), bold: Some(true), ..Default::default() };
+    let (t, at) = l.typing_at(&d, &Pos::body(0, 2), &l_typed(&picked, &Pos::body(0, 2)), 0).expect("after the superscript 2");
+    assert_eq!(t.face.get().family, "Source Serif 4");
+    assert!(t.face.get().weight >= 600.0, "bold: {}", t.face.get().style);
+    assert_eq!((t.size, t.shift, at), (30.0, 0.0, line));
+    // In a table cell, the table style's run formatting too, as the cell's text has it.
+    use wordcraft_doc::styles::TableStyleParts;
+    let mut d = styled_table_doc(Some("BigGrid"), 2);
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "BigGrid".into(),
+        name: "Big Grid".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        based_on: Some("TableGrid".into()),
+        chr: CharProps { size: Some(30.0), ..Default::default() },
+        table: Some(TableStyleParts { header_chr: CharProps { bold: Some(true), ..Default::default() }, ..Default::default() }),
+        ..Default::default()
+    });
+    let l = lay(&d);
+    let pos = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 2 };
+    let (t, _) = l.typing_at(&d, &pos, &l_typed(&props(&d, &pos), &pos), 0).expect("in the header cell");
+    let head = cell_para(&l, 0, 0);
+    let run = head.styles.first().unwrap();
+    assert!(run.rc.bold && run.size == 30.0, "{:?}", run.rc);
+    assert!(t.face == run.requested_face && t.size == run.size, "{} at {}", t.face.get().style, t.size);
 }
 
-/// Text typed after a character the run's font lacks asks for the run's own font, not the fallback
-/// face that drew that character: an input method's composition after a Chinese character in a
-/// Latin font draws its letters as the committed letters are drawn.
+/// Chinese, Japanese and Korean text is drawn in the run's East Asian font (`w:eastAsia`) when
+/// it is installed: text typed with it has that face too, beside the font's.
 #[test]
-fn typing_style_asks_for_the_runs_font_after_a_fallback_character() {
-    let text = "A\u{4f60}";
-    let l = lay(&Document::from_text(text));
-    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
-    let face_at = |off: usize| para.clusters.iter().find(|c| c.start == off).map(|c| para.styles[c.style as usize].face.id());
-    let (latin, han) = (face_at(0), face_at(1));
-    if latin == han {
-        eprintln!("skipped: the body font has the character, or no installed font does");
-        return;
-    }
-    let (run, _) = l.typing_style(&Pos::body(0, text.len()), 0).expect("after the Chinese character");
-    assert_eq!(Some(run.face.id()), han, "the character before the caret is drawn in a fallback face");
-    assert_eq!(Some(run.requested_face.id()), latin, "text typed there asks for the run's own font");
+fn typing_at_has_the_east_asian_fonts_face() {
+    crate::test_fonts();
+    let d = Document::from_text("x");
+    let l = lay(&d);
+    let with = |ea: &str| {
+        let props = CharProps { font: Some("Source Serif 4".into()), font_ea: Some(ea.into()), ..Default::default() };
+        let typed = crate::hit::Typed { props: &props, into: &Pos::body(0, 1), text: "x" };
+        let (t, _) = l.typing_at(&d, &Pos::body(0, 1), &typed, 0).expect("after the x");
+        assert_eq!(t.face.get().family, "Source Serif 4");
+        t.east_asian.map(|f| f.get().family.clone())
+    };
+    assert_eq!(with("JetBrains Mono").as_deref(), Some("JetBrains Mono"));
+    assert_eq!(with("Source Serif 4"), None, "the run's own font");
+    assert_eq!(with("No Such East Asian Font 4140"), None, "not installed");
+}
+
+/// [`crate::hit::Typed`] for Latin text with `props` going in at `into`.
+fn l_typed<'a>(props: &'a CharProps, into: &'a Pos) -> crate::hit::Typed<'a> {
+    crate::hit::Typed { props, into, text: "x" }
+}
+
+/// Arabic, Hebrew and other complex-script text is drawn in the run's complex-script font and
+/// size (`w:cs`, `w:szCs`), so text typed in it is too: an input method's composition of Arabic
+/// after Arabic text in a run whose complex-script size differs.
+#[test]
+fn typing_at_takes_the_complex_script_formatting_for_complex_script_text() {
+    crate::test_fonts();
+    let d = Document::from_text("x");
+    let l = lay(&d);
+    let props = CharProps {
+        font: Some("Source Serif 4".into()),
+        size: Some(20.0),
+        font_cs: Some("JetBrains Mono".into()),
+        size_cs: Some(30.0),
+        font_ea: Some("Inter".into()),
+        ..Default::default()
+    };
+    let at = |text: &str| {
+        let typed = crate::hit::Typed { props: &props, into: &Pos::body(0, 1), text };
+        l.typing_at(&d, &Pos::body(0, 1), &typed, 0).expect("after the x").0
+    };
+    let latin = at("salaam");
+    assert_eq!((latin.face.get().family.as_str(), latin.size), ("Source Serif 4", 20.0));
+    assert!(latin.east_asian.is_some_and(|f| f.get().family == "Inter"));
+    let arabic = at("\u{0633}\u{0644}\u{0627}\u{0645}");
+    assert_eq!((arabic.face.get().family.as_str(), arabic.size), ("JetBrains Mono", 30.0));
+    assert!(arabic.east_asian.is_none(), "complex-script text takes no East Asian font");
+}
+
+/// Text typed over a selection goes in at the selection's start: it takes the style of that
+/// paragraph, not of the one the selection ends in, where the caret is drawn.
+#[test]
+fn typing_at_resolves_in_the_paragraph_the_text_goes_into() {
+    crate::test_fonts();
+    let mut d = Document::from_text("small\nlarge");
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "Large".into(),
+        name: "Large".into(),
+        based_on: Some("Normal".into()),
+        chr: CharProps { size: Some(24.0), ..Default::default() },
+        ..Default::default()
+    });
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.style = Some("Large".into())).unwrap();
+    let l = lay(&d);
+    let props = CharProps::default();
+    let size = |into: Pos| {
+        let typed = crate::hit::Typed { props: &props, into: &into, text: "x" };
+        l.typing_at(&d, &Pos::body(1, 3), &typed, 0).expect("in the second paragraph").0.size
+    };
+    assert_eq!(size(Pos::body(1, 0)), 24.0);
+    let small = size(Pos::body(0, 2));
+    assert!(small < 24.0, "in the first paragraph's style: {small}");
 }
 
 #[test]
