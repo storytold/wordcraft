@@ -2460,6 +2460,7 @@ fn autosave_covers_macro_enabled_documents_and_templates() {
         let path = dir.join(format!("novel.{ext}"));
         let mut a = typed();
         a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        a.run("file.autosave", json!({"value": true})).unwrap();
         assert!(a.autosaves(), "{ext}");
         a.run("text.insert", json!({"text": "More "})).unwrap();
         a.autosave_tick(monotonic_ms() + 10_000.0);
@@ -2477,6 +2478,7 @@ fn renaming_a_saved_file_keeps_autosave_and_replaces_its_recent_entry() {
     let renamed = dir.join("Notes v2.docx");
     let mut a = typed();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    a.run("file.autosave", json!({"value": true})).unwrap();
     assert!(a.autosaves());
     a.run("file.rename", json!({"name": "Notes v2"})).unwrap();
     assert_eq!(a.session.path.as_deref(), Some(renamed.as_path()));
@@ -2851,6 +2853,7 @@ fn mailings_results_never_save_over_the_original() {
         a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
         a.run("text.insert", json!({"text": "Revised "})).unwrap();
         a.run("file.save", json!({})).unwrap();
+        a.run("file.autosave", json!({"value": true})).unwrap();
         assert!(a.autosaves());
         a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
         a.run("text.insert", json!({"text": "Again "})).unwrap();
@@ -2927,6 +2930,7 @@ fn redo_after_a_mailing_cannot_put_the_result_under_a_saved_file() {
         a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
         a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
         a.run("file.save", json!({})).unwrap();
+        a.run("file.autosave", json!({"value": true})).unwrap();
         a.run(id, mailing(id)).unwrap();
         assert_eq!(prompt(&a), None, "{id}: the document was saved");
         let result = body_text(&a);
@@ -2953,13 +2957,14 @@ fn opened_files_are_not_autosaved_until_the_user_saves() {
     let path = docx_on_disk(&dir, "Original");
     let before = std::fs::read(&path).unwrap();
     let mut a = app();
+    a.apply_prefs(crate::prefs::Prefs { autosave: true, ..Default::default() });
     a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
     a.run("text.insert", json!({"text": "Typed "})).unwrap();
     a.autosave_tick(monotonic_ms() + 10_000.0);
     assert!(std::fs::read(&path).unwrap() == before, "an opened file is never rewritten behind the user's back");
     assert!(a.session.dirty);
 
-    // After an explicit save, later changes are saved automatically.
+    // With AutoSave opted in, an explicit save permits later automatic writes.
     a.run("file.save", json!({})).unwrap();
     a.run("text.insert", json!({"text": "More "})).unwrap();
     assert!(a.session.dirty);
@@ -2979,6 +2984,7 @@ fn autosave_is_blocked_with_a_reason_for_files_it_cannot_keep() {
     let md = dir.join("notes.md");
     std::fs::write(&md, "# Notes\n\nSome text\n").unwrap();
     let mut a = app();
+    a.apply_prefs(crate::prefs::Prefs { autosave: true, ..Default::default() });
     assert_eq!(a.autosave_block(), Some(AutoSaveBlock::Unsaved), "a new document has no file yet");
     a.run("file.open", json!({"path": md.to_string_lossy()})).unwrap();
     a.run("text.insert", json!({"text": "Typed "})).unwrap();
@@ -2991,7 +2997,7 @@ fn autosave_is_blocked_with_a_reason_for_files_it_cannot_keep() {
     let err = a.run("file.autosave", json!({"value": true})).unwrap_err();
     assert_eq!(err, why, "scripts are told why");
     assert!(a.run("file.autosave", json!({"value": false})).is_ok(), "turning it off always works");
-    a.autosave = true;
+    a.apply_prefs(crate::prefs::Prefs { autosave: true, ..Default::default() });
 
     // Save As .docx (what the greyed switch offers) lifts the block.
     let docx = dir.join("notes.docx");
@@ -3027,6 +3033,7 @@ fn cancelling_open_keeps_autosave() {
     let (mut a, files) = typed_scripted();
     script_pick(&files, None);
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    a.run("file.autosave", json!({"value": true})).unwrap();
     assert!(a.autosaves());
     a.run("file.open", json!({})).unwrap();
     assert!(a.autosaves(), "the picker was cancelled; nothing was replaced");
