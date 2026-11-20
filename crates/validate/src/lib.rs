@@ -5975,6 +5975,59 @@ mod budget_tests {
     }
 
     #[test]
+    fn unexamined_opc_content_yields_no_definite_findings() {
+        let rels_ns = "http://schemas.openxmlformats.org/package/2006/relationships";
+        let document = format!(
+            r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p><w:hyperlink r:id="rExt"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
+        );
+        let ext = format!(r#"<Relationship Id="rExt" Type="{NS_R}/hyperlink" Target="other.docx" TargetMode="External"/>"#);
+        let styles = format!(r#"<w:styles xmlns:w="{NS_W}"/>"#);
+        let report = |types: Vec<u8>, relationships: String| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", types),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document.clone().into_bytes()),
+                ("word/_rels/document.xml.rels", relationships.into_bytes()),
+                ("word/styles.xml", styles.clone().into_bytes()),
+            ]))
+        };
+        let plain = content_types_with_override(
+            "word/styles.xml",
+            &format!("{}styles+xml", "application/vnd.openxmlformats-officedocument.wordprocessingml."),
+        );
+        // The relationship the document names is delivered through an entity this walk does not expand (an inert
+        // parameter entity keeps the subset unmodelled): its absence is not established.
+        let unmodelled = report(
+            plain.clone(),
+            format!(r#"<!DOCTYPE Relationships [<!ENTITY % pe "x"><!ENTITY item '{ext}'>]><Relationships xmlns="{rels_ns}">&item;</Relationships>"#),
+        );
+        // A relationship attribute spelled through an entity is an unknown value, not a missing target.
+        let valued = report(
+            plain.clone(),
+            format!(
+                r#"<!DOCTYPE Relationships [<!ENTITY t "nowhere.xml">]><Relationships xmlns="{rels_ns}">{ext}<Relationship Id="rS" Type="{NS_R}/styles" Target="&t;"/></Relationships>"#
+            ),
+        );
+        // A content-types Override delivered through an entity leaves the part's type unknown, not mismatched.
+        let types = format!(
+            r#"<!DOCTYPE Types [<!ENTITY ov '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'>]><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{}"/>&ov;</Types>"#,
+            package::MAIN_CONTENT_TYPE
+        );
+        let wrapped = report(
+            types.into_bytes(),
+            format!(r#"<Relationships xmlns="{rels_ns}">{ext}<Relationship Id="rS" Type="{NS_R}/styles" Target="styles.xml"/></Relationships>"#),
+        );
+        for (name, report, forbidden) in [
+            ("unmodelled", &unmodelled, &["REL-REF-MISSING", "REL-DANGLING"][..]),
+            ("valued", &valued, &["REL-DANGLING", "REL-REF-MISSING"][..]),
+            ("wrapped", &wrapped, &["CT-MISMATCH"][..]),
+        ] {
+            assert_eq!(report.verdict, Verdict::Incomplete, "{name}: {report:?}");
+            assert!(!report.findings.iter().any(|f| forbidden.contains(&f.rule)), "{name}: {report:?}");
+        }
+    }
+
+    #[test]
     fn diagnostics_are_never_made_from_unknowns() {
         // `q` is bound to a namespace spelled through an entity this part cannot expand; `mc` to the markup
         // compatibility namespace through another. A diagnostic that needs the unknown value is not made.

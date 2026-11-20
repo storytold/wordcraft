@@ -1658,7 +1658,7 @@ fn parse_opc_children(
 ) -> (bool, bool) {
     observation_contract! {
         rules: "-";
-        collections: "parser.parse_opc_children*1,type.Vec*1";
+        collections: "access.is_complete*1,parser.parse_doctype_entities*1,parser.parse_opc_children*1,type.Vec*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "malformed XML or discarded declarations; XML event, depth, namespace and declaration budgets";
         fallback: "retain delivered declarations for positive checks; no negative membership from an incomplete inventory";
@@ -1674,6 +1674,10 @@ fn parse_opc_children(
     let mut at_start = true;
     // An element whose namespace is unknown may be a declaration the walk did not visit, so a traversal
     // that met one (by a declaration's local name) is not complete.
+    // The same holds for content the walk cannot read as expat delivers it: a DOCTYPE declaring more than plain
+    // internal entities (an ATTLIST default changes attributes without any reference), a reference to an entity
+    // this walk does not expand, and an attribute value that uses one. Nothing absent from an unexamined part
+    // is established.
     let mut unknown_namespace = false;
     // Hashing expanded attribute names can rescan an inherited URI. Bound that work
     // separately from reading namespace declarations, which are expanded once.
@@ -1692,6 +1696,7 @@ fn parse_opc_children(
                 let res = reader.resolver();
                 let ns = crate::xml::resolve_element(res, e.name()).0;
                 let local = e.local_name();
+                unknown_namespace |= references_unexpanded_entity(e.attributes_raw());
                 let recognized = matches!(&ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace);
                 // Only the root and a depth-1 element with a declaration's own local name could be one the walk did
                 // not visit; an unresolved element of any other name is not a missing declaration.
@@ -1724,6 +1729,7 @@ fn parse_opc_children(
             }
             Event::GeneralRef(e) => {
                 let defined = matches!(e.as_ref(), b"lt" | b"gt" | b"amp" | b"apos" | b"quot");
+                unknown_namespace |= !defined && !e.as_ref().starts_with(b"#");
                 inventory_complete &= depth > 0 && (defined || e.resolve_char_ref().is_ok_and(|c| c.is_some_and(craft_xml::is_xml_char)));
             }
             Event::CData(_) => inventory_complete &= depth > 0,
@@ -1737,12 +1743,22 @@ fn parse_opc_children(
             Event::Decl(e) => inventory_complete &= at_start && opc_xml_decl_valid(&e),
             // An unevaluated DTD can change declarations or present replacement markup
             // that this walk does not traverse.
-            Event::DocType(_) => inventory_complete = false,
+            Event::DocType(e) => {
+                inventory_complete = false;
+                unknown_namespace |= !crate::scan::parse_doctype_entities(e.as_ref(), 4096).0.is_complete();
+            }
             Event::Eof => return (depth == 0 && !unknown_namespace, depth == 0 && roots == 1 && valid_root && inventory_complete),
         }
         at_start = false;
         buf.clear();
     }
+}
+
+/// Whether raw start-tag attribute bytes contain a reference to anything but a predefined entity or a character.
+fn references_unexpanded_entity(raw: &[u8]) -> bool {
+    raw.split(|&byte| byte == b'&')
+        .skip(1)
+        .any(|rest| !(rest.starts_with(b"#") || [&b"lt;"[..], b"gt;", b"amp;", b"apos;", b"quot;"].iter().any(|name| rest.starts_with(name))))
 }
 
 /// Validate the lexical QName as well as its in-scope prefix, which the resolver checks separately.
@@ -1963,6 +1979,14 @@ fn parse_rel(dir: &str, e: &BytesStart) -> Option<(Rel, bool)> {
     let id = attr_plain(e, b"Id")?;
     let kind = attr_plain(e, b"Type").unwrap_or_default();
     let target = attr_plain(e, b"Target").unwrap_or_default();
+    // A value this walk could not read (an entity it does not expand) is unknown, not absent: neither the mode nor the
+    // target of such a declaration is established, so the declaration is not recorded (the part is then incomplete).
+    let unread = |name: &[u8]| {
+        e.attributes().any(|a| a.is_ok_and(|a| a.key.as_ref() == name && a.normalized_value(quick_xml::XmlVersion::Implicit1_0).is_err()))
+    };
+    if unread(b"TargetMode") || unread(b"Target") {
+        return None;
+    }
     let complete = !id.is_empty() && !kind.is_empty() && !target.is_empty();
     let external = attr_plain(e, b"TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
     let target_abs = (!external).then(|| resolve(dir, &target));

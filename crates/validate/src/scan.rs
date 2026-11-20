@@ -2998,7 +2998,7 @@ fn find_decl_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// Extract declared general entities and their replacement text from a part's DOCTYPE internal subset.
 /// Returns an incomplete `Observed` when an external subset, parameter entity,
 /// external general entity, or declaration budget prevents full resolution.
-fn parse_doctype_entities(raw: &[u8], cap: usize) -> (Observed<HashSet<String>>, BTreeMap<String, String>) {
+pub(crate) fn parse_doctype_entities(raw: &[u8], cap: usize) -> (Observed<HashSet<String>>, BTreeMap<String, String>) {
     observation_contract! {
         rules: "-";
         collections: "access.invalidate*2,parser.parse_doctype_entities*1,type.BTreeMap*5,type.HashSet*5,type.Observed*6";
