@@ -6,6 +6,7 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::RibbonMenuRequest;
 use craft::review::ui::Avatar;
+use craft::theme::ControlSize;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::choice::Switch;
 use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowCollection as _, ShowContainer as _, TooltipSpec, Trigger};
@@ -13,10 +14,12 @@ use craft::ui::display::{Divider, Text};
 use craft::ui::list::{UndoList, UndoMark, UndoRows, UndoWords, footer_text, undo_count};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::popover::Popover;
+use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::inspect;
 use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use craft::ui::shell::{Title, TitleBar};
+use craft::ui::style::GlyphRole;
 use egui::Ui;
 use serde_json::json;
 
@@ -101,7 +104,8 @@ fn autosave(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
     let block = app.autosave_block();
     let on = app.autosaves() && block.is_none();
     let tip = block.as_ref().map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
-    let out = Switch::new(Bind::given(on)).label(tl!("AutoSave").to_string()).tooltip(TooltipSpec::new(tip)).show(ui);
+    // The small switch, as the old title bar drew it.
+    let out = Switch::new(Bind::given(on)).label(tl!("AutoSave").to_string()).size(ControlSize::Sm).tooltip(TooltipSpec::new(tip)).show(ui);
     if out.response.clicked() {
         match block {
             None => {
@@ -127,7 +131,9 @@ fn quick_access(app: &mut WordApp, ui: &mut Ui) -> Option<egui::Rect> {
     inspect::record(ui, crate::keytips::qat_region(), |ui| {
         for id in &ids {
             let enabled = qat_enabled(&ctx, app, id);
-            let mut button = IconButton::command(crate::icons::for_command(id), CommandRef::new(id.as_str())).enabled(enabled);
+            // Tool glyphs: the old toolbar drew its icons at the standard icon side, not a small glyph.
+            let mut button =
+                IconButton::command(crate::icons::for_command(id), CommandRef::new(id.as_str())).glyphs(GlyphRole::Tool).enabled(enabled);
             if id == "edit.undo" {
                 button = button.tooltip(TooltipSpec::new(crate::i18n::prefixed("Undo", app.session.undo_label().unwrap_or(""))));
             }
@@ -152,7 +158,8 @@ const UNDO_ROWS_SHOWN: u16 = 8;
 /// The small arrow beside Undo: a list of steps to undo several at once, with a footer that names how many a pick
 /// undoes, or Cancel while none is marked (#1903). Returns the arrow's rect.
 fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
-    let out = IconButton::new(IconId::new("chevron_down")).label(tl!("Undo History").to_string()).enabled(enabled).show(ui);
+    // The small filled triangle of the old toolbar.
+    let out = IconButton::new(IconSpec::glyph(&crate::ribbon::common::MENU_ARROW)).label(tl!("Undo History").to_string()).enabled(enabled).show(ui);
     let labels = undo_list_rows(app);
     let mut open = app.chrome.undo;
     if out.response.clicked() {
@@ -196,7 +203,8 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
 
 /// The menu button (…): common commands to show or hide, More Commands…, and Hide. Returns the button's rect.
 fn qat_menu(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
-    let out = IconButton::new(IconId::new("wordcraft.more")).label(tl!("Customize Quick Access Toolbar").to_string()).show(ui);
+    let out =
+        IconButton::new(IconId::new("wordcraft.more")).label(tl!("Customize Quick Access Toolbar").to_string()).glyphs(GlyphRole::Tool).show(ui);
     let shown: Vec<(&'static str, String, bool)> = QAT_MENU
         .iter()
         .filter_map(|id| {

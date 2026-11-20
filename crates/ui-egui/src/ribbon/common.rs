@@ -24,7 +24,7 @@ pub(super) fn about_enabled(ctx: &egui::Context, about: &str) -> bool {
 }
 
 /// The arrow after the label of a ribbon menu button: the small filled triangle of the old ribbon.
-static MENU_ARROW: DisclosureGlyph = DisclosureGlyph::new(1.0);
+pub(crate) static MENU_ARROW: DisclosureGlyph = DisclosureGlyph::new(1.0);
 
 /// A button that opens a menu, greyed out (and not opening) while the command the menu is about cannot run.
 /// `face` is the caller's button; `about` is that command's id, `None` for a menu about no command.
