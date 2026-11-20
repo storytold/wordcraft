@@ -518,8 +518,8 @@ pub(super) fn sample_chars(key: &str, limit: usize) -> Vec<char> {
 fn precompute_block<'a>(block: &Block, key: Option<&'a str>) -> PrecomputedBlock<'a> {
     match (block, key) {
         (Block::Para(_), Some(key)) => {
+            let has_cjk = key.chars().any(wordcraft_fonts::is_cjk);
             let chars = sample_chars(key, MAX_SIM_CHARS);
-            let has_cjk = chars.iter().copied().any(wordcraft_fonts::is_cjk);
             let words = sample_words(key, MAX_SIM_WORDS);
             PrecomputedBlock::Para { key, has_cjk, words, chars }
         }
