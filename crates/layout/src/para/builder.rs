@@ -336,7 +336,11 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style(rc, key.face, small);
+            // A complex-script segment the run's complex-script face covers is drawn in that face,
+            // looked up as a script font ([`lookup_script_family`]): `style` would look its font
+            // up as a run font, in Calibri or a core font, which have no Arabic or Hebrew.
+            let face = key.face.or(primary_cs.filter(|_| key.complex));
+            let si = self.style(rc, face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several
