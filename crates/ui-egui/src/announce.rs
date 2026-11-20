@@ -23,10 +23,10 @@ pub(crate) struct Announcement {
 
 /// Announces what the shortcut for command `id` did, once it has run; nothing for a command Word
 /// doesn't announce.
-pub(crate) fn after_shortcut(app: &mut WordApp, id: &str) {
+pub(crate) fn after_shortcut(app: &mut WordApp, id: &str, ctx: &egui::Context) {
     let Some(text) = describe(app, id) else { return };
     let serial = app.announcement.as_ref().map_or(0, |a| a.serial.wrapping_add(1));
-    app.announcement = Some(Announcement { text, serial, at: crate::now_ms() });
+    app.announcement = Some(Announcement { text, serial, at: ctx.input(|i| i.time) * 1000.0 });
 }
 
 /// The words for what command `id` did: the command's name and whether its formatting is now on,
@@ -66,7 +66,7 @@ fn describe(app: &WordApp, id: &str) -> Option<String> {
     if matches!(id, "format.growFont" | "format.shrinkFont" | "format.growFont1" | "format.shrinkFont1") {
         // A selection of mixed sizes has no one size to say.
         let size = state().get("size").and_then(Value::as_f64)?;
-        return Some(format!("{} {}", tl!("Font"), crate::options::length_in(wordcraft_geom::Unit::Points, size as f32)));
+        return Some(format!("{} {}", tl!("Font"), format_args!("{}{}", wordcraft_geom::Unit::Points.number(size as f32, app.session.region().decimal()), crate::options::unit_suffix(wordcraft_geom::Unit::Points))));
     }
     None
 }
@@ -74,7 +74,7 @@ fn describe(app: &WordApp, id: &str) -> Option<String> {
 /// Puts the latest announcement in the tree, as a polite live region, while it is fresh.
 pub(crate) fn expose(app: &WordApp, ctx: &egui::Context) {
     let Some(a) = &app.announcement else { return };
-    let age = crate::now_ms() - a.at;
+    let age = ctx.input(|i| i.time) * 1000.0 - a.at;
     if !(0.0..SHOWN_MS).contains(&age) {
         return;
     }
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn an_announcement_stays_with_its_window() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-        app.announcement = Some(super::Announcement { text: "Bold On".into(), serial: 0, at: crate::now_ms() });
+        app.announcement = Some(super::Announcement { text: "Bold On".into(), serial: 0, at: 0.0 });
         let mut other = crate::window_ui::WindowUi::new(app.session.document_id());
         app.swap_window(&mut other);
         assert!(app.announcement.is_none(), "the other window has nothing to say");
@@ -112,9 +112,8 @@ mod tests {
     }
 
     fn harness(text: &str) -> egui_kittest::Harness<'static, WordApp> {
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), crate::Services::default());
-        app.canvas.want_focus = true;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), crate::Services::default());
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -122,10 +121,12 @@ mod tests {
             },
             app,
         );
-        h.run_steps(6);
-        assert!(h.state().canvas.focused, "the page has the keyboard");
+        let ctx = h.ctx.clone();
+        h.state_mut().canvas.focus_page(&ctx);
+        crate::test_harness::frames(&mut h, 6);
+        assert!(h.state().canvas.focused(&ctx), "the page has the keyboard");
         h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 8) };
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         h
     }
 
@@ -140,7 +141,7 @@ mod tests {
 
     fn press(h: &mut egui_kittest::Harness<'_, WordApp>, m: Modifiers, key: Key) -> Option<(String, String)> {
         h.key_press_modifiers(m, key);
-        h.run_steps(2);
+        crate::test_harness::frames(h, 2);
         heard(h)
     }
 
@@ -180,14 +181,14 @@ mod tests {
     fn only_formatting_shortcuts_are_announced_for_a_while() {
         let mut h = harness("Lanterns glow");
         h.state_mut().run("format.bold", json!({})).unwrap();
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         assert_eq!(heard(&h), None, "a command run another way isn't announced");
         assert_eq!(press(&mut h, Modifiers::COMMAND, Key::Z), None, "Undo isn't announced");
         assert!(press(&mut h, Modifiers::COMMAND, Key::I).is_some());
         if let Some(a) = &mut h.state_mut().announcement {
             a.at -= super::SHOWN_MS;
         }
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         assert_eq!(heard(&h), None, "gone after three seconds");
     }
 
@@ -197,7 +198,7 @@ mod tests {
     fn alignment_is_said_for_the_paragraph_the_shortcut_formatted() {
         let mut h = harness("Lanterns glow\nRivers run");
         h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(1, 0) };
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         assert_eq!(press(&mut h, Modifiers::COMMAND, Key::E).map(|(t, _)| t).as_deref(), Some("Center On"));
         let align =
             |h: &egui_kittest::Harness<'_, WordApp>, i| h.state().session.doc.para_at(&wordcraft_doc::Pos::body(i, 0)).and_then(|p| p.props.align);
@@ -212,10 +213,10 @@ mod tests {
         let mut h = harness("Lanterns glow");
         // The key down alone, in one frame (`key_press_modifiers` gives each event a frame).
         h.input_mut().events.push(egui::Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
-        h.step();
+        crate::test_harness::frame(&mut h);
         assert_eq!(heard(&h), None, "the key's own frame built its tree before the shortcut ran");
         assert!(h.ctx.has_requested_repaint(), "the key asked for another frame");
-        h.step();
+        crate::test_harness::frame(&mut h);
         assert_eq!(heard(&h).map(|(t, _)| t).as_deref(), Some("Bold On"));
     }
 
@@ -228,7 +229,7 @@ mod tests {
     fn every_formatting_shortcut_says_its_own_words() {
         let mut h = harness("Lanterns glow");
         h.state_mut().run("format.size", json!({"size": 12})).unwrap();
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         let (cmd, shift) = (Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT);
         for (m, key, said) in [
             (cmd, Key::B, "Bold On"),
@@ -261,7 +262,7 @@ mod tests {
             h.state_mut().run("format.size", json!({"size": size})).unwrap();
         }
         h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 13) };
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         assert_eq!(press(&mut h, shift, Key::Period), None, "mixed sizes: nothing to say");
         assert!(h.state().announcement.is_none(), "and nothing waits to be said");
     }
@@ -270,10 +271,10 @@ mod tests {
     #[test]
     fn the_words_go_through_the_interface_catalogs() {
         let mut h = harness("Lanterns glow");
-        crate::i18n::pseudo::set(true);
+        h.state_mut().ui.language = "pseudo".into();
         let said = press(&mut h, Modifiers::COMMAND, Key::B).map(|(t, _)| t).unwrap_or_default();
-        crate::i18n::pseudo::set(false);
-        assert!(said.contains('⟦') && crate::i18n::pseudo::unmarked(&said).trim().is_empty(), "every word is marked: {said:?}");
+        crate::i18n::apply_language(crate::i18n::Lang::EN);
+        assert!(said.split_whitespace().all(|word| word.starts_with('⟦') && word.ends_with('⟧')) && said.contains('⟦'), "every word is marked: {said:?}");
     }
 
     /// Ten presses in a burst, one per frame or all in one frame (a held key, or keys typed
@@ -297,7 +298,7 @@ mod tests {
         for _ in 0..10 {
             h.input_mut().events.extend([key(true), key(false)]);
         }
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         let bold = wordcraft_engine::cmd::format::state(&h.state().session).get("bold").and_then(serde_json::Value::as_bool);
         assert_eq!(bold, Some(false), "ten Ctrl+B in one frame: bold on and off five times");
         assert_eq!(live(&h), 1, "one live region in the tree");
@@ -321,7 +322,7 @@ mod tests {
             app
         };
         let mut a = app();
-        crate::i18n::set_current(crate::i18n::fixture_lang(
+        crate::i18n::apply_language(crate::i18n::fixture_lang(
             "x-fixture",
             "\tBold\tBold-FX\n\tOn\tOn-FX\n\tOff\tOff-FX\n\tCenter\tCenter-FX\n\tFont\tFont-FX\n\tpt\tpt-FX\n",
         ));
@@ -335,12 +336,12 @@ mod tests {
                 [("tr", "Kalın Açık", "Ortala Açık", "Yazı Tipi 14 pt"), ("zh-hans", "加粗 开", "居中 开", "字体 14 磅")]
             {
                 let mut a = app();
-                crate::i18n::set_current(crate::i18n::Lang::from_code(code).expect("an interface language"));
+                crate::i18n::apply_language(crate::i18n::Lang::from_code(code).expect("an interface language"));
                 assert_eq!(said(&mut a, "format.bold").as_deref(), Some(bold), "{code}");
                 assert_eq!(said(&mut a, "para.alignCenter").as_deref(), Some(center), "{code}");
                 assert_eq!(said(&mut a, "format.growFont").as_deref(), Some(font), "{code}");
             }
         }
-        crate::i18n::set_current(crate::i18n::Lang::EN);
+        crate::i18n::apply_language(crate::i18n::Lang::EN);
     }
 }
