@@ -8,3 +8,4 @@ mod non_utf8_args;
 mod picture_then_typing;
 mod strict;
 mod text_tracked;
+mod wrote_on_stdout;
