@@ -3270,7 +3270,13 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
             shown.insert(String::from_utf16_lossy(&units));
         }
     }
+    // The equation's x is the mathematical italic 𝑥 when the math face has that alphabet. A host
+    // without a math font (no STIX Two Math, Latin Modern Math…) sets math in a text face that
+    // lacks it, and the layout draws the plain letter slanted instead (`math/nodes.rs`), which the
+    // body's "x" already maps.
+    let (math_face, _) = wordcraft_fonts::math::resolve_math("Cambria Math");
+    let equation_x = if math_face.covers('\u{1D465}') { "\u{1D465}" } else { "x" };
     let expected: std::collections::BTreeSet<String> =
-        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
-    assert_eq!(shown, expected);
+        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", equation_x].into_iter().map(String::from).collect();
+    assert_eq!(shown, expected, "math face: {}", math_face.family);
 }
