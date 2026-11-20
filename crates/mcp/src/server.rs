@@ -1,7 +1,9 @@
 //! WordCraft's MCP server: the shared `craft_mcp_server` core (JSON-RPC framing, the lifecycle,
 //! `tools/*` and `resources/*`) around WordCraft's own tools, resources and instructions.
 
-use std::io::{BufRead, Read, Write};
+#[cfg(test)]
+use std::io::Read;
+use std::io::{BufRead, Write};
 
 use craft_mcp_server::{Contents, Info, Options, Tools};
 use serde_json::{Value, json};
@@ -29,6 +31,7 @@ pub const COMMANDS_URI: &str = "wordcraft://commands";
 pub const MAX_REQUEST_LINE: usize = 1 << 20;
 
 /// One bounded line read.
+#[cfg(test)]
 pub(crate) enum BoundedLine {
     Eof,
     Line(String),
@@ -38,6 +41,7 @@ pub(crate) enum BoundedLine {
 
 /// Read one line of at most `max` bytes (excluding the newline) without buffering more than
 /// `max + 1` bytes; an over-long line is skipped up to its newline.
+#[cfg(test)]
 pub(crate) fn read_bounded_line(reader: &mut impl BufRead, max: usize) -> std::io::Result<BoundedLine> {
     let mut buf = Vec::new();
     reader.by_ref().take(max as u64 + 1).read_until(b'\n', &mut buf)?;
