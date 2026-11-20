@@ -8,6 +8,7 @@ use super::shortcuts::{
     is_shift_delete, paste_release_modifiers,
 };
 use super::{Key, Modifiers, WordApp, json};
+use crate::canvas::DismissedReplacement;
 
 /// Events for the focused canvas: text, editing keys, clipboard, IME. While keytips are showing
 /// every key belongs to them (letters pick badges, Escape cancels), so nothing here runs.
@@ -139,6 +140,74 @@ fn read_mode_events(app: &mut WordApp, ctx: &egui::Context, events: &[egui::Even
 fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool {
     let Batch { interrupted_preedit, interrupted_replacement, .. } = b;
     *interrupted_preedit |= std::mem::take(&mut app.canvas.ime_interrupted_preedit);
+    // A pointer press discarded a composition. The interrupt reaches the platform a frame or two
+    // later, so its pre-edit, result string and replacement deletion can all arrive after the
+    // press moved the caret. Keep the quarantine until that result has been consumed; a
+    // genuinely different pre-edit or fresh ordinary input ends it (#6916).
+    if let Some(dismissed) = app.canvas.ime_dismissed_preedit.clone() {
+        match e {
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty() && *text == dismissed => {
+                app.canvas.ime_preedit.clear();
+                app.canvas.ime_preedit_range = None;
+                app.canvas.ime_preview = None;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
+            }
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty() => {
+                // A different pre-edit starts a new composition at the caret the click placed.
+                app.canvas.ime_dismissed_preedit = None;
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
+            }
+            egui::Event::Ime(egui::ImeEvent::Preedit { .. }) => {
+                // Windows can send an empty pre-edit immediately before the canceled
+                // composition's result string. It is not an acknowledgement: keep the
+                // quarantine so the following Commit is dropped too.
+                return true;
+            }
+            egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { .. } | egui::ImeEvent::DeleteSurroundingBytes { .. }) => {
+                // The old composition's replacement would delete around its original caret,
+                // which the press has already moved. Drop it and wait for its paired result.
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::Awaiting;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
+            }
+            egui::Event::Text(_) => {
+                // A canceled composition can be replaced by a bare `Text` followed by a
+                // `Commit`, with no `DeleteSurrounding` first. Real typing never arrives here:
+                // egui-winit sends `Key { pressed: true }` before `Text`, and that arm below
+                // ends the quarantine first. An isolated `Text` while quarantined is therefore
+                // replacement residue; drop it and keep the quarantine for its `Commit` so
+                // neither lands at the caret the press moved to (#6916).
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::TextDropped;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
+            }
+            egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                // `WM_IME_ENDCOMPOSITION` can still carry a result string. Drop it: the
+                // composition is over, so a later commit is fresh input.
+                *interrupted_preedit = false;
+                *interrupted_replacement = EquationReplacementDrop::None;
+                app.canvas.ime_dismissed_preedit = None;
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
+                app.session.clear_ime_joins();
+                app.canvas.ime_join_text = None;
+                return true;
+            }
+            // Fresh ordinary input after the dismissal ends the quarantine, so a later commit
+            // reaches `ime_commit` at the caret. `Text` is deliberately absent: egui sends a
+            // pressed `Key` before typing's `Text`, so that key has already ended the quarantine
+            // by the time its text arrives. A `Text` still inside the quarantine is replacement
+            // residue from the canceled composition and was dropped above.
+            egui::Event::Paste(_) | egui::Event::Key { pressed: true, .. } => {
+                app.canvas.ime_dismissed_preedit = None;
+                app.canvas.ime_dismissed_replacement = DismissedReplacement::None;
+            }
+            _ => {}
+        }
+    }
     let stale_composition_event = if *interrupted_preedit {
         match &e {
             egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { .. } | egui::ImeEvent::DeleteSurroundingBytes { .. }) => {
@@ -150,7 +219,12 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
                 *interrupted_replacement = EquationReplacementDrop::None;
                 true
             }
-            egui::Event::Text(_) if matches!(*interrupted_replacement, EquationReplacementDrop::Awaiting) => {
+            egui::Event::Text(_) => {
+                // An interrupted composition can be replaced by a bare `Text` + `Commit` with no
+                // `DeleteSurrounding` first. egui sends a pressed `Key` before ordinary typing's
+                // `Text`, and that key has already ended this batch quarantine; a `Text` still
+                // here is replacement residue. Drop it and keep the quarantine for its `Commit`
+                // so neither is written at the caret the press moved to (#6916).
                 *interrupted_replacement = EquationReplacementDrop::TextDropped;
                 true
             }
@@ -158,7 +232,6 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
             // A new marked composition or ordinary input is not the old target's queued
             // replacement. Commit-only input without an interrupted preedit is never gated.
             egui::Event::Ime(egui::ImeEvent::Preedit { .. })
-            | egui::Event::Text(_)
             | egui::Event::Paste(_)
             | egui::Event::Key { pressed: true, .. } => {
                 *interrupted_preedit = false;
@@ -556,8 +629,39 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         }
         egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) => {
             if text.len() <= MAX_IME_PREEDIT_BYTES {
+                // On Windows egui-winit replaces a `0..0` cursor range with `None` (a workaround
+                // for the Korean IME reporting the cursor at the start by mistake). While we are
+                // tracking this composition's cursor, such a `None` means the caret is at its
+                // *start*: `preedit_cursor_chars` would otherwise fall back to its end, jumping
+                // from before the first letter to after the last one, then sticking there until
+                // a right press reports a range again (#6916).
+                //
+                // This is not only a Left press with unchanged text. Delete/Backspace at the
+                // start changes the text but leaves the cursor at 0, and deleting the letters
+                // before the cursor moves it to 0; Windows reports both as `0..0` -> `None` too.
+                // A composition that never reported a cursor keeps the end fallback: winit says
+                // no range means no caret hint, and the end is the usual position.
+                let range = match active_range_chars {
+                    Some(r) => Some(r),
+                    None if !text.is_empty()
+                        && app.canvas.ime_preedit_range.as_ref().is_some_and(|old_range| {
+                            let old = app.canvas.ime_preedit.as_str();
+                            if old == text.as_str() {
+                                return true;
+                            }
+                            if !cfg!(target_os = "windows") {
+                                return false;
+                            }
+                            old_range.end == 0
+                                || old.chars().skip(old_range.end).collect::<String>() == text
+                        }) =>
+                    {
+                        Some(0..0)
+                    }
+                    None => None,
+                };
                 app.canvas.ime_preedit = text;
-                app.canvas.ime_preedit_range = active_range_chars;
+                app.canvas.ime_preedit_range = range;
             } else {
                 log::warn!("ignoring an IME pre-edit of {} bytes", text.len());
                 app.canvas.ime_preedit.clear();

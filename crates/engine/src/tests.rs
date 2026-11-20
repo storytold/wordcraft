@@ -2517,6 +2517,48 @@ fn preview_layout_keeps_the_word_being_typed_unmarked() {
     assert_eq!(marks(&preview, &copy), ["helo"]);
 }
 
+/// IME composition in the middle of a line: the pre-edit is laid out in a copy at the caret, so
+/// the glyphs after it start further right. The real document and caret must not move until the
+/// input method commits.
+#[test]
+fn ime_preview_layout_reflows_the_text_right_of_the_composition() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("甲乙"));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    let (doc, sel, rev) = (s.doc.clone(), s.sel.clone(), s.rev());
+    let base_off = s.sel.focus.off;
+    let base_caret = {
+        let base = s.layout();
+        base.caret_on(&s.sel.focus, 0).expect("the caret between the two characters")
+    };
+
+    let preedit = "にほん";
+    let (copy, preview_sel, preview) = s.ime_preview_layout(preedit, 2).expect("a body composition can be laid out");
+    assert_eq!(copy.plain_text(wordcraft_doc::StoryRef::Body), format!("甲{preedit}乙"));
+    // `cursor_chars` is in scalar values: two of the three kana have been typed past.
+    assert_eq!(preview_sel.focus.off, base_off + 6);
+    let at_cursor = preview.caret_on(&preview_sel.focus, 0).expect("the caret inside the composition");
+    assert!(at_cursor.x > base_caret.x, "the composition's caret has advanced: {} > {}", at_cursor.x, base_caret.x);
+
+    let right = wordcraft_doc::Pos { off: base_off + preedit.len(), ..preview_sel.focus.clone() };
+    let after_composition = preview.caret_on(&right, 0).expect("the caret before 乙 in the preview");
+    assert!(
+        after_composition.x > base_caret.x + 1.0,
+        "乙 starts further right: {} > {}",
+        after_composition.x,
+        base_caret.x
+    );
+
+    assert_eq!(s.doc, doc, "the composition does not edit the document");
+    assert_eq!((&s.sel, s.rev(), s.dirty), (&sel, rev, false));
+    assert!(!s.can_undo());
+    assert!(s.ime_preview_layout("", 0).is_none(), "an empty pre-edit has no layout");
+    assert!(s.ime_preview_layout("に\nほん", 0).is_none(), "control characters fall back to the overlay");
+
+    s.sel.anchor = wordcraft_doc::Pos::body(0, 0);
+    assert!(s.ime_preview_layout("に", 1).is_none(), "a range selection cannot host a composition");
+}
+
 #[test]
 fn delete_row_on_a_merge_start_promotes_the_cell_below() {
     use wordcraft_doc::props::VMerge;

@@ -85,6 +85,453 @@ fn the_preview_follows_the_caret_and_the_view() {
     assert_eq!(web.pages[0].w, app.session.layout().pages[0].w, "laid out at the Web view's width");
 }
 
+/// IME pre-edit is shown by the page raster, laid out into a copy at the caret, so the glyphs on
+/// its right reflow right. It is cached for still frames and dropped as soon as the composition
+/// ends; the document, its revision and the undo history stay untouched.
+#[test]
+fn the_page_shows_the_input_method_composition_in_the_document() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+    let (doc, rev, sel) = (app.session.doc.clone(), app.session.rev(), app.session.sel.clone());
+    let base_off = app.session.sel.focus.off;
+
+    app.canvas.ime_preedit = "にほん".into();
+    app.canvas.ime_preedit_range = Some(0..1);
+    let layout = shown_layout(&mut app);
+    assert!(!std::sync::Arc::ptr_eq(&layout, &app.session.layout()), "the page has the composed layout");
+    assert_eq!(shown_doc(&app).plain_text(StoryRef::Body), "甲にほん乙");
+    assert!(!std::ptr::eq(shown_doc(&app), &app.session.doc), "the raster is drawn from the copy");
+    // A composition is not a document or selection change: a11y, find and window state keep the
+    // real ones. Only the raster and its caret see the copy.
+    assert_eq!(page_doc(&app).plain_text(StoryRef::Body), "甲乙");
+    assert!(preview_sel(&app).is_none());
+    let composed_caret = shown_sel(&app).expect("the composition's caret").clone();
+    assert_eq!(composed_caret.focus.off, base_off + 3, "one kana into the pre-edit");
+    let base = app.session.layout();
+    let before = base.caret_on(&sel.focus, 0).unwrap();
+    let after = layout.caret_on(&wordcraft_doc::Pos { off: base_off + "にほん".len(), ..composed_caret.focus.clone() }, 0).unwrap();
+    assert!(after.x > before.x + 1.0, "乙 moved right: {} > {}", after.x, before.x);
+    assert_eq!((&app.session.doc, app.session.rev(), &app.session.sel, app.session.can_undo()), (&doc, rev, &sel, false));
+
+    app.canvas.ime_preedit = "にほん".into();
+    app.canvas.ime_preedit_range = Some(0..1);
+    let again = shown_layout(&mut app);
+    assert!(std::sync::Arc::ptr_eq(&layout, &again), "an unchanged composition reuses its layout");
+
+    app.canvas.ime_preedit_range = Some(0..0);
+    let moved = shown_layout(&mut app);
+    assert!(!std::sync::Arc::ptr_eq(&layout, &moved), "the caret moving through the pre-edit rebuilds it");
+    assert_eq!(shown_sel(&app).unwrap().focus.off, base_off, "the caret is at the composition's start");
+
+    app.canvas.ime_preedit.clear();
+    app.canvas.ime_preedit_range = None;
+    assert!(std::sync::Arc::ptr_eq(&shown_layout(&mut app), &app.session.layout()));
+    assert!(std::ptr::eq(page_doc(&app), &app.session.doc), "the composition is gone: the document's own pages");
+    assert!(preview_sel(&app).is_none());
+    assert!(app.canvas.ime_preview.is_none());
+}
+
+/// #6916: clicks and the accessibility tree use the document's layout, not the composition copy.
+/// A hit in the copy carries the pre-edit's byte offset, so writing it back as the real selection
+/// would move the caret past 乙 (or past the paragraph end) and land a later insert in the wrong
+/// place. The page pixels still use the copy so the text to the right reflows.
+#[test]
+fn composition_keeps_hit_testing_and_a11y_on_the_real_document() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+
+    app.canvas.ime_preedit = "にほん".into();
+    app.canvas.ime_preedit_range = Some(1..2);
+    let shown = shown_layout(&mut app);
+    assert!(app.canvas.ime_preview.is_some());
+    let real = document_layout(&mut app, &shown);
+    assert!(
+        std::sync::Arc::ptr_eq(&real, &app.session.layout()),
+        "hits and a11y read the real document, whose offsets the session and selection use"
+    );
+    assert!(!std::sync::Arc::ptr_eq(&real, &shown), "the page pixels still reflow with the pre-edit");
+
+    // The real caret is a position the session can use, with no pre-edit offset mixed in.
+    assert!(real.caret_on(&app.session.sel.focus, 0).is_some(), "the real caret is a valid hit target");
+
+    app.canvas.ime_preedit.clear();
+    app.canvas.ime_preedit_range = None;
+    let plain = shown_layout(&mut app);
+    assert!(std::sync::Arc::ptr_eq(&document_layout(&mut app, &plain), &plain), "no composition: one layout everywhere");
+}
+
+/// #6916: a right-click during a composition interrupts it instead of leaving the uncommitted
+/// text to drift to the pointer. The caret must not move to the clicked spot in the meantime, and
+/// the context menu still opens at the pointer. On Windows the interrupt normally cancels the
+/// composition, so the pre-edit does not enter the body; the last part of this test covers the
+/// rarer platform that answers with a result string, which must land at the composition.
+#[test]
+fn right_click_interrupts_the_composition_instead_of_dragging_it() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙丙丁")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    // A live composition at the caret between 甲 and 乙.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: Some(0..0) }));
+    h.step();
+    h.step();
+    assert!(h.state().canvas.ime_preview.is_some(), "the composition is shown in the page copy");
+    let caret_off = h.state().session.sel.focus.off;
+
+    // Right-click far to the right of the composition, on the same page.
+    let at = h.state().canvas.page_rects.first().map(|r| egui::pos2(r.max.x - 12.0, r.center().y)).expect("a page");
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    let mut interrupted = false;
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+        interrupted |= h.output().platform_output.ime.as_ref().is_some_and(|ime| ime.should_interrupt_composition);
+    }
+    assert!(interrupted, "the right-click interrupts the composition");
+    assert_eq!(h.state().session.sel.focus.off, caret_off, "the caret stays at the composition, it does not drift to the pointer");
+    assert!(h.state().canvas.context_menu_open, "the context menu still opens at the pointer");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "甲乙丙丁", "an interrupted composition is not written into the body");
+
+    // A platform that does answer the interrupt with a result string: it lands where it was
+    // composed, between 甲 and 乙, not at the spot under the mouse.
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲にほん乙丙丁", "the committed text stays at the composition: {text:?}");
+}
+
+/// #6916 review: a composition over a range has no preview copy (it falls back to the overlay),
+/// but its pre-edit is still live. A right-click must not move the caret to the pointer in that
+/// case either, or any platform result would land away from the composition it belongs to.
+#[test]
+fn right_click_keeps_the_caret_when_the_composition_has_no_preview() {
+    let (mut h, at) = composing_harness();
+    // `ime_preview_layout` refuses a non-collapsed selection, so there is no page copy to check.
+    h.state_mut().session.sel = wordcraft_engine::Selection {
+        anchor: wordcraft_doc::Pos::body(0, 3),
+        focus: wordcraft_doc::Pos::body(0, 6),
+    };
+    h.step();
+    assert!(!h.state().canvas.ime_preedit.is_empty(), "the composition is still live");
+    assert!(h.state().canvas.ime_preview.is_none(), "a range selection has no preview layout");
+    let sel = h.state().session.sel.clone();
+
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    assert_eq!(h.state().session.sel, sel, "the caret stays at the composition, not at the pointer");
+    assert!(h.state().canvas.context_menu_open, "the context menu still opens at the pointer");
+}
+
+/// #6916: a left-click places the caret at the pointer, but a live composition must not be rebuilt
+/// there and appear to follow the mouse. The click discards the pre-edit instead: on Windows an
+/// interrupt only cancels, so no `Commit` arrives and the text stays out of the body. This drives
+/// the real platform behaviour — nothing is injected after the interrupt.
+#[test]
+fn left_click_discards_the_composition_without_drifting_to_the_pointer() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙丙丁")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    // A live composition at the caret between 甲 and 乙.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: Some(0..0) }));
+    h.step();
+    h.step();
+    assert!(h.state().canvas.ime_preview.is_some(), "the composition is shown in the page copy");
+
+    // Left-click far to the right of the composition, on the same page.
+    let at = h.state().canvas.page_rects.first().map(|r| egui::pos2(r.max.x - 12.0, r.center().y)).expect("a page");
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    let mut interrupted = false;
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.step();
+        interrupted |= h.output().platform_output.ime.as_ref().is_some_and(|ime| ime.should_interrupt_composition);
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+
+    assert!(interrupted, "the left-click interrupts the composition");
+    assert!(h.state().canvas.ime_preedit.is_empty(), "the pre-edit is discarded on the click, not moved to the pointer");
+    assert!(h.state().canvas.ime_preview.is_none(), "no preview copy is left to drift under the pointer");
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲乙丙丁", "the cancelled composition does not enter the body: {text:?}");
+}
+
+/// A live "にほん" composition between 甲 and 乙, with the pointer parked far to its right.
+fn composing_harness() -> (H, egui::Pos2) {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("甲乙丙丁")), Default::default());
+    app.session.run("caret.docStart", &json!({})).unwrap();
+    app.session.run("caret.right", &json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: Some(0..0) }));
+    h.step();
+    h.step();
+    assert!(h.state().canvas.ime_preview.is_some(), "the composition is shown in the page copy");
+    let at = h.state().canvas.page_rects.first().map(|r| egui::pos2(r.max.x - 12.0, r.center().y)).expect("a page");
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    (h, at)
+}
+
+fn primary_button(at: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
+}
+
+fn shown_text(h: &H) -> String {
+    shown_doc(h.state()).plain_text(wordcraft_doc::StoryRef::Body)
+}
+
+/// #6916: a left press moves the caret on the very frame it arrives. The composition must be
+/// dropped *before* that, and before `shown_layout` builds the page copy again — otherwise the
+/// discarded pre-edit is inserted at the pointer and looks as if it followed the mouse. The page
+/// raster is drawn from `shown_doc`, so assert on what is actually painted, not just on the flag.
+#[test]
+fn left_press_stops_painting_the_composition_before_the_caret_moves() {
+    let (mut h, at) = composing_harness();
+    assert_eq!(shown_text(&h), "甲にほん乙丙丁");
+    h.event(primary_button(at, true));
+    h.step();
+    assert!(h.state().canvas.ime_preedit.is_empty(), "the pre-edit is discarded on the press");
+    assert!(h.state().canvas.ime_preview.is_none(), "the cached page copy is dropped too");
+    assert_eq!(shown_text(&h), "甲乙丙丁", "the press frame paints only the real document");
+    assert!(h.state().session.sel.focus.off > 3, "the caret still moves to the click");
+    for _ in 0..3 {
+        h.step();
+        assert_eq!(shown_text(&h), "甲乙丙丁", "no later frame rebuilds the pre-edit under the pointer");
+    }
+    h.event(primary_button(at, false));
+    h.step();
+    assert!(h.output().platform_output.ime.as_ref().is_some_and(|ime| ime.should_interrupt_composition), "the click interrupts the platform's composition");
+}
+
+/// #6916: the interrupt reaches the platform a frame or two later, and Windows can keep reporting
+/// the old pre-edit (and even queue a result string) in the meantime. None of it may be painted
+/// again at the new caret, and none of it may enter the body.
+#[test]
+fn stale_platform_events_after_a_click_are_neither_painted_nor_committed() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    for _ in 0..2 {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: Some(0..0) }));
+        h.step();
+        h.step();
+        assert!(h.state().canvas.ime_preedit.is_empty(), "the stale pre-edit is not held");
+        assert!(h.state().canvas.ime_preview.is_none(), "the stale pre-edit is not laid out");
+        assert_eq!(shown_text(&h), "甲乙丙丁", "the discarded text is not painted");
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "甲乙丙丁", "a cancelled composition never enters the body");
+}
+
+/// #6916 review: a `Commit` queued in the same input batch as the press belongs to the
+/// composition the press discards. It must not reach `ime_commit` before the dismissal is
+/// recorded, or the discarded text lands in the body anyway.
+#[test]
+fn a_commit_in_the_press_batch_is_discarded_with_the_composition() {
+    let (mut h, at) = composing_harness();
+    // `Harness::event` gives every queued event its own frame; a real raw input batch can hold
+    // both. Push them straight into the next frame's input so they really share a batch.
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.input_mut().events.push(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "甲乙丙丁", "the same-batch commit does not enter the body");
+    assert_eq!(shown_text(&h), "甲乙丙丁", "nor is it painted");
+}
+
+/// #6916 review: dropping one quarantined `Commit` ends that composition. A second commit in
+/// the same batch is fresh input and must still reach `ime_commit`.
+#[test]
+fn only_one_commit_is_quarantined_after_a_press() {
+    let (mut h, at) = composing_harness();
+    // One raw batch, not three frames: `Harness::event` would give each event its own frame.
+    h.input_mut().events.push(primary_button(at, true));
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("あ".into())));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(!text.contains("にほん"), "the canceled composition is dropped: {text:?}");
+    assert!(text.contains('あ'), "the following commit is fresh input: {text:?}");
+}
+
+/// #6916 review: ordinary typing after a dismissal ends the quarantine. egui sends a pressed
+/// `Key` before the `Text` of every real keystroke, so the key releases the quarantine and the
+/// fresh `Text` reaches the document. A later genuine `Commit` must then reach `ime_commit` too.
+#[test]
+fn fresh_input_after_a_dismissal_releases_the_commit_quarantine() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    // A real keystroke is Key { pressed: true } followed by Text in the same batch.
+    h.input_mut().events.push(egui::Event::Key { key: egui::Key::X, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.input_mut().events.push(egui::Event::Text("X".into()));
+    h.step();
+    assert!(h.state().canvas.ime_dismissed_preedit.is_none(), "typing ends the quarantine");
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("あ".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains('X'), "the fresh text reaches the document: {text:?}");
+    assert!(text.contains('あ'), "a fresh commit reaches the document: {text:?}");
+}
+
+/// #6916 review (CodeRabbit r4611363553): some platforms replace a canceled composition with a
+/// bare `Text` followed by `Commit`, with no `DeleteSurrounding` first. Neither may be written at
+/// the caret the press moved to. A bare `Text` is distinguishable from typing because egui always
+/// puts a pressed `Key` before typing's `Text`; a quarantined bare `Text` is replacement residue.
+#[test]
+fn a_bare_text_commit_pair_after_a_dismissal_is_not_written() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.step();
+    // Same batch: no Key, so this Text is the canceled composition's replacement, not typing.
+    h.input_mut().events.push(egui::Event::Text("にほん".into()));
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲乙丙丁", "neither the replacement Text nor its Commit enters the body: {text:?}");
+    assert_eq!(shown_text(&h), "甲乙丙丁", "nor is either painted");
+}
+
+/// #6916 review: Windows can emit an empty pre-edit immediately before the canceled
+/// composition's result string, in the frame *after* the press (when the batch-local interrupted
+/// flag is already gone). Treating that empty pre-edit as an acknowledgement would let the
+/// result string into the body at the caret the press moved to.
+#[test]
+fn an_empty_preedit_keeps_the_dismissal_through_a_late_commit() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲乙丙丁", "the empty pre-edit does not release the quarantine: {text:?}");
+    assert!(h.state().canvas.ime_dismissed_preedit.is_none(), "the consumed result ends the quarantine");
+}
+
+/// #6916 review: a surrounding deletion queued for the discarded composition must not erase
+/// body text at the caret the press moved to; its paired replacement is dropped as well.
+#[test]
+fn a_dismissed_composition_delete_pair_does_not_erase_the_body() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 3, after_bytes: 0 }));
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("にほん".into())));
+    h.step();
+    h.step();
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(text, "甲乙丙丁", "neither the deletion nor its replacement touches the body: {text:?}");
+}
+
+/// The dismissal is scoped to the composition the click ended: a genuinely new composition must
+/// still be laid out at the caret the click placed.
+#[test]
+fn a_new_composition_after_a_click_is_painted_at_the_new_caret() {
+    let (mut h, at) = composing_harness();
+    h.event(primary_button(at, true));
+    h.step();
+    h.event(primary_button(at, false));
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }));
+    h.step();
+    h.step();
+    assert_eq!(h.state().canvas.ime_preedit, "に", "a different pre-edit starts a fresh composition");
+    assert!(h.state().canvas.ime_dismissed_preedit.is_none(), "the dismissal is cleared");
+    assert!(h.state().canvas.ime_preview.is_some(), "the fresh composition is laid out");
+    assert_eq!(h.state().canvas.ime_preview.as_ref().unwrap().real_sel, h.state().session.sel, "at the caret the click placed");
+    assert!(shown_text(&h).ends_with("に"), "the new pre-edit is at the new caret: {:?}", shown_text(&h));
+}
+
+/// A table preview takes over the page; the input method's pre-edit goes back to being an overlay
+/// rather than leaving the two previews fighting over the same raster.
+#[test]
+fn a_table_preview_takes_over_from_an_input_method_composition() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns")), Default::default());
+    app.canvas.ime_preedit = "に".into();
+    app.canvas.ime_preedit_range = Some(0..1);
+    let composed = shown_layout(&mut app);
+    assert!(app.canvas.ime_preview.is_some());
+
+    app.canvas.table_preview = Some((2, 2));
+    let table = shown_layout(&mut app);
+    assert!(!std::sync::Arc::ptr_eq(&composed, &table));
+    assert!(app.canvas.ime_preview.is_none(), "the composition falls back to the overlay");
+    assert!(table.index.keys().any(|(st, p)| *st == StoryRef::Body && p.0.len() == 4));
+}
+
 /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
 /// held while the window is dragged, applied once the size has been still for the settle time.
 #[test]
@@ -4547,8 +4994,8 @@ fn the_ime_fixture_draws_kana_without_a_japanese_font() {
 }
 
 /// While an input method composes, the caret and the candidate window sit at its cursor inside
-/// the composition: the end of the range it reports, or the end of the text with no range. The
-/// range comes from the OS and is clamped, whatever it holds.
+/// the composition: the end of the range it reports, or the end of the text when it never reports
+/// a range. The range comes from the OS and is clamped, whatever it holds.
 #[test]
 fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -4578,9 +5025,10 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     };
     let before = compose(Some(0..0));
     assert_eq!(before, start, "a cursor at the composition's start is the caret before composing");
-    let end = compose(None);
     let mid = compose(Some(1..1));
+    let end = compose(Some(3..3));
     assert!(end > mid && mid > before, "the cursor moves through the composition: {before} {mid} {end}");
+    assert_eq!(compose(None), before, "Windows collapses 0..0 to None: the caret stays at the start");
     assert_eq!(compose(Some(0..99)), end, "a range past the text ends at its end");
     assert_eq!(compose(Some(std::ops::Range { start: 5, end: 1 })), mid, "a reversed range uses its end");
     assert_eq!(compose(Some(usize::MAX..usize::MAX)), end);
@@ -4588,6 +5036,99 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     h.step();
     assert_eq!(h.state().canvas.ime_preedit_range, None, "the commit clears the range");
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
+}
+
+/// #6916: egui-winit turns a Windows `0..0` cursor range into `None` (a Korean IME workaround).
+/// Moving left through a pinyin pre-edit used to jump from before the first letter to after the
+/// last one, then get stuck; moving right jumped back to the first letter. A composition that
+/// never reported a cursor still starts at its end.
+#[test]
+fn moving_left_inside_a_composition_stops_at_its_start() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "The"})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    let ime_x = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x);
+    let start = ime_x(&h).expect("the canvas places the candidate window");
+    let mut compose = |text: &str, range: Option<std::ops::Range<usize>>| {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: range }));
+        h.step();
+        h.step();
+        ime_x(&h).expect("the canvas places the candidate window")
+    };
+    let x4 = compose("abcd", Some(4..4));
+    let x3 = compose("abcd", Some(3..3));
+    let x2 = compose("abcd", Some(2..2));
+    let x1 = compose("abcd", Some(1..1));
+    assert!(x4 > x3 && x3 > x2 && x2 > x1 && x1 > start, "left presses walk the caret through the pre-edit: {start} {x1} {x2} {x3} {x4}");
+    // The fourth left press reaches 0, which Windows reports as no range at all.
+    assert_eq!(compose("abcd", None), start, "the caret sits before the first letter, not after the last");
+    assert_eq!(compose("abcd", None), start, "another left press leaves it at the start");
+    assert_eq!(compose("abcd", Some(1..1)), x1, "a right press moves it to the first letter again");
+    // A fresh composition with no cursor hint still puts the caret at its end.
+    let fresh = compose("xy", None);
+    assert!(fresh > start, "a composition that never reported a cursor keeps the end fallback: {start} {fresh}");
+    assert_eq!(h.state().canvas.ime_preedit_range, None);
+}
+
+/// #6916: deleting inside a composition changes its text but can leave the IME cursor at 0,
+/// which Windows reports as `0..0` -> `None`. A bare `None` must not fall back to the end: the
+/// caret would jump after the last letter, ignore Left, and jump back to the first on Right.
+#[test]
+fn deleting_at_the_start_of_a_composition_keeps_its_caret_at_the_start() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "The"})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(kana_test_glyphs)
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+    for _ in 0..8 {
+        h.step();
+    }
+    let ime_x = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x);
+    let start = ime_x(&h).expect("the canvas places the candidate window");
+    let mut compose = |text: &str, range: Option<std::ops::Range<usize>>| {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: range }));
+        h.step();
+        h.step();
+        ime_x(&h).expect("the canvas places the candidate window")
+    };
+
+    // Backspace-like edit: the cursor was after the first letter, the letter before it is gone,
+    // so the new pre-edit is the tail of the old one and the caret is now at its start.
+    let x1 = compose("abcd", Some(1..1));
+    assert!(x1 > start);
+    assert_eq!(compose("bcd", None), start, "deleting before the cursor moves it to the pre-edit's start");
+    assert_eq!(compose("bcd", None), start, "Left at the start still stays there");
+    assert!(compose("bcd", Some(1..1)) > start, "Right moves to the first remaining letter");
+
+    // Delete at an already-start cursor: the text changes, the cursor stays at 0, and Windows
+    // sends no range again.
+    compose("bcd", None);
+    assert_eq!(compose("cd", None), start, "deleting the first letter keeps the caret at the start");
+    assert_eq!(compose("cd", None), start, "and Left cannot move past it");
+    assert!(compose("cd", Some(1..1)) > start, "Right still walks into the remaining text");
 }
 
 /// The outgoing IME descriptor is built from settled, visible logical text. A pre-edit does
