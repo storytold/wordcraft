@@ -135,7 +135,7 @@ mod tests {
     /// The live region's text and node (its id, written out), if one is in the tree. The text is
     /// the label's value, which is its name to screen readers.
     fn heard(h: &egui_kittest::Harness<'_, WordApp>) -> Option<(String, String)> {
-        let node = h.query_by(|n| n.role() == Role::Label && n.accesskit_node().data().live() == Some(Live::Polite))?;
+        let node = h.query_by(|n| n.role() == Role::Label && n.data().live() == Some(Live::Polite))?;
         let n = node.accesskit_node();
         assert!(n.label_comes_from_value(), "a label, named by its value");
         Some((n.value().unwrap_or_default(), format!("{:?}", n.id())))
@@ -298,9 +298,8 @@ mod tests {
     /// each replaces the last (`WordApp::announcement` holds one), so nothing queues up.
     #[test]
     fn a_burst_of_ten_presses_leaves_one_announcement_the_latest() {
-        let live = |h: &egui_kittest::Harness<'_, WordApp>| {
-            h.query_all_by(|n| n.role() == Role::Label && n.accesskit_node().data().live() == Some(Live::Polite)).count()
-        };
+        let live =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.query_all_by(|n| n.role() == Role::Label && n.data().live() == Some(Live::Polite)).count();
         let mut h = harness("Lanterns glow");
         let mut nodes = std::collections::HashSet::new();
         for i in 0..10 {
