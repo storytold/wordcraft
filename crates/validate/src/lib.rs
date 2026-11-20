@@ -4317,9 +4317,14 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     Ok(AlternateAssessment::Usable)
 }
 
+/// The page the decoder opens by default, for an image whose directory graph `tiff_admission` already
+/// admitted. That graph walk is the only completeness authority: the codec's own walk also stops at a
+/// directory it has listed before (any shared SubIFD, or a `next`/SubIFD diamond), which is no defect,
+/// so its `complete` flag is not consulted. The page is the one the decoder itself selects from the
+/// same listing.
 fn probe_alternate_tiff(bytes: &[u8]) -> Result<Option<codecs::TiffPage>, CodecError> {
     let directories = codecs::tiff_info(bytes)?;
-    let index = directories.default_page().filter(|_| directories.complete);
+    let index = directories.default_page();
     Ok(index.and_then(|index| directories.pages.into_iter().nth(index)))
 }
 
@@ -4661,87 +4666,83 @@ mod budget_tests {
 
     #[test]
     fn media_magic_tiff_admission_is_a_function_of_the_directory_graph() {
-        // Directories 0 and 1 are image pages chained by `next`; 2 and 3 are metadata directories.
-        // Every page may point at either metadata directory through a pointer tag, and each metadata
-        // directory may point at either one through Interop, so the graphs cover shared targets,
-        // self references and two-directory cycles. Only a directory reachable from itself rejects.
-        let choices: [Option<usize>; 3] = [None, Some(2), Some(3)];
-        let cyclic = |links: [Option<usize>; 4]| {
-            [0, 1].into_iter().any(|page| {
-                let mut seen = [false; 4];
-                let mut at = links[page];
-                while let Some(node) = at {
-                    if std::mem::replace(&mut seen[node], true) {
-                        return true;
+        // Every graph over three image directories: each has an optional `next` and one optional
+        // SubIFD, Exif, GPS or Interop pointer to any directory (shared targets, diamonds, three-page
+        // chains with metadata back edges, a directory that is a SubIFD and an Exif target). The oracle
+        // is independent of the walk: reachability, then a transitive closure. A directory that reaches
+        // itself rejects; every other graph admits, whatever order it is visited in, and both the
+        // admission and the report agree.
+        let nexts: [Option<usize>; 4] = [None, Some(0), Some(1), Some(2)];
+        let pointers: Vec<Option<(u16, usize)>> =
+            std::iter::once(None).chain([330u16, 34665, 34853, 40965].into_iter().flat_map(|tag| (0..3).map(move |to| Some((tag, to))))).collect();
+        let cyclic = |graph: &[(Option<usize>, Option<(u16, usize)>); 3]| {
+            let (mut reached, mut chain) = ([true, false, false], [true, false, false]);
+            loop {
+                let before = (reached, chain);
+                for (at, &(next, pointer)) in graph.iter().enumerate() {
+                    if !reached[at] {
+                        continue;
                     }
-                    at = links[node];
+                    if let Some((tag, to)) = pointer {
+                        reached[to] = true;
+                        chain[to] |= tag == 330;
+                    }
+                    if let (Some(to), true) = (next, chain[at]) {
+                        (reached[to], chain[to]) = (true, true);
+                    }
                 }
-                false
-            })
-        };
-        for pointer_tag in [34665u16, 34853, 330] {
-            for links in choices
-                .into_iter()
-                .flat_map(|a| choices.into_iter().map(move |b| (a, b)))
-                .flat_map(|(a, b)| choices.into_iter().flat_map(move |c| choices.into_iter().map(move |d| [a, b, c, d])))
-            {
-                let image = |link: Option<usize>, next: bool| {
-                    let mut entries = vec![
-                        (256u16, 4u16, None, 1u32),
-                        (257, 4, None, 1),
-                        (258, 4, None, 8),
-                        (259, 4, None, 1),
-                        (262, 4, None, 1),
-                        (273, 4, None, 0),
-                        (277, 4, None, 1),
-                        (278, 4, None, 1),
-                        (279, 4, None, 1),
-                    ];
-                    entries.extend(link.map(|target| (pointer_tag, 4, Some(target), 0)));
-                    entries.extend(next.then_some((0xffff, 4, Some(1), 0)));
-                    entries
-                };
-                let metadata = |link: Option<usize>| {
-                    let mut entries = vec![(40000u16, 4u16, None, 0u32)];
-                    entries.extend(link.map(|target| (40965, 4, Some(target), 0)));
-                    entries
-                };
-                let mut directories = vec![image(links[0], true), image(links[1], false), metadata(links[2]), metadata(links[3])];
-                let strip = 8 + directories.iter().map(|entries| 6 + 12 * entries.len() as u32).sum::<u32>();
-                for entry in directories.iter_mut().take(2).flatten().filter(|entry| entry.0 == 273) {
-                    entry.3 = strip;
+                if (reached, chain) == before {
+                    break;
                 }
-                let bytes = graph_tiff(&directories);
-                // Admission alone, so SubIFD targets need not be decodable pages.
-                let admitted = tiff_admission::payload(&bytes, |_| Ok(())).unwrap().is_some();
-                assert_eq!(admitted, !cyclic(links), "tag {pointer_tag} links {links:?}");
-                if pointer_tag == 330 {
-                    continue;
-                }
-                let report = validate_bytes(&media_zip(&[("word/media/drawn.png", &bytes)], DRAWN, "png"));
-                let grade = (report.verdict, report.findings.first().map(|f| (f.rule, f.severity)));
-                let expected = if cyclic(links) { (Verdict::Fail, Severity::Error) } else { (Verdict::Pass, Severity::Warning) };
-                assert_eq!(grade, (expected.0, Some(("MEDIA-MAGIC", expected.1))), "tag {pointer_tag} links {links:?}: {report:?}");
             }
-        }
-    }
-
-    #[test]
-    fn media_magic_tiff_admission_rejects_next_chain_cycles_and_admits_diamonds() {
-        let node = |next: Option<usize>, sub: Option<usize>| {
-            let mut entries = vec![(256u16, 4u16, None, 1u32), (273, 4, None, 0)];
-            entries.extend(next.map(|target| (0xffff, 4, Some(target), 0)));
-            entries.extend(sub.map(|target| (330, 4, Some(target), 0)));
+            let mut path = [[false; 3]; 3];
+            for (at, &(next, pointer)) in graph.iter().enumerate().filter(|&(at, _)| reached[at]) {
+                for to in pointer.map(|(_, to)| to).into_iter().chain(next.filter(|_| chain[at])) {
+                    path[at][to] = true;
+                }
+            }
+            for via in 0..3 {
+                for from in 0..3 {
+                    for to in 0..3 {
+                        path[from][to] |= path[from][via] && path[via][to];
+                    }
+                }
+            }
+            (0..3).any(|at| reached[at] && path[at][at])
+        };
+        let node = |next: Option<usize>, pointer: Option<(u16, usize)>| {
+            let mut entries = vec![(256u16, 4u16, None, 1u32), (257, 4, None, 1), (258, 4, None, 8), (259, 4, None, 1), (262, 4, None, 1)];
+            entries.extend([(273, 4, None, 0), (277, 4, None, 1), (278, 4, None, 1), (279, 4, None, 1)]);
+            entries.extend(pointer.map(|(tag, to)| (tag, 4, Some(to), 0)));
+            entries.extend(next.map(|to| (0xffff, 4, Some(to), 0)));
             entries
         };
-        let admitted =
-            |directories: Vec<Vec<(u16, u16, Option<usize>, u32)>>| tiff_admission::payload(&graph_tiff(&directories), |_| Ok(())).unwrap().is_some();
-        // 0 -> 1 -> 2 reached again as SubIFD of 0 and 1: shared, not cyclic.
-        assert!(admitted(vec![node(Some(1), Some(2)), node(Some(2), Some(2)), node(None, None)]));
-        // A chain that returns to an open directory, directly or through SubIFD, is a cycle.
-        assert!(!admitted(vec![node(Some(1), None), node(Some(0), None)]));
-        assert!(!admitted(vec![node(Some(1), None), node(None, Some(0))]));
-        assert!(!admitted(vec![node(None, Some(0))]));
+        let build = |graph: &[(Option<usize>, Option<(u16, usize)>); 3]| {
+            let mut directories: Vec<_> = graph.iter().map(|&(next, pointer)| node(next, pointer)).collect();
+            let strip = 8 + directories.iter().map(|entries| 6 + 12 * entries.len() as u32).sum::<u32>();
+            for entry in directories.iter_mut().flatten().filter(|entry| entry.0 == 273) {
+                entry.3 = strip;
+            }
+            graph_tiff(&directories)
+        };
+        let slots: Vec<_> = nexts.iter().flat_map(|&next| pointers.iter().map(move |&pointer| (next, pointer))).collect();
+        let mut rejected = 0usize;
+        for index in 0..slots.len().pow(3) {
+            let graph = [slots[index / slots.len() / slots.len()], slots[index / slots.len() % slots.len()], slots[index % slots.len()]];
+            let bytes = build(&graph);
+            let admitted = tiff_admission::payload(&bytes, |_| Ok(())).unwrap().is_some();
+            assert_eq!(admitted, !cyclic(&graph), "{graph:?}");
+            // The report level is the same function: a sample of every shape.
+            if index % 97 == 0 {
+                let report = validate_bytes(&media_zip(&[("word/media/drawn.png", &bytes)], DRAWN, "png"));
+                let grade = (report.verdict, report.findings.first().map(|f| (f.rule, f.severity)));
+                let expected = if admitted { (Verdict::Pass, Severity::Warning) } else { (Verdict::Fail, Severity::Error) };
+                assert_eq!(grade, (expected.0, Some(("MEDIA-MAGIC", expected.1))), "{graph:?}: {report:?}");
+            }
+            rejected += usize::from(!admitted);
+        }
+        let count = slots.len().pow(3);
+        assert!(rejected > 0 && rejected < count, "{rejected} of {count}");
     }
 
     #[test]

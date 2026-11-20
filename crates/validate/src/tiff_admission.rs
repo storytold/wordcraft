@@ -1,6 +1,6 @@
 //! Bounded, non-materializing admission for the validator's TIFF pixel check.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque, hash_map::Entry};
 
 use craft_image_codecs::CodecError;
 use craft_tiff::{ByteOrder, EntrySpan, FieldType, ParseOptions, Tiff, directory_entries, entry_span, tags};
@@ -10,7 +10,7 @@ use craft_tiff::{ByteOrder, EntrySpan, FieldType, ParseOptions, Tiff, directory_
 pub(crate) fn payload(bytes: &[u8], mut reserve: impl FnMut(u64) -> Result<(), CodecError>) -> Result<Option<&[u8]>, CodecError> {
     observation_contract! {
         rules: "-";
-        collections: "type.HashMap*2,type.HashSet*3";
+        collections: "type.HashMap*2";
         scope: "the TIFF directory graph within the part byte and metadata limits";
         loss: "header failure, malformed directory or metadata budget";
         fallback: "leave the image unassessed";
@@ -26,9 +26,6 @@ pub(crate) fn payload(bytes: &[u8], mut reserve: impl FnMut(u64) -> Result<(), C
         big,
         limits: ParseOptions::default(),
         parsed: HashMap::new(),
-        on_path: HashSet::new(),
-        admitted: HashSet::new(),
-        followed: HashSet::new(),
         value_spans: HashMap::new(),
         entries: 0,
         end: if big { 16 } else { 8 },
@@ -38,7 +35,7 @@ pub(crate) fn payload(bytes: &[u8], mut reserve: impl FnMut(u64) -> Result<(), C
         || CodecError::Malformed { format: craft_image_codecs::Format::Tiff, message: "the first TIFF directory is missing or cut off".into() };
     let first = walk.offset(if big { 8 } else { 4 }).filter(|&offset| offset != 0).ok_or_else(malformed_root)?;
     directory_entries(bytes, first, order, big, walk.limits.max_entries).map_err(|_| malformed_root())?;
-    if !walk.chain(first, 0, true)? {
+    if !walk.admit(first)? {
         return Ok(None);
     }
     // Every range the codec reads is named by the walk, so what follows its end is padding of any content.
@@ -53,12 +50,6 @@ struct DirectoryWalk<'a, R> {
     limits: ParseOptions,
     /// Directories already read and charged, with their tables and next pointers.
     parsed: HashMap<u64, (BTreeMap<u16, EntrySpan>, u64)>,
-    /// Directories on the current traversal path. Reaching one again is a true cycle.
-    on_path: HashSet<u64>,
-    /// Directories whose pointers were all admitted. Sharing one costs nothing.
-    admitted: HashSet<u64>,
-    /// Directories whose next-directory chain was admitted in full.
-    followed: HashSet<u64>,
     value_spans: HashMap<u64, u64>,
     entries: usize,
     end: u64,
@@ -79,60 +70,70 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
         if self.big { self.order.read_u64(self.bytes, at) } else { self.order.read_u32(self.bytes, at).map(u64::from) }
     }
 
-    /// Admit the directory graph reachable from `start`. The outcome depends only on that graph:
-    /// a directory reached again after it was admitted is free, and only a directory reached
-    /// from itself while still open is a cycle. The directory and entry budgets bound the walk.
-    fn chain(&mut self, start: u64, depth: usize, follow_next: bool) -> Result<bool, CodecError> {
+    /// Whether the directory graph reachable from `first` can be admitted: every directory reads, the
+    /// directory, entry and depth budgets hold, and no directory is reachable from itself.
+    ///
+    /// This is the ONLY cycle computation. The graph's edges are every SubIFD, Exif, GPS and Interop
+    /// pointer, and the `next` pointer of every directory that is read as a chain member (the first
+    /// directory, a `next` target or a SubIFD target; Exif, GPS and Interop directories are single
+    /// directories whose `next` nothing follows). Reaching a directory again is free whatever route
+    /// it took; only a directory that reaches itself rejects. Reachability is explored first, so
+    /// the verdict depends on the graph and not on the order its edges are visited in.
+    fn admit(&mut self, first: u64) -> Result<bool, CodecError> {
         observation_contract! {
             rules: "-";
-            collections: "field.followed*1,field.on_path*1,type.Vec*1";
-            scope: "the directory path of one TIFF chain walk";
-            loss: "directory cycle or an unadmitted directory";
-            fallback: "leave the image unassessed";
-            package_loss: "independent";
-        }
-
-        if depth > self.limits.max_depth {
-            return Ok(false);
-        }
-        let mut path = Vec::new();
-        let outcome = self.chain_path(start, depth, follow_next, &mut path);
-        for opened in &path {
-            self.on_path.remove(opened);
-        }
-        let admitted = outcome?;
-        if admitted && follow_next {
-            self.followed.extend(path);
-        }
-        Ok(admitted)
-    }
-
-    fn chain_path(&mut self, mut offset: u64, depth: usize, follow_next: bool, path: &mut Vec<u64>) -> Result<bool, CodecError> {
-        observation_contract! {
-            rules: "-";
-            collections: "field.admitted*1,field.followed*1,field.on_path*1,type.Vec*1";
-            scope: "one TIFF directory chain under directory, depth and work bounds";
+            collections: "type.HashMap*6,type.HashSet*1,type.Vec*2";
+            scope: "the TIFF directory graph within the directory, entry, depth and work bounds";
             loss: "directory cycle, malformed directory or metadata budget";
             fallback: "leave the image unassessed";
             package_loss: "independent";
         }
 
-        while offset != 0 {
-            if follow_next && self.followed.contains(&offset) {
-                break;
-            }
-            if !self.on_path.insert(offset) {
+        // Phase 1: reach every directory once per role (chain member or single), nearest first.
+        // `next` keeps the depth (a chain is one level); a pointer to a child adds one.
+        let mut queue = VecDeque::from([(first, true, 0usize)]);
+        let mut visited = HashSet::new();
+        let mut children_of: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut chain_next: HashMap<u64, u64> = HashMap::new();
+        while let Some((offset, chain, depth)) = queue.pop_front() {
+            if depth > self.limits.max_depth {
                 return Ok(false);
             }
-            path.push(offset);
+            if !visited.insert((offset, chain)) {
+                continue;
+            }
             let Some((tags, next)) = self.directory(offset)? else { return Ok(false) };
-            if self.admitted.insert(offset) {
+            if let Entry::Vacant(slot) = children_of.entry(offset) {
                 self.record_image_data(&tags)?;
-                if !self.children(&tags, depth)? {
-                    return Ok(false);
+                let Some(children) = self.children(&tags)? else { return Ok(false) };
+                slot.insert(children.iter().map(|&(child, _)| child).collect());
+                queue.extend(children.into_iter().map(|(child, chain)| (child, chain, depth + 1)));
+            }
+            if chain && next != 0 {
+                chain_next.insert(offset, next);
+                queue.push_front((next, true, depth));
+            }
+        }
+        // Phase 2: a directory with a path back to itself is a cycle (depth-first, three colours).
+        let successors =
+            |offset: u64| -> Vec<u64> { children_of.get(&offset).into_iter().flatten().copied().chain(chain_next.get(&offset).copied()).collect() };
+        // `false`: open on the current path; `true`: finished, with no path back to itself.
+        let mut colour: HashMap<u64, bool> = HashMap::from([(first, false)]);
+        let mut stack = vec![(first, successors(first).into_iter())];
+        while let Some((offset, rest)) = stack.last_mut() {
+            let offset = *offset;
+            match rest.next().map(|target| (target, colour.get(&target).copied())) {
+                Some((_, Some(false))) => return Ok(false),
+                Some((target, None)) => {
+                    colour.insert(target, false);
+                    stack.push((target, successors(target).into_iter()));
+                }
+                Some(_) => {}
+                None => {
+                    colour.insert(offset, true);
+                    stack.pop();
                 }
             }
-            offset = if follow_next { next } else { 0 };
         }
         Ok(true)
     }
@@ -221,30 +222,33 @@ impl<R: FnMut(u64) -> Result<(), CodecError>> DirectoryWalk<'_, R> {
         Ok(())
     }
 
-    fn children(&mut self, tags: &BTreeMap<u16, EntrySpan>, depth: usize) -> Result<bool, CodecError> {
+    /// The directories a directory points at, each with whether it is read as a chain (SubIFD) or as a
+    /// single directory (Exif, GPS, Interop). `None` when a pointer is unreadable or malformed.
+    fn children(&mut self, tags: &BTreeMap<u16, EntrySpan>) -> Result<Option<Vec<(u64, bool)>>, CodecError> {
         observation_contract! {
             rules: "-";
-            collections: "type.BTreeMap*1";
+            collections: "type.BTreeMap*1,type.Vec*2";
             scope: "SubIFD, Exif, GPS and Interop pointers under directory, depth and work bounds";
             loss: "unreadable child pointer or incomplete child directory";
             fallback: "withhold the complete directory inventory";
             package_loss: "independent";
         }
 
+        let mut out = Vec::new();
         for tag in [tags::SUB_IFDS, tags::EXIF_IFD, tags::GPS_IFD, tags::INTEROP_IFD] {
             let Some(children) = tags.get(&tag) else { continue };
             if tag != tags::SUB_IFDS && children.count != 1 {
-                return Ok(false);
+                return Ok(None);
             }
             (self.reserve)(children.count.saturating_mul(8))?;
             for index in 0..children.count {
-                let Some(child) = self.uint(*children, index) else { return Ok(false) };
-                if child == 0 || !self.chain(child, depth + 1, tag == tags::SUB_IFDS)? {
-                    return Ok(false);
+                let Some(child) = self.uint(*children, index) else { return Ok(None) };
+                if child != 0 {
+                    out.push((child, tag == tags::SUB_IFDS));
                 }
             }
         }
-        Ok(true)
+        Ok(Some(out))
     }
 
     fn uint(&self, span: EntrySpan, index: u64) -> Option<u64> {
