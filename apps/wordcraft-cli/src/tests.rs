@@ -18,11 +18,13 @@ fn peer_text_stays_on_one_visible_line() {
 fn validators_accept_only_the_documented_options() {
     assert!(validate_options("info", &args(&["file.docx"]), PASSWORD_OPTIONS).is_ok());
     assert!(validate_options("render", &args(&["in.docx", "out.png", "--page", "2", "--scale", "1.5"]), RENDER_OPTIONS).is_ok());
+    assert!(validate_options("render", &args(&["in.docx", "out.png", "--scale", "-2"]), RENDER_OPTIONS).is_ok());
     assert!(validate_options("run", &args(&["--cmd", "text.insert={}", "--cmd", "edit.undo", "--print"]), RUN_OPTIONS).is_ok());
+    assert!(validate_options("run", &args(&["--script", "-"]), RUN_OPTIONS).is_ok());
+    assert!(validate_options("info", &args(&["file.docx", "--password", ""]), PASSWORD_OPTIONS).is_ok());
     assert!(validate_options("commands", &args(&["--json"]), COMMANDS_OPTIONS).is_ok());
     assert!(validate_options("parity", &args(&["--markdown"]), PARITY_OPTIONS).is_ok());
     assert!(validate_options("mcp", &args(&["--connect", "127.0.0.1:9000"]), MCP_OPTIONS).is_ok());
-    assert!(validate_options("render", &args(&["in.docx", "out.png", "--page"]), RENDER_OPTIONS).is_ok());
     assert!(
         validate_options(
             "zotero",
@@ -31,6 +33,24 @@ fn validators_accept_only_the_documented_options() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn missing_option_values_do_not_select_defaults_or_consume_another_option() {
+    for options in [vec!["--connect"], vec!["--connect", "--author", "Reviewer"]] {
+        assert_eq!(validate_options("mcp", &args(&options), MCP_OPTIONS), Err("mcp: --connect requires a value".into()), "{options:?}");
+    }
+    for options in [vec!["--save"], vec!["--save", "--print"]] {
+        assert_eq!(validate_options("run", &args(&options), RUN_OPTIONS), Err("run: --save requires a value".into()), "{options:?}");
+    }
+    assert_eq!(validate_options("render", &args(&["in.docx", "out.png", "--page"]), RENDER_OPTIONS), Err("render: --page requires a value".into()));
+}
+
+#[test]
+fn run_requires_a_save_path_before_executing_commands() {
+    for argv in [vec!["run", "--save"], vec!["run", "--save", "--print"], vec!["run", "--cmd", "no.such.command", "--save"]] {
+        assert_eq!(run(&args(&argv)), Err("run: --save requires a value".into()), "{argv:?}");
+    }
 }
 
 #[test]
@@ -99,6 +119,56 @@ fn help_or_h_after_a_subcommand_asks_for_the_usage() {
         assert!(!wants_help(cmd, &args(&["in.docx", "--hepl"])), "{cmd}");
     }
     assert!(!wants_help("frobnicate", &args(&["--help"])));
+}
+
+#[test]
+fn help_flags_are_not_option_values() {
+    for (cmd, specs) in [
+        ("convert", CONVERT_OPTIONS),
+        ("info", PASSWORD_OPTIONS),
+        ("text", PASSWORD_OPTIONS),
+        ("inspect", PASSWORD_OPTIONS),
+        ("render", RENDER_OPTIONS),
+        ("run", RUN_OPTIONS),
+        ("commands", COMMANDS_OPTIONS),
+        ("parity", PARITY_OPTIONS),
+        ("mcp", MCP_OPTIONS),
+        ("zotero", ZOTERO_OPTIONS),
+    ] {
+        for spec in specs {
+            if spec.takes_value {
+                assert!(!wants_help(cmd, &args(&[spec.name, "-h"])), "{cmd} {} -h", spec.name);
+                assert!(wants_help(cmd, &args(&[spec.name, "-h", "--help"])), "{cmd} {} -h --help", spec.name);
+                assert!(wants_help(cmd, &args(&[spec.name, "--help"])), "{cmd} {} --help", spec.name);
+            } else {
+                assert!(wants_help(cmd, &args(&[spec.name, "-h"])), "{cmd} {} -h", spec.name);
+            }
+        }
+        assert!(wants_help(cmd, &args(&["--unsupported", "-h"])), "{cmd}");
+    }
+    for root in ["--automation-read-root", "--automation-write-root"] {
+        assert!(!wants_help("mcp", &args(&[root, "-h"])), "{root}");
+        assert!(wants_help("mcp", &args(&[root, "-h", "-h"])), "{root}");
+        assert!(wants_help("mcp", &args(&[root, "--help"])), "{root}");
+        // A root is not a recognized option for other subcommands.
+        assert!(wants_help("run", &args(&[root, "-h"])), "{root}");
+    }
+    assert!(!wants_help("run", &args(&["--password", "-h", "--script", "-h"])));
+    assert!(wants_help("run", &args(&["--password", "-h", "--script", "-h", "-h"])));
+}
+
+#[test]
+fn literal_help_operands_reach_the_command() {
+    let missing = std::env::temp_dir().join(format!(
+        "wc-cli-literal-help-{}-{}.docx",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    ));
+    assert!(!missing.exists());
+    let missing = missing.to_string_lossy();
+    let error = run(&args(&["info", &missing, "--password", "-h"])).unwrap_err().to_string();
+    assert!(error.starts_with(missing.as_ref()), "{error}");
+    assert_eq!(run(&args(&["run", "--scale", "-h"])), Err("run: invalid --scale `-h`: not a number".into()));
 }
 
 #[test]
@@ -185,6 +255,38 @@ fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
     assert!(roots.is_none());
     assert_eq!(left, args(&["--connect", "127.0.0.1:9"]));
     let _ = std::fs::remove_dir_all(base);
+}
+
+#[test]
+fn automation_roots_preserve_mcp_option_operand_boundaries() {
+    let dir = std::env::temp_dir().to_string_lossy().into_owned();
+    let missing = std::env::temp_dir().join(format!(
+        "wc-cli-missing-root-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    ));
+    assert!(!missing.exists());
+    let missing = missing.to_string_lossy();
+    for (option, value) in [("--author", "Alice"), ("--connect", "127.0.0.1:9")] {
+        for root in ["--automation-read-root", "--automation-write-root"] {
+            let inline = format!("{root}={dir}");
+            for malformed in [args(&[option, root, &dir, value]), args(&[option, &inline, value]), args(&[option, root, &missing, value])] {
+                let error = automation_roots("mcp", &malformed).err().unwrap();
+                assert_eq!(error, format!("mcp: {option} requires a value"), "{malformed:?}");
+            }
+            for valid in [
+                args(&[option, value, root, &dir]),
+                args(&[root, &dir, option, value]),
+                args(&[option, value, &inline]),
+                args(&[&inline, option, value]),
+            ] {
+                let (roots, left) = automation_roots("mcp", &valid).unwrap();
+                assert!(roots.is_some(), "{valid:?}");
+                assert_eq!(left, args(&[option, value]), "{valid:?}");
+                assert!(validate_options("mcp", &left, MCP_OPTIONS).is_ok(), "{valid:?}");
+            }
+        }
+    }
 }
 
 #[test]

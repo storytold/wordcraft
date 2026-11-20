@@ -81,8 +81,34 @@ same output on every machine.
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
 const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
 
+/// A value-taking option can consume `-h`; help is requested only by a standalone flag.
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
-    SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
+    if !SUBCOMMANDS.contains(&cmd) {
+        return false;
+    }
+    let specs = match cmd {
+        "convert" => CONVERT_OPTIONS,
+        "render" => RENDER_OPTIONS,
+        "run" => RUN_OPTIONS,
+        "commands" => COMMANDS_OPTIONS,
+        "parity" => PARITY_OPTIONS,
+        "mcp" => MCP_OPTIONS,
+        "zotero" => ZOTERO_OPTIONS,
+        _ => PASSWORD_OPTIONS,
+    };
+    let mut args = rest.iter().peekable();
+    while let Some(arg) = args.next() {
+        if arg == "--help" || arg == "-h" {
+            return true;
+        }
+        // MCP root flags are extracted after help is checked, before option validation.
+        let takes_value = specs.iter().any(|spec| spec.name == arg && spec.takes_value)
+            || (cmd == "mcp" && matches!(arg.as_str(), "--automation-read-root" | "--automation-write-root"));
+        if takes_value && args.peek().is_some_and(|value| !value.starts_with("--")) {
+            args.next();
+        }
+    }
+    false
 }
 
 /// A failure whose message may carry text from a file or from the engine's reading of one (a
@@ -286,13 +312,32 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
             let Some(spec) = specs.iter().find(|spec| spec.name == arg) else {
                 return Err(format!("{command}: unknown option --{name}"));
             };
-            if spec.takes_value && args.get(i + 1).is_some_and(|value| !value.starts_with("--")) {
+            if spec.takes_value {
+                if args.get(i + 1).is_none_or(|value| value.starts_with("--")) {
+                    return Err(format!("{command}: {arg} requires a value"));
+                }
                 i += 2;
             } else {
                 i += 1;
             }
         } else {
             i += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Check MCP operands before removing root flags can join an option to an unrelated token.
+fn validate_mcp_option_values(command: &str, args: &[String]) -> Result<(), String> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if MCP_OPTIONS.iter().any(|spec| spec.name == arg && spec.takes_value) {
+            if args.next().is_none_or(|value| value.starts_with("--")) {
+                return Err(format!("{command}: {arg} requires a value"));
+            }
+        } else if matches!(arg.as_str(), "--automation-read-root" | "--automation-write-root") {
+            // The root parser checks this operand; an attached --root=DIR is one token.
+            args.next();
         }
     }
     Ok(())
@@ -305,6 +350,7 @@ fn automation_roots(
     command: &str,
     args: &[String],
 ) -> Result<(Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>, Vec<String>), String> {
+    validate_mcp_option_values(command, args)?;
     let mut found = automation_args::AutomationArgs::new(None, None);
     let mut left = Vec::new();
     let mut it = args.iter().cloned();
