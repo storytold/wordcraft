@@ -1322,3 +1322,27 @@ fn a_combo_field_reached_with_tab_shows_its_hint_after_a_delay() {
     }
     assert!(h.query_all_by_label("Font Size").count() >= 2, "hint must show after tooltip delay");
 }
+
+/// #7165: the Symbol drop-down's cells are compact (a thumbnail-small step, not a card) and the hover text names
+/// the character, not just the glyph.
+#[test]
+fn symbol_menu_cells_are_compact_and_the_tooltip_names_the_character() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let mut h = tab_harness(app, "Insert");
+    click_button(&mut h, "Symbol");
+    let cell = h.get_by_label("\u{A9}").rect();
+    assert!(cell.width() <= 80.0 && cell.height() <= 80.0, "a symbol cell is compact, got {:?}", cell.size());
+    h.get_by_label("\u{A9}").hover();
+    crate::test_harness::frames(&mut h, 40);
+    assert!(h.query_by_label_contains("COPYRIGHT SIGN (U+00A9)").is_some(), "the tooltip names the character");
+}
+
+/// Characters outside the common list still say what they are: code point and block.
+#[test]
+fn symbol_tip_names_known_characters_and_falls_back_to_the_code_point() {
+    use super::insert::symbol_tip;
+    assert_eq!(symbol_tip("\u{A9}", ""), "COPYRIGHT SIGN (U+00A9)");
+    assert_eq!(symbol_tip("\u{3B1}", "Symbol"), "GREEK SMALL LETTER ALPHA (U+03B1), Symbol");
+    assert_eq!(symbol_tip("\u{2602}", ""), "U+2602 (Miscellaneous Symbols)");
+    assert_eq!(symbol_tip("", ""), "");
+}
