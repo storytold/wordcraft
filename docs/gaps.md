@@ -129,6 +129,8 @@ Normal Find and Replace now match a keyboard apostrophe against straight and typ
 
 ## By kind
 
+Mixed Latin/CJK interface labels share one baseline; rows accommodate the fallback font ascent and descent. Layout ribbon fields keep localized CJK unit suffixes above the group title. The start screen and Options use the same interface font registration. See [ui-parity.md](ui-parity.md); ranked gaps and readiness estimates are unchanged.
+
 List toggles now recognise numbering inherited from paragraph styles (related to #3459). This closes that command-level case; the broader issue and readiness estimates are unchanged. See [typing-parity.md](typing-parity.md) for the original-fixture and round-trip coverage.
 
 Sample-text formulas on Enter (#1067) are implemented: `=rand()` and `=lorem()`,
@@ -181,6 +183,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
 ## Revision history
+
+> 2026-11-12 · Mixed Latin/CJK interface baseline alignment; ranked gaps unchanged.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 

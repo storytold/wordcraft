@@ -132,6 +132,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         // every field the same width.
         const FIELD: egui::Vec2 = egui::Vec2::new(64.0, 20.0);
         ui.spacing_mut().interact_size.y = FIELD.y;
+        // Baseline-aligned CJK unit suffixes need the field height without extra vertical padding.
+        ui.spacing_mut().button_padding.y = 0.0;
         // The gap before the Spacing column sits inside its cells: `add_space` in a grid moves the
         // next cell in release builds but trips a debug assertion.
         let spaced = |ui: &mut Ui, text: egui::RichText| {
