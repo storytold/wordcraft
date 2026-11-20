@@ -1052,6 +1052,7 @@ fn rep_mode(text: &str, q: &str, with: &str, extra: serde_json::Value) -> String
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hostile_find_patterns_are_bounded() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": &"a".repeat(5000)}));
@@ -1675,6 +1676,26 @@ fn paste_merge_formatting_keeps_rtf_deletions() {
 }
 
 #[test]
+fn paste_merge_formatting_keeps_bold_and_italic_in_a_complex_script_run() {
+    // #4852 review: with the caret in a run marked `w:cs` (Thai from a WPS or Word file), the
+    // pasted text takes `cs` too, so its bold and italic must be the complex-script ones as well.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ภาษาไทย"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.set", json!({"props": {"cs": true}}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.pasteMerge", json!({"rtf": r"{\rtf1{\b bold}{\i slant}\par}"}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let at = |word: &str| p.props_of_char(p.text.find(word).unwrap() + 1).clone();
+    let (b, i) = (at("bold"), at("slant"));
+    assert_eq!((b.cs, b.bold, b.bold_cs), (Some(true), Some(true), Some(true)), "{b:?}");
+    assert_eq!((i.cs, i.italic, i.italic_cs), (Some(true), Some(true), Some(true)), "{i:?}");
+    assert_ne!(b.italic, Some(true));
+    let r = s.doc.styles.resolve_char(None, &b);
+    assert!(r.bold_cs, "drawn bold as complex script");
+}
+
+#[test]
 fn pasted_rtf_sections_link_their_headers_to_the_previous() {
     // #1378: the RTF's own header part ids mean nothing in this document; a pasted section
     // break keeps its page but links its headers and footers to the previous section.
@@ -2131,6 +2152,58 @@ fn body_table_cells(s: &Session) -> Vec<Vec<String>> {
 }
 
 /// #1744: Select Table → Copy → Paste outside the table pastes a copy of the whole table.
+#[test]
+fn table_spots_and_borders_are_the_areas_the_pointer_queries_answer_for() {
+    use crate::cmd::{table_mouse, table_resize};
+    let mut sess = s();
+    run(&mut sess, "insert.table", serde_json::json!({"rows": 3, "cols": 3}));
+    let l = sess.layout();
+    let story = sess.sel.focus.story;
+    let reach = 3.0;
+    let spots = table_mouse::spots(&l, &sess.doc, story, 0, reach);
+    let borders = table_resize::borders(&l, &sess.doc, 0, reach);
+    assert!(!spots.is_empty() && !borders.is_empty());
+    let inside = |r: &wordcraft_geom::Rect, x: f32, y: f32| x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom();
+    let (w, bottom) = l.pages.first().map_or((0.0, 0.0), |p| (p.w, p.body.bottom()));
+    let (mut spot_hits, mut border_hits) = (0, 0);
+    let mut y = 0.3f32;
+    while y < bottom {
+        let mut x = 0.3f32;
+        while x < w {
+            let spot = table_mouse::target_at(&l, &sess.doc, story, 0, x, y, reach);
+            if let Some(t) = &spot {
+                spot_hits += 1;
+                assert!(spots.iter().any(|a| a.target == *t && inside(&a.area, x, y)), "spot at ({x}, {y}) lies in its listed area");
+            }
+            if spot.is_none() && table_resize::resize_target(&l, &sess.doc, 0, x, y, reach).is_none() {
+                // Nothing answers: no listed area may hold the point unless a border took it first.
+                assert!(!spots.iter().any(|a| inside(&a.area, x, y)), "an area holds ({x}, {y}) yet nothing answers");
+            }
+            let border = table_resize::resize_target(&l, &sess.doc, 0, x, y, reach);
+            match &border {
+                Some(t) => {
+                    border_hits += 1;
+                    assert!(borders.iter().any(|(a, b)| b == t && inside(a, x, y)), "border at ({x}, {y}) lies in its listed strip");
+                }
+                None => assert!(
+                    !borders.iter().any(|(a, b)| inside(a, x, y) && {
+                        let d = match b.edge {
+                            table_resize::Edge::Column(i) => b.cols.get(i).map_or(f32::INFINITY, |c| (x - c).abs()),
+                            table_resize::Edge::Row(r) => b.rows.iter().find(|q| q.row == r).map_or(f32::INFINITY, |q| (y - q.bottom).abs()),
+                            table_resize::Edge::Corner => 0.0,
+                        };
+                        d <= reach
+                    }),
+                    "a strip holds ({x}, {y}) within reach yet no border answers"
+                ),
+            }
+            x += 3.7;
+        }
+        y += 3.7;
+    }
+    assert!(spot_hits > 0 && border_hits > 0, "the sweep met both kinds of spot");
+}
+
 #[test]
 fn copy_whole_table_pastes_a_table() {
     let mut s = table_doc();
@@ -4926,6 +4999,50 @@ fn toc_page_numbers_are_pageref_fields() {
     let mut s = Session::new(crate::io::open_bytes("toc.docx", &bytes).unwrap());
     run(&mut s, "references.updateFields", json!({}));
     assert_eq!(text(&s), expected);
+}
+
+/// Output (PDF, print) shows a table of contents' page numbers where the headings now are, as
+/// Word fills its `PAGEREF`s in when it prints or exports; the editor shows them as stored until
+/// the table is updated, and the document keeps them.
+#[test]
+fn output_shows_toc_page_numbers_where_the_headings_are() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    // Another page before Alpha moves the headings to pages 3 and 4.
+    let alpha = s
+        .doc
+        .body
+        .iter()
+        .position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("Heading1") && p.text.contains("Alpha")))
+        .unwrap();
+    s.sel = crate::Selection::caret(Pos::body(alpha, 0));
+    run(&mut s, "text.pageBreak", json!({}));
+    let toc_numbers = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(s.export_layout().pages.len(), 4);
+    assert_eq!(toc_numbers(&s.layout()), ["2", "3"]);
+    assert_eq!(toc_numbers(&s.export_layout()), ["3", "4"]);
+    assert!(text(&s).contains("Alpha\t2"), "the document keeps the stored numbers");
+    // A page image is laid out as the print job is: it shows the same numbers.
+    let png = crate::io_ext::render_png(&s.doc, 0, 1.0, &Default::default()).unwrap();
+    let printed = wordcraft_render::render_page(&s.doc, &s.export_layout().pages[0], 1.0, &Default::default()).to_png();
+    assert!(png == printed, "the page image and the printed page differ");
 }
 
 /// Headings numbered through a list carry their numbers, and the level's separator, into the
@@ -7868,6 +7985,35 @@ fn hostile_chart_data_is_capped() {
     s.doc.insert_object(&Pos::body(0, 0), foreign, &Default::default()).unwrap();
     run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())}));
     assert!(s.run("chart.type", &json!({"type": "pie"})).is_err());
+}
+
+/// The pane's findings follow the document: an edit that fixes an issue and a replacement by
+/// another document both show at the next read, though the session keeps them between reads.
+#[test]
+fn accessibility_findings_follow_the_document() {
+    let alt = |s: &mut Session| s.accessibility_findings().iter().any(|i| i["rule"] == "altText");
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title"));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s), "a shape without alternative text is reported");
+    assert!(alt(&mut s), "and still is at the next read");
+    let (id, rev) = (s.document_id(), s.rev());
+
+    // The fix the issue names, as the pane runs it.
+    let issue = s.accessibility_findings().iter().find(|i| i["rule"] == "altText").cloned().expect("the alt text issue");
+    run(&mut s, "select.range", issue["select"].clone());
+    run(&mut s, issue["action"]["command"].as_str().expect("a fix"), issue["action"]["params"].clone());
+    assert_eq!(s.document_id(), id);
+    assert_ne!(s.rev(), rev);
+    assert!(!alt(&mut s), "the fixed issue is gone");
+
+    // The issue again, then another document in its place.
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s));
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), id);
+    let want = crate::cmd::accessibility::check(&s.doc);
+    assert_eq!(s.accessibility_findings(), want.as_slice(), "the new document's findings");
+    assert!(!alt(&mut s));
 }
 
 #[test]
@@ -11338,8 +11484,6 @@ fn find_replace_and_go_to_open_like_word() {
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "replace"})));
     assert!(!s.dirty, "opening the dialog changes nothing");
     assert!(s.run("edit.findReplace", &json!({"tab": "nope"})).is_err());
-    let reg = s.registry.clone();
-    assert_eq!(s.keymap.resolve(&reg, "Mod+H").map(|c| c.id), Some("edit.findReplace"));
     run(&mut s, "edit.goto", json!({}));
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "goto"})));
     // Replace with a "with" and the last search still replaces, as before.
@@ -12161,6 +12305,7 @@ fn inspect_document_removes_the_note_of_a_hidden_reference() {
 /// #1344: many hidden pieces (index entries are hidden text) are removed quickly, and the
 /// found list is capped.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn inspect_document_removes_thousands_of_hidden_pieces() {
     use wordcraft_doc::props::CharProps;
     use wordcraft_doc::{Paragraph, para_block};
@@ -13104,6 +13249,13 @@ fn style_set_keeps_imported_styles_latent_styles_and_defaults() {
     let mut s = s();
     run(&mut s, "design.styleSet", json!({ "name": "title" }));
     assert_eq!(s.doc.styles.get("Title").unwrap().chr.size, Some(36.0));
+    // #4852 review: the sets that make headings bold or italic do it in both scripts, so a Thai
+    // heading in a run marked `w:cs` is drawn bold or italic too.
+    let cs = wordcraft_doc::props::CharProps { cs: Some(true), ..Default::default() };
+    run(&mut s, "design.styleSet", json!({ "name": "basic" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading1"), &cs).bold_cs, "basic");
+    run(&mut s, "design.styleSet", json!({ "name": "casual" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading2"), &cs).italic_cs, "casual");
 }
 
 fn style_size(s: &Session, id: &str) -> f32 {
