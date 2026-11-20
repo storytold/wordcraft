@@ -128,7 +128,7 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             }
         });
     });
-    row.group(RibbonGroup::new("view.window", tl!("Window").to_string(), IconId::new("newWindow").into()), |ui| {
+    row.group(RibbonGroup::new("view.window", tl!("Window").to_string(), IconId::new("wordcraft.more").into()), |ui| {
         Button::command(CommandRef::new("view.newWindow"))
             .label(tl!("New\nWindow").to_string())
             .icon(IconId::new("newWindow"))

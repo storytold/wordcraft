@@ -40,6 +40,18 @@ pub(crate) fn menu_button(
     Menu::new(name).opened_by(&opener.response, Trigger::Click).show(ui, body).output
 }
 
+/// Shows `add` with its inline buttons as icons alone (the compact group level): buttons the old
+/// ribbon drew without their labels. The labels stay their accessible names and tooltips.
+pub(crate) fn icon_only<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    craft::ui::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(craft::ui::buttons::GroupLevel::Compact);
+        },
+        add,
+    )
+}
+
 /// Custom groups (Customize Ribbon, #379): up to three commands as stacked buttons, more as inline
 /// buttons in columns of three. Each shows the command's own icon and label.
 pub(super) fn custom_groups(row: &mut RibbonRow<'_>, app: &mut WordApp, groups: &[wordcraft_engine::ribbon::CustomGroup]) {

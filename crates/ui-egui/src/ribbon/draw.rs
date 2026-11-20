@@ -61,36 +61,40 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 }
             },
         );
-        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            // With ink lasso-selected the colour goes to the selection, else to the pen.
-            let target = if lasso_on { "draw.lassoColor" } else { pen_command(tool) };
-            let ink = egui::Color32::from_rgb(set.color.0, set.color.1, set.color.2);
-            // The main part picks up the pen; the menu sets the colour the bar shows.
-            let _ = SplitButton::<String>::command(
-                CommandRef::with_params(pen_command(tool), json!({})),
-                SplitMenu::Body(Box::new(|ui, _| {
-                    let _ = crate::colors::menu(ui, app, Target::cmd(target));
-                })),
-            )
-            .label(crate::tl!("Color"))
-            .icon(IconSpec::from(IconId::new("fontcolor")).with_mark(IconMark::bar(DataColor::new(ink))))
-            .show(ui);
-            menu_button(
-                ui,
-                Button::new(crate::tl!("Thickness")).icon(IconId::new("thickness")).tooltip(crate::tl!("Thickness")),
-                crate::tl!("Thickness"),
-                Some(pen_command(tool)),
-                |ui, _| {
-                    let widths: &[f32] = if tool == InkTool::Highlighter { &[4.0, 8.0, 12.0, 18.0, 24.0] } else { &[0.5, 1.0, 1.5, 2.5, 3.5, 5.0] };
-                    for w in widths {
-                        let label = crate::i18n::fmt(crate::tl!("{n} pt"), &[("n", &w.to_string())]);
-                        MenuItem::command(CommandRef::with_params(pen_command(tool), json!({"width": w})))
-                            .label(label)
-                            .radio_mark((set.width - w).abs() < 0.01)
-                            .show(ui);
-                    }
-                },
-            );
+        // Colour and Thickness show their icons alone, as the old ribbon showed them.
+        super::common::icon_only(ui, |ui| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                // With ink lasso-selected the colour goes to the selection, else to the pen.
+                let target = if lasso_on { "draw.lassoColor" } else { pen_command(tool) };
+                let ink = egui::Color32::from_rgb(set.color.0, set.color.1, set.color.2);
+                // The main part picks up the pen; the menu sets the colour the bar shows.
+                let _ = SplitButton::<String>::command(
+                    CommandRef::with_params(pen_command(tool), json!({})),
+                    SplitMenu::Body(Box::new(|ui, _| {
+                        let _ = crate::colors::menu(ui, app, Target::cmd(target));
+                    })),
+                )
+                .label(crate::tl!("Color"))
+                .icon(IconSpec::from(IconId::new("fontcolor")).with_mark(IconMark::bar(DataColor::new(ink))))
+                .show(ui);
+                menu_button(
+                    ui,
+                    Button::new(crate::tl!("Thickness")).icon(IconId::new("thickness")).tooltip(crate::tl!("Thickness")),
+                    crate::tl!("Thickness"),
+                    Some(pen_command(tool)),
+                    |ui, _| {
+                        let widths: &[f32] =
+                            if tool == InkTool::Highlighter { &[4.0, 8.0, 12.0, 18.0, 24.0] } else { &[0.5, 1.0, 1.5, 2.5, 3.5, 5.0] };
+                        for w in widths {
+                            let label = crate::i18n::fmt(crate::tl!("{n} pt"), &[("n", &w.to_string())]);
+                            MenuItem::command(CommandRef::with_params(pen_command(tool), json!({"width": w})))
+                                .label(label)
+                                .radio_mark((set.width - w).abs() < 0.01)
+                                .show(ui);
+                        }
+                    },
+                );
+            })
         });
         // The colour or thickness a menu just set goes to the gallery pen that was in use too.
         if !lasso_on {

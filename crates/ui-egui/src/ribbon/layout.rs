@@ -212,10 +212,13 @@ pub(super) fn layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             Button::command(CommandRef::new("arrange.sendBackward")).icon(IconId::new("sendBackward")).show(ui);
             Button::command(CommandRef::new("arrange.selectionPane")).icon(IconId::new("selectionPane")).show(ui);
         });
-        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            align_menu(ui);
-            group_menu(ui, app);
-            rotate_menu(ui);
+        // Align, Group and Rotate show their icons alone, as the old ribbon showed them.
+        super::common::icon_only(ui, |ui| {
+            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                align_menu(ui);
+                group_menu(ui, app);
+                rotate_menu(ui);
+            });
         });
     });
 }
