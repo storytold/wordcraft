@@ -346,3 +346,97 @@ fn typing_the_custom_dictionary_path_binds_it_only_on_enter() {
     assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(target_str.as_str()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A harness over the real Options page, Proofing pane, with two dictionary files on disk.
+fn dictionary_harness(tag: &str) -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf, String, String) {
+    let dir = std::env::temp_dir().join(format!("wc-ui-dict-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let one = dir.join("one.dic");
+    let two = dir.join("two.dic");
+    std::fs::write(&one, "oneword\n").unwrap();
+    std::fs::write(&two, "twoword\n").unwrap();
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "proofing"})).unwrap();
+    let mut h = crate::test_harness::builder().build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    options_frames(&mut h, 3);
+    (h, dir, one.to_string_lossy().into_owned(), two.to_string_lossy().into_owned())
+}
+
+fn dictionary_field_text(h: &egui_kittest::Harness<'static, WordApp>) -> String {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").value().unwrap_or_default()
+}
+
+fn type_into_dictionary_field(h: &mut egui_kittest::Harness<'static, WordApp>, text: &str) {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").focus();
+    options_frames(h, 2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").type_text(text);
+    options_frames(h, 2);
+}
+
+/// #5899: a path typed but not committed yields to a saved path an agent sets meanwhile: the field
+/// shows the agent's value (the framework ends the edit when the value changes outside it), and a
+/// later Enter does not write the abandoned draft over it.
+#[test]
+fn an_outside_change_replaces_a_path_being_typed() {
+    let (mut h, dir, one, two) = dictionary_harness("outside");
+    type_into_dictionary_field(&mut h, &one);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None, "typing binds nothing");
+    h.state_mut().run("file.options", json!({"customDictionary": two})).unwrap();
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(two.as_str()));
+    assert_eq!(dictionary_field_text(&h), two, "the field shows the agent's path");
+    h.key_press(egui::Key::Enter);
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(two.as_str()), "Enter did not overwrite it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5899: an uncommitted draft does not outlive its pane: back on Proofing the field shows the saved path.
+#[test]
+fn leaving_the_pane_drops_an_uncommitted_path() {
+    let (mut h, dir, one, two) = dictionary_harness("leave");
+    h.state_mut().run("file.options", json!({"customDictionary": two})).unwrap();
+    options_frames(&mut h, 3);
+    type_into_dictionary_field(&mut h, &one);
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    options_frames(&mut h, 3);
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "options", "pane": "proofing"})).unwrap();
+    options_frames(&mut h, 3);
+    assert_eq!(dictionary_field_text(&h), two, "the field shows the saved path");
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(two.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5899: focus leaving the field commits the typed path.
+#[test]
+fn focus_loss_commits_the_custom_dictionary_path() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, dir, one, _two) = dictionary_harness("blur");
+    type_into_dictionary_field(&mut h, &one);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "New word").focus();
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(one.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5899: Escape abandons the typed path: nothing binds, and the field shows the saved path again.
+#[test]
+fn escape_does_not_commit_the_custom_dictionary_path() {
+    let (mut h, dir, one, _two) = dictionary_harness("escape");
+    type_into_dictionary_field(&mut h, &one);
+    h.key_press(egui::Key::Escape);
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None);
+    assert_eq!(dictionary_field_text(&h), "", "the field shows the saved (empty) path");
+    let _ = std::fs::remove_dir_all(&dir);
+}

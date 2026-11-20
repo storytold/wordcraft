@@ -229,6 +229,23 @@ mod tests {
         wordcraft_engine::proof::remove_word("zqxfallbackword");
     }
 
+    /// #5840: a custom file that is set but missing, with no default file either: nothing is a
+    /// write target (the `custom.is_none()` arm does not claim the default), and nothing panics.
+    #[test]
+    fn a_missing_custom_and_default_dictionary_leave_no_write_target() {
+        let _one = CUSTOM_DICT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("custom-dictionary.txt");
+        let (settings, _) = open_in(Some(dir.path().to_path_buf()), &mut Store::in_memory());
+        let missing = dir.path().join("gone").join("CUSTOM.DIC");
+        settings.lock().update(|p| p.editing.custom_dictionary = Some(missing.to_string_lossy().into_owned()));
+        let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        load_user_dictionary(&mut session, &settings, default.clone());
+        assert_eq!(session.user_dict_path, None, "no write target while the custom file is missing");
+        assert_eq!(session.default_user_dict_path.as_deref(), Some(default.as_path()));
+        assert_eq!(settings.lock().get().editing.custom_dictionary.as_deref(), Some(&*missing.to_string_lossy()), "the setting is kept");
+    }
+
     /// #5840: with no custom file set, the default file is the write target, whether or not it
     /// exists yet; a readable custom file is the write target when it is set.
     #[test]

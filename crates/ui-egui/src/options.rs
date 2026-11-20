@@ -756,32 +756,18 @@ const CUSTOM_WORDS_SHOWN: u16 = 8;
 #[derive(Clone, Default)]
 struct NewWord(String);
 
-/// The path being typed into the Dictionary file field; `None` while the field shows the saved path.
-#[derive(Clone, Default)]
-struct PathDraft(Option<String>);
-
 impl OptionsModel<'_> {
     /// The Dictionary file field. A text row reports every typed draft, and each would bind (and
     /// later write to) whatever file the half-typed path names, so the path is committed only on
-    /// Enter or focus loss.
+    /// Enter or focus loss. The field is given the saved path and never writes it: the framework
+    /// holds the draft while an edit is open and drops it when the saved path changes (an agent's
+    /// `file.options`) or the page is left, so no edit open always shows the saved path.
     fn custom_dictionary_file(&mut self, ui: &mut Ui) {
         let saved = self.app.session.prefs.custom_dictionary.clone().unwrap_or_default();
-        let mut committed = None;
-        Row::new().show(ui, |ui, cx| {
-            let draft = &mut cx.keep::<PathDraft>().0;
-            let mut text = draft.clone().unwrap_or_else(|| saved.clone());
-            let out = TextField::new(tl!("Dictionary file:"), Bind::bound(&mut text)).limit(None).show(ui);
-            *draft = (text != saved).then_some(text);
-            for event in out.events {
-                match event {
-                    EditEvent::Commit { after, .. } => {
-                        committed = Some(after);
-                        *draft = None;
-                    }
-                    EditEvent::Cancel { .. } => *draft = None,
-                    _ => {}
-                }
-            }
+        let out = TextField::new(tl!("Dictionary file:"), Bind::given(saved)).limit(None).show(ui);
+        let committed = out.events.into_iter().find_map(|event| match event {
+            EditEvent::Commit { after, .. } => Some(after),
+            _ => None,
         });
         if let Some(path) = committed {
             self.set("proofing.customDictionaryFile", PrefValue::Text(path));
