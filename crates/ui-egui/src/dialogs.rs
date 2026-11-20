@@ -22,6 +22,7 @@ use crate::theme::{Tokens, semibold};
 mod bookmarks;
 mod chrome;
 mod dispatch;
+pub(crate) use dispatch::HANCOM_NOTICE;
 mod find;
 mod font;
 mod forms;

@@ -1,3 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <!-- Hangul documents. Neither has a registered type; these are the names in common use: the HWPX
+       package's own `mimetype` entry, and file(1)'s name for HWP 5.0. If shared-mime-info defines
+       them too, the definitions merge. -->
+  <mime-type type="application/x-hwp">
+    <comment>Hangul document (HWP)</comment>
+    <comment xml:lang="ko">한/글 문서 (HWP)</comment>
+    <sub-class-of type="application/x-ole-storage"/>
+    <glob pattern="*.hwp"/>
+  </mime-type>
+  <mime-type type="application/hwp+zip">
+    <comment>Hangul document (HWPX)</comment>
+    <comment xml:lang="ko">한/글 문서 (HWPX)</comment>
+    <sub-class-of type="application/zip"/>
+    <magic priority="70">
+      <match type="string" offset="30" value="mimetypeapplication/hwp+zip"/>
+    </magic>
+    <glob pattern="*.hwpx"/>
+  </mime-type>
 </mime-info>

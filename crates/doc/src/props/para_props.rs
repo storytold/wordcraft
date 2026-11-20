@@ -481,6 +481,11 @@ pub struct ParaProps {
     /// "Allow Latin text to wrap in the middle of a word"). Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub word_wrap: Option<bool>,
+    /// Hangul words (the text between two spaces) wrap whole instead of breaking between any
+    /// two syllables: a Hancom Hangul paragraph's `breakNonLatinWord="KEEP_WORD"`. Set only by the
+    /// Hangul reader (no DOCX equivalent; not written to DOCX). Unset = off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_hangul_words: Option<bool>,
     /// `w:overflowPunct`: punctuation may hang past the line end. Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow_punct: Option<bool>,
@@ -527,7 +532,7 @@ impl ParaProps {
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; bidi, text_direction, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
-        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn, text_alignment);
+        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, keep_hangul_words, overflow_punct, top_line_punct, auto_space_de, auto_space_dn, text_alignment);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);

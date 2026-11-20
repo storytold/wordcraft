@@ -269,6 +269,10 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         super::view::restore_zoom(s, z);
     }
     s.path = Some(path.into());
+    // A Hangul document drawn with stand-ins for fonts that are not installed: point to Nanum and Pretendard.
+    if let Some(n) = wordcraft_hwp::font_notice(&s.doc) {
+        s.status = n;
+    }
     // A Markdown file's own text, for the view to show and Save to write back as it is.
     if super::md_source::is_markdown_file(std::path::Path::new(path)) {
         s.md_file = markdown_file_text(path, v);
@@ -439,28 +443,60 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     // once it doesn't (an edit in the formatted view), the document is written out again.
     let exact = super::md_source::text_to_save(s, &path, opts.markup);
     let rewritten = exact.is_none() && !s.md_file.is_empty() && super::md_source::is_markdown_file(&path);
+    // An .hwpx or .hwp save also reports what it could not write into the original.
     let written = match &exact {
-        Some(text) => crate::io::save_text_path(&path, text),
-        None => crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts),
+        Some(text) => crate::io::save_text_path(&path, text).map(|()| None),
+        None => crate::io::save_path_report(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts),
     };
-    if let Err(e) = written {
-        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-        return Err(CmdError::Failed(e));
-    }
+    let report = match written {
+        Ok(r) => r,
+        Err(e) => {
+            (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+            return Err(CmdError::Failed(e));
+        }
+    };
     let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
     // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
     // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
     // A Markdown file saved as another one loses nothing its own save wouldn't: it moves there.
     let own_file = s.path.as_deref() == Some(path.as_path());
     let markdown_to_markdown = super::md_source::is_markdown_file(&path) && s.path.as_deref().is_some_and(super::md_source::is_markdown_file);
-    if own_file || markdown_to_markdown || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
+    // An .hwpx or .hwp save that could not write every edit leaves the document marked as
+    // changed, so closing it still asks before those edits are lost.
+    let unwritten = report.as_ref().is_some_and(|r| !r.skipped.is_empty());
+    if own_file
+        || markdown_to_markdown
+        || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "hwpx", "hwp", "rtf", "json", "xml"].contains(&ext.as_str())
+    {
         s.path = Some(path.clone());
-        s.dirty = false;
+        s.dirty = unwritten;
         s.relayout();
         // What the file holds now.
         s.md_file = super::md_source::FileText::saved(exact.filter(|_| super::md_source::is_markdown_file(&path)));
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten}))
+    let mut out = json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten});
+    if let Some(r) = report {
+        let (status, result) = hangul_save_result(&ext, &r);
+        if let Some(status) = status {
+            s.status = status;
+        }
+        out[ext.as_str()] = result;
+    }
+    Ok(out)
+}
+
+/// What an .hwpx or .hwp save tells: it writes edits into the original and lists the rest, not
+/// written. The status line when some are left (the document stays marked as changed), and the
+/// result's entry for the format. Desktop and browser saves report alike.
+pub fn hangul_save_result(ext: &str, r: &wordcraft_hwp::SaveReport) -> (Option<String>, serde_json::Value) {
+    let status = (!r.skipped.is_empty()).then(|| {
+        format!(
+            "Saved as {}. {} edits could not be written yet (formatting, tables or objects); the document stays marked as changed.",
+            ext.to_ascii_uppercase(),
+            r.skipped.len()
+        )
+    });
+    (status, json!({"modified": r.modified, "inserted": r.inserted, "deleted": r.deleted, "pictures": r.pictures, "notWritten": r.skipped}))
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?

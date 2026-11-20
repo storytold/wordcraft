@@ -7470,6 +7470,7 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-formats",
  "wordcraft-geom",
+ "wordcraft-hwp",
  "wordcraft-layout",
  "wordcraft-pdf",
  "wordcraft-render",
@@ -7529,6 +7530,19 @@ dependencies = [
  "craft-tiff",
  "image",
  "serde",
+]
+
+[[package]]
+name = "wordcraft-hwp"
+version = "0.18.1"
+dependencies = [
+ "cfb",
+ "craft-xml",
+ "craft-zip",
+ "log",
+ "miniz_oxide 0.9.1",
+ "wordcraft-doc",
+ "wordcraft-fonts",
 ]
 
 [[package]]

@@ -1189,6 +1189,10 @@ fn paste_special_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool 
     ok || cancel
 }
 
+/// The sentence Hancom's public HWP format document asks for in the interface of products built
+/// with it, word for word (so never translated).
+pub(crate) const HANCOM_NOTICE: &str = "본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.";
+
 fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::About { tab } = d else {
         return false;
@@ -1214,6 +1218,23 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.hyperlink_to(tl!("Source code: github.com/storytold/wordcraft"), "https://github.com/storytold/wordcraft");
             ui.add_space(6.0);
             ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.")).small().weak());
+            ui.add_space(6.0);
+            // Hancom's sentence word for word once a Korean font is loaded; in English until then,
+            // or where the system has no Korean font, rather than as boxes
+            let small = egui::TextStyle::Small.resolve(ui.style());
+            let notice = if ui.fonts_mut(|f| f.has_glyphs(&small, HANCOM_NOTICE)) {
+                HANCOM_NOTICE
+            } else {
+                tl!("This product was developed with reference to Hancom's public document on the Hangul document file (.hwp) format.")
+            };
+            ui.label(egui::RichText::new(notice).small().weak());
+            ui.label(
+                egui::RichText::new(tl!(
+                    "Hangul and HWP are trademarks of Hancom Inc. WordCraft is not affiliated with, sponsored by or endorsed by Hancom Inc."
+                ))
+                .small()
+                .weak(),
+            );
         }
     }
     // One Close button: About has nothing to cancel.

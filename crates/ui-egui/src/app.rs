@@ -133,6 +133,7 @@ impl WordApp {
             want_system_arabic: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
+            status_fonts_for: None,
             fonts_frames: 0,
             applied_theme: None,
             native_scale: 1.0,
@@ -282,6 +283,8 @@ impl WordApp {
         self.ensure_recover_fonts();
         self.ensure_recent_fonts();
         self.ensure_find_fonts();
+        self.ensure_about_fonts();
+        self.ensure_status_fonts();
         self.install_ui_fonts(ctx, lang);
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
@@ -411,6 +414,8 @@ impl WordApp {
         self.ensure_recover_fonts();
         self.ensure_recent_fonts();
         self.ensure_find_fonts();
+        self.ensure_about_fonts();
+        self.ensure_status_fonts();
         self.install_ui_fonts(ctx, lang);
         self.report_dirty();
     }

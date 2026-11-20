@@ -12,6 +12,8 @@ impl WordApp {
         self.font_generation = generation;
         self.session.relayout();
         self.previews.fonts_changed();
+        // a font installed now may have the letters the status message lacked: look again
+        self.status_fonts_for = None;
         ctx.request_repaint();
     }
 
@@ -57,6 +59,42 @@ impl WordApp {
         let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
             wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
         });
+        if !new.is_empty() {
+            self.canvas.ime_faces.extend(new);
+            self.styled = false;
+        }
+    }
+
+    /// About shows the sentence Hancom asks for in Korean ([`crate::dialogs::HANCOM_NOTICE`]),
+    /// which an interface in another language has no font for. While About is open, borrow the
+    /// face the system draws Hangul with ([`hangul_face`]). Without one, About shows the sentence
+    /// in English.
+    pub(super) fn ensure_about_fonts(&mut self) {
+        if !matches!(self.dialog, Some(crate::dialogs::Dialog::About { .. })) {
+            return;
+        }
+        let new = theme::faces_for_preedit(crate::dialogs::HANCOM_NOTICE, &self.canvas.ime_faces, |_| false, hangul_face);
+        if !new.is_empty() {
+            self.canvas.ime_faces.extend(new);
+            self.styled = false;
+        }
+    }
+
+    /// Status messages can carry the operating system's own error text, in the system's language
+    /// whatever the interface language is: on Korean Windows a failed save says "the system
+    /// cannot find the path specified" in Korean under an English interface. The CJK UI font only has the letters of the
+    /// interface catalogs, so borrow a face for each letter beyond Latin that no borrowed face has
+    /// yet, Hangul from the faces About uses; the interface fonts still come first. egui isn't
+    /// asked which letters its fonts lack: this runs in the logic pass, before the first frame
+    /// too (a file that fails to open at startup), when egui has no fonts and asking panics.
+    pub(super) fn ensure_status_fonts(&mut self) {
+        let msg = self.status_msg.as_ref().map(|(m, _)| m);
+        if self.status_fonts_for.as_ref() == msg {
+            return;
+        }
+        self.status_fonts_for = msg.cloned();
+        let Some(msg) = msg else { return };
+        let new = theme::faces_for_preedit(msg, &self.canvas.ime_faces, |c| (c as u32) < 0x250, hangul_face);
         if !new.is_empty() {
             self.canvas.ime_faces.extend(new);
             self.styled = false;
@@ -213,5 +251,24 @@ impl WordApp {
             theme::set_composition_face(&mut fonts, window, w.canvas.ime_face);
         }
         ctx.set_fonts(fonts);
+    }
+}
+
+/// A face for `c`: the one the system draws it with (WordCraft's fallback: Malgun Gothic on
+/// Windows, Apple SD Gothic Neo on macOS, ... for Hangul).
+fn hangul_face(c: char) -> Option<std::sync::Arc<wordcraft_fonts::FontFace>> {
+    wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    /// A status message set before the first frame (a file that fails to open at startup, with
+    /// the system's error text in Korean) doesn't make the first logic pass ask egui for fonts it
+    /// doesn't have yet. Before, that panicked: egui has no fonts until a pass has run.
+    #[test]
+    fn status_fonts_before_the_first_pass_do_not_panic() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.status_msg = Some(("지정된 경로를 찾을 수 없습니다.".to_string(), crate::now_ms()));
+        app.logic(&egui::Context::default());
     }
 }

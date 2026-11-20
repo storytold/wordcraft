@@ -121,3 +121,84 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
     let img = wordcraft_render::render_page(doc, p, scale, &Default::default());
     Ok(img.to_png())
 }
+
+/// Pixels per point of a chart drawn as a picture (144 dpi): sharp in print at its own size.
+const GRAPHIC_PICTURE_SCALE: f32 = 2.0;
+
+/// How deep groups are searched for graphics.
+const MAX_GROUP_DEPTH: usize = 8;
+
+/// `doc` with its charts, SmartArt diagrams and ink drawn as pictures, for a format that has no
+/// place for them (HWPX: Hancom's chart format is not public). Each becomes a PNG of what
+/// WordCraft shows, with the same size, place and alt text; in groups too. `None` when there
+/// is nothing to change.
+pub fn graphics_as_pictures(doc: &Document) -> Option<Document> {
+    let mut out = doc.clone();
+    let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();
+    out.objects_mut(&|o| has_graphic(o, 0), &mut |o| to_picture(doc, o, &mut pictures, 0));
+    if pictures.is_empty() {
+        return None;
+    }
+    for (key, png) in pictures {
+        out.media.insert(key, std::sync::Arc::new(png));
+    }
+    Some(out)
+}
+
+fn has_graphic(o: &wordcraft_doc::InlineObject, depth: usize) -> bool {
+    use wordcraft_doc::InlineObject;
+    match o {
+        InlineObject::Graphic { .. } => true,
+        InlineObject::Group { children, .. } if depth < MAX_GROUP_DEPTH => children.iter().any(|c| has_graphic(&c.obj, depth + 1)),
+        _ => false,
+    }
+}
+
+/// Graphic `o` replaced by the picture `png` under media `key` (added to `pictures`). A PNG
+/// that failed to encode (empty) replaces nothing: the graphic stays, and the Hangul writers
+/// report it as not written, rather than a picture with no image.
+pub(crate) fn swap_in_picture(o: &mut wordcraft_doc::InlineObject, key: String, png: Vec<u8>, pictures: &mut Vec<(String, Vec<u8>)>) -> bool {
+    use wordcraft_doc::InlineObject;
+    if png.is_empty() {
+        return false;
+    }
+    let InlineObject::Graphic { w, h, alt, float, .. } = o else { return false };
+    let (w, h, alt, float) = (*w, *h, std::mem::take(alt), float.clone());
+    pictures.push((key.clone(), png));
+    *o = InlineObject::Image { media: key, w, h, alt, float, crop: [0.0; 4], ole: None, fx: Default::default() };
+    true
+}
+
+/// Replace the graphic `o` (or those in the group `o`) by a picture drawn from `doc`; the PNGs
+/// go into `pictures` under new media keys.
+fn to_picture(doc: &Document, o: &mut wordcraft_doc::InlineObject, pictures: &mut Vec<(String, Vec<u8>)>, depth: usize) {
+    use wordcraft_doc::InlineObject;
+    match o {
+        InlineObject::Graphic { w, h, graphic, .. } => {
+            let (w, h) = (*w, *h);
+            if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+                return;
+            }
+            let area = wordcraft_geom::Rect::new(0.0, 0.0, w, h);
+            let items = wordcraft_layout::display::graphic_display(doc, graphic, area);
+            if items.is_empty() {
+                return;
+            }
+            let png = wordcraft_render::render_items(doc, &items, area, GRAPHIC_PICTURE_SCALE, &Default::default()).to_png();
+            // numbered on from the last picture made (all of `pictures` is below it), so each
+            // graphic checks only the document's own media, not every picture made before it
+            let start = pictures
+                .last()
+                .and_then(|p| p.0.strip_prefix("graphic-picture")?.strip_suffix(".png")?.parse::<usize>().ok())
+                .map_or(1, |n| n.saturating_add(1));
+            let Some(key) = (start..).map(|n| format!("graphic-picture{n}.png")).find(|k| !doc.media.contains_key(k)) else { return };
+            swap_in_picture(o, key, png, pictures);
+        }
+        InlineObject::Group { children, .. } if depth < MAX_GROUP_DEPTH => {
+            for c in children.iter_mut() {
+                to_picture(doc, &mut c.obj, pictures, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}

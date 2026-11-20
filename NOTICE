@@ -188,3 +188,19 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Hangul (HWP/HWPX) support (crates/hwp)
+
+본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+(HWP 5.0 documents are read following Hancom's public "한글 문서 파일 형식 5.0" document;
+their compound-file container following Microsoft's [MS-CFB] Open Specification, through the
+cfb crate. The Hancom document itself is not included in this distribution.)
+
+HWPX (OWPML, KS X 6101) element and attribute names were taken from "hwpx-owpml-model"
+(https://github.com/hancom-io/hwpx-owpml-model), Copyright 2022 Hancom Inc., licensed under the
+Apache License, Version 2.0. No source code from that project is included; docs/hwp/owpml-reference.md
+lists the names extracted from it and is distributed under the Apache License, Version 2.0 only.
+The clean-room record is docs/hwp/cleanroom.md.
+
+한글 and HWP are trademarks of Hancom Inc. WordCraft is not affiliated with, sponsored by or
+endorsed by Hancom Inc.

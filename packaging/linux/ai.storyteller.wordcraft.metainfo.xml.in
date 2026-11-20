@@ -61,6 +61,8 @@
     <mediatype>application/msword-template</mediatype>
     <mediatype>application/vnd.oasis.opendocument.text</mediatype>
     <mediatype>application/rtf</mediatype>
+    <mediatype>application/x-hwp</mediatype>
+    <mediatype>application/hwp+zip</mediatype>
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>

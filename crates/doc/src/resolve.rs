@@ -216,6 +216,9 @@ pub struct ResolvedPara {
     pub kinsoku: bool,
     /// Latin words wrap whole (`false`: they may break at any character).
     pub word_wrap: bool,
+    /// Hangul words wrap whole (see `ParaProps::keep_hangul_words`); `None`: not said (a
+    /// document from another format), laid out as off.
+    pub keep_hangul_words: Option<bool>,
     pub overflow_punct: bool,
     pub top_line_punct: bool,
     pub auto_space_de: bool,
@@ -303,6 +306,7 @@ impl ResolvedPara {
             suppress_line_numbers: p.suppress_line_numbers.unwrap_or(false),
             kinsoku: p.kinsoku.unwrap_or(true),
             word_wrap: p.word_wrap.unwrap_or(true),
+            keep_hangul_words: p.keep_hangul_words,
             overflow_punct: p.overflow_punct.unwrap_or(true),
             top_line_punct: p.top_line_punct.unwrap_or(false),
             auto_space_de: p.auto_space_de.unwrap_or(true),

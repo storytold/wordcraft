@@ -8,3 +8,5 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+# Test documents (HWP/HWPX) for checks only, never committed
+/samples/

@@ -1,0 +1,18 @@
+[package]
+name = "wordcraft-hwp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft import/export for Hancom Hangul documents: HWPX (OWPML) and HWP 5.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-doc = { workspace = true }
+craft-xml = { workspace = true }
+craft-zip = { workspace = true }
+cfb = { workspace = true }
+miniz_oxide = { workspace = true }
+log = { workspace = true }
+wordcraft-fonts = { workspace = true }

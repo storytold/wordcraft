@@ -109,6 +109,19 @@ impl WordApp {
         r
     }
 
+    /// The result of a save or export delivered in the browser. An .hwpx or .hwp save lists the
+    /// edits it could not write there and in the status line, as the desktop save does.
+    fn downloaded(&mut self, name: &str, bytes: usize, notice: Option<wordcraft_engine::io::SaveNotice>) -> Value {
+        let mut out = json!({"downloaded": name, "bytes": bytes});
+        if let Some(notice) = notice {
+            if let Some(status) = notice.status {
+                self.status(status);
+            }
+            out[notice.format.as_str()] = notice.result;
+        }
+        out
+    }
+
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -173,8 +186,8 @@ impl WordApp {
             let password =
                 if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = match wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts) {
-                Ok(bytes) => bytes,
+            let (bytes, hangul) = match wordcraft_engine::io::save_bytes_report(&name, &self.session.doc, password, &opts) {
+                Ok(saved) => saved,
                 Err(error) => {
                     (
                         self.session.doc.settings.zoom,
@@ -229,9 +242,11 @@ impl WordApp {
             if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
                 let document = self.session.document_id();
                 self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
-                return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
+                let mut out = self.downloaded(&name, bytes.len(), hangul);
+                out["pendingSave"] = json!(ticket);
+                return Ok(out);
             }
-            return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
+            return Ok(self.downloaded(&name, bytes.len(), hangul));
         }
         let document = self.session.document_id();
         let body_epoch = self.session.ime_body_epoch();
