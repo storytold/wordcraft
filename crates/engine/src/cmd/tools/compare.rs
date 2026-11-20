@@ -36,6 +36,7 @@ struct DiffCtx<'a> {
     opts: &'a CompareOptions,
     budget: &'a mut u64,
     char_fallbacks: &'a mut usize,
+    plain_revised: bool,
 }
 
 /// Changed paragraphs longer than this (in characters) are compared word by word even at
@@ -50,10 +51,12 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
 /// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
-    let revised = if let Some(t) = p::str(v, "text") {
-        Document::from_text(t)
+    // A revised side given as plain text carries no real runs or properties; one opened from a
+    // path does. The diff takes the revised formatting only in the latter case.
+    let (revised, plain_revised) = if let Some(t) = p::str(v, "text") {
+        (Document::from_text(t), true)
     } else if let Some(path) = p::str(v, "path") {
-        crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
+        (crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?, false)
     } else {
         return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
     };
@@ -102,7 +105,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut align_budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
     let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut diff_budget);
-    let mut ctx = DiffCtx { ins, del, fmt, opts: &opts, budget: &mut diff_budget, char_fallbacks: &mut char_fallbacks };
+    let mut ctx = DiffCtx { ins, del, fmt, opts: &opts, budget: &mut diff_budget, char_fallbacks: &mut char_fallbacks, plain_revised };
     let mut out: Vec<Arc<Block>> = Vec::new();
     let (mut i, mut j) = (0usize, 0usize);
     let mut changes = 0usize;
@@ -1027,65 +1030,11 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
 
 /// A token of a changed paragraph: a word (or character), or an inline object without text
 /// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+/// Each token also carries the byte range it came from in its source paragraph, so the output
+/// segment can take the formatting of the run it came from instead of the paragraph's first run.
 enum Tok<'a> {
-    Text { text: String, runs: Vec<(String, CharProps)> },
-    Obj(&'a InlineObject, Box<CharProps>),
-}
-
-/// Accumulates characters into words and runs without splitting words at formatting boundaries.
-struct WordBuilder<'a> {
-    tokens: Vec<Tok<'a>>,
-    word_text: String,
-    runs: Vec<(String, CharProps)>,
-    cur_run_text: String,
-    cur_run_props: CharProps,
-    characters: bool,
-}
-
-impl<'a> WordBuilder<'a> {
-    /// Creates a new builder for word or character tokenization.
-    fn new(characters: bool) -> Self {
-        Self {
-            tokens: Vec::new(),
-            word_text: String::new(),
-            runs: Vec::new(),
-            cur_run_text: String::new(),
-            cur_run_props: CharProps::default(),
-            characters,
-        }
-    }
-
-    /// Appends a character with its formatting properties, completing the word on space or char mode.
-    fn push_char(&mut self, c: char, props: &CharProps) {
-        if self.cur_run_text.is_empty() {
-            self.cur_run_props = props.clone();
-        } else if &self.cur_run_props != props {
-            self.runs.push((std::mem::take(&mut self.cur_run_text), self.cur_run_props.clone()));
-            self.cur_run_props = props.clone();
-        }
-        self.word_text.push(c);
-        self.cur_run_text.push(c);
-        if self.characters || c == ' ' {
-            self.finish_word();
-        }
-    }
-
-    /// Flushes the active character run and completed word token into the token list.
-    fn finish_word(&mut self) {
-        if !self.cur_run_text.is_empty() {
-            self.runs.push((std::mem::take(&mut self.cur_run_text), self.cur_run_props.clone()));
-        }
-        if !self.word_text.is_empty() {
-            self.tokens.push(Tok::Text { text: std::mem::take(&mut self.word_text), runs: std::mem::take(&mut self.runs) });
-        }
-        self.cur_run_props = CharProps::default();
-    }
-
-    /// Flushes any pending word and appends an inline object token.
-    fn push_obj(&mut self, o: &'a InlineObject, props: &CharProps) {
-        self.finish_word();
-        self.tokens.push(Tok::Obj(o, Box::new(props.clone())));
-    }
+    Text(String, std::ops::Range<usize>),
+    Obj(&'a InlineObject, std::ops::Range<usize>),
 }
 
 /// What a comparison sees of a token: the text as the options say, an object with the text of
@@ -1111,275 +1060,132 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text.
+/// between them. Objects with text (fields, equations…) count as their text. Each token records
+/// the byte range it came from in `p`, so its output segment can take that source run's
+/// formatting. An object's flattened text (or a broken marker's placeholder) maps to the marker's
+/// own range, which is the nearest formatting the object has.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
-    let mut builder = WordBuilder::new(characters);
-    let mut objects = p.objects.iter();
-    let mut runs = p.run_ranges();
-    let mut run = runs.next();
-    for (off, c) in p.text.char_indices() {
-        while matches!(&run, Some((r, _)) if off >= r.end) {
-            run = runs.next();
+    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
+        cur.push(c);
+        if characters || c == ' ' {
+            v.push(Tok::Text(std::mem::take(cur), start..end));
         }
-        let props = match &run {
-            Some((r, props)) if off >= r.start => *props,
-            _ => &p.mark,
-        };
+    }
+    let mut v = Vec::new();
+    let mut cur = String::new();
+    let mut cur_start = 0usize;
+    let mut objects = p.objects.iter();
+    for (i, c) in p.text.char_indices() {
+        let marker = i..i + OBJ.len_utf8();
         if c != OBJ {
-            builder.push_char(c, props);
+            if cur.is_empty() {
+                cur_start = i;
+            }
+            push(&mut v, &mut cur, cur_start, i + c.len_utf8(), c, characters);
             continue;
         }
         match objects.next() {
             Some(o) if o.plain_text().is_empty() => {
-                builder.push_obj(o, props);
+                if !cur.is_empty() {
+                    v.push(Tok::Text(std::mem::take(&mut cur), cur_start..i));
+                }
+                v.push(Tok::Obj(o, marker));
             }
             Some(o) => {
                 for c in o.plain_text().chars() {
-                    builder.push_char(c, props);
+                    if cur.is_empty() {
+                        cur_start = i;
+                    }
+                    push(&mut v, &mut cur, cur_start, marker.end, c, characters);
                 }
             }
             None => {
                 // A marker without its object (a broken paragraph): kept as a visible
                 // placeholder, so the loss shows in the result instead of vanishing.
                 log::warn!("compare: an object marker without its object");
-                builder.push_char(char::REPLACEMENT_CHARACTER, props);
+                if cur.is_empty() {
+                    cur_start = i;
+                }
+                push(&mut v, &mut cur, cur_start, marker.end, char::REPLACEMENT_CHARACTER, characters);
             }
         }
     }
-    builder.finish_word();
-    builder.tokens
+    if !cur.is_empty() {
+        v.push(Tok::Text(cur, cur_start..p.text.len()));
+    }
+    v
 }
 
-/// Returns the normalized key string and a mapping from each character in the key
-/// to its corresponding source byte offset in `s`.
-fn key_with_offsets(s: &str, opts: &CompareOptions) -> (String, Vec<usize>) {
-    let mut key = String::new();
-    let mut offsets = Vec::new();
-
-    if opts.white_space {
-        if opts.case {
-            for (b_idx, c) in s.char_indices() {
-                key.push(c);
-                offsets.push(b_idx);
-            }
-        } else {
-            let s_lc = s.to_lowercase();
-            let mut lc_chars = s_lc.chars();
-            for (b_idx, c) in s.char_indices() {
-                for _ in 0..c.to_lowercase().count() {
-                    if let Some(lc) = lc_chars.next() {
-                        key.push(lc);
-                        offsets.push(b_idx);
-                    }
-                }
-            }
-        }
-    } else {
-        let mut in_ws = true;
-        let mut word_start_b = 0;
-        let mut ws_start_b = 0;
-        let mut words = Vec::new();
-
-        for (b_idx, c) in s.char_indices() {
-            if c.is_whitespace() {
-                if !in_ws {
-                    words.push((word_start_b, b_idx, ws_start_b));
-                    in_ws = true;
-                    ws_start_b = b_idx;
-                }
-            } else {
-                if in_ws {
-                    word_start_b = b_idx;
-                    in_ws = false;
-                }
-            }
-        }
-        if !in_ws {
-            words.push((word_start_b, s.len(), ws_start_b));
-        }
-
-        for (i, &(wb_start, wb_end, prev_ws)) in words.iter().enumerate() {
-            if i > 0 {
-                key.push(' ');
-                offsets.push(prev_ws);
-            }
-            let word = s.get(wb_start..wb_end).unwrap_or_default();
-            if opts.case {
-                for (b_off, c) in word.char_indices() {
-                    key.push(c);
-                    offsets.push(wb_start.saturating_add(b_off));
-                }
-            } else {
-                let w_lc = word.to_lowercase();
-                let mut lc_chars = w_lc.chars();
-                for (b_off, c) in word.char_indices() {
-                    for _ in 0..c.to_lowercase().count() {
-                        if let Some(lc) = lc_chars.next() {
-                            key.push(lc);
-                            offsets.push(wb_start.saturating_add(b_off));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    offsets.push(s.len());
-    (key, offsets)
+/// One side's run formatting for `word_diff`: the paragraph's run ranges (from
+/// [`Paragraph::run_ranges`]), walked with a forward cursor. `word_diff` consumes each side's
+/// tokens in increasing offset order, so the cursor makes a token's lookup amortised O(1)
+/// instead of rescanning the runs from the start for every token; an out-of-order offset falls
+/// back to a binary search, so the lookup stays correct for any offset.
+struct SideProps<'a> {
+    ranges: Vec<(std::ops::Range<usize>, &'a CharProps)>,
+    mark: &'a CharProps,
+    cursor: usize,
 }
 
-/// Maps byte offsets from `a` to `b` when their plain text matches under `opts.key`.
-fn map_byte_offsets(a: &str, b: &str, opts: &CompareOptions) -> Vec<usize> {
-    if a == b {
-        return (0..=a.len()).collect();
-    }
-    let (key_a, offsets_a) = key_with_offsets(a, opts);
-    let (key_b, offsets_b) = key_with_offsets(b, opts);
-
-    if key_a != key_b || offsets_a.is_empty() || offsets_b.is_empty() {
-        return (0..=a.len()).map(|off| if a.is_empty() { 0 } else { ((off as u64 * b.len() as u64) / a.len() as u64) as usize }).collect();
+impl<'a> SideProps<'a> {
+    fn new(p: &'a Paragraph) -> Self {
+        SideProps { ranges: p.run_ranges().collect(), mark: &p.mark, cursor: 0 }
     }
 
-    let mut map = Vec::with_capacity(a.len() + 1);
-    for byte_a in 0..=a.len() {
-        let k = offsets_a.partition_point(|&off| off < byte_a);
-        let byte_b = offsets_b.get(k).copied().unwrap_or(b.len());
-        map.push(byte_b.min(b.len()));
+    /// The props of the run holding byte `off`: that run's props, or the paragraph mark when
+    /// `off` is past the last run — the same answer `Paragraph::props_of_char` gives.
+    fn run_props(&mut self, off: usize) -> &'a CharProps {
+        while self.cursor < self.ranges.len() && self.ranges[self.cursor].0.end <= off {
+            self.cursor += 1;
+        }
+        if let Some((range, props)) = self.ranges.get(self.cursor)
+            && range.contains(&off)
+        {
+            return props;
+        }
+        let idx = self.ranges.partition_point(|(r, _)| r.start <= off);
+        match idx.checked_sub(1).and_then(|i| self.ranges.get(i)) {
+            Some((range, props)) if range.contains(&off) => props,
+            _ => self.mark,
+        }
     }
-    map
-}
 
-/// Finds the `CharProps` in `runs` containing byte index `byte_idx`.
-fn lookup_props_by_byte<'a>(runs: &'a [(String, CharProps)], byte_idx: usize, base: &'a CharProps) -> &'a CharProps {
-    let mut acc = 0;
-    for (s, p) in runs {
-        let next = acc + s.len();
-        if byte_idx < next {
-            return p;
-        }
-        acc = next;
-    }
-    runs.last().map(|(_, p)| p).unwrap_or(base)
-}
-
-/// Emit a matched token into `p`, preserving original revision state from `a` while applying
-/// revised formatting changes when formatting comparison is enabled.
-fn put_same(p: &mut Paragraph, ta: Option<&Tok<'_>>, tb: Option<&Tok<'_>>, ctx: &DiffCtx<'_>, base: &CharProps) {
-    match (ta, tb) {
-        (Some(Tok::Text { text: text_a, runs: runs_a }), Some(Tok::Text { text: text_b, runs: runs_b })) => {
-            if runs_a.len() <= 1 && runs_b.len() <= 1 {
-                let props_a = runs_a.first().map(|(_, p)| p).unwrap_or(base);
-                let props_b = runs_b.first().map(|(_, p)| p).unwrap_or(base);
-                let props = if ctx.opts.formatting {
-                    let mut pr = props_b.clone();
-                    pr.ins = props_a.ins;
-                    pr.del = props_a.del;
-                    if props_a.formatting() != props_b.formatting() {
-                        pr.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, props_a.formatting());
-                    } else {
-                        pr.fmt_change = props_a.fmt_change.clone();
-                    }
-                    pr
-                } else {
-                    CharProps { ins: props_a.ins, del: props_a.del, fmt_change: props_a.fmt_change.clone(), ..props_a.formatting() }
-                };
-                let _ = p.insert_text(p.len(), text_b, &props);
-            } else {
-                let map_a_to_b = map_byte_offsets(text_a, text_b, ctx.opts);
-                let map_b_to_a = map_byte_offsets(text_b, text_a, ctx.opts);
-                let mut splits = Vec::with_capacity(runs_a.len() + runs_b.len() + 2);
-                splits.push(0);
-                splits.push(text_b.len());
-                let mut off_b = 0;
-                for (s, _) in runs_b {
-                    off_b += s.len();
-                    if off_b < text_b.len() {
-                        splits.push(off_b);
-                    }
-                }
-                let mut off_a = 0;
-                for (s, _) in runs_a {
-                    off_a += s.len();
-                    if off_a < text_a.len() {
-                        let b_split = map_a_to_b.get(off_a).copied().unwrap_or(text_b.len());
-                        if b_split < text_b.len() {
-                            splits.push(b_split);
-                        }
-                    }
-                }
-                splits.sort_unstable();
-                splits.dedup();
-
-                for w in splits.windows(2) {
-                    let (b0, b1) = (w[0], w[1]);
-                    if b0 >= b1 {
-                        continue;
-                    }
-                    let slice = text_b.get(b0..b1).unwrap_or("");
-                    if slice.is_empty() {
-                        continue;
-                    }
-                    let a0 = map_b_to_a.get(b0).copied().unwrap_or(0);
-                    let props_a = lookup_props_by_byte(runs_a, a0, base);
-                    let props_b = lookup_props_by_byte(runs_b, b0, base);
-                    let props = if ctx.opts.formatting {
-                        let mut pr = props_b.clone();
-                        pr.ins = props_a.ins;
-                        pr.del = props_a.del;
-                        if props_a.formatting() != props_b.formatting() {
-                            pr.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, props_a.formatting());
-                        } else {
-                            pr.fmt_change = props_a.fmt_change.clone();
-                        }
-                        pr
-                    } else {
-                        CharProps { ins: props_a.ins, del: props_a.del, fmt_change: props_a.fmt_change.clone(), ..props_a.formatting() }
-                    };
-                    let _ = p.insert_text(p.len(), slice, &props);
-                }
-            }
-        }
-        (Some(Tok::Obj(oa, props_a)), Some(Tok::Obj(ob, props_b))) => {
-            let _ = oa;
-            let props = if ctx.opts.formatting {
-                let mut pr = (**props_b).clone();
-                pr.ins = props_a.ins;
-                pr.del = props_a.del;
-                if props_a.formatting() != props_b.formatting() {
-                    pr.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, props_a.formatting());
-                } else {
-                    pr.fmt_change = props_a.fmt_change.clone();
-                }
-                pr
-            } else {
-                CharProps { ins: props_a.ins, del: props_a.del, fmt_change: props_a.fmt_change.clone(), ..props_a.formatting() }
-            };
-            let _ = p.insert_object(p.len(), (*ob).clone(), &props);
-        }
-        (_, Some(Tok::Text { text, runs })) => {
-            let props_b = runs.first().map(|(_, p)| p).unwrap_or(base);
-            let _ = p.insert_text(p.len(), text, props_b);
-        }
-        (_, Some(Tok::Obj(o, props_b))) => {
-            let _ = p.insert_object(p.len(), (*o).clone(), props_b);
-        }
-        _ => {}
+    /// The formatting of the source run a token came from: the run holding the token's first
+    /// byte, with the revision metadata stripped. `ins`, `del` and `fmt_change` are indices into
+    /// the *source* document's own revision table, and the rebuilt paragraph lives in the result
+    /// document, whose table is a different one, so a source mark can never be carried across;
+    /// `word_diff` stamps the compare's own `ins`/`del` on the segments it marks. The consequence
+    /// is plain: a pre-existing pending revision inside a changed paragraph (say another author's
+    /// deletion) is superseded by the compare result rather than preserved. The hyperlink is
+    /// kept, because Reject restores it on a deleted run (at token granularity: the link is taken
+    /// from the token's first byte, so a token that starts unlinked can lose a mid-token link).
+    fn props_of(&mut self, t: &Tok<'_>) -> CharProps {
+        let off = match t {
+            Tok::Text(_, range) | Tok::Obj(_, range) => range.start,
+        };
+        let c = self.run_props(off);
+        CharProps { ins: None, del: None, fmt_change: None, ..c.clone() }
     }
 }
 
-/// Emit a deleted token into `p`, marking all runs with delete revision `ctx.del`.
-fn put_del(p: &mut Paragraph, t: Option<&Tok<'_>>, ctx: &DiffCtx<'_>) {
+/// The props of an output token: those of the source run it came from, or — never expected, since
+/// [`tokens`] and [`lcs_ops`] consume both sides in step — the given fallback. A miss is loud.
+fn output_props(side: &mut SideProps<'_>, t: Option<&Tok<'_>>, fallback: &CharProps) -> CharProps {
+    if t.is_none() {
+        log::warn!("compare: a token range lookup missed; `tokens` and `lcs_ops` are out of step");
+    }
+    t.map(|t| side.props_of(t)).unwrap_or_else(|| fallback.clone())
+}
+
+/// Add a token at the end of `p` with `props`.
+fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
+    let at = p.len();
     match t {
-        Some(Tok::Text { runs, .. }) => {
-            for (text, props_a) in runs {
-                let mut props = props_a.clone();
-                props.del = Some(ctx.del);
-                let _ = p.insert_text(p.len(), text, &props);
-            }
+        Some(Tok::Text(t, _)) => {
+            let _ = p.insert_text(at, t, props);
         }
-        Some(Tok::Obj(o, props_a)) => {
-            let mut props = (**props_a).clone();
-            props.del = Some(ctx.del);
-            let _ = p.insert_object(p.len(), (*o).clone(), &props);
+        Some(Tok::Obj(o, _)) => {
+            let _ = p.insert_object(at, (*o).clone(), props);
         }
         None => {}
     }
@@ -1451,9 +1257,11 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     } else {
         false
     };
+    let plain_revised = ctx.plain_revised;
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
+    let (mut a_props, mut b_props) = (SideProps::new(a), SideProps::new(b));
     let key = |t: &Tok<'_>| match t {
-        Tok::Text { text, .. } => Key::Text(ctx.opts.key(text)),
+        Tok::Text(t, _) => Key::Text(ctx.opts.key(t)),
         Tok::Obj(o, _) => obj_key(doc, o),
     };
     let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
@@ -1462,7 +1270,6 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     // a short interior match need folding back into its surrounding edit.
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
-
     if ctx.opts.formatting && a.props.formatting() != b.props.formatting() {
         p.props = b.props.formatting();
         p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, a.props.formatting());
@@ -1514,21 +1321,31 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
         }
     }
 
-    let base = b.runs.first().map(|r| r.props.clone()).or_else(|| a.runs.first().map(|r| r.props.clone())).unwrap_or_else(|| b.mark.clone());
+    let fallback = a.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
+    let fallback_b = b.runs.first().map(|r| CharProps { ins: None, del: None, fmt_change: None, ..r.props.clone() }).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
             Op::Same => {
-                put_same(&mut p, ta.get(i), tb.get(j), ctx, &base);
+                // Equal as compared (perhaps up to case or spacing): the revised text, but the
+                // formatting of the run it stands for. For a document revised side that is the
+                // revised run, as issue #3749 prescribes ("Copy unchanged tokens from the revised
+                // paragraph with their own properties"); a plain-text revised side has no runs to
+                // speak of, so the original run's formatting is kept instead.
+                let props =
+                    if plain_revised { output_props(&mut a_props, ta.get(i), &fallback) } else { output_props(&mut b_props, tb.get(j), &fallback_b) };
+                put(&mut p, tb.get(j), &props);
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                put_del(&mut p, ta.get(i), ctx);
+                let props = output_props(&mut a_props, ta.get(i), &fallback);
+                put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..props });
                 i += 1;
             }
             Op::Ins => {
-                put_ins(&mut p, tb.get(j), ctx);
+                let props = tb.get(j).map(|t| b_props.props_of(t)).unwrap_or_else(|| fallback.clone());
+                put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..props });
                 j += 1;
             }
         }
