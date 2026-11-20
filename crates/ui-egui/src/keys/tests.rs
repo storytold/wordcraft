@@ -1608,7 +1608,8 @@ fn delete_previous_sentence_shortcut_dispatches_and_can_be_reassigned() {
     assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. ");
     app.run("edit.undo", json!({})).unwrap();
     assert!(dispatch(&mut app, Key::Backspace, Modifiers { shift: false, ..mods }));
-    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second ");
+    // Ctrl+Backspace after a full stop takes the full stop alone, as Word does (#4773).
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second sentence");
     app.run("edit.undo", json!({})).unwrap();
     app.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+Backspace": "select.all"}}));
     assert!(dispatch(&mut app, Key::Backspace, mods));

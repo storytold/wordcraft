@@ -23,12 +23,14 @@ pub fn is_complex_script(c: char) -> bool {
 }
 
 /// A character that belongs to a word for word selection and Ctrl+arrow movement: letters,
-/// digits, `_` and `'`, plus what sits inside Persian and Arabic words: the zero-width non-joiner
-/// (نیم‌فاصله, as in «می‌خواهم»), the zero-width joiner, tatweel and the Arabic combining marks.
+/// digits, `_`, `'` and `’` (the apostrophe smart quotes type, as in «l’amico»: one word in Word),
+/// plus what sits inside Persian and Arabic words: the zero-width non-joiner (نیم‌فاصله, as in
+/// «می‌خواهم»), the zero-width joiner, tatweel and the Arabic combining marks.
 pub fn is_word_char(c: char) -> bool {
     c.is_alphanumeric()
         || c == '_'
         || c == '\''
+        || c == '\u{2019}'
         || matches!(u32::from(c), 0x200C | 0x200D | 0x0640 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06DC | 0x06DF..=0x06E8 | 0x06EA..=0x06ED | 0x08D3..=0x08FF | 0x0300..=0x036F)
 }
 
