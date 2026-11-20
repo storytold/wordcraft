@@ -18,7 +18,6 @@ use crate::{WordApp, system_clipboard};
 pub(crate) const MAX_FILE_BYTES: u64 = 200 << 20;
 /// Most picture files one paste inserts.
 const MAX_FILES: usize = 20;
-const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 
 /// PNG bytes for clipboard pixels, or why they can't be pasted. The platform read has checked the
 /// size already.
@@ -31,7 +30,7 @@ pub fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u
 }
 
 fn is_picture_file(path: &Path) -> bool {
-    path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| IMAGE_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| crate::file_dialogs::PICTURES.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Pasted text that is only paths or `file://` addresses of picture files — what file managers
