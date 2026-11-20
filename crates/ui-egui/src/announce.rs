@@ -93,7 +93,7 @@ pub(crate) fn expose(app: &WordApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use egui::accesskit::Live;
+    use egui::accesskit::{Live, Role};
     use egui::{Key, Modifiers};
     use egui_kittest::kittest::{NodeT, Queryable};
     use serde_json::json;
@@ -135,7 +135,7 @@ mod tests {
     /// The live region's text and node (its id, written out), if one is in the tree. The text is
     /// the label's value, which is its name to screen readers.
     fn heard(h: &egui_kittest::Harness<'_, WordApp>) -> Option<(String, String)> {
-        let node = h.query_by(|n| n.live() == Live::Polite)?;
+        let node = h.query_by(|n| n.role() == Role::Label && n.accesskit_node().data().live() == Some(Live::Polite))?;
         let n = node.accesskit_node();
         assert!(n.label_comes_from_value(), "a label, named by its value");
         Some((n.value().unwrap_or_default(), format!("{:?}", n.id())))
@@ -273,6 +273,17 @@ mod tests {
     #[test]
     fn the_words_go_through_the_interface_catalogs() {
         let mut h = harness("Lanterns glow");
+        // These delimiters mark translations in the synthetic locale and are absent from some test fonts.
+        h.ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::announce::pseudo_markers", |request| {
+            matches!(request.cluster, "⟦" | "⟧").then(|| egui::RasterizedGlyph {
+                bitmap: egui::GlyphBitmap {
+                    image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+                    offset_px: egui::Vec2::ZERO,
+                    is_color: false,
+                },
+                advance_px: request.font_size_px.max(1.0),
+            })
+        }));
         h.state_mut().ui.language = "pseudo".into();
         let said = press(&mut h, Modifiers::COMMAND, Key::B).map(|(t, _)| t).unwrap_or_default();
         crate::i18n::apply_language(crate::i18n::Lang::EN);
@@ -287,7 +298,9 @@ mod tests {
     /// each replaces the last (`WordApp::announcement` holds one), so nothing queues up.
     #[test]
     fn a_burst_of_ten_presses_leaves_one_announcement_the_latest() {
-        let live = |h: &egui_kittest::Harness<'_, WordApp>| h.query_all_by(|n| n.live() == Live::Polite).count();
+        let live = |h: &egui_kittest::Harness<'_, WordApp>| {
+            h.query_all_by(|n| n.role() == Role::Label && n.accesskit_node().data().live() == Some(Live::Polite)).count()
+        };
         let mut h = harness("Lanterns glow");
         let mut nodes = std::collections::HashSet::new();
         for i in 0..10 {
