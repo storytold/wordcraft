@@ -1004,8 +1004,11 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             zoom_step(app, near.2);
                         }
                         // Reading zoom changes only reading presentation, never the normal view zoom.
-                        let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
-                        let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
+                        // In percent, as the commands take it and Word's slider gives it to screen
+                        // readers ("Zoom 100").
+                        let mut v = 100.0 * if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
+                        let slider =
+                            egui::Slider::new(&mut v, if reading { 75.0..=150.0 } else { 10.0..=500.0 }).logarithmic(!reading).show_value(false);
                         ui.spacing_mut().slider_width = 110.0;
                         let response = ui.add(slider);
                         response.widget_info(|| {
@@ -1013,7 +1016,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         });
                         if response.changed() {
                             let command = if reading { "view.readTextSize" } else { "view.zoom" };
-                            let _ = app.run(command, json!({"value": (v * 100.0).round()}));
+                            let _ = app.run(command, json!({"value": v.round()}));
                         }
                         if small_icon(ui, far.0, tl!(far.1)) {
                             zoom_step(app, far.2);
@@ -1065,6 +1068,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         if resp.clicked() {
                             let _ = app.run("view.focus", json!({}));
                         }
+                        // Laid out from the far end inwards, these controls were made from the zoom to Focus:
+                        // screen readers get them the other way, in reading order, as they are on the screen
+                        // and as Word gives them.
+                        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                            let mut children = node.children().to_vec();
+                            children.reverse();
+                            node.set_children(children);
+                        });
                     });
                     // The controls' width from the edge they cling to, for the texts of the next pass.
                     let width = if rtl { controls_left - row_left } else { row_right - controls_left };
