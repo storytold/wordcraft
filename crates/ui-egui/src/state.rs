@@ -7,7 +7,7 @@ pub(crate) enum PromptSave {
     /// Not saved (a format that doesn't keep everything); the command is cancelled.
     NotSaved,
     /// Web: the browser's save picker finishes later; its ticket.
-    Later(craft::host::PickId),
+    Later,
 }
 
 /// Why AutoSave can't cover the document ([`WordApp::autosave_block`]); the switch is greyed out

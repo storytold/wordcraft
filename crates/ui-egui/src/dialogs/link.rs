@@ -82,7 +82,7 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
         HyperlinkAnswer::Set { link, text, .. } => {
             let places = link_places(app).map(|(_, refs)| refs).unwrap_or_default();
             match link_params(&link.target, text.as_deref(), &places) {
-                Some(params) => app.run("insert.link", params).map(|_| ()).map_err(|e| Label::from(e)),
+                Some(params) => app.run("insert.link", params).map(|_| ()).map_err(Label::from),
                 None => Err(Label::from(tl!("That place is no longer in the document."))),
             }
         }

@@ -20,23 +20,23 @@ use crate::WordApp;
 
 /// The key of the inspected region the title bar records over its quick access toolbar buttons.
 pub(crate) fn qat_region() -> egui::Id {
-    egui::Id::new("wc_keytips_qat_region")
+    egui::Id::unique("wc_keytips_qat_region")
 }
 
 /// The key of the inspected region the title bar records over its Search box.
 pub(crate) fn search_region() -> egui::Id {
-    egui::Id::new("wc_keytips_search_region")
+    egui::Id::unique("wc_keytips_search_region")
 }
 
 /// The key of the inspected region the Backstage records over its page buttons.
 pub(crate) fn backstage_region() -> egui::Id {
-    egui::Id::new("wc_keytips_backstage_region")
+    egui::Id::unique("wc_keytips_backstage_region")
 }
 
 /// The key of the inspected region the screen bar (Focus, Full Screen View) records; the legacy hint hangs from
 /// its first element when no ribbon shows.
 pub(crate) fn screen_bar_region() -> egui::Id {
-    egui::Id::new("wc_keytips_screen_bar_region")
+    egui::Id::unique("wc_keytips_screen_bar_region")
 }
 
 /// Word's tab letters, as Word for Windows shows them after Alt (File F, Design G, References S,

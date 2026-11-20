@@ -714,8 +714,6 @@ fn type_height(h: &mut egui_kittest::Harness<'_, WordApp>, text: &str) {
 /// proportion as one undo step and closes the dialog.
 #[test]
 fn size_dialog_typed_height_applies_on_ok_in_proportion() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
     let mut a = picture_app(40, 20);
     a.run("picture.size", json!({})).unwrap();
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(

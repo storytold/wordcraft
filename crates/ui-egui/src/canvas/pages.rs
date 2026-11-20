@@ -1,4 +1,4 @@
-use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, WordApp, json, pos2};
+use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Rect, WordApp, json};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
@@ -90,10 +90,6 @@ pub(super) fn page_shows(keys: &mut PageKeys, layout: &std::sync::Arc<DocLayout>
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (view, keys.content(layout, i)).hash(&mut h);
     h.finish()
-}
-
-pub(super) fn to_screen(origin: Pos2, page_rect: Rect, scale: f32, x: f32, y: f32) -> Pos2 {
-    pos2(origin.x + page_rect.min.x + x * scale, origin.y + page_rect.min.y + y * scale)
 }
 
 pub(crate) fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {

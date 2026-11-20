@@ -94,7 +94,7 @@ impl WordApp {
                             return Ok(json!({"done": false}));
                         }
                         // The browser's picker finishes later: `settle_saves` carries on (#1315).
-                        Ok(PromptSave::Later(_)) => {
+                        Ok(PromptSave::Later) => {
                             self.status(tl!("Waiting for the save to finish…"));
                             return Ok(json!({"pending": "save"}));
                         }
@@ -264,7 +264,7 @@ impl WordApp {
             return Ok(PromptSave::NotSaved);
         }
         Ok(match v.get("pendingSave").and_then(Value::as_u64) {
-            Some(ticket) => PromptSave::Later(PickId(ticket)),
+            Some(_) => PromptSave::Later,
             None => PromptSave::Saved,
         })
     }

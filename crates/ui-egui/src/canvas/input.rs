@@ -10,7 +10,7 @@ use craft::ui::primitives::Draw;
 
 use super::links::{field_showing_code, follow_link, is_generated_bookmark_link, link_under};
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
-use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, WordApp, json};
+use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, StoryRef, WordApp, json};
 use crate::objects::ObjectGesture;
 
 /// See [`CanvasState::unit_drag`].

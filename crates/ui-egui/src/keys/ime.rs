@@ -52,8 +52,8 @@ pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Cont
     }
     let in_equation = app.session.math.is_some();
     let epoch = match &app.session.math {
-        Some(math) => math.session as u64,
-        None => app.session.ime_body_epoch() as u64,
+        Some(math) => math.session,
+        None => app.session.ime_body_epoch(),
     };
     let revision = app.session.ime_state_revision();
     // A wide selection or cross-story caret has no single surrounding window either.

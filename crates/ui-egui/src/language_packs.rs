@@ -390,7 +390,7 @@ pub(crate) fn pack_bar(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let document = app.session.document_id();
     let ctx = ui.ctx().clone();
     let env = Env::of(ui);
-    let format = env.format().clone();
+    let format = env.format();
     match bar {
         Bar::Pack(pack) => {
             let language = shown(&language_of(&pack.locale, &pack.name), MAX_BAR_NAME);
@@ -398,7 +398,7 @@ pub(crate) fn pack_bar(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
             let running = progress(&pack.locale);
             let error = error_of(app, &pack.locale);
             let install =
-                (running.is_none()).then(|| crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size_text(pack.size, &format))]).to_string());
+                (running.is_none()).then(|| crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size_text(pack.size, format))]).to_string());
             // The body can run twice in a pass (measuring, then drawing): the notice is built in it each time.
             let shown_bar = Row::new().show(ui, |ui, _| {
                 let mut notice = Notice::new(if error.is_some() { Tone::Bad } else { Tone::Info }, message.to_string()).dismiss().id_salt("pack");
@@ -623,7 +623,7 @@ fn status_text(row: &LanguageRow, running: Option<(u64, u64)>) -> String {
 /// where its proofing comes from and what can be done, and Add a language….
 pub(crate) fn your_languages(app: &mut WordApp, ui: &mut Ui) {
     let env = Env::of(ui);
-    let format = env.format().clone();
+    let format = env.format();
     let ctx = ui.ctx().clone();
     Text::new(tl!(
         "English, the languages of this document and every installed Language pack. Language packs add spelling dictionaries and hyphenation."
@@ -692,7 +692,7 @@ pub(crate) fn your_languages(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                 } else {
-                    let size = size_text(row.size, &format);
+                    let size = size_text(row.size, format);
                     let label = if row.proofing == Proofing::Install {
                         crate::i18n::fmt(tl!("Install ({size})"), &[("size", &size)])
                     } else {
@@ -888,7 +888,7 @@ impl StackDialog for AddLanguage {
                                     });
                             }
                             None => {
-                                let size = if pack.size > 0 { format!(" ({})", size_text(pack.size, &format)) } else { String::new() };
+                                let size = if pack.size > 0 { format!(" ({})", size_text(pack.size, format)) } else { String::new() };
                                 let pack = pack.clone();
                                 row = row.trailing_field(Button::new(format!("{}{size}", tl!("Install"))).id_salt(("install", at)), move |out| {
                                     if clicked(&out) {

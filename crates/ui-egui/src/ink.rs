@@ -24,7 +24,7 @@ use craft::ui::contract::{
 use craft::ui::primitives::{DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor};
 use craft::ui::runtime::motion::Animate;
 use craft::ui::style::{ComponentStyle, DataColor, StyleCx, SurfaceKind};
-use egui::{Align2, Color32, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Align2, Color32, Pos2, Response, Ui, Vec2};
 use serde_json::json;
 use wordcraft_doc::freeform::{InkTool, MAX_POINTS};
 use wordcraft_engine::cmd::draw::DrawMode;

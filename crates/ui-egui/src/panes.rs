@@ -9,7 +9,6 @@ use craft::ui::contract::SizeLimits;
 use craft::ui::patterns::dock::{PaneContent, PaneEdges, PaneSpec, PaneState};
 use craft::ui::runtime::env::PaneEdge;
 use egui::{Ui, vec2};
-use wordcraft_engine::StylesPaneDock;
 
 use crate::WordApp;
 
@@ -20,10 +19,8 @@ mod nav;
 mod side;
 mod state;
 
-#[cfg(test)]
-pub(crate) use comments::comment_draft;
 use comments::comments;
-pub(crate) use comments::{COMMENT_ROWS, commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, state_has_drafts};
+pub(crate) use comments::{commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, state_has_drafts};
 use host::Content;
 #[cfg(test)]
 pub(crate) use host::apply;
@@ -182,12 +179,12 @@ impl PaneContent<Pane> for Content<'_, '_> {
     }
 
     fn state(&self, pane: &Pane) -> Option<PaneState> {
-        Some(state::pane_state(&**self.app.borrow(), *pane, self.rtl))
+        Some(state::pane_state(&self.app.borrow(), *pane, self.rtl))
     }
 
     fn body(&mut self, pane: &Pane, ui: &mut Ui, _cx: &mut craft::ui::contract::BodyCx<'_>) {
         let mut app = self.app.borrow_mut();
-        pane_body(&mut **app, ui, *pane);
+        pane_body(&mut app, ui, *pane);
     }
 }
 

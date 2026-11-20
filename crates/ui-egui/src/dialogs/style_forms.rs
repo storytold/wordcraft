@@ -265,11 +265,6 @@ pub(crate) fn open_new_child(app: &mut WordApp, based_on: &str, parent: DialogId
     open_new_with(app, based_on, Some(parent))
 }
 
-/// Opens New Style based on Normal.
-pub(crate) fn open_new(app: &mut WordApp) -> Option<DialogId> {
-    open_new_with(app, "Normal", None)
-}
-
 /// `None` before the first frame: the dialog reads its remembered values through the egui context.
 fn open_new_with(app: &mut WordApp, based_on: &str, parent: Option<DialogId>) -> Option<DialogId> {
     let ctx = app.ctx.clone()?;

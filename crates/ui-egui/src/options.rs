@@ -11,7 +11,7 @@ use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowCon
 use craft::ui::display::{Elide, Shade, Text};
 use craft::ui::layout_components::Row;
 use craft::ui::list::{List, ListRow};
-use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, PreferencesState, RowKind, RowSpec};
+use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
 use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
 use craft::ui::runtime::memory::Remember;
 use craft::ui::runtime::windows::WindowHost;
@@ -292,14 +292,6 @@ impl<'a> OptionsModel<'a> {
             ],
             _ => Vec::new(),
         }
-    }
-}
-
-/// The text of a `Choice` or `Text` value.
-fn text_of(value: &PrefValue) -> Option<&str> {
-    match value {
-        PrefValue::Choice(s) | PrefValue::Text(s) => Some(s),
-        _ => None,
     }
 }
 
@@ -717,10 +709,8 @@ impl PreferencesModel for OptionsModel<'_> {
                     self.run("tools.customizeKeyboard", json!({}));
                 }
             }
-            "advanced.customizeRibbon" => {
-                if Button::new(tl!("Customize…")).show(ui).clicked() {
-                    self.run("tools.customizeRibbon", json!({}));
-                }
+            "advanced.customizeRibbon" if Button::new(tl!("Customize…")).show(ui).clicked() => {
+                self.run("tools.customizeRibbon", json!({}));
             }
             _ => {}
         }

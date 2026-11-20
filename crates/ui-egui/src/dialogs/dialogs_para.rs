@@ -33,9 +33,6 @@ use crate::options::unit_kind;
 /// The Tabs dialog as the dialog host holds it, under its dialog name.
 pub(crate) type TabStopsHost = Keyed<TabStopsDialog>;
 
-/// [`wordcraft_doc::props::TAB_POS_EPS`]: the engine replaces stops within this tolerance.
-const SAME_POS: f32 = wordcraft_doc::props::TAB_POS_EPS;
-
 /// An interface string as a label.
 pub(super) fn word(text: impl std::fmt::Display) -> Label {
     Label::from(text.to_string())

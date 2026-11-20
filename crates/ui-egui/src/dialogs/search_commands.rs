@@ -2,7 +2,7 @@
 //! the board as `FireSource::Palette`; only the "Find … in the document" row comes back here.
 
 use craft::keymap::CommandRef;
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::menu::HelpEntry;
 use craft::ui::patterns::panels::CommandPalette;

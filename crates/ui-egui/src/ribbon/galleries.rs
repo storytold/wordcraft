@@ -169,7 +169,7 @@ pub(crate) fn styles(ui: &mut Ui, app: &mut WordApp, current: Option<&str>) {
         let _ = app.run("para.style", json!({"style": id}));
     }
     // The menu's target stays in memory until the menu closes, as the gallery's request is made once.
-    let menu_id = ui.id().with("style_tile_menu");
+    let menu_id = ui.scope_id().with("style_tile_menu");
     if let Some(request) = out.menu {
         ui.data_mut(|d| d.insert_temp(menu_id, (request.key, request.at)));
     }
@@ -279,10 +279,10 @@ pub(crate) fn shapes(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
             let (label, _, icon) = SHAPE_TILES.get(*at).copied().unwrap_or(("", "", "shape.rectangle"));
             Tile::new(crate::tl!(label)).icon(IconSpec::svg(IconId::new(icon)))
         });
-    if let Some((_, kind, _)) = picked(&out.response.events).and_then(|at| SHAPE_TILES.get(at)) {
-        if app.run("insert.shape", json!({"kind": kind})).is_ok() {
-            cx.request_close();
-        }
+    if let Some((_, kind, _)) = picked(&out.response.events).and_then(|at| SHAPE_TILES.get(at))
+        && app.run("insert.shape", json!({"kind": kind})).is_ok()
+    {
+        cx.request_close();
     }
 }
 
@@ -304,12 +304,12 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
             let theme = &theme;
             Tile::new(crate::tl!(label)).thumb(ThumbAspect::new(10, 9), move |cx, r| crate::wordart_menus::paint_style(cx, r, id, theme))
         });
-    if let Some((id, _)) = picked(&out.response.events).and_then(|at| styles.get(at)) {
-        if app.run(command, json!({"style": id})).is_ok() {
-            cx.request_close();
-            // The WordArt's text is selected: the page takes the keyboard so typing replaces it at once (#4061).
-            app.canvas.focus_page(ui.ctx());
-        }
+    if let Some((id, _)) = picked(&out.response.events).and_then(|at| styles.get(at))
+        && app.run(command, json!({"style": id})).is_ok()
+    {
+        cx.request_close();
+        // The WordArt's text is selected: the page takes the keyboard so typing replaces it at once (#4061).
+        app.canvas.focus_page(ui.ctx());
     }
 }
 

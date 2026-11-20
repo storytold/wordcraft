@@ -1,5 +1,5 @@
 use craft::ui::choice::{Radio, RadioGroup};
-use craft::ui::contract::{Bind, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft::ui::contract::{Bind, FieldLayout, Show as _, ShowContainer as _, SideLabel};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Text;
 use craft::ui::layout_components::Stack;

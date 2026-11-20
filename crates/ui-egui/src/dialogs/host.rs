@@ -164,7 +164,7 @@ pub(crate) enum ChildAnswer {
     /// The character the Symbol dialog picked.
     Symbol(SymbolPick),
     /// The Font form as it was confirmed.
-    Font(FontForm),
+    Font(Box<FontForm>),
     /// The colour More Colors confirmed for `field`, as `RRGGBB`.
     Color {
         /// The form's colour field.
@@ -575,7 +575,7 @@ fn form_settle<F: WordForm>(app: &mut WordApp, ctx: &Context, id: DialogId) -> S
         if key == font_key
             && let Ok(form) = serde_json::from_value::<FontForm>(value.clone())
         {
-            answers.push(ChildAnswer::Font(form));
+            answers.push(ChildAnswer::Font(Box::new(form)));
         } else {
             answers.push(ChildAnswer::Form { key, value });
         }
@@ -623,6 +623,7 @@ impl<D: StackDialog> Keyed<D> {
     }
 
     /// The wrapped dialog.
+    #[cfg(test)]
     pub(crate) fn inner(&self) -> &D {
         &self.dialog
     }

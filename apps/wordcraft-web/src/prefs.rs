@@ -3,7 +3,7 @@
 //! browser's `localStorage`. A value stored by an earlier build under `wordcraft.ui` is imported once.
 
 use craft::settings::SharedSettings;
-use wordcraft_ui_egui::prefs::{Prefs, legacy_ui_json};
+use wordcraft_ui_egui::prefs::Prefs;
 
 /// Opens the settings store over the browser's `localStorage`. Changes are written at once on the
 /// next tick: a reload or closed tab never runs exit code.

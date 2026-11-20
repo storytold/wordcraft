@@ -100,10 +100,10 @@ impl WordForm for LineNumbersForm {
         let lengths = self.lengths.unwrap_or_else(points);
         Checkbox::new(Bind::bound(&mut self.on)).label(tl!("Add line numbering").to_string()).show(ui);
         let on = self.on;
-        count_field(ui, &tl!("Start at:"), &mut self.start, 1..=32_767, on);
+        count_field(ui, tl!("Start at:"), &mut self.start, 1..=32_767, on);
         Checkbox::new(Bind::bound(&mut self.auto_distance)).label(tl!("Auto").to_string()).enabled(on).show(ui);
-        length_field(ui, &tl!("From text:"), &mut self.distance, lengths, 0.0..=22.0 * 72.0, on && !self.auto_distance);
-        count_field(ui, &tl!("Count by:"), &mut self.count_by, 1..=100, on);
+        length_field(ui, tl!("From text:"), &mut self.distance, lengths, 0.0..=22.0 * 72.0, on && !self.auto_distance);
+        count_field(ui, tl!("Count by:"), &mut self.count_by, 1..=100, on);
         let opts = [("restartPage", tl!("Restart Each Page")), ("restartSection", tl!("Restart Each Section")), ("continuous", tl!("Continuous"))];
         RadioGroup::new(tl!("Numbering:").to_string(), Bind::bound(&mut self.restart)).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, cx| {
@@ -167,9 +167,9 @@ impl WordForm for HyphenationForm {
         let lengths = self.lengths.unwrap_or_else(points);
         Checkbox::new(Bind::bound(&mut self.auto)).label(tl!("Automatically hyphenate document").to_string()).show(ui);
         Checkbox::new(Bind::bound(&mut self.caps)).label(tl!("Hyphenate words in CAPS").to_string()).show(ui);
-        length_field(ui, &tl!("Hyphenation zone:"), &mut self.zone, lengths, 0.0..=22.0 * 72.0, true);
+        length_field(ui, tl!("Hyphenation zone:"), &mut self.zone, lengths, 0.0..=22.0 * 72.0, true);
         let mut limit = if self.limit == 0 { NamedOr::Named(NoLimit::NoLimit) } else { NamedOr::Number(f64::from(self.limit)) };
-        named_field(ui, &tl!("Limit consecutive hyphens to:"), &mut limit, (NoLimit::NoLimit, &tl!("No limit")), None, 1.0..=99.0, true);
+        named_field(ui, tl!("Limit consecutive hyphens to:"), &mut limit, (NoLimit::NoLimit, tl!("No limit")), None, 1.0..=99.0, true);
         self.limit = number_or_zero(&limit).round().clamp(0.0, 99.0) as u32;
         // Manual… keeps what was set here and moves on to manual hyphenation, over this dialog.
         if Button::new(tl!("Manual…").to_string()).show(ui).clicked() {

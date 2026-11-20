@@ -33,43 +33,31 @@ mod tabs;
 mod underline;
 mod view;
 
-#[cfg(test)]
-use arrange::align_menu;
 pub(crate) use arrange::wrap_text_items;
 use charts::{chart_design, smart_art_design};
 use common::custom_groups;
-#[cfg(test)]
-pub(crate) use common::size_menu;
 pub(crate) use common::weight_menu;
 pub(crate) use context_menu::command_menu;
 use design::design;
 use draw::draw;
 use home::home;
-#[cfg(test)]
-use home::painter_double_click;
 use insert::insert;
 #[cfg(test)]
 pub(crate) use language::PROOFING_LANGUAGES;
 #[cfg(test)]
 pub(crate) use language::all_languages;
 #[cfg(test)]
-use language::language_checks;
-#[cfg(test)]
 pub(crate) use language::short_languages;
 pub(crate) use language::sort_key;
 pub(crate) use language::{
-    caret_lang_tag, caret_language, caret_language_proofed, caret_missing_dictionary, caret_no_proof, caret_unreadable_dictionary, language_menu,
+    caret_language, caret_language_proofed, caret_missing_dictionary, caret_no_proof, caret_unreadable_dictionary, language_menu,
 };
 pub(crate) use language::{display_name, language_list, language_name, same_language, tag_for_pack};
 use layout::layout;
-#[cfg(test)]
-use layout::{columns_items, margins_items, orientation_items};
 use mailings::mailings;
 use picture::picture_format;
 use references::{references, zotero};
 use review::{developer, help, review};
-#[cfg(test)]
-pub(crate) use shape::gradient_menu;
 use shape::shape_format;
 use table::{table_design, table_layout};
 use tabs::reading_toolbar;

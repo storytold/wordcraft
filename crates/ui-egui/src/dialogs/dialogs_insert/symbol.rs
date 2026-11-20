@@ -3,7 +3,7 @@ use std::sync::Arc;
 use craft::behavior::{ColumnWidth, Selection, SelectionChange, keyed};
 use craft::font_manager::Catalog;
 use craft::font_manager::picker::FontPickerSettings;
-use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft::ui::display::{Kbd, Text};
 use craft::ui::form::Field;
@@ -523,7 +523,7 @@ fn paint_glyph(cx: &ContentPainterCx<'_>, rect: egui::Rect, ch: char, font: &str
     let chr = wordcraft_doc::props::CharProps { font: Some(font.to_string()).filter(|f| !f.is_empty()), ..Default::default() };
     let ppp = ctx.pixels_per_point();
     // The texture is kept by what makes the picture, so a settled grid paints without rendering again.
-    let key = egui::Id::new(("symbol-glyph", ch, font, dark, rect.width().round() as i32, rect.height().round() as i32, (ppp * 100.0) as i32));
+    let key = egui::Id::unique(("symbol-glyph", ch, font, dark, rect.width().round() as i32, rect.height().round() as i32, (ppp * 100.0) as i32));
     let texture = match ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
         Some(texture) => texture,
         None => {

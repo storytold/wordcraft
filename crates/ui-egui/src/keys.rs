@@ -2,7 +2,7 @@
 //! Keyboard first, then the registry's `shortcut` fields).
 
 use egui::{Key, Modifiers};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::WordApp;
 use wordcraft_engine::ImeEditOutcome;

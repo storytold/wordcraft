@@ -50,7 +50,7 @@ pub(crate) fn title(name: &str, dirty: bool) -> String {
 
 /// The id of the container that shows window `id`; the window host names its viewport by it.
 fn window_container_id(id: WindowId) -> egui::Id {
-    egui::Id::new(("wordcraft.window", id.get()))
+    egui::Id::unique(("wordcraft.window", id.get()))
 }
 
 /// An open window.
@@ -161,11 +161,6 @@ impl Windows {
     /// The window showing document `doc`, the most recently focused if several do.
     fn of_doc(&self, doc: u64) -> Option<u64> {
         self.list.recent().find(|&id| self.list.get(id).is_some_and(|w| w.doc == doc)).map(WindowId::get)
-    }
-
-    /// Open windows, most recently focused first.
-    fn recent_keys(&self) -> Vec<u64> {
-        self.list.recent().map(WindowId::get).collect()
     }
 
     /// The document of the window focused last before `key`'s, if any.
@@ -628,12 +623,6 @@ impl WordApp {
     /// search box's text, a gallery's first tile.
     pub(crate) fn window_id(&self, name: &'static str) -> egui::Id {
         egui::Id::unique(name).with(self.windows.shown())
-    }
-
-    /// The windows other than the drawn one, for state every window contributes to (the faces
-    /// borrowed for the interface).
-    pub(crate) fn other_windows(&self) -> impl Iterator<Item = &WindowUi> {
-        self.windows.list.iter().filter_map(|(_, w)| w.ui.as_deref())
     }
 }
 

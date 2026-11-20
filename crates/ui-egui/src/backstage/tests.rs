@@ -194,12 +194,12 @@ fn recovery_does_not_replace_an_explicit_new_document() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn recovery_does_not_replace_an_explicitly_opened_file() {
-    let (mut app, root) = recovery_fixture();
+    let (_first, root) = recovery_fixture();
     let path = root.join("Requested.txt");
     std::fs::write(&path, "Requested synthetic document").unwrap();
     // The Browse… pick is answered with the file.
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path])]));
-    app = app_with_files(&files);
+    let mut app = app_with_files(&files);
     app.ui.language = "en".into();
     app.ui.backstage = true;
     app.ui.backstage_page = "info".into();
@@ -480,7 +480,6 @@ fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
 #[test]
 fn info_fields_keep_typed_properties_through_a_web_save() {
     use egui::accesskit::Role;
-    use egui_kittest::kittest::NodeT;
     // A browser host: the save is a download, answered with the suggested name.
     let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
     let mut a = app_with_files(&files);

@@ -37,12 +37,6 @@ pub(crate) fn command_menu(ui: &mut Ui, app: &mut WordApp, req: &RibbonMenuReque
     rows(ui, req, &qat, app.ui.quick_access_toolbar);
 }
 
-/// "Customize the Ribbon…" and "Customize Quick Access Toolbar…", and "Show Quick Access Toolbar" while the
-/// toolbar is hidden (#1945).
-pub(crate) fn customize_items(ui: &mut Ui, app: &mut WordApp) {
-    customize_rows(ui, app.ui.quick_access_toolbar);
-}
-
 fn customize_rows(ui: &mut Ui, qat_shown: bool) {
     if !qat_shown {
         row(ui, tl!("Show Quick Access Toolbar"), "ui.quickAccessToolbar", json!({"value": true}));

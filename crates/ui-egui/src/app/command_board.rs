@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use craft::keymap::Overrides;
 use craft::ui::runtime::commands::{
-    AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, CommandState, FireSource, Scope, TypingRule,
+    AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, CommandStates, FireSource, Scope, TypingRule,
 };
 use craft::ui::runtime::frame::FrameOutput;
 
@@ -157,13 +157,14 @@ impl WordApp {
         if let Some(catalog) = self.catalog() {
             input = input.catalog(catalog);
         }
+        let mut states = CommandStates::new();
         for spec in registry.all() {
             let (enabled, reason) = gate(self, spec.id); // A toggle's checked state is bound at its ribbon button, not here.
             let mut state = CommandState::new().enabled(enabled);
             if let Some(hint) = crate::widgets::command_hint(spec.location, spec.label, reason) {
                 state = state.hint(hint);
             }
-            input = input.state(CommandRef::new(spec.id), state);
+            states.set(CommandRef::new(spec.id), state);
         }
         // Print acts on the document, so with none open it is off like the engine's commands (#1129); a command with
         // no state here resolves as enabled.
@@ -171,10 +172,14 @@ impl WordApp {
             .into_iter()
             .chain(GATED_UI_COMMANDS.iter().map(|(id, _)| *id));
         for id in ids {
-            input = input.state(CommandRef::new(id), CommandState::new().enabled(command_enabled(self, id)));
+            states.set(CommandRef::new(id), CommandState::new().enabled(command_enabled(self, id)));
         }
         let commands = CommandRef::with_params("ui.dialog", json!({"name": "commands"}));
-        input.state(commands, CommandState::new().enabled(command_enabled(self, "ui.dialog")))
+        states.set(commands, CommandState::new().enabled(command_enabled(self, "ui.dialog")));
+        if *self.command_states != states {
+            self.command_states.edit(|kept| *kept = states);
+        }
+        input.states(&self.command_states)
     }
 
     /// Run what the runtime fired this frame, in order, in the window that is active. Automation

@@ -7,7 +7,7 @@ use craft::behavior::Anchor9;
 use craft::color_ui::ui::ColorPickerTab;
 use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::buttons::{Button, ToggleButton};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::contract::{Bind, Entry, Show as _, ShowContainer as _, Trigger};
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Picture;
 use craft::ui::form::{Field, FieldGroup};
@@ -648,7 +648,7 @@ impl WordForm for TableStyleForm {
         self.formatting(ui, asks);
         // Live preview: the style as OK would leave it, on the current table's options with the
         // part being edited turned on.
-        let look = look_for(self.look.clone(), self.part());
+        let look = look_for(self.look, self.part());
         let preview = self.preview.as_ref();
         Section::fixed(lab("Preview")).show(ui, |ui, _| {
             Picture::painter(lab("Table style preview"), ThumbAspect::new(36, 13), |cx, rect| paint_preview(cx, rect, preview, &look)).show(ui);

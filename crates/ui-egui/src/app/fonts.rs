@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
-use craft::ui::fonts::{EmbeddedFace, FontRef, I18nScripts, Stack, UiFonts};
 #[cfg(not(target_arch = "wasm32"))]
-use craft::ui::fonts::{OnDemandFonts, SystemCandidates, han_for_locale};
+use craft::ui::fonts::SystemCandidates;
+use craft::ui::fonts::{EmbeddedFace, I18nScripts, UiFonts};
+#[cfg(test)]
+use craft::ui::fonts::{FontRef, Stack};
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use craft::ui::fonts::{OnDemandFonts, han_for_locale};
 
 use super::WordApp;
 use crate::i18n::Lang;
@@ -26,14 +30,17 @@ pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     fonts
 }
 
+#[cfg(test)]
 /// One character of each script the app ships, to find the document fonts that cover it.
 const FALLBACK_SAMPLES: [char; 6] = ['ع', 'א', 'ก', 'ა', 'ա', '汉'];
 
+#[cfg(test)]
 /// The largest document face added to the interface stack.
 const MAX_FALLBACK_BYTES: usize = 16 << 20;
 
 /// Add the document database's fallback faces to the interface families, so a script only a
 /// user-added font covers still draws in file names, comments and search results.
+#[cfg(test)]
 pub fn add_document_fallbacks(stack: &mut Stack) {
     let db = wordcraft_fonts::FontDb::global();
     let families = [FontRef::proportional(), FontRef::named("medium"), FontRef::named("semibold")];
@@ -51,6 +58,7 @@ pub fn add_document_fallbacks(stack: &mut Stack) {
     }
 }
 
+#[cfg(test)]
 /// The app's one font install: the interface stack with the document fallbacks, then the loader
 /// of installed system faces. Run it at start-up and again on a language change.
 pub fn install_ui_fonts(ctx: &egui::Context, lang: Lang) -> Stack {

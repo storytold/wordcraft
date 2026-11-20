@@ -137,7 +137,7 @@ impl RibbonDialog {
 
     /// The tree's list id, so Rename… can ask its rename field to open.
     fn tree_id(&self, ui: &Ui) -> egui::Id {
-        ui.id().with("rb_tree")
+        ui.scope_id().with("rb_tree")
     }
 
     fn body(&mut self, ui: &mut Ui) {
@@ -280,17 +280,13 @@ impl RibbonDialog {
             });
         for event in out.events {
             match event {
-                CollectionEvent::Toggle(edit) => {
-                    if let EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } = edit {
-                        self.file(if after.on { "show" } else { "hide" }, json!(after.key.tab));
-                    }
+                CollectionEvent::Toggle(EditEvent::Commit { after, .. } | EditEvent::Set { after, .. }) => {
+                    self.file(if after.on { "show" } else { "hide" }, json!(after.key.tab));
                 }
-                CollectionEvent::Rename(edit) => {
-                    if let EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } = edit {
-                        let mut m = address(&after.key);
-                        m.insert("to".into(), json!(after.name));
-                        self.file("rename", Value::Object(m));
-                    }
+                CollectionEvent::Rename(EditEvent::Commit { after, .. } | EditEvent::Set { after, .. }) => {
+                    let mut m = address(&after.key);
+                    m.insert("to".into(), json!(after.name));
+                    self.file("rename", Value::Object(m));
                 }
                 _ => {}
             }
@@ -406,7 +402,7 @@ fn pick(ui: &mut Ui, salt: &'static str, label: &str, rows: &[(String, String)],
     let at = rows.iter().position(|(id, _)| id == current);
     let mut selection = at.map_or_else(Selection::default, Selection::single);
     List::new(word(label))
-        .id(ui.id().with(salt))
+        .id(ui.scope_id().with(salt))
         .select(SelectMode::Single)
         // The list scrolls its own rows, as main's fixed-height boxes did, so the dialog's body does not scroll it too.
         .max_rows(12)
@@ -509,7 +505,7 @@ pub(crate) fn matching_commands(app: &WordApp, category: &str, query: &str) -> V
         .registry
         .all()
         .iter()
-        .filter(|s| fold.contains(s.id, q) || fold.contains(s.label, q) || fold.contains(&tl!(s.label), q))
+        .filter(|s| fold.contains(s.id, q) || fold.contains(s.label, q) || fold.contains(tl!(s.label), q))
         .map(|s| (s.id.to_string(), tl!(s.label).to_string()))
         .collect();
     out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));

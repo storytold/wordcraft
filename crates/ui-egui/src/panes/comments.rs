@@ -46,7 +46,7 @@ fn card(app: &mut WordApp, ui: &mut Ui, ctx: &egui::Context, document: u64, id: 
     });
     // Editable comment text (one undo step per edit, like the balloons).
     comment_field(app, ui, document, id);
-    let open_key = egui::Id::new(("comment_reply_open", document, id));
+    let open_key = egui::Id::unique(("comment_reply_open", document, id));
     let mut replying = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
     Row::new().wrap(true).show(ui, |ui, _| {
         if Button::new(tl!("Go to").to_owned()).show(ui).clicked()
@@ -113,12 +113,6 @@ fn draft_of(app: &WordApp, id: u32) -> Option<String> {
     app.canvas.comments.editing.as_ref().filter(|(t, i, _)| (t.0, *i) == key).map(|(_, _, text)| text.clone())
 }
 
-/// The pending draft of comment `id`'s text in the open document, if any.
-#[cfg(test)]
-pub(crate) fn comment_draft(app: &WordApp, id: u32) -> Option<String> {
-    draft_of(app, id)
-}
-
 /// Whether the open document has a comment or reply draft not yet written to it (typed, or
 /// kept after the document refused it): closing the page would lose it.
 pub(crate) fn has_comment_drafts(app: &WordApp) -> bool {
@@ -159,10 +153,8 @@ fn comment_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) {
                 // A refusal is on the status line, and the draft stays.
                 let _ = commit_comment(app, id);
             }
-            EditEvent::Cancel { .. } => {
-                if draft_of(app, id).is_some() {
-                    drafts(app).editing = None;
-                }
+            EditEvent::Cancel { .. } if draft_of(app, id).is_some() => {
+                drafts(app).editing = None;
             }
             _ => {}
         }
@@ -192,7 +184,7 @@ fn thread_root(app: &WordApp, id: u32) -> u32 {
 
 /// The id of comment `id`'s reply field, so the Reply button can ask for its focus.
 fn reply_id(document: u64, id: u32) -> egui::Id {
-    egui::Id::new(("comment_reply", document, id))
+    egui::Id::unique(("comment_reply", document, id))
 }
 
 /// A field for replying to a comment. When its value lands a non-empty reply is posted with

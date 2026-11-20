@@ -267,7 +267,7 @@ pub fn chart_primitives(kind: ChartType, col: [Color32; 3], line: Color32, size:
 
 /// The chart types as tiles, one picked; true when a type was activated (double click or Enter).
 fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bool {
-    let kinds: Vec<ChartType> = ChartType::ALL.iter().copied().collect();
+    let kinds: Vec<ChartType> = ChartType::ALL.to_vec();
     let positions: Vec<usize> = (0..kinds.len()).collect();
     let current = kinds.iter().position(|k| *k == form.kind).unwrap_or(0);
     let source = keyed(&positions, |i| *i);

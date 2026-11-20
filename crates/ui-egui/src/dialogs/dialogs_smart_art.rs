@@ -565,7 +565,7 @@ enum ColorPick {
 
 /// The id of item `i`'s text row, stable across passes so a focus request can name a row before it exists.
 fn row_id(i: usize) -> egui::Id {
-    egui::Id::new(("smart_art_pane_row", i))
+    egui::Id::unique(("smart_art_pane_row", i))
 }
 
 /// The name of item `i`'s colour field: its shape's colour.
@@ -590,7 +590,7 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
         // The body may run twice in a pass; the last run's reports are the pass's.
         reports.borrow_mut().clear();
         for (i, it) in g.items.iter().enumerate() {
-            Row::new().indent(u8::try_from(it.level).unwrap_or(u8::MAX)).show(ui, |ui, _| {
+            Row::new().indent(it.level).show(ui, |ui, _| {
                 let field = TextField::new(format!("{} {}", tl!("Text Pane"), i + 1), Bind::given(it.text.clone()))
                     .id(row_id(i))
                     .tab_reports()

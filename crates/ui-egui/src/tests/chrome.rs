@@ -722,7 +722,9 @@ fn alt_q_opens_search_and_typing_goes_there() {
     // `tools.search` binding gives way to: it opens Search in the title bar's box where the window shows one.
     let search = craft::ui::runtime::commands::CommandRef::with_params("ui.dialog", json!({"name": "commands"}));
     let Some(chord) = craft::ui::runtime::commands::chord(&h.ctx, &search) else {
-        assert!(cfg!(target_os = "macos"), "Search has a chord off macOS");
+        #[cfg(not(target_os = "macos"))]
+        panic!("Search has a chord off macOS");
+        #[cfg(target_os = "macos")]
         return;
     };
     let Some(open) = chord_event(&chord) else {

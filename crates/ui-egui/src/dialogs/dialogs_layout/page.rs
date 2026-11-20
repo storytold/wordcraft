@@ -170,20 +170,20 @@ impl WordForm for SizeForm {
         // change is applied.
         Section::new(tl!("Size").to_string()).show(ui, |ui, _| {
             let mut h = self.height;
-            if length_field(ui, &tl!("Height:"), &mut h, lengths, 1.0..=4000.0, true) {
+            if length_field(ui, tl!("Height:"), &mut h, lengths, 1.0..=4000.0, true) {
                 self.set_height(h);
             }
             let mut w = self.width;
-            if length_field(ui, &tl!("Width:"), &mut w, lengths, 1.0..=4000.0, true) {
+            if length_field(ui, tl!("Width:"), &mut w, lengths, 1.0..=4000.0, true) {
                 self.set_width(w);
             }
         });
         Section::new(tl!("Scale").to_string()).show(ui, |ui, _| {
             let (mut sw, mut sh) = self.scale();
-            if percent_field(ui, &tl!("Height:"), &mut sh, 1.0..=10_000.0) {
+            if percent_field(ui, tl!("Height:"), &mut sh, 1.0..=10_000.0) {
                 self.set_scale_height(sh);
             }
-            if percent_field(ui, &tl!("Width:"), &mut sw, 1.0..=10_000.0) {
+            if percent_field(ui, tl!("Width:"), &mut sw, 1.0..=10_000.0) {
                 self.set_scale_width(sw);
             }
             let original = self.original.is_some();
@@ -192,8 +192,8 @@ impl WordForm for SizeForm {
         });
         if let Some((mut w, mut h)) = self.uncropped {
             Section::new(tl!("Original size").to_string()).show(ui, |ui, _| {
-                length_field(ui, &tl!("Height:"), &mut h, lengths, 0.0..=f64::MAX, false);
-                length_field(ui, &tl!("Width:"), &mut w, lengths, 0.0..=f64::MAX, false);
+                length_field(ui, tl!("Height:"), &mut h, lengths, 0.0..=f64::MAX, false);
+                length_field(ui, tl!("Width:"), &mut w, lengths, 0.0..=f64::MAX, false);
                 if let Some((pw, ph)) = self.pixels {
                     let (pw, ph) = (pw.to_string(), ph.to_string());
                     Text::new(crate::i18n::fmt(tl!("{width} × {height} pixels"), &[("width", &pw), ("height", &ph)])).show(ui);
@@ -307,7 +307,7 @@ impl WordForm for PageNumbersForm {
                 cx.labelled(ui, 1, Label::from(tl!("Start at:")), SideLabel::new().layout(FieldLayout::After), Radio::new(false));
             });
         });
-        super::count_field(ui, &tl!("Start at:"), &mut self.start, 0..=100_000, !self.cont);
+        super::count_field(ui, tl!("Start at:"), &mut self.start, 0..=100_000, !self.cont);
         true
     }
 

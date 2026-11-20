@@ -45,6 +45,7 @@ pub(crate) struct ControlPopup {
 }
 
 /// Whether a control's list or calendar is open.
+#[cfg(test)]
 pub(crate) fn popup_open(app: &WordApp) -> bool {
     app.canvas.control_popup.is_some()
 }

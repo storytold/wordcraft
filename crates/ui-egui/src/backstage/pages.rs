@@ -23,7 +23,7 @@ pub(super) fn recovery(ui: &mut Ui, app: &mut WordApp) {
         let _ = Text::new(label("Recovery is disabled while this document has a password.")).show(ui);
     }
     if let Some(error) = app.session.recovery_error() {
-        error_line(ui, &error.to_string());
+        error_line(ui, error);
     }
     if !app.session.recovery_ready() {
         let _ = Text::new(label("Local recovery is unavailable or still loading.")).show(ui);
@@ -99,7 +99,7 @@ pub(super) fn info(ui: &mut Ui, app: &mut WordApp) {
 }
 
 /// The editable properties and the password controls.
-fn properties(ui: &mut Ui, app: &mut WordApp, info: &serde_json::Value) {
+fn properties(ui: &mut Ui, app: &mut WordApp, _info: &serde_json::Value) {
     subheading(ui, "Properties");
     // The fields edit a copy of the document's properties that is read afresh every pass, so each
     // change goes into the document as it is typed (#260): waiting for the field to lose focus

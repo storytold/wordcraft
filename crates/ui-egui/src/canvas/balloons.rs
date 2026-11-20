@@ -4,7 +4,6 @@
 
 use craft::review::ui::{BalloonItem, BalloonPlace, CommentBalloons, CommentEdit};
 use craft::review::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, Revision, RevisionKind, ThreadId};
-use craft::ui::contract::{Props, Show as _};
 
 use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
 use super::{Color32, CommentDisplay, DocLayout, Env, Pos, Pos2, StoryRef, Ui, WordApp, json};
@@ -195,7 +194,7 @@ fn collect_items(app: &WordApp, layout: &DocLayout, only_shown: bool, shown: Opt
             cards.push(Card { page: anchor.0, anchor: anchor.1, pos, what: What::Thread(thread) });
         }
     }
-    let mut revision = |cards: &mut Vec<Card>, pos: Pos, kind: RevisionKind, author: String, text: String| {
+    let revision = |cards: &mut Vec<Card>, pos: Pos, kind: RevisionKind, author: String, text: String| {
         if let Some((page, anchor)) = anchor_of(layout, app.session.page_hint, &pos) {
             let revision = Revision { kind, heading: author_name(&author), details: vec![text] };
             cards.push(Card { page, anchor, pos, what: What::Revision(revision) });

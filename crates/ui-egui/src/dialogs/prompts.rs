@@ -1,7 +1,6 @@
 //! The small questions: a protected file's password, the password a document is saved with, and
 //! discarding a recovery copy.
 
-use craft::ui::contract::Show as _;
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, PromptChoice, StackDialog, StandardPrompt, dialog_id};
 use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose, Secret};
 use craft::ui::runtime::env::Label;

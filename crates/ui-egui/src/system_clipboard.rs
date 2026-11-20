@@ -294,11 +294,11 @@ pub(crate) mod testing {
     pub(crate) fn app_holding(flavors: &[Flavor]) -> WordApp {
         let mut clipboard = Clipboard::new(FilesClipboard::default());
         if !flavors.is_empty() {
-            clipboard.write(flavors).unwrap();
+            let _ = clipboard.write(flavors).unwrap();
         }
         let ctx = egui::Context::default();
         // PLAN: assumed craft::ui::install(&Context, InstallSpec) and craft::ui::testing::install_spec() from craft-ui-contract
-        craft::ui::install(&ctx, crate::test_harness::install_spec().clipboard(clipboard));
+        craft::ui::install(&ctx, crate::test_harness::install_spec().clipboard(clipboard)).unwrap();
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
         a.ctx = Some(ctx);
         a

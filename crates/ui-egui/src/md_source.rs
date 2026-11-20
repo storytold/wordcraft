@@ -93,10 +93,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             focus_pending = true;
         }
     }
-    if focus_pending {
-        if let Some(src) = app.session.md_source.as_mut() {
-            src.place_caret = true;
-        }
+    if focus_pending && let Some(src) = app.session.md_source.as_mut() {
+        src.place_caret = true;
     }
     if refused {
         app.status(tl!("Markdown Source takes up to 2 MB of text"));

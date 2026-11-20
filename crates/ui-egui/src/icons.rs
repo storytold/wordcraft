@@ -431,7 +431,7 @@ mod tests {
             .filter(|t| !t.is_empty())
             .map(|t| t.parse().expect("a number"))
             .collect();
-        nums.chunks_exact(2).map(|p| (p[0], p[1])).collect()
+        nums.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect()
     }
 
     /// #6768: the Insert › Shapes Arrow tile is the block arrow that tile inserts, outlined as the

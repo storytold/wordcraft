@@ -1,9 +1,9 @@
 use super::services::Services;
 use super::state::{AutoSaveBlock, PromptSave, keeps_everything};
 use super::{
-    DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, backstage, canvas, chrome,
-    content_controls, crop, dialogs, documents, file_dialogs, i18n, json, keys, options, panes, paste_picture, printing, push_recent_font,
-    read_aloud, recent_fonts_from, ribbon, scroll, system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
+    DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, canvas, chrome, crop, dialogs, documents,
+    file_dialogs, i18n, json, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, system_clipboard, table_pen,
+    theme, updates_ui, window_ui, windows, zotero,
 };
 use craft::platform::clock::monotonic_ms;
 use craft::ui::runtime::commands::CommandInput;
@@ -16,16 +16,14 @@ mod commands;
 mod control;
 mod files;
 pub(crate) use files::Closing;
-#[cfg(test)]
-pub(crate) use files::suggested_stem;
 pub(crate) mod fonts;
 mod frame;
 mod input;
 mod pictures;
 mod prefs;
 
+#[cfg(test)]
 pub(crate) use commands::works_without_document;
-pub(crate) use frame::STATUS_MS;
 
 /// WordCraft's own sizes over the size set. The display role is the File pages' titles (Info, Open, Print,
 /// Options…), production's 26 pt semibold over its 15 pt section headings; the suite's display size (38 pt) is a
@@ -101,6 +99,7 @@ impl WordApp {
             command_catalog_mac: cfg!(target_os = "macos"),
             command_catalog_lang: "",
             key_overrides: Default::default(),
+            command_states: Default::default(),
             fonts_frames: 0,
             clipboard_published: false,
             printing: Default::default(),

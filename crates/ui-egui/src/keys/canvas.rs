@@ -247,7 +247,7 @@ fn equation_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &E
         // each side with one transactional equation command. The tree cannot provide a surrounding
         // snapshot; an engine revision proves a real commit and the platform is never handed
         // fabricated surroundings.
-        EditorInput::DeleteSurrounding { before, after, unit, .. } if matches!(unit, SurroundingUnit::Chars) => {
+        EditorInput::DeleteSurrounding { before, after, unit: SurroundingUnit::Chars, .. } => {
             delete_in_equation(app, pass, ctx, *before, *after);
             true
         }

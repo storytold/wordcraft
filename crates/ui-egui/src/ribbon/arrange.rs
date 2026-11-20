@@ -1,6 +1,6 @@
 use craft::behavior::IconId;
 use craft::ui::buttons::{Arrangement, Button, SplitButton, SplitMenu};
-use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::runtime::commands::CommandRef;

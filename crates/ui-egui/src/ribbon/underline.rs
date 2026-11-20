@@ -1,4 +1,3 @@
-use craft::behavior::IconId;
 use craft::menu::CommandRef;
 use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::display::Divider;

@@ -105,6 +105,7 @@ mod app;
 mod services;
 mod state;
 
+#[cfg(test)]
 pub(crate) use app::works_without_document;
 // PLAN: assumed shell-w13 leaves `HostSaveFn` and `Inbox` out of `services` (sh.A14 removes `host_save` and `inbox`).
 pub use app::fonts::ui_fonts;
@@ -395,6 +396,9 @@ pub struct WordApp {
     /// The session's key overrides, kept as one `Arc` while they do not change: the runtime
     /// rebuilds its keymap when the `Arc` it is handed changes ([`WordApp::overrides`]).
     pub(crate) key_overrides: std::sync::Arc<craft::keymap::Overrides>,
+    /// The app-scope command states handed to the runtime, edited only when they change: the runtime resolves
+    /// commands again only when their revision moves ([`WordApp::command_input`]).
+    pub(crate) command_states: craft::ui::contract::Tracked<craft::ui::runtime::commands::CommandStates>,
     /// Frames drawn so far, counted to 2: the control channel's queued requests wait until the
     /// fonts are warm.
     pub(crate) fonts_frames: u8,
@@ -407,7 +411,7 @@ pub struct WordApp {
     print_gen: u64,
     pub canvas: canvas::CanvasState,
     /// The Restrict Editing pane (#412).
-    pub restrict: restrict_pane::RestrictPane,
+    pub(crate) restrict: restrict_pane::RestrictPane,
     /// The language-aware spelling and grammar task pane.
     pub spelling_review: Option<proofing_pane::SpellingForm>,
     /// The status bar's message, until its `until` passes.

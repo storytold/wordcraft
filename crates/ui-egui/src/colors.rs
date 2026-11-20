@@ -14,7 +14,7 @@ use craft::keymap::CommandRef;
 use craft::theme::Srgba;
 use craft::ui::buttons::{SplitButton, SplitMenu};
 use craft::ui::choice::SwatchTable;
-use craft::ui::contract::{BodyCx, Entry as _, Hover, NoValue, Outcome as _, Props as _, Show as _, clicked};
+use craft::ui::contract::{BodyCx, Hover, NoValue, Props as _, Show as _, clicked};
 use craft::ui::dialog::{DialogId, DialogResult};
 use craft::ui::menu::{MenuItem, MenuItemOutput};
 use craft::ui::primitives::{IconMark, IconSpec};

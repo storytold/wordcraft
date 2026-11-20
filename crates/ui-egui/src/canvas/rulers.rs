@@ -8,7 +8,7 @@ use craft::pages::Margins;
 use craft::pages::ui::{PageEdges, PageRulers};
 use craft::text::ui::DocUnit;
 use craft::text::ui::ruler::{RulerValues, TabAlign as RulerAlign, TabLeader as RulerLeader, TabStop as RulerStop};
-use craft::ui::contract::{Bind, Props};
+use craft::ui::contract::Bind;
 use craft::ui::runtime::env::UnitKind;
 use serde_json::{Map, Value};
 use wordcraft_doc::props::{TAB_POS_EPS, TabAlign, TabLeader, TabStop};

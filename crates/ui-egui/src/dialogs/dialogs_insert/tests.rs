@@ -26,7 +26,7 @@ fn drop_cap_dialog_prefills_and_applies() {
     assert_eq!(f.params(), json!({"position": "none"}));
     f.position = "margin".into();
     f.lines = 4;
-    f.distance = wordcraft_geom::PT_PER_CM as f32;
+    f.distance = wordcraft_geom::PT_PER_CM;
     a.run("insert.dropCap", f.params()).unwrap();
     let props = |a: &WordApp| a.session.doc.body.first().and_then(|b| b.as_para()).map(|p| p.props.clone()).unwrap_or_default();
     let p = props(&a);
@@ -34,7 +34,7 @@ fn drop_cap_dialog_prefills_and_applies() {
     assert!((p.drop_cap_distance.unwrap_or_default() - wordcraft_geom::PT_PER_CM).abs() < 0.01, "1 cm: {:?}", p.drop_cap_distance);
     let mut f = drop_cap_form(&mut a).expect("the dialog");
     assert_eq!((f.position.as_str(), f.lines), ("margin", 4));
-    assert!((f.distance - wordcraft_geom::PT_PER_CM as f32).abs() < 0.01, "{} pt", f.distance);
+    assert!((f.distance - wordcraft_geom::PT_PER_CM).abs() < 0.01, "{} pt", f.distance);
     f.position = "dropped".into();
     f.font = "Liberation Mono".into();
     a.run("insert.dropCap", f.params()).unwrap();

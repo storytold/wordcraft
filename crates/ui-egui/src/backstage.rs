@@ -14,7 +14,7 @@ use craft::ui::buttons::Button;
 use craft::ui::buttons::ControlPlace;
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{
-    BodyCx, CollectionEvent, CommandSet as _, Commands as _, Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
+    BodyCx, CollectionEvent, Commands as _, Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
 };
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
@@ -268,7 +268,7 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
             );
         })
         .show(ui, |ui, _| {
-            let _ = inspect::record(ui, egui::Id::new("wordcraft-backstage-pages"), |ui| {
+            let _ = inspect::record(ui, egui::Id::unique("wordcraft-backstage-pages"), |ui| {
                 // The rows are the side menu place's: production's 38 pt rows of 14 pt names.
                 with_env(
                     ui,

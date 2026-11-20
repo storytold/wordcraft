@@ -33,7 +33,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui, mut centre: impl FnMut(&mut Ui, &mut
         let mut content = Content { app: &cell, rtl, size };
         PaneArea::new(tl!("Task Panes").to_owned(), &open, &mut content)
             .policy(SidePolicy::Columns)
-            .show(ui, |ui, cx| centre(ui, cx, &mut **cell.borrow_mut()))
+            .show(ui, |ui, cx| centre(ui, cx, &mut cell.borrow_mut()))
             .requests
     };
     for request in requests {

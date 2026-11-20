@@ -72,7 +72,6 @@ struct Drop {
 struct Preview {
     /// The bits of the pixels-per-page-point it was drawn at, which with the object names its texture.
     scale_bits: u32,
-    size: [usize; 2],
     image: Arc<egui::ColorImage>,
 }
 
@@ -244,7 +243,7 @@ impl Component for TurnPreview {
 
 /// Keeps the pixels of the object `o` the frame is turning, turned to `live`, and shows them. A box that is not a
 /// pure turn (a resize) has no pixel preview; the frame's outline alone shows it.
-fn show_turning(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &PageBody, pp: &PlacedPage, o: &ObjectHit, live: &BoxState) {
+fn show_turning(app: &mut WordApp, _ui: &mut Ui, layout: &DocLayout, body: &PageBody, pp: &PlacedPage, o: &ObjectHit, live: &BoxState) {
     let c = live.quad.map(|q| pp.from_doc(&body.view, q));
     let (w, h) = ((c[1] - c[0]).hypot() as f32, (c[3] - c[0]).hypot() as f32);
     if (w - o.rect.w).abs() > 0.5 || (h - o.rect.h).abs() > 0.5 {
@@ -997,7 +996,7 @@ fn preview(app: &WordApp, layout: &DocLayout, o: &ObjectHit, scale: f32, body: &
     }
     let size = [img.width as usize, img.height as usize];
     let image = egui::ColorImage::from_rgba_unmultiplied(size, &img.to_straight());
-    Some(Preview { scale_bits: px.to_bits(), size, image: Arc::new(image) })
+    Some(Preview { scale_bits: px.to_bits(), image: Arc::new(image) })
 }
 
 /// Commit a finished move as one command.

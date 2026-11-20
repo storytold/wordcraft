@@ -20,8 +20,6 @@ mod chrome_tests;
 mod control_tests;
 #[path = "tests/dialogs.rs"]
 mod dialogs_tests;
-#[path = "prefs/tests.rs"]
-mod prefs_tests;
 #[path = "tests/ribbon.rs"]
 mod ribbon_tests;
 
@@ -561,8 +559,6 @@ thread_local! {
     static LATE_PASTES: std::cell::RefCell<Vec<craft::platform::clipboard::Flavor>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-use craft::platform::clipboard::ClipboardBackend as _;
-
 /// An in-memory clipboard that, like the event clipboard of the web build, takes a queued paste as one late arrival.
 #[derive(Default)]
 struct LatePaste(craft::platform::clipboard::MemoryClipboard);
@@ -809,11 +805,6 @@ fn page_rect(a: &WordApp, page: usize) -> Option<egui::Rect> {
 /// The first page on screen.
 fn first_page(a: &WordApp) -> Option<egui::Rect> {
     a.canvas.page_rects().next().map(|(_, r)| r)
-}
-
-/// The page under `p`, or the nearest one.
-fn nearest_page(a: &WordApp, p: egui::Pos2) -> Option<usize> {
-    a.canvas.page_rects().min_by(|(_, x), (_, y)| x.distance_to_pos(p).total_cmp(&y.distance_to_pos(p))).map(|(i, _)| i)
 }
 
 /// Pages per row, read off the rectangles: those level with the first page.
@@ -2772,16 +2763,6 @@ fn programmatic_commands_never_prompt() {
     assert!(!body_text(&a).contains(UNSAVED));
 }
 
-/// Send `engine.execute` the way the control channel does and return the reply (#1268).
-fn control_execute(a: &mut WordApp, params: Value) -> Value {
-    let ctx = crate::test_harness::context();
-    let (req, _reply) = ControlRequest::new("engine.execute", params);
-    match control::handle(a, &ctx, &req) {
-        Reply::Done(v) => v,
-        _ => json!({"ok": false, "error": "not a reply"}),
-    }
-}
-
 const MAILINGS: [&str; 4] = ["mailings.envelopes", "mailings.labels", "mailings.finish", "mailings.printDocuments"];
 
 /// What the user gave: Envelopes and Labels without anything open their dialogs (#407).
@@ -3243,8 +3224,8 @@ fn interface_size_is_absolute_and_auto_keeps_the_system_scale() {
     let doc_zoom = a.session.view.zoom;
     a.ctx = Some(ctx.clone());
     let frame = |a: &mut WordApp, native: f32| {
-        let mut input = egui::RawInput::default();
-        input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0)));
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))), ..Default::default() };
         input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native);
         // The interface scale is a root value the runtime applies (`RootEnv::scale`): it comes
         // with the frame's input, as eframe's `raw_input_hook` hands it over.

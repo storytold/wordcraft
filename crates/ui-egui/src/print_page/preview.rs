@@ -76,7 +76,7 @@ impl ThumbSource<usize> for SheetSource<'_> {
                 if y < 0 || y >= h as i64 {
                     continue;
                 }
-                for (col, px) in line.chunks_exact(4).enumerate() {
+                for (col, px) in line.as_chunks::<4>().0.iter().enumerate() {
                     let x = x0 + col as i64;
                     if x < 0 || x >= w as i64 {
                         continue;

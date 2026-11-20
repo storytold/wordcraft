@@ -318,13 +318,13 @@ fn preview(rows: Vec<PreviewRow>, edited: usize) -> impl Fn(&ContentPainterCx, R
                 let bar = Rect::from_min_max(pos2(text_x, top + row / 2.0 - 2.0), pos2(rect.right() - 8.0, top + row / 2.0 + 2.0));
                 if bar.width() > 0.0 {
                     let draw_bar = |cx: &ContentPainterCx| cx.data_shapes([egui::Shape::rect_filled(bar, 1.0, cx.ink())]);
-                    cx.faded(0.45, &draw_bar);
+                    cx.faded(0.45, draw_bar);
                 }
             };
             if i == edited {
                 paint(cx);
             } else {
-                cx.faded(0.5, &paint);
+                cx.faded(0.5, paint);
             }
         }
     }

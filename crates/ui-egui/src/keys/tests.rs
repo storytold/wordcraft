@@ -131,7 +131,7 @@ fn caret(h: &mut H, off: usize) {
 
 /// Puts `items` on the window's clipboard.
 fn offer(h: &H, items: Vec<ClipItem>) {
-    ClipboardHandle::of(&h.ctx).offer(&items).expect("the clipboard takes the offer");
+    let _ = ClipboardHandle::of(&h.ctx).offer(&items).expect("the clipboard takes the offer");
 }
 
 /// The clipboard flavours of a bold word: HTML and text.

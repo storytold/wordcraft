@@ -6,7 +6,6 @@
 // as dependencies for the paths below.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -20,7 +19,7 @@ use craft::ui::contract::Show as _;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::focus::{self, FocusTarget};
 use craft::ui::style::DataColor;
-use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Color32, Pos2, Rect, Ui, pos2, vec2};
 use serde_json::json;
 use wordcraft_doc::{PartKind, Pos, StoryRef};
 use wordcraft_layout::display::CommentDisplay;
@@ -50,7 +49,9 @@ mod story;
 
 pub use balloons::{deselect_balloon, select_balloon};
 use context_menu::ContextAsk;
-pub(crate) use cursor::{caret_color_on, caret_contrast};
+pub(crate) use cursor::caret_color_on;
+#[cfg(test)]
+pub(crate) use cursor::caret_contrast;
 pub use cursor::{caret_screen, pos_from_screen};
 pub use geometry::{markup_width, sync_fit_zoom};
 use input::UnitDrag;
@@ -359,7 +360,7 @@ impl CanvasState {
     }
 
     /// The object gesture the page tool holds, if one runs.
-    pub fn object_gesture(&self) -> Option<&crate::objects::ObjectGesture> {
+    pub(crate) fn object_gesture(&self) -> Option<&crate::objects::ObjectGesture> {
         self.object_gesture.as_ref()
     }
 

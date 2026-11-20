@@ -142,6 +142,7 @@ impl WordApp {
             command_catalog_mac: _,
             command_catalog_lang: _,
             key_overrides: _,
+            command_states: _,
             fonts_frames: _,
             printing: _,
             print_feedback_seen: _,

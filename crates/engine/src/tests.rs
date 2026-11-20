@@ -2144,19 +2144,16 @@ fn table_spots_and_borders_are_the_areas_the_pointer_queries_answer_for() {
     let borders = table_resize::borders(&l, &sess.doc, 0, reach);
     assert!(!spots.is_empty() && !borders.is_empty());
     let inside = |r: &wordcraft_geom::Rect, x: f32, y: f32| x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom();
-    let (w, bottom) = l.pages.get(0).map_or((0.0, 0.0), |p| (p.w, p.body.bottom()));
+    let (w, bottom) = l.pages.first().map_or((0.0, 0.0), |p| (p.w, p.body.bottom()));
     let (mut spot_hits, mut border_hits) = (0, 0);
     let mut y = 0.3f32;
     while y < bottom {
         let mut x = 0.3f32;
         while x < w {
             let spot = table_mouse::target_at(&l, &sess.doc, story, 0, x, y, reach);
-            match &spot {
-                Some(t) => {
-                    spot_hits += 1;
-                    assert!(spots.iter().any(|a| a.target == *t && inside(&a.area, x, y)), "spot at ({x}, {y}) lies in its listed area");
-                }
-                None => {}
+            if let Some(t) = &spot {
+                spot_hits += 1;
+                assert!(spots.iter().any(|a| a.target == *t && inside(&a.area, x, y)), "spot at ({x}, {y}) lies in its listed area");
             }
             if spot.is_none() && table_resize::resize_target(&l, &sess.doc, 0, x, y, reach).is_none() {
                 // Nothing answers: no listed area may hold the point unless a border took it first.

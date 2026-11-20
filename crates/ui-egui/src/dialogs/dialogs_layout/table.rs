@@ -309,8 +309,8 @@ impl WordForm for SplitCellsForm {
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         // Several cells split one by one keep their rows.
         let rows_on = self.cells <= 1 || self.merge_first;
-        count_field(ui, &tl!("Number of columns:"), &mut self.columns, 1..=63, true);
-        count_field(ui, &tl!("Number of rows:"), &mut self.rows, 1..=63, rows_on);
+        count_field(ui, tl!("Number of columns:"), &mut self.columns, 1..=63, true);
+        count_field(ui, tl!("Number of rows:"), &mut self.rows, 1..=63, rows_on);
         let mut merge = self.merge_first;
         Checkbox::new(Bind::bound(&mut merge)).label(tl!("Merge cells before split").to_string()).enabled(self.several).show(ui);
         if merge != self.merge_first {
@@ -420,7 +420,7 @@ impl WordForm for TextToTableForm {
         let lengths = self.lengths.unwrap_or_else(points);
         let before = (self.separator.clone(), self.other_char.clone(), self.columns);
         Section::new(tl!("Table size").to_string()).show(ui, |ui, _| {
-            count_field(ui, &tl!("Number of columns:"), &mut self.columns, 1..=63, true);
+            count_field(ui, tl!("Number of columns:"), &mut self.columns, 1..=63, true);
             Text::new(format!("{} {}", tl!("Number of rows:"), self.rows)).show(ui);
         });
         Section::new(tl!("AutoFit behavior").to_string()).show(ui, |ui, _| {
@@ -435,9 +435,9 @@ impl WordForm for TextToTableForm {
             let mut width = if self.width <= 0.0 { NamedOr::Named(Auto::Auto) } else { NamedOr::Number(f64::from(self.width)) };
             named_field(
                 ui,
-                &tl!("Initial column width:"),
+                tl!("Initial column width:"),
                 &mut width,
-                (Auto::Auto, &tl!("Auto")),
+                (Auto::Auto, tl!("Auto")),
                 Some(lengths),
                 0.0..=22.0 * 72.0,
                 self.autofit == "initial",
