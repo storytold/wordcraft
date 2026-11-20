@@ -1688,7 +1688,7 @@ fn parse_opc_children(
                 let recognized = matches!(&ns, ResolveResult::Bound(uri) if uri.as_ref() == namespace);
                 if inventory_complete {
                     inventory_complete = !matches!(&ns, ResolveResult::Unknown(_))
-                        && valid_qname(e.name().as_ref())
+                        && valid_element_name(e.name().as_ref())
                         && opc_attributes_valid(res, &e, &mut namespace_work);
                 }
                 if depth == 0 {
@@ -1742,6 +1742,26 @@ fn valid_qname(raw: &[u8]) -> bool {
     })
 }
 
+/// An element name is a legal QName whose prefix is not `xmlns`. quick-xml pre-installs the `xmlns`
+/// binding, so the resolver reports `xmlns:x` as bound, but Namespaces in XML 1.0 (and expat) reject it.
+/// The `xml` prefix is pre-bound to its own URI, which is legal.
+fn valid_element_name(raw: &[u8]) -> bool {
+    valid_qname(raw) && !raw.starts_with(b"xmlns:")
+}
+
+/// Whether a namespace declaration binds a reserved spelling illegally: `xmlns` is never declared,
+/// `xml` is bound only to its own URI, and no other prefix or the default namespace is bound to the
+/// `xml` or `xmlns` namespace URIs. (Attributes never carry the `xmlns` prefix except as declarations.)
+fn illegal_binding(prefix: &PrefixDeclaration<'_>, value: &str) -> bool {
+    const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
+    match prefix {
+        PrefixDeclaration::Default => matches!(value, craft_xml::XML_NS | XMLNS_NS),
+        PrefixDeclaration::Named(b"xmlns") => true,
+        PrefixDeclaration::Named(b"xml") => value != craft_xml::XML_NS,
+        PrefixDeclaration::Named(_) => value.is_empty() || matches!(value, craft_xml::XML_NS | XMLNS_NS),
+    }
+}
+
 /// quick-xml reports malformed attributes but accepts adjacent quoted attributes.
 /// Consume the corresponding XML grammar from the original bytes as well, so
 /// even the ignored attributes of foreign elements count towards inventory loss.
@@ -1788,11 +1808,7 @@ fn opc_attributes_valid(res: &NamespaceResolver, element: &BytesStart, work: &mu
             return false;
         }
         if let Some(prefix) = attr.key.as_namespace_binding() {
-            let invalid = match prefix {
-                PrefixDeclaration::Default => matches!(value.as_ref(), craft_xml::XML_NS | "http://www.w3.org/2000/xmlns/"),
-                PrefixDeclaration::Named(_) => value.is_empty(),
-            };
-            if invalid || !names.insert((None, key)) {
+            if illegal_binding(&prefix, value.as_ref()) || !names.insert((None, key)) {
                 return false;
             }
             continue;

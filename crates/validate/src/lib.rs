@@ -5437,6 +5437,13 @@ mod budget_tests {
                     (rels("<vendor><nested a = '1'b = \"2\"/></vendor>"), false),
                     (rels("<?x:y z?><vendor/>"), false),
                     (rels("<?xy z?><vendor/>"), true),
+                    (rels("<xmlns:vendor/>"), false),
+                    (rels("<vendor><xmlns:nested/></vendor>"), false),
+                    (rels("<xml:vendor xml:lang='en'/>"), true),
+                    (rels("<v xmlns:xml='urn:x'/>"), false),
+                    (rels("<v xmlns:xmlns='urn:x'/>"), false),
+                    (rels("<v xmlns:a='http://www.w3.org/XML/1998/namespace'/>"), false),
+                    (rels("<v xmlns:xml='http://www.w3.org/XML/1998/namespace'/>"), true),
                     (rels("<vendor><nested a = '1'\r\nb = \"2\"/></vendor>"), true),
                     (String::from_utf8(rels("")).unwrap().replace("?>", "encoding='UTF-8'?>").into_bytes(), false),
                 ] {
