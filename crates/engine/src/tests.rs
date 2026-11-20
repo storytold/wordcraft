@@ -20,6 +20,7 @@ mod fonts;
 mod ime_noop;
 mod page_number_formats_in_lists;
 mod para_tools;
+mod paragraph_sort;
 mod revision_checks;
 mod typing;
 mod wordart;

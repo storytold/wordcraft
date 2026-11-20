@@ -1,6 +1,7 @@
 use super::lists::touch_all;
 use super::{Block, CmdError, CmdResult, NumRef, ParaProps, Pos, Session, SortKey, Value, p, sel_result, sort_key};
 use std::sync::Arc;
+use wordcraft_doc::InlineObject;
 
 /// Move Paragraph Up / Down (Alt+Shift+Up/Down, ⌃⇧↑/↓ on macOS): the paragraphs the selection
 /// touches swap places with the paragraph above or below, in their own container (the story or
@@ -163,19 +164,44 @@ pub(super) fn outline_step(s: &mut Session, promote: bool) -> CmdResult {
     sel_result(s)
 }
 
-/// Sort the selected paragraphs (same container) alphabetically.
+/// Sort the selected paragraphs in one container, without moving section breaks.
 pub(super) fn sort(s: &mut Session, v: &Value) -> CmdResult {
     let desc = p::bool(v, "descending").unwrap_or(false);
     let (a, b) = s.sel.ordered();
     if a.path.parent() != b.path.parent() {
         return Err(CmdError::Failed("select paragraphs in one place to sort".into()));
     }
-    let (i0, i1) = (a.path.last(), b.path.last());
+    let (i0, mut i1) = (a.path.last(), b.path.last());
+    if i1 > i0 && b.off == 0 {
+        i1 -= 1;
+    }
     let lang = s.doc.para(a.story, &a.path).and_then(|p| crate::cmd::para_lang(&s.doc, p)).or_else(|| crate::cmd::default_lang(s));
     let bl = s.doc.container_mut(a.story, &a.path)?;
     let Some(slice) = bl.get_mut(i0..=i1) else { return Err(CmdError::Failed("bad range".into())) };
     if slice.iter().any(|b| !matches!(**b, Block::Para(_))) {
         return Err(CmdError::Failed("sorting tables isn't supported here; use Table › Sort".into()));
+    }
+    // A section's page setup belongs to its boundary, not to the paragraph's sort key.
+    if slice.iter().any(|b| b.as_para().is_some_and(|p| p.section.is_some())) {
+        return Err(CmdError::Failed("select paragraphs without section breaks to sort".into()));
+    }
+    // A control's markers must travel together. Local pairs and paragraphs inside a larger
+    // control are safe, but moving a boundary apart loses the control when the file is saved.
+    if slice.iter().filter_map(|b| b.as_para()).any(|p| {
+        let mut depth = 0usize;
+        for object in &p.objects {
+            match object {
+                InlineObject::ControlStart { .. } => depth = depth.saturating_add(1),
+                InlineObject::ControlEnd => {
+                    let Some(remaining) = depth.checked_sub(1) else { return true };
+                    depth = remaining;
+                }
+                _ => {}
+            }
+        }
+        depth != 0
+    }) {
+        return Err(CmdError::Failed("select paragraphs without cross-paragraph content control boundaries to sort".into()));
     }
     let mut keyed: Vec<_> =
         slice.iter().map(|b| (natural_key(&b.as_para().map(|p| p.plain_text()).unwrap_or_default(), lang.as_deref()), b.clone())).collect();
@@ -186,7 +212,6 @@ pub(super) fn sort(s: &mut Session, v: &Value) -> CmdResult {
     for (dst, (_, blk)) in slice.iter_mut().zip(keyed) {
         *dst = blk;
     }
-    // Keep a section break on the last paragraph of the range where it was.
     s.sel = crate::Selection { anchor: Pos { off: 0, ..a }, focus: b };
     sel_result(s)
 }
