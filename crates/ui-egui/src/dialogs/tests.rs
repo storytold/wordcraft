@@ -1782,3 +1782,19 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
         assert!(present, "the translated field is {name}");
     }
 }
+
+/// Insert › Icons keeps its size and place whichever category is picked (#7167): the footer's Cancel button, which
+/// stands at the dialog's lower edge, does not move.
+#[test]
+fn icons_dialog_keeps_its_size_across_categories() {
+    let mut h = app_harness(app_with("x"));
+    open_named(&mut h, "icons", json!({}));
+    h.run_steps(6);
+    let cancel = |h: &egui_kittest::Harness<'_, WordApp>| h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").rect();
+    let all = cancel(&h);
+    for category in ["Arrows", "Transport", "All"] {
+        h.get_by_label(category).click();
+        h.run_steps(6);
+        assert_eq!(cancel(&h), all, "the dialog moved or resized on {category}");
+    }
+}
