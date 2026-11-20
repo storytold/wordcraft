@@ -346,21 +346,12 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.laid_width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take. Balancing from Word 2013's layout
         // keeps the lines and the next paragraph together at the top of a column too (#6821).
-        let mut moved = false;
-        while pb.y + need > pb.bottom + 0.01 && (!pb.fresh() || Self::strict_widow_control(ctx, pb)) && need <= pb.next_room(self.body_top) {
+        if pb.y + need > pb.bottom + 0.01 && (!pb.fresh() || Self::strict_widow_control(ctx, pb)) && need <= pb.next_room(self.body_top) {
             pb.advance(self.block, self.body_top);
-            moved = true;
-            // Balancing: the next column is as short, so go on to one that holds it, or to the
-            // page after, which fails the try (the loop ends there, the page isn't balanced).
-            if !Self::strict_widow_control(ctx, pb) {
-                break;
-            }
-        }
-        if moved {
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);
         }
@@ -372,16 +363,16 @@ impl<'a> Flow<'a> {
     /// paragraph, together there too: asks again, and places the paragraph's floats again where it
     /// ends up (#6821).
     fn keep_again(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms) {
-        let rp = &self.pl.rp;
-        if self.l0 != 0 || !(rp.keep_lines || rp.keep_next) || !pb.fresh() || !Self::strict_widow_control(ctx, pb) {
-            return;
-        }
-        let (col, pages) = (pb.col, pb.pages.len());
-        self.keep_together(ctx, pb, rooms, 0.0);
-        if (pb.col, pb.pages.len()) != (col, pages) {
+        while self.l0 == 0 && (self.pl.rp.keep_lines || self.pl.rp.keep_next) && pb.fresh() && Self::strict_widow_control(ctx, pb) {
+            let (col, pages) = (pb.col, pb.pages.len());
+            let before = self.keep_together(ctx, pb, rooms, 0.0);
+            if (pb.col, pb.pages.len()) == (col, pages) {
+                break;
+            }
+            // Reflow before testing the new column: wraps can change the paragraph's height.
             let y0 = pb.y;
-            self.reanchor(ctx, pb, (y0, 0.0), &[]);
-            self.anchor_y = y0;
+            self.reanchor(ctx, pb, (y0, before), &[]);
+            self.anchor_y = y0 - before;
             (self.rechecked, self.forced) = (false, Vec::new());
         }
     }
@@ -1131,8 +1122,40 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
 mod tests {
     use super::*;
     use wordcraft_doc::Pos;
-    use wordcraft_doc::para::{Anchor, Float, LINE_BREAK, Wrap};
+    use wordcraft_doc::para::{Anchor, Float, LINE_BREAK, Wrap, WrapText};
     use wordcraft_doc::props::LineSpacing;
+
+    #[test]
+    fn strict_balancing_remeasures_kept_lines_in_the_next_column() {
+        crate::test_fonts();
+        let mut doc = Document::new();
+        doc.settings.compat_mode = 15;
+        doc.last_section.columns.count = 2;
+        let mut p = Paragraph::with_text("One two three four five six", Default::default());
+        p.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+        p.props.keep_lines = Some(true);
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let p = doc.body[0].as_para().unwrap();
+
+        crate::pass::with_flow_page(&doc, |ctx, pb| {
+            let top = pb.top;
+            pb.balance = Some((0, 28.1));
+            pb.cap_columns();
+            // A preceding floating object leaves a narrow strip of the first column, but does
+            // not occupy the second column. The same kept paragraph fits there in one line.
+            pb.excl.push((Rect::new(pb.col_x(), top, pb.col_w() - 26.0, 100.0), false, None, WrapText::BothSides, false));
+            place_para_in_flow(ctx, pb, p, 0, top);
+
+            assert_eq!(pb.pages.len(), 1, "a fitting candidate kept the balance attempt on its page");
+            assert_eq!(pb.col, 1);
+            assert!(
+                pb.pages[0]
+                    .items
+                    .iter()
+                    .any(|item| { matches!(item, Placed::Lines { x, l0: 0, l1: 1, story: StoryRef::Body, .. } if (*x - pb.col_x()).abs() < 0.01) })
+            );
+        });
+    }
 
     #[test]
     fn strict_widow_control_releases_a_late_float_when_no_line_is_emitted() {

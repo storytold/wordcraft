@@ -287,6 +287,8 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 ## Revision history
 
+> 2026-11-21 · When strict column balancing moves a kept paragraph between columns, it measures the paragraph again in each candidate column. A floating object that narrows one column no longer causes the paragraph to skip a later column where it fits (#6821).
+
 > 2026-11-19 · Balanced columns before a continuous break (#6821). From compatibility mode 15, strict widow/orphan control applies at the top of a column and avoids leaving a single line of a paragraph there when it continues into the next column. The strict rules also keep a paragraph together when requested, including with the next paragraph. When the strict rules cannot fit within the full column height, balancing retries with relaxed rules. The measured Word comparisons used synthetic documents with exact 14 pt lines, two and three columns, and modes 14 and 15. `layout::tests::balanced_tail` also covers tails beside a footnote or a square-wrapped picture with synthetic tests. Plain page flow with widow control on and off, with and without a footnote, was measured in Word and already matched. It has no new test here. Mode 14 still splits a two-line tail one per column. Its three-line tail, two-line paragraph after one line, and section-end spacing with automatic line spacing still differ, as does keep with next on the last lines of a paragraph that started on the preceding page.
 
 > 2026-11-19 · A continued paragraph that strict widow/orphan control moves out of a fresh column takes its floating object's wrap area with it. A line that overflows the column keeps its float because the line is still drawn there (#6821).
