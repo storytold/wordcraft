@@ -6028,6 +6028,64 @@ mod budget_tests {
     }
 
     #[test]
+    fn an_unresolved_ancestor_decides_only_the_checks_that_depend_on_its_identity() {
+        let wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
+        let dtd = r#"<!DOCTYPE w:document [<!ENTITY year "2006"><!ENTITY mcns "http://schemas.openxmlformats.org/markup-compatibility/2006">]>"#;
+        let q = r#"xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/&year;/main""#;
+        let ns = format!(
+            r#"xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#
+        );
+        let story = |body: &str| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", format!("<?xml version=\"1.0\"?>{dtd}<w:document {ns}><w:body>{body}</w:body></w:document>").into_bytes()),
+                ("word/_rels/document.xml.rels", doc_rels()),
+            ]))
+        };
+        let settings = |body: &str| {
+            validate_bytes(&tiny_zip(&[
+                ("[Content_Types].xml", content_types_with_override("word/settings.xml", &format!("{wml}settings+xml"))),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", document()),
+                ("word/_rels/document.xml.rels", rels(&format!(r#"<Relationship Id="rS" Type="{NS_R}/settings" Target="settings.xml"/>"#))),
+                ("word/settings.xml", format!("<?xml version=\"1.0\"?>{dtd}<w:settings xmlns:w=\"{NS_W}\" {q}>{body}</w:settings>").into_bytes()),
+            ]))
+        };
+        let rules = |report: &Report| report.findings.iter().map(|f| f.rule).collect::<Vec<_>>();
+        let alt = |attr: &str, fallback: &str| {
+            format!(
+                r#"<mc:AlternateContent {attr}><mc:Choice Requires="w14"><w:p/></mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+            )
+        };
+        // An `AlternateContent` of unresolved namespace is the literal one: its cell has block content, and nothing
+        // in its Fallback is established (no missing relationship).
+        for attr in ["", r#"xmlns:mc="&mcns;""#] {
+            let cell = story(&format!("<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>", alt(attr, "<w:p/>")));
+            assert_eq!((rules(&cell), cell.verdict), (vec![], Verdict::Pass), "{attr}: {cell:?}");
+            let reference = story(&alt(attr, r#"<w:p><w:hyperlink r:id="rAbsent"/></w:p>"#));
+            assert_eq!((rules(&reference), reference.verdict), (vec![], Verdict::Pass), "{attr}: {reference:?}");
+        }
+        // A check whose answer an unresolved element decides is undecided (Incomplete), never silently passed; the same
+        // check against a literal foreign spelling is made. An unrelated unresolved wrapper still decides nothing.
+        let cell = |tag: &str| story(&format!("<w:tbl><w:tr><w:tc><{tag}/></w:tc></w:tr></w:tbl>"));
+        assert_eq!(rules(&cell(r#"q:p xmlns:q="urn:2006""#)), ["STRUCT-TC-NO-P"]);
+        assert_eq!(cell(&format!("q:p {q}")).verdict, Verdict::Incomplete);
+        let math = |wrapper: &str| story(&format!(r#"<w:p><{wrapper} xmlns:q="urn:&year;"><m:f/></{wrapper}></w:p>"#));
+        assert_eq!(rules(&math("q:vendor")), ["MATH-PLACEMENT"]);
+        assert_eq!(math("q:num").verdict, Verdict::Incomplete);
+        let merge = |open: &str, close: &str| settings(&format!("<{open}><w:headerSource/></{close}>"));
+        assert_eq!(rules(&merge("w:mailMerge", "w:mailMerge")), ["HEADERSOURCE-PRESENT"]);
+        assert_eq!(merge(&format!("q:mailMerge {q}"), "q:mailMerge").verdict, Verdict::Incomplete);
+        let range = |open: &str, close: &str| {
+            story(&format!(r#"<w:p><w:r><w:pict><{open}><w:p><w:commentRangeStart w:id="1"/></w:p></{close}></w:pict></w:r></w:p>"#))
+        };
+        assert_eq!(rules(&range("w:txbxContent", "w:txbxContent")), Vec::<&str>::new());
+        let hidden = range(&format!("q:txbxContent {q}"), "q:txbxContent");
+        assert_eq!((rules(&hidden), hidden.verdict), (vec![], Verdict::Incomplete), "{hidden:?}");
+    }
+
+    #[test]
     fn diagnostics_are_never_made_from_unknowns() {
         // `q` is bound to a namespace spelled through an entity this part cannot expand; `mc` to the markup
         // compatibility namespace through another. A diagnostic that needs the unknown value is not made.

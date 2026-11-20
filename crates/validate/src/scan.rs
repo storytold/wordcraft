@@ -678,6 +678,10 @@ struct Frame {
     /// cell, or row level — a run-level `customXml` inside a paragraph is not.
     is_custom_xml: bool,
     tc_has_block: bool,
+    /// A block of known kind (or a skipped `AlternateContent`) was seen directly in this cell.
+    tc_known_block: bool,
+    /// A direct child of unresolved namespace named like a block element was seen in this cell.
+    tc_unresolved_candidate: bool,
     /// None also represents an unknown last block in skipped AlternateContent.
     tc_last_block: Option<TcEnd>,
     is_del: bool,
@@ -695,6 +699,9 @@ struct Frame {
 
 #[derive(Default)]
 struct State {
+    /// Checks whose judgement depended on the identity of an element of unresolved namespace and so were not made
+    /// (by rule id): the part reports them as undecided rather than passing them silently.
+    withheld: BTreeSet<&'static str>,
     /// This settings part carries `w:uiCompat97to2003` (the Word 97–2003
     /// compatibility flag the count limits key on).
     compat_97: bool,
@@ -910,7 +917,7 @@ fn decode_utf16_strict(bytes: &[u8], little_endian: bool) -> Result<String, Deco
 /// `r:id`/`r:embed`/`r:link` value come back on the `PartScan`.
 pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -> PartScan {
     observation_contract! {
-        rules: "-";
+        rules: "STRUCT-TC-NO-P";
         collections: "access.into_complete_set*2,access.invalidate*2,field.alt_stack*2,field.content_part_exemptions*2,field.content_parts*2,field.declared*8,field.frames*10,field.note_listings*1,field.note_listings_e*1,field.note_listings_f*1,field.para_ids*1,field.special_notes*2,field.unknown_prefixes*2,parser.parse_doctype_entities*1,type.BTreeMap*1,type.HashMap*1,type.HashSet*1,type.Observed*1,type.Vec*9";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
@@ -991,11 +998,11 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 };
                 scan_attr_refs(part, &attrs, acc);
                 let was_suppressed = state.alt_depth > 0;
-                let is_alt = enter_alt(&mut state, &id, part, acc);
-                let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
                 state.declared.push(decls);
                 note_unresolved_element(&mut state, &mut id, &[]);
+                let is_alt = enter_alt(&mut state, &id, part, acc);
+                let branch_prev = assign_alt_branch(&mut state, &id);
                 push_unknown_prefix(&mut out, &state.declared, &[], id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
@@ -1034,10 +1041,10 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 };
                 scan_attr_refs(part, &attrs, acc);
                 let was_suppressed = state.alt_depth > 0;
-                let is_alt = enter_alt(&mut state, &id, part, acc);
-                let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
                 note_unresolved_element(&mut state, &mut id, &decls);
+                let is_alt = enter_alt(&mut state, &id, part, acc);
+                let branch_prev = assign_alt_branch(&mut state, &id);
                 push_unknown_prefix(&mut out, &state.declared, &decls, id.unknown.as_deref());
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
                 collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
@@ -1083,7 +1090,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                         if f.is_wrapper {
                             state.wrapper_depth -= 1;
                         }
-                        close_cell(&f, part, role, acc);
+                        close_cell(&mut state, &f, part, role, acc);
                     }
                 }
             }
@@ -1160,6 +1167,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         ));
         acc.set_incomplete();
     }
+    note_withheld(&state, part, acc);
     finish_prefix(&state, part, acc);
     note_scan_incomplete(part, &state, &out, scan_complete, skipped_content, acc);
     out.facts = state.facts;
@@ -1297,7 +1305,9 @@ fn enter_alt(state: &mut State, id: &ElemId, part: &str, acc: &mut Acc) -> bool 
         package_loss: "independent";
     }
 
-    let is_alt = id.ns == Some(NS_MC.as_bytes()) && id.local == "AlternateContent";
+    // An `AlternateContent` of unresolved namespace may be the markup-compatibility one: it is treated as that,
+    // so its branches are skipped exactly as the literal spelling's are (nothing in them is established).
+    let is_alt = id.local == "AlternateContent" && (id.ns == Some(NS_MC.as_bytes()) || id.unresolved);
     if is_alt {
         state.alt_depth += 1;
         state.alt_seq += 1;
@@ -1310,6 +1320,7 @@ fn enter_alt(state: &mut State, id: &ElemId, part: &str, acc: &mut Acc) -> bool 
             && f.is_tc
         {
             f.tc_has_block = true;
+            f.tc_known_block = true;
             // The skipped branch may end in a paragraph; do not infer its terminal kind.
             f.tc_last_block = None;
         }
@@ -1355,6 +1366,8 @@ fn frame_for(id: &ElemId) -> Frame {
         is_sdt_content: w && local == "sdtContent",
         is_custom_xml: w && local == "customXml",
         tc_has_block: false,
+        tc_known_block: false,
+        tc_unresolved_candidate: false,
         tc_last_block: None,
         is_del: w && local == "del",
         is_wrapper: w && matches!(local, "ins" | "del" | "moveFrom" | "moveTo"),
@@ -1368,10 +1381,10 @@ fn frame_for(id: &ElemId) -> Frame {
 /// `STRUCT-TC-NO-P`; one whose last block is not a paragraph is `STRUCT-END-P`. A closed
 /// cell's last block is known even if later XML is malformed or truncated, so it is
 /// evaluated here; an open cell never is, because later content could repair it.
-fn close_cell(f: &Frame, part: &str, role: PartRole, acc: &mut Acc) {
+fn close_cell(state: &mut State, f: &Frame, part: &str, role: PartRole, acc: &mut Acc) {
     observation_contract! {
         rules: "STRUCT-END-P,STRUCT-TC-NO-P";
-        collections: "-";
+        collections: "field.withheld*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1386,6 +1399,31 @@ fn close_cell(f: &Frame, part: &str, role: PartRole, acc: &mut Acc) {
     }
     if !f.tc_has_block {
         acc.add("STRUCT-TC-NO-P", Some(part.to_string()), format!("w:tc in {part} has no block-level content"));
+    }
+    // A cell whose only block-level candidate is an element of unresolved namespace was not judged.
+    if f.tc_unresolved_candidate && !f.tc_known_block {
+        state.withheld.insert("STRUCT-TC-NO-P");
+    }
+}
+
+/// Report the checks an unresolved element left undecided: the part is incomplete, never silently passed.
+fn note_withheld(state: &State, part: &str, acc: &mut Acc) {
+    observation_contract! {
+        rules: "-";
+        collections: "field.withheld*2,type.Vec*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "an element of unresolved namespace that a check's inputs depend on";
+        fallback: "withhold the check; note it and take the incomplete path";
+        package_loss: "independent";
+    }
+
+    if !state.withheld.is_empty() {
+        let rules: Vec<&str> = state.withheld.iter().copied().collect();
+        acc.note(format!(
+            "{part}: {} could not be decided because an element of unresolved namespace may be one the check depends on",
+            rules.join(", ")
+        ));
+        acc.set_incomplete();
     }
 }
 
@@ -1408,6 +1446,7 @@ fn mark_block_content(state: &mut State, id: &ElemId) {
             && let Some(f) = state.frames.last_mut().filter(|f| f.is_tc)
         {
             f.tc_has_block = true;
+            f.tc_unresolved_candidate = true;
             f.tc_last_block = None;
         }
         return;
@@ -1419,6 +1458,7 @@ fn mark_block_content(state: &mut State, id: &ElemId) {
         && f.is_tc
     {
         f.tc_has_block = true;
+        f.tc_known_block = true;
         // Only a nested table is a *known* non-paragraph ending (calibration fixture 32).
         // The wrapper kinds (sdt, customXml, altChunk) can hold a terminal paragraph the
         // scanner does not descend into, so they leave the terminal kind unknown — the
@@ -1485,10 +1525,10 @@ fn prohibited_parent(state: &State) -> Option<&'static str> {
 /// frame is pushed. Story parts only: the documented refusals concern document
 /// content. A stray math island (math content with no `m:oMath` anywhere above it)
 /// is reported once, at its root element, not once per descendant.
-fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, acc: &mut Acc) {
+fn check_math_placement(state: &mut State, id: &ElemId, role: PartRole, part: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "MATH-PLACEMENT";
-        collections: "field.frames*7";
+        collections: "field.frames*7,field.withheld*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
@@ -1506,13 +1546,19 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
     let in_p = state.frames.iter().any(|f| f.is_p);
     // An ancestor whose namespace is unresolved withholds an absence only when its local name is the missing ancestor's.
     let unresolved = |roles: u8| state.frames.iter().any(|f| f.unresolved & roles != 0);
+    // A finding an unresolved ancestor could be hiding is reported as undecided, never dropped silently.
+    let mut undecided = false;
     match id.local.as_str() {
         "oMath" => {
             if in_omath {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} is nested inside another m:oMath"));
             }
-            if !in_p && !unresolved(U_P) {
-                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} occurs outside any w:p"));
+            if !in_p {
+                if unresolved(U_P) {
+                    undecided = true;
+                } else {
+                    acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} occurs outside any w:p"));
+                }
             }
             if let Some(parent) = prohibited_parent(state) {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMath in {part} is a direct child of w:{parent}"));
@@ -1522,8 +1568,12 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
             if in_math {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} is a descendant of a math element"));
             }
-            if !in_p && !unresolved(U_P) {
-                acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} occurs outside any w:p"));
+            if !in_p {
+                if unresolved(U_P) {
+                    undecided = true;
+                } else {
+                    acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} occurs outside any w:p"));
+                }
             }
             if let Some(parent) = prohibited_parent(state) {
                 acc.add("MATH-PLACEMENT", Some(part.to_string()), format!("m:oMathPara in {part} is a direct child of w:{parent}"));
@@ -1531,8 +1581,9 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
         }
         // Paragraph properties are a legal child of oMathPara, not stray content.
         "oMathParaPr" if in_omath_para => {}
-        // The closed set of math local names is not modelled, so any unresolved ancestor may be a math one.
-        _ if !in_omath && !in_stray && !in_parapr && !unresolved(U_ANY) => {
+        // Only an unresolved ancestor named like a math element can be the `m:oMath` family this is judged against.
+        _ if !in_omath && !in_stray && !in_parapr && unresolved(U_MATH) => undecided = true,
+        _ if !in_omath && !in_stray && !in_parapr => {
             // Batch b6 (Word for the web, 2026-11-07): a lone stray math
             // element opened clean and rendered as plain text, unlike the
             // placement cases above, which drew the corruption banner —
@@ -1546,6 +1597,9 @@ fn check_math_placement(state: &State, id: &ElemId, role: PartRole, part: &str, 
             );
         }
         _ => {}
+    }
+    if undecided {
+        state.withheld.insert("MATH-PLACEMENT");
     }
 }
 
@@ -1690,16 +1744,20 @@ fn record_note_pr(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Nam
 /// fails to open WordprocessingML documents in which this element is
 /// present." The element's only schema location is as a mailMerge
 /// child, so presence is judged there.
-fn check_header_source(state: &State, id: &ElemId, role: PartRole, part: &str, acc: &mut Acc) {
+fn check_header_source(state: &mut State, id: &ElemId, role: PartRole, part: &str, acc: &mut Acc) {
     observation_contract! {
         rules: "HEADERSOURCE-PRESENT";
-        collections: "field.frames*1";
+        collections: "field.frames*2,field.withheld*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
 
+    if role.is_settings() && id.w() && id.local == "headerSource" && state.frames.last().is_some_and(|f| f.unresolved & U_MAILMERGE != 0) {
+        // The parent may be the `w:mailMerge` this is judged against: not decided.
+        state.withheld.insert("HEADERSOURCE-PRESENT");
+    }
     if role.is_settings() && id.w() && id.local == "headerSource" && state.frames.last().is_some_and(|f| f.is_mail_merge) {
         acc.add(
             "HEADERSOURCE-PRESENT",
@@ -2011,17 +2069,25 @@ fn record_ids(state: &mut State, id: &ElemId, attrs: &[Attribute], res: &Namespa
 /// or glossary story, outside any text box. MS-OI29500 Part 1 §17.13.4.4
 /// note (c) and §17.13.4.3 note (b): Word ignores commentRangeStart and
 /// commentRangeEnd under a header, footer, text box, footnote, or endnote.
-fn range_scope(state: &State, role: PartRole) -> bool {
+fn range_scope(state: &mut State, role: PartRole) -> bool {
     observation_contract! {
-        rules: "-";
-        collections: "field.frames*1";
+        rules: "COMMENT-RANGE-UNPAIRED";
+        collections: "field.frames*2,field.withheld*1";
         scope: "source-local bounded extraction; no implicit document owner";
         loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
         fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
         package_loss: "independent";
     }
 
-    (role.is_main() || role.is_glossary()) && !state.frames.iter().any(|f| f.is_txbx_content)
+    if !(role.is_main() || role.is_glossary()) || state.frames.iter().any(|f| f.is_txbx_content) {
+        return false;
+    }
+    // Inside an unresolved `txbxContent` the range may be one Word ignores: neither collected nor judged.
+    if state.frames.iter().any(|f| f.unresolved & U_TXBX != 0) {
+        state.withheld.insert("COMMENT-RANGE-UNPAIRED");
+        return false;
+    }
+    true
 }
 
 /// Collect one comment range id under the fact budget (the bookmark
@@ -2716,21 +2782,157 @@ const U_P: u8 = 1;
 const U_DEL: u8 = 2;
 /// A block container (or the `sdtContent`/`customXml` wrappers judged by context): the block level of a child is unknown.
 const U_BLOCK: u8 = 4;
-/// Any unresolved element, for the one judgement that needs a closed set of names the validator does not model.
-const U_ANY: u8 = 8;
+/// An unresolved element whose local name is an Office Math element: it may be the `m:*` ancestor of math content.
+const U_MATH: u8 = 8;
+/// An unresolved `mailMerge`: it may be the parent a `w:headerSource` is judged against.
+const U_MAILMERGE: u8 = 16;
+/// An unresolved `txbxContent`: comment ranges inside it may be ones Word ignores.
+const U_TXBX: u8 = 32;
+
+/// The local names of Office Math (ECMA-376 Part 1 §22.1.2) elements: an unresolved ancestor is a possible math
+/// ancestor of a stray `m:*` element only when it is named like one.
+fn is_omml_name(local: &str) -> bool {
+    matches!(
+        local,
+        "acc"
+            | "accPr"
+            | "aln"
+            | "alnScr"
+            | "argPr"
+            | "argSz"
+            | "bar"
+            | "barPr"
+            | "baseJc"
+            | "begChr"
+            | "borderBox"
+            | "borderBoxPr"
+            | "box"
+            | "boxPr"
+            | "brk"
+            | "brkBin"
+            | "brkBinSub"
+            | "cGp"
+            | "cGpRule"
+            | "chr"
+            | "count"
+            | "cSp"
+            | "ctrlPr"
+            | "d"
+            | "degHide"
+            | "den"
+            | "diff"
+            | "dispDef"
+            | "dPr"
+            | "e"
+            | "endChr"
+            | "eqArr"
+            | "eqArrPr"
+            | "f"
+            | "fName"
+            | "fPr"
+            | "func"
+            | "funcPr"
+            | "gc"
+            | "groupChr"
+            | "groupChrPr"
+            | "grow"
+            | "hideBot"
+            | "hideLeft"
+            | "hideRight"
+            | "hideTop"
+            | "interSp"
+            | "intLim"
+            | "intraSp"
+            | "jc"
+            | "lim"
+            | "limLoc"
+            | "limLow"
+            | "limLowPr"
+            | "limUpp"
+            | "limUppPr"
+            | "lit"
+            | "lMargin"
+            | "m"
+            | "mathFont"
+            | "mathPr"
+            | "maxDist"
+            | "mc"
+            | "mcJc"
+            | "mcPr"
+            | "mcs"
+            | "mPr"
+            | "mr"
+            | "nary"
+            | "naryLim"
+            | "naryPr"
+            | "noBreak"
+            | "nor"
+            | "num"
+            | "objDist"
+            | "oMath"
+            | "oMathPara"
+            | "oMathParaPr"
+            | "opEmu"
+            | "phant"
+            | "phantPr"
+            | "plcHide"
+            | "pos"
+            | "postSp"
+            | "preSp"
+            | "r"
+            | "rad"
+            | "radPr"
+            | "rMargin"
+            | "rPr"
+            | "rSp"
+            | "rSpRule"
+            | "scr"
+            | "sepChr"
+            | "show"
+            | "shp"
+            | "smallFrac"
+            | "sPre"
+            | "sPrePr"
+            | "sSub"
+            | "sSubPr"
+            | "sSubSup"
+            | "sSubSupPr"
+            | "sSup"
+            | "sSupPr"
+            | "strikeBLTR"
+            | "strikeH"
+            | "strikeTLBR"
+            | "strikeV"
+            | "sty"
+            | "sub"
+            | "subHide"
+            | "sup"
+            | "supHide"
+            | "t"
+            | "transp"
+            | "type"
+            | "vertJc"
+            | "wrap"
+            | "zeroAsc"
+            | "zeroDesc"
+            | "zeroWid"
+    )
+}
 
 fn unresolved_roles(id: &ElemId) -> u8 {
     if !id.unresolved {
         return 0;
     }
-    U_ANY
-        | match id.local.as_str() {
-            "p" => U_P,
-            "del" => U_DEL,
-            "body" | "comment" | "docPartBody" | "endnote" | "footnote" | "ftr" | "hdr" | "tbl" | "tc" | "tr" | "txbxContent" | "sdtContent"
-            | "customXml" => U_BLOCK,
-            _ => 0,
-        }
+    let local = id.local.as_str();
+    let math = if is_omml_name(local) { U_MATH } else { 0 };
+    math | match local {
+        "p" => U_P,
+        "del" => U_DEL,
+        "mailMerge" => U_MAILMERGE,
+        "txbxContent" => U_BLOCK | U_TXBX,
+        "body" | "comment" | "docPartBody" | "endnote" | "footnote" | "ftr" | "hdr" | "tbl" | "tc" | "tr" | "sdtContent" | "customXml" => U_BLOCK,
+        _ => 0,
+    }
 }
 
 /// Detect attribute prefixes that are undeclared or referenced in `mc:Ignorable` without a namespace declaration.
