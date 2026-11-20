@@ -2163,3 +2163,46 @@ fn mixed_object_multi_selection_enables_shape_and_text_box_commands() {
     assert_eq!(body.anchor, VAlign::Bottom);
     assert_eq!(body.vert, TextVert::Vert270);
 }
+
+/// Issue #5896: `arrange.align` and `arrange.position` inside an active text box anchored in
+/// a later section use that anchor section's margins rather than section 0's.
+#[test]
+fn arrange_align_and_position_use_text_box_anchor_section() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.margins", &json!({"left": 144.0, "right": 144.0})).unwrap();
+    let sect1_tw = crate::cmd::page::sect(&s).text_width();
+    let sect0_tw = s.doc.sections()[0].1.text_width();
+    assert!(sect1_tw < sect0_tw, "section 1 has narrower text area");
+
+    s.run("insert.textBox", &json!({"text": "Section 1 box", "width": 100.0, "height": 50.0})).unwrap();
+    s.run("arrange.align", &json!({"value": "right"})).unwrap();
+    let (pos, o) = selected_or_text_box(&s).unwrap();
+    let (_, _, f) = o.frame().unwrap();
+    assert!((f.x - (sect1_tw - 100.0)).abs() < 0.01, "aligned to section 1 right margin ({} vs {})", f.x, sect1_tw - 100.0);
+
+    s.run("arrange.position", &json!({"preset": "topRight"})).unwrap();
+    let o2 = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+    let (_, _, f2) = o2.frame().unwrap();
+    assert!((f2.x - (sect1_tw - 100.0)).abs() < 0.01, "positioned to section 1 right margin ({} vs {})", f2.x, sect1_tw - 100.0);
+}
+
+/// Issue #5896: bulk rotation commands stay enabled when a chart is primary selection and a
+/// movable shape is added via `select.addObject`.
+#[test]
+fn chart_primary_with_added_shape_allows_rotation() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.chart", &json!({})).unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+
+    s.run("arrange.rotation", &json!({"degrees": 45.0})).unwrap();
+    s.run("arrange.rotate", &json!({"direction": "right"})).unwrap();
+    let objs = all_objects(&s);
+    let (_, _, chart_f) = objs[0].1.frame().unwrap();
+    let (_, _, shape_f) = objs[1].1.frame().unwrap();
+    assert_eq!(chart_f.spin().deg, 0.0);
+    assert_eq!(shape_f.spin().deg, 135.0);
+}

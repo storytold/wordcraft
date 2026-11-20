@@ -2,13 +2,28 @@ use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
-    all_objects, alt_text, can_group, edit_obj, has_any_shape, has_floating, has_group, has_movable, has_object, has_picture, has_placeable,
-    has_shape, has_shape_or_canvas, has_sizable, obj_size, objects_list, selected_or_text_box, target_objects, with_float, with_movable_floats,
-    with_obj,
+    all_objects, alt_text, can_group, edit_obj, has_any_movable, has_any_shape, has_floating, has_group, has_movable, has_object, has_picture,
+    has_placeable, has_shape, has_shape_or_canvas, has_sizable, obj_size, objects_list, selected_or_text_box, target_objects, with_float,
+    with_movable_floats, with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
 use wordcraft_doc::picfx::PicFx;
+
+/// Returns the section properties of the target object's anchor story (including text boxes anchored
+/// in a later body section or header/footer), falling back to `page::sect`.
+fn target_sect(s: &crate::Session) -> wordcraft_doc::SectionProps {
+    if let Some((pos, _)) = selected_or_text_box(s) {
+        let i = match pos.story {
+            wordcraft_doc::StoryRef::Body => s.doc.section_index_of(pos.path.0.first().copied().unwrap_or(0) as usize),
+            wordcraft_doc::StoryRef::Part(id) => crate::cmd::page::section_of_part(s, id),
+        };
+        if let Some((_, sp)) = s.doc.sections().get(i) {
+            return (*sp).clone();
+        }
+    }
+    crate::cmd::page::sect(s)
+}
 
 /// Returns all command specifications for objects (pictures, shapes, text boxes, and drawing canvases).
 pub fn specs() -> Vec<CommandSpec> {
@@ -191,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             with_movable_floats(s, |f| f.set_spin(f.spin().within(by)))
         })
         .params(r#"{"direction": "right|left|flipVertical|flipHorizontal"}  (turns 90° or mirrors the selected picture, shape or text box; its pixels are kept)"#)
-        .when(has_movable),
+        .when(has_any_movable),
         CommandSpec::new("arrange.rotation", "Rotation", "Layout › Arrange", |s, v| {
             let deg = p::req_f32(v, "degrees")?;
             let (fh, fv) = (p::bool(v, "flipH"), p::bool(v, "flipV"));
@@ -201,7 +216,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"degrees": number, "flipH"?: bool, "flipV"?: bool}  (the exact angle, clockwise, of the selected picture, shape or text box; normalised to 0–360)"#)
-        .when(has_movable),
+        .when(has_any_movable),
         CommandSpec::new("arrange.wrap", "Wrap Text", "Layout › Arrange", |s, v| {
             let wrap: Wrap = serde_json::from_value(v.get("wrap").cloned().unwrap_or(json!("square"))).map_err(|e| CmdError::Params(e.to_string()))?;
             with_float(s, |f| f.wrap = wrap)
@@ -221,7 +236,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
-            let sect = crate::cmd::page::sect(s);
+            let sect = target_sect(s);
             let size = selected_or_text_box(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
             with_float(s, |f| {
                 if f.wrap == Wrap::Inline {
@@ -243,7 +258,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_placeable),
         CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
             let h = p::str(v, "value").unwrap_or("center").to_string();
-            let tw = crate::cmd::page::sect(s).text_width();
+            let tw = target_sect(s).text_width();
             let w = selected_or_text_box(s).map(|(_, o)| obj_size(&o).0).unwrap_or(72.0);
             with_float(s, |f| {
                 if f.wrap == Wrap::Inline {

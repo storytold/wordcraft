@@ -57,6 +57,14 @@ pub(super) fn has_movable(s: &Session) -> Option<&'static str> {
     }
 }
 
+/// Guard returning `None` when at least one selected target (or active text box) is movable.
+pub(super) fn has_any_movable(s: &Session) -> Option<&'static str> {
+    if !target_objects(s, |o| !matches!(o, InlineObject::Graphic { .. }) && o.is_drawing()).is_empty() {
+        return None;
+    }
+    has_movable(s)
+}
+
 /// `has_movable` for what places an object in the text (wrapping, position, alignment, Move with
 /// Text): not for a member inside a drawing canvas, which the canvas places.
 pub(super) fn has_placeable(s: &Session) -> Option<&'static str> {
