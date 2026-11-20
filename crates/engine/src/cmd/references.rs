@@ -17,9 +17,12 @@ mod properties;
 mod toc;
 
 use fields::caption;
+#[cfg(test)]
+use fields::output_fields_with;
 pub use fields::{
     CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, output_fields, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq,
 };
+pub(crate) use fields::{page_at, page_formats, page_label, page_text};
 pub(super) use notes::note_options;
 use notes::{note, note_refs};
 pub use properties::{bookmark_text, date_picture};
