@@ -330,11 +330,16 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.props = para.clone();
             for run in &mut p.runs {
                 let src = std::mem::replace(&mut run.props, base.clone());
-                if src.bold == Some(true) {
+                // Emphasis in either script is kept for both, as the Bold and Italic buttons set
+                // it: text pasted into a run marked `w:cs` (Thai from a WPS or Word file) is drawn
+                // with the complex-script bold and italic.
+                if src.bold == Some(true) || src.bold_cs == Some(true) {
                     run.props.bold = Some(true);
+                    run.props.bold_cs = Some(true);
                 }
-                if src.italic == Some(true) {
+                if src.italic == Some(true) || src.italic_cs == Some(true) {
                     run.props.italic = Some(true);
+                    run.props.italic_cs = Some(true);
                 }
                 if src.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None) {
                     run.props.underline = src.underline;
