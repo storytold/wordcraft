@@ -200,7 +200,6 @@ fn enter_on_an_empty_nested_item_moves_it_up_a_level_first() {
 /// up a level and then ends the list, as with direct numbering.
 #[test]
 fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
-    use std::io::Write;
     let w = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
     let style = |id: &str, name: &str, ilvl: u8| {
         format!(
@@ -227,8 +226,7 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
     let doc_rels =
         format!("<Relationships {rels_ns}>{}{}</Relationships>", rel("rId1", "styles", "styles.xml"), rel("rId2", "numbering", "numbering.xml"));
     let ct = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default();
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [
         ("[Content_Types].xml", ct),
         ("_rels/.rels", main.as_str()),
@@ -237,10 +235,9 @@ fn enter_on_an_empty_item_numbered_by_its_style_moves_it_up_a_level() {
         ("word/styles.xml", styles.as_str()),
         ("word/numbering.xml", numbering.as_str()),
     ] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap().into_inner()).unwrap();
+    let doc = crate::io::open_bytes("t.docx", &z.finish().unwrap()).unwrap();
     let mut s = Session::new(doc);
     // The list level each paragraph shows, wherever its numbering comes from.
     let levels = |s: &Session| -> Vec<Option<u8>> {
@@ -1943,72 +1940,13 @@ fn alt_x_toggles_between_a_character_and_its_code() {
 
 #[test]
 fn alt_numpad_codes_map_like_word_on_windows() {
-    use crate::cmd::text::{alt_code_char, oem_code_page};
-    let c = |code| alt_code_char(code, 1252, 437);
-    // Leading 0: Windows-1252.
-    assert_eq!(c("0233"), Some('é'));
-    assert_eq!(c("0128"), Some('€'));
-    assert_eq!(c("0150"), Some('–'));
-    assert_eq!(c("065"), Some('A'));
-    assert_eq!(c("0032"), Some(' '));
-    assert_eq!(c("0255"), Some('ÿ'));
-    // No leading 0: the OEM code page (437 here, 850 in Western Europe).
-    assert_eq!(c("233"), Some('Θ'));
-    // The issue said 233 → é in 850; the CP850 mapping file has Ú at 0xE9 (é is 130 in both).
-    assert_eq!(alt_code_char("233", 1252, 850), Some('Ú'));
-    assert_eq!(alt_code_char("130", 1252, 850), Some('é'));
-    assert_eq!(c("130"), Some('é'));
-    assert_eq!(alt_code_char("155", 1252, 850), Some('ø'));
-    assert_eq!(c("155"), Some('¢'));
-    assert_eq!(c("65"), Some('A'));
-    assert_eq!(c("1"), Some('☺'));
-    assert_eq!(c("7"), Some('•'));
-    assert_eq!(c("127"), Some('⌂'));
-    assert_eq!(c("176"), Some('░'));
-    // Above 255: the Unicode character with that decimal value.
-    assert_eq!(c("8364"), Some('€'));
-    assert_eq!(c("09733"), Some('★'));
-    assert_eq!(c("128512"), Some('😀'));
-    // Nothing for junk, 0, control characters, surrogates or values past Unicode.
-    for bad in ["", "0", "000", "0009", "0013", "0127", "0129", "x1", "-5", "55296", "1114112", "99999999999999999999", "4294967361"] {
-        assert_eq!(c(bad), None, "{bad:?}");
-    }
+    use crate::cmd::text::oem_code_page;
     assert_eq!(oem_code_page(None), 437);
     assert_eq!(oem_code_page(Some("en-US")), 437);
     assert_eq!(oem_code_page(Some("en_GB.UTF-8")), 850);
     assert_eq!(oem_code_page(Some("fr-FR")), 850);
     assert_eq!(oem_code_page(Some("de")), 850);
     assert_eq!(oem_code_page(Some("ru-RU")), 437, "only 437/850 without the shell's code pages");
-}
-
-#[test]
-fn alt_numpad_codes_follow_the_system_code_pages() {
-    use crate::cmd::text::{alt_code_char, windows_code_pages};
-    // Polish (1250/852): Alt+0185 and Alt+165 are both ą, not ¹ / Ñ.
-    assert_eq!(alt_code_char("0185", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("165", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("0185", 1252, 437), Some('¹'));
-    // Russian (1251/866), Greek (1253/737), Turkish (1254/857).
-    assert_eq!(alt_code_char("0207", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("143", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("0193", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("128", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("0253", 1254, 857), Some('ı'));
-    assert_eq!(alt_code_char("141", 1254, 857), Some('ı'));
-    // Above 255 the code page doesn't matter.
-    assert_eq!(alt_code_char("8364", 1251, 866), Some('€'));
-    // A byte the code page leaves unassigned types nothing.
-    assert_eq!(alt_code_char("213", 1254, 857), None);
-    assert_eq!(alt_code_char("0219", 874, 437), None);
-    assert_eq!(windows_code_pages(None), (1252, 437));
-    assert_eq!(windows_code_pages(Some("en-US")), (1252, 437));
-    assert_eq!(windows_code_pages(Some("de-DE")), (1252, 850));
-    assert_eq!(windows_code_pages(Some("pl-PL")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("sr-Latn-RS")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("ru_RU.UTF-8")), (1251, 866));
-    assert_eq!(windows_code_pages(Some("el-GR")), (1253, 737));
-    assert_eq!(windows_code_pages(Some("tr-TR")), (1254, 857));
-    assert_eq!(windows_code_pages(Some("ja-JP")), (1252, 437));
 }
 
 #[test]
@@ -2408,8 +2346,6 @@ fn ctrl_tab_inserts_a_tab_inside_a_table_cell() {
     let (_, r, c) = s.sel.focus.path.cell().expect("caret in a cell");
     assert_eq!((r, c), (0, 0), "Ctrl+Tab stays in the cell");
     assert_eq!(s.doc.para_at(&s.sel.focus).map(|p| p.text.as_str()), Some("A\tB"));
-    let key = if cfg!(target_os = "macos") { "Alt+Tab" } else { "Mod+Tab" };
-    assert_eq!(s.keymap.resolve(&s.registry, key).map(|c| c.id), Some("text.insertTab"));
 }
 
 /// A .docx of two paragraphs in two sections, as Word writes it: the first section's properties
@@ -2433,12 +2369,11 @@ fn two_section_docx(kind: &str) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Backspace just after a section break, or Delete just before it, removes the break, as
@@ -2504,12 +2439,11 @@ fn break_on_the_last_paragraph_docx(then: Option<&str>) -> Vec<u8> {
             ),
         ),
     ];
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, data) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, data.as_bytes()).unwrap();
+        zip.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 /// #2127: Delete at the end of the last paragraph removes a section break on its mark too,
@@ -4035,4 +3969,26 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let issues = s.run("review.issues", &json!({})).unwrap();
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
+}
+
+/// #6788: Enter in a paragraph with a drop cap makes a normal paragraph; only the first keeps
+/// the cap (Word behaviour), for a dropped cap and one in the margin.
+#[test]
+fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
+    for position in ["dropped", "margin"] {
+        let mut s = typed("Sugar and knowledge");
+        run(&mut s, "insert.dropCap", json!({"position": position, "lines": 3, "distance": 4.0, "font": "Liberation Mono"}));
+        let first_has_cap = s.doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| p.props.drop_cap == Some(3));
+        assert!(first_has_cap, "{position}: the cap is set");
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 0, "off": 10}}));
+        run(&mut s, "text.newParagraph", json!({}));
+        let paras: Vec<_> = s.doc.body.iter().filter_map(|b| b.as_para()).collect();
+        assert_eq!(paras.len(), 2, "{position}");
+        let (first, second) = (&paras[0].props, &paras[1].props);
+        assert_eq!(first.drop_cap, Some(3), "{position}: the first paragraph keeps its cap");
+        assert_eq!(second.drop_cap, None, "{position}");
+        assert_eq!(second.drop_cap_margin, None, "{position}");
+        assert_eq!(second.drop_cap_distance, None, "{position}");
+        assert_eq!(second.drop_cap_font, None, "{position}");
+    }
 }

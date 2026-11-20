@@ -1,10 +1,33 @@
 //! File tab (Backstage): Home/New, Open, Info, Save As, Print, Export, Close, Options, About.
 
-use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
+mod home;
+mod new_page;
+mod pages;
+mod thumbs;
+
+use std::cell::{Cell, RefCell};
+
+use craft::behavior::IconId;
+use craft::theme::Variant;
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::buttons::ControlPlace;
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{
+    BodyCx, CollectionEvent, Commands as _, Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
+};
+use craft::ui::display::Text;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::notices::Notice;
+use craft::ui::primitives::{HAlign, IconSpec};
+use craft::ui::runtime::env::{Label, with_env};
+use craft::ui::runtime::inspect;
+use craft::ui::style::{SurfaceKind, TypeRole};
+use egui::Ui;
 use serde_json::json;
 
-use crate::theme::{Tokens, medium, regular, semibold};
-use crate::{WordApp, icons};
+use crate::WordApp;
+pub(crate) use thumbs::TemplateThumbs;
 
 /// The side menu: page id, label and icon (#1714).
 const PAGES: [(&str, &str, &str); 11] = [
@@ -21,9 +44,9 @@ const PAGES: [(&str, &str, &str); 11] = [
     ("options", "Options", "options"),
 ];
 
-/// The Backstage pages' keytips, as Word's (#4960): Alt, F, then a letter. V is Word's older
-/// Print Preview key, which opens the Print page too.
-const KEYTIPS: [(&str, &str); 11] = [
+/// The Backstage pages' keytips, as Word's (#4960): Alt, F, then a letter. One badge per page: Word's
+/// older Print Preview key (V) is not shown.
+pub(crate) const KEYTIPS: [(&str, &str); 10] = [
     ("home", "H"),
     ("new", "N"),
     ("open", "O"),
@@ -31,243 +54,278 @@ const KEYTIPS: [(&str, &str); 11] = [
     ("save", "S"),
     ("saveAs", "A"),
     ("print", "P"),
-    ("print", "V"),
     ("export", "E"),
     ("close", "C"),
     ("options", "T"),
 ];
 
-/// The page a Backstage keytip letter opens.
-pub(crate) fn keytip_page(letter: &str) -> Option<&'static str> {
-    KEYTIPS.iter().find(|(_, l)| *l == letter).map(|(page, _)| *page)
+/// What the File page itself answers to: Escape and the back button close it, Enter prints on the
+/// Print sub-page. One page scope (not raw key reads) so a dialog over the page, the file chooser
+/// included, takes Escape first, and so the Print page gets Enter with nothing focused: the shell
+/// routes keys to the page's own scope only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft::ui::contract::CommandSet)]
+#[command(prefix = "backstagePage", scope = "backstagePage")]
+enum BackstagePageCommand {
+    /// Leave File and return to the document.
+    #[command(label = "Back", default = "Escape")]
+    Back,
+    /// Print the document; acts only while the Print page shows.
+    #[command(label = "Print", default = "Enter")]
+    Print,
 }
 
-/// The badge a Backstage page shows while its keytips do (the first letter listed).
-fn keytip_letter(page: &str) -> Option<&'static str> {
-    KEYTIPS.iter().find(|(p, _)| *p == page).map(|(_, l)| *l)
+/// The scope of the File page, which the shell's page slot is an instance of.
+pub(crate) fn scope() -> craft::ui::runtime::commands::CommandScope {
+    <BackstagePageCommand as craft::ui::runtime::commands::CommandSet>::SCOPE
 }
 
-/// The Backstage back chevron's centre on macOS (#1873): beside the traffic lights in a
-/// window (the title bar's content edge), at the plain control inset in full screen, where the
-/// lights aren't docked top-left and the reserved offset would leave dead space.
-fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left: f32) -> egui::Pos2 {
-    let x = if fullscreen { 26.0 } else { content_left + 3.0 };
-    pos2(band_min_x + x, center_y)
+/// A personal template: what the gallery needs of a listing entry.
+type PersonalTemplate = wordcraft_engine::cmd::user_templates::PersonalTemplate;
+
+/// The templates folder setting and the listing File › New shows for it.
+#[derive(Clone)]
+pub(crate) struct PersonalListing {
+    /// The settings the listing was read for; a different folder setting reads it again.
+    key: (Option<String>, Option<std::path::PathBuf>),
+    /// The folder the listing is of, when there is one.
+    folder: Option<std::path::PathBuf>,
+    /// Its templates.
+    templates: Vec<PersonalTemplate>,
 }
 
-/// The bottom of the backstage menu: About, and the community link unless the user turned the
-/// community button off — the title bar pill honors the same setting, so the menu hides the
-/// link with it.
-fn bottom_links(app: &WordApp) -> Vec<(&'static str, &'static str)> {
-    let mut links = vec![("About", "about")];
-    if app.ui.show_discord {
-        links.push(("Discord community", "discord"));
+/// What the File page keeps for its window between passes: the errors it shows, the personal
+/// template listing and the New page's search text.
+#[derive(Default)]
+pub(crate) struct BackstageState {
+    /// Why the last attempt to open a recent document failed.
+    pub(crate) open_error: Option<String>,
+    /// The Save As page's write-failure message ([`WordApp::fail_save_as`]): this page skips the
+    /// status bar, so a failed write (no permission, disk full, a bad path) says why here.
+    pub(crate) save_as_error: Option<String>,
+    /// Why the last attempt to open a personal template failed.
+    pub(crate) personal_error: Option<String>,
+    /// The personal templates as last read (when New was shown, the folder setting changed, or
+    /// Refresh); `None` reads them on the next pass of New.
+    personal: Option<PersonalListing>,
+    /// The New page's search text.
+    pub(crate) query: String,
+}
+
+impl BackstageState {
+    /// Forgets every error message, so none comes back when File is opened next time.
+    pub(crate) fn clear_errors(&mut self) {
+        self.open_error = None;
+        self.save_as_error = None;
+        self.personal_error = None;
     }
-    links
 }
 
-/// Draws the Backstage side menu and the active page. Without a document only the Home, New, Open
-/// and Options pages work, and it handles Back, Escape, Save, Save As and Close routing.
-pub fn show(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
+/// `text` in the interface language, as a framework label.
+fn label(text: &str) -> Label {
+    Label::from(tl!(text).to_owned())
+}
+
+/// A page's heading: the page's largest text, in the role the framework's start screen gives the Home page's
+/// greeting, so every File page's title has one size (production: 26 pt semibold over 15 pt sections).
+fn heading(ui: &mut Ui, text: &str) {
+    // Production's page title is large (26 pt semibold), well above its 15 pt section headings: the one role above
+    // the section headings' is the display role.
+    let _ = Text::new(label(text)).role(TypeRole::Display).show(ui);
+}
+
+/// A section heading inside a page, a step under the page's title: production's 15 pt semibold, the heading role.
+fn subheading(ui: &mut Ui, text: &str) {
+    let _ = Text::new(label(text)).role(TypeRole::Heading).show(ui);
+}
+
+/// An error message on a page.
+fn error_line(ui: &mut Ui, text: &str) {
+    let _ = Notice::new(Tone::Bad, text.to_owned()).show(ui);
+}
+
+/// The keys a collection's events activated, in order.
+fn activated<K, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<K> {
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            CollectionEvent::Activate(key) => Some(key),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What the side menu asked for this pass; the page acts after the menu is shown, so no closure of
+/// the menu holds the app.
+#[derive(Default)]
+struct MenuChoice {
+    page: RefCell<Option<&'static str>>,
+    about: Cell<bool>,
+    discord: Cell<bool>,
+}
+
+/// The File page, shown in the shell's page slot: the side menu and the active page. Without a
+/// document only the Home, New, Open and Options pages work. Back and Escape close it.
+pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
+    let ctx = ui.ctx().clone();
     // No document open (#1129): only the pages that open or create one, and Options.
     let has_document = app.has_document();
     if !has_document && !works_without_document(&app.ui.backstage_page) {
         app.ui.backstage_page = "home".into();
     }
-    let mac = app.integrated_titlebar;
-    crate::rtl::start_panel("backstage_nav")
-        .exact_size(200.0)
-        // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
-        .resizable(false)
-        .frame(egui::Frame::NONE.fill(t.nav).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
-        .show(ui, |ui| {
-            // Right to left the navigation is on the right, away from the macOS traffic lights.
-            let rtl = crate::rtl::on();
-            let back = if mac {
-                // macOS (#222): the Backstage covers the title bar, so its top band is the title
-                // bar: the back button sits beside the traffic lights, centred with them and as far
-                // from them as the title bar's own controls, and the rest of the band drags the window.
-                let (band, drag) = ui.allocate_exact_size(vec2(200.0, app.mac_titlebar.height), Sense::click_and_drag());
-                if drag.drag_started() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
-                crate::chrome::note_title_drag(ui.ctx(), band);
-                // The chevron's stroke starts at the content edge.
-                let c = if rtl {
-                    pos2(band.max.x - 26.0, band.center().y)
-                } else {
-                    back_chevron_c(band.min.x, band.center().y, app.session.view.full_screen, app.mac_titlebar.content_left)
-                };
-                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
-                    if rtl { "chevronRight" } else { "chevronLeft" },
-                    egui::Color32::WHITE,
-                    egui::Color32::WHITE,
-                );
-                resp
-            } else {
-                // The hit area is scoped to the chevron, not the whole 200px-wide row (#3041):
-                // the row reads as plain sidebar background next to it, so clicking there must
-                // not also close the File page, same as the macOS chevron fix (#2972) below.
-                let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
-                let c = pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y);
-                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(c, vec2(18.0, 18.0)),
-                    if rtl { "chevronRight" } else { "chevronLeft" },
-                    egui::Color32::WHITE,
-                    egui::Color32::WHITE,
-                );
-                resp
-            };
-            // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
-                app.ui.backstage = false;
-                app.canvas.want_focus = true;
+    while let Some((command, _)) = cx.take_command::<BackstagePageCommand>() {
+        match command {
+            BackstagePageCommand::Back => {
+                let _ = app.run("ui.backstage", json!({"value": false}));
+                app.canvas.focus_page(&ctx);
             }
-            ui.add_space(if mac { 12.0 } else { 6.0 });
-            for (id, label, icon) in PAGES {
-                // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
-                let on = has_document || works_without_document(id);
-                let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
-                let active = app.ui.backstage_page == id;
-                if active {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
-                } else if on && resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
-                }
-                let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0), r.center().y), vec2(18.0, 18.0)),
-                    icon,
-                    ink,
-                    ink,
-                );
-                ui.painter().text(
-                    pos2(crate::rtl::lead_x(rtl, r, 52.0), r.center().y),
-                    crate::rtl::lead_center(rtl),
-                    tl!(label),
-                    if active { semibold(14.0) } else { medium(14.0) },
-                    ink,
-                );
-                if on
-                    && app.ui.keytips == crate::keytips::Phase::Backstage
-                    && let Some(letter) = keytip_letter(id)
-                {
-                    crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
-                }
-                if resp.clicked() {
-                    go_to_page(app, id);
-                }
-            }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in bottom_links(app) {
-                    let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
-                    if resp.hovered() {
-                        ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
-                    }
-                    let at = pos2(crate::rtl::lead_x(rtl, r, 22.0), r.center().y);
-                    ui.painter().text(at, crate::rtl::lead_center(rtl), tl!(label), regular(13.0), egui::Color32::WHITE);
-                    if resp.clicked() {
-                        if id == "discord" {
-                            let _ = app.run("ui.discord", json!({}));
-                        } else {
-                            app.dialog = crate::dialogs::Dialog::open("about", app);
-                        }
-                    }
-                }
-            });
-        });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
-        // The side padding sits inside the pages, so the scroll area reaches the window's edge.
-        let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
-        // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
-        if app.ui.backstage_page == "print" {
-            pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
-            return;
+            // PLAN: `print_requested(app, ctx)` is chrome-w10's new `pub(crate)` fn in print_page.rs (S-L263).
+            BackstagePageCommand::Print if app.ui.backstage_page == "print" => crate::print_page::print_requested(app, &ctx),
+            BackstagePageCommand::Print => {}
         }
-        // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
-        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
-            pad.show(ui, |ui| {
-                crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
-                    "home" => home_page(app, ui),
-                    "new" => new_page(app, ui),
-                    "open" => open_page(app, ui),
-                    "saveAs" => save_as_page(app, ui),
-                    "info" => info_page(app, ui),
-                    "recover" => recovery_page(app, ui),
-                    "print" | "export" => export_page(app, ui),
-                    "options" => crate::options::page(app, ui),
-                    _ => home_page(app, ui),
-                })
-            })
+    }
+    // The page band, the window's move band, lies over the top of the window; the controls start below it. The side
+    // menu's back button clears it. The page's own margin (production's 30 pt over its title) already reaches below a
+    // title bar's height, so only what the band takes past that margin is cleared there.
+    let band = cx.shell().and_then(|shell| shell.page_band()).map_or(0.0, |band| band.rect.height());
+    let page_band = (band - craft::ui::contract::pad_of(&craft::ui::runtime::env::Env::of(ui).tokens, Pad::Page)).max(0.0);
+    let choice = MenuChoice::default();
+    let current = app.ui.backstage_page.clone();
+    let show_discord = app.ui.show_discord;
+    // The row starts at the reading start, so the side menu is at the right in a mirrored interface.
+    let _ = Row::new().fill().show(ui, |ui, _| {
+        side_menu(ui, band, &current, has_document, show_discord, &choice);
+        let print = current == "print";
+        // Stacked rows' spacing between a page's controls, as production's (Browse… over Browse in WordCraft…).
+        // The page stands on the window's background (production's `t.ribbon`, #f9f9f9 light), not the white panel,
+        // a page's margin off the window and the side menu (production's 40 pt sides, 30 pt top).
+        let mut body = Stack::new().fill().pad(Pad::Page).gap(Gap::Stack).surface(SurfaceKind::Background);
+        // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
+        if !print {
+            body = body.scroll(Scroll::vertical());
+        }
+        let _ = body.show(ui, |ui, _| {
+            ui.add_space(page_band);
+            page_body(ui, app, &current);
         });
     });
+    if let Some(id) = choice.page.take() {
+        go_to_page(app, id, &ctx);
+    }
+    if choice.about.get() {
+        let _ = crate::dialogs::open(app, "about", &json!({}));
+    }
+    if choice.discord.get() {
+        let _ = app.run("ui.discord", json!({}));
+    }
 }
 
-/// Recovery is a separate copy. Leaving this page never discards it.
-fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, "Recover documents");
-    ui.label(tl!("Restore opens an unsaved copy. Your original file stays unchanged."));
-    ui.add_space(20.0);
-    if app.session.password.is_some() {
-        ui.label(tl!("Recovery is disabled while this document has a password."));
+/// The active page's body.
+fn page_body(ui: &mut Ui, app: &mut WordApp, page: &str) {
+    // The personal templates are read once per visit to New: a page that is not New drops the
+    // listing, so the next visit reads the folder again (a stale listing is re-read by New).
+    if page != "new" {
+        app.backstage_state.personal = None;
     }
-    if let Some(error) = app.session.recovery_error() {
-        ui.label(error);
+    match page {
+        "home" => home::home(ui, app),
+        "new" => new_page::show(ui, app),
+        "open" => home::open(ui, app),
+        "saveAs" => pages::save_as(ui, app),
+        "info" => pages::info(ui, app),
+        "recover" => pages::recovery(ui, app),
+        "print" | "export" => pages::export(ui, app),
+        "options" => crate::options::page(app, ui),
+        _ => home::home(ui, app),
     }
-    if !app.session.recovery_ready() {
-        ui.label(tl!("Local recovery is unavailable or still loading."));
-    }
-    let documents = app.session.recovery_documents();
-    if documents.is_empty() && app.session.recovery_ready() {
-        ui.label(tl!("No recovery copies."));
-    }
-    let busy = app.session.recovery_busy();
-    crate::rtl::grid(ui, egui::Grid::new("recovery_documents").min_col_width(180.0).spacing(vec2(24.0, 16.0)), |ui| {
-        if !documents.is_empty() {
-            ui.strong(tl!("Document"));
-            ui.strong(tl!("Recovery copy"));
-            ui.end_row();
-        }
-        for doc in documents {
-            ui.label(&doc.name);
-            ui.label(&doc.saved_at);
-            ui.add_enabled_ui(!busy, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button(tl!("Restore")).clicked() {
-                        let _ = app.run("file.recover", json!({"restore": doc.id}));
-                    }
-                    if ui.button(tl!("Discard…")).clicked() {
-                        let _ = app.run("ui.recoveryDiscard", json!({"id": doc.id}));
-                    }
-                });
+}
+
+/// The side menu: Back, one button per page (the page buttons are one inspected region, from which
+/// the keytips take their rects), then About and the community link unless the user turned the
+/// community button off, as the title bar's pill does.
+fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_discord: bool, choice: &MenuChoice) {
+    // At least the side menu's width and as tall as the window, About at its foot (production's 200 pt full-height
+    // rail); its rows are the side menu place's (production's 38 pt rows of 14 pt names).
+    let _ = Stack::new()
+        .sizing(Sizing::FillHeight)
+        .least_width(LeastWidth::SideMenu)
+        .surface(SurfaceKind::Brand)
+        .label(label("File"))
+        .gap(Gap::None)
+        .scroll(Scroll::vertical())
+        .header(move |ui, _| {
+            ui.add_space(band);
+            let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back).show(ui);
+        })
+        // The community link above About, both at the reading start, as production's bottom links: rows of the side
+        // menu place too, so they read in the rail's white ink over the brand colour, not a panel button's dark ink.
+        .footer(move |ui, _| {
+            with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(ControlPlace::SideMenu);
+                },
+                |ui| footer_links(ui, show_discord, choice),
+            );
+        })
+        .show(ui, |ui, _| {
+            let _ = inspect::record(ui, egui::Id::unique("wordcraft-backstage-pages"), |ui| {
+                // The rows are the side menu place's: production's 38 pt rows of 14 pt names.
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::SideMenu);
+                    },
+                    |ui| page_rows(ui, current, has_document, choice),
+                );
             });
-            ui.end_row();
+        });
+}
+
+/// The side menu's foot: the community link (unless the user turned it off) above About.
+fn footer_links(ui: &mut Ui, show_discord: bool, choice: &MenuChoice) {
+    if show_discord
+        && clicked(
+            &Button::new(label("Discord community"))
+                .id_salt("backstage-discord")
+                .variant(Variant::GHOST)
+                .sizing(Sizing::FillWidth)
+                .align(HAlign::Start)
+                .show(ui),
+        )
+    {
+        choice.discord.set(true);
+    }
+    if clicked(
+        &Button::new(label("About")).id_salt("backstage-about").variant(Variant::GHOST).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui),
+    ) {
+        choice.about.set(true);
+    }
+}
+
+/// The side menu's page rows, one full-width button per page.
+fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice) {
+    for (id, name, icon) in PAGES {
+        // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
+        let on = has_document || works_without_document(id);
+        let row = Button::new(label(name))
+            .id_salt(("backstage-page", id))
+            .icon(crate::icons::id(icon))
+            .variant(Variant::GHOST)
+            .sizing(Sizing::FillWidth)
+            // Icon and name at the reading start of the full-width row, as production's menu.
+            .align(HAlign::Start)
+            .selected(current == id)
+            .enabled(on)
+            .show(ui);
+        if clicked(&row) {
+            *choice.page.borrow_mut() = Some(id);
         }
-    });
-    ui.add_space(20.0);
-    ui.horizontal(|ui| {
-        if ui.button(tl!("Continue without restoring")).clicked() {
-            let _ = app.run("ui.backstage", json!({"value": false}));
-            app.canvas.want_focus = true;
-        }
-        if ui.add_enabled(!busy && app.session.recovery_ready(), egui::Button::new(tl!("Refresh"))).clicked() {
-            let _ = app.run("file.recover", json!({"refresh": true}));
-        }
-    });
+    }
 }
 
 /// Opens a side-menu page, as a click on it (or its keytip) does. Without a document only the
 /// pages that work without one open.
-pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
+pub(crate) fn go_to_page(app: &mut WordApp, id: &str, ctx: &egui::Context) {
     if !app.has_document() && !works_without_document(id) {
         return;
     }
@@ -275,14 +333,14 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         // A document without a file goes to the Save As page (as in Word) instead
         // of `file.save`, which would also open the native Save As dialog.
         // In the browser a save is a download, so it saves right away.
-        "save" if app.session.path.is_none() && app.services.download.is_none() => {
+        "save" if app.session.path.is_none() && !app.browser_saves() => {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
             let r = app.run("file.save", json!({}));
             if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
                 app.ui.backstage = false;
-                app.canvas.want_focus = true;
+                app.canvas.focus_page(ctx);
             } else {
                 app.ui.backstage_page = "saveAs".into();
             }
@@ -304,63 +362,6 @@ fn works_without_document(page: &str) -> bool {
     matches!(page, "home" | "new" | "open" | "options")
 }
 
-fn heading(ui: &mut Ui, s: &str) {
-    ui.label(egui::RichText::new(tl!(s)).font(semibold(26.0)));
-    ui.add_space(16.0);
-}
-
-/// Draws a template thumbnail and caption as one accessible button, lazily renders and caches a
-/// region-aware page preview, and creates a document from the template on click.
-fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
-    let t = Tokens::get(ui.ctx());
-    crate::rtl::vertical(ui, |ui| {
-        // The thumbnail and its caption are one button named by the caption, so a screen reader
-        // announces "Blank document, button" rather than unnamed text (#3176); the caption opens
-        // the template too, as in Word.
-        let caption = crate::i18n::tc("template", label);
-        let galley = ui.painter().layout_no_wrap(caption.to_string(), regular(12.5), ui.visuals().text_color());
-        let (tile, resp) = ui.allocate_exact_size(vec2(galley.size().x.max(150.0), 194.0 + galley.size().y), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), caption));
-        let r = Rect::from_min_size(tile.min, vec2(150.0, 194.0));
-        ui.painter().rect(
-            r,
-            2.0,
-            egui::Color32::WHITE,
-            Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if resp.hovered() { t.accent } else { t.border_strong }),
-            egui::StrokeKind::Inside,
-        );
-        let ppp = ui.ctx().pixels_per_point();
-        let key = format!("tpl:{template}:{ppp}");
-        let region = app.session.region();
-        let tex = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::unique(&key))).or_else(|| {
-            let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
-            // The blank tile shows the region's paper (#838).
-            s.system_region = region;
-            let _ = s.run("file.new", &json!({"template": template}));
-            let l = s.export_layout();
-            let page = l.pages.first()?;
-            let img = wordcraft_render::render_page(&s.doc, page, 150.0 / page.w * ppp, &crate::canvas::screen_render_options());
-            let px = img.to_straight();
-            let h = ui.ctx().load_texture(
-                &key,
-                egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px),
-                egui::TextureOptions::LINEAR,
-            );
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(&key), h.clone()));
-            Some(h)
-        });
-        if let Some(h) = tex {
-            ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
-        }
-        ui.painter().galley(pos2(r.min.x, r.max.y), galley, ui.visuals().text_color());
-        if resp.clicked() {
-            let _ = app.run("file.new", json!({"template": template}));
-            app.ui.backstage = false;
-            app.canvas.want_focus = true;
-        }
-    });
-}
-
 /// The built-in templates in gallery order: display label and the `file.new` template id.
 const TEMPLATES: [(&str, &str); 5] =
     [("Blank document", "blank"), ("Studio handbook (sample)", "sample"), ("Letter", "letter"), ("Résumé", "resume"), ("Report", "report")];
@@ -380,171 +381,6 @@ fn matching_templates(query: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Home: a greeting, Blank plus a short row of templates with a link to New, then Recent.
-fn home_page(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
-    let hour = wordcraft_engine::cmd::local_now().3.0;
-    heading(
-        ui,
-        if hour < 12 {
-            "Good morning"
-        } else if hour < 18 {
-            "Good afternoon"
-        } else {
-            "Good evening"
-        },
-    );
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
-        for (label, template) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
-            template_tile(ui, app, label, template);
-        }
-    });
-    ui.add_space(8.0);
-    let more = ui.add(egui::Label::new(egui::RichText::new(tl!("More templates →")).font(medium(13.5)).color(t.accent)).sense(Sense::click()));
-    if more.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-        app.ui.backstage_page = "new".into();
-    }
-    ui.add_space(24.0);
-    open_list(app, ui);
-}
-
-/// New: the whole template gallery with a search box, then the personal templates (#2852); no
-/// Recent list (that is on Home and Open). The search covers both.
-fn new_page(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
-    heading(ui, "New");
-    let id = app.window_id("backstage_template_search");
-    let mut query = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
-    let search = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0));
-    if search.changed() {
-        ui.ctx().data_mut(|d| d.insert_temp(id, query.clone()));
-    }
-    ui.add_space(18.0);
-    let found = matching_templates(&query);
-    let (folder, personal) = personal_templates(app, ui);
-    let personal_found = matching_personal(&query, &personal);
-    if found.is_empty() && personal_found.is_empty() {
-        ui.label(egui::RichText::new(tl!("No templates match your search.")).color(t.text_dim));
-        return;
-    }
-    if !found.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
-            for (label, template) in found {
-                template_tile(ui, app, label, template);
-            }
-        });
-    }
-    // Personal: the user templates folder's templates; a folder per category, as in Word.
-    let Some(folder) = folder else { return };
-    if !query.trim().is_empty() && personal_found.is_empty() {
-        return;
-    }
-    ui.add_space(24.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Personal")).font(semibold(16.0)));
-        ui.add_space(8.0);
-        if ui.small_button(tl!("Refresh")).on_hover_text(folder.to_string_lossy()).clicked() {
-            refresh_personal_templates(ui.ctx());
-        }
-    });
-    ui.add_space(8.0);
-    let error = ui.ctx().data(|d| d.get_temp::<String>(personal_error_id())).unwrap_or_default();
-    if !error.is_empty() {
-        ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
-        ui.add_space(6.0);
-    }
-    if personal.is_empty() {
-        ui.label(egui::RichText::new(tl!("Templates you save in your templates folder show up here.")).color(t.text_dim));
-        ui.label(egui::RichText::new(folder.to_string_lossy()).font(regular(11.5)).color(t.text_dim));
-        return;
-    }
-    let mut categories: Vec<&str> = Vec::new();
-    for p in &personal_found {
-        if !categories.contains(&p.category.as_str()) {
-            categories.push(&p.category);
-        }
-    }
-    for category in categories {
-        if !category.is_empty() {
-            ui.add_space(12.0);
-            ui.label(egui::RichText::new(category).font(medium(13.5)).color(t.text));
-            ui.add_space(6.0);
-        }
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
-            for p in personal_found.iter().filter(|p| p.category == category) {
-                personal_tile(ui, app, p);
-            }
-        });
-    }
-}
-
-/// A personal template: what the gallery needs of a [`PersonalTemplate`] listing entry.
-type PersonalTemplate = wordcraft_engine::cmd::user_templates::PersonalTemplate;
-
-/// The templates folder setting and listing File › New shows, and the pass it was last shown in.
-#[derive(Clone)]
-struct PersonalListing {
-    key: (Option<String>, Option<std::path::PathBuf>),
-    pass: u64,
-    folder: Option<std::path::PathBuf>,
-    templates: Vec<PersonalTemplate>,
-}
-
-/// Stable storage id for the personal-template listing cache.
-fn personal_listing_id() -> egui::Id {
-    egui::Id::unique("backstage_personal_templates")
-}
-
-#[cfg(test)]
-thread_local! {
-    /// How many times this thread has listed the templates folder (tests check it isn't every frame).
-    static PERSONAL_LISTINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// The user templates folder and its templates (#2852). The folder is read when New is shown (so
-/// a template saved meanwhile, or a folder chosen in Options, appears), when its setting changes
-/// and on Refresh; never on every frame, as reading a big or synced folder would stall the window.
-/// A folder that isn't there lists nothing.
-fn personal_templates(app: &WordApp, ui: &Ui) -> (Option<std::path::PathBuf>, Vec<PersonalTemplate>) {
-    let key = (app.session.prefs.user_templates_folder.clone(), app.services.templates_dir.clone());
-    let pass = ui.ctx().cumulative_pass_nr();
-    let cached = ui.ctx().data(|d| d.get_temp::<PersonalListing>(personal_listing_id()));
-    // Still on New since the last pass: the listing stands.
-    if let Some(mut l) = cached
-        && l.key == key
-        && l.pass.saturating_add(1) >= pass
-    {
-        l.pass = pass;
-        let out = (l.folder.clone(), l.templates.clone());
-        ui.ctx().data_mut(|d| d.insert_temp(personal_listing_id(), l));
-        return out;
-    }
-    let folder = app.user_templates_dir();
-    let templates = match &folder {
-        Some(f) if f.is_dir() => {
-            #[cfg(test)]
-            PERSONAL_LISTINGS.with(|n| n.set(n.get().saturating_add(1)));
-            wordcraft_engine::cmd::user_templates::list_templates(&f.to_string_lossy()).map(|l| l.templates).unwrap_or_else(|e| {
-                log::debug!("personal templates: {e}");
-                Vec::new()
-            })
-        }
-        _ => Vec::new(),
-    };
-    let l = PersonalListing { key, pass, folder: folder.clone(), templates: templates.clone() };
-    ui.ctx().data_mut(|d| d.insert_temp(personal_listing_id(), l));
-    (folder, templates)
-}
-
-/// Read the templates folder again on the next pass (File › New › Personal's Refresh).
-fn refresh_personal_templates(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<PersonalListing>(personal_listing_id()));
-    ctx.request_repaint();
-}
-
 /// The personal templates whose name, title or category contains `query` (case-insensitive);
 /// all of them for an empty query.
 fn matching_personal(query: &str, list: &[PersonalTemplate]) -> Vec<PersonalTemplate> {
@@ -553,167 +389,13 @@ fn matching_personal(query: &str, list: &[PersonalTemplate]) -> Vec<PersonalTemp
     list.iter().filter(|p| q.is_empty() || has(&p.label) || has(&p.category) || p.title.as_deref().is_some_and(has)).cloned().collect()
 }
 
-/// A personal template's tile: a page with the template mark (no thumbnail) and its name; a
-/// click makes a new document from it.
-fn personal_tile(ui: &mut Ui, app: &mut WordApp, p: &PersonalTemplate) {
-    let t = Tokens::get(ui.ctx());
-    crate::rtl::vertical(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        ui.set_max_width(150.0);
-        let (r, resp) = ui.allocate_exact_size(vec2(150.0, 194.0), Sense::click());
-        ui.painter().rect(
-            r,
-            2.0,
-            egui::Color32::WHITE,
-            Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if resp.hovered() { t.accent } else { t.border_strong }),
-            egui::StrokeKind::Inside,
-        );
-        let mark = egui::Color32::from_gray(150);
-        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(44.0, 44.0)), "documentTemplate", mark, t.accent);
-        let resp = resp.on_hover_text(&p.path);
-        let caption = ui.add(egui::Label::new(egui::RichText::new(&p.label).font(regular(12.5))).truncate().sense(Sense::click()));
-        if resp.clicked() || caption.clicked() {
-            let failed = open_personal(app, &p.path).err();
-            ui.ctx().data_mut(|d| d.insert_temp(personal_error_id(), failed.unwrap_or_default()));
-        }
-    });
-}
-
 /// Make a new document from the personal template at `path` and close File; a template that
 /// can't be read keeps File open so the gallery can say why.
-fn open_personal(app: &mut WordApp, path: &str) -> Result<(), String> {
+fn open_personal(app: &mut WordApp, path: &str, ctx: &egui::Context) -> Result<(), String> {
     app.run("file.newFromTemplate", json!({"path": path}))?;
     app.ui.backstage = false;
-    app.canvas.want_focus = true;
+    app.canvas.focus_page(ctx);
     Ok(())
-}
-
-/// Stable storage id for the personal-template listing error.
-fn personal_error_id() -> egui::Id {
-    egui::Id::unique("backstage_personal_error")
-}
-
-/// How the × of a recent row is drawn (#2716): not at all while nothing is hovered, dimmed while
-/// the row is, and with the stronger fill only when the pointer is on the × itself.
-#[derive(Debug, PartialEq, Eq)]
-enum RemoveCue {
-    Hidden,
-    Dim,
-    Strong,
-}
-
-fn remove_cue(row_active: bool, x_active: bool) -> RemoveCue {
-    if x_active {
-        RemoveCue::Strong
-    } else if row_active {
-        RemoveCue::Dim
-    } else {
-        RemoveCue::Hidden
-    }
-}
-
-/// Width of the × that sits at the trailing end of a recent row (#2716).
-const REMOVE_W: f32 = 28.0;
-
-/// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
-/// stores an open failure in this page's temporary state.
-fn open_list(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
-    ui.add_space(6.0);
-    let error = ui.ctx().data(|d| d.get_temp::<String>(open_error_id())).unwrap_or_default();
-    if !error.is_empty() {
-        ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
-        ui.add_space(6.0);
-    }
-    if app.ui.recent.is_empty() {
-        ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
-    }
-    let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
-    let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
-    let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
-    for (p, name) in shown.iter().zip(&names) {
-        // #2716: each row carries its own Remove, as Word's context menu does. The × is a button
-        // of its own at the trailing end, so it never opens the document; clicking the rest of the
-        // row opens it as before.
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0) - REMOVE_W, 40.0), Sense::click());
-        // The row shows a name and a path that may not fit: the path in full is its tooltip.
-        let resp = resp.on_hover_text(crate::i18n::isolate_path(p));
-        // Two documents with the same file name are told apart by their path, as on screen.
-        let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
-        if resp.hovered() {
-            ui.painter().rect_filled(r, 4.0, t.hover);
-        }
-        // Names and paths are set apart (a right-to-left line would scramble their marks and
-        // folders) and the row starts at the side reading starts from.
-        let rtl = crate::rtl::on();
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 18.0), r.center().y), vec2(22.0, 22.0)),
-            "printLayout",
-            t.icon,
-            t.accent,
-        );
-        let side = crate::rtl::lead_center(rtl);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
-        let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
-        // Right-to-left: the × sits on the left, past the row's trailing edge.
-        let xr = if rtl { xr.translate(vec2(-(r.width() + REMOVE_W + 2.0), 0.0)) } else { xr };
-        let xresp = ui.interact(xr, ui.scope_id().with(("recent-remove", &p)), Sense::click());
-        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Remove from list")));
-        // The × shows (dimmed) as soon as the row or the × is hovered or focused, so the Remove can
-        // be found; only the × itself gets the stronger fill and full-strength glyph.
-        match remove_cue(resp.hovered() || resp.has_focus(), xresp.hovered() || xresp.has_focus()) {
-            RemoveCue::Hidden => {}
-            RemoveCue::Dim => {
-                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
-            }
-            RemoveCue::Strong => {
-                ui.painter().rect_filled(xr, 4.0, t.hover);
-                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text);
-            }
-        }
-        if resp.clicked() {
-            let failed = open_recent(app, p).err();
-            ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
-        }
-        if xresp.clicked() {
-            let _ = app.run("ui.recentRemove", json!({"path": p}));
-        }
-    }
-    if app.ui.recent.iter().take(app.ui.recent_shown()).next().is_some()
-        && ui.add(egui::Button::new(egui::RichText::new(tl!("Clear all")).font(medium(13.0)))).clicked()
-    {
-        let _ = app.run("ui.recentClear", json!({}));
-    }
-}
-
-/// Stable storage id for the Recent list's open error.
-fn open_error_id() -> egui::Id {
-    egui::Id::unique("backstage_open_error")
-}
-
-/// Drop the Recent list's open error once File is closed, so it doesn't come back next time.
-pub(crate) fn forget_open_error(ctx: &egui::Context) {
-    ctx.data_mut(|d| {
-        d.remove::<String>(open_error_id());
-        d.remove::<String>(personal_error_id());
-    });
-}
-
-/// The Save As page's write-failure message ([`WordApp::fail_save_as`]): this page's own
-/// render loop skips the status bar, so a failed write (no permission, disk full, a bad path)
-/// needs its own place to say why, or the page just sits there with a Browse… button and no clue.
-pub(crate) fn save_as_error_id() -> egui::Id {
-    egui::Id::unique("backstage_save_as_error")
-}
-
-/// Drop the Save As page's error once File is closed or a later save succeeds, so it doesn't
-/// come back next time.
-pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<String>(save_as_error_id()));
 }
 
 /// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
@@ -721,182 +403,7 @@ pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
 pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
     app.open_file(path, None)?;
     app.ui.backstage = false;
-    app.canvas.want_focus = true;
     Ok(())
-}
-
-fn open_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, "Open");
-    if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
-        let _ = app.run("ui.openFileDialog", json!({}));
-    }
-    // Linux and the BSDs (#576): the system dialog needs a file chooser portal or zenity; when it
-    // doesn't show up, WordCraft's own browser is always one click away.
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-    if ui
-        .button(egui::RichText::new(tl!("Browse in WordCraft…")).font(medium(14.0)))
-        .on_hover_text(tl!("Open a file with WordCraft's own browser when the system file dialog doesn't appear."))
-        .clicked()
-    {
-        let _ = app.run("ui.fileBrowser", json!({}));
-    }
-    ui.add_space(18.0);
-    open_list(app, ui);
-}
-
-/// Save As: Browse… asks where to save. It has no recent-documents list: clicking one of those
-/// opens it, which is not what Save As is for.
-fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, "Save As");
-    let error = ui.ctx().data(|d| d.get_temp::<String>(save_as_error_id())).unwrap_or_default();
-    if !error.is_empty() {
-        ui.label(egui::RichText::new(&error).color(ui.visuals().error_fg_color));
-        ui.add_space(6.0);
-    }
-    if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
-        app.save_as_dialog();
-    }
-    // A Word template in the user templates folder, which File › New lists under Personal (#2852).
-    ui.add_space(8.0);
-    if ui
-        .button(egui::RichText::new(tl!("Save as Word Template…")).font(medium(14.0)))
-        .on_hover_text(tl!("Saves a .dotx template in your templates folder. It shows up in File › New under Personal."))
-        .clicked()
-    {
-        let _ = app.run("ui.saveAsTemplate", json!({}));
-    }
-}
-
-fn info_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, "Info");
-    let info = app.session.run("file.info", &json!({})).unwrap_or_default();
-    // Properties at the reading start, so at the right in a mirrored interface, Statistics after.
-    let (first, second) = if crate::rtl::on() { (1, 0) } else { (0, 1) };
-    ui.columns(2, |cols| {
-        crate::rtl::root(&mut cols[first], |ui| info_properties(app, ui, &info));
-        crate::rtl::root(&mut cols[second], |ui| info_statistics(ui, &info));
-    });
-}
-
-fn info_properties(app: &mut WordApp, ui: &mut Ui, info: &serde_json::Value) {
-    ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
-    // The fields edit a copy of the document's properties that is read afresh every frame,
-    // so each change goes into the document as it is typed (#260): waiting for the field to
-    // lose focus dropped the keystrokes, and leaving File with Escape never loses it at all.
-    // The keystrokes of one visit to a field are a single undo step.
-    let mut props = app.session.doc.core.clone();
-    let mut edited = None;
-    let mut focused = None;
-    crate::rtl::Table::new("props").columns(2).spacing(vec2(12.0, 6.0)).show(ui, |t| {
-        for (l, v) in [
-            ("Title", &mut props.title),
-            ("Subject", &mut props.subject),
-            ("Author", &mut props.creator),
-            ("Keywords", &mut props.keywords),
-            ("Category", &mut props.category),
-        ] {
-            t.row(|r| {
-                let label = r.cell(|ui| ui.label(tl!(l)));
-                let field = r.cell(|ui| ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id));
-                if field.changed() {
-                    edited = Some(l);
-                }
-                if field.has_focus() {
-                    focused = Some(l);
-                }
-            });
-        }
-    });
-    if let Some(field) = edited {
-        if app.info_editing == Some((field, app.session.rev())) {
-            app.session.join_next_undo();
-        }
-        let ok = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category})).is_ok();
-        app.info_editing = ok.then(|| (field, app.session.rev()));
-    }
-    if focused != app.info_editing.map(|(f, _)| f) {
-        app.info_editing = None;
-    }
-    // Advanced Properties › Custom (#2982): view and edit the document's custom properties.
-    ui.add_space(6.0);
-    if ui
-        .button(egui::RichText::new(tl!("Advanced Properties…")).font(medium(13.5)))
-        .on_hover_text(tl!("View and edit the document's custom properties."))
-        .clicked()
-    {
-        let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
-    }
-    // Protect Document › Encrypt with Password (#55).
-    ui.add_space(18.0);
-    ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
-    let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
-    ui.label(if encrypted {
-        tl!("A password is required to open this document.")
-    } else {
-        tl!("Anyone can open this document. Encrypt it with a password to keep it private.")
-    });
-    ui.horizontal(|ui| {
-        let label = if encrypted { tl!("Change Password…") } else { tl!("Encrypt with Password…") };
-        if ui.button(egui::RichText::new(label).font(medium(13.5))).clicked() {
-            let _ = app.run("file.encrypt", json!({}));
-        }
-        if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
-            let _ = app.run("file.encrypt", json!({"password": null}));
-        }
-    });
-}
-
-fn info_statistics(ui: &mut Ui, info: &serde_json::Value) {
-    ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
-    for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
-        ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
-    }
-    let path = info.get("path").and_then(|v| v.as_str()).unwrap_or(tl!("Not saved yet"));
-    // A path reads left to right whatever its folders are called, so it is a label of its own
-    // beside the words around it (one right-to-left line would swap its folders), and a long
-    // one is cut short, the whole path on hover, rather than wrapped to strand its last part.
-    let shown = crate::i18n::isolate_path(path);
-    let template = tl!("Location: {path}");
-    let (before, after) = template.split_once("{path}").unwrap_or((template, ""));
-    // The columns start left to right, so the row's own direction is set: the words before the
-    // path come first at the right edge, the path after them.
-    let row = if crate::rtl::on() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
-    ui.scope_builder(egui::UiBuilder::new().layout(row), |ui| {
-        if !before.trim().is_empty() {
-            ui.label(before.trim_end());
-        }
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let room = ui.available_width() - if after.trim().is_empty() { 0.0 } else { 40.0 };
-        let fitted = crate::theme::fit_text(ui.painter(), &shown, &font, 0.0, ui.visuals().text_color(), room);
-        ui.label(fitted).on_hover_text(&shown);
-        if !after.trim().is_empty() {
-            ui.label(after.trim_start());
-        }
-    });
-}
-
-fn export_page(app: &mut WordApp, ui: &mut Ui) {
-    if app.ui.backstage_page == "print" {
-        heading(ui, "Print");
-        // Print Markup (a print setting, as in Word): the comments beside each page.
-        let mut markup = app.session.prefs.print_markup;
-        if ui
-            .checkbox(&mut markup, tl!("Print Markup"))
-            .on_hover_text(tl!(
-                "Comments beside each page and tracked changes in PDFs, prints and images; a comment list at the end of web pages, Markdown and text."
-            ))
-            .changed()
-        {
-            let _ = app.run("file.printMarkup", json!({"value": markup}));
-        }
-        ui.add_space(12.0);
-        crate::print_page::show(app, ui);
-        return;
-    }
-    heading(ui, "Export");
-    ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
-    ui.add_space(12.0);
-    crate::print_page::export_formats(app, ui);
 }
 
 #[cfg(test)]

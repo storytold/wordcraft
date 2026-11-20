@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use egui::{Rect, Vec2, ViewportCommand, ViewportId, pos2, vec2};
+use craft::ui::runtime::windows::{WindowAction, WindowHost};
+use craft::window::WindowId;
+use egui::{Rect, pos2, vec2};
 use serde_json::Value;
 use wordcraft_engine::cmd::view::OtherWindow;
 
@@ -52,9 +54,9 @@ impl State {
 
 /// As the drawn window starts its frame: tell the session which other windows there are and
 /// whether this one is viewed beside one, and give the window the scrolling its partner did.
-pub(crate) fn poll(app: &mut WordApp, _ctx: &egui::Context) {
-    let key = app.windows.shown;
-    let open: Vec<u64> = app.windows.open.iter().map(|w| w.key).collect();
+pub(crate) fn poll(app: &mut WordApp, ctx: &egui::Context) {
+    let key = app.windows.shown();
+    let open: Vec<u64> = app.windows.list.ids().map(WindowId::get).collect();
     let st = &mut app.windows.arranged;
     if st.pair.is_some_and(|(a, b)| !open.contains(&a) || !open.contains(&b)) {
         // One of the two closed.
@@ -63,7 +65,7 @@ pub(crate) fn poll(app: &mut WordApp, _ctx: &egui::Context) {
     let partner = st.partner(key);
     let sync = partner.is_some() && st.sync;
     let waiting = st.waiting.remove(&key).unwrap_or(0.0);
-    let native = app.windows.native && app.windows.driven;
+    let native = app.windows.native && WindowHost::of(ctx).viewports_available();
     let others: Vec<OtherWindow> = if native {
         app.switch_windows_entries().into_iter().filter(|(k, ..)| *k != key).map(|(id, title, _)| OtherWindow { id, title }).collect()
     } else {
@@ -71,6 +73,7 @@ pub(crate) fn poll(app: &mut WordApp, _ctx: &egui::Context) {
     };
     let w = &mut app.session.windows;
     w.available = native;
+    w.current = Some(key);
     w.others = others;
     w.side_by_side = partner;
     w.sync_scroll = sync;
@@ -84,21 +87,28 @@ pub(crate) fn poll(app: &mut WordApp, _ctx: &egui::Context) {
 
 /// After the drawn window drew: what it scrolled itself goes to its partner.
 pub(crate) fn forward_scroll(app: &mut WordApp, ctx: &egui::Context) {
-    let key = app.windows.shown;
+    let key = app.windows.shown();
     let dy = std::mem::take(&mut app.canvas.sync_out);
     let st = &mut app.windows.arranged;
     let Some(partner) = st.partner(key).filter(|_| st.sync && dy.is_finite() && dy != 0.0) else { return };
     let total = st.waiting.entry(partner).or_default();
     *total = (*total + dy).clamp(-MAX_SCROLL, MAX_SCROLL);
-    ctx.request_repaint_of(app.windows.viewport(partner));
+    if let Some(viewport) = app.windows.viewport(ctx, partner) {
+        ctx.request_repaint_of(viewport);
+    }
 }
 
 /// Carry out a window request a `view.*` command made (`{"windows": …}`).
 pub(crate) fn request(app: &mut WordApp, req: &Value) {
     let Some(what) = req.get("windows").and_then(Value::as_str) else { return };
-    let key = app.windows.shown;
+    let key = app.windows.shown();
     let id = |k: &str| req.get(k).and_then(Value::as_u64);
     match what {
+        "switchWindow" => {
+            if let Some(w) = id("window") {
+                app.show_window(w);
+            }
+        }
         "sideBySide" => {
             app.canvas.sync_in = 0.0;
             if id("off").is_some() {
@@ -124,8 +134,8 @@ pub(crate) fn request(app: &mut WordApp, req: &Value) {
         }
         "arrange" => {
             let Some(area) = monitor_of(app, key) else { return };
-            let keys: Vec<u64> = app.windows.open.iter().map(|w| w.key).collect();
-            for (k, r) in keys.into_iter().zip(tile(app.windows.open.len(), area)) {
+            let keys: Vec<u64> = app.windows.list.ids().map(WindowId::get).collect();
+            for (k, r) in keys.into_iter().zip(tile(app.windows.list.len(), area)) {
                 place(app, k, r);
             }
         }
@@ -138,37 +148,25 @@ pub(crate) fn request(app: &mut WordApp, req: &Value) {
 
 /// The monitor window `key` is on.
 fn monitor_of(app: &WordApp, key: u64) -> Option<Rect> {
-    if !app.windows.native || !app.windows.driven {
+    let ctx = app.ctx.as_ref()?;
+    if !app.windows.native || !WindowHost::of(ctx).viewports_available() {
         return None;
     }
-    let ctx = app.ctx.as_ref()?;
-    ctx.input_for(app.windows.viewport(key), |i| monitor_area(i.viewport()))
+    let viewport = app.windows.viewport(ctx, key)?;
+    ctx.input_for(viewport, |i| monitor_area(i.viewport()))
 }
 
-/// Move window `key`'s frame to `r`: un-maximized, its content `r` less the frame's borders, and
-/// allowed below the usual minimum size so two halves fit a small screen. Platforms that don't
-/// let apps place windows (Wayland) ignore the position.
+/// Move window `key`'s frame to `r`: left full screen and maximized, then its outer rect set to
+/// `r`. Platforms that don't let apps place windows (Wayland) ignore the position.
 fn place(app: &WordApp, key: u64, r: Rect) {
     let Some(ctx) = app.ctx.as_ref() else { return };
-    let viewport: ViewportId = app.windows.viewport(key);
-    let border = ctx.input_for(viewport, |i| {
-        let v = i.viewport();
-        match (v.outer_rect, v.inner_rect) {
-            (Some(o), Some(inner)) => (o.size() - inner.size()).max(Vec2::ZERO),
-            _ => Vec2::ZERO,
-        }
-    });
-    let inner = (r.size() - border).max(vec2(200.0, 150.0));
-    for cmd in [
-        ViewportCommand::Fullscreen(false),
-        ViewportCommand::Minimized(false),
-        ViewportCommand::Maximized(false),
-        ViewportCommand::MinInnerSize(inner.min(crate::window_geometry::MIN_SIZE)),
-        ViewportCommand::InnerSize(inner),
-        ViewportCommand::OuterPosition(r.min),
-    ] {
-        ctx.send_viewport_cmd_to(viewport, cmd);
-    }
+    let Some(viewport) = app.windows.viewport(ctx, key) else { return };
+    let host = WindowHost::of(ctx);
+    host.act(viewport, WindowAction::SetFullscreen(false));
+    host.act(viewport, WindowAction::SetMaximized(false));
+    // PLAN(chrome-w7): sh.K12: `set_outer` un-minimises the window and lowers its minimum size to
+    // the placed size, so two halves fit a small screen as before.
+    host.set_outer(viewport, r);
 }
 
 /// The monitor a window is on, in points. egui reports the monitor's size but not where it
@@ -214,6 +212,7 @@ mod tests {
 
     use super::*;
     use crate::{Services, WordApp};
+    use craft_ui_test_kit::windows::Windows as Kit;
 
     #[test]
     fn tiles_cover_the_monitor_without_overlap() {
@@ -257,19 +256,22 @@ mod tests {
 
     #[test]
     fn side_by_side_scrolls_with_its_partner_only() {
-        let ctx = egui::Context::default();
+        let kit = Kit::new();
+        let ctx = kit.ctx.clone();
+        // No native windows, so the window commands stay disabled.
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
         app.ctx = Some(ctx.clone());
+        // A second window needs native windows; the commands are checked once the platform has none.
         app.new_window();
-        let keys: Vec<u64> = app.windows.open.iter().map(|w| w.key).collect();
+        app.windows.native = false;
+        let keys: Vec<u64> = app.windows.list.ids().map(WindowId::get).collect();
         assert_eq!(keys.len(), 2);
         let (first, second) = (keys[0], keys[1]);
-        // Headless: no native viewports, so the commands stay disabled.
         poll(&mut app, &ctx);
         assert!(!app.session.windows.available);
         assert!(app.run("view.sideBySide", json!({})).is_err());
         // Pair the two windows as the request would, then scroll the drawn one.
-        let shown = app.windows.shown;
+        let shown = app.windows.shown();
         let other = if shown == first { second } else { first };
         app.windows.arranged.pair = Some((shown, other));
         app.windows.arranged.sync = true;
@@ -299,7 +301,9 @@ mod tests {
         forward_scroll(&mut app, &ctx);
         assert_eq!(app.windows.arranged.waiting.get(&other), Some(&MAX_SCROLL));
         // The partner closing ends the pairing.
-        app.windows.open.retain(|w| w.key == shown);
+        if let Some(id) = app.windows.id_of(other) {
+            app.windows.list.close(id);
+        }
         app.canvas.sync_in = 3.0;
         poll(&mut app, &ctx);
         assert_eq!(app.canvas.sync_in, 0.0);
