@@ -147,3 +147,26 @@ fn no_command_changes_locked_preferences() {
         }
     }
 }
+
+/// `review.trackingOptions` is pure but changes the document's track-moves setting itself (with
+/// its own undo step). Locked, a request that also changes a markup option (the user's) is refused
+/// before the document is touched, so neither the setting nor an undo step survives the refusal;
+/// changing only track moves, the document's own setting, still works (review: CodeRabbit).
+#[test]
+fn locked_tracking_options_leave_the_document_alone_when_refused() {
+    let mut s = locked();
+    let moves = s.doc.settings.track_moves;
+    let comments = s.prefs.markup.comments;
+    let undo_steps = s.undo_labels();
+    let r = s.run("review.trackingOptions", &json!({"comments": !comments, "trackMoves": !moves}));
+    assert!(matches!(r, Err(CmdError::Disabled(_))), "{r:?}");
+    assert_eq!(s.prefs.markup.comments, comments, "the user's option is kept");
+    assert_eq!(s.doc.settings.track_moves, moves, "the document's setting isn't changed by a refused request");
+    assert_eq!(s.undo_labels(), undo_steps, "and no undo step is left behind");
+
+    let r = s.run("review.trackingOptions", &json!({"trackMoves": !moves}));
+    assert!(r.is_ok(), "track moves alone is the document's, not a preference: {r:?}");
+    assert_eq!(s.doc.settings.track_moves, !moves);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.settings.track_moves, moves, "and it is an undo step");
+}

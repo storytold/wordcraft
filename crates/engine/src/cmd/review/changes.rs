@@ -678,6 +678,13 @@ pub(super) fn tracking_options(s: &mut Session, v: &Value) -> CmdResult {
     m.changed_lines_color = color("changedLinesColor", "auto", m.changed_lines_color)?;
     m.move_from_color = color("moveFromColor", "byAuthor", m.move_from_color)?;
     m.move_to_color = color("moveToColor", "byAuthor", m.move_to_color)?;
+    // While automation may not change the user's preferences (#3622), a request that would change
+    // these options is refused before the document's track-moves setting is touched: the command
+    // is pure, so the refusal in `Session::run` puts back the preferences but not the document or
+    // its undo step. A request that only changes track moves (the document's) still goes through.
+    if s.preferences_locked && m != s.prefs.markup {
+        return Err(CmdError::Disabled(format!("review.trackingOptions: {}", crate::PREFERENCES_LOCKED)));
+    }
     // Track moves is the document's (`w:doNotTrackMoves`), so changing it is an undo step; the
     // command is pure, so it records the step itself, once every parameter has been accepted.
     // The other options are the user's own, so the command stays available under Restrict
