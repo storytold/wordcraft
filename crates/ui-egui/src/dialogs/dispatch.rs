@@ -574,12 +574,12 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     };
     crate::rtl::Table::new("it").columns(2).show(ui, |t| {
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of columns:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(cols).range(1..=63)));
+            let label = r.cell(|ui| ui.label(tl!("Number of columns:")));
+            r.cell(|ui| ui.add(egui::DragValue::new(cols).range(1..=63)).labelled_by(label.id));
         });
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Number of rows:")));
-            r.cell(|ui| ui.add(egui::DragValue::new(rows).range(1..=1000)));
+            let label = r.cell(|ui| ui.label(tl!("Number of rows:")));
+            r.cell(|ui| ui.add(egui::DragValue::new(rows).range(1..=1000)).labelled_by(label.id));
         });
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
