@@ -109,10 +109,63 @@ impl Linked {
 /// Header rows are re-placed on every page a table spills onto, so a table is O(header items ×
 /// pages) placed items — and an exact-height header row keeps all its overflowing text without
 /// growing, so a few KB of document could otherwise fill memory. Once this many items (a row
-/// counts at least one) have been repeated across a table, later pages carry no header rows;
+/// counts at least one) have been repeated across the whole layout (every table together), later pages carry no header rows;
 /// pagination still finishes. Far above any real table (three ordinary header rows over some
 /// 5 000 pages).
 pub(crate) const MAX_HEADER_ITEMS: usize = 500_000;
+
+#[cfg(test)]
+thread_local! {
+    /// A smaller [`MAX_HEADER_ITEMS`] for tests, so a short table can reach it.
+    pub(crate) static HEADER_ITEMS_CAP: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_HEADER_ITEMS) };
+}
+
+/// [`MAX_HEADER_ITEMS`], or the test cap ([`HEADER_ITEMS_CAP`]) in tests.
+pub(crate) fn header_items_cap() -> usize {
+    #[cfg(test)]
+    return HEADER_ITEMS_CAP.with(|c| c.get());
+    #[cfg(not(test))]
+    MAX_HEADER_ITEMS
+}
+
+/// What re-placing `it` costs against [`MAX_HEADER_ITEMS`] (and laying it out against
+/// [`textbox::MAX_FLOW_WORK`]): one, and for a clipped group (a floating Drawing Canvas) every
+/// member below it, nested groups included, as placing clones them all. Counted with an explicit
+/// stack, and counting stops once the total passes `limit` (the result is then just over it), so
+/// neither deep nesting nor a huge group makes the count itself costly.
+pub(crate) fn placed_cost(it: &Placed, limit: usize) -> usize {
+    placed_cost_by(it, limit, |_| 1)
+}
+
+/// [`placed_cost`] with each item (the group itself and every member) costing `cost` of it.
+pub(crate) fn placed_cost_by(it: &Placed, limit: usize, cost: impl Fn(&Placed) -> usize) -> usize {
+    let mut count = 0usize;
+    let mut stack: Vec<std::slice::Iter<Placed>> = Vec::new();
+    let mut next = Some(it);
+    loop {
+        let cur = match next.take() {
+            Some(c) => c,
+            None => loop {
+                match stack.last_mut() {
+                    None => return count,
+                    Some(iter) => match iter.next() {
+                        Some(c) => break c,
+                        None => {
+                            stack.pop();
+                        }
+                    },
+                }
+            },
+        };
+        count = count.saturating_add(cost(cur));
+        if count > limit {
+            return count;
+        }
+        if let Placed::Clip { items, .. } = cur {
+            stack.push(items.iter());
+        }
+    }
+}
 
 /// Header tables can displace a non-overlapping body table. Page-positioned drawings keep
 /// their own wrapping rules, so only table areas are retained from the header layout.
@@ -143,7 +196,7 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let Some(part) = ctx.doc.parts.get(&id) else { return Vec::new() };
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
-    let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+    let frame = PageFrame { sect, margin_top: Some(page.body.y), origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
     let base = hf.defining_width(false, page.section, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
@@ -151,6 +204,7 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let fields = ctx.fields.clone();
     let grid = std::mem::take(&mut ctx.grid);
     let track = std::mem::replace(&mut ctx.track_totals, false);
+    ctx.fields.page_format = sect.page_num_format;
     ctx.fields.page = page.number;
     let mut areas = again(ctx, 0, |ctx| {
         with_pct_base(ctx, base, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame)))).table_areas
@@ -182,23 +236,83 @@ pub(crate) fn headers_footers_refer_to_pages(doc: &Document) -> bool {
     })
 }
 
-/// Where each bookmark in the body starts: the number and number format of the page it is placed
-/// on (with two of the same name, the first in the document).
+/// Whether a story laid out with the body (the body itself, text boxes, footnotes and endnotes)
+/// shows an unlocked `PAGEREF` field, which output resolves from the paginated document
+/// ([`crate::LayoutOptions::output_page_refs`]); a locked one keeps its result, so it needs no
+/// extra pass. Headers and footers are filled in after pagination and need none either.
+pub(crate) fn flow_refers_to_pages(doc: &Document) -> bool {
+    use wordcraft_doc::PartKind;
+    let refers = |story: StoryRef| {
+        doc.para_paths(story).iter().filter_map(|path| doc.para(story, path)).any(|p| {
+            p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, locked, .. } if !*locked && fields::field_name(instr) == "PAGEREF"))
+        })
+    };
+    refers(StoryRef::Body)
+        || doc
+            .parts
+            .iter()
+            .filter(|(_, part)| matches!(part.kind, PartKind::TextBox | PartKind::Footnote | PartKind::Endnote))
+            .any(|(id, _)| refers(StoryRef::Part(*id)))
+}
+
+/// The names of all the document's bookmarks, in any story: a `PAGEREF` to one of them that
+/// [`bookmark_pages`] can't place keeps its result rather than showing Word's error.
+pub(crate) fn bookmark_names(doc: &Document) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|id| StoryRef::Part(*id)));
+    for story in stories {
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for o in &p.objects {
+                if let InlineObject::BookmarkStart { name } = o {
+                    names.insert(name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Where each bookmark in the body, a footnote or an endnote, or in a text box anchored in one of
+/// them, starts: the number and number format of the page it is placed on (with two of the same
+/// name, the first found). A bookmark in a text box is on the page of the box's anchor (measured
+/// in Word for Windows); one in a note, on the page that shows that part of the note.
 pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize, &SectionProps)]) -> fields::BookmarkPages {
+    use wordcraft_doc::PartKind;
     // Each paragraph's bookmarks: name, offset, and its line in the paragraph layout last looked
     // up (the pieces of a paragraph usually share one).
-    let mut wanted: HashMap<Path, Vec<(String, usize, Option<(usize, usize)>)>> = HashMap::new();
+    let mut wanted: Wanted = HashMap::new();
     let mut seen = HashSet::new();
-    for path in doc.para_paths(StoryRef::Body) {
-        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
-        if !p.objects.iter().any(|o| matches!(o, InlineObject::BookmarkStart { .. })) {
-            continue;
+    let mut stories = vec![StoryRef::Body];
+    let mut notes: Vec<u32> =
+        doc.parts.iter().filter(|(_, part)| matches!(part.kind, PartKind::Footnote | PartKind::Endnote)).map(|(id, _)| *id).collect();
+    notes.sort_unstable();
+    stories.extend(notes.into_iter().map(StoryRef::Part));
+    for &story in &stories {
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            if !p.objects.iter().any(|o| matches!(o, InlineObject::BookmarkStart { .. })) {
+                continue;
+            }
+            for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
+                if let InlineObject::BookmarkStart { name } = o
+                    && seen.insert(name.as_str())
+                {
+                    wanted.entry(story).or_default().entry(path.clone()).or_default().push((name.clone(), off, None));
+                }
+            }
         }
-        for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
-            if let InlineObject::BookmarkStart { name } = o
-                && seen.insert(name.as_str())
-            {
-                wanted.entry(path.clone()).or_default().push((name.clone(), off, None));
+    }
+    if doc.parts.values().any(|part| part.kind == PartKind::TextBox) {
+        let mut boxes = HashSet::new();
+        for &story in &stories {
+            for path in doc.para_paths(story) {
+                let Some(p) = doc.para(story, &path) else { continue };
+                for (off, o) in p.object_offsets().into_iter().zip(&p.objects) {
+                    for id in o.text_boxes() {
+                        box_bookmarks(doc, id, (story, &path, off), &mut boxes, &mut wordcraft_doc::BoxBudget::default(), &mut seen, &mut wanted);
+                    }
+                }
             }
         }
     }
@@ -209,8 +323,9 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
         }
         let format = sections.get(page.section).map(|(_, s)| s.page_num_format).unwrap_or_default();
         for it in &page.items {
-            let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, .. } = it else { continue };
-            let Some(marks) = wanted.get_mut(path) else { continue };
+            let Placed::Lines { story, path, para, l0, l1, .. } = it else { continue };
+            let Some(paras) = wanted.get_mut(story) else { continue };
+            let Some(marks) = paras.get_mut(path) else { continue };
             let layout = Arc::as_ptr(para) as usize;
             marks.retain_mut(|(name, off, line)| {
                 let li = match *line {
@@ -228,21 +343,61 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
                 false
             });
             if marks.is_empty() {
-                wanted.remove(path);
+                paras.remove(path);
+                if paras.is_empty() {
+                    wanted.remove(story);
+                }
             }
         }
     }
     out
 }
 
-/// A key for caches standing for `marks` (0 for none).
-pub(crate) fn marks_key(marks: &fields::BookmarkPages) -> u64 {
-    if marks.is_empty() {
-        return 0;
+/// The bookmarks [`bookmark_pages`] looks for, by story and paragraph: name, offset, and the line
+/// in the paragraph layout last looked up.
+type Wanted = HashMap<StoryRef, HashMap<Path, Vec<(String, usize, Option<(usize, usize)>)>>>;
+
+/// Add the bookmarks of text box `id`, and of the boxes inside it, to `wanted` at `anchor` (the
+/// story, paragraph and offset of the outermost box). A box shown twice, or inside itself, counts
+/// once, and the boxes inside one go as deep as layout shows them ([`wordcraft_doc::BoxBudget`]): a
+/// bookmark in a box nested deeper has no page.
+fn box_bookmarks<'d>(
+    doc: &'d Document,
+    id: u32,
+    anchor: (StoryRef, &Path, usize),
+    boxes: &mut HashSet<u32>,
+    budget: &mut wordcraft_doc::BoxBudget,
+    seen: &mut HashSet<&'d str>,
+    wanted: &mut Wanted,
+) {
+    if boxes.contains(&id) || !budget.enter(id) {
+        return;
     }
+    boxes.insert(id);
+    let story = StoryRef::Part(id);
+    for path in doc.para_paths(story) {
+        let Some(p) = doc.para(story, &path) else { continue };
+        for o in &p.objects {
+            if let InlineObject::BookmarkStart { name } = o
+                && seen.insert(name.as_str())
+            {
+                wanted.entry(anchor.0).or_default().entry(anchor.1.clone()).or_default().push((name.clone(), anchor.2, None));
+            }
+            for inner in o.text_boxes() {
+                box_bookmarks(doc, inner, anchor, boxes, budget, seen, wanted);
+            }
+        }
+    }
+    budget.leave();
+}
+
+/// A key for caches standing for `marks`: 0 while the pages aren't known (`None`), something else
+/// once they are, even with no bookmarks (output then shows missing ones as errors).
+pub(crate) fn marks_key(marks: Option<&fields::BookmarkPages>) -> u64 {
+    let Some(marks) = marks else { return 0 };
     let mut v: Vec<_> = marks.iter().collect();
     v.sort_by(|a, b| a.0.cmp(b.0));
-    hash_of(&v)
+    hash_of(&v).max(1)
 }
 
 pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)], totals: &Totals) {
@@ -298,9 +453,9 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
             && let Some(part) = ctx.doc.parts.get(&id)
         {
             let blocks = part.blocks.clone();
-            let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+            let frame = PageFrame { sect, margin_top: Some(page.body.y), origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
             let base = hf.defining_width(false, page.section, hid);
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, frame.margin_top, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))).items)
             });
             for it in &mut items {
@@ -315,11 +470,11 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
             let blocks = part.blocks.clone();
             let base = hf.defining_width(true, page.section, fid);
             // The footer's height fixes where it sits, which page-relative floats need.
-            let (h, ..) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let (h, ..) = with_pin(ctx, id, sect, page.number, None, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, None)).height)
             });
-            let frame = PageFrame { sect, origin: (x, sect.page_h - sect.footer - h), number: page.number, mirror: ctx.mirror };
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let frame = PageFrame { sect, margin_top: None, origin: (x, sect.page_h - sect.footer - h), number: page.number, mirror: ctx.mirror };
+            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, frame.margin_top, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))).items)
             });
             for it in &mut items {

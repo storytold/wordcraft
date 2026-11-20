@@ -56,6 +56,7 @@ fn listing_stops_at_the_field_budget() {
 // Finding 16: rich text with alternating formatting is built in one pass, not run by run with
 // every earlier run merged again.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn rich_text_with_many_runs_is_linear() {
     let html: String = "<i>a</i>b".repeat(50_000);
     let t = Instant::now();
@@ -82,6 +83,7 @@ fn call(b: &mut Bridge, s: &mut Session, method: &str, args: Value) -> Result<Va
 
 // Finding 32: Document_convert checks each distinct id once against one list of the fields.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn convert_with_one_id_repeated_is_one_check() {
     let mut doc = Document::from_text("");
     // Checking each id against a fresh list of the fields took 81 s with 300 of them; with 1,000

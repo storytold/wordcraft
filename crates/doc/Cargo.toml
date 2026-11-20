@@ -9,12 +9,16 @@ description = "WordCraft document model: stories, paragraphs, runs, tables, sect
 workspace = true
 
 [features]
-# Test inputs other crates' tests share (`cfb_guard::repeating_difat_sample`); turned on only as a
-# dev-dependency, so never built into the app.
-test-support = []
+# Test inputs other crates' tests share (`cfb_guard::repeating_difat_sample`,
+# `zip_guard::zip64_entry_count_sample`) and the step count of
+# `work::count`; turned on only as a dev-dependency, so never built into
+# the app.
+test-support = ["craft-zip/test-support"]
 
 [dependencies]
+craft-codepage = { workspace = true }
 wordcraft-geom = { workspace = true }
+craft-zip = { workspace = true }
 base64 = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
@@ -23,4 +27,5 @@ thiserror = { workspace = true }
 unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
+craft-zip = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }

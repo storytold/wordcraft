@@ -25,3 +25,7 @@ sys-locale = "0.3"
 
 [dev-dependencies]
 zip = { workspace = true }
+wordcraft-fonts = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
+image = { workspace = true }
+craft-zip = { workspace = true }
