@@ -35,22 +35,40 @@ fn tiff_workspace(bytes: &[u8], page: &TiffPage) -> u64 {
     let workers = rayon::current_num_threads() as u64;
     #[cfg(target_arch = "wasm32")]
     let workers = 1;
-    // tiff 0.11 uses a fresh reader per worker decoding a strip or row of tiles.
-    // Deflate has a 32 KiB flate2 buffer plus window and state. LZW uses the
-    // weezl tables and a buffer of up to 32 KiB. JPEG uses zune-jpeg. Fax uses
-    // an input buffer plus line and transition data. Raw/PackBits stream rows.
-    let compression = match page.compression {
-        8 | 32946 => 128 * KIB,
-        5 => 64 * KIB,
-        7 => JPEG_FIXED.saturating_add(chunk_width.div_ceil(32).saturating_mul(256 * 32)).saturating_add((bytes.len() as u64).saturating_mul(2)),
-        4 => (16 * KIB).saturating_add(8u64.saturating_mul(chunk_width)),
-        _ => 8 * KIB,
-    };
     let samples = u64::from(page.samples_per_pixel).clamp(1, 64);
     let sample_bytes = u64::from(page.bits_per_sample).div_ceil(8).clamp(1, 8);
     // Converted or planar strips and padded edge tiles can have more stored
     // samples than their output. Charge each simultaneous reader's scratch.
     let chunk = chunk_width.saturating_mul(chunk_height).saturating_mul(samples).saturating_mul(sample_bytes);
+    // tiff 0.11 builds the reader of each strip or tile (`create_reader`), so every worker holds the
+    // nested decoder its compression kind creates:
+    // - Deflate: flate2's 32 KiB input buffer, miniz_oxide's 32 KiB window and about 11 KiB of
+    //   Huffman tables (`DecompressorOxide`): under 80 KiB.
+    // - LZW: a BufReader of up to 32 KiB, and weezl's 4096-entry link table (16 KiB), depth table
+    //   (8 KiB) and 4 KiB output buffer: under 64 KiB.
+    // - Fax: a default 8 KiB BufReader, two transition vectors of one u16 a pixel and a line buffer
+    //   of a byte a pixel (`fax` 0.2 `Group4Decoder`, `stream.rs` `Group4Reader`).
+    // - PackBits and raw: streaming, no state worth modelling.
+    // - JPEG: zune-jpeg's row, MCU and upsampler state (the fixed term and the per-32-pixel term),
+    //   the compressed strip with its tables (once, moved into the decoder), the decoded output
+    //   (`decode`: `vec![0; output_buffer_size]`, one byte a sample), and, for a progressive image
+    //   or a baseline one with several scans, a 16-bit coefficient plane for every component padded
+    //   to whole MCUs (`mcu_prog.rs` `block[i]`, `mcu.rs` `progressive_mcus`). The layout kind is
+    //   in the strip's own markers, which the directory does not hold, so the coefficient planes
+    //   (at most two bytes for each sample padded to 32 in both directions) are charged for every
+    //   JPEG strip: a bound over all layout kinds.
+    let padded = |side: u64| side.div_ceil(32).saturating_mul(32);
+    let compression = match page.compression {
+        8 | 32946 => 128 * KIB,
+        5 => 64 * KIB,
+        7 => JPEG_FIXED
+            .saturating_add(chunk_width.div_ceil(32).saturating_mul(256 * 32))
+            .saturating_add((bytes.len() as u64).saturating_mul(2))
+            .saturating_add(chunk)
+            .saturating_add(padded(chunk_width).saturating_mul(padded(chunk_height)).saturating_mul(samples).saturating_mul(2)),
+        4 => (16 * KIB).saturating_add(8u64.saturating_mul(chunk_width)),
+        _ => 8 * KIB,
+    };
     // Each worker also opens its own `tiff` decoder, which rebuilds the page's directory and tables.
     let opened = crate::tiff_admission::worker_open_bytes(bytes, page);
     let per_worker = compression.saturating_add(chunk.saturating_mul(2)).saturating_add(opened);

@@ -4983,6 +4983,36 @@ mod budget_tests {
     }
 
     #[test]
+    fn media_magic_tiff_workspace_charges_the_jpeg_strip_decoder_each_worker_holds() {
+        // Inside a JPEG strip zune-jpeg holds the decoded output (a byte a sample) and, for a
+        // progressive image, 16-bit coefficients for every padded sample: three bytes a sample. Each
+        // worker holds them, so the JPEG debit exceeds the same page uncompressed by at least that.
+        let tiff = |compression: u32, rows_per_strip: u32| {
+            let mut bytes = strips_tiff(1);
+            for (at, value) in [(18, 256), (30, 1024), (54, compression), (102, rows_per_strip)] {
+                bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            bytes
+        };
+        for (rows_per_strip, bands) in [(1024u32, 1usize), (512, 2)] {
+            for threads in [1usize, 2] {
+                let debit = |compression: u32| {
+                    let bytes = tiff(compression, rows_per_strip);
+                    let page = probe_alternate_tiff(&bytes).unwrap().unwrap();
+                    assert_eq!((page.width, page.height, page.compression), (256, 1024, compression as u16));
+                    rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap()
+                        .install(|| media_workspace::decode(Format::Tiff, &bytes, 256, 1024, Some(&page)))
+                };
+                let held = 3 * 256 * u64::from(rows_per_strip) * threads.min(bands) as u64;
+                assert!(debit(7) - debit(1) >= held, "{rows_per_strip} rows a strip, {threads} threads: {} < {held}", debit(7) - debit(1));
+            }
+        }
+    }
+
+    #[test]
     fn media_magic_names_header_declined_layouts_the_adapter_flattens() {
         let grade = |bytes: &[u8]| {
             let report = validate_bytes(&media_zip(&[("word/media/drawn.png", bytes)], DRAWN, "png"));
