@@ -74,9 +74,18 @@ fn headings_are_not_items_and_breaks_are_described() {
         assert!(!nodes.is_empty(), "{heading} is shown");
         assert!(nodes.iter().all(|(role, _)| *role == egui::accesskit::Role::Heading), "{heading} is a heading, not a row: {nodes:?}");
     }
-    for item in ["Page", "Column", "Text Wrapping", "Next Page", "Continuous", "Even Page", "Odd Page"] {
+    // Each break says what it does, in a description of its own: without one, every row would
+    // only repeat the command's shared place on the ribbon.
+    let mut descriptions = std::collections::BTreeSet::new();
+    let items = ["Page", "Column", "Text Wrapping", "Next Page", "Continuous", "Even Page", "Odd Page"];
+    for item in items {
         let nodes = named(&h, item);
-        let described = nodes.iter().any(|(role, d)| *role != egui::accesskit::Role::Heading && d.as_deref().is_some_and(|d| d.len() > item.len()));
-        assert!(described, "{item} is a row that says what it does: {nodes:?}");
+        let description = nodes
+            .iter()
+            .find(|(role, _)| *role != egui::accesskit::Role::Heading)
+            .and_then(|(_, d)| d.clone())
+            .unwrap_or_else(|| panic!("{item} is a row with a description: {nodes:?}"));
+        descriptions.insert(description);
     }
+    assert_eq!(descriptions.len(), items.len(), "every break is described differently: {descriptions:?}");
 }
