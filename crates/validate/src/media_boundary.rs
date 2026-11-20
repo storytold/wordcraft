@@ -241,25 +241,48 @@ pub(crate) fn declined_layout(format: Format, bytes: &[u8]) -> Option<&'static s
     }
 }
 
-/// The 24-bit frame tag of the first `VP8 ` chunk, found by walking RIFF chunks and animation frames.
+/// The 24-bit frame tag of the SELECTED frame: the first image of the file, which is the first `VP8 ` chunk of a
+/// plain file, or the image inside the first `ANMF` animation frame. The walk follows RIFF chunk sizes, never
+/// leaves the body of the frame it is in (a frame with no image of its own names nothing; the next frame is a
+/// different frame), and reads the tag only from a complete frame header (a `VP8 ` chunk of at least ten bytes,
+/// the size of a keyframe's header, inside its container).
 fn webp_frame_tag(bytes: &[u8]) -> Option<u32> {
     if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
         return None;
     }
     let mut at = 12usize;
     loop {
-        let kind = bytes.get(at..at.checked_add(4)?)?;
-        let size = le32(bytes, at.checked_add(4)?)?;
-        let body = at.checked_add(8)?;
+        let (kind, body, end) = webp_chunk(bytes, at, bytes.len())?;
         match kind {
-            b"VP8 " => {
-                return Some(u32::from_le_bytes([*bytes.get(body)?, *bytes.get(body.checked_add(1)?)?, *bytes.get(body.checked_add(2)?)?, 0]));
-            }
+            b"VP8 " => return vp8_tag(bytes, body, end),
             // An animation frame holds its own chunks after sixteen bytes of frame geometry.
-            b"ANMF" if size >= 16 => at = body.checked_add(16)?,
-            _ => at = body.checked_add(size)?.checked_add(size & 1)?,
+            b"ANMF" => {
+                let mut inner = body.checked_add(16).filter(|&inner| inner <= end)?;
+                loop {
+                    let (kind, body, chunk_end) = webp_chunk(bytes, inner, end)?;
+                    match kind {
+                        b"VP8 " => return vp8_tag(bytes, body, chunk_end),
+                        b"VP8L" => return None,
+                        _ => inner = chunk_end.checked_add(chunk_end.checked_sub(body)? & 1)?,
+                    }
+                }
+            }
+            _ => at = end.checked_add(end.checked_sub(body)? & 1)?,
         }
     }
+}
+
+/// One RIFF chunk at `at` inside a container ending at `limit`: its tag, where its data starts and where it ends.
+fn webp_chunk(bytes: &[u8], at: usize, limit: usize) -> Option<(&[u8], usize, usize)> {
+    let body = at.checked_add(8).filter(|&body| body <= limit)?;
+    let end = body.checked_add(le32(bytes, at.checked_add(4)?)?).filter(|&end| end <= limit)?;
+    Some((bytes.get(at..at.checked_add(4)?)?, body, end))
+}
+
+/// The frame tag of a `VP8 ` chunk whose data is `body..end`, when its header is complete.
+fn vp8_tag(bytes: &[u8], body: usize, end: usize) -> Option<u32> {
+    (end.checked_sub(body)? >= 10).then_some(())?;
+    Some(u32::from_le_bytes([*bytes.get(body)?, *bytes.get(body.checked_add(1)?)?, *bytes.get(body.checked_add(2)?)?, 0]))
 }
 
 /// The marker of the first start-of-frame segment.
@@ -279,7 +302,12 @@ fn jpeg_frame_marker(bytes: &[u8]) -> Option<u8> {
         let marker = *bytes.get(at)?;
         at += 1;
         match marker {
-            0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => return Some(marker),
+            // A frame header is a whole segment: the length, the precision, both dimensions and at least one
+            // component (eleven bytes); a marker byte alone, or a cut-off segment, is no frame.
+            0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => {
+                let length = be16(bytes, at)?;
+                return (length >= 11 && bytes.get(at..at.checked_add(length)?).is_some()).then_some(marker);
+            }
             0xd9 | 0xda | 0x00 => return None,
             0x01 | 0xd0..=0xd8 => {}
             _ => {

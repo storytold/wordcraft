@@ -5286,6 +5286,21 @@ mod budget_tests {
         for stray in [0xc5u8, 0xc7, 0xcf] {
             assert_eq!(grade(&[&jpeg[..after_app0], &[stray], &jpeg[after_app0..]].concat()).2, 0, "bare {stray:#x}");
         }
+        // A frame header is a whole segment: a bare `FF D8 FF C5` earns no note, a complete one does.
+        assert_eq!(grade(b"\xff\xd8\xff\xc5").2, 0);
+        assert_eq!(grade(b"\xff\xd8\xff\xc5\x00\x0b\x08\x00\x08\x00\x08\x01\x01\x11\x00").2, 1);
+        // The WebP note comes only from the SELECTED frame's complete header. A first frame that is not a VP8 chunk (a
+        // truncated VP8L) is the frame that fails whatever a later frame holds, and an animation frame whose body is
+        // too short, or holds no image, names nothing: the walk never leaves it for the chunks that follow.
+        let vp8l = [b"VP8L".as_slice(), &5u32.to_le_bytes(), &[0x2f, 0, 0xc0, 0x7f, 0], &[0]].concat();
+        for later in [key, frame] {
+            assert_eq!(grade(&riff(&[&vp8x, &anim, &anmf(&vp8l), &anmf(later)])).2, 0);
+        }
+        let one_byte_body = [b"ANMF".as_slice(), &1u32.to_le_bytes(), &[0, 0]].concat();
+        let no_image = [b"ANMF".as_slice(), &16u32.to_le_bytes(), &[0; 16]].concat();
+        for first in [one_byte_body, no_image] {
+            assert_eq!(grade(&riff(&[&vp8x, &anim, &first, frame])).2, 0);
+        }
     }
 
     #[test]
