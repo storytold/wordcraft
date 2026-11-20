@@ -332,6 +332,17 @@ fn uses_x11(
     (x11, why)
 }
 
+/// AppRun checks the system keyboard library from the normal executable before it
+/// selects the fallback path. The probe exits before opening a window or starting services.
+#[cfg(target_os = "linux")]
+fn appimage_needs_x11_fallback() -> bool {
+    let env = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    let setting = saved_ui().map(|ui| ui.display_server).unwrap_or_default();
+    let force_x11 = uses_x11(setting, |name| std::env::var_os(name), || Ok(())).0;
+    let x11_only = env("DISPLAY").is_some() && env("WAYLAND_DISPLAY").is_none() && env("WAYLAND_SOCKET").is_none();
+    (force_x11 || x11_only) && xkbcommon_dl::x11::xkbcommon_x11_option().is_none()
+}
+
 /// `Err` naming the libraries winit's X11 backend opens at startup that can't be loaded: libX11,
 /// libXcursor, libX11-xcb (which brings in libxcb), libXi, and libxkbcommon-x11 for the keyboard.
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -568,6 +579,10 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().skip(1).eq(["--appimage-needs-x11-fallback"]) {
+        std::process::exit(i32::from(!appimage_needs_x11_fallback()));
+    }
     #[cfg(windows)]
     if let Some(code) = print::isolated::helper_mode() {
         std::process::exit(code);

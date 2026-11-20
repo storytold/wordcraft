@@ -249,10 +249,15 @@ review of translations, owner decisions (cloud/co-authoring scope, AI provider, 
 licensed or commissioned metric-compatible Aptos substitute, and a real-world DOCX corpus that
 can be used without committing Word output.
 
+## Linux AppImage keyboard libraries
+
+AppImages carry a matched `libxkbcommon.so.0` and `libxkbcommon-x11.so.0` pair alongside `libxcb-xkb.so.1` (#5363). The launcher selects the fallback only when X11 is needed and the system keyboard bridge cannot load. The executable’s relative library search path keeps the bundled libraries out of the environment inherited by other programs.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | trivial | AppImage: use the matched bundled X11 keyboard libraries only when the system bridge is unavailable (#5363). Child processes keep the caller’s library environment. |
 | 2026-10-26 | trivial | View › Window across the native windows (#322): View catalog 26/29 → 29/29; View row text only, percentages unchanged |
 | 2026-10-30 | trivial | Equations: `\int`, `\sum` and the other n-ary operators typed with AutoCorrect wait for their limits: `_x^y` then Space gives the operator its limits, Space alone builds it without, and the operand typed next goes inside it; any character that can't continue `\name` corrects it (`\int_0^1`); observed in Word for Windows on #4938 (#4917); no percentage change |
 | 2026-10-30 | trivial | Tables row: tables nest 18 deep at most, so a `.json` save or AutoRecover snapshot reads back, rich content in the deepest cell included (it was 24, which a `.json` save could not reopen); the .docx reader and writer still keep 24 (#3618); no percentage change |

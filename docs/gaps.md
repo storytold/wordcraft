@@ -125,6 +125,8 @@ full number from ~60% to ~75%. Everything else is depth on the way to full parit
 
 > **Three-column preset update:** 2026-10-15 · the header/footer preset uses editable table cells and screen-only editing guides (#2197). Synthetic command, undo/redo and repeated DOCX save/reopen checks cover this preset; broader template/layout gaps and readiness estimates remain unchanged.
 
+AppImages carry a matched `libxkbcommon.so.0` and `libxkbcommon-x11.so.0` pair alongside `libxcb-xkb.so.1` (#5363). The launcher selects the fallback only when X11 is needed and the system keyboard bridge cannot load. The executable’s relative library search path keeps the bundled libraries out of the environment inherited by other programs.
+
 Normal Find and Replace now match a keyboard apostrophe against straight and typographic single quotes (#5388), including text entered with smart quotes. Exact search modes and numeric character codes retain their character identity. This fixes a focused editing case; ranked gaps and readiness estimates are unchanged.
 
 ## By kind
@@ -198,6 +200,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | trivial | AppImage: use the matched bundled X11 keyboard libraries only when the system bridge is unavailable (#5363). Child processes keep the caller’s library environment. |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
 | 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |

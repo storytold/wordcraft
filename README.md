@@ -342,6 +342,9 @@ AppImage or the tarball, install one yourself if neither is there (`sudo apt ins
 `sudo dnf install espeak-ng`, `sudo pacman -S espeak-ng`). The Flatpak doesn't speak yet: it has
 no audio access and doesn't include `espeak-ng`, `espeak` or Speech Dispatcher.
 
+AppImages include a matched X11 keyboard-library pair and its XCB dependency as a fallback (#5363). WordCraft uses the system libraries when available and leaves the caller’s library environment intact. AppImage builders need `libxkbcommon-x11-0` and `libxcb-xkb1` for the target architecture.
+
+
 **Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
 winit (the windowing library) supports dragging files into the window only on X11. To use the
 native Wayland backend instead (for example for sharper text with fractional scaling, at the cost

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Resolve the launcher's location and preserve the AppImage runtime's APPDIR for WordCraft.
+launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+wordcraft="$launcher_dir/usr/bin/wordcraft"
+if [[ -n "${DISPLAY:-}" ]] && "$wordcraft" --appimage-needs-x11-fallback; then
+  wordcraft="$launcher_dir/usr/lib/wordcraft-x11/wordcraft"
+fi
+exec "$wordcraft" "$@"
