@@ -154,7 +154,7 @@ fn a_second_window_draws_its_interface_in_the_room_of_its_window() {
     let key = a.windows.active().unwrap();
     let room = a.windows.drawn.get(&key).copied().unwrap();
     // The kit's child window is 400 by 300 points.
-    assert!(room.height() <= 300.0 && room.min.y >= 0.0, "the interface has the window's room, not {room:?}");
+    assert!(room.height() <= 300.0 && room.min.y >= 0.0 && room.max.y <= 300.0, "the interface has the window's room, not {room:?}");
 }
 
 /// Each window has its own key, and the root window's stays `main` when it adopts another entry.
