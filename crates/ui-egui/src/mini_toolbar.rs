@@ -429,6 +429,10 @@ pub(crate) fn highlight_menu(ui: &mut egui::Ui, app: &mut WordApp) {
             }
             if resp.on_hover_text(tl!(h.name())).clicked() {
                 app.canvas.last_highlight = h.ooxml().to_string();
+                // In highlighter mode the pen takes the colour picked (#6461).
+                if app.canvas.highlighter.is_some() {
+                    app.canvas.highlighter = Some(h.ooxml().to_string());
+                }
                 widgets::run_from_ribbon(app, "format.highlight", json!({"color": h.ooxml()}));
                 ui.close();
             }
@@ -445,6 +449,9 @@ pub(crate) fn highlight_menu(ui: &mut egui::Ui, app: &mut WordApp) {
     }
     if no_color.clicked() {
         app.canvas.last_highlight = "none".into();
+        if app.canvas.highlighter.is_some() {
+            app.canvas.highlighter = Some("none".into());
+        }
         widgets::run_from_ribbon(app, "format.highlight", json!({"color": "none"}));
         ui.close();
     }

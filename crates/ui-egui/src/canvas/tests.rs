@@ -1471,6 +1471,144 @@ fn double_clicking_a_word_with_the_format_painter_paints_it() {
     assert!(s.painter.is_none(), "the painter is used up");
 }
 
+/// #6461: with a caret, the ribbon's Text Highlight Color button turns highlighter mode on: a
+/// highlighter pen replaces the I-beam, dragging across words highlights them and the mode stays
+/// on; clicking the button again turns it off, and so does Esc.
+#[test]
+fn the_highlight_button_turns_highlighter_mode_on_and_off() {
+    use egui::{Event, Key, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::props::Highlight;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let text = "Mark these words only";
+    a.run("text.insert", json!({"text": text})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: egui::Pos2| {
+        h.event(Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.step();
+    };
+    // The button's main part (its menu arrow, labelled the same, is to its right).
+    let button = |h: &egui_kittest::Harness<'_, WordApp>| {
+        h.get_all_by_label("Text Highlight Color")
+            .map(|n| n.rect())
+            .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+            .expect("the ribbon has the button")
+            .center()
+    };
+    let at = |h: &mut egui_kittest::Harness<'_, WordApp>, off: usize| {
+        let c = h.state_mut().session.layout().caret(&Pos::body(0, off)).expect("caret");
+        page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen")
+    };
+    let b = button(&h);
+    click(&mut h, b);
+    assert_eq!(h.state().canvas.highlighter.as_deref(), Some("yellow"), "the button turns highlighter mode on");
+    assert!(h.state().session.pending.as_ref().is_none_or(|p| p.highlight.is_none()), "not a colour for what is typed next");
+    // Over the text the system pointer gives way to a drawn highlighter.
+    let (from, to) = (at(&mut h, "Mark ".len()), at(&mut h, "Mark these words".len()));
+    h.event(Event::PointerMoved(from));
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "a highlighter, not the I-beam");
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    for i in 1..=4 {
+        h.event(Event::PointerMoved(from + (to - from) * (i as f32 / 4.0)));
+        h.step();
+    }
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    for _ in 0..3 {
+        h.step();
+    }
+    let para = h.state().session.doc.para_at(&Pos::body(0, 0)).expect("paragraph").clone();
+    let hl = |off: usize| para.props_of_char(off).highlight;
+    assert_eq!((hl("Mark ".len()), hl("Mark these words".len() - 1)), (Some(Highlight::Yellow), Some(Highlight::Yellow)), "the dragged words");
+    assert_eq!((hl(0), hl(text.len() - 1)), (None, None), "the rest stays plain");
+    assert_eq!(h.state().canvas.highlighter.as_deref(), Some("yellow"), "the mode stays on after a stroke");
+    let b = button(&h);
+    click(&mut h, b);
+    assert_eq!(h.state().canvas.highlighter, None, "a second click turns it off");
+    // Esc turns it off too.
+    let mid = at(&mut h, 2);
+    click(&mut h, mid);
+    let b = button(&h);
+    click(&mut h, b);
+    assert!(h.state().canvas.highlighter.is_some());
+    h.key_press(Key::Escape);
+    h.step();
+    assert_eq!(h.state().canvas.highlighter, None, "Esc turns it off");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), text);
+}
+
+/// #6461: the Format Painter and highlighter mode can both be on; one Escape turns off both,
+/// rather than leaving highlighter mode on for a second press.
+#[test]
+fn one_escape_turns_off_the_format_painter_and_highlighter() {
+    use egui::{Event, Key, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Mark these words"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    // A click on the page gives the canvas the keyboard.
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 2)).expect("caret");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(Event::PointerMoved(at));
+    h.step();
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.state_mut().run("ui.highlighter", json!({"value": true})).unwrap();
+    h.state_mut().run("edit.formatPainter", json!({})).unwrap();
+    assert!(h.state().canvas.highlighter.is_some() && h.state().session.painter.is_some(), "both modes are on");
+    h.key_press(Key::Escape);
+    h.step();
+    assert!(h.state().session.painter.is_none(), "the painter is off");
+    assert_eq!(h.state().canvas.highlighter, None, "one Escape turns highlighter mode off too");
+}
+
+/// #6461: with text selected the button highlights it and stays out of highlighter mode;
+/// `value` sets the mode; an unknown colour is refused and changes nothing.
+#[test]
+fn the_highlighter_command_highlights_a_selection_and_refuses_junk() {
+    use wordcraft_doc::props::Highlight;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Alpha Beta"})).unwrap();
+    a.run("select.text", json!({"text": "Beta"})).unwrap();
+    a.run("ui.highlighter", json!({"color": "green"})).unwrap();
+    assert_eq!(a.canvas.highlighter, None);
+    assert_eq!(a.session.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char("Alpha ".len()).highlight, Some(Highlight::BrightGreen));
+    assert_eq!(a.run("ui.highlighter", json!({"value": true})).unwrap()["active"], json!(true));
+    assert_eq!(a.canvas.highlighter.as_deref(), Some("yellow"), "the remembered colour");
+    assert!(a.run("ui.highlighter", json!({"color": "plaid"})).is_err());
+    assert!(a.run("ui.highlighter", json!({"color": 7})).is_ok(), "a non-string colour falls back to the remembered one");
+    assert_eq!(a.run("ui.highlighter", json!({"value": false})).unwrap()["active"], json!(false));
+}
+
 /// #1085: a selected balloon's buttons work (pressing them is not a click on the page that
 /// leaves the balloon): a new comment with no text resolves and deletes from its balloon.
 #[test]

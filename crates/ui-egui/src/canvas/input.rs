@@ -88,6 +88,12 @@ fn apply_format_painter(app: &mut WordApp) {
     if app.session.painter.is_some() {
         let _ = app.run("edit.pasteFormat", json!({}));
     }
+    // Highlighter mode highlights what the pointer selected and stays on, as in Word (#6461).
+    if let Some(color) = app.canvas.highlighter.clone()
+        && !app.session.sel.is_collapsed()
+    {
+        let _ = app.run("format.highlight", json!({"color": color}));
+    }
 }
 
 /// Routes pointer input: pen or eraser ink, object and crop drags, table border, selection and move

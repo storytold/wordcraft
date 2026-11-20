@@ -555,6 +555,24 @@ impl WordApp {
                 crate::updates_ui::check(self);
                 Value::Null
             }
+            // The ribbon's Text Highlight Color button (#6461): with text selected it highlights
+            // it; with a caret it turns highlighter mode on, and a second click (or Esc) turns it
+            // off, as in Word. `value` turns the mode on or off whatever is selected.
+            "ui.highlighter" => {
+                let name = s("color").unwrap_or(&self.canvas.last_highlight).to_string();
+                let Some(h) = wordcraft_doc::props::Highlight::ALL.iter().find(|h| h.ooxml().eq_ignore_ascii_case(&name)) else {
+                    return Some(Err(format!("unknown highlight colour `{name}`")));
+                };
+                let value = p.get("value").and_then(Value::as_bool);
+                if value == Some(false) || (value.is_none() && self.canvas.highlighter.is_some()) {
+                    self.canvas.highlighter = None;
+                } else if value.is_none() && !self.session.sel.is_collapsed() {
+                    return Some(self.run("format.highlight", json!({"color": h.ooxml()})));
+                } else {
+                    self.canvas.highlighter = Some(h.ooxml().to_string());
+                }
+                json!({"active": self.canvas.highlighter.is_some()})
+            }
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {

@@ -23,6 +23,23 @@ pub(crate) fn replace(ctx: &egui::Context, p: Pos2, bg: Rgb) -> bool {
     true
 }
 
+/// In highlighter mode (#6461), once the canvas has chosen its pointer: if it is the I-beam, hide
+/// it and draw a highlighter pen whose tip is at `p`, its nib in `nib` (the mode's colour; white
+/// for No Color). egui has no such pointer. Whether it did.
+pub(crate) fn replace_with_highlighter(ctx: &egui::Context, p: Pos2, nib: Color32) -> bool {
+    if ctx.output(|o| o.cursor_icon) != CursorIcon::Text || !(p.x.is_finite() && p.y.is_finite()) {
+        return false;
+    }
+    ctx.set_cursor_icon(CursorIcon::None);
+    let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::unique("wordcraft_highlighter")));
+    // The pen leans up and right from its tip, on a 1.2 pt grid with the tip at (0, 0).
+    let at = |pts: &[(f32, f32)]| pts.iter().map(|&(x, y)| egui::pos2(p.x + x * 1.2, p.y + y * 1.2)).collect::<Vec<_>>();
+    let edge = Stroke::new(1.0, Color32::WHITE);
+    painter.add(egui::Shape::convex_polygon(at(&[(1.5, -3.0), (7.5, -11.0), (10.5, -8.0), (4.5, 0.0)]), Color32::from_gray(48), edge));
+    painter.add(egui::Shape::convex_polygon(at(&[(0.0, 0.0), (1.5, -3.0), (4.5, 0.0)]), nib, Stroke::new(1.0, Color32::from_gray(48))));
+    true
+}
+
 /// The I-beam centred on `p`, in `fill`, edged in the opposite colour. Its strokes are whole
 /// physical pixels wide and lie on pixel edges, so at 125% or 150% scaling the fill isn't blurred
 /// into the edge (a white I-beam on the dark page read grey).

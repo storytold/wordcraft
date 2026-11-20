@@ -159,12 +159,14 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 });
                 let hl = app.canvas.last_highlight.clone();
                 let (icon, sw, color) = crate::mini_toolbar::highlight_button_appearance(&hl);
+                // With a caret the button turns highlighter mode on and off (#6461).
+                let on = app.canvas.highlighter.is_some();
                 split(
                     ui,
                     app,
                     icon,
                     "Text Highlight Color",
-                    crate::widgets::ButtonAction::new("format.highlight", json!({"color": color}), false),
+                    crate::widgets::ButtonAction::new("ui.highlighter", json!({"color": color}), on),
                     sw,
                     crate::mini_toolbar::highlight_menu,
                 );

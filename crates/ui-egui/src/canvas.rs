@@ -159,6 +159,9 @@ pub struct CanvasState {
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
+    /// Highlighter mode is on with this colour (`ui.highlighter`): text selected with the
+    /// pointer is highlighted, as in Word, until the button is clicked again or Esc (#6461).
+    pub highlighter: Option<String>,
     pub open_url: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
@@ -419,6 +422,7 @@ impl Default for CanvasState {
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
+            highlighter: None,
             open_url: None,
             page_rects: Vec::new(),
             scrollbar_page: None,
@@ -1545,6 +1549,14 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     crate::table_resize::cursor(app, ui, &resp, layout, &rects, geo.scale);
     crate::table_mouse::cursor(app, ui, &resp, layout, &rects, geo.scale);
     crate::table_pen::cursor(app, ui, &resp);
+    // Highlighter mode: a highlighter pen over the text instead of the I-beam, as in Word (#6461).
+    if let Some(name) = &app.canvas.highlighter
+        && (resp.hovered() || resp.dragged())
+        && let Some(p) = ui.input(|i| i.pointer.latest_pos())
+    {
+        let nib = wordcraft_doc::props::Highlight::from_ooxml(name).rgb().map_or(egui::Color32::WHITE, crate::theme::c32);
+        crate::ibeam::replace_with_highlighter(ui.ctx(), p, nib);
+    }
     // Windows' I-beam is lost on white paper there: draw one that shows (#1746).
     if app.canvas.drawn_ibeam
         && (resp.hovered() || resp.dragged())
