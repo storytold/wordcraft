@@ -207,6 +207,17 @@ impl RenderOptions {
         Rgb(lift(r), lift(g), lift(b))
     }
 
+    /// The on-screen colour for ink (a pen, pencil or highlighter stroke) on `paper`, the paper
+    /// as drawn on screen ([`RenderOptions::paper_of`]). A dark page takes whichever of its
+    /// colour and its inverted colour ([`RenderOptions::ink`]) stands out more against that
+    /// paper: on the dark paper grey, black and dark pens turn light while light pens keep their
+    /// colour instead of turning dark, and white ink stays white instead of vanishing (#6548). A
+    /// dark page colour turns light on a dark page, so there white ink turns dark, as before.
+    pub fn ink_stroke(&self, c: Rgb, paper: Rgb) -> Rgb {
+        let inked = self.ink(c);
+        if contrast(c, paper) > contrast(inked, paper) { c } else { inked }
+    }
+
     /// The on-screen colour for a text background (highlight, character shading). A dark page
     /// dims it toward black, keeping its hue, instead of inverting it: inverting leaves bright
     /// hues such as yellow bright, so the white text on them can't be read (#1252). Every
@@ -1050,13 +1061,14 @@ fn draw_art(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 }
 
 fn draw_ink(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let Draw::Ink { pts, color: c, width, alpha } = it else { return };
+    let Draw::Ink { pts, color: c, width, alpha, pen } = it else { return };
     let Some(path) = ink_path(pts) else { return };
     if !path.bounding_box().inflate(*width as f64, *width as f64).overlaps(*fr.visible) {
         return;
     }
     ctx.set_transform(fr.view);
-    ctx.set_paint(color(fr.opts.ink(*c), *alpha));
+    let c = if *pen { fr.opts.ink_stroke(*c, fr.opts.paper_of(fr.doc)) } else { fr.opts.ink(*c) };
+    ctx.set_paint(color(c, *alpha));
     let w = if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 };
     ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
     ctx.stroke_path(&path);

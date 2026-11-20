@@ -62,7 +62,7 @@ pub use navigation::{nearest_page, page_at, page_to_screen};
 use navigation::{scrollbar_page_tip, viewed_page};
 #[cfg(test)]
 use pages::{DRAWING_GRID_MAX_LINES, DRAWING_GRID_MIN_PX};
-pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_paper, page_screen_scale, preview_sel, screen_render_options};
 use pages::{
     drawing_grid, drawing_grid_step, gridline_segments, page_image, page_key, page_render_options, page_shows, shown_layout, texel_aligned_rect,
     view_key, visible_tiles,

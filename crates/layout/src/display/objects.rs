@@ -154,13 +154,12 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
                 if closed && let Some(first) = pts.first().copied() {
                     pts.push(first);
                 }
-                if !closed
-                    && extra.arrow_end
-                    && let Some(arrow) = path_arrowhead(&pts, color, width, extra.end_style)
-                {
-                    out.push(arrow);
-                }
-                out.push(Draw::Ink { pts, color, width: width.max(0.25), alpha: f.alpha });
+                let arrow = if !closed && extra.arrow_end { path_arrowhead(&pts, color, width, extra.end_style) } else { None };
+                // The arrowhead is a path, mapped like every outline on a dark page: a stroke
+                // with one is mapped the same way so the two match.
+                let pen = f.is_ink() && arrow.is_none();
+                out.extend(arrow);
+                out.push(Draw::Ink { pts, color, width: width.max(0.25), alpha: f.alpha, pen });
             }
             continue;
         }

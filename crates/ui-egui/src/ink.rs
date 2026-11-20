@@ -215,11 +215,13 @@ fn to_screen(rects: &[Rect], layout: &DocLayout, scale: f32, page: usize) -> Opt
     Some(move |[x, y]: [f32; 2]| pos2(r.min.x + x * s, r.min.y + y * s))
 }
 
-/// The on-screen colour of ink: on a dark page (View > Switch Modes) it is mapped like every other
-/// document colour, so a stroke looks the same while it is drawn as after it is saved.
-fn screen_ink(dark: bool, c: wordcraft_doc::Rgb, alpha: u8) -> Color32 {
+/// The on-screen colour of ink: on a dark page (View > Switch Modes) it is mapped like the page
+/// draws a saved stroke ([`wordcraft_render::RenderOptions::ink_stroke`]), so a stroke looks the
+/// same while it is drawn as after it is saved. `paper` is the paper as drawn on screen
+/// ([`crate::canvas::page_paper`]).
+fn screen_ink(dark: bool, paper: wordcraft_doc::Rgb, c: wordcraft_doc::Rgb, alpha: u8) -> Color32 {
     let opts = wordcraft_render::RenderOptions { dark, ..Default::default() };
-    let wordcraft_doc::Rgb(r, g, b) = opts.ink(c);
+    let wordcraft_doc::Rgb(r, g, b) = opts.ink_stroke(c, paper);
     Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
@@ -232,7 +234,7 @@ pub fn paint(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLayou
     let s = page_scale(rects, layout, scale, d.page).unwrap_or(scale);
     let set = app.session.view.draw.settings(d.tool);
     let alpha = (d.tool.alpha() * 255.0).round() as u8;
-    let color = screen_ink(crate::canvas::dark_page(app), set.color, alpha);
+    let color = screen_ink(crate::canvas::dark_page(app), crate::canvas::page_paper(app), set.color, alpha);
     let pts: Vec<Pos2> = d.pts.iter().map(|p| map(*p)).collect();
     let width = (set.width * s).max(1.0);
     if let [only] = pts.as_slice() {
@@ -334,13 +336,14 @@ fn path_len(p: &[[f32; 2]]) -> f32 {
 /// The replayed ink so far: finished strokes whole, the current one up to where it has got.
 fn paint_replay(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLayout, scale: f32) {
     let Some(r) = &app.canvas.ink_ui.replay else { return };
+    let paper = crate::canvas::page_paper(app);
     for k in r.strokes.iter().filter(|k| k.start <= r.t) {
         let Some(map) = to_screen(rects, layout, scale, k.page) else { continue };
         let s = page_scale(rects, layout, scale, k.page).unwrap_or(scale);
         let frac = if k.dur > 0.0 { ((r.t - k.start) / k.dur).clamp(0.0, 1.0) } else { 1.0 };
         let total: f32 = k.paths.iter().map(|p| path_len(p)).sum();
         let [cr, cg, cb, ca] = k.color.to_srgba_unmultiplied();
-        let color = screen_ink(crate::canvas::dark_page(app), wordcraft_doc::Rgb(cr, cg, cb), ca);
+        let color = screen_ink(crate::canvas::dark_page(app), paper, wordcraft_doc::Rgb(cr, cg, cb), ca);
         let mut left = total * frac;
         let width = (k.width * s).max(1.0);
         for path in &k.paths {
@@ -447,9 +450,22 @@ mod tests {
     #[test]
     fn live_ink_follows_the_dark_page() {
         let black = wordcraft_doc::Rgb(0, 0, 0);
-        assert_eq!(screen_ink(false, black, 255), Color32::from_rgba_unmultiplied(0, 0, 0, 255));
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let ink =
+            |app: &WordApp, c: wordcraft_doc::Rgb, alpha: u8| screen_ink(crate::canvas::dark_page(app), crate::canvas::page_paper(app), c, alpha);
+        assert_eq!(ink(&app, black, 255), Color32::from_rgba_unmultiplied(0, 0, 0, 255));
         // Black pen on a dark page turns light, like the saved stroke.
-        let dark = screen_ink(true, black, 128);
-        assert_eq!(dark, Color32::from_rgba_unmultiplied(255, 255, 255, 128));
+        app.run("view.darkMode", serde_json::json!({"value": true})).unwrap();
+        assert_eq!(ink(&app, black, 128), Color32::from_rgba_unmultiplied(255, 255, 255, 128));
+        // White and light pens keep their colour on a dark page instead of vanishing (#6548).
+        let white = wordcraft_doc::Rgb(255, 255, 255);
+        assert_eq!(ink(&app, white, 255), Color32::from_rgba_unmultiplied(255, 255, 255, 255));
+        let mint = wordcraft_doc::Rgb(0x90, 0xEE, 0x90);
+        assert_eq!(ink(&app, mint, 255), Color32::from_rgba_unmultiplied(0x90, 0xEE, 0x90, 255));
+        // A black Page Color is drawn white on a dark page: white ink there turns the dark grey,
+        // as the saved stroke does, instead of vanishing into the page.
+        app.run("design.pageColor", serde_json::json!({"color": "#000000"})).unwrap();
+        let d = wordcraft_render::DARK_PAPER;
+        assert_eq!(ink(&app, white, 255), Color32::from_rgba_unmultiplied(d, d, d, 255));
     }
 }
