@@ -4746,6 +4746,59 @@ mod budget_tests {
     }
 
     #[test]
+    fn bmp_boundary_comes_from_the_layout_not_the_declared_size() {
+        // A Windows-header BMP in RLE8, RLE4 and uncompressed rows, and an OS/2 core-header BMP whose
+        // pixel bytes read as nonsense when taken for Windows-header fields. Each is a complete, valid
+        // image. Its boundary is the end of the pixel data whatever size it declares (exact, zero, one
+        // byte into the pixels, or past them) and whatever follows; a size past the pixels may extend it.
+        let le = |value: u32| value.to_le_bytes();
+        let windows = |bits: u16, compression: u32, colors: u32, width: i32, pixels: &[u8]| {
+            let offset = 14 + 40 + 4 * colors;
+            let mut bytes =
+                [b"BM".as_slice(), &le(offset + pixels.len() as u32), &[0; 4], &le(offset), &le(40), &width.to_le_bytes(), &le(1)].concat();
+            bytes.extend([1, 0, bits as u8, (bits >> 8) as u8]);
+            bytes.extend([le(compression), le(pixels.len() as u32), [0; 4], [0; 4], le(colors), le(0)].concat());
+            bytes.extend(vec![0; 4 * colors as usize]);
+            bytes.extend(pixels);
+            bytes
+        };
+        let core = {
+            let mut bytes = [b"BM".as_slice(), &le(34), &[0; 4], &le(26), &le(12), &[2, 0, 1, 0, 1, 0, 24, 0]].concat();
+            bytes.extend([0, 0, 0x20, 0, 0, 0, 0, 0]);
+            bytes
+        };
+        let outcome = |bytes: &[u8]| {
+            let mut remaining = 1u64 << 20;
+            let result = decode_alternate_image(Format::Bmp, bytes, 1 << 20, &mut remaining);
+            (result.map(|assessment| matches!(assessment, AlternateAssessment::Usable)).map_err(|error| format!("{error:?}")), remaining)
+        };
+        for plain in [
+            windows(8, 1, 2, 2, &[2, 1, 0, 0, 0, 1]),
+            windows(4, 2, 2, 4, &[4, 0x12, 0, 0, 0, 1]),
+            windows(24, 0, 0, 2, &[9, 8, 7, 6, 5, 4, 0, 0]),
+            core,
+        ] {
+            assert_eq!(outcome(&plain).0, Ok(true), "{plain:?}");
+            for declared in [plain.len(), 0, 30, plain.len() - 1] {
+                for trailer in [&b""[..], b"X", b"BM\0\0\0\0", &[0u8; 300]] {
+                    let mut bytes = plain.clone();
+                    bytes[2..6].copy_from_slice(&le(declared as u32));
+                    bytes.extend(trailer);
+                    assert_eq!(media_boundary::coded_image(Format::Bmp, &bytes), &bytes[..plain.len()], "{declared} {trailer:?} {plain:?}");
+                    assert_eq!(outcome(&bytes), outcome(&bytes[..plain.len()]), "{declared} {trailer:?} {plain:?}");
+                }
+            }
+            // A declared size that reaches past the pixels, into bytes the part holds, is kept.
+            let mut longer = plain.clone();
+            longer.extend([0; 6]);
+            let declared = longer.len() as u32 - 2;
+            longer[2..6].copy_from_slice(&le(declared));
+            longer.extend([0; 9]);
+            assert_eq!(media_boundary::coded_image(Format::Bmp, &longer).len(), plain.len() + 4, "{plain:?}");
+        }
+    }
+
+    #[test]
     fn alternate_image_assessment_and_debit_ignore_every_trailer() {
         // The assessment is a function of the coded image. Whatever follows its own boundary, of any
         // content and length, changes neither the outcome nor the budget charged for the image.

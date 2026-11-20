@@ -2,8 +2,8 @@
 //!
 //! The assessment is a function of the coded image only. For each format the image ends at
 //! the format's own boundary: the JPEG end-of-image marker, the PNG `IEND` chunk, the GIF
-//! trailer, the BMP file size or pixel array, or the RIFF container size. Bytes after that
-//! boundary have any content and any length, and are padding that is neither assessed nor
+//! trailer, the end of the BMP pixel data (a declared file size is only a claim), or the RIFF
+//! container size. Bytes after that boundary have any content and any length, and are padding that is neither assessed nor
 //! charged. A boundary is found by walking the format's structure from the start, never by
 //! trimming the tail of the part. Without a boundary (a cut-off image) every byte is data.
 
@@ -130,26 +130,63 @@ fn sub_blocks_end(bytes: &[u8], mut at: usize) -> Option<usize> {
     }
 }
 
-/// The declared file size, or the end of an uncompressed pixel array when none is declared.
+/// The end of the pixel data, from the layout the decoder reads. The declared file size is a claim
+/// about the layout: it may extend the image (data after the pixels that the file counts as its
+/// own) but never cuts into pixels the layout needs, so a short or zero size changes nothing.
 fn bmp_end(bytes: &[u8]) -> Option<usize> {
     if bytes.get(..2)? != b"BM" {
         return None;
     }
-    let declared = le32(bytes, 2).filter(|&size| size >= 26 && le32(bytes, 10).is_some_and(|offset| offset < size));
-    // BITMAPINFOHEADER and later: width, height, planes, bit count, compression.
-    let pixels = (|| {
-        let offset = le32(bytes, 10)?;
-        let width = le32(bytes, 18)?;
-        let height = i32::from_le_bytes(bytes.get(22..26)?.try_into().ok()?).unsigned_abs() as usize;
-        let bits = usize::from(u16::from_le_bytes(bytes.get(28..30)?.try_into().ok()?));
-        let uncompressed = matches!(le32(bytes, 30)?, 0 | 3);
-        let stride = width.checked_mul(bits)?.checked_add(31)? / 32 * 4;
-        uncompressed.then(|| stride.checked_mul(height)?.checked_add(offset)).flatten()
-    })();
-    match (declared, pixels) {
-        (Some(declared), Some(pixels)) => Some(declared.max(pixels)),
-        (declared, pixels) => declared.or(pixels),
+    let layout = bmp_layout_end(bytes)?;
+    let declared = le32(bytes, 2).filter(|&size| size >= layout && size <= bytes.len());
+    Some(declared.unwrap_or(layout))
+}
+
+/// Where the pixel data ends, read the way the codec's own BMP probe reads the layout
+/// (`bmp_probe.rs`, `bmp_layout` and `dimensions`): a 12-byte core header has 16-bit dimensions,
+/// bits per pixel at 24 and is never compressed; a larger header has 32-bit dimensions, bits per
+/// pixel at 28 and the compression at 30. Compression 1 and 2 are RLE8 and RLE4, whose extent is
+/// found by walking the commands; every other value is rows of `bits` per pixel padded to 4 bytes.
+/// `None` when the header or the RLE stream is cut off, so the whole part stays data.
+fn bmp_layout_end(bytes: &[u8]) -> Option<usize> {
+    let le16 = |at: usize| bytes.get(at..at.checked_add(2)?).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes).map(usize::from);
+    let offset = le32(bytes, 10)?;
+    let (width, height) = craft_image_codecs::bmp_probe::dimensions(bytes)?;
+    let (width, height) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
+    let (bits, compression) = if le32(bytes, 14)? == 12 { (le16(24)?, 0) } else { (le16(28)?, le32(bytes, 30)?) };
+    match compression {
+        1 | 2 => bmp_rle_end(bytes, offset, compression == 2, height),
+        _ => {
+            let stride = width.checked_mul(bits.max(1))?.checked_add(31)? / 32 * 4;
+            offset.checked_add(stride.checked_mul(height)?)
+        }
     }
+}
+
+/// The end of an RLE8 or RLE4 command stream: its end-of-bitmap code, or the last row's commands
+/// and an end-of-bitmap code that immediately follows them. Only the rows matter, so a run and a
+/// delta's horizontal move need no position.
+fn bmp_rle_end(bytes: &[u8], mut at: usize, rle4: bool, height: usize) -> Option<usize> {
+    let mut y = 0usize;
+    while y < height {
+        let (count, value) = (*bytes.get(at)?, *bytes.get(at.checked_add(1)?)?);
+        at = at.checked_add(2)?;
+        match (count, value) {
+            (0, 0) => y = y.saturating_add(1),
+            (0, 1) => return Some(at),
+            (0, 2) => {
+                y = y.saturating_add(usize::from(*bytes.get(at.checked_add(1)?)?));
+                at = at.checked_add(2)?;
+            }
+            (0, n) => {
+                let stored = if rle4 { usize::from(n).div_ceil(2) } else { usize::from(n) };
+                at = at.checked_add(stored + (stored & 1))?;
+            }
+            _ => {}
+        }
+    }
+    let end = if bytes.get(at..at.checked_add(2)?) == Some(&[0, 1]) { at.checked_add(2)? } else { at };
+    (end <= bytes.len()).then_some(end)
 }
 
 /// The RIFF container size plus its eight-byte header.
