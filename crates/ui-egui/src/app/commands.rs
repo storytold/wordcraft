@@ -513,6 +513,12 @@ impl WordApp {
                 }
                 "newWindow" => self.new_window(),
                 "pasteSpecial" => {}
+                // With the system's font panel (macOS) every Font entry point — the ribbon
+                // launcher, the context menu, Mod+D — opens it, as in Pages and TextEdit;
+                // there is no second, built-in Font dialog.
+                "font" if self.services.show_fonts.is_some() => {
+                    let _ = self.run("ui.showFonts", json!({}));
+                }
                 other if self.user_origin => {
                     let _ = dialogs::open(self, other, &json!({}));
                 }
@@ -587,6 +593,11 @@ impl WordApp {
             }
             "ui.dialog" => {
                 let name = s("name").unwrap_or("");
+                // The system font panel takes the Font dialog's place everywhere (macOS).
+                if name == "font" && self.services.show_fonts.is_some() {
+                    let _ = self.run("ui.showFonts", json!({}));
+                    return Some(Ok(json!({"dialog": "font"})));
+                }
                 let opened = dialogs::open(self, name, p);
                 json!({"dialog": opened.map(|_| name)})
             }
@@ -837,6 +848,18 @@ impl WordApp {
                     "making WordCraft the default app needs a click in File › Options › General; scripts and agents can't change system defaults"
                         .into(),
                 ));
+            }
+            // Mod+D with the system's font panel (macOS), where the system has one.
+            "ui.showFonts" => {
+                let Some(show) = &self.services.show_fonts else {
+                    return Some(Err("the system font panel is macOS only; use Home › Font".into()));
+                };
+                let st = self.session.run("format.state", &json!({})).unwrap_or_default();
+                let family = st["font"].as_str().unwrap_or("");
+                show(family, st["size"].as_f64().unwrap_or(12.0), st["bold"] == true, st["italic"] == true);
+                // The panel takes over from the mini toolbar for this selection.
+                self.canvas.mini_dismissed = Some(self.session.sel.clone());
+                json!({})
             }
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());

@@ -4070,17 +4070,15 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
 #[test]
 fn every_font_entry_point_opens_the_system_panel_when_there_is_one() {
     let mut a = typed();
-    a.run("ui.dialog", json!({"name": "font"})).unwrap();
-    assert!(matches!(a.dialog, Some(dialogs::Dialog::Font { .. })), "no panel: the Font dialog");
-    a.dialog = None;
+    let open = |a: &WordApp| a.dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("font"));
     let shown = std::rc::Rc::new(std::cell::Cell::new(0));
     let seen = shown.clone();
     a.services.show_fonts = Some(Box::new(move |_, _, _, _| seen.set(seen.get() + 1)));
     a.run("ui.dialog", json!({"name": "font"})).unwrap();
-    assert!(a.dialog.is_none() && shown.get() == 1, "ui.dialog opens the panel, not the dialog");
+    assert!(!open(&a) && shown.get() == 1, "ui.dialog opens the panel, not the dialog");
     a.session.push_ui_request(json!({"open": "font"}));
     a.run("format.state", json!({})).unwrap(); // any command drains the UI requests
-    assert!(a.dialog.is_none() && shown.get() == 2, "the open request opens the panel, not the dialog");
+    assert!(!open(&a) && shown.get() == 2, "the open request opens the panel, not the dialog");
 }
 
 /// ⌘D (`ui.showFonts`) opens the host's font panel on the selection's font, and says where it
