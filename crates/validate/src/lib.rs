@@ -4249,6 +4249,15 @@ enum AlternateAssessment {
 
 /// Verify the raster with a bounded decoder and charge the assessment even on failure.
 fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining: &mut u64) -> Result<AlternateAssessment, CodecError> {
+    observation_contract! {
+        rules: "-";
+        collections: "type.Vec*1";
+        scope: "the admitted TIFF directory graph's main chain, within the part byte and metadata limits";
+        loss: "directory walk incomplete, or the alternate image decode budget";
+        fallback: "leave the image unassessed";
+        package_loss: "independent";
+    }
+
     let budget = per_part.min(*remaining);
     let over_budget = || CodecError::LimitExceeded("alternate image decode budget".into());
     let mut preflight = 0u64;
@@ -4261,11 +4270,13 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
         Ok(())
     };
     // Reserve before inspecting headers. Keep the debit on any early return.
+    let mut main_chain = Vec::new();
     let bytes = if format == Format::Tiff {
         reserve(8192)?;
-        let Some(payload) = tiff_admission::payload(bytes, reserve)? else {
+        let Some((payload, chain)) = tiff_admission::payload(bytes, reserve)? else {
             return Ok(AlternateAssessment::IncompleteTiffDirectory);
         };
+        main_chain = chain;
         payload
     } else {
         let factor = match format {
@@ -4279,6 +4290,7 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     };
     let encoded = bytes.len() as u64;
     let mut tiff_page = None;
+    let mut tiff_index = None;
     let (width, height, coefficients) = match format {
         Format::Png => {
             // Read the pixel model without inflating compressed metadata under default limits.
@@ -4299,11 +4311,12 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
             (width, height, 0)
         }
         Format::Tiff => {
-            let Some(page) = probe_alternate_tiff(bytes)? else {
+            let Some((index, page)) = probe_alternate_tiff(bytes, &main_chain)? else {
                 return Ok(AlternateAssessment::IncompleteTiffDirectory);
             };
             let dimensions = (page.width, page.height, 0);
             tiff_page = Some(page);
+            tiff_index = Some(index);
             dimensions
         }
         _ => return Ok(AlternateAssessment::Unassessed),
@@ -4328,7 +4341,11 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     }
     let side = width.max(height);
     let options = DecodeOptions { limits: CodecLimits::new(side, side, pixels, allocation.saturating_add(coefficients)), keep_orientation: true };
-    let image = codecs::decode_as_with(format, bytes, &options)?;
+    // The page that was charged is the page that is decoded.
+    let image = match tiff_index {
+        Some(index) => codecs::decode_tiff_page(bytes, index, &options)?,
+        None => codecs::decode_as_with(format, bytes, &options)?,
+    };
     // The codec can return synthesized pixels for a damaged scan. Its complete warning list
     // is available once decoding succeeds, and a repaired scan cannot prove usability here.
     for warning in image.warnings {
@@ -4339,15 +4356,33 @@ fn decode_alternate_image(format: Format, bytes: &[u8], per_part: u64, remaining
     Ok(AlternateAssessment::Usable)
 }
 
-/// The page the decoder opens by default, for an image whose directory graph `tiff_admission` already
-/// admitted. That graph walk is the only completeness authority: the codec's own walk also stops at a
-/// directory it has listed before (any shared SubIFD, or a `next`/SubIFD diamond), which is no defect,
-/// so its `complete` flag is not consulted. The page is the one the decoder itself selects from the
-/// same listing.
-fn probe_alternate_tiff(bytes: &[u8]) -> Result<Option<codecs::TiffPage>, CodecError> {
+/// The page to assess (its index in the codec's listing) and its description, for an image whose directory graph
+/// `tiff_admission` already admitted. That graph walk is the only authority for completeness AND for which
+/// directories are main-chain pages (`main_chain`: the first directory and each `next` target, in order): the
+/// codec's own walk lists a directory once, so one first reached as a SubIFD is listed as a child, and its
+/// default page would then depend on the order directories were met in. The page is the first full-resolution
+/// directory of the main chain (reduced-resolution copies and masks are skipped), else the first directory; the
+/// decoder is asked for exactly that page. A main-chain directory the codec did not list leaves it undecided.
+fn probe_alternate_tiff(bytes: &[u8], main_chain: &[u64]) -> Result<Option<(usize, codecs::TiffPage)>, CodecError> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.first*1,type.Vec*1";
+        scope: "the admitted TIFF directory graph's main chain against the codec's own page listing";
+        loss: "a main-chain directory the codec did not list";
+        fallback: "leave the image unassessed";
+        package_loss: "independent";
+    }
+
     let directories = codecs::tiff_info(bytes)?;
-    let index = directories.default_page();
-    Ok(index.and_then(|index| directories.pages.into_iter().nth(index)))
+    let listed: Vec<Option<usize>> = main_chain.iter().map(|&offset| directories.pages.iter().position(|page| page.ifd_offset == offset)).collect();
+    if listed.iter().any(Option::is_none) {
+        return Ok(None);
+    }
+    let full = |index: &usize| {
+        directories.pages.get(*index).is_some_and(|page| page.kind == codecs::TiffPageKind::Page && page.width > 0 && page.height > 0)
+    };
+    let index = listed.iter().flatten().copied().find(full).or_else(|| listed.first().copied().flatten());
+    Ok(index.and_then(|index| directories.pages.into_iter().nth(index).map(|page| (index, page))))
 }
 
 /// Check the first PNG image's rows, including Adam7 passes, without inflating text or ICC data.
@@ -4962,6 +4997,48 @@ mod budget_tests {
         bytes
     }
 
+    /// The page the validator assesses, from the admission walk's main chain.
+    fn probe_page(bytes: &[u8]) -> codecs::TiffPage {
+        let (_, chain) = tiff_admission::payload(bytes, |_| Ok(())).unwrap().unwrap();
+        probe_alternate_tiff(bytes, &chain).unwrap().unwrap().1
+    }
+
+    #[test]
+    fn media_magic_tiff_page_authority_is_main_chain_membership() {
+        // A -> B on the main chain; A is a preview (NewSubfileType 1) and B the full-resolution page. B may ALSO be
+        // A's SubIFD, which makes the codec's own walk list it as a child of A before the chain reaches it. Drawn
+        // either way, the page assessed is B, and each page's assessment is its own: damage to the preview does not
+        // fail the image, and damage to the full page is not blessed by a clean preview. A damaged strip points one
+        // byte past the only pixel byte.
+        let page = |strip: u32, preview: bool, subifd: bool, next: bool| {
+            let mut entries = vec![(256u16, 4u16, None, 1u32), (257, 4, None, 1), (258, 3, None, 8), (259, 3, None, 1), (262, 3, None, 1)];
+            entries.extend([(273, 4, None, strip), (277, 3, None, 1), (278, 4, None, 1), (279, 4, None, 1)]);
+            entries.splice(0..0, preview.then_some((254, 4, None, 1)));
+            entries.extend(subifd.then_some((330, 4, Some(1), 0)));
+            entries.extend(next.then_some((0xffff, 4, Some(1), 0)));
+            entries
+        };
+        for subifd in [false, true] {
+            let layout = |strips: [u32; 2]| graph_tiff(&[page(strips[0], true, subifd, true), page(strips[1], false, false, false)]);
+            // The pixel byte is the last byte of the file.
+            let pixel = layout([0, 0]).len() as u32 - 1;
+            for damaged in [None, Some(0), Some(1)] {
+                let strips = [pixel + u32::from(damaged == Some(0)), pixel + u32::from(damaged == Some(1))];
+                let bytes = layout(strips);
+                let (_, chain) = tiff_admission::payload(&bytes, |_| Ok(())).unwrap().unwrap();
+                let (_, selected) = probe_alternate_tiff(&bytes, &chain).unwrap().unwrap();
+                assert_eq!(selected.ifd_offset, chain[1], "subifd {subifd}: the full-resolution main-chain page is selected");
+                let report = validate_bytes(&media_zip(&[("word/media/drawn.png", &bytes)], DRAWN, "png"));
+                let expected = if damaged == Some(1) { (Verdict::Fail, Severity::Error) } else { (Verdict::Pass, Severity::Warning) };
+                assert_eq!(
+                    (report.verdict, report.findings.first().map(|f| f.severity)),
+                    (expected.0, Some(expected.1)),
+                    "subifd {subifd}, damaged {damaged:?}: {report:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn media_magic_tiff_workspace_charges_each_worker_its_decoder_state() {
         // The codec opens one `tiff` decoder per band worker, and each rebuilds the directory and
@@ -4969,7 +5046,7 @@ mod budget_tests {
         // grow with every worker by at least those tables, at every concurrency the pool allows.
         for rows in [1u32, 100, 10_000] {
             let bytes = strips_tiff(rows);
-            let page = probe_alternate_tiff(&bytes).unwrap().unwrap();
+            let page = probe_page(&bytes);
             assert_eq!((page.width, page.height), (1, rows));
             let in_pool =
                 |threads: usize, work: &(dyn Fn() -> u64 + Sync)| rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(work);
@@ -5020,7 +5097,7 @@ mod budget_tests {
             for threads in [1usize, 2] {
                 let debit = |compression: u32| {
                     let bytes = tiff(compression, rows_per_strip);
-                    let page = probe_alternate_tiff(&bytes).unwrap().unwrap();
+                    let page = probe_page(&bytes);
                     assert_eq!((page.width, page.height, page.compression), (256, 1024, compression as u16));
                     rayon::ThreadPoolBuilder::new()
                         .num_threads(threads)
