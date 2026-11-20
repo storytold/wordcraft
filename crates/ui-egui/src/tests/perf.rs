@@ -79,5 +79,14 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     assert!(hashed < pages && hashed <= first + 30, "pages fingerprinted: {hashed} of {pages}");
     // Textures stay bounded to the pages near the view.
     assert!(max_textures <= 12, "textures kept while scrolling: {max_textures}");
+    // Pictures are rendered by background jobs and stored by a later frame, so a slow machine has none landed
+    // yet right after the last wheel step: wait (bounded) for the pages in view to arrive instead of racing them.
+    for _ in 0..400 {
+        if h.state().canvas.resident_pictures >= 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        h.step();
+    }
     assert!(h.state().canvas.resident_pictures >= 1, "the pages in view stay rendered");
 }
