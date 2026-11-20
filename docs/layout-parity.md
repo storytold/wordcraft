@@ -308,6 +308,8 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | trivial | #4558: integrate distinct dashSmallGap through shared model and DOCX/RTF/DOC/ODF IO; retain app rendering/previews and qualification limits. |
+| 2026-11-05 | trivial | PR #4558: keep dashSmallGap distinct through DOC/DOCX/RTF import and document/PDF output; ODT degrades it to dashed rather than solid. Border preview patterns and synthetic round trips are covered; existing Word Mac observations are narrow and other platforms remain unqualified. Dotted table previews now use equal one-stroke-width on/off segments at every tested width. |
 | 2026-10-29 | trivial | A list item deleted whole under Track Changes shows its number in the deletion's colour and with its mark (struck through by default) with markup, and not at all without (#4828) |
 | 2026-11-04 | trivial | Headers, footers and note separators of the second and later sections are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's; a regression from the #4501 refactor (#4683). `layout::tests::pages::a_sections_header_is_measured_without_the_previous_sections_grid` |
 | 2026-11-08 | trivial | Turned inline pictures with no recorded effect extent keep their line to the frame (exchanged near a quarter turn in Word 2013+ layout) and overhang it, cut at the line's top and bottom, as in Word |

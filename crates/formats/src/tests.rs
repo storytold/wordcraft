@@ -1207,3 +1207,37 @@ fn latex_export_keeps_repeated_spaces() {
     let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
     assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
 }
+
+/// Small-gap paragraph borders keep their style through parsing, export and re-import.
+#[test]
+fn dash_small_gap_border_round_trips() {
+    use wordcraft_doc::props::BorderStyle;
+    let rtf = br"{\rtf1\ansi\pard\brdrb\brdrdashsm\brdrw10 Dash\par}";
+    let flow = crate::rtf::parse(rtf).unwrap();
+    let FBlock::Para(para) = &flow.blocks[0] else { panic!() };
+    assert_eq!(para.borders.unwrap().bottom.unwrap().style.ooxml(), "dashSmallGap");
+    let doc = crate::rtf::import(rtf).unwrap();
+    let exported = crate::rtf::export(&doc);
+    assert!(exported.contains("\\brdrb\\brdrdashsm\\brdrw10"), "{exported}");
+    let back = crate::rtf::import(exported.as_bytes()).unwrap();
+    let para = back.body.iter().find_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p) } else { None }).unwrap();
+    let border = para.props.borders.unwrap().bottom.unwrap();
+    assert_eq!(border.style, BorderStyle::DashSmallGap);
+    assert_eq!(border.width, 0.5);
+}
+
+/// The active shared ODF writer uses dashed for a small-gap border, never solid.
+#[test]
+fn small_gap_borders_keep_the_odf_dashed_fallback_through_the_active_bridge() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let mut doc = Document::new();
+    let border = Border { style: BorderStyle::DashSmallGap, width: 1.0, color: Some(wordcraft_doc::Rgb(10, 20, 30)), space: 0.0 };
+    doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.borders =
+        Some(Borders { top: Some(border), ..Default::default() });
+    for _ in 0..2 {
+        let bytes = crate::odt::export(&doc).unwrap();
+        doc = crate::odt::import(&bytes).unwrap();
+        let para = doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        assert_eq!(para.props.borders.unwrap().top.unwrap().style, BorderStyle::Dashed);
+    }
+}
