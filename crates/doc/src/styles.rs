@@ -431,6 +431,12 @@ impl TableStyleParts {
 }
 
 impl Style {
+    /// Whether this is Word's built-in Normal Table. Word goes by the name, in either order and
+    /// any case, not by the id or `w:default`; `TableNormal` in one word is just another style
+    /// (measured in Word for Windows).
+    pub fn is_normal_table(&self) -> bool {
+        self.kind == StyleKind::Table && ["Normal Table", "Table Normal"].iter().any(|n| self.name.eq_ignore_ascii_case(n))
+    }
     /// Table style part `p` as this style alone sets it (the whole table's text formatting and
     /// paragraph alignment are the style's own).
     pub fn table_part(&self, p: TablePart) -> PartFormat {
@@ -772,6 +778,8 @@ impl StyleSheet {
             id: "TableGrid".into(),
             name: "Table Grid".into(),
             kind: StyleKind::Table,
+            // Without this base Word gives a saved table no cell margins.
+            based_on: Some("TableNormal".into()),
             para: ParaProps { space_after: Some(0.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..para() },
             priority: Some(59),
             builtin: true,
@@ -834,6 +842,14 @@ impl StyleSheet {
         }
         let mut out = TableStyleProps::default();
         for s in chain {
+            // Word gives a table nothing from Normal Table, whatever the file's definition of it
+            // says, whether the table names it or a style based on it: no paragraph or text
+            // formatting, lines, margins or shading, and no conditional parts (measured in Word
+            // for Windows). The styles based on it add theirs to that.
+            if s.is_normal_table() {
+                out = TableStyleProps::default();
+                continue;
+            }
             out.para.overlay(&s.para);
             out.chr.overlay(&s.chr);
             if let Some(t) = &s.table {
@@ -843,6 +859,10 @@ impl StyleSheet {
         out.para.style = None;
         out.chr.style = None;
         Some(out)
+    }
+    /// Whether table style `id` is Normal Table or based on it.
+    pub fn table_style_has_normal_table(&self, id: &str) -> bool {
+        self.chain(id).into_iter().any(Style::is_normal_table)
     }
     /// Add or replace a style.
     pub fn upsert(&mut self, st: Style) {
@@ -1091,6 +1111,69 @@ mod tests {
         let s = StyleSheet::builtin();
         let t = s.table_style("GridTable4AccentBlue").map(|t| t.parts);
         assert_eq!(t.map(|t| (t.band_size, t.col_band_size)), Some((Some(1), Some(1))));
+    }
+
+    /// Word gives a table nothing from Normal Table, whatever the file says, and goes by the name:
+    /// measured in Word for Windows with each set in the style, the table naming it or a style
+    /// based on it.
+    #[test]
+    fn normal_table_gives_a_table_nothing() {
+        let mut s = StyleSheet::builtin();
+        let parts = || TableStyleParts {
+            borders: Some(Borders::all(Border::single(2.0))),
+            fill: Some(Rgb(0xFF, 0, 0)),
+            cell_margins: Some([0.0, 10.0, 0.0, 10.0]),
+            header_fill: Some(Rgb(0xFF, 0, 0)),
+            ..Default::default()
+        };
+        let table = |id: &str, name: &str, based_on: Option<&str>, table: Option<TableStyleParts>| Style {
+            id: id.into(),
+            name: name.into(),
+            kind: StyleKind::Table,
+            based_on: based_on.map(Into::into),
+            para: ParaProps { align: table.as_ref().map(|_| Align::Center), ..Default::default() },
+            chr: CharProps { size: table.as_ref().map(|_| 24.0), ..Default::default() },
+            table,
+            ..Default::default()
+        };
+        // Nor from Normal Table's own base: measured with Normal Table based on a style that sets a
+        // centred paragraph, larger text and cell margins, which a table naming that style gets.
+        s.upsert(Style {
+            id: "Base".into(),
+            name: "Base".into(),
+            kind: StyleKind::Table,
+            para: ParaProps { space_after: Some(7.0), ..Default::default() },
+            chr: CharProps { bold: Some(true), ..Default::default() },
+            table: Some(TableStyleParts { band_fill: Some(Rgb(0, 0, 0xFF)), first_col_fill: Some(Rgb(0, 0xFF, 0)), ..Default::default() }),
+            ..Default::default()
+        });
+        let base = s.table_style("Base").unwrap();
+        assert_eq!((base.para.space_after, base.chr.bold, base.parts.band_fill), (Some(7.0), Some(true), Some(Rgb(0, 0, 0xFF))));
+        s.upsert(table("TableNormal", "Normal Table", Some("Base"), Some(parts())));
+        s.upsert(table("Child", "Child", Some("TableNormal"), None));
+        s.upsert(table("Own", "Own", Some("TableNormal"), Some(parts())));
+        s.upsert(table("Grandchild", "Grandchild", Some("Own"), None));
+        s.upsert(table("Alone", "Alone", None, None));
+        for id in ["TableNormal", "Child"] {
+            assert_eq!(s.table_style(id).unwrap(), TableStyleProps::default(), "{id}");
+            assert!(s.table_style_has_normal_table(id), "{id}");
+        }
+        for id in ["Own", "Grandchild"] {
+            let st = s.table_style(id).unwrap();
+            assert_eq!((st.parts, st.para.align, st.chr.size), (parts(), Some(Align::Center), Some(24.0)), "{id}");
+            assert_eq!((st.para.space_after, st.chr.bold), (None, None), "{id}: nothing from Normal Table's base");
+            assert!(s.table_style_has_normal_table(id), "{id}");
+        }
+        assert!(!s.table_style_has_normal_table("Alone"));
+        assert!(!s.table_style_has_normal_table("Gone"));
+        let named = |name: &str| table("X", name, None, None).is_normal_table();
+        assert!(named("Normal Table") && named("normal table") && named("Table Normal"));
+        assert!(!named("TableNormal") && !named("Foo"), "one word, or another name");
+        let not_a_table = Style { name: "Normal Table".into(), kind: StyleKind::Paragraph, ..Default::default() };
+        assert!(!not_a_table.is_normal_table());
+        // Table Grid has Normal Table as its base as in Word's files, or Word gives a saved table
+        // no cell margins.
+        assert!(StyleSheet::builtin().table_style_has_normal_table("TableGrid"));
     }
 
     /// A table style based on another inherits what it doesn't set itself; borders merge edge by
