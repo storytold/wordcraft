@@ -63,19 +63,22 @@ fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId
     let st = drawn_state(ui, &resp, true);
     let r = r.expand(st.expansion);
     ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
+    // By language, not by layout: these buttons also sit in far-side clusters, which fill from
+    // the other end.
+    let rtl = crate::rtl::on();
     icons::paint(
         ui.painter(),
-        Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)),
+        Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, pad.x + icon_w / 2.0), r.center().y), vec2(icon_w, icon_w)),
         icon,
         t.icon,
         t.accent,
     );
-    let text_x = r.min.x + pad.x + icon_w + if show_text { 4.0 } else { 0.0 };
+    let text_x = crate::rtl::lead_left(rtl, r, pad.x + icon_w + if show_text { 4.0 } else { 0.0 }, text_w);
     if show_text {
         ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, st.text);
     }
     if marker {
-        let c = pos2(text_x + text_w + 4.0 + DROPDOWN / 2.0, r.center().y);
+        let c = pos2(if rtl { text_x - 4.0 - DROPDOWN / 2.0 } else { text_x + text_w + 4.0 + DROPDOWN / 2.0 }, r.center().y);
         icons::paint(ui.painter(), Rect::from_center_size(c, vec2(DROPDOWN, DROPDOWN)), "dropdown", st.text, st.text);
     }
     resp
@@ -105,6 +108,41 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
     resp
 }
 
+/// A dialog section: space above, then a soft rounded panel. The panel
+/// holds the heading and, indented under it, the settings. An empty title
+/// gives a panel with no heading. A section inside another keeps the fill
+/// of its parent and shows only the border.
+pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get(ui.ctx());
+    let key = egui::Id::unique("dialog_section_fill");
+    let parent: Option<Color32> = ui.data(|d| d.get_temp(key));
+    let fill = parent.unwrap_or_else(|| ui.visuals().window_fill.lerp_to_gamma(t.text, 0.04));
+    ui.data_mut(|d| d.insert_temp(key, fill));
+    ui.add_space((f32::from(ui.spacing().window_margin.left) - ui.spacing().item_spacing.y).max(0.0));
+    let out = egui::Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1.0, t.border.gamma_multiply(0.6)))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if title.is_empty() {
+                return add(ui);
+            }
+            ui.label(egui::RichText::new(title).font(crate::theme::semibold(12.5)));
+            ui.add_space(2.0);
+            egui::Frame::new().inner_margin(egui::Margin { left: 12, ..egui::Margin::ZERO }).show(ui, add).inner
+        })
+        .inner;
+    ui.data_mut(|d| match parent {
+        Some(p) => {
+            d.insert_temp(key, p);
+        }
+        None => d.remove::<Color32>(key),
+    });
+    out
+}
+
 /// A strip of dialog tabs. The active tab joins the page below it.
 /// Returns the index of the tab the user clicked.
 pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<usize> {
@@ -118,13 +156,16 @@ pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<us
     let base_y = origin.y + H;
     let base = ui.painter().add(egui::Shape::Noop);
     let top = CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 };
-    let mut x = origin.x;
+    // Right to left, the tabs start at the right edge and run leftwards.
+    let rtl = crate::rtl::flows(ui);
+    let mut x = if rtl { origin.x + width } else { origin.x };
     let mut clicked = None;
     for (i, label) in labels.iter().enumerate() {
         let on = i == selected;
         let galley = ui.painter().layout_no_wrap(label.clone(), regular(12.5), t.text);
         let w = galley.size().x + 28.0;
-        let r = Rect::from_min_max(pos2(x, origin.y + 2.0), pos2(x + w, base_y));
+        let left = if rtl { x - w } else { x };
+        let r = Rect::from_min_max(pos2(left, origin.y + 2.0), pos2(left + w, base_y));
         let resp = ui.interact(r, ui.scope_id().with(("dialog_tab", i)), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
         let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
@@ -140,7 +181,7 @@ pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<us
         if resp.clicked() && !on {
             clicked = Some(i);
         }
-        x += w - 1.0;
+        x += if rtl { 1.0 - w } else { w - 1.0 };
     }
     ui.allocate_space(vec2(width, H + 1.0));
     ui.painter().set(base, egui::Shape::line_segment([pos2(origin.x, base_y), pos2(origin.x + width, base_y)], Stroke::new(1.0, t.border)));

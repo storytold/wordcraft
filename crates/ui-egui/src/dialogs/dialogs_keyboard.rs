@@ -202,8 +202,8 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
     if cmds.is_empty() {
         ui.label(egui::RichText::new(tl!("No matching commands")).weak());
     }
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(tl!("Categories:"));
             if let Some(c) = list(ui, "kb_categories", vec2(left, 170.0), &cats, &f.category) {
                 f.category = c;
@@ -212,7 +212,7 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
                 f.current.clear();
             }
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(tl!("Commands:"));
             if let Some(c) = list(ui, "kb_commands", vec2(right, 170.0), &cmds, &f.command) {
                 f.command = c;
@@ -227,17 +227,18 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
         f.current = keys.first().cloned().unwrap_or_default();
     }
     let mut close = false;
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(tl!("Keys for this command:"));
             let rows: Vec<(String, String)> = keys.iter().map(|k| (k.clone(), key_text(k))).collect();
             if let Some(k) = list(ui, "kb_current", vec2(left, 70.0), &rows, &f.current) {
                 f.current = k;
             }
         });
-        ui.vertical(|ui| {
-            ui.label(tl!("New shortcut:"));
-            close = capture(ui, f);
+        crate::rtl::vertical(ui, |ui| {
+            let label = tl!("New shortcut:");
+            ui.label(label);
+            close = capture(ui, f, label);
             ui.add_space(4.0);
             if !f.pressed.is_empty() {
                 let owner = match app.session.keymap.resolve(&reg, &f.pressed) {
@@ -282,7 +283,7 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
         if ui.add_enabled(!app.session.keymap.is_empty(), egui::Button::new(tl!("Reset All…"))).clicked() {
             f.confirm_reset = true;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             if ui.button(tl!("Close")).clicked() {
                 close = true;
             }
@@ -293,7 +294,7 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
 
 /// The "New shortcut" box: takes keyboard focus and records the combination pressed.
 /// True when plain Escape asks to close the dialog.
-fn capture(ui: &mut Ui, f: &mut KeyboardForm) -> bool {
+fn capture(ui: &mut Ui, f: &mut KeyboardForm, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(300.0, 26.0), Sense::click());
     // Keys belong to the box whenever nothing else in the dialog has focus, so a shortcut pressed
@@ -314,6 +315,8 @@ fn capture(ui: &mut Ui, f: &mut KeyboardForm) -> bool {
             f.pressed = k;
         }
     }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), label));
+    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_value(key_text(&f.pressed)));
     let stroke = egui::Stroke::new(if focused { 1.5 } else { 1.0 }, if focused { t.accent } else { t.input_border });
     ui.painter().rect(rect, 2.0, t.input, stroke, egui::StrokeKind::Inside);
     let (text, color) = if f.pressed.is_empty() { (tl!("Press a key combination").to_string(), t.text_dim) } else { (key_text(&f.pressed), t.text) };
@@ -416,6 +419,22 @@ mod tests {
             h.step();
         }
         h
+    }
+
+    /// The shortcut capture field has a name and reports the combination it records.
+    #[test]
+    fn shortcut_capture_exposes_its_name_and_current_value() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness("", Some("format.bold"));
+        let input = h.get_by_role_and_label(Role::TextInput, "New shortcut:");
+        assert_eq!(input.value().as_deref(), Some(""));
+        input.focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::F6);
+        h.run_steps(2);
+        assert_eq!(h.state().1.pressed, "F6");
+        assert_eq!(h.get_by_role_and_label(Role::TextInput, "New shortcut:").value().as_deref(), Some("F6"));
     }
 
     type KbHarness<'a> = egui_kittest::Harness<'a, (WordApp, super::KeyboardForm)>;
