@@ -19,8 +19,25 @@ use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Document, Path, StoryRef, StyleKind};
 
-/// The result when no paragraph has the style (or the style doesn't exist).
-pub const NO_TEXT: &str = "Error: no paragraph in this style.";
+/// The result when the style exists (or is a heading level 1-9) but no paragraph, or for a
+/// character style no run, has it.
+pub const NO_TEXT: &str = "Error! No text of specified style in document.";
+
+/// The result when the field names no style.
+pub const NO_STYLE_NAME: &str = "Error! No style name given.";
+
+/// The longest style name a "not defined" result repeats, in characters: a hostile field code
+/// can be very long, and the message stays bounded.
+const MAX_ECHOED_NAME: usize = 255;
+
+/// The result when the document has no style called `name` (as written in the field code).
+pub fn not_defined(name: &str) -> String {
+    let name = match name.char_indices().nth(MAX_ECHOED_NAME) {
+        Some((end, _)) => name.get(..end).unwrap_or(name),
+        None => name,
+    };
+    format!("Error! Use the Home tab to apply {name} to the text that you want to appear here.")
+}
 
 /// Which number a STYLEREF shows instead of the text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -250,12 +267,16 @@ impl StyleIndex {
         }
     }
 
-    fn target(&self, style: &str) -> Option<Target> {
+    /// What a STYLEREF of `style` looks for, or its error text: no name, or a name that is
+    /// neither a heading level 1-9 nor a style of the document.
+    fn target(&self, style: &str) -> Result<Target, String> {
         let style = style.trim();
-        if let Ok(n) = style.parse::<u8>() {
-            if !(1..=9).contains(&n) {
-                return None;
-            }
+        if style.is_empty() {
+            return Err(NO_STYLE_NAME.to_string());
+        }
+        if let Ok(n) = style.parse::<u8>()
+            && (1..=9).contains(&n)
+        {
             // The built-in style is named `heading N` whatever its id (localized Word writes
             // ids like `berschrift1`); else an id `HeadingN`.
             let id = self
@@ -264,10 +285,10 @@ impl StyleIndex {
                 .or_else(|| self.styles.get(&format!("heading{n}")))
                 .map(|s| s.0.clone())
                 .unwrap_or_else(|| format!("Heading{n}"));
-            return Some(Target::Para(id));
+            return Ok(Target::Para(id));
         }
-        let (id, chr) = self.styles.get(&style.to_lowercase())?;
-        Some(if *chr { Target::Char(id.clone()) } else { Target::Para(id.clone()) })
+        let Some((id, chr)) = self.styles.get(&style.to_lowercase()) else { return Err(not_defined(style)) };
+        Ok(if *chr { Target::Char(id.clone()) } else { Target::Para(id.clone()) })
     }
 
     fn text_of(&self, i: usize, t: &Target) -> Option<String> {
@@ -317,7 +338,10 @@ impl StyleIndex {
     /// The field's result.
     pub fn eval(&self, instr: &str, at: At) -> String {
         let code = parse(instr);
-        let Some(target) = self.target(&code.style) else { return NO_TEXT.to_string() };
+        let target = match self.target(&code.style) {
+            Ok(t) => t,
+            Err(e) => return e,
+        };
         let Some((i, below)) = Self::first_in_order(self.matches(&target), self.entries.len(), at, code.last) else {
             return NO_TEXT.to_string();
         };
