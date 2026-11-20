@@ -21,6 +21,7 @@ mod ime_noop;
 mod page_number_formats_in_lists;
 mod para_tools;
 mod revision_checks;
+mod shrink_font_steps;
 mod typing;
 mod wordart;
 
