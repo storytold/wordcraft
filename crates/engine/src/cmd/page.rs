@@ -94,8 +94,8 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// Orientation: with text selected in the main text only that text turns (next-page section
-/// breaks around it), otherwise the section(s) of the selection (#6421). `apply: "section"` skips
-/// the breaks, as Page Setup's OK does.
+/// breaks around it), otherwise the section(s) of the selection (#6421). `apply: "section"`
+/// turns existing sections without splitting them, as Page Setup's OK does.
 fn orientation(s: &mut Session, v: &Value) -> CmdResult {
     let sectionable = selection_sectionable(s);
     let default = if sectionable { "selection" } else { "section" };
@@ -113,7 +113,16 @@ fn orientation(s: &mut Session, v: &Value) -> CmdResult {
         _ => !sect(s).landscape,
     };
     match apply {
-        "section" => with_sect(s, |x| x.set_landscape(land)),
+        "section" => {
+            let selected = selected_section_ends(s);
+            let changed: Vec<_> =
+                s.doc.sections().iter().filter_map(|(end, x)| (x.landscape != land && selected.binary_search(end).is_ok()).then_some(*end)).collect();
+            with_sect(s, |x| x.set_landscape(land))?;
+            if !changed.is_empty() {
+                pages_start_where_orientation_changes(s, Some(&changed));
+            }
+            Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
+        }
         "selection" => {
             // Text that already has this orientation gets no section breaks for nothing.
             if sectionable {
@@ -125,7 +134,7 @@ fn orientation(s: &mut Session, v: &Value) -> CmdResult {
             }
             selection_to_sections(s, SectionStart::NextPage)?;
             let turned = with_sect(s, |x| x.set_landscape(land));
-            pages_start_where_orientation_changes(s);
+            pages_start_where_orientation_changes(s, None);
             turned
         }
         x => Err(CmdError::Params(format!("unknown apply `{x}` (section or selection)"))),
@@ -136,7 +145,7 @@ fn orientation(s: &mut Session, v: &Value) -> CmdResult {
 /// ended at an existing section boundary got no break of its own, so a neighbouring section that
 /// starts continuous would share a page with a differently turned one: the selected sections, and
 /// the one after them, start on a new page where their orientation differs from the section before.
-fn pages_start_where_orientation_changes(s: &mut Session) {
+fn pages_start_where_orientation_changes(s: &mut Session, changed: Option<&[usize]>) {
     let all: Vec<(usize, bool, SectionStart)> = s.doc.sections().iter().map(|(e, x)| (*e, x.landscape, x.start)).collect();
     let selected = selected_section_ends(s);
     let index_of = |end: Option<&usize>| end.and_then(|e| all.iter().position(|(a, _, _)| a == e));
@@ -147,7 +156,8 @@ fn pages_start_where_orientation_changes(s: &mut Session) {
         let (Some(prev), Some((end, land, start))) = (i.checked_sub(1).and_then(|j| all.get(j)), all.get(i)) else {
             break;
         };
-        if *land != prev.1 && *start == SectionStart::Continuous {
+        let changed_here = changed.is_none_or(|ends| ends.binary_search(&prev.0).is_ok() || ends.binary_search(end).is_ok());
+        if changed_here && *land != prev.1 && *start == SectionStart::Continuous {
             s.doc.section_mut(*end).start = SectionStart::NextPage;
         }
     }

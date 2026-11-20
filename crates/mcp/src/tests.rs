@@ -4,6 +4,9 @@ use serde_json::{Value, json};
 
 use crate::{Headless, Server};
 
+mod differential;
+mod oracle;
+
 fn call(s: &mut Server, id: u64, method: &str, params: Value) -> Value {
     let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string();
     let r = s.handle_line(&line).expect("reply");
@@ -169,7 +172,9 @@ fn render_and_screenshot_through_the_app_use_no_temp_file() {
     let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut s = Server::new(Box::new(FakeApp { calls: calls.clone() }));
     for (tool, method) in [("render_page", "ui.render"), ("screenshot", "ui.screenshot")] {
-        let r = call(&mut s, 10, "tools/call", json!({"name": tool, "arguments": {"page": 1}}));
+        // `screenshot` takes no arguments (the shared check refuses ones its schema does not list).
+        let args = if tool == "render_page" { json!({"page": 1}) } else { json!({}) };
+        let r = call(&mut s, 10, "tools/call", json!({"name": tool, "arguments": args}));
         let content = &r["result"]["content"];
         assert_eq!(r["result"]["isError"], false, "{tool}: {r}");
         assert_eq!(content[0]["type"], "image", "{tool}");
@@ -310,7 +315,8 @@ fn over_long_request_line_is_rejected_and_serving_continues() {
     let text = String::from_utf8(out).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");
-    assert!(lines[0].contains("too long"), "{}", lines[0]);
+    // The shared core words it "request too large" (was "request line too long"); same -32600.
+    assert!(lines[0].contains("too large") && lines[0].contains("-32600"), "{}", lines[0]);
     assert!(lines[1].contains(r#""id":5"#), "{}", lines[1]);
 }
 

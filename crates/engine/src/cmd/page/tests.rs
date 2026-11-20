@@ -465,6 +465,37 @@ c1",
     assert_eq!(landscape_flags(&s.doc), vec![false, false, false]);
 }
 
+#[test]
+fn section_scoped_orientation_separates_the_turned_section_on_both_sides() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("First\nSecond\nThird"));
+    for at in [2, 1] {
+        select(&mut s, (at, 0), (at, 0));
+        s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
+    }
+    let ends: Vec<_> = s.doc.sections().iter().map(|(end, _)| *end).collect();
+    select(&mut s, (ends[0] + 1, 0), (ends[0] + 1, 0));
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "section"})).unwrap();
+    let sections = s.doc.sections();
+    assert_eq!(sections.len(), 3);
+    assert_eq!(landscape_flags(&s.doc), [false, true, false]);
+    assert!(sections.iter().skip(1).all(|(_, x)| x.start == SectionStart::NextPage));
+}
+
+#[test]
+fn section_scoped_orientation_preserves_boundaries_outside_the_turned_sections() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("First\nSecond\nThird"));
+    for at in [2, 1] {
+        select(&mut s, (at, 0), (at, 0));
+        s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
+    }
+    let ends: Vec<_> = s.doc.sections().iter().map(|(end, _)| *end).collect();
+    s.doc.section_mut(ends[1]).set_landscape(true);
+    select(&mut s, (0, 0), (ends[1], 0));
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "section"})).unwrap();
+    assert_eq!(landscape_flags(&s.doc), [true, true, false]);
+    assert_eq!(s.doc.sections()[2].1.start, SectionStart::Continuous);
+}
+
 /// #6421 (review): a selection that ends at the start of the next section does not include it.
 /// Landscape section, then a portrait one: selecting from inside the first to the start of the
 /// second and asking for landscape changes nothing (no section break, no undo step), and turning
@@ -506,19 +537,15 @@ b2",
 /// part before keeps an explicit start, so the numbering does not restart inside or after the
 /// turned text.
 #[test]
-fn orientation_of_selected_text_does_not_restart_page_numbers() {
-    let mut s = Session::new(wordcraft_doc::Document::from_text(
-        "p1
-p2
-alpha beta gamma
-p4
-p5",
-    ));
-    s.run("layout.pageNumberFormat", &json!({"start": 5})).unwrap();
-    select(&mut s, (2, 0), (3, 0));
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
-    let starts: Vec<Option<u32>> = s.doc.sections().iter().map(|(_, x)| x.page_num_start).collect();
-    assert_eq!(starts, vec![Some(5), None, None]);
+fn orientation_and_columns_for_selected_text_do_not_restart_page_numbers() {
+    for (command, params) in [("layout.orientation", json!({"value": "landscape"})), ("layout.columns", json!({"count": 2, "apply": "selection"}))] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("p1\np2\nalpha beta gamma\np4\np5"));
+        s.run("layout.pageNumberFormat", &json!({"start": 5})).unwrap();
+        select(&mut s, (2, 0), (3, 0));
+        s.run(command, &params).unwrap();
+        let starts: Vec<_> = s.doc.sections().iter().map(|(_, x)| x.page_num_start).collect();
+        assert_eq!(starts, [Some(5), None, None], "{command}");
+    }
     // The text from the document's start keeps the section's own start.
     let mut s = Session::new(wordcraft_doc::Document::from_text(
         "p1
