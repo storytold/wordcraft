@@ -140,7 +140,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                         k += 1;
                         continue;
                     }
-                    let (p, changed) = build_same_para(pa, pb, &opts, plain_revised, &mut s.doc.revisions, &author, &date, fmt);
+                    let (p, changed) = build_same_para(pa, pb, &ctx, &mut s.doc.revisions, &author, &date);
                     if changed {
                         changes += 1;
                     }
@@ -204,14 +204,13 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
 fn build_same_para(
     pa: &Paragraph,
     pb: &Paragraph,
-    opts: &CompareOptions,
-    plain_revised: bool,
+    ctx: &DiffCtx<'_>,
     revisions: &mut Vec<wordcraft_doc::Revision>,
     author: &str,
     date: &str,
-    fmt: u32,
 ) -> (Paragraph, bool) {
-    let track_fmt = opts.formatting && !plain_revised;
+    let track_fmt = ctx.opts.formatting && !ctx.plain_revised;
+    let fmt = ctx.fmt;
     let mut p = pb.clone();
     p.props.fmt_change = pa.props.fmt_change.clone();
     for r in &mut p.runs {
@@ -220,7 +219,7 @@ fn build_same_para(
         r.props.fmt_change = None;
     }
     let new_fmt = std::cell::Cell::new(false);
-    let map = map_byte_offsets(&pa.text, &pb.text, opts);
+    let map = map_byte_offsets(&pa.text, &pb.text, ctx.opts);
     for (r, props_a) in pa.run_ranges() {
         let start_b = map.get(r.start).copied().unwrap_or(p.len());
         let end_b = map.get(r.end).copied().unwrap_or(p.len());
@@ -1252,17 +1251,17 @@ fn map_byte_offsets(a: &str, b: &str, opts: &CompareOptions) -> Vec<usize> {
     map
 }
 
-/// Finds the `CharProps` in `runs` containing byte index `byte_idx`.
-fn lookup_props_by_byte<'a>(runs: &'a [(String, CharProps)], byte_idx: usize, base: &'a CharProps) -> &'a CharProps {
-    let mut acc = 0;
-    for (s, p) in runs {
-        let next = acc + s.len();
+/// Advances a forward cursor over `runs` to the run containing `byte_idx`, returning its `CharProps`.
+fn advance_run<'a>(runs: &'a [(String, CharProps)], idx: &mut usize, acc: &mut usize, byte_idx: usize, base: &'a CharProps) -> &'a CharProps {
+    while let Some((s, _)) = runs.get(*idx) {
+        let next = *acc + s.len();
         if byte_idx < next {
-            return p;
+            break;
         }
-        acc = next;
+        *acc = next;
+        *idx += 1;
     }
-    runs.last().map(|(_, p)| p).unwrap_or(base)
+    runs.get(*idx).or_else(|| runs.last()).map(|(_, p)| p).unwrap_or(base)
 }
 
 /// Resolves character properties for a matched token or sub-run, preserving original revision
@@ -1318,6 +1317,8 @@ fn put_same(p: &mut Paragraph, ta: Option<&Tok<'_>>, tb: Option<&Tok<'_>>, ctx: 
                 splits.sort_unstable();
                 splits.dedup();
 
+                let (mut idx_a, mut acc_a) = (0, 0);
+                let (mut idx_b, mut acc_b) = (0, 0);
                 for w in splits.windows(2) {
                     let (b0, b1) = (w[0], w[1]);
                     if b0 >= b1 {
@@ -1328,8 +1329,8 @@ fn put_same(p: &mut Paragraph, ta: Option<&Tok<'_>>, tb: Option<&Tok<'_>>, ctx: 
                         continue;
                     }
                     let a0 = map_b_to_a.get(b0).copied().unwrap_or(0);
-                    let props_a = lookup_props_by_byte(runs_a, a0, base);
-                    let props_b = lookup_props_by_byte(runs_b, b0, base);
+                    let props_a = advance_run(runs_a, &mut idx_a, &mut acc_a, a0, base);
+                    let props_b = advance_run(runs_b, &mut idx_b, &mut acc_b, b0, base);
                     let props = same_token_props(props_a, props_b, ctx);
                     let _ = p.insert_text(p.len(), slice, &props);
                 }
