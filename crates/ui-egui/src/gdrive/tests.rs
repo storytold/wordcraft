@@ -151,7 +151,11 @@ fn a_protected_drive_file_asks_for_its_password() {
 
     let mut a = app();
     super::native::apply(&mut a, super::native::Event::Opened { file: drive_file(), bytes });
-    assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Password { ref then, .. }) if then == "ui.drive.openProtected"), "asks for the password");
+    let asked = a.dialog_host.open_dialogs().into_iter().next_back().map(|d| (d.key.unwrap_or_default(), d.fields.unwrap_or_default()));
+    assert!(
+        asked.as_ref().is_some_and(|(key, fields)| key == "password" && fields["then"] == "ui.drive.openProtected" && fields["name"] == "Essay.docx"),
+        "asks for the password: {asked:?}"
+    );
 
     let wrong = a.execute("ui.drive.openProtected", json!({"password": "nope"}));
     assert!(wrong.is_err_and(|e| wordcraft_engine::io::wrong_password(&e)), "a wrong password can be tried again");

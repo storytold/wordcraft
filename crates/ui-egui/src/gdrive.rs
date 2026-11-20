@@ -128,16 +128,19 @@ pub(crate) fn export_google_doc_button(app: &mut WordApp, ui: &mut egui::Ui) {
     if !app.ui.google_drive || app.drive.signed_in != Some(true) {
         return;
     }
-    let label = egui::RichText::new(tl!("Google Docs document (in Google Drive)")).font(crate::theme::medium(13.5));
-    if ui
-        .add(egui::Button::new(label).min_size(egui::vec2(320.0, 34.0)))
-        .on_hover_text(tl!("A copy Drive converts to a Google Doc you can edit in Google Docs; this document doesn't change"))
-        .clicked()
+    use craft::ui::contract::{Props as _, Show as _, Sizing, clicked};
+    // A row like the format buttons above it, its name at the reading start.
+    let button = craft::ui::buttons::Button::new(tl!("Google Docs document (in Google Drive)"))
+        .id_salt("drive-export-gdoc")
+        .sizing(Sizing::FillWidth)
+        .align(craft::ui::primitives::HAlign::Start)
+        .tooltip(tl!("A copy Drive converts to a Google Doc you can edit in Google Docs; this document doesn't change").to_owned())
+        .show(ui);
+    if clicked(&button)
         && let Err(e) = app.run("ui.drive.export", json!({"format": "gdoc"}))
     {
         export_failed(app, e);
     }
-    ui.add_space(4.0);
 }
 
 /// A Drive export was refused or failed: said on the status bar and on the Export page too,
@@ -152,8 +155,10 @@ pub(crate) fn export_checkbox(app: &mut WordApp, ui: &mut egui::Ui) {
     if !app.ui.google_drive || app.drive.signed_in != Some(true) {
         return;
     }
-    ui.checkbox(&mut app.drive.export_to_drive, tl!("Save the copy to Google Drive (My Drive) instead of a folder on this computer"));
-    ui.add_space(8.0);
+    use craft::ui::contract::{Bind, Props as _, Show as _};
+    craft::ui::choice::Checkbox::new(Bind::bound(&mut app.drive.export_to_drive))
+        .label(craft::ui::runtime::env::Label::from(tl!("Save the copy to Google Drive (My Drive) instead of a folder on this computer").to_owned()))
+        .show(ui);
 }
 
 const OFF: &str = "Google Drive is off; turn it on in File › Options › Accounts";
@@ -515,7 +520,7 @@ pub fn page(app: &mut WordApp, ui: &mut egui::Ui) {
         ui.label(tl!("No Word, OpenDocument, RTF or Google Docs files found."));
     }
     let files = app.drive.files.clone();
-    crate::rtl::grid(ui, egui::Grid::new("drive_files").min_col_width(160.0).spacing(vec2(24.0, 10.0)), |ui| {
+    egui::Grid::new("drive_files").min_col_width(160.0).spacing(vec2(24.0, 10.0)).show(ui, |ui| {
         if !files.is_empty() {
             ui.strong(tl!("Name"));
             ui.strong(tl!("Modified"));
@@ -1083,13 +1088,7 @@ mod native {
             Ok(()) => {}
             Err(e) if wordcraft_engine::io::needs_password(&e) => {
                 app.drive.pending_open = Some((name.clone(), origin, bytes));
-                app.dialog = Some(crate::dialogs::Dialog::Password {
-                    name,
-                    then: "ui.drive.openProtected".into(),
-                    params: json!({}),
-                    password: Default::default(),
-                    message: String::new(),
-                });
+                crate::dialogs::prompts::open_password(app, &name, "ui.drive.openProtected", json!({}));
             }
             Err(e) => {
                 let msg = i18n::fmt(tl!("Couldn't open {name}: {error}"), &[("name", &name), ("error", &e)]);
@@ -1128,7 +1127,7 @@ mod native {
         let doc = app.session.document_id();
         app.drive.origins.insert(doc, origin);
         let _ = app.run("ui.backstage", json!({"value": false}));
-        app.canvas.want_focus = true;
+        app.canvas.focus_pending = true;
         app.status(i18n::fmt(tl!("Opened {name} from Google Drive"), &[("name", name)]));
         Ok(())
     }
