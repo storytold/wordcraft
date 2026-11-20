@@ -9,8 +9,8 @@ use std::process::{Command, Output, Stdio};
 
 use serde_json::{Value, json};
 
-/// A fresh folder holding `in` (the read root, with `a.txt` and `pic.png`), `out` (the write
-/// root) and `outside` (with `secret.txt` and `pic.png`).
+/// A fresh folder holding `in` (the read root, with `a.txt`), `out` (the write root) and
+/// `outside` (with `secret.txt`).
 fn folders(tag: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!("wc-cli-mcp-roots-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
