@@ -129,6 +129,8 @@ Normal Find and Replace now match a keyboard apostrophe against straight and typ
 
 ## By kind
 
+List definition commands now refuse malformed explicit IDs before changing numbering (#5517). This prevents an invalid automation request from creating and applying another list or changing a clamped maximum-ID list. Existing list behavior, broader gaps and readiness estimates are unchanged.
+
 List toggles now recognise numbering inherited from paragraph styles (related to #3459). This closes that command-level case; the broader issue and readiness estimates are unchanged. See [typing-parity.md](typing-parity.md) for the original-fixture and round-trip coverage.
 
 Sample-text formulas on Enter (#1067) are implemented: `=rand()` and `=lorem()`,
@@ -198,6 +200,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Explicit list IDs must be non-negative 32-bit JSON integers; malformed IDs no longer select, create or change another list (#5517). Omitted defaults, valid IDs and readiness estimates unchanged |
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-10-30 | trivial | #5: a list item deleted whole under Track Changes shows its number as deleted text, in the deletion's colour and mark, and hides it where deletions are hidden (#4828); estimate unchanged |
 | 2026-10-26 | trivial | Dialog sections improve readability across 13 dialogs; conditional scrolling keeps tall dialogs usable. Ranked gaps and estimates unchanged (#4035, #4038) |

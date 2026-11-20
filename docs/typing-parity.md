@@ -71,6 +71,8 @@ formatting use the existing editing primitives. Tests: `sample_text_formulas_exp
 
 ## Lists
 
+`list.get` and `list.define` accept an explicit `num` only as a non-negative 32-bit JSON integer (#5517). Invalid values return a parameter error before a list is selected, created or changed. Omitting `num` keeps the command defaults: read the caret list or define a new list. Tests cover malformed IDs, the maximum valid ID, refused-edit history and a DOCX round trip. This is command validation, with no new Word comparison.
+
 Bullets and Numbering decide whether to toggle off from the selected paragraphs' effective numbering, including numbering inherited from a paragraph style or its `basedOn` chain. An explicit `numId=0` override remains unlisted until a list is applied. The effective list level and any level override determine the list kind, including an explicitly requested gallery kind. Toggling preserves custom styles, including a ListParagraph style that supplies numbering, list definitions and paragraphs outside the selection. A directly applied list still clears the automatic ListParagraph style. Original command and DOCX round-trip tests cover this narrow case related to #3459; it is not a new Word UI measurement. Tests: `toggle_style_inherited_list_off_preserves_other_paragraphs_and_round_trips`, `explicit_list_off_override_is_not_toggled_off_again`, `list_toggle_uses_effective_level_and_override`, `list_paragraph_style_survives_inherited_toggle_off`, `direct_list_toggle_still_clears_the_automatic_list_paragraph_style`.
 
 | Keys | Word's result | Test |
@@ -621,6 +623,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | Explicit list IDs must be non-negative 32-bit JSON integers; malformed IDs no longer select, create or change another list (#5517). Omitted defaults, valid IDs and readiness estimates unchanged |
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
