@@ -364,10 +364,15 @@ impl WordApp {
                 r
             }
             AfterPick::SaveCopy { document } => {
-                if document != self.session.document_id() {
-                    return Err("the document for this copy has been replaced".into());
-                }
                 let Some(path) = picked else { return Ok(json!({"saved": false})) };
+                if document != self.session.document_id() {
+                    if !self.session.is_open(document) {
+                        let error = tl!("The document for this copy was closed.");
+                        self.status_long(error);
+                        return Err(error.into());
+                    }
+                    self.show_document(document)?;
+                }
                 self.run("file.saveAs", json!({"path": path}))
             }
             AfterPick::SaveAs { after, document } => {

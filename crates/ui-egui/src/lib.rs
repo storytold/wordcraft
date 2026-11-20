@@ -834,6 +834,8 @@ pub struct WordApp {
     autosave_path: Option<std::path::PathBuf>,
     /// Typed native error kept long enough for the user command to offer Save Copy.
     save_conflict: Option<wordcraft_engine::io::FileConflict>,
+    /// AutoSave conflict waiting for the active document's other dialogs to close.
+    pending_autosave_conflict: Option<wordcraft_engine::io::FileConflict>,
     /// Web: saves the browser's picker hasn't finished yet ([`async_saves`], #1315).
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).

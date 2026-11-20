@@ -155,6 +155,7 @@ impl WordApp {
             read_aloud_error: None,
             autosave_path: None,
             save_conflict: None,
+            pending_autosave_conflict: None,
             #[cfg(not(target_arch = "wasm32"))]
             native_opens: Default::default(),
             saves_in_flight: Vec::new(),

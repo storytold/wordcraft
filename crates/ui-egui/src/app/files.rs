@@ -1,3 +1,5 @@
+use wordcraft_engine::io::FileConflict;
+
 use super::{
     AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
     printing,
@@ -27,9 +29,14 @@ impl WordApp {
 
     pub(crate) fn show_save_conflict(&mut self) {
         if let Some(conflict) = self.save_conflict.take() {
-            let name = conflict.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| conflict.path.display().to_string());
-            self.dialog = Some(dialogs::Dialog::SaveConflict { name, document: self.session.document_id() });
+            self.present_save_conflict(conflict);
         }
+    }
+
+    fn present_save_conflict(&mut self, conflict: FileConflict) {
+        self.pending_autosave_conflict = None;
+        let name = conflict.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| conflict.path.display().to_string());
+        self.dialog = Some(dialogs::Dialog::SaveConflict { name, document: self.session.document_id() });
     }
 
     pub(crate) fn answer_save_conflict(&mut self, answer: &str) -> Result<Value, String> {
@@ -499,6 +506,7 @@ impl WordApp {
             && result.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
         {
             self.autosave_path = self.session.path.clone();
+            self.pending_autosave_conflict = None;
         }
         // Edits in the formatted view can require writing out Markdown again.
         if result.get("rewritten").and_then(Value::as_bool) == Some(true) {
@@ -523,11 +531,8 @@ impl WordApp {
                 Err(e) => {
                     log::warn!("AutoSave failed: {e}");
                     self.autosave_path = None;
-                    if let wordcraft_engine::CmdError::FileConflict(conflict) = &e
-                        && self.dialog.is_none()
-                    {
-                        self.save_conflict = Some(conflict.clone());
-                        self.show_save_conflict();
+                    if let wordcraft_engine::CmdError::FileConflict(conflict) = &e {
+                        self.pending_autosave_conflict = Some(conflict.clone());
                     }
                     self.status(i18n::fmt(
                         tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."),
@@ -536,6 +541,13 @@ impl WordApp {
                 }
                 Ok(_) => {}
             }
+        }
+        // A conflict pauses AutoSave, so this must still run on later frames after dialogs close.
+        if self.dialog.is_none()
+            && !self.file_dialog_open()
+            && let Some(conflict) = self.pending_autosave_conflict.take()
+        {
+            self.present_save_conflict(conflict);
         }
     }
 

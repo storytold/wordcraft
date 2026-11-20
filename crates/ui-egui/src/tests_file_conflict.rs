@@ -112,6 +112,55 @@ fn save_copy_picker_success_cancel_and_changed_document_are_bound_to_the_conflic
     }
 }
 #[test]
+fn single_window_save_copy_remains_bound_to_the_originating_document() {
+    for mode in ["save", "cancel", "closed"] {
+        let d = Scratch::new();
+        let mut a = app(&d);
+        a.windows.single();
+        let original = a.session.document_id();
+        let external = external(&d);
+        let (tx, rx) = channel();
+        let rx = std::cell::RefCell::new(Some(rx));
+        a.services.file_dialog = Some(Box::new(move |_| rx.borrow_mut().take().unwrap()));
+        a.run("file.save", json!({})).unwrap_err();
+        assert_eq!(a.run("ui.saveConflict", json!({"answer": "copy"})).unwrap()["pending"], "saveCopy");
+
+        a.execute("file.new", json!({})).unwrap();
+        a.execute("document.setText", json!({"text": "Other document"})).unwrap();
+        let other = a.session.document_id();
+        assert_ne!(other, original);
+        if mode == "closed" {
+            a.execute("file.closeDocument", json!({"id": original, "force": true})).unwrap();
+            assert!(!a.session.is_open(original));
+        }
+
+        let copy = d.file("copy.docx");
+        let picked = if mode == "cancel" { Vec::new() } else { vec![copy.display().to_string()] };
+        tx.send(Ok(picked)).unwrap();
+        let result = a.poll_file_dialog().unwrap();
+        if mode == "save" {
+            assert_eq!(result.unwrap()["saved"], true);
+            assert_eq!(a.session.document_id(), original);
+            assert_eq!(a.session.path.as_ref(), Some(&copy));
+            assert!(!a.session.dirty);
+            assert_eq!(io::open_path(&copy).unwrap().plain_text(wordcraft_doc::StoryRef::Body), "Local edit");
+            a.show_document(other).unwrap();
+        } else if mode == "closed" {
+            let error = result.unwrap_err();
+            assert!(error.contains("closed"), "{error}");
+            assert!(a.status_msg.as_ref().is_some_and(|(message, _)| message == &error));
+        } else {
+            assert_eq!(result.unwrap()["saved"], false);
+        }
+        assert_eq!(a.session.document_id(), other);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Other document");
+        assert!(a.session.dirty);
+        assert_eq!(copy.exists(), mode == "save");
+        assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), external);
+    }
+}
+
+#[test]
 fn autosave_pauses_after_conflict_and_pending_close_does_not_discard_edits() {
     let d = Scratch::new();
     let mut a = app(&d);
@@ -230,7 +279,41 @@ fn autosave_conflict_retains_open_save_changes_and_its_close_command() {
     a.run("ui.saveChanges", json!({"answer":"cancel"})).unwrap();
     assert!(a.dialog.is_none());
     assert!(!a.quit_requested);
+    a.window_work(&egui::Context::default());
+    assert!(matches!(&a.dialog, Some(dialogs::Dialog::SaveConflict { document, .. }) if *document == a.session.document_id()));
     assert_local(&a, &d, &b);
+}
+
+#[test]
+fn deferred_autosave_conflict_follows_its_document() {
+    let d = Scratch::new();
+    let mut a = app(&d);
+    let original = a.session.document_id();
+    a.execute("file.save", json!({})).unwrap();
+    a.execute("document.setText", json!({"text": "Pending edit"})).unwrap();
+    let external = external(&d);
+
+    a.run("file.close", json!({})).unwrap();
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveChanges { .. })));
+    a.execute("file.new", json!({})).unwrap();
+    let other = a.session.document_id();
+    assert_ne!(other, original);
+    a.window_work(&egui::Context::default());
+    assert!(a.dialog.is_none(), "another document must not inherit the conflict");
+
+    a.show_document(original).unwrap();
+    assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveChanges { .. })));
+    a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+    a.window_work(&egui::Context::default());
+    assert!(matches!(&a.dialog, Some(dialogs::Dialog::SaveConflict { document, .. }) if *document == original));
+    assert!(!a.autosaves());
+    assert!(a.session.dirty);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Pending edit");
+    assert_eq!(std::fs::read(d.file("original.docx")).unwrap(), external);
+    a.run("ui.saveConflict", json!({"answer": "cancel"})).unwrap();
+    a.window_work(&egui::Context::default());
+    assert!(a.dialog.is_none(), "Keep editing acknowledges the queued conflict");
 }
 
 #[test]

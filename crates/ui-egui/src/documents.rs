@@ -19,6 +19,7 @@ use crate::{WordApp, panes};
 pub(crate) struct Parked {
     /// [`WordApp`]'s `autosave_path`: the file AutoSave writes this document to.
     autosave_path: Option<std::path::PathBuf>,
+    pending_autosave_conflict: Option<wordcraft_engine::io::FileConflict>,
     /// Comment and reply text typed in this document and not yet written to it.
     comment_drafts: panes::CommentDrafts,
 }
@@ -103,7 +104,11 @@ impl WordApp {
         if from == to {
             return false;
         }
-        let leaving = Parked { autosave_path: self.autosave_path.take(), comment_drafts: std::mem::take(&mut self.comment_drafts) };
+        let leaving = Parked {
+            autosave_path: self.autosave_path.take(),
+            pending_autosave_conflict: self.pending_autosave_conflict.take(),
+            comment_drafts: std::mem::take(&mut self.comment_drafts),
+        };
         if self.session.is_open(from) {
             self.parked.insert(from, leaving);
         }
@@ -111,6 +116,7 @@ impl WordApp {
         let seen = back.is_some();
         let back = back.unwrap_or_default();
         self.autosave_path = back.autosave_path;
+        self.pending_autosave_conflict = back.pending_autosave_conflict;
         self.comment_drafts = back.comment_drafts;
         let session = &self.session;
         self.parked.retain(|d, _| session.is_open(*d));
