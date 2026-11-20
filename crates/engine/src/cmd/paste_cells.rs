@@ -153,6 +153,8 @@ pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
     if s.doc.control_at(&s.sel.focus).is_some_and(|r| r.control.showing_placeholder) {
         return Ok(false);
     }
+    // Pasting ends Backspace's carried formatting, as in the ordinary paste path.
+    s.forget_carried();
     // Protection: the edit rules may move the caret (to where typing goes) or refuse.
     super::controls::prepare_edit(s)?;
     let at = s.sel.focus.clone();
