@@ -17259,3 +17259,64 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
+
+/// `DocLayout::typing_style` honours `Pos::affinity` so IME preedit baselines stay on the
+/// caret's visual continuation line across wrapped fields, including across a page split.
+#[test]
+fn typing_style_baseline_honors_visual_affinity_in_wrapped_field_with_page_split() {
+    crate::test_fonts();
+    let mut doc = Document::new();
+    doc.last_section.margin_left = 200.0;
+    doc.last_section.margin_right = 200.0;
+    doc.last_section.page_h = 80.0;
+    doc.last_section.margin_top = 15.0;
+    doc.last_section.margin_bottom = 15.0;
+    let long_text = "The quick brown fox jumps over the lazy dog and runs across the wide open fields ".repeat(3);
+    let mut p = Paragraph::new();
+    p.insert_object(
+        0,
+        InlineObject::Field { instr: "DOCVARIABLE summary".into(), result: long_text, locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let mut cache = LayoutCache::new();
+    let l = layout(&doc, &mut cache, &LayoutOptions::default());
+    assert!(l.pages.len() >= 2, "expected field paragraph to split across pages, got {} page(s)", l.pages.len());
+
+    let Placed::Lines { para, .. } = &l.pages[0].items[0] else {
+        panic!("expected laid out paragraph");
+    };
+    let n_lines = para.lines.len();
+    assert!(n_lines >= 4, "expected wrapped field across >= 4 lines, got {n_lines}");
+
+    let mut pos = Pos::body(0, 0);
+    let mut caret = l.caret_on(&pos, 0).expect("caret on line 0");
+    let (_, base0) = l.typing_style(&pos, caret.page).expect("typing style on line 0");
+    assert!(base0 > caret.top && base0 < caret.top + caret.height, "line 0 baseline {base0} must lie within caret {caret:?}");
+
+    let mut saw_middle_on_page0 = false;
+    let mut saw_page_split_continuation = false;
+    for line_idx in 1..n_lines {
+        let (next_pos, _) = l.vertical(&pos, None, 1, caret.page).expect("down move should succeed");
+        assert_eq!(next_pos.affinity, Some(line_idx), "expected affinity {line_idx}");
+        let next_caret = l.caret_on(&next_pos, caret.page).expect("caret on continuation line");
+        let (_, base) = l.typing_style(&next_pos, next_caret.page).expect("typing style on continuation line");
+        assert!(
+            base > next_caret.top && base < next_caret.top + next_caret.height,
+            "line {line_idx} baseline {base} must lie within caret {next_caret:?}"
+        );
+        if next_caret.page == 0 && line_idx < n_lines - 1 {
+            assert!(base > base0 + 1.0, "middle line {line_idx} baseline {base} must differ from line 0 baseline {base0}");
+            saw_middle_on_page0 = true;
+        }
+        if next_caret.page > 0 {
+            saw_page_split_continuation = true;
+        }
+        pos = next_pos;
+        caret = next_caret;
+    }
+    assert!(saw_middle_on_page0, "expected at least one middle continuation line on page 0");
+    assert!(saw_page_split_continuation, "expected at least one continuation line after page split");
+}

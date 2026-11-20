@@ -740,7 +740,7 @@ impl DocLayout {
     pub fn typing_style(&self, pos: &Pos, page_hint: usize) -> Option<(StyleRun, f32)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, y, turn, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.line_for(pos);
             if li < *l0 || li >= *l1 {
                 continue;
             }
