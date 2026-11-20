@@ -1,9 +1,10 @@
-//! Bounded conversion from the shared Word model to WordCraft's app model.
+//! Bounded conversion between the shared Word model and WordCraft's app model, both ways: from
+//! the shared reader's document, and to the shared writer's.
 //!
 //! The model crates intentionally have independent Rust types. Convert document stories a
 //! paragraph at a time, recursively through tables, so a large document never needs a second
 //! serialized copy of its complete body in memory. Embedded media and opaque streams are moved
-//! directly because both models use the same `Arc<Vec<u8>>` representation.
+//! (or, writing, shared) directly because both models use the same `Arc<Vec<u8>>` representation.
 
 use std::sync::Arc;
 
@@ -19,6 +20,15 @@ where
 {
     let bytes = serde_json::to_vec(&value).map_err(|error| DocbinError::Malformed(format!("shared model conversion: {error}")))?;
     drop(value);
+    serde_json::from_slice(&bytes).map_err(|error| DocbinError::Malformed(format!("shared model conversion: {error}")))
+}
+
+fn convert_ref<T, U>(value: &T) -> Result<U, DocbinError>
+where
+    T: Serialize + ?Sized,
+    U: DeserializeOwned,
+{
+    let bytes = serde_json::to_vec(value).map_err(|error| DocbinError::Malformed(format!("shared model conversion: {error}")))?;
     serde_json::from_slice(&bytes).map_err(|error| DocbinError::Malformed(format!("shared model conversion: {error}")))
 }
 
@@ -159,6 +169,151 @@ pub fn from_shared_model(source: craft_wordmodel::Document) -> Result<wordcraft_
     Ok(document)
 }
 
+fn blocks_to_shared(source: &wordcraft_doc::Blocks) -> Result<craft_wordmodel::Blocks, DocbinError> {
+    source.iter().map(|block| block_to_shared(block).map(Arc::new)).collect()
+}
+
+fn block_to_shared(source: &wordcraft_doc::Block) -> Result<craft_wordmodel::Block, DocbinError> {
+    match source {
+        wordcraft_doc::Block::Para(paragraph) => paragraph_to_shared(paragraph).map(craft_wordmodel::Block::Para),
+        wordcraft_doc::Block::Table(table) => table_to_shared(table).map(craft_wordmodel::Block::Table),
+    }
+}
+
+/// A non-finite number as 0: JSON has no NaN or infinity, so one would fail the conversion.
+fn finite(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
+fn finite_para_props(mut props: wordcraft_doc::ParaProps) -> wordcraft_doc::ParaProps {
+    if let Some(ls) = &mut props.line_spacing {
+        match ls {
+            wordcraft_doc::props::LineSpacing::Multiple(v)
+            | wordcraft_doc::props::LineSpacing::Exactly(v)
+            | wordcraft_doc::props::LineSpacing::AtLeast(v) => {
+                *v = finite(*v);
+            }
+        }
+    }
+    for v in [&mut props.indent_left, &mut props.indent_right, &mut props.indent_first, &mut props.space_before, &mut props.space_after]
+        .into_iter()
+        .flatten()
+    {
+        *v = finite(*v);
+    }
+    props
+}
+
+fn finite_char_props(mut props: wordcraft_doc::CharProps) -> wordcraft_doc::CharProps {
+    for v in [&mut props.size, &mut props.spacing].into_iter().flatten() {
+        *v = finite(*v);
+    }
+    props
+}
+
+fn paragraph_to_shared(source: &wordcraft_doc::para::Paragraph) -> Result<craft_wordmodel::para::Paragraph, DocbinError> {
+    let mut paragraph = craft_wordmodel::para::Paragraph::new();
+    paragraph.text = source.text.clone();
+    paragraph.runs = source
+        .runs
+        .iter()
+        .map(|run| Ok(craft_wordmodel::para::Run { len: run.len, props: convert(finite_char_props(run.props.clone()))? }))
+        .collect::<Result<_, DocbinError>>()?;
+    paragraph.props = convert(finite_para_props(source.props.clone()))?;
+    paragraph.mark = convert(finite_char_props(source.mark.clone()))?;
+    paragraph.objects = source.objects.iter().map(object_to_shared).collect::<Result<_, _>>()?;
+    paragraph.section = source.section.as_ref().map(|section| convert_ref(section.as_ref()).map(Box::new)).transpose()?;
+    Ok(paragraph)
+}
+
+fn object_to_shared(source: &wordcraft_doc::para::InlineObject) -> Result<craft_wordmodel::para::InlineObject, DocbinError> {
+    use craft_wordmodel::para::InlineObject as Target;
+    use wordcraft_doc::para::InlineObject as Source;
+
+    match source {
+        Source::Image { media, w, h, alt, float, crop, fx, ole } => Ok(Target::Image {
+            media: media.clone(),
+            w: finite(*w),
+            h: finite(*h),
+            alt: alt.clone(),
+            float: convert_ref(float)?,
+            crop: crop.map(finite),
+            fx: convert_ref(fx)?,
+            ole: ole.as_ref().map(|o| convert_ref(o.as_ref()).map(Arc::new)).transpose()?,
+        }),
+        Source::Group { w, h, float, ch_w, ch_h, children, canvas } => Ok(Target::Group {
+            w: *w,
+            h: *h,
+            float: convert_ref(float)?,
+            ch_w: *ch_w,
+            ch_h: *ch_h,
+            children: children
+                .iter()
+                .map(|child| Ok(craft_wordmodel::para::GroupChild { x: child.x, y: child.y, obj: object_to_shared(&child.obj)? }))
+                .collect::<Result<_, DocbinError>>()?,
+            canvas: canvas.as_ref().map(convert_ref).transpose()?,
+        }),
+        other => convert_ref(other),
+    }
+}
+
+fn table_to_shared(source: &wordcraft_doc::table::Table) -> Result<craft_wordmodel::table::Table, DocbinError> {
+    Ok(craft_wordmodel::table::Table {
+        props: convert_ref(&source.props)?,
+        grid: source.grid.clone(),
+        rows: source
+            .rows
+            .iter()
+            .map(|row| {
+                Ok(craft_wordmodel::table::Row {
+                    props: convert_ref(&row.props)?,
+                    cells: row
+                        .cells
+                        .iter()
+                        .map(|cell| {
+                            Ok(craft_wordmodel::table::Cell {
+                                props: convert_ref(&cell.props)?,
+                                blocks: blocks_to_shared(&cell.blocks)?,
+                                controls: convert_ref(&cell.controls)?,
+                            })
+                        })
+                        .collect::<Result<_, DocbinError>>()?,
+                    controls: convert_ref(&row.controls)?,
+                })
+            })
+            .collect::<Result<_, DocbinError>>()?,
+        controls: convert_ref(&source.controls)?,
+    })
+}
+
+/// The shared model of a document, for the `.doc` writer: the stories (body, headers, footers,
+/// notes), sections, styles, lists, tracked changes, settings, document properties and media.
+/// Comments, sources, the glossary and WordCraft's own state stay out: the writer has no place
+/// for them.
+pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmodel::Document, DocbinError> {
+    let mut document = craft_wordmodel::Document::new();
+    document.body = blocks_to_shared(&source.body)?;
+    document.last_section = convert_ref(&source.last_section)?;
+    document.parts = source
+        .parts
+        .iter()
+        .map(|(&id, part)| {
+            Ok((
+                id,
+                craft_wordmodel::Part { kind: convert_ref(&part.kind)?, blocks: blocks_to_shared(&part.blocks)?, body: convert_ref(&part.body)? },
+            ))
+        })
+        .collect::<Result<_, DocbinError>>()?;
+    document.styles = Arc::new(convert_ref(source.styles.as_ref())?);
+    document.numbering = Arc::new(convert_ref(source.numbering.as_ref())?);
+    document.revisions = convert_ref(&source.revisions)?;
+    document.settings = convert_ref(&source.settings)?;
+    document.core = convert_ref(&source.core)?;
+    document.custom_props = convert_ref(&source.custom_props)?;
+    document.media = source.media.clone();
+    Ok(document)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +381,52 @@ mod tests {
         assert_eq!(document.settings.compat_mode, 11);
         assert!(Arc::ptr_eq(document.media.get("image1.png").expect("moved media"), &image));
         assert!(document.fit_state.is_none());
+    }
+
+    /// A WordCraft document saved as a `.doc` goes through the shared model and reads back: body
+    /// text, a table cell, a tracked insertion with its author and time, and the document title.
+    #[test]
+    fn writes_through_the_shared_model_and_reads_back() {
+        use wordcraft_doc::{Revision, RevisionKind};
+        let mut doc = wordcraft_doc::Document::new();
+        doc.revisions = vec![Revision::new(RevisionKind::Insert, "Ada", "2025-03-04T05:06:00Z")];
+        let mut para = wordcraft_doc::para::Paragraph::with_text("kept added", Default::default());
+        para.format(5, 10, &|c| c.ins = Some(0)).expect("format");
+        let table = wordcraft_doc::table::Table {
+            grid: vec![144.0],
+            rows: vec![wordcraft_doc::table::Row { cells: vec![wordcraft_doc::table::Cell::with_text("in a cell")], ..Default::default() }],
+            ..Default::default()
+        };
+        doc.body = vec![
+            Arc::new(wordcraft_doc::Block::Para(para)),
+            Arc::new(wordcraft_doc::Block::Table(table)),
+            Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::para::Paragraph::new())),
+        ];
+        doc.core.title = "Bridged".into();
+
+        let bytes = crate::write(&doc).expect("writes");
+        let back = crate::read(&bytes).expect("reads");
+        let para = back.body[0].as_para().expect("paragraph");
+        assert_eq!(para.text, "kept added");
+        let ins = para.props_at(6).ins.and_then(|i| back.revisions.get(i as usize)).expect("a tracked insertion");
+        assert_eq!((ins.kind, ins.author.as_str(), ins.date.as_str()), (RevisionKind::Insert, "Ada", "2025-03-04T05:06:00Z"));
+        assert_eq!(para.props_at(1).ins, None);
+        let table = back.body[1].as_table().expect("table");
+        assert_eq!(table.rows[0].cells[0].blocks[0].as_para().map(|p| p.text.as_str()), Some("in a cell"));
+        assert_eq!(back.core.title, "Bridged");
+    }
+
+    /// A non-finite number in WordCraft's model (JSON has none) is written as 0 instead of
+    /// failing the save.
+    #[test]
+    fn non_finite_sizes_do_not_fail_a_save() {
+        let mut doc = wordcraft_doc::Document::new();
+        let mut para = wordcraft_doc::para::Paragraph::with_text("odd", Default::default());
+        // Not an Option: JSON's `null` for NaN would fail to convert back to a number.
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(f32::NAN));
+        para.format(0, 3, &|c| c.size = Some(f32::INFINITY)).expect("format");
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(para))];
+        let back = crate::read(&crate::write(&doc).expect("writes")).expect("reads");
+        assert_eq!(back.body[0].as_para().map(|p| p.text.as_str()), Some("odd"));
     }
 }
