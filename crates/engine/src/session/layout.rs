@@ -143,6 +143,8 @@ impl Session {
         copy.column = self.column.clone();
         copy.widened = self.widened.clone();
         copy.view = self.view.clone();
+        copy.page_hint = self.page_hint;
+        copy.hf_section = self.hf_section;
         copy.prefs = self.prefs.clone();
         copy.path = self.path.clone();
         copy.file_name = self.file_name.clone();

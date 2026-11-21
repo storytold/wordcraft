@@ -141,9 +141,9 @@ pub(super) fn create_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let id = match p::u64(v, "page") {
         Some(page) => {
             let page = usize::try_from(page).unwrap_or(usize::MAX);
+            let sec = s.layout().pages.get(page).map(|pg| pg.section).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
             s.page_hint = page;
-            let sec = s.layout().pages.get(page).map(|pg| pg.section);
-            s.hf_section = sec.map(|sec| sec.min(s.doc.sections().len().saturating_sub(1)));
+            s.hf_section = Some(sec.min(s.doc.sections().len().saturating_sub(1)));
             page_hf_part(s, page, header)?
         }
         None => {

@@ -661,3 +661,165 @@ fn section_commands_follow_the_page_being_edited() {
     assert!(secs[0].1.landscape, "the section whose footer is open");
     assert!(!secs[1].1.landscape);
 }
+
+/// #5855: an out-of-range `insert.createFooter` page leaves the active header/footer section intact.
+#[test]
+fn create_footer_out_of_range_page_preserves_active_hf_section() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Shared footer"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Edit page 1's inherited footer (active section 1), then fail `insert.createFooter` with an
+    // out-of-range page number.
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    assert_eq!(section_index_of_focus(&s), 1);
+    assert!(s.run("insert.createFooter", &json!({"page": 99})).is_err());
+
+    // Section targeting still points at section 1 rather than falling back to section 0.
+    assert_eq!(section_index_of_focus(&s), 1);
+    s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 7})).unwrap();
+    let secs = s.doc.sections();
+    assert_eq!((secs[0].1.page_num_format, secs[0].1.page_num_start), (NumFormat::Decimal, None));
+    assert_eq!((secs[1].1.page_num_format, secs[1].1.page_num_start), (NumFormat::LowerRoman, Some(7)));
+}
+
+/// #5855: `take_view`/`put_view` preserves `hf_section` when section structure matches, and clears
+/// it when a section break is added or removed across another edit.
+#[test]
+fn take_view_put_view_tracks_hf_section_across_revisions_and_section_breaks() {
+    // Build a two-section document whose expanded shared footer causes section 0 to spill onto
+    // page 1 and push section 1 to page 2.
+    let mut n_lines: usize = 10;
+    while n_lines < 100 {
+        let lines = (0..n_lines).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+        let mut s = Session::new(wordcraft_doc::Document::from_text(&lines));
+        s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+        s.run("text.insert", &json!({"text": "Footer"})).unwrap();
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        if s.layout().pages.len() == 1 {
+            n_lines += 1;
+        } else {
+            n_lines = n_lines.saturating_sub(3);
+            break;
+        }
+    }
+
+    let lines = (0..n_lines).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&lines));
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 1 body"})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Shared footer"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Open section 1's inherited footer on page 1, then expand the footer so page 1 belongs to
+    // section 0 while `hf_section` still targets section 1.
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    for _ in 0..8 {
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Expanded footer row"})).unwrap();
+    }
+    assert_eq!(s.layout().pages[1].section, 0);
+    assert_eq!(section_index_of_focus(&s), 1);
+
+    // Same revision (`current == true`): `put_view` restores `hf_section`.
+    let same_rev_view = s.take_view();
+    s.put_view(same_rev_view);
+    assert_eq!(section_index_of_focus(&s), 1, "same-revision view swap keeps hf_section");
+
+    // Revision changed without changing section breaks: `put_view` still preserves `hf_section`.
+    let view_before_format = s.take_view();
+    s.run("select.text", &json!({"text": "Line 0"})).unwrap();
+    s.run("format.bold", &json!({})).unwrap();
+    s.put_view(view_before_format);
+    assert_eq!(section_index_of_focus(&s), 1, "unchanged section breaks preserve hf_section across revision bump");
+
+    // Revision changed with a section break added: stale `hf_section` is cleared and resolution
+    // falls back to `page_hint` (page 1 -> section 0).
+    let view_before_added_break = s.take_view();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
+    s.put_view(view_before_added_break);
+    assert_eq!(section_index_of_focus(&s), 0, "adding a section break clears stale hf_section");
+
+    // Revision changed with a section break removed in a 3-section document: stale `hf_section`
+    // (`Some(2)`) is cleared rather than clamping onto section 1.
+    let mut s3 = Session::new(wordcraft_doc::Document::from_text("s0\ns1\ns2"));
+    s3.run("select.text", &json!({"text": "s0"})).unwrap();
+    s3.run("caret.end", &json!({})).unwrap();
+    s3.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s3.run("select.text", &json!({"text": "s1"})).unwrap();
+    s3.run("caret.end", &json!({})).unwrap();
+    s3.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s3.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s3.run("text.insert", &json!({"text": "Shared footer"})).unwrap();
+    s3.run("insert.closeHeader", &json!({})).unwrap();
+
+    s3.run("insert.editFooter", &json!({"page": 2})).unwrap();
+    assert_eq!(section_index_of_focus(&s3), 2);
+    let view3 = s3.take_view();
+    s3.run("select.all", &json!({})).unwrap();
+    s3.run("text.insert", &json!({"text": "a"})).unwrap();
+    s3.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s3.run("text.insert", &json!({"text": "b"})).unwrap();
+    s3.put_view(view3);
+    assert_eq!(section_index_of_focus(&s3), 0, "removing a section break clears stale hf_section");
+}
+
+/// #5855: `preview_layout` copies the active header/footer section context so previews target the
+/// section whose inherited footer is being edited.
+#[test]
+fn preview_layout_formats_active_inherited_section_footer() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("insert.pageNumber", &json!({"position": "bottom"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    let (doc, _sel, layout) = s.preview_layout("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 7})).unwrap();
+    let secs = doc.sections();
+    assert_eq!((secs[0].1.page_num_format, secs[0].1.page_num_start), (NumFormat::Decimal, None));
+    assert_eq!((secs[1].1.page_num_format, secs[1].1.page_num_start), (NumFormat::LowerRoman, Some(7)));
+    let page1_footer: String = layout.pages[1]
+        .footer
+        .iter()
+        .flat_map(|it| match it {
+            crate::layout::Placed::Lines { para, .. } => para.shown.iter().map(|part| part.1.clone()).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert!(page1_footer.contains("vii"), "preview renders section 1 footer as vii, got {page1_footer:?}");
+}
+
+/// #5855: `layout.margins` refreshes layout before reading existing edges when editing a header/footer.
+#[test]
+fn margins_from_inherited_footer_targets_active_section() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.margins", &json!({"top": 108.0})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Shared footer"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    s.run("layout.margins", &json!({"left": 90.0})).unwrap();
+    let secs = s.doc.sections();
+    assert_eq!(secs[0].1.margin_left, SectionProps::default().margin_left);
+    assert_eq!(secs[1].1.margin_left, 90.0);
+    assert_eq!(secs[1].1.margin_top, 108.0);
+}

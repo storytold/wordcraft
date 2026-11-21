@@ -7,6 +7,7 @@ use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::{Label, LengthUnits};
 use craft::ui::sections::Section;
+use craft::ui::text::NumberField;
 use egui::Ui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -257,6 +258,8 @@ pub struct PageNumbersForm {
     pub format: String,
     pub cont: bool,
     pub start: u32,
+    #[serde(skip)]
+    before_edit: Option<(usize, u32, bool)>,
 }
 
 impl PageNumbersForm {
@@ -268,6 +271,7 @@ impl PageNumbersForm {
             format: sp.page_num_format.ooxml().to_string(),
             cont: sp.page_num_start.is_none(),
             start: sp.page_num_start.unwrap_or(1).min(100_000),
+            before_edit: None,
         }
     }
 
@@ -354,14 +358,49 @@ impl WordForm for PageNumbersForm {
         let formats: Vec<Entry<String>> =
             crate::dialogs_notes::FORMATS.iter().map(|(v, l)| Entry::new((*v).to_string(), tl!(l).to_string())).collect();
         Select::new(tl!("Number format").to_string(), Bind::bound(&mut self.format), &formats).show(ui);
+        let cont_before_radio = self.cont;
         RadioGroup::new(tl!("Page numbering").to_string(), Bind::bound(&mut self.cont)).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, cx| {
                 cx.labelled(ui, 0, Label::from(tl!("Continue from previous section")), SideLabel::new().layout(FieldLayout::After), Radio::new(true));
                 cx.labelled(ui, 1, Label::from(tl!("Start at:")), SideLabel::new().layout(FieldLayout::After), Radio::new(false));
             });
         });
-        if super::count_field(ui, tl!("Start at:"), &mut self.start, 0..=100_000, true) {
-            self.cont = false;
+        let radio_changed = self.cont != cont_before_radio;
+        if radio_changed {
+            self.before_edit = None;
+        }
+        let fmt = self.format.clone();
+        let codec = craft::behavior::NumberCodec::new(craft::behavior::Reader::new(), 0).or_parse(move |s| parse_page_start(s, &fmt));
+        let out =
+            NumberField::new(tl!("Start at:").to_string(), Bind::given(Some(f64::from(self.start)))).codec(codec).range(0.0..=100_000.0).show(ui);
+        let clamp_start = |n: f64| (n.round().max(0.0) as u32).clamp(0, 100_000);
+        for event in out.edit.events.iter() {
+            match event {
+                craft::behavior::EditEvent::Begin { .. } => {
+                    self.before_edit = Some((self.section, self.start, self.cont));
+                }
+                craft::behavior::EditEvent::Update { value: Some(n), .. } => {
+                    self.before_edit.get_or_insert((self.section, self.start, self.cont));
+                    self.start = clamp_start(*n);
+                    self.cont = false;
+                }
+                craft::behavior::EditEvent::Commit { after, .. } | craft::behavior::EditEvent::Set { after, .. } => {
+                    self.before_edit = None;
+                    if !radio_changed && let Some(n) = after {
+                        self.start = clamp_start(*n);
+                        self.cont = false;
+                    }
+                }
+                craft::behavior::EditEvent::Cancel { .. } => {
+                    if let Some((sec, start, cont)) = self.before_edit.take()
+                        && sec == self.section
+                    {
+                        self.start = start;
+                        self.cont = cont;
+                    }
+                }
+                _ => {}
+            }
         }
         true
     }

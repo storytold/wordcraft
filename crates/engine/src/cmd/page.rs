@@ -541,6 +541,9 @@ fn border_sides_mut(b: &mut Borders) -> impl Iterator<Item = &mut Border> {
 
 fn margins(s: &mut Session, v: &Value) -> CmdResult {
     let preset = p::str(v, "preset");
+    if s.sel.focus.story != wordcraft_doc::StoryRef::Body {
+        let _ = s.layout();
+    }
     let (t, b, l, r) = match preset {
         Some(x) => match MARGIN_PRESETS.iter().find(|(id, _)| *id == x) {
             Some((_, [t, b, l, r])) => (*t, *b, *l, *r),
