@@ -298,9 +298,11 @@ pub(crate) fn item_band(it: &Placed, page_h: f32) -> (f32, f32) {
 /// A rendered page's tracking info for in-place region updates.
 #[derive(Clone)]
 pub(crate) struct RenderedPage {
+    pub(crate) revision: craft::ui::primitives::textures::Revision,
     pub(crate) view: u64,
     pub(crate) scale: f32,
     pub(crate) bands: std::sync::Arc<PageBands>,
+    pub(crate) generation: u64,
 }
 
 /// Fingerprint of a page's laid-out content. A layout never changes once made, so this is

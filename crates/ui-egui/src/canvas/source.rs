@@ -32,6 +32,7 @@ pub(super) struct WordPages {
     hidden: Option<(usize, Pos)>,
     rendered_pages: Arc<std::sync::Mutex<std::collections::HashMap<usize, super::pages::RenderedPage>>>,
     telemetry: Arc<std::sync::Mutex<super::CanvasTelemetry>>,
+    generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl WordPages {
@@ -43,6 +44,7 @@ impl WordPages {
         let doc = Arc::new(page_doc(app).clone());
         let rendered_pages = Arc::clone(&app.canvas.rendered_pages);
         let telemetry = Arc::clone(&app.canvas.telemetry);
+        let generation = Arc::clone(&app.canvas.generation);
         WordPages {
             doc,
             layout: layout.clone(),
@@ -52,6 +54,7 @@ impl WordPages {
             hidden,
             rendered_pages,
             telemetry,
+            generation,
         }
     }
 
@@ -92,14 +95,21 @@ impl ThumbSource<usize> for WordPages {
 
         let current_bands = self.keys.borrow_mut().snapshot(&self.layout, index).1;
         let total_rows = ((p.h.min(1e6) * scale).ceil() as u32).clamp(1, wordcraft_render::MAX_SIDE) as usize;
+        let target_revision = Revision::of(&(self.revision(&index, request), request.side, None::<[u32; 4]>));
 
         if whole && request.patchable {
-            let mut cache = self.rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(prev) = cache.get(&index)
-                && prev.view == self.view
-                && prev.scale.to_bits() == scale.to_bits()
-                && let Some(rows) = prev.bands.changed_rows(&current_bands, scale, total_rows)
-            {
+            let patch_rows = {
+                let cache = self.rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                cache.get(&index).and_then(|prev| {
+                    if Some(prev.revision) == request.resident_revision && prev.view == self.view && prev.scale.to_bits() == scale.to_bits() {
+                        prev.bands.changed_rows(&current_bands, scale, total_rows)
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            if let Some(rows) = patch_rows {
                 let band_rows = rows.end.saturating_sub(rows.start);
                 if band_rows > 0 && rows.end <= total_rows {
                     let y = rows.start as f32 / scale;
@@ -112,11 +122,37 @@ impl ThumbSource<usize> for WordPages {
                         telem.partial_renders += 1;
                         telem.raster_ms += elapsed;
                     }
-                    cache.insert(index, super::pages::RenderedPage { view: self.view, scale, bands: current_bands });
+                    let job_generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let mut cache = self.rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        cache.insert(
+                            index,
+                            super::pages::RenderedPage {
+                                revision: target_revision,
+                                view: self.view,
+                                scale,
+                                bands: current_bands,
+                                generation: job_generation,
+                            },
+                        );
+                    }
                     let image = egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels);
                     return ThumbRender::Region { origin: [0, rows.start as u32], image };
                 } else if band_rows == 0 {
-                    cache.insert(index, super::pages::RenderedPage { view: self.view, scale, bands: current_bands });
+                    let job_generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let mut cache = self.rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        cache.insert(
+                            index,
+                            super::pages::RenderedPage {
+                                revision: target_revision,
+                                view: self.view,
+                                scale,
+                                bands: current_bands,
+                                generation: job_generation,
+                            },
+                        );
+                    }
                     return ThumbRender::Region { origin: [0, 0], image: egui::ColorImage::new([0, 0], vec![]) };
                 }
             }
@@ -127,6 +163,7 @@ impl ThumbSource<usize> for WordPages {
         let telemetry = Arc::clone(&self.telemetry);
         let view = self.view;
         let bands = current_bands;
+        let job_generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         ThumbRender::Later(Box::new(move |_cancel| {
             let Some(page) = layout.pages.get(index) else { return Ok(LoadedPicture::Blank) };
@@ -141,10 +178,13 @@ impl ThumbSource<usize> for WordPages {
                 let mut telem = telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 telem.full_renders += 1;
                 telem.raster_ms += elapsed;
-                rendered_pages
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(index, super::pages::RenderedPage { view, scale, bands });
+            }
+            if whole {
+                let mut cache = rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let obsolete = cache.get(&index).is_some_and(|existing| existing.generation > job_generation);
+                if !obsolete {
+                    cache.insert(index, super::pages::RenderedPage { revision: target_revision, view, scale, bands, generation: job_generation });
+                }
             }
             // Both are premultiplied RGBA8, so the pixels go across as they are.
             Ok(LoadedPicture::Image(egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels)))

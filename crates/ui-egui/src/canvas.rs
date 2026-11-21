@@ -161,6 +161,7 @@ pub struct CanvasState {
     pub raster_ms: f64,
     pub(crate) rendered_pages: Arc<std::sync::Mutex<std::collections::HashMap<usize, pages::RenderedPage>>>,
     pub(crate) telemetry: Arc<std::sync::Mutex<CanvasTelemetry>>,
+    pub(crate) generation: Arc<std::sync::atomic::AtomicU64>,
     /// The caret colour last worked out and the key of the place it was worked out for, so a blink doesn't rebuild the
     /// page's draw list every frame (`cursor::caret_color_at`).
     pub(crate) caret_bg: Option<(u64, Color32)>,
@@ -425,6 +426,7 @@ impl Default for CanvasState {
             raster_ms: 0.0,
             rendered_pages: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             telemetry: Arc::new(std::sync::Mutex::new(CanvasTelemetry::default())),
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             caret_bg: None,
             markup_facts: Cell::new(None),
             scroll_to_caret: true,
@@ -727,7 +729,6 @@ fn paper_color(app: &WordApp) -> Color32 {
 fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect, metrics: &ReadingMetrics) {
     app.canvas.raster_ms = 0.0;
     app.canvas.render_ms = 0.0;
-    app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner).raster_ms = 0.0;
     let t0 = craft::platform::clock::monotonic_ms();
     let renders_before = {
         let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -747,8 +748,9 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
         .inner;
     app.canvas.page_keys = source.into_keys();
     let (renders_after, telem_raster) = {
-        let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        ((t.full_renders, t.partial_renders), t.raster_ms)
+        let mut t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let drained = std::mem::take(&mut t.raster_ms);
+        ((t.full_renders, t.partial_renders), drained)
     };
     app.canvas.full_renders = renders_after.0;
     app.canvas.partial_renders = renders_after.1;
@@ -789,7 +791,6 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect) {
     app.canvas.raster_ms = 0.0;
     app.canvas.render_ms = 0.0;
-    app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner).raster_ms = 0.0;
     let t0 = craft::platform::clock::monotonic_ms();
     let renders_before = {
         let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -925,8 +926,9 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
     let (renders_after, telem_raster) = {
-        let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        ((t.full_renders, t.partial_renders), t.raster_ms)
+        let mut t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let drained = std::mem::take(&mut t.raster_ms);
+        ((t.full_renders, t.partial_renders), drained)
     };
     app.canvas.full_renders = renders_after.0;
     app.canvas.partial_renders = renders_after.1;
