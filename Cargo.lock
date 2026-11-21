@@ -2934,19 +2934,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui_extras"
-version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
-dependencies = [
- "ahash",
- "egui",
- "enum-map",
- "itertools 0.15.0",
- "log",
- "profiling",
-]
-
-[[package]]
 name = "egui_glow"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
@@ -3024,26 +3011,6 @@ name = "endi"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
-
-[[package]]
-name = "enum-map"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4532960034c15ba2f55e9eee631040ecc473c32e6c4b200828c759840f13a06"
-dependencies = [
- "enum-map-derive",
-]
-
-[[package]]
-name = "enum-map-derive"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7127272f64b3e098f7d81f350d672081b879bff896d219c42370dc858b1af9ff"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.6",
-]
 
 [[package]]
 name = "enumflags2"
@@ -9329,7 +9296,6 @@ dependencies = [
  "craft-ui-test-kit",
  "craft-zip",
  "egui",
- "egui_extras",
  "egui_kittest",
  "image",
  "js-sys",
@@ -9934,23 +9900,3 @@ dependencies = [
  "syn 3.0.6",
  "winnow",
 ]
-
-[[patch.unused]]
-name = "egui_demo_lib"
-version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
-
-[[patch.unused]]
-name = "egui_inspection"
-version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
-
-[[patch.unused]]
-name = "egui_system_font_provider"
-version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
-
-[[patch.unused]]
-name = "hayro"
-version = "0.7.1"
-source = "git+https://github.com/storytold/craft-libs?rev=243d68e12d05e89122db6d154924bf1992e10d38#243d68e12d05e89122db6d154924bf1992e10d38"

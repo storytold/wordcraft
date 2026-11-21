@@ -16,8 +16,6 @@ test_threads = 4
 version = "0.18.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.95"
-repository = "https://github.com/storytold/wordcraft"
 
 [workspace.dependencies]
 # internal
@@ -61,7 +59,6 @@ log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proptest = "1"
-rayon = "1"
 unicode-bidi = "0.3"
 unicode-segmentation = "1"
 unicode-linebreak = "0.1"
@@ -103,8 +100,6 @@ craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d
 craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", version = "=0.1.0" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", version = "=0.1.0" }
 craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", version = "=0.1.0" }
-# zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
-miniz_oxide = "0.9"
 cfb = "0.15"
 # Legacy text encodings (GBK/GB18030, Big5, Shift_JIS, EUC-KR, single-byte code pages) for plain
 # text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause), pure
@@ -113,10 +108,6 @@ encoding_rs = "0.8"
 # chardetng (Apache-2.0 OR MIT): only the formats test oracle for the old detector uses it directly.
 chardetng = "1"
 # Password-protected (agile-encrypted) Word documents: pure-Rust RustCrypto primitives.
-aes = "0.9"
-sha1 = "0.11"
-sha2 = "0.11"
-hmac = "0.13"
 base64 = "0.23"
 getrandom = "0.3"
 zeroize = "1"
@@ -128,13 +119,10 @@ libc = "0.2"
 
 # ui
 egui = "0.37"
-egui_extras = { version = "0.37", default-features = false }
 eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
 # A monotonic clock that works on native and in the browser (`performance.now()`).
 web-time = "1.1"
-rfd = "0.17"
-arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -168,10 +156,10 @@ debug = 0
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
 # The framework's patches, which Cargo does not carry over to dependents: its vendored crates from craft-libs,
-# and the egui and winit forks it builds with.
+# and the egui and winit forks it builds with. Only those in this workspace's graph: Cargo warns about unused
+# patches, so add one back here when a dependency brings its crate in.
 [patch.crates-io]
 krilla = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38" }
-hayro = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38" }
 hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38" }
 hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38" }
 hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38" }
@@ -186,11 +174,7 @@ egui = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d
 egui-winit = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
 egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
 egui_glow = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
 egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
 eframe = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "7e1c30d142bc7879d043e74b5ceb3ecfe7f51329" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
