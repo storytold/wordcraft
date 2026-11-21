@@ -1786,44 +1786,20 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     }
 }
 
-/// `Services::paragraph_window`: the Paragraph dialog asks for a window of its own (a macOS
-/// utility panel), so `DialogHost::run` leaves it out of the document window's pass and
-/// `run_windowed` drives it; its OK still files through the windowed path and runs `para.set`.
+/// `Services::paragraph_window`: the Paragraph dialog opens in a window of its own where the platform has windows (a
+/// dialog over the document here, without them). The document behind it is blocked, and its OK still runs `para.set`.
 #[test]
-fn paragraph_in_its_own_window_runs_windowed_and_answers_ok() {
+fn paragraph_in_its_own_window_blocks_the_document_and_answers_ok() {
     let mut app = app_with("one\ntwo");
     app.services.paragraph_window = true;
     let mut h = app_harness(app);
     h.run_steps(2);
-    let id = open_named(&mut h, "paragraph", json!({}));
-    let windowed = h
-        .state()
-        .dialog_host
-        .get_by_id::<ParagraphHost>(id)
-        .map(craft::ui::dialog::StackDialog::windowed)
-        .unwrap_or_else(|| panic!("the paragraph dialog is on the host"));
-    assert!(windowed, "the dialog asked for a window of its own");
-    // The document window behind the panel is blocked while the panel is open.
-    assert!(h.ctx.memory(|m| m.top_modal_layer().is_some()), "the document is blocked behind the panel");
-    // An OK filed in the panel's window runs para.set, as in the document window.
+    open_named(&mut h, "paragraph", json!({}));
+    assert!(h.ctx.memory(|m| m.top_modal_layer().is_some()), "the document is blocked behind the dialog");
     let depth = h.state().session.undo_depth();
     apply_paragraph(&mut h, |f| f.space_before = Some(6.0));
     assert_eq!(props(h.state()).space_before, Some(6.0));
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
-    assert!(!is_open(h.state(), "paragraph"), "the panel closed on OK");
-    assert!(h.ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
-}
-
-/// Without `Services::paragraph_window` the Paragraph dialog is an ordinary in-window one.
-#[test]
-fn paragraph_without_the_window_service_stays_in_the_document_window() {
-    let mut h = app_harness(app_with("one"));
-    h.run_steps(2);
-    let id = open_named(&mut h, "paragraph", json!({}));
-    let windowed = h.state().dialog_host.get_by_id::<ParagraphHost>(id).map(craft::ui::dialog::StackDialog::windowed).unwrap_or_default();
-    assert!(!windowed);
-    let ctx = h.ctx.clone();
-    h.state_mut().dialog_host.cancel_by_id(&ctx, id);
-    h.run_steps(2);
-    assert!(!is_open(h.state(), "paragraph"), "cancel closes it");
+    assert!(!is_open(h.state(), "paragraph"), "the dialog closed on OK");
+    assert!(h.ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the dialog closes");
 }
