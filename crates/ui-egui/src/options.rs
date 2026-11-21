@@ -6,11 +6,13 @@
 //! outside the engine are written directly by [`OptionsModel::set`].
 
 use craft::behavior::{EditEvent, MotionMode, keyed};
+use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
+use craft::ui::contract::{Bind, Entry, Politeness, Props as _, Show, ShowCollection, ShowContainer};
 use craft::ui::display::{Elide, Shade, Text};
-use craft::ui::layout_components::Row;
+use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
+use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
 use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
 use craft::ui::runtime::memory::Remember;
@@ -774,40 +776,55 @@ struct NewWord(String);
 struct DefaultFileLocation {
     saved: String,
     draft: String,
+    /// The rejected draft and its validation message, shown while that draft is unchanged.
+    rejected: Option<(String, String)>,
 }
 
 impl OptionsModel<'_> {
     fn default_file_location(&mut self, ui: &mut Ui) {
-        Row::new().show(ui, |ui, cx| {
+        Stack::new().show(ui, |ui, cx| {
             let location = &mut *cx.keep::<DefaultFileLocation>();
             let saved = self.app.session.prefs.default_file_location.clone().unwrap_or_default();
             if location.saved != saved {
                 location.draft.clone_from(&saved);
                 location.saved = saved;
+                location.rejected = None;
             }
-            let field = TextField::new(tl!("Default local file location:"), Bind::bound(&mut location.draft))
-                .limit(None)
-                .placeholder(tl!("Not set: the system's choice"))
-                .submits()
-                .show(ui);
-            let changed = location.draft.trim() != location.saved;
-            let apply = Button::new(tl!("Apply")).enabled(changed).show(ui).clicked();
-            let clear = Button::new(tl!("Clear")).enabled(!location.saved.is_empty()).show(ui).clicked();
-            let value = if clear {
-                Some("")
-            } else if changed && (apply || field.submitted) {
-                Some(location.draft.trim())
-            } else {
-                None
-            };
-            if let Some(value) = value {
-                match self.app.run("file.options", json!({"defaultFileLocation": value})) {
-                    Ok(_) => {
-                        location.saved = self.app.session.prefs.default_file_location.clone().unwrap_or_default();
-                        location.draft.clone_from(&location.saved);
-                    }
-                    Err(error) => self.app.status(error),
+            Row::new().show(ui, |ui, _| {
+                let field = TextField::new(tl!("Default local file location:"), Bind::bound(&mut location.draft))
+                    .limit(None)
+                    .placeholder(tl!("Not set: the system's choice"))
+                    .submits()
+                    .show(ui);
+                if location.rejected.as_ref().is_some_and(|(draft, _)| *draft != location.draft) {
+                    location.rejected = None;
                 }
+                let changed = location.draft.trim() != location.saved;
+                let apply = Button::new(tl!("Apply")).enabled(changed).show(ui).clicked();
+                let clear = Button::new(tl!("Clear")).enabled(!location.saved.is_empty()).show(ui).clicked();
+                let value = if clear {
+                    Some("")
+                } else if changed && (apply || field.submitted) {
+                    Some(location.draft.trim())
+                } else {
+                    None
+                };
+                if let Some(value) = value {
+                    match self.app.run("file.options", json!({"defaultFileLocation": value})) {
+                        Ok(_) => {
+                            location.saved = self.app.session.prefs.default_file_location.clone().unwrap_or_default();
+                            location.draft.clone_from(&location.saved);
+                            location.rejected = None;
+                        }
+                        Err(error) => {
+                            self.app.status(error.clone());
+                            location.rejected = Some((location.draft.clone(), error));
+                        }
+                    }
+                }
+            });
+            if let Some((_, error)) = &location.rejected {
+                Notice::new(Tone::Bad, error.clone()).layout(NoticeLayout::Inline).announce(Politeness::Assertive).show(ui);
             }
         });
     }

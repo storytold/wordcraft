@@ -302,6 +302,8 @@ fn save_options_default_file_location_applies_and_clears() {
     h.get_by_label("Apply").click();
     options_frames(&mut h, 4);
     assert!(h.state().session.prefs.default_file_location.is_none());
+    let rejection = "isn't a full path";
+    assert!(h.query_by_label_contains(rejection).is_some(), "Options shows why it refused the folder");
 
     let field = h.get_by_role_and_label(Role::TextInput, label);
     field.focus();
@@ -310,6 +312,7 @@ fn save_options_default_file_location_applies_and_clears() {
     options_frames(&mut h, 2);
     h.get_by_role_and_label(Role::TextInput, label).type_text(dir.to_str().unwrap());
     options_frames(&mut h, 4);
+    assert!(h.query_by_label_contains(rejection).is_none(), "editing the path clears the error");
     h.get_by_label("Apply").click();
     options_frames(&mut h, 4);
     assert_eq!(h.state().session.prefs.default_file_location.as_deref(), dir.to_str());
