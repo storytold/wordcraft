@@ -90,7 +90,13 @@ impl<'a> Builder<'a> {
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
                 }
             };
-            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            // Font metrics follow the script of the shaped character. A combining mark keeps
+            // the base character's metrics, like it keeps the base character's face.
+            let arabic = match cur {
+                Some(k) if mark => k.arabic,
+                _ => sym.is_none() && wordcraft_fonts::word::is_arabic_script(dc),
+            };
+            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, arabic, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
                 Some(previous) => {
@@ -341,9 +347,6 @@ impl<'a> Builder<'a> {
         };
         self.note_missing_fonts(text, &segs, (primary, primary_cs, primary_ea), &missing);
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
-        // Word gives every line of a run with Arabic letters the height of its missing font, spaces
-        // and digits between the letters included.
-        let arabic_run = text.chars().any(wordcraft_fonts::word::is_arabic_script);
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
             let rc = match (&rc_cs, key.complex) {
@@ -352,7 +355,7 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style_for(rc, key.face, small, arabic_run);
+            let si = self.style_for(rc, key.face, small, key.arabic);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several

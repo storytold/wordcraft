@@ -812,7 +812,7 @@ fn scripts_that_join_their_letters_are_told_apart() {
 /// Arabic text in a font that isn't installed.
 const TIMES_LINE_EM: f64 = 2355.0 / 2048.0;
 
-/// The (ascent + descent) in em of each cluster's style, for one paragraph of `text` set at 12 pt
+/// The (ascent + descent) in em of each text cluster's style, for a paragraph of `text` at 12 pt
 /// with the Latin font `font` and complex-script font `font_cs`.
 fn line_em_per_cluster(text: &str, font: &str, font_cs: &str) -> Vec<f64> {
     line_em_in(text, font, font_cs, &[])
@@ -824,10 +824,22 @@ fn line_em_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<f64>
     line_styles_in(text, font, font_cs, roman).into_iter().map(|(em, _)| em).collect()
 }
 
-/// Each cluster's line (ascent + descent in em) and whether it is the Arabic missing-font line.
+/// Each visible text cluster's font metrics and whether it uses the Arabic missing-font line.
 fn line_styles_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<(f64, bool)> {
+    let l = laid_font_text(text, font, font_cs, roman);
+    let (pl, _) = first_line(&l, 0);
+    pl.clusters
+        .iter()
+        .filter(|c| c.kind == crate::para::ClKind::Text)
+        .filter_map(|c| pl.styles.get(c.style as usize))
+        .map(|st| (f64::from(st.ascent + st.descent) / 12.0, st.arabic_line))
+        .collect()
+}
+
+fn laid_font_text(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> DocLayout {
     crate::test_fonts();
-    let mut d = Document::from_text(text);
+    let mut d = Document::default();
+    *d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap() = wordcraft_doc::Paragraph::with_text(text, CharProps::default());
     d.settings.roman_fonts = roman.iter().map(|f| f.to_string()).collect();
     d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
         c.font = Some(font.into());
@@ -836,14 +848,7 @@ fn line_styles_in(text: &str, font: &str, font_cs: &str, roman: &[&str]) -> Vec<
         c.size_cs = Some(12.0);
     })
     .unwrap();
-    let l = lay(&d);
-    let (pl, _) = first_line(&l, 0);
-    pl.clusters
-        .iter()
-        .filter(|c| matches!(c.kind, crate::para::ClKind::Text | crate::para::ClKind::Space))
-        .filter_map(|c| pl.styles.get(c.style as usize))
-        .map(|st| (f64::from(st.ascent + st.descent) / 12.0, st.arabic_line))
-        .collect()
+    lay(&d)
 }
 
 #[test]
@@ -858,12 +863,6 @@ fn arabic_text_in_a_missing_font_has_times_new_romans_line_height() {
     // A missing font that merely starts with the name of a font Word has is another font.
     let em = line_em_per_cluster("ببب", "Arial Custom Naskh 6803", "Arial Custom Naskh 6803");
     assert!(!em.is_empty());
-    for e in &em {
-        assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
-    }
-    // Spaces and digits between Arabic letters are as tall as the letters.
-    let em = line_em_per_cluster("ببب ببب 12", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
-    assert!(em.len() >= 9, "{em:?}");
     for e in &em {
         assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{em:?}");
     }
@@ -911,9 +910,42 @@ fn latin_text_and_installed_fonts_keep_their_own_line_height() {
     for (_, times) in &tahoma {
         assert!(!times, "{tahoma:?}");
     }
-    // A run with Arabic letters is one height throughout, its Latin letters included.
-    let mixed = line_em_per_cluster("abc ببب", "Zz Invented Naskh 6803", "Zz Invented Naskh 6803");
-    for e in &mixed {
-        assert!((e - TIMES_LINE_EM).abs() < 1e-3, "{mixed:?}");
+}
+
+#[test]
+fn arabic_metrics_do_not_change_other_scripts_in_a_run() {
+    // Test a real Latin family and a guaranteed missing one. In the second case both script
+    // slots name the same family, so equal font names cannot hide a leaked metric.
+    let missing = "Zz Invented Naskh 6803";
+    let text = "abc 12 中 ببب def";
+    for font in ["Aptos", missing] {
+        let l = laid_font_text(text, font, missing, &[]);
+        let (pl, _) = first_line(&l, 0);
+        let mut arabic = 0;
+        let mut other = 0;
+        for c in pl.clusters.iter().filter(|c| c.kind == crate::para::ClKind::Text) {
+            let chars = &text[c.start..c.end];
+            let expected = chars.chars().any(wordcraft_fonts::word::is_arabic_script);
+            assert_eq!(pl.styles[c.style as usize].arabic_line, expected, "{font}: {chars}");
+            arabic += usize::from(expected);
+            other += usize::from(!expected);
+        }
+        assert!(arabic > 0 && other > 0);
+    }
+}
+
+#[test]
+fn manual_breaks_keep_the_preceding_arabic_line_metrics() {
+    let missing = "Zz Invented Naskh 6803";
+    let l = laid_font_text("ببب \nببب\nببب", missing, missing, &[]);
+    let (pl, _) = first_line(&l, 0);
+    assert_eq!(pl.lines.len(), 3);
+    for line in &pl.lines {
+        assert!((line.text_asc + line.text_desc - 12.0 * TIMES_LINE_EM as f32).abs() < 0.02, "{line:?}");
+    }
+    let breaks: Vec<_> = pl.clusters.iter().filter(|c| c.kind == crate::para::ClKind::LineBreak).collect();
+    assert_eq!(breaks.len(), 2);
+    for c in breaks {
+        assert!(pl.styles[c.style as usize].arabic_line);
     }
 }
