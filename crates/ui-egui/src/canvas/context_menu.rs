@@ -21,10 +21,11 @@ pub(crate) enum ContextAsk {
 }
 
 /// The spelling suggestions and synonyms the context menu offers for the selection or the word
-/// at the caret.
+/// at the caret, and whether it offers Accept and Reject Change: worked out once, as it opens.
 pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_issue = app.session.run("review.suggestions", &json!({})).ok().filter(|v| !v.is_null());
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
+    app.canvas.context_change = wordcraft_engine::cmd::review::change_at_selection(&app.session);
 }
 
 /// The heading of a proofing issue's context menu, in the interface language like the rest of
@@ -59,13 +60,20 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
                 if wordcraft_engine::cmd::objects::selected(&app.session).is_some() {
                     app.canvas.context_issue = None;
                     app.canvas.context_synonyms = None;
+                    app.canvas.context_change = false;
                 } else {
                     context_suggestions(app);
                 }
             }
             open = true;
         }
+        // What the menu offers was worked out for the selection it opened on: when a command
+        // changes that under the open menu (one over the control channel, say), the menu closes.
+        None if app.canvas.context_sel.as_ref() != Some(&app.session.sel) => open = false,
         None => {}
+    }
+    if ask.is_some() {
+        app.canvas.context_sel = Some(app.session.sel.clone());
     }
     if !open {
         app.canvas.context_menu_open = false;
@@ -114,7 +122,8 @@ fn rule(ui: &mut Ui) {
     let _ = Divider::horizontal().show(ui);
 }
 
-/// The text menu's rows.
+/// The text menu's rows: a proofing issue's suggestions, Accept and Reject Change on a tracked
+/// change, then Cut, Copy, Paste and the rest (an equation has rows of its own).
 fn rows(app: &mut WordApp, ui: &mut Ui) {
     if let Some(issue) = app.canvas.context_issue.clone() {
         let sugg: Vec<String> = issue
@@ -135,6 +144,12 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
             item(ui, "Ignore All", "review.ignoreAll", json!({}));
             item(ui, "Add to Dictionary", "review.addToDictionary", json!({}));
         }
+        rule(ui);
+    }
+    // A tracked change at the caret or in the selection: resolve it from here, as in Word.
+    if app.canvas.context_change {
+        item(ui, "Accept Change", "review.accept", json!({}));
+        item(ui, "Reject Change", "review.reject", json!({}));
         rule(ui);
     }
     item(ui, "Cut", "edit.cut", json!({}));
