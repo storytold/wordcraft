@@ -103,6 +103,10 @@ pub struct AutoCorrectPrefs {
     /// A second Space after a word, number or closing bracket or quote turns the first into a
     /// period (macOS's "Add period with double-space"); off by default.
     pub double_space_period: bool,
+    /// Define styles based on your formatting: Enter at the end of a Normal paragraph whose
+    /// text, all formatted alike, looks exactly like Heading 1, 2 or 3 gives it that style.
+    /// No new style is created. Off by default.
+    pub define_styles: bool,
     /// The user's entries: added, or replacing a built-in one.
     pub entries: Vec<(String, String)>,
     /// Built-in entries the user deleted.
@@ -142,6 +146,7 @@ impl Default for AutoCorrectPrefs {
             tab_indent: false,
             heading_styles: false,
             double_space_period: false,
+            define_styles: false,
             entries: Vec::new(),
             removed: Vec::new(),
             exceptions: Vec::new(),
@@ -337,6 +342,7 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         ("tabIndent", &mut ac.tab_indent),
         ("headingStyles", &mut ac.heading_styles),
         ("doubleSpacePeriod", &mut ac.double_space_period),
+        ("defineStyles", &mut ac.define_styles),
         ("autoAddFirstLetter", &mut ac.auto_add_first_letter),
         ("autoAddInitialCaps", &mut ac.auto_add_initial_caps),
     ] {
@@ -414,6 +420,7 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         "tabIndent": ac.tab_indent,
         "headingStyles": ac.heading_styles,
         "doubleSpacePeriod": ac.double_space_period,
+        "defineStyles": ac.define_styles,
         "autoAddFirstLetter": ac.auto_add_first_letter,
         "autoAddInitialCaps": ac.auto_add_initial_caps,
         "entries": ac.list().into_iter().map(|(a, b, builtin)| json!({"from": a, "to": b, "builtIn": builtin})).collect::<Vec<_>>(),

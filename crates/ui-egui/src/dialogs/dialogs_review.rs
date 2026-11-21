@@ -313,6 +313,7 @@ impl AutoCorrectForm {
             "tabIndent": o.tab_indent,
             "headingStyles": o.heading_styles,
             "doubleSpacePeriod": o.double_space_period,
+            "defineStyles": o.define_styles,
             "autoAddFirstLetter": o.auto_add_first_letter,
             "autoAddInitialCaps": o.auto_add_initial_caps,
         })
@@ -523,6 +524,7 @@ impl AutoCorrectForm {
             Checkbox::new(Bind::bound(&mut o.tab_indent))
                 .label(Label::from(tl!("Set left- and first-indent with tabs and backspaces").to_string()))
                 .show(ui);
+            Checkbox::new(Bind::bound(&mut o.define_styles)).label(Label::from(tl!("Define styles based on your formatting").to_string())).show(ui);
         });
     }
 
@@ -623,6 +625,47 @@ mod tests {
         let mut d = app("");
         d.apply_prefs(serde_json::from_value(v).unwrap());
         assert_eq!(d.session.prefs.autocorrect.entries, vec![("ok".to_string(), "fine".to_string())]);
+    }
+
+    /// Tick "Define styles based on your formatting" on the AutoFormat As You Type tab and press
+    /// OK: the option is on, it is saved with the preferences, and the dialog shows it ticked when
+    /// it opens again.
+    #[test]
+    fn the_define_styles_option_is_set_in_the_dialog_and_saved() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app("");
+        assert!(!app.session.prefs.autocorrect.define_styles, "off by default");
+        app.run("tools.autocorrect", json!({})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("AutoFormat As You Type").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("Define styles based on your formatting").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("OK").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.state().dialog_host.stack().is_empty(), "OK closes the dialog");
+        assert!(h.state().session.prefs.autocorrect.define_styles, "the option is on");
+        assert_eq!(AutoCorrectForm::new(h.state()).params()["defineStyles"], json!(true));
+        let saved = serde_json::to_string(&h.state().prefs()).unwrap();
+        let mut b = self::app("");
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(b.session.prefs.autocorrect.define_styles, "the option is saved");
     }
 
     /// #2848 through the real dialog: tick "Add a period with double-space" on the AutoFormat As
