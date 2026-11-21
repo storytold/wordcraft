@@ -211,3 +211,6 @@ real_name = "Ashok Ram"
 
 [people.benandez]
 sync_github_name = true
+
+[people.so-sai]
+display_name = "so.sai"
