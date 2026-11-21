@@ -107,14 +107,14 @@ impl Exporter<'_> {
         let valid = known.len() == glyphs.len() && known.iter().all(|r| r.start < r.end && text.get(r.clone()).is_some());
         let (txt, ranges) = if valid { (text.to_string(), known.to_vec()) } else { self.map_text(face, glyphs, text) };
         let upem = face.upem.max(1.0) as f32;
-        // Right-to-left text is written left to right as it appears (see `left_to_right`); glyphs
-        // already in that order are written as they are.
-        let (order, ranges) = if left_to_right(glyphs) {
-            ((0..glyphs.len()).collect(), ranges)
-        } else {
-            let parts = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
-            (visual_order(&txt, glyphs, &ranges, &parts), parts)
-        };
+        // Every glyph takes the character it shows where its cluster can be spelled per glyph (see
+        // `split_clusters`), so the ToUnicode maps give each one a character and a viewer that
+        // ignores /ActualText reads the text back without control characters or a reused glyph's
+        // earlier cluster (#5883). Right-to-left text is written left to right as it appears (see
+        // `left_to_right`); glyphs already in that order are written as they are.
+        let (txt, clusters, parts) = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
+        let (order, ranges) =
+            if left_to_right(glyphs) { ((0..glyphs.len()).collect(), parts) } else { (visual_order(&txt, glyphs, &clusters, &parts), parts) };
         let placed: Vec<(u32, f32, f32, std::ops::Range<usize>)> =
             order.iter().filter_map(|&i| Some((glyphs.get(i).copied()?, ranges.get(i).cloned()?))).map(|((g, x, y), r)| (g, x, y, r)).collect();
         let Some(&(_, x0, y0, _)) = placed.first() else { return };
