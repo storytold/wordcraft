@@ -142,6 +142,17 @@ pub fn cell_margins(doc: &wordcraft_doc::Document, t: &Table, row: usize, cell: 
     t.rows.get(row).and_then(|r| r.cells.get(cell)).map_or(defaults, |cell| cell.props.resolved_margins(defaults))
 }
 
+/// The run formatting the table style gives text in cell `cell` of row `row`, with the cell's
+/// conditional formatting (header row, first column…) applied, as the layout uses it (`None`
+/// without a table style or such a cell).
+pub fn cell_chr(doc: &wordcraft_doc::Document, t: &Table, row: usize, cell: usize) -> Option<wordcraft_doc::CharProps> {
+    let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id))?;
+    let r = t.rows.get(row)?;
+    let g = r.cells.iter().take(cell).fold(r.first_grid(), |g, c| g.saturating_add(c.span()));
+    let span = r.cells.get(cell)?.span();
+    Some(region_text(&style, region_of(t, Some(&style), row, g, span, grid_cols(t).max(1))).chr)
+}
+
 /// The most paragraphs [`measure_table_columns`] lays out: a huge table is measured by its first
 /// rows only, so AutoFit stays quick.
 const MEASURE_BUDGET: usize = 4000;
