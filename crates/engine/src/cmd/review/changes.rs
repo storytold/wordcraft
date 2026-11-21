@@ -82,21 +82,57 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     let Some((tp, r, c)) = path.cell() else { return Ok(false) };
     let has = s.doc.table(story, &tp).is_some_and(|t| {
         let row = t.rows.get(r);
-        t.props.fmt_change.is_some()
-            || row.is_some_and(|x| x.props.fmt_change.is_some())
-            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
+        (r == 0 && c == 0 && t.props.fmt_change.is_some())
+            || (c == 0
+                && row.is_some_and(|x| {
+                    x.props.ins.is_some()
+                        || x.props.del.is_some()
+                        || x.props.fmt_change.is_some()
+                        || x.props.exceptions.as_ref().is_some_and(|e| e.fmt_change.is_some())
+                }))
+            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.ins.is_some() || x.props.del.is_some() || x.props.fmt_change.is_some())
     });
     if !has {
         return Ok(false);
     }
-    let t = s.doc.table_mut(story, &tp)?;
-    fmt_revisions::resolve_table(t, accept);
-    if let Some(row) = t.rows.get_mut(r) {
-        fmt_revisions::resolve_row(row, accept);
-        if let Some(cell) = row.cells.get_mut(c) {
-            fmt_revisions::resolve_cell(cell, accept);
+    let remove_table = {
+        let t = s.doc.table_mut(story, &tp)?;
+        if r == 0 && c == 0 {
+            fmt_revisions::resolve_table(t, accept);
+        }
+        let drop_row = c == 0 && t.rows.get(r).is_some_and(|row| (row.props.del.is_some() && accept) || (row.props.ins.is_some() && !accept));
+        if drop_row {
+            t.delete_row(r);
+        } else if let Some(row) = t.rows.get_mut(r) {
+            if c == 0 {
+                row.props.ins = None;
+                row.props.del = None;
+                fmt_revisions::resolve_row(row, accept);
+            }
+            let drop_cell = row.cells.get(c).is_some_and(|cell| (cell.props.del.is_some() && accept) || (cell.props.ins.is_some() && !accept));
+            if drop_cell {
+                row.cells.remove(c);
+            } else if let Some(cell) = row.cells.get_mut(c) {
+                cell.props.ins = None;
+                cell.props.del = None;
+                fmt_revisions::resolve_cell(cell, accept);
+            }
+            if row.cells.is_empty() {
+                t.delete_row(r);
+            }
+        }
+        t.rows.is_empty()
+    };
+    if remove_table {
+        let bl = s.doc.container_mut(story, &tp)?;
+        if tp.last() < bl.len() {
+            bl.remove(tp.last());
+        }
+        if bl.is_empty() {
+            bl.push(std::sync::Arc::new(wordcraft_doc::Block::Para(Paragraph::new())));
         }
     }
+    s.clamp_selection();
     Ok(true)
 }
 
@@ -371,16 +407,30 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
-    for path in s.doc.paths_between(&a, &b).into_iter().rev() {
-        let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
-        let from = if path == a.path { a.off } else { 0 };
-        let to = if path == b.path { b.off } else { len };
+    let paths = s.doc.paths_between(&a, &b);
+    let cell_prefixes: std::collections::HashSet<Vec<u32>> =
+        if ranged { paths.iter().filter(|p| p.cell().is_some()).map(|p| p.parent().to_vec()).collect() } else { std::collections::HashSet::new() };
+    for (idx, path) in paths.iter().enumerate().rev() {
+        let len = s.doc.para(a.story, path).map(|p| p.len()).unwrap_or(0);
+        let from = if *path == a.path { a.off } else { 0 };
+        let to = if *path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
-        let mark = path != b.path || caret_mark.as_ref() == Some(&path);
-        let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
-        resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
+        let mark = *path != b.path || caret_mark.as_ref() == Some(path);
+        let props = (ranged && (*path != b.path || to > from)) || caret_props.as_ref() == Some(path);
+        resolve_para(s, a.story, path, (from, to), (mark, props), accept)?;
         if ranged {
-            resolve_cell(s, a.story, &path, accept)?;
+            let prev = idx.checked_sub(1).and_then(|i| paths.get(i));
+            let slice = path.0.as_slice();
+            let mut depth = slice.len().saturating_sub(1);
+            while depth >= 3 {
+                let prefix = &slice[..depth];
+                if cell_prefixes.contains(prefix) && !prev.is_some_and(|p| p.0.starts_with(prefix)) {
+                    let mut cell_para = prefix.to_vec();
+                    cell_para.push(0);
+                    resolve_cell(s, a.story, &wordcraft_doc::Path(cell_para), accept)?;
+                }
+                depth -= 3;
+            }
         }
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
@@ -409,8 +459,36 @@ fn changes(s: &Session) -> Vec<Change> {
         {
             let row = t.rows.get(r);
             let cell = row.and_then(|x| x.cells.get(c));
+            if c == 0
+                && let Some(row) = row
+            {
+                let kind = run_kind(&s.doc, row.props.ins, row.props.del);
+                if !kind.is_empty() {
+                    out.push(Change { a: mk(&path, 0), b: mk(&path, 0), kind, rev: row.props.ins.or(row.props.del), props: Vec::new(), style: None });
+                }
+            }
+            if let Some(cell) = cell {
+                let kind = run_kind(&s.doc, cell.props.ins, cell.props.del);
+                if !kind.is_empty() {
+                    out.push(Change {
+                        a: mk(&path, 0),
+                        b: mk(&path, 0),
+                        kind,
+                        rev: cell.props.ins.or(cell.props.del),
+                        props: Vec::new(),
+                        style: None,
+                    });
+                }
+            }
             let found = [
                 (r == 0 && c == 0).then(|| t.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(&t.props)))).flatten(),
+                (c == 0)
+                    .then(|| {
+                        row.and_then(|x| {
+                            x.props.exceptions.as_deref().and_then(|ex| ex.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(ex))))
+                        })
+                    })
+                    .flatten(),
                 (c == 0).then(|| row.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::row_diff(&x.props))))).flatten(),
                 cell.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::cell_diff(&x.props)))),
             ];
@@ -482,7 +560,11 @@ pub fn has_format_changes(doc: &wordcraft_doc::Document) -> bool {
                 || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())
                 || path.cell().and_then(|(tp, r, c)| doc.table(StoryRef::Body, &tp).map(|t| (t, r, c))).is_some_and(|(t, r, c)| {
                     t.props.fmt_change.is_some()
-                        || t.rows.get(r).is_some_and(|x| x.props.fmt_change.is_some() || x.cells.get(c).is_some_and(|x| x.props.fmt_change.is_some()))
+                        || t.rows.get(r).is_some_and(|x| {
+                            x.props.fmt_change.is_some()
+                                || x.props.exceptions.as_ref().is_some_and(|e| e.fmt_change.is_some())
+                                || x.cells.get(c).is_some_and(|x| x.props.fmt_change.is_some())
+                        })
                 })
         })
     })
@@ -570,6 +652,11 @@ pub fn has_deletions(doc: &wordcraft_doc::Document) -> bool {
     doc.para_paths(StoryRef::Body).iter().any(|path| {
         doc.para(StoryRef::Body, path)
             .is_some_and(|p| plain_deletion(doc, p.mark.del).is_some() || p.runs.iter().any(|r| plain_deletion(doc, r.props.del).is_some()))
+            || path.cell().and_then(|(tp, r, c)| doc.table(StoryRef::Body, &tp).map(|t| (t, r, c))).is_some_and(|(t, r, c)| {
+                t.rows.get(r).is_some_and(|x| {
+                    plain_deletion(doc, x.props.del).is_some() || x.cells.get(c).is_some_and(|x| plain_deletion(doc, x.props.del).is_some())
+                })
+            })
     })
 }
 

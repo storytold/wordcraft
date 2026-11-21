@@ -6,6 +6,7 @@
 
 mod fit;
 mod model_bridge;
+mod table_revisions;
 
 pub use craft_docx::{
     DEFAULT_SPIN_COUNT, DocxError, EmbeddedFont, Flavor, MAX_PASSWORD_CHARS, MAX_SOURCES, MAX_XML_FILE, PASSWORD_REQUIRED, PasswordCheck,
@@ -64,7 +65,9 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Docu
         craft_docx::ReadOptions { password: opts.password, chunks: opts.chunks.as_ref().map(|_| &bridge_importer as craft_docx::ChunkImporter) };
 
     let shared = craft_docx::read_with(bytes, &shared_opts)?;
-    from_shared_model(shared)
+    let mut doc = from_shared_model(shared)?;
+    table_revisions::apply_read_table_revs(bytes, &mut doc);
+    Ok(doc)
 }
 
 /// Read a Word XML file (`.xml`).
@@ -76,13 +79,13 @@ pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
 /// Write a document as `.docx`.
 pub fn write(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxError> {
     let shared = to_shared_model(doc)?;
-    craft_docx::write(&shared)
+    craft_docx::write(&shared).map(|bytes| table_revisions::apply_write_table_revs(doc, bytes))
 }
 
 /// Write a document with a specific package flavor.
 pub fn write_as(doc: &wordcraft_doc::Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
     let shared = to_shared_model(doc)?;
-    craft_docx::write_as(&shared, flavor)
+    craft_docx::write_as(&shared, flavor).map(|bytes| table_revisions::apply_write_table_revs(doc, bytes))
 }
 
 /// Write a document as a Flat OPC XML file.
