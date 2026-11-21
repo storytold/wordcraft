@@ -203,13 +203,15 @@ impl ParaLayout {
     }
     /// The farthest right a caret goes on left-to-right line `li`: spaces at the end of a line
     /// hang past its right edge, but the caret after them stays at the edge, as in Word (#2146);
-    /// text that overflows the line still carries it. `None` on bidirectional lines.
+    /// text that overflows the line still carries it. Markers and breaks after the spaces hang
+    /// with them, as where the line's content ends (#6434). `None` on bidirectional lines.
     pub fn caret_limit(&self, li: usize) -> Option<f32> {
         let l = self.lines.get(li)?;
         if !l.vis.is_empty() {
             return None;
         }
-        let ink = (l.c0..l.c1).rev().find(|&k| self.clusters.get(k).is_some_and(|c| c.kind != ClKind::Space));
+        let hangs = |c: &Cluster| matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
+        let ink = (l.c0..l.c1).rev().find(|&k| self.clusters.get(k).is_some_and(|c| !hangs(c)));
         let end = match ink {
             Some(k) => l.xs.get(k + 1 - l.c0).copied(),
             None => l.xs.first().copied(),
