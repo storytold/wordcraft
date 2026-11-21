@@ -488,6 +488,7 @@ fn code_blocks_and_rules() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn deep_nesting_is_bounded() {
     let html = "<div><table><tr><td>".repeat(5000) + "x";
     let d = import("html", html.as_bytes()).unwrap().unwrap();
@@ -566,6 +567,7 @@ fn latex_export_carries_no_commands_from_the_document() {
 /// past them for the last text made a megabyte of labels take tens of seconds), and labels
 /// separated by text are all kept.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn latex_labels_in_a_row_are_read_in_linear_time() {
     let started = std::time::Instant::now();
     for src in ["\\label{a} ".repeat(100_000) + "x", "\\label{a}".repeat(100_000) + "x", "\\hypertarget{a}{} ".repeat(100_000)] {
@@ -743,6 +745,7 @@ fn decorative_picture_exports_with_empty_alt_text() {
 /// Hostile Markdown and HTML that rescanned the rest of the text from every `[`, `![`, `<` or `&`
 /// took quadratic time: a few hundred KB froze the importer for tens of seconds.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hostile_importer_input_takes_linear_time() {
     use std::time::{Duration, Instant};
     let cases: [(&str, String); 5] = [
@@ -764,6 +767,7 @@ fn hostile_importer_input_takes_linear_time() {
 /// bracket scan over them looking for a closing run through the rest of the text: superlinear
 /// time on hostile Markdown.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn unmatched_backtick_runs_take_linear_time() {
     use std::time::{Duration, Instant};
     // Runs of 1, 2, … 2000 backticks (2 MB), none of them closed.

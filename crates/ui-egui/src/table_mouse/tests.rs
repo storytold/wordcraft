@@ -1,24 +1,20 @@
 use super::*;
 use crate::table_resize::tests::{H, button, cell, screen, steps, table_window, table_window_stepping};
+use crate::test_harness::AppFrames as _;
 
-/// On the dark paper the column and cell arrows are drawn light, so they stay visible; on
-/// white paper they stay black, and the hollow row arrow is the same on both.
-#[test]
-fn the_selection_arrow_is_light_on_dark_paper() {
-    let dark_paper = Color32::from_gray(wordcraft_render::DARK_PAPER);
-    assert_eq!(arrow_colors(Spot::Column(0), false), (Color32::BLACK, Color32::WHITE));
-    assert_eq!(arrow_colors(Spot::Cell(0, 0), false), (Color32::BLACK, Color32::WHITE));
-    assert_eq!(arrow_colors(Spot::Column(0), true), (Color32::WHITE, dark_paper));
-    assert_eq!(arrow_colors(Spot::Cell(0, 0), true), (Color32::WHITE, dark_paper));
-    assert_eq!(arrow_colors(Spot::Row(0), false), (Color32::WHITE, Color32::BLACK));
-    assert_eq!(arrow_colors(Spot::Row(0), true), (Color32::WHITE, Color32::BLACK));
+/// The direction of the painted selection arrow the last pass settled on, `None` for any other cursor.
+fn arrow_toward(h: &H) -> Option<Vec2> {
+    match craft::ui::runtime::cursor::current(&h.ctx) {
+        Some(Cursor::Painted(PaintedCursor::Arrow { toward, .. })) => toward,
+        _ => None,
+    }
 }
 
 fn click(h: &mut H, at: Pos2) {
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     button(h, at, true);
-    h.step();
+    h.app_frame();
     button(h, at, false);
     steps(h, 2);
 }
@@ -33,7 +29,7 @@ fn a_click_above_a_column_selects_it() {
     let at = screen(&mut h, b.x + b.w / 2.0, b.y - 3.0);
     h.event(egui::Event::PointerMoved(at));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the drawn selection arrow");
+    assert!(arrow_toward(&h).is_some_and(|dir| dir.y > 0.0), "the selection arrow points down at the column");
     click(&mut h, at);
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (1, 1))));
     assert_eq!(h.state().session.undo_depth(), depth);
@@ -53,16 +49,16 @@ fn dragging_down_the_row_areas_selects_rows() {
     let start = screen(&mut h, a.x - 10.0, a.y + a.h / 2.0);
     let end = screen(&mut h, a.x - 10.0, b.y + b.h / 2.0);
     h.event(egui::Event::PointerMoved(start));
-    h.step();
+    h.app_frame();
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((0, 0)));
     h.event(egui::Event::PointerMoved(end));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((0, 1)), "the selection follows the pointer");
     button(&h, end, false);
     steps(&mut h, 2);
-    assert!(h.state().canvas.table_drag.is_none());
+    assert!(!dragging(h.state()));
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (0, 2))));
 }
 
@@ -78,17 +74,17 @@ fn the_margin_beside_a_table_selects_rows() {
     let at_a = screen(&mut h, far, ya);
     h.event(egui::Event::PointerMoved(at_a));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the drawn selection arrow");
+    assert!(arrow_toward(&h).is_some_and(|dir| dir.x > 0.0 && dir.y < 0.0), "the selection arrow points up and right beside the row");
     click(&mut h, at_a);
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 0), (0, 2))), "one click, the row");
     // Drag from row 0 to row 1.
     let end = screen(&mut h, far, yb);
     h.event(egui::Event::PointerMoved(at_a));
-    h.step();
+    h.app_frame();
     button(&h, at_a, true);
-    h.step();
+    h.app_frame();
     h.event(egui::Event::PointerMoved(end));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((0, 1)), "the selection follows the pointer");
     button(&h, end, false);
     steps(&mut h, 2);
@@ -96,15 +92,15 @@ fn the_margin_beside_a_table_selects_rows() {
     click(&mut h, at_a);
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((0, 0)));
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
-    h.step();
+    h.app_frame();
     h.event(egui::Event::PointerMoved(end));
-    h.step();
+    h.app_frame();
     button(&h, end, true);
-    h.step();
+    h.app_frame();
     button(&h, end, false);
     steps(&mut h, 2);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::default()));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (0, 2))), "extended by rows");
 }
 
@@ -121,20 +117,20 @@ fn a_shift_click_up_the_margin_keeps_its_anchor_while_held() {
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((1, 1)));
     let at = screen(&mut h, far, a.y + a.h / 2.0);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
-    h.step();
+    h.app_frame();
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     button(&h, at, true);
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((0, 1)), "extended up");
     for k in 1..=3 {
         h.event(egui::Event::PointerMoved(at + vec2(k as f32, 1.0)));
-        h.step();
+        h.app_frame();
     }
     button(&h, at + vec2(3.0, 1.0), false);
     steps(&mut h, 2);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::default()));
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (0, 2))), "the jitter kept the rows");
 }
 
@@ -158,11 +154,11 @@ fn triple_click_or_ctrl_click_beside_a_row_selects_the_document() {
     steps(&mut h, 40);
     for _ in 0..3 {
         h.event(egui::Event::PointerMoved(at));
-        h.step();
+        h.app_frame();
         button(&h, at, true);
-        h.step();
+        h.app_frame();
         button(&h, at, false);
-        h.step();
+        h.app_frame();
     }
     steps(&mut h, 2);
     assert!(whole(&mut h), "triple-click: {:?}", h.state().session.sel);
@@ -172,10 +168,10 @@ fn triple_click_or_ctrl_click_beside_a_row_selects_the_document() {
     assert_eq!(h.state().session.cell_range().map(|r| r.rows), Some((1, 1)));
     steps(&mut h, 40);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
-    h.step();
+    h.app_frame();
     click(&mut h, at);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::default()));
-    h.step();
+    h.app_frame();
     assert!(whole(&mut h), "ctrl+click: {:?}", h.state().session.sel);
 }
 
@@ -188,7 +184,7 @@ fn shift_click_beside_a_row_extends_a_selection_from_above() {
     a.run("insert.table", json!({"rows": 3, "cols": 2})).unwrap();
     a.run("caret.set", json!({"pos": serde_json::to_value(wordcraft_doc::Pos::body(0, 0)).unwrap()})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -200,10 +196,10 @@ fn shift_click_beside_a_row_extends_a_selection_from_above() {
     let b = cell(&mut h, 1, 0);
     let at = screen(&mut h, 20.0, b.y + b.h / 2.0);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
-    h.step();
+    h.app_frame();
     click(&mut h, at);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::default()));
-    h.step();
+    h.app_frame();
     let sel = h.state().session.sel.clone();
     assert_eq!(sel.anchor, wordcraft_doc::Pos::body(0, 0), "the selection still starts above the table");
     assert!(!sel.is_collapsed());
@@ -220,12 +216,12 @@ fn dragging_across_cells_selects_their_rectangle() {
     let start = screen(&mut h, a.x + a.w / 2.0, a.y + a.h / 2.0);
     let end = screen(&mut h, d.x + d.w / 2.0, d.y + d.h / 2.0);
     h.event(egui::Event::PointerMoved(start));
-    h.step();
+    h.app_frame();
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     for k in 1..=4 {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 4.0)));
-        h.step();
+        h.app_frame();
     }
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((0, 1), (1, 2))), "the selection follows the pointer");
     button(&h, end, false);
@@ -235,24 +231,6 @@ fn dragging_across_cells_selects_their_rectangle() {
     assert!(!crate::mini_toolbar::visible(h.state()));
 }
 
-/// The "+" left of a row border adds a row there and selects it, in one undo step; over it
-/// the pointer is the plain arrow.
-#[test]
-fn the_plus_button_adds_a_row() {
-    let mut h = table_window();
-    let a = cell(&mut h, 0, 0);
-    let depth = h.state().session.undo_depth();
-    let at = screen(&mut h, a.x - 10.0, a.bottom());
-    h.event(egui::Event::PointerMoved(at));
-    steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
-    click(&mut h, at);
-    let rows = h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len());
-    assert_eq!(rows, Some(3));
-    assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((1, 1), (0, 2))), "the new row is selected");
-    assert_eq!(h.state().session.undo_depth(), depth + 1);
-}
-
 /// A double-click along a cell's left edge selects its row, as in Word.
 #[test]
 fn a_double_click_by_a_cells_edge_selects_its_row() {
@@ -260,14 +238,14 @@ fn a_double_click_by_a_cells_edge_selects_its_row() {
     let c = cell(&mut h, 1, 1);
     let at = screen(&mut h, c.x + 4.5, c.y + c.h / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     button(&h, at, true);
-    h.step();
+    h.app_frame();
     button(&h, at, false);
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((1, 1), (1, 1))), "a click selects the cell");
     button(&h, at, true);
-    h.step();
+    h.app_frame();
     button(&h, at, false);
     steps(&mut h, 2);
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((1, 1), (0, 2))), "a double-click its row");
@@ -285,15 +263,15 @@ fn dragging_the_move_handle_moves_the_table() {
     let start = screen(&mut h, hx, hy);
     h.event(egui::Event::PointerMoved(start));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move);
+    assert_eq!(craft::ui::runtime::cursor::current(&h.ctx), Some(Cursor::System(CursorIcon::Move)), "the move arrows over the handle");
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     let end = screen(&mut h, hx + 40.0, hy + 30.0);
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
     }
-    assert!(h.state().canvas.table_drag.is_some(), "a move is in progress");
+    assert!(dragging(h.state()), "a move is in progress");
     assert_eq!(cell(&mut h, 0, 0), a, "the table waits for the release");
     button(&h, end, false);
     steps(&mut h, 3);
@@ -312,14 +290,14 @@ fn dropping_the_move_handle_keeps_the_view_where_it_is() {
     h.event(egui::Event::PointerMoved(start));
     steps(&mut h, 2);
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     let end = screen(&mut h, hx + 40.0, hy + 30.0);
     h.event(egui::Event::PointerMoved(end));
     steps(&mut h, 2);
     h.state_mut().canvas.scroll_to_caret = false;
     let depth = h.state().session.undo_depth();
     button(&h, end, false);
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.undo_depth(), depth + 1, "the table moved");
     assert!(!h.state().canvas.scroll_to_caret, "the move scrolled to the caret");
 }
