@@ -328,15 +328,20 @@ impl<'a> Flow<'a> {
         // During balancing, a trial column that cuts a kept run must grow until the run fits.
         let balancing = pb.balance.is_some_and(|(page, _)| pb.pages.len() == page + 1);
         let room = if room < 0.0 || balancing { f32::INFINITY } else { room };
-        let following =
-            |ctx: &mut Ctx, room| next_first_line(ctx, self.block, (rp, self.label.is_some()), self.width, 0, room, &mut ctx.counters.clone());
-        let need = height + if rp.keep_next { following(ctx, room) } else { 0.0 };
+        // A paragraph closing a section that the next one starts on a new page keeps with
+        // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
+        let closes_page = pb.next_starts_page && self.p.section.is_some();
+        let keep_next = rp.keep_next && !closes_page;
+        let following = |ctx: &mut Ctx, room| {
+            next_first_line(ctx, self.block, (rp, self.label.is_some()), self.width, 0, (room, pb.next_starts_page), &mut ctx.counters.clone())
+        };
+        let need = height + if keep_next { following(ctx, room) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         let next_room = pb.next_room(self.body_top);
         // Evaluated last: the room-limited count must not move a run that Word gives up on. When
         // the whole run is longer than a page, moving it fits nowhere and it stays where it is.
-        let whole_run_fits = |ctx: &mut Ctx| !rp.keep_next || room.is_infinite() || height + following(ctx, f32::INFINITY) <= next_room;
+        let whole_run_fits = |ctx: &mut Ctx| !keep_next || room.is_infinite() || height + following(ctx, f32::INFINITY) <= next_room;
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= next_room && whole_run_fits(ctx) {
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
@@ -1035,9 +1040,10 @@ fn next_first_line(
     previous: (&ResolvedPara, bool),
     width: f32,
     depth: usize,
-    room: f32,
+    page: (f32, bool),
     counters: &mut Counters,
 ) -> f32 {
+    let (room, new_page) = page;
     let (prev, prev_listed) = previous;
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
@@ -1086,8 +1092,8 @@ fn next_first_line(
             let paragraph = gap + top + pl.height + bottom;
             // It fits when it does, without its space after: placement measures a paragraph's
             // own fit without trailing spacing too. The spacing still counts for what follows.
-            if pl.rp.keep_next && depth < 8 && paragraph <= room {
-                paragraph + next_first_line(ctx, block + 1, (&pl.rp, listed), width, depth + 1, room - paragraph, counters)
+            if pl.rp.keep_next && depth < 8 && paragraph <= room && !(new_page && p.section.is_some()) {
+                paragraph + next_first_line(ctx, block + 1, (&pl.rp, listed), width, depth + 1, (room - paragraph, new_page), counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
