@@ -137,6 +137,7 @@ impl WordApp {
             canvas,
             restrict,
             spelling_review,
+            library: Default::default(),
             status,
             announcement,
             previews,

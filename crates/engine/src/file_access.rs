@@ -176,7 +176,7 @@ pub fn current() -> Option<Arc<AutomationRoots>> {
 }
 
 /// `path` without Windows' `\\?\` prefix (which `canonicalize` adds), for people to read.
-fn plain(path: PathBuf) -> PathBuf {
+pub(crate) fn plain(path: PathBuf) -> PathBuf {
     if !cfg!(windows) {
         return path;
     }

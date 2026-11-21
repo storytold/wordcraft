@@ -201,6 +201,38 @@ fn session(doc: wordcraft_doc::Document) -> Session {
     s
 }
 
+/// The largest settings file read for the Library folders: the app's `ui.json` is far smaller,
+/// even with a full custom dictionary.
+const MAX_SETTINGS_BYTES: u64 = 16 << 20;
+
+/// The Library folders the desktop app keeps in its preferences (`ui.json`'s `editing`), so `run`
+/// and headless `mcp` browse the same Library (#2868). Only those: the app's other preferences
+/// don't change what the CLI does. `WORDCRAFT_NO_PREFS` leaves them out, as it does for the app,
+/// and `WORDCRAFT_PROFILE_DIR` names another settings folder. The file is the app's own, read
+/// before any automation root is in force; the folders are checked against the roots whenever the
+/// Library reads them.
+fn saved_library_folders() -> Vec<String> {
+    use std::io::Read;
+    if std::env::var_os("WORDCRAFT_NO_PREFS").is_some() {
+        return vec![];
+    }
+    let Some(path) = wordcraft_control_key::settings_dir().map(|d| d.join("ui.json")) else { return vec![] };
+    let Ok(file) = std::fs::File::open(&path) else { return vec![] };
+    if !file.metadata().is_ok_and(|m| m.is_file() && m.len() <= MAX_SETTINGS_BYTES) {
+        return vec![];
+    }
+    let mut bytes = Vec::new();
+    if file.take(MAX_SETTINGS_BYTES).read_to_end(&mut bytes).is_err() {
+        return vec![];
+    }
+    // Through the preferences' own reading, which keeps the list within the Library's bounds.
+    let folders = serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| v.pointer("/editing/libraryFolders").cloned());
+    folders
+        .and_then(|f| serde_json::from_value::<wordcraft_engine::Prefs>(json!({"libraryFolders": f})).ok())
+        .map(|p| p.library_folders)
+        .unwrap_or_default()
+}
+
 /// The system region, read as the app reads it (locale variables, else the platform's locale).
 fn system_region() -> wordcraft_engine::Region {
     wordcraft_engine::Region::from_locale_vars(|name| std::env::var(name).ok(), sys_locale::get_locale)
@@ -648,6 +680,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             if let Some(name) = arg_value(&rest, "--author") {
                 set_author(&mut s, &name)?;
             }
+            s.prefs.library_folders = saved_library_folders();
             let print = rest.iter().any(|a| a == "--print");
             for (n, (id, params)) in script.iter().flat_map(|c| c.commands.iter()).enumerate() {
                 let r = s.run(id, params).map_err(|e| engine_error(format!("command {} ({id}): {e}", n + 1)))?;
@@ -743,11 +776,15 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let Some(roots) = roots.filter(|r| r.read_root().is_some() && r.write_root().is_some()) else {
                 return Err(MCP_NEEDS_ROOTS.into());
             };
+            // Read before the roots come into force: the settings file is the app's own.
+            let library_folders = saved_library_folders();
             // Every thread of this process, not only the server's: nothing reaches past the roots.
             wordcraft_engine::file_access::confine_process(roots.clone());
             let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
             eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
-            let backend: Box<dyn wordcraft_mcp::Backend> = Box::new(headless_mcp(roots, arg_value(&rest, "--author").as_deref())?);
+            let mut headless = headless_mcp(roots, arg_value(&rest, "--author").as_deref())?;
+            headless.session.prefs.library_folders = library_folders;
+            let backend: Box<dyn wordcraft_mcp::Backend> = Box::new(headless);
             let mut server = wordcraft_mcp::Server::new(backend);
             let stdin = std::io::stdin();
             // A client that closes our stdout has hung up: `serve` returns BrokenPipe and we end cleanly.

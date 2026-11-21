@@ -6,11 +6,13 @@
 //! outside the engine are written directly by [`OptionsModel::set`].
 
 use craft::behavior::{EditEvent, MotionMode, keyed};
+use craft::host::PickRequest;
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
 use craft::ui::display::{Elide, Shade, Text};
 use craft::ui::layout_components::Row;
 use craft::ui::list::{List, ListRow};
+use craft::ui::patterns::form_dialogs::PathRow;
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
 use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
 use craft::ui::runtime::memory::Remember;
@@ -486,11 +488,7 @@ impl PreferencesModel for OptionsModel<'_> {
                 GroupSpec::new(
                     Some(tl!("Dictionaries")),
                     vec![
-                        RowSpec::new(
-                            "language.dictionariesFolder",
-                            tl!("Dictionaries folder:"),
-                            RowKind::Text(prefs.dictionaries_folder.as_deref().unwrap_or("")),
-                        )
+                        RowSpec::new("language.dictionariesFolder", tl!("Dictionaries folder:"), RowKind::Custom)
                         .help(tl!("Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.\nAn installed Language pack is used after this folder.")),
                         custom("language.dictionaryFiles", tl!("Dictionary files")),
                     ],
@@ -586,12 +584,8 @@ impl PreferencesModel for OptionsModel<'_> {
             groups.push(GroupSpec::new(
                 Some(tl!("File locations")),
                 vec![
-                    RowSpec::new(
-                        "advanced.templatesFolder",
-                        tl!("User templates:"),
-                        RowKind::Text(prefs.user_templates_folder.as_deref().unwrap_or("")),
-                    )
-                    .help(tl!("File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.")),
+                    RowSpec::new("advanced.templatesFolder", tl!("User templates:"), RowKind::Custom)
+                        .help(tl!("File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.")),
                 ],
             ));
         }
@@ -721,6 +715,14 @@ impl PreferencesModel for OptionsModel<'_> {
             // PLAN: assumed `your_languages(app: &mut WordApp, ui: &mut Ui)` (chrome-w12)
             "language.yourLanguages" => crate::language_packs::your_languages(self.app, ui),
             "language.dictionaryFiles" => dictionary_files(ui),
+            "language.dictionariesFolder" => {
+                let saved = self.app.session.prefs.dictionaries_folder.clone();
+                self.folder_row(ui, key, tl!("Dictionaries folder:"), saved, "dictionaries");
+            }
+            "advanced.templatesFolder" => {
+                let saved = self.app.session.prefs.user_templates_folder.clone();
+                self.folder_row(ui, key, tl!("User templates:"), saved, "templates");
+            }
             "advanced.customizeKeyboard" => {
                 if Button::new(tl!("Customize…")).show(ui).clicked() {
                     self.run("tools.customizeKeyboard", json!({}));
@@ -771,6 +773,31 @@ impl OptionsModel<'_> {
         });
         if let Some(path) = committed {
             self.set("proofing.customDictionaryFile", PrefValue::Text(path));
+        }
+    }
+
+    /// A folder setting (`key`, labelled `label`, now `saved`): its path, committed on Enter or focus
+    /// loss as the Dictionary file's is, and Browse… beside it where the host can ask for a folder
+    /// (the system's dialog, or the framework's chooser where there is none, #576). The picked
+    /// folder is the setting at once. The web can't pick a folder, so there the path is typed.
+    fn folder_row(&mut self, ui: &mut Ui, key: &str, label: &'static str, saved: Option<String>, purpose: &str) {
+        let saved = saved.unwrap_or_default();
+        let (edit, picked) = if self.app.has_folder_picker() {
+            let request = PickRequest::folder(purpose).fallback(self.app.fallback_chooser);
+            let out = PathRow::new(label, Bind::given(saved)).pick(request).show(ui);
+            (out.edit, out.picked)
+        } else {
+            (TextField::new(label, Bind::given(saved)).limit(None).show(ui).events, None)
+        };
+        let committed = edit
+            .into_iter()
+            .filter_map(|event| match event {
+                EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(after),
+                _ => None,
+            })
+            .next_back();
+        if let Some(path) = picked.or(committed) {
+            self.set(key, PrefValue::Text(path));
         }
     }
 

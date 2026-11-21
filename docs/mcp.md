@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-11-20 · `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root`, and `--connect` is refused until the desktop app confines its control channel (#7124, shared rule 18). Earlier: The bridge authenticates once per connection with the control token (`WORDCRAFT_CONTROL_TOKEN` or the app's token file). Earlier: The protocol core is the shared `craft-mcp-server` crate (#778); `click` and `key` list every argument they accept. Earlier: Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-21 · `library.list` takes `refresh` and `library.search` takes `file`; a query is at most 256 characters (#2868). Previously 2026-11-20 · `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root`, and `--connect` is refused until the desktop app confines its control channel (#7124, shared rule 18). Previously 2026-11-15 · The Library (#2868): `library.*` commands, confined by the read root; headless `mcp` and `run` browse the app's Library folders. Earlier: The bridge authenticates once per connection with the control token (`WORDCRAFT_CONTROL_TOKEN` or the app's token file). Earlier: The protocol core is the shared `craft-mcp-server` crate (#778); `click` and `key` list every argument they accept. Earlier: Keep the complete `type_text` description in one tool-table row; behavior wording unchanged. Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -110,7 +110,9 @@ config works across the suite) keep the agent to the folders you give it:
   `styles.organizer` and `styles.copyFrom` read, and the folders `file.options` takes
   (`dictionariesFolder`, `userTemplatesFolder`). The pictures an opened HTML file names are read
   from beside that file and must be inside the read root too, even when the file was opened through
-  a link (#3736).
+  a link (#3736). So must every folder and picture of the [Library](#library): `library.addFolder`
+  takes no folder outside it, and a Library folder outside it lists, searches, draws and inserts
+  nothing (`library.folders` gives it the refusal as its `error`).
 - Every file a command writes must lie inside the **write root**: `save_document`, `file.save`,
   `file.saveAs`, `file.rename` (the file and its new name), `file.exportPdf`, `file.exportPng`, `file.printPdf`,
   `file.saveTemplate`, and `mailings.finish` with a `path`. `font.add` and `font.remove` change the
@@ -143,12 +145,36 @@ What the roots do not cover: commands that take no path (`text.insert`, `execute
 works on the open document) can still read and change that document, and `get_text` and
 `inspect_document` return it. The Zotero commands talk to a local Zotero over a socket, not to files.
 Anything that reads or writes a path goes through one place in the engine (`io::open_path_with`,
-`io::save_path_with`, `io::read_file`, `io::write_file`); a test keeps command modules from
-touching the file system on their own.
+`io::save_path_with`, `io::read_file`, `io::write_file`, and the Library's `io::library_*`); a
+test keeps command modules from touching the file system on their own.
 
 The checks hold for every thread of the server process. A path is checked, then opened: another
 program that swaps a link in between can still win that race, so the roots keep an agent to the
 files it was given rather than guarding against other software on the computer.
+
+## Library
+
+Insert › Library (#2868) shows the pictures in folders the user chose, in a side pane; agents reach
+the same Library through `execute`. It is the Library the Craft apps share (`craft-library`, from
+craft-libs): the same commands and answers as DeckCraft's, with WordCraft's nouns (`picture`,
+`pictures`, `pictureCount`).
+
+| Command | Does |
+|---|---|
+| `library.folders` | the folders and how many pictures each holds |
+| `library.addFolder {path}`, `library.removeFolder {path}` | change the folder list, kept with the app's preferences (at most 32 folders) |
+| `library.list {folder?, file?, pictures?, refresh?}` | the picture files of every folder or one, or one file, each with its one picture; `refresh` looks again at files that failed |
+| `library.search {query, limit?, folder?, file?}` | pictures whose file name or format holds `query` (at most 256 characters), in every folder, one folder or one file |
+| `library.thumbnail {file, picture: 0, width?}` | a picture drawn small, as base64 PNG |
+| `library.insert {file, width?, alt?}` | put the picture at the selection, as `insert.picture` does (one undo step) |
+
+It lists PNG, JPEG, GIF, WebP, BMP and TIFF files, at most 5,000 entries and 8 folders deep per
+folder, and never follows links. A picture is known from its file name, so listing and search read
+no picture: a file larger than 256 MB is listed with its `error`, and one that isn't a picture
+WordCraft decodes says so when `library.thumbnail` or `library.insert` reads it. Headless `mcp` and `run` start with the folders the desktop
+app keeps in its preferences (`ui.json` in its settings folder, or `WORDCRAFT_PROFILE_DIR`);
+`WORDCRAFT_NO_PREFS` leaves them out. The read root still confines every one of them. The browser
+build has no folders to read: every `library.*` command says so.
 
 ## Language packs
 

@@ -440,3 +440,53 @@ fn escape_does_not_commit_the_custom_dictionary_path() {
     assert_eq!(dictionary_field_text(&h), "", "the field shows the saved (empty) path");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// File › Options › Advanced › User templates (#2868): Browse… asks the host's file service for a
+/// folder, and its answer is the setting at once and shows in the field; a cancel leaves the
+/// setting as it was, and a host that can't pick a folder shows no Browse….
+#[test]
+fn browse_sets_an_options_folder() {
+    use craft::host::{PickKind, Picked, ScriptedFiles};
+    use egui_kittest::kittest::Queryable;
+    let harness = |mut a: WordApp| {
+        a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "advanced"})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        options_frames(&mut h, 3);
+        h
+    };
+    let h = harness(app());
+    let field = h.query_by_role_and_label(egui::accesskit::Role::TextInput, "User templates:");
+    assert!(field.is_some() && h.query_by_label("Browse…").is_none(), "no picker, no Browse…");
+    drop(h);
+
+    let dir = std::env::temp_dir().join(format!("wc-ui-options-browse-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let files = std::sync::Arc::new(ScriptedFiles::held());
+    let host =
+        craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+    let mut h = harness(app().with_host(std::sync::Arc::new(host)));
+    h.get_by_label("Browse…").click();
+    options_frames(&mut h, 2);
+    let asked = files.requests();
+    assert_eq!((asked[0].kind, asked[0].purpose.as_str()), (PickKind::Folder, "templates"));
+    files.answer(Picked::Cancelled);
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.user_templates_folder, None, "cancelled");
+    h.get_by_label("Browse…").click();
+    options_frames(&mut h, 2);
+    files.answer(Picked::Paths(vec![dir.clone()]));
+    options_frames(&mut h, 3);
+    let path = dir.to_string_lossy().into_owned();
+    assert_eq!(h.state().session.prefs.user_templates_folder.as_deref(), Some(path.as_str()));
+    let shown = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "User templates:").value().unwrap_or_default();
+    assert_eq!(shown, path, "the field shows the folder");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
