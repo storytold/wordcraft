@@ -32,6 +32,8 @@ use wordcraft_layout::DocLayout;
 
 use crate::WordApp;
 
+mod cursor;
+
 /// A stroke being drawn: its page and points (page points).
 pub struct InkDrag {
     page: usize,
@@ -283,7 +285,8 @@ impl CanvasTool for InkCanvasTool<'_> {
         }
     }
 
-    fn paint(&self, draw: &Draw<'_>, _cx: &ToolContext<'_>) {
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        cursor::paint(self.app, self.body, draw, cx);
         let Some(d) = &self.app.canvas.ink else { return };
         let Some(pg) = placed(self.body.pages, d.page) else { return };
         let set = self.app.session.view.draw.settings(d.tool);
@@ -298,11 +301,11 @@ impl CanvasTool for InkCanvasTool<'_> {
         }
     }
 
-    fn cursor(&self, _cx: &ToolContext<'_>) -> Cursor {
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         if matches!(self.app.canvas.ink_ui.lasso, Some(LassoDrag::Move { .. })) {
             Cursor::System(CursorIcon::Grabbing)
         } else {
-            Cursor::System(CursorIcon::Crosshair)
+            cursor::cursor(self.app, self.body, cx)
         }
     }
 
