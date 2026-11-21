@@ -2468,3 +2468,26 @@ fn a_sliver_of_a_row_above_is_not_the_page_in_view_with_columns() {
     assert_eq!(viewed_page(None, 96.0, &layout, 100.0), 2, "4 points of the row above is a sliver");
     assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the first row is the page in view");
 }
+
+/// A last row that is not full has no page below the one above it: the gap is still the one to the next row.
+#[test]
+fn a_sliver_of_a_row_above_is_not_the_page_in_view_with_an_incomplete_last_row() {
+    let rects: Vec<craft::behavior::kurbo::Rect> =
+        [(0.0, 0.0), (90.0, 0.0), (0.0, 110.0)].iter().map(|&(x, y)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + 100.0)).collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 2, bands: vec![(0.0, 100.0); 3] };
+    assert_eq!(viewed_page(None, 96.0, &layout, 100.0), 2, "4 points of the row above is a sliver");
+    assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the first row is the page in view");
+}
+
+/// Two Up with a cover: page 0 is a row of its own, so there is no page `columns` after it.
+#[test]
+fn a_sliver_of_the_cover_is_not_the_page_in_view() {
+    let rects: Vec<craft::behavior::kurbo::Rect> = [(90.0, 0.0), (0.0, 110.0), (90.0, 110.0), (0.0, 220.0)]
+        .iter()
+        .map(|&(x, y)| craft::behavior::kurbo::Rect::new(x, y, x + 80.0, y + 100.0))
+        .collect();
+    let layout = craft::pages::layout::PagedLayout { rects, size: Default::default(), columns: 2, bands: vec![(0.0, 100.0); 4] };
+    assert_eq!(viewed_page(None, 96.0, &layout, 100.0), 1, "4 points of the cover is a sliver");
+    assert_eq!(viewed_page(None, 80.0, &layout, 100.0), 0, "20 points of the cover is the page in view");
+    assert_eq!(viewed_page(None, 206.0, &layout, 100.0), 3, "4 points of the spread is a sliver");
+}
