@@ -81,6 +81,11 @@ impl WordApp {
         let mode = self.screen_mode();
         let dropped = self.ribbon_dropped;
         let key = self.windows.window_key();
+        let file = self.ui.backstage;
+        let first = crate::backstage::shell_shape_count(ui.painter());
+        if !file {
+            crate::backstage::reset_transition(ui.ctx());
+        }
         let shell = AppShell::new(key)
             .mode_set(ScreenModeSet::Document)
             .screen_mode(Bind::given(mode))
@@ -132,6 +137,13 @@ impl WordApp {
             self.follow_screen_mode(out.screen_mode);
         }
         self.ribbon_dropped = out.dropped;
+        crate::backstage::paint_shell_transition(
+            ui.painter(),
+            first,
+            file,
+            self.resolved_root().motion == craft::behavior::MotionMode::Full,
+            crate::chrome::interface_direction().is_rtl(),
+        );
         out.regions
     }
 

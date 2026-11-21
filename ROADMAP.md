@@ -151,6 +151,10 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-21: Ported File transitions and ribbon hover lighting onto the shared craft-libs shell/ribbon after #7101. Dense screen compositions settle instead of caching an incomplete reversal frame. System reduced motion disables the app's travel effects. Readiness unchanged.
+
+- 2026-11-14: File pages fade and lift over 180 ms; entering and leaving File crossfade over 220 ms with a short slide and paint-only outgoing screens. Both respect reduced motion and keep state per window. Ribbon group highlights have a lower, 20%-opacity core with a soft tail in the ribbon padding. Readiness estimates unchanged.
+
 - 2026-11-15: Native, built-in and web Insert/Change Picture choosers offer both TIFF extensions (`.tif`, `.tiff`) alongside other supported pictures; native drops, picked-file inbox dispatch and pasted picture paths recognize the same suffixes (#6704). TIFF decoding remains limited to supported compression.
 - 2026-10-31: Screen readers hear what the dialogs and their drawn controls are: a dialog is a dialog, where it was only a window, so NVDA says so and reads the text in it (Word Count's figures); a dialog's tabs (Paragraph, Find and Replace, About) are tabs, the one shown selected, as in Word, where they were buttons read as pressed toggles; a colour field says its label and colour ("Font color: #104861"), where its text alone was the colour's hex digits; and each swatch of the colour grid says its colour, where it had no name. Readiness estimates unchanged.
 
@@ -919,6 +923,8 @@ Section page-numbering settings preserve `w:chapStyle` values across the full un
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
 
 ## Revision history
+
+> 2026-11-15 · File page transitions, animated single-click ribbon folding and softer group highlights. Outgoing transition paint reserves capacity before live capture within the shared 4096-shape cap, preserving dense screens at entry and reversal; readiness unchanged.
 
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >

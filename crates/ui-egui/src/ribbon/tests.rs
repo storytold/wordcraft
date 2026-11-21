@@ -26,6 +26,84 @@ fn app_harness(mut app: WordApp, size: egui::Vec2) -> Harness {
     h
 }
 
+/// A single active-tab click hides the ribbon; either tab can open it again.
+#[test]
+fn active_tab_single_click_toggles_and_other_tab_opens_ribbon() {
+    use egui_kittest::kittest::Queryable;
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let bottom = std::rc::Rc::new(std::cell::Cell::new(0.0));
+    let measured = bottom.clone();
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            app.logic(ui.ctx());
+            super::show(app, ui);
+            measured.set(ui.available_rect_before_wrap().top());
+        },
+        app,
+    );
+    crate::test_harness::frames(&mut h, 4);
+    let expanded = bottom.get();
+    h.get_by_label("Home").click();
+    crate::test_harness::frames(&mut h, 20);
+    assert!(h.state().ui.ribbon_collapsed);
+    assert!(expanded - bottom.get() > 40.0, "collapsing frees space below the tab strip");
+    h.get_by_label("Home").click();
+    crate::test_harness::frames(&mut h, 20);
+    assert!(!h.state().ui.ribbon_collapsed);
+    assert!((bottom.get() - expanded).abs() < 1.0, "opening restores the full panel height");
+    h.get_by_label("Home").click();
+    crate::test_harness::frames(&mut h, 20);
+    assert!(h.state().ui.ribbon_collapsed);
+    h.get_by_label("Insert").click();
+    crate::test_harness::frames(&mut h, 20);
+    assert!(!h.state().ui.ribbon_collapsed);
+    assert_eq!(h.state().ui.tab, "Insert");
+    // Command/keytip navigation remains idempotent and opens a collapsed ribbon.
+    h.state_mut().ui.ribbon_collapsed = true;
+    h.state_mut().run("ui.tab", json!({"tab": "Insert"})).unwrap();
+    assert!(!h.state().ui.ribbon_collapsed);
+    h.state_mut().run("ui.tab", json!({"tab": "Insert"})).unwrap();
+    assert!(!h.state().ui.ribbon_collapsed);
+}
+
+/// Both directions have intermediate heights, and reversal has no position jump.
+#[test]
+fn ribbon_slide_animates_both_directions_and_respects_reduced_motion() {
+    let ctx = egui::Context::default();
+    assert_eq!(super::tabs::ribbon_openness(&ctx, true, 0.0, true), 1.0);
+    assert_eq!(super::tabs::ribbon_openness(&ctx, false, 1.0, true), 1.0);
+    let middle = super::tabs::ribbon_openness(&ctx, false, 1.1, true);
+    assert!(middle > 0.0 && middle < 1.0);
+    assert_eq!(super::tabs::ribbon_openness(&ctx, true, 1.1, true), middle);
+    let opening = super::tabs::ribbon_openness(&ctx, true, 1.2, true);
+    assert!(opening > middle && opening < 1.0);
+    assert_eq!(super::tabs::ribbon_openness(&ctx, true, 1.4, true), 1.0);
+    super::tabs::ribbon_openness(&ctx, false, 2.0, true);
+    assert_eq!(super::tabs::ribbon_openness(&ctx, false, 2.3, true), 0.0);
+    assert_eq!(super::tabs::ribbon_openness(&ctx, true, 3.0, false), 1.0);
+    assert_eq!(super::tabs::ribbon_openness(&ctx, false, 3.1, false), 0.0);
+}
+
+/// Native windows must not share a partially hidden ribbon.
+#[test]
+fn ribbon_slide_is_independent_in_each_viewport() {
+    let ctx = egui::Context::default();
+    let other = egui::ViewportId::from_hash_of("other_ribbon");
+    let step = |viewport_id, open, now| {
+        let mut value = 0.0;
+        let mut input = egui::RawInput { viewport_id, time: Some(now), ..Default::default() };
+        input.viewports.insert(viewport_id, egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| value = super::tabs::ribbon_openness(ui.ctx(), open, now, true));
+        output.textures_delta.clear();
+        value
+    };
+    assert_eq!(step(egui::ViewportId::ROOT, true, 0.0), 1.0);
+    step(egui::ViewportId::ROOT, false, 1.0);
+    assert_eq!(step(other, true, 1.1), 1.0);
+    let value = step(egui::ViewportId::ROOT, false, 1.1);
+    assert!(value > 0.0 && value < 1.0);
+}
+
 /// A document window on `tab`, wide enough that no tab hides groups behind its scroll arrows.
 fn tab_harness(app: WordApp, tab: &str) -> Harness {
     let mut app = app;

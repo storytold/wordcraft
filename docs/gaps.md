@@ -77,6 +77,8 @@ Text context menus now include the existing formatting mini toolbar (#2959), inc
 
 Page drawing indexes text-box warp lookups by paragraph and story for the current call (#3614). Ordinary text boxes no longer rescan every preceding marker to find that they have no warp. Only requested offsets are retained; traversal stops after the last requested character. Original Linux display and save/reopen checks cover the correction; other drawing and command scans remain open. Gap and readiness estimates are unchanged.
 
+File page transitions, animated single-click ribbon folding and quieter group highlights are visual polish. If both screens cannot fit within the transition's shape budget, the new screen appears immediately. No ranked gap closes and readiness estimates are unchanged.
+
 ## Ranked
 
 | # | Gap | B | Evidence | Impact | Hours | Doc |
@@ -181,6 +183,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
 ## Revision history
+
+> 2026-11-14 · File pages fade and lift over 180 ms; entering and leaving File crossfade over 220 ms with a short slide and paint-only outgoing screens. Both respect reduced motion and keep state per window. Ribbon group highlights have a lower, 20%-opacity core with a soft tail in the ribbon padding. Readiness estimates unchanged.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 
