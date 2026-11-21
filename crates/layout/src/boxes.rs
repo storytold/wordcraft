@@ -159,7 +159,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
     let (tx, ty) = match t.props.float {
         Some(float) => {
-            let legacy = (ctx.doc.settings.compat_mode < 15).then(|| table::first_cell_left_margin(ctx, t));
+            let legacy = (ctx.doc.settings.compat_mode < 15).then(|| table::first_cell_left_inset(ctx, t));
             let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
             exclusions.push((area, false, None, WrapText::BothSides, true));
             float_tables.push(area);

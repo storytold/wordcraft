@@ -201,6 +201,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
     use wordcraft_doc::Block;
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
     let margins_def = default_margins(t, style.as_ref());
+    let tb = table_borders(t, style.as_ref());
     let ncols = grid_cols(t).clamp(1, wordcraft_doc::table::MAX_COLS);
     let fields = crate::FieldCtx::default();
     let mut cols = vec![(0.0f32, 0.0f32); ncols];
@@ -209,10 +210,11 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
     let mut budget = MEASURE_BUDGET;
     'rows: for (ri, row) in t.rows.iter().enumerate() {
         let mut g = row.first_grid();
-        for cell in &row.cells {
+        for (ci, cell) in row.cells.iter().enumerate() {
             let span = cell.span();
             let margins = cell.props.resolved_margins(margins_def);
-            let side = margins[1].max(0.0) + margins[3].max(0.0);
+            let (l, r) = text_insets(t, style.as_ref(), &tb, (ri, ci, g), ncols, (margins[1].max(0.0), margins[3].max(0.0)));
+            let side = l + r;
             let text = style.as_ref().map(|st| region_text(st, region_of(t, style.as_ref(), ri, g, span, ncols)));
             let env = crate::para::ParaEnv {
                 doc,
@@ -311,9 +313,25 @@ pub fn autofit_widths(cols: &[(f32, f32)], avail: f32) -> Vec<f32> {
     cols.iter().map(|c| c.0 + (c.1 - c.0) * k).collect()
 }
 
-/// The first cell's left margin: how far its text sits inside the table's edge.
-pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
-    first_cell_left_margin_in(t, default_margins(t, table_style(ctx, t).as_ref()))
+/// How far the first cell's text sits inside the table's edge: its left margin, or half its left
+/// border where that is wider ([`side_inset`]).
+pub(crate) fn first_cell_left_inset(ctx: &Ctx, t: &Table) -> f32 {
+    let style = table_style(ctx, t);
+    let tborders = table_borders(t, style.as_ref());
+    side_inset(first_cell_left_margin_in(t, default_margins(t, style.as_ref())), first_row_borders(t, style.as_ref(), &tborders).0)
+}
+
+/// The first row's outer borders as its cells resolve them ([`side_borders`]: own, row exception,
+/// table style, table): its first cell's start border, its last cell's start border and its last
+/// cell's end border.
+fn first_row_borders(t: &Table, style: Option<&TableStyleProps>, tborders: &Borders) -> (Option<Border>, Option<Border>, Option<Border>) {
+    let ncols = grid_cols(t).max(1);
+    let Some(row) = t.rows.first() else { return (None, None, None) };
+    let last = row.cells.len().saturating_sub(1);
+    let last_g = row.first_grid() + row.cells.iter().take(last).map(|c| c.span()).sum::<usize>();
+    let (first_start, _) = cell_sides(t, style, tborders, (0, 0, row.first_grid()), ncols);
+    let (last_start, last_end) = cell_sides(t, style, tborders, (0, last, last_g), ncols);
+    (first_start, last_start, last_end)
 }
 
 fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
@@ -347,6 +365,106 @@ fn region_look(st: &TableStyleProps, region: Region) -> RegionLook {
 /// A cell's borders from the table style's parts it is in ([`wordcraft_doc::styles::part_borders`]).
 fn region_borders(parts: &[(TablePart, Borders)], rows: (usize, usize), edges: (bool, bool)) -> Borders {
     wordcraft_doc::styles::part_borders(parts, rows, edges)
+}
+
+/// The table's borders: its style's, overlaid by its own side by side.
+fn table_borders(t: &Table, style: Option<&TableStyleProps>) -> Borders {
+    let mut tb = style.and_then(|s| s.parts.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tb.overlay(&own);
+    }
+    tb
+}
+
+/// The start (left) and end (right) borders of the cell of row `ri` at grid column `g` spanning
+/// `span` of `ncols` columns: its own, else its row's exceptions (`w:tblPrEx`), else the table
+/// style's parts it is in (`look`), else the table's (`tb`), outer or inside. Logical: an RTL
+/// table draws them mirrored.
+fn side_borders(
+    t: &Table,
+    ri: usize,
+    cell: &wordcraft_doc::table::Cell,
+    (g, span, ncols): (usize, usize, usize),
+    look: Option<&[(TablePart, Borders)]>,
+    tb: &Borders,
+) -> (Option<Border>, Option<Border>) {
+    let Some(row) = t.rows.get(ri) else { return (None, None) };
+    let cb = cell.props.borders.unwrap_or_default();
+    let row_borders = row.props.exceptions.as_ref().and_then(|e| e.borders).unwrap_or_default();
+    // A row that skips grid columns (`w:gridBefore`/`w:gridAfter`) has its edge at its own first
+    // and last cell.
+    let (first_g, last_g) = (g == row.first_grid(), g + span >= ncols.saturating_sub(row.grid_after()));
+    let rb = look.map(|l| region_borders(l, (ri, t.rows.len()), (first_g, last_g))).unwrap_or_default();
+    let left = cb.left.or(if first_g { row_borders.left } else { row_borders.inside_v }).or(if first_g { rb.left } else { rb.inside_v });
+    let right = cb.right.or(if last_g { row_borders.right } else { row_borders.inside_v }).or(if last_g { rb.right } else { rb.inside_v });
+    (left.or(if first_g { tb.left } else { tb.inside_v }), right.or(if last_g { tb.right } else { tb.inside_v }))
+}
+
+/// How far in from its left edge a cell's text starts, its left margin being `m` and its start
+/// border `border` ([`text_insets`]).
+fn side_inset(m: f32, border: Option<Border>) -> f32 {
+    m.max(half_border(border))
+}
+
+/// Half a side border's width, when it is visible.
+fn half_border(b: Option<Border>) -> f32 {
+    b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+}
+
+/// The cell at index `ci` of row `ri`, at grid column `g`: its logical start and end borders
+/// ([`side_borders`]).
+fn cell_sides(
+    t: &Table,
+    style: Option<&TableStyleProps>,
+    tb: &Borders,
+    (ri, ci, g): (usize, usize, usize),
+    ncols: usize,
+) -> (Option<Border>, Option<Border>) {
+    let Some(cell) = t.rows.get(ri).and_then(|r| r.cells.get(ci)) else { return (None, None) };
+    let span = cell.span();
+    let look = style.map(|st| region_look(st, region_of(t, style, ri, g, span, ncols)));
+    side_borders(t, ri, cell, (g, span, ncols), look.as_ref().map(|l| l.borders.as_slice()), tb)
+}
+
+/// How far in from its left and right edges the text of the cell at index `ci` of row `ri`, at
+/// grid column `g`, sits, its left and right margins being `ml` and `mr`. Measured in Word for Windows (two-column tables,
+/// 0.5 to 6 pt borders, 0.25 to 3 pt margins, compatibility modes 14 and 15, left to right and
+/// right to left):
+///
+/// - The text starts at the left margin or half the cell's own start border (`w:left`), whichever
+///   is wider, from the left edge, in a right-to-left table too: Word doesn't mirror a cell's text
+///   insets, only its borders.
+/// - The text is as wide as the cell less both margins, or less half the border painted on each
+///   edge, whichever leaves less. On an edge two cells share, the wider of their borders is painted.
+///
+/// So a border wider than twice the margin keeps the text clear of it, and a cell beside a wider
+/// neighbour's border starts its text where it would anyway (under that border, as Word draws it)
+/// but gives up the width.
+fn text_insets(
+    t: &Table,
+    style: Option<&TableStyleProps>,
+    tb: &Borders,
+    (ri, ci, g): (usize, usize, usize),
+    ncols: usize,
+    (ml, mr): (f32, f32),
+) -> (f32, f32) {
+    let Some(row) = t.rows.get(ri) else { return (ml, mr) };
+    let own = cell_sides(t, style, tb, (ri, ci, g), ncols);
+    let wider = |a: Option<Border>, b: Option<Border>| half_border(a).max(half_border(b));
+    // The neighbours' grid columns from this cell's: no walk along the row.
+    let prev_end = ci.checked_sub(1).and_then(|p| {
+        let pg = g.saturating_sub(row.cells.get(p).map_or(1, |c| c.span()));
+        cell_sides(t, style, tb, (ri, p, pg), ncols).1
+    });
+    let next_g = g + row.cells.get(ci).map_or(1, |c| c.span());
+    let next_start = (ci + 1 < row.cells.len()).then(|| cell_sides(t, style, tb, (ri, ci + 1, next_g), ncols).0).flatten();
+    // A right-to-left table paints a cell's start border on its right and the next cell is on
+    // its left.
+    let (left_edge, right_edge) =
+        if t.props.bidi_visual { (wider(own.1, next_start), wider(own.0, prev_end)) } else { (wider(own.0, prev_end), wider(own.1, next_start)) };
+    let left = ml.max(half_border(own.0));
+    let total = (ml + mr).max(left_edge + right_edge);
+    (left, (total - left).max(0.0))
 }
 
 struct CellBox {
@@ -454,32 +572,32 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     }
     colx.push(acc);
     // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
-    // indent); earlier modes line the first cell's text up with it instead.
+    // indent); earlier modes line the first cell's text up with it instead (measured in Word for
+    // Windows: also where a thick border keeps that text further in).
     let margins_def = default_margins(t, style);
     let indent = t.props.indent.unwrap_or(0.0);
-    // The style's borders, overlaid by the table's own side by side.
-    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
-    if let Some(own) = t.props.borders {
-        tborders.overlay(&own);
-    }
-    let first_cell = t.rows.first().and_then(|r| r.cells.first());
+    let tborders = table_borders(t, style);
     // A right-to-left table (`w:bidiVisual`) mirrors: its first column stands at the right, its
     // start alignment and indent are measured from the right margin, and each cell's start
-    // (left) margin and border are on its right.
+    // (left) border is drawn on its right. Its text insets aren't mirrored ([`text_insets`]).
     let rtl = t.props.bidi_visual;
     // How far in from the start margin the table's edge sits when it is start-aligned.
+    let (border, last_start, last_end) = first_row_borders(t, style, &tborders);
     let start_offset = if ctx.doc.settings.compat_mode >= 15 {
         // The border is centred on the edge, so half of it sits outside: Word moves the table in
-        // by that half.
-        let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
-        indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+        // by that half. A right-to-left table moves in by half its last cell's start border too
+        // (measured in Word for Windows: a one-column table, by its start border's whole width).
+        indent + half_border(border) + if rtl { half_border(last_start) } else { 0.0 }
     } else {
-        indent - first_cell_left_margin_in(t, margins_def)
+        indent - side_inset(first_cell_left_margin_in(t, margins_def), border)
     };
+    let end_offset = if ctx.doc.settings.compat_mode >= 15 { half_border(last_end) } else { 0.0 };
     let x = match (t.props.align, rtl) {
         (Some(Align::Center), _) => (avail - total) / 2.0,
-        // End alignment: the right margin, or the left one in a right-to-left table.
-        (Some(Align::Right), false) => avail - total,
+        // End alignment: the right margin, or the left one in a right-to-left table. From Word
+        // 2013 on, the right border's centre stands in from the margin by half its width
+        // (measured in Word for Windows), as the left one does when start-aligned.
+        (Some(Align::Right), false) => avail - total - end_offset,
         (Some(Align::Right), true) => 0.0,
         (_, true) => avail - total - start_offset,
         (_, false) => start_offset,
@@ -521,12 +639,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let span = cell.span();
             let x0 = colx.get(g).copied().unwrap_or(acc);
             let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
-            // Right to left: grid columns run from the right edge, and the start (left) margin
-            // is on the cell's right.
+            // Right to left: grid columns run from the right edge. A cell's text insets stay
+            // where they are, as Word lays them out ([`text_insets`]).
             let (x0, x1) = if rtl { ((acc - x1).max(0.0), (acc - x0).max(0.0)) } else { (x0, x1) };
             let m = cell.props.resolved_margins(margins_def);
-            let margins = if rtl { [row_top, m[3], row_bottom, m[1]] } else { [row_top, m[1], row_bottom, m[3]] };
-            let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let region = region_of(t, style.as_ref(), ri, g, span, ncols);
             // Conditional formatting, later parts winning (ECMA-376 §17.7.6): whole table, column
             // bands, row bands, first/last column, header/total row, corner cells.
@@ -553,6 +669,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             // first and last cell.
             let (first_g, last_g) = (g == row.first_grid(), g + span >= ncols.saturating_sub(row.grid_after()));
             let rb = look.map(|l| region_borders(&l.borders, (ri, nrows), (first_g, last_g))).unwrap_or_default();
+            let sides = side_borders(t, ri, cell, (g, span, ncols), look.map(|l| l.borders.as_slice()), &tb);
             let mut borders = Borders {
                 top: edge(cb.top.or(if ri == 0 { row_borders.top } else { row_borders.between }).or(rb.top), ri == 0, tb.top, tb.between),
                 bottom: edge(
@@ -561,18 +678,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     tb.bottom,
                     tb.between,
                 ),
-                left: edge(
-                    cb.left.or(if first_g { row_borders.left } else { row_borders.inside_v }).or(if first_g { rb.left } else { rb.inside_v }),
-                    first_g,
-                    tb.left,
-                    tb.inside_v,
-                ),
-                right: edge(
-                    cb.right.or(if last_g { row_borders.right } else { row_borders.inside_v }).or(if last_g { rb.right } else { rb.inside_v }),
-                    last_g,
-                    tb.right,
-                    tb.inside_v,
-                ),
+                left: sides.0,
+                right: sides.1,
                 between: None,
                 inside_v: None,
             };
@@ -580,6 +687,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             if rtl {
                 std::mem::swap(&mut borders.left, &mut borders.right);
             }
+            // The text stays clear of thick side borders ([`text_insets`]).
+            let (left, right) = text_insets(t, style.as_ref(), &tb, (ri, ci, g), ncols, (m[1], m[3]));
+            let margins = [row_top, left, row_bottom, right];
+            let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             // Word keeps the cell's text clear of its top border (and the last row's of its bottom
             // border): the border's width sits on top of the cell margin.
             let band = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
@@ -1372,6 +1483,7 @@ fn region_text(st: &TableStyleProps, region: Region) -> CellText {
 /// with their own. `None` when every cell is empty.
 fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, depth: usize, grid: &[f32]) -> Option<Vec<(f32, f32)>> {
     let margins_def = default_margins(t, style);
+    let tb = table_borders(t, style);
     // The grid's width once: counting it walks every row.
     let ncols = grid_cols(t);
     let mut cols = vec![(0.0f32, 0.0f32); ncols.max(1)];
@@ -1379,14 +1491,16 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
     let mut any = false;
     for (ri, row) in t.rows.iter().enumerate() {
         let mut g = row.first_grid();
-        for cell in &row.cells {
+        for (ci, cell) in row.cells.iter().enumerate() {
             let span = cell.span();
             if cell.props.vmerge != VMerge::Continue {
                 let text = style.map(|st| region_text(st, region_of(t, style, ri, g, cell.span(), cols.len())));
                 let (lo, hi) = blocks_content(ctx, &cell.blocks, text.as_ref(), depth);
                 any |= hi > 0.0;
                 let m = cell.props.resolved_margins(margins_def);
-                let need = (lo + m[1] + m[3], hi + m[1] + m[3]);
+                let (l, r) = text_insets(t, style, &tb, (ri, ci, g), cols.len(), (m[1], m[3]));
+                let side = l + r;
+                let need = (lo + side, hi + side);
                 match cols.get_mut(g) {
                     Some(col) if span == 1 => *col = (col.0.max(need.0), col.1.max(need.1)),
                     _ => spanning.push((g, span, need)),

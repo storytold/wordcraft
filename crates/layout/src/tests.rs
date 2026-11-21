@@ -6608,6 +6608,257 @@ fn cell_margins_are_where_cell_text_starts() {
     }
 }
 
+/// Measured in Word for Windows: from Word 2013 on, a side border wider than twice the cell margin
+/// keeps the cell's text clear of it, on the table's edge and between cells; Word 2010 documents
+/// keep the margin alone.
+#[test]
+fn a_cells_text_stays_clear_of_a_side_border_wider_than_twice_its_margin() {
+    crate::test_fonts();
+    let inset = |mode: u32, width: f32, margin: f32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = mode;
+        let mut t = Table::new(1, 2, 200.0);
+        t.props.cell_margins = Some([0.0, margin, 0.0, margin]);
+        let b = Border { style: wordcraft_doc::props::BorderStyle::Single, width, color: None, space: 0.0 };
+        t.props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) });
+        for (c, text) in t.rows[0].cells.iter_mut().zip(["one", "two"]) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        }
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        (0..2)
+            .map(|c| {
+                let boxed = items.iter().find_map(|it| match it {
+                    Placed::Cell { rect, cell, .. } if *cell == c => Some(*rect),
+                    _ => None,
+                });
+                let (text_x, right) = items
+                    .iter()
+                    .find_map(|it| match it {
+                        Placed::Lines { path, x, para, .. } if path.0.get(2) == Some(&(c as u32)) => Some((*x, para.lines[0].right)),
+                        _ => None,
+                    })
+                    .unwrap();
+                let boxed = boxed.unwrap();
+                (text_x - boxed.x, boxed.w - (text_x - boxed.x) - right)
+            })
+            .collect::<Vec<_>>()
+    };
+    let near = |got: Vec<(f32, f32)>, want: (f32, f32), what: &str| {
+        for (c, (l, r)) in got.into_iter().enumerate() {
+            assert!((l - want.0).abs() < 0.01 && (r - want.1).abs() < 0.01, "{what}, cell {c}: insets {l} and {r}, not {want:?}");
+        }
+    };
+    near(inset(15, 3.0, 0.75), (1.5, 1.5), "3 pt border, 0.75 pt margins, Word 2013");
+    near(inset(15, 6.0, 0.75), (3.0, 3.0), "6 pt border, Word 2013");
+    near(inset(15, 1.5, 0.75), (0.75, 0.75), "a border twice the margin: the margin");
+    near(inset(15, 6.0, 5.4), (5.4, 5.4), "a margin wider than half the border");
+    near(inset(14, 6.0, 0.75), (3.0, 3.0), "Word 2010 too");
+}
+
+/// Measured in Word for Windows (two-column tables, 0.5 pt outer borders, 0.75 pt margins): a
+/// cell's text starts its margin, or half its own start border where that is wider, in from its
+/// left edge, and is as wide as the cell less both margins or less half the border painted on each
+/// edge, whichever leaves less; on an edge two cells share the wider border is painted. So beside a
+/// wider neighbour's border a cell's text starts where it would anyway (under that border, as Word
+/// draws it) and ends sooner. In a right-to-left table the insets aren't mirrored, and the table
+/// stands in from the right margin by half its first and last cells' start borders. Word 2010
+/// documents keep the same insets, the first cell's text at the margin.
+#[test]
+fn a_cells_text_insets_count_the_borders_painted_on_its_edges() {
+    crate::test_fonts();
+    let single = |width: f32| Border { style: wordcraft_doc::props::BorderStyle::Single, width, color: None, space: 0.0 };
+    // A two-cell table, the first cell's own right border `right` and the second's own left border
+    // `left`, the first cell's margins `m0`: each cell's page x of its edge and its text's left
+    // and right insets.
+    let lay_out = |mode: u32, rtl: bool, inside: f32, (right, left): (Option<f32>, Option<f32>), m0: Option<(f32, f32)>| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = mode;
+        let mut t = Table::new(1, 2, 200.0);
+        t.props.bidi_visual = rtl;
+        t.props.cell_margins = Some([0.0, 0.75, 0.0, 0.75]);
+        let (b, iv) = (single(0.5), single(inside));
+        t.props.borders = Some(wordcraft_doc::props::Borders {
+            top: Some(b),
+            left: Some(b),
+            bottom: Some(b),
+            right: Some(b),
+            between: Some(b),
+            inside_v: Some(iv),
+        });
+        if let Some(w) = right {
+            t.rows[0].cells[0].props.borders = Some(wordcraft_doc::props::Borders { right: Some(single(w)), ..Default::default() });
+        }
+        if let Some(w) = left {
+            t.rows[0].cells[1].props.borders = Some(wordcraft_doc::props::Borders { left: Some(single(w)), ..Default::default() });
+        }
+        if let Some((l, r)) = m0 {
+            t.rows[0].cells[0].props.partial_margins = Some([None, Some(l), None, Some(r)]);
+        }
+        for (c, text) in t.rows[0].cells.iter_mut().zip(["one", "two"]) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        }
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        (0..2)
+            .map(|c| {
+                let boxed = items.iter().find_map(|it| match it {
+                    Placed::Cell { rect, cell, .. } if *cell == c => Some(*rect),
+                    _ => None,
+                });
+                let (text_x, right) = items
+                    .iter()
+                    .find_map(|it| match it {
+                        Placed::Lines { path, x, para, .. } if path.0.get(2) == Some(&(c as u32)) => Some((*x, para.lines[0].right)),
+                        _ => None,
+                    })
+                    .unwrap();
+                let boxed = boxed.unwrap();
+                (boxed, text_x - boxed.x, boxed.w - (text_x - boxed.x) - right)
+            })
+            .collect::<Vec<_>>()
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    // (the first cell's right border, the second's left), and each cell's (left, right) insets.
+    let check = |mode: u32, inside: f32, borders: (Option<f32>, Option<f32>), want: [(f32, f32); 2]| {
+        let got = lay_out(mode, false, inside, borders, None);
+        for (c, ((_, l, r), (wl, wr))) in got.into_iter().zip(want).enumerate() {
+            assert!(near(l, wl) && near(r, wr), "mode {mode}, inside {inside}, {borders:?}: cell {c} insets {l} and {r}, not {wl} and {wr}");
+        }
+    };
+    for mode in [15, 14] {
+        // The wider border on the left cell's own side, or on its neighbour's.
+        check(mode, 0.5, (Some(6.0), Some(0.5)), [(0.75, 2.5), (0.75, 2.5)]);
+        check(mode, 0.5, (Some(0.5), Some(6.0)), [(0.75, 2.5), (3.0, 0.25)]);
+        check(mode, 0.5, (None, Some(6.0)), [(0.75, 2.5), (3.0, 0.25)]);
+        check(mode, 6.0, (Some(0.5), None), [(0.75, 2.5), (3.0, 0.25)]);
+        check(mode, 6.0, (None, Some(0.5)), [(0.75, 2.5), (0.75, 2.5)]);
+        // No border of its own: the neighbour's still counts.
+        check(mode, 0.0, (Some(0.0), Some(6.0)), [(0.75, 2.5), (3.0, 0.25)]);
+        check(mode, 0.5, (Some(3.0), Some(1.5)), [(0.75, 1.0), (0.75, 1.0)]);
+        check(mode, 0.5, (None, None), [(0.75, 0.75), (0.75, 0.75)]);
+    }
+    // Unequal margins (2 and 0.25 pt) and a 6 pt border on the right: the text starts 2 pt in and
+    // the borders take 3.25 pt, so it ends 1.25 pt in.
+    let got = lay_out(15, false, 0.5, (Some(6.0), None), Some((2.0, 0.25)));
+    assert!(near(got[0].1, 2.0) && near(got[0].2, 1.25), "unequal margins: {:?}", (got[0].1, got[0].2));
+    // Right to left, the second (left) cell's start border 6 pt, painted on the edge they share:
+    // the second cell starts its text 3 pt in from its left edge, under the 0.5 pt border there,
+    // and the table stands 3.25 pt in from the right margin.
+    let got = lay_out(15, true, 0.5, (None, Some(6.0)), None);
+    assert!(near(got[0].1, 0.75) && near(got[0].2, 2.5), "right to left, first cell: {:?}", (got[0].1, got[0].2));
+    assert!(near(got[1].1, 3.0) && near(got[1].2, 0.25), "right to left, second cell: {:?}", (got[1].1, got[1].2));
+    assert!(got[1].0.x < got[0].0.x, "the first cell is on the right");
+    assert!(near(got[0].0.x + got[0].0.w, 540.0 - 3.25), "the table's right edge is at {}", got[0].0.x + got[0].0.w);
+    // A cell's own left margin stays on its left in a right-to-left table.
+    let got = lay_out(15, true, 0.5, (None, None), Some((2.0, 0.25)));
+    assert!(near(got[0].1, 2.0) && near(got[0].2, 0.25), "right to left, unequal margins: {:?}", (got[0].1, got[0].2));
+    // Word 2010: the first cell's text is at the margin, whatever its border; Word 2013 puts the
+    // border's centre half its width in from the margin and the text its inset further.
+    let got = lay_out(14, false, 0.5, (None, None), None);
+    assert!(near(got[0].0.x + got[0].1, 72.0), "Word 2010: the text at {}", got[0].0.x + got[0].1);
+    // The first cell's border as it resolves it: here from its row's exceptions (`w:tblPrEx`).
+    let exception = |mode: u32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = mode;
+        let mut t = Table::new(1, 2, 200.0);
+        t.props.cell_margins = Some([0.0, 0.75, 0.0, 0.75]);
+        let b = single(0.5);
+        t.props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) });
+        let mut ex = t.rows[0].props.exceptions.clone().unwrap_or_default();
+        ex.borders = Some(wordcraft_doc::props::Borders { left: Some(single(6.0)), ..Default::default() });
+        t.rows[0].props.exceptions = Some(ex);
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("one", Default::default()))];
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { x, .. } = it { Some(*x) } else { None }).unwrap()
+    };
+    assert!(near(exception(14), 72.0), "Word 2010, a row exception's 6 pt border: the text at {}", exception(14));
+    assert!(near(exception(15), 78.0), "Word 2013, a row exception's 6 pt border: the text at {}", exception(15));
+    let thick = |mode| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = mode;
+        let mut t = Table::new(1, 1, 100.0);
+        t.props.cell_margins = Some([0.0, 0.75, 0.0, 0.75]);
+        let b = single(6.0);
+        t.props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) });
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("one", Default::default()))];
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { x, .. } = it { Some(*x) } else { None }).unwrap()
+    };
+    assert!(near(thick(14), 72.0), "Word 2010: {}", thick(14));
+    assert!(near(thick(15), 78.0), "Word 2013: {}", thick(15));
+    // Right-aligned, from Word 2013 on the right border's centre stands half its width (0.25 pt)
+    // in from the right margin.
+    let right_edge = |mode| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = mode;
+        let mut t = Table::new(1, 2, 200.0);
+        t.props.align = Some(Align::Right);
+        let b = single(0.5);
+        t.props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) });
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.x + rect.w) } else { None }).fold(0.0f32, f32::max)
+    };
+    assert!(near(right_edge(15), 540.0 - 0.25), "Word 2013, right-aligned: {}", right_edge(15));
+}
+
+/// Measured in Word for Windows: AutoFit to Contents makes a column wider by what a thick side
+/// border keeps its text clear of (a cell holding one word, 0.75 pt margins: 1.5 pt more with
+/// 3 pt borders, 4.5 pt more with 6 pt ones), so the word still fits on one line.
+#[test]
+fn autofit_counts_what_a_thick_side_border_keeps_clear() {
+    crate::test_fonts();
+    let need = |mode: u32, width: f32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = mode;
+        let mut t = Table::new(1, 1, 100.0);
+        t.props.cell_margins = Some([0.0, 0.75, 0.0, 0.75]);
+        let b = Border { style: wordcraft_doc::props::BorderStyle::Single, width, color: None, space: 0.0 };
+        t.props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) });
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Antidisestablishment", Default::default()))];
+        crate::measure_table_columns(&d, &t)[0].0
+    };
+    let thin = need(15, 1.5);
+    assert!((need(15, 3.0) - thin - 1.5).abs() < 0.01, "3 pt: {} against {thin}", need(15, 3.0));
+    assert!((need(15, 6.0) - thin - 4.5).abs() < 0.01, "6 pt: {} against {thin}", need(15, 6.0));
+    assert!((need(14, 6.0) - thin - 4.5).abs() < 0.01, "Word 2010 too: {}", need(14, 6.0));
+}
+
+/// A column AutoFit sizes to a word it can't break holds that word on one line beside thick side
+/// borders: the column is as wide as the word, the margins and what the borders keep clear.
+#[test]
+fn autofit_keeps_a_word_on_one_line_beside_thick_borders() {
+    crate::test_fonts();
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    for (mode, width) in [(15, 6.0), (15, 3.0), (14, 6.0)] {
+        let mut t = Table::new(1, 2, 468.0);
+        t.props.cell_margins = Some([0.0, 0.75, 0.0, 0.75]);
+        let b = Border { style: wordcraft_doc::props::BorderStyle::Single, width, color: None, space: 0.0 };
+        t.props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) });
+        // The second column's long text leaves the first only its narrowest width.
+        t.rows[0].cells[0].blocks = vec![text("Antidisestablishment")];
+        t.rows[0].cells[1].blocks = vec![text(&"A long cell that needs most of the width. ".repeat(12))];
+        t.rows[0].cells.iter_mut().for_each(|c| c.props.width = None);
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = mode;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let [(_, _, n)] = para_at(&l, &[0, 0, 0, 0])[..] else { panic!("line missing") };
+        assert_eq!(n, 1, "mode {mode}, {width} pt borders: the word is broken over {n} lines");
+    }
+}
+
 /// Line count and, per line, how far the text (trailing spaces excluded) reaches.
 fn justified_lines(text: &str, compat_mode: u32, align: Align) -> (usize, Vec<f32>) {
     let mut d = Document::from_text(text);
@@ -14691,6 +14942,10 @@ fn banner_layout(width: SpanWidth) -> DocLayout {
         SpanWidth::Automatic | SpanWidth::TextOnly => None,
     };
     t.props.cell_margins = Some([0.0; 4]);
+    // No borders (no Table Grid): with zero margins half a border would keep each cell's text clear of it
+    // (`autofit_counts_what_a_thick_side_border_keeps_clear`), and these tests are about how the
+    // spanning cell's width is shared.
+    t.props.style = None;
     t.rows[0].cells.truncate(1);
     t.rows[0].cells[0].props.span = 4;
     t.rows[0].cells[0].props.width = t.props.width;
