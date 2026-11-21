@@ -16,6 +16,8 @@ pub enum Underline {
     DotDash,
     DotDotDash,
     Wave,
+    /// Also read under its `w:u` name, which `format.state` reports, so that name round-trips.
+    #[serde(alias = "wavyDouble")]
     DoubleWave,
 }
 
