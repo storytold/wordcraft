@@ -897,8 +897,8 @@ impl StackDialog for AddLanguage {
                                 });
                             }
                         }
-                        // The components `below` adds share one line, so a row has one: the licence, or a notice
-                        // with the failure and the licence.
+                        // The components `below` adds share one line, so a row has one: the license, or a notice
+                        // with the failure and the license.
                         let licence = licence_hover(pack);
                         match error_in(errors, &pack.locale) {
                             Some(e) => row.below(Notice::new(Tone::Bad, e).lines([licence]).id_salt(("row_error", at)), |_| {}),
@@ -1645,8 +1645,8 @@ mod tests {
         tree.nodes.iter().find(|(_, n)| n.label().is_some_and(|l| l.starts_with(label))).and_then(|(_, n)| n.bounds())
     }
 
-    /// In the Add a language picker, the reason an agent's Install was refused shows in that row with its licence,
-    /// whatever the licence's length (Dutch's is one short line, Catalan's wraps).
+    /// In the Add a language picker, the reason an agent's Install was refused shows in that row with its license,
+    /// whatever the license's length (Dutch's is one short line, Catalan's wraps).
     #[test]
     fn a_refused_install_says_why_in_its_own_row() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
