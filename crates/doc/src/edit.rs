@@ -1638,9 +1638,9 @@ impl Document {
         Some(id)
     }
 
-    /// Whether reattaching a cut note would restore the copied note and every box it contains.
+    /// Whether reattaching a cut note restores the copied stories without rewriting references.
     /// The paste-wide link allowance bounds repeated comparisons of shared box stories.
-    fn same_note_and_boxes(&self, note: u32, copied: &BTreeMap<u32, Part>, links_left: &mut usize) -> bool {
+    fn can_reuse_note(&self, note: u32, copied: &BTreeMap<u32, Part>, wanted: &[u32], links_left: &mut usize) -> bool {
         let mut seen = BTreeSet::from([note]);
         let mut pending = vec![note];
         while let Some(id) = pending.pop() {
@@ -1648,15 +1648,22 @@ impl Document {
             if (id != note && source.kind != PartKind::TextBox) || self.parts.get(&id) != Some(source) {
                 return false;
             }
-            let mut within_limit = true;
+            let mut reusable = true;
             for block in &source.blocks {
                 each_para(block, 0, &mut |p| {
-                    if !within_limit {
+                    if !reusable {
+                        return;
+                    }
+                    // In the equal destination story this edge already counts as a reference
+                    // to the other note, so that note will be copied or dropped. The note's
+                    // own mark keeps its id when the note is reused.
+                    if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { id, .. } if *id != note && wanted.binary_search(id).is_ok())) {
+                        reusable = false;
                         return;
                     }
                     for box_id in box_ids(p) {
                         let Some(left) = links_left.checked_sub(1) else {
-                            within_limit = false;
+                            reusable = false;
                             break;
                         };
                         *links_left = left;
@@ -1665,7 +1672,7 @@ impl Document {
                         }
                     }
                 });
-                if !within_limit {
+                if !reusable {
                     return false;
                 }
             }
@@ -1692,6 +1699,7 @@ impl Document {
                 each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
             }
         }
+        // Keep the IDs sorted for the reuse check's lookups.
         let wanted: Vec<u32> =
             found.into_iter().filter(|id| parts.get(id).is_some_and(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote))).collect();
         if wanted.is_empty() {
@@ -1702,9 +1710,9 @@ impl Document {
         let mut map: BTreeMap<u32, Option<u32>> = BTreeMap::new();
         let mut fill: Vec<(u32, u32)> = Vec::new();
         let mut reuse_links_left = MAX_PASTED_BOXES;
-        for old in wanted {
+        for &old in &wanted {
             let Some(part) = parts.get(&old) else { continue };
-            let kept = !referenced.contains(&old) && self.same_note_and_boxes(old, parts, &mut reuse_links_left);
+            let kept = !referenced.contains(&old) && self.can_reuse_note(old, parts, &wanted, &mut reuse_links_left);
             if kept {
                 map.insert(old, Some(old));
                 continue;

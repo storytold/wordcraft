@@ -386,6 +386,63 @@ fn cut_note_with_an_edited_nested_box_restores_the_copied_box_text() {
     assert_eq!(d.plain_text(StoryRef::Part(inner)), "changed box");
 }
 
+#[test]
+fn cut_note_follows_the_copied_or_removed_nested_note() {
+    for in_box in [false, true] {
+        let mut d = doc(&["Alpha"]);
+        let outer = add_note(&mut d, 5, "outer");
+        let inner = make_note(&mut d, "copied text");
+        let target = if in_box {
+            let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
+            d.insert_object(&d.end_of(StoryRef::Part(outer)), box_shape(story), &CharProps::default()).unwrap();
+            story
+        } else {
+            outer
+        };
+        d.insert_object(&d.end_of(StoryRef::Part(target)), note_ref(inner), &CharProps::default()).unwrap();
+        let start = Pos::body(0, 0);
+        let end = d.end_of(StoryRef::Body);
+        let frag = d.copy_range(&start, &end);
+        d.delete_range(&start, &end).unwrap();
+        let end_of_inner = d.end_of(StoryRef::Part(inner));
+        d.para_mut(StoryRef::Part(inner), &end_of_inner.path).unwrap().insert_text(end_of_inner.off, " edited", &CharProps::default()).unwrap();
+
+        let mut limited = d.clone();
+        d.insert_fragment(&start, &frag).unwrap();
+        let [pasted] = body_note_ids(&d).try_into().unwrap();
+        assert_ne!(pasted, outer, "the outer note needs a new target");
+        let pasted_source = if in_box {
+            let p = d.para(StoryRef::Part(pasted), &Path::top(0)).unwrap();
+            p.objects.iter().flat_map(InlineObject::text_boxes).next().unwrap()
+        } else {
+            pasted
+        };
+        let pasted_inner = *refs_in(&d, StoryRef::Part(pasted_source)).last().unwrap();
+        assert_ne!(pasted_inner, inner);
+        assert!(d.plain_text(StoryRef::Part(pasted_inner)).ends_with("copied text"));
+        assert!(d.plain_text(StoryRef::Part(inner)).ends_with(" edited"));
+        assert_eq!(refs_in(&d, StoryRef::Part(target)).last(), Some(&inner));
+
+        let mut blocks = frag.blocks.clone();
+        let mut parts = frag.parts.clone();
+        let mut budget = BoxBudget::new();
+        budget.stories = 1;
+        limited.adopt_notes(&mut blocks, &mut parts, &mut budget);
+        assert!(!parts.contains_key(&inner), "the nested note exceeds the remaining story budget");
+        let Some(Block::Para(p)) = blocks.first() else { panic!() };
+        let new_outer = p
+            .objects
+            .iter()
+            .find_map(|o| match o {
+                InlineObject::NoteRef { id, .. } => Some(*id),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(new_outer, outer);
+        assert_eq!(refs_in(&limited, StoryRef::Part(new_outer)), [new_outer]);
+    }
+}
+
 /// An image object naming `key`.
 fn image_ref(key: &str) -> InlineObject {
     InlineObject::Image {
