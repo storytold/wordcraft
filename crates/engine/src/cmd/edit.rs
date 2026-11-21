@@ -845,13 +845,20 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// The character and paragraph formatting at the start of the selection.
-fn picked_format(s: &Session) -> (wordcraft_doc::props::CharProps, wordcraft_doc::props::ParaProps) {
+/// A caret, whole paragraph, or cross-paragraph selection qualifies for paragraph formatting.
+/// Word for Mac 16.114.4 leaves paragraph properties alone when only part is selected (#5964).
+fn paragraph_format_selection(s: &Session) -> bool {
+    let (a, b) = s.sel.ordered();
+    a == b || a.path != b.path || (a.off == 0 && s.doc.para_at(&b).is_some_and(|p| b.off == p.len()))
+}
+
+/// The character formatting and any paragraph formatting at the start of the selection.
+fn picked_format(s: &Session) -> (wordcraft_doc::props::CharProps, Option<wordcraft_doc::props::ParaProps>) {
     let f = s.sel.ordered().0;
     // A symbol's own font isn't formatting to paint onto text.
     // Formatting only: not the source's hyperlink or revision marks (#5616).
     let chr = s.doc.para_at(&f).map(|p| p.props_of_char(f.off).clone().without_symbol().formatting()).unwrap_or_default();
-    let para = s.doc.para_at(&f).map(|p| p.props.clone().formatting()).unwrap_or_default();
+    let para = paragraph_format_selection(s).then(|| s.doc.para_at(&f).map(|p| p.props.formatting()).unwrap_or_default());
     (chr, para)
 }
 
@@ -878,6 +885,7 @@ fn painter(s: &mut Session, v: &Value) -> CmdResult {
 /// Apply the format painter's formatting to the selection, or else what Copy Formatting picked
 /// up (which stays for the next Paste Formatting).
 fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
+    let brush = s.painter.is_some();
     let (chr, para, sticky) = match (s.painter.clone(), s.copied_format.clone()) {
         (Some(brush), _) => brush,
         (None, Some((chr, para))) => (chr, para, true),
@@ -885,7 +893,7 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
     };
     let (a, b) = s.sel.ordered();
     if a == b {
-        // No selection: apply paragraph formatting (and word formatting like Word).
+        // At a caret, character formatting applies to the word.
         let f = s.sel.focus.clone();
         if let Some(pp) = s.doc.para_at(&f) {
             let (x, y) = pp.word_at(f.off);
@@ -894,12 +902,12 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
             let word_end = pp.text.get(x..y).map(|word| x + word.trim_end().len()).unwrap_or(y);
             s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: word_end, ..f.clone() }, &|c| *c = c.cleared().overlaid(&chr))?;
         }
-        s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     } else {
         s.doc.format_range(&a, &b, &|c| *c = c.cleared().overlaid(&chr))?;
-        if a.path != b.path || a.off == 0 {
-            s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
-        }
+    }
+    // The armed brush paints captured paragraph properties even onto a partial selection.
+    if let Some(para) = para.filter(|_| brush || paragraph_format_selection(s)) {
+        s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;
     }
     if !sticky {
         s.painter = None;

@@ -436,3 +436,5 @@ labels unambiguous. Those extra-number assignments have not been compared with W
 ### Format Painter integration refresh, 2026-10-30
 
 Single-click release applies the armed painter to the target word without trailing spaces and disarms it. Explicit selections retain their scope (#1455, partial). Source and UI regressions are retained after the canvas/input module split. Earlier Windows pointer and browser qualification are historical; current-head hosted validation is pending, and native shortcut/Mint qualification is not newly claimed.
+
+In Word for Mac 16.114.4, copying part of a paragraph carries character formatting only. With a whole-paragraph source, the toolbar brush applied paragraph formatting to a selected word, while Paste Formatting preserved that target's paragraph properties. See the [Format Painter reference matrix](format-painter-reference.md) for the observed selections and test scope (#5964).
