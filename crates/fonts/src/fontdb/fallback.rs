@@ -81,7 +81,7 @@ impl FontDb {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let enabled = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled;
-            if enabled {
+            if enabled && self.family_maps(FAMILY, c) {
                 self.load_cataloged(FAMILY);
             }
         }
