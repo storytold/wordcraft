@@ -61,6 +61,10 @@ pub(crate) use links::follow_link;
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 pub use navigation::page_to_screen;
 use navigation::viewed_page;
+#[cfg(test)]
+pub(crate) use pages::BAND_PAD_PT;
+#[cfg(test)]
+pub(crate) use pages::{ItemBand, PageBands};
 pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
 use pages::{page_render_options, shown_layout};
 use reading::{reading_anchor_page, reading_page_start, web_layout_width};
@@ -91,6 +95,13 @@ impl Default for ShownPages {
     fn default() -> Self {
         ShownPages { rect: Rect::NOTHING, pages: Vec::new(), laid: Vec::new(), view: Rect::NOTHING, canvas: None }
     }
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+pub(crate) struct CanvasTelemetry {
+    pub(crate) raster_ms: f64,
+    pub(crate) full_renders: u64,
+    pub(crate) partial_renders: u64,
 }
 
 pub struct CanvasState {
@@ -140,6 +151,16 @@ pub struct CanvasState {
     pub(crate) turning: Option<crate::objects::Turning>,
     /// Page content fingerprints of the current layout, for the page revision.
     pub(crate) page_keys: PageKeys,
+    /// Page rasters drawn since the canvas was made: whole pages, and bands of changed pages
+    /// (#1109). Reported by the control channel's `perf` and the responsiveness probe.
+    pub partial_renders: u64,
+    pub full_renders: u64,
+    pub render_ms: f64,
+    /// Time spent rasterising pages and bands in this frame, milliseconds: what a keystroke's
+    /// page raster costs the CPU, apart from the rest of the canvas work.
+    pub raster_ms: f64,
+    pub(crate) rendered_pages: Arc<std::sync::Mutex<std::collections::HashMap<usize, pages::RenderedPage>>>,
+    pub(crate) telemetry: Arc<std::sync::Mutex<CanvasTelemetry>>,
     /// The caret colour last worked out and the key of the place it was worked out for, so a blink doesn't rebuild the
     /// page's draw list every frame (`cursor::caret_color_at`).
     pub(crate) caret_bg: Option<(u64, Color32)>,
@@ -398,6 +419,12 @@ impl Default for CanvasState {
             frame_held: false,
             turning: None,
             page_keys: PageKeys::default(),
+            partial_renders: 0,
+            full_renders: 0,
+            render_ms: 0.0,
+            raster_ms: 0.0,
+            rendered_pages: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            telemetry: Arc::new(std::sync::Mutex::new(CanvasTelemetry::default())),
             caret_bg: None,
             markup_facts: Cell::new(None),
             scroll_to_caret: true,
@@ -698,6 +725,14 @@ fn paper_color(app: &WordApp) -> Color32 {
 
 /// Read Mode: the reading columns, with the page-turn row under them.
 fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect, metrics: &ReadingMetrics) {
+    app.canvas.raster_ms = 0.0;
+    app.canvas.render_ms = 0.0;
+    app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner).raster_ms = 0.0;
+    let t0 = craft::platform::clock::monotonic_ms();
+    let renders_before = {
+        let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (t.full_renders, t.partial_renders)
+    };
     let zoom = app.session.view.read_zoom.clamp(0.75, 1.5);
     let paper = DataColor::new(paper_color(app));
     let columns = Rect::from_min_max(full.min, pos2(full.max.x, (full.max.y - metrics.nav_bar).max(full.min.y)));
@@ -711,6 +746,16 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
         })
         .inner;
     app.canvas.page_keys = source.into_keys();
+    let (renders_after, telem_raster) = {
+        let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        ((t.full_renders, t.partial_renders), t.raster_ms)
+    };
+    app.canvas.full_renders = renders_after.0;
+    app.canvas.partial_renders = renders_after.1;
+    app.canvas.raster_ms = telem_raster;
+    if renders_after != renders_before {
+        app.canvas.render_ms = craft::platform::clock::monotonic_ms() - t0;
+    }
     app.canvas.reading = state;
     app.canvas.shown = ShownPages { rect: columns, pages: Vec::new(), laid: Vec::new(), view: columns, canvas: Some(out.response.id) };
     app.canvas.viewed_page = None;
@@ -742,6 +787,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
 /// The page view and everything shown over it.
 fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect) {
+    app.canvas.raster_ms = 0.0;
+    app.canvas.render_ms = 0.0;
+    app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner).raster_ms = 0.0;
+    let t0 = craft::platform::clock::monotonic_ms();
+    let renders_before = {
+        let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (t.full_renders, t.partial_renders)
+    };
     // The document's layout the pages are drawn from: the pass's keys and press run inside the page view, after the
     // pages took it.
     let laid_before = app.session.layout();
@@ -871,6 +924,16 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         });
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
+    let (renders_after, telem_raster) = {
+        let t = app.canvas.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        ((t.full_renders, t.partial_renders), t.raster_ms)
+    };
+    app.canvas.full_renders = renders_after.0;
+    app.canvas.partial_renders = renders_after.1;
+    app.canvas.raster_ms = telem_raster;
+    if renders_after != renders_before {
+        app.canvas.render_ms = craft::platform::clock::monotonic_ms() - t0;
+    }
     // This pass's own input changed the document under the pages it drew: run the pass again, so the frame that
     // delivers a key paints its text (production laid out and painted in the one pass) rather than the next frame.
     if ran && !Arc::ptr_eq(&laid_before, &app.session.layout()) {

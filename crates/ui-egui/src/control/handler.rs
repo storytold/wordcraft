@@ -65,7 +65,14 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "dirty": app.session.dirty,
         "document": app.session.document_id(),
         "documents": app.session.documents(),
-        "perf": {"frameMs": app.frame_ms, "layoutMs": app.session.layout().ms},
+        "perf": {
+            "frameMs": app.frame_ms,
+            "renderMs": app.canvas.render_ms,
+            "rasterMs": app.canvas.raster_ms,
+            "layoutMs": app.session.layout().ms,
+            "pageRenders": app.canvas.full_renders,
+            "bandRenders": app.canvas.partial_renders,
+        },
     })
 }
 
@@ -431,5 +438,20 @@ fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) 
                 Err(e) => err(e),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `docs/control-protocol.md` promises `perf.rasterMs`; a control client reads it to tell a
+    /// keystroke's page raster from the rest of the canvas work.
+    #[test]
+    fn inspect_reports_the_documented_raster_time() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.canvas.raster_ms = 1.25;
+        let seen = inspect(&mut app, &egui::Context::default());
+        assert_eq!(seen["perf"]["rasterMs"].as_f64(), Some(1.25));
     }
 }
