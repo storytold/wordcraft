@@ -20,27 +20,24 @@
 //! unfocused), and moves that start or end off screen. Our choice; Word wasn't measured there.
 //!
 //! With animations off the caret jumps and blinks on and off, as it always did: File ▸ Options ▸
-//! Advanced ▸ Animation (the `ui.caretAnimation` command) turns them off, and so do egui's
-//! `animation_time` at 0 (the headless test harness, so scripted screenshots never catch a caret
-//! in flight) and `WORDCRAFT_CARET_GLIDE_MS=0`. The variable also sets the duration, for looking
-//! at the motion slowed down.
+//! Advanced ▸ Animation (the `ui.caretAnimation` command) turns them off, and so does any motion
+//! mode but the full one (the app's Animation setting and the system's reduce-motion).
 //!
 //! The glide runs in content space (screen points from the top-left of the scrolled content), so
 //! scrolling under a moving caret doesn't bend its path.
 
 use std::hash::{Hash, Hasher};
 
-use egui::{Pos2, Rect, Ui};
+use craft::behavior::motion::MotionMode;
+use egui::{Pos2, Rect};
 
 use crate::WordApp;
-use crate::canvas::Geometry;
 
 /// How long a glide, and each fade of the blink, takes (seconds).
 pub const GLIDE_SECS: f64 = 0.10;
 /// The caret is on for this long, then off for this long (seconds).
 pub const BLINK_SECS: f64 = 0.53;
-/// The longest glide `WORDCRAFT_CARET_GLIDE_MS` can ask for.
-const MAX_GLIDE_SECS: f64 = 10.0;
+
 /// Moves shorter than this (screen points) aren't worth a glide.
 const MIN_MOVE: f32 = 0.5;
 /// How far outside the visible canvas a glide may start or end (screen points).
@@ -49,14 +46,33 @@ const OFFSCREEN_SLACK: f32 = 48.0;
 /// The caret's bar: its two ends.
 pub type Bar = [Pos2; 2];
 
-/// Caller-owned geometry and blink state for one caret frame.
-pub struct LookRequest<'a> {
+/// What the page knows about the caret in one pass.
+pub struct LookRequest {
+    /// The scrolled content's top-left on screen.
     pub content_origin: Pos2,
-    pub geometry: &'a Geometry,
+    /// Where the caret belongs on screen.
     pub target: Bar,
+    /// Whether the caret is drawn at all.
     pub shown: bool,
+    /// Milliseconds since the blink was restarted.
     pub since_ms: f64,
+    /// What the plain on-and-off blink says.
     pub on: bool,
+    /// The pass time, in seconds.
+    pub now: f64,
+    /// The frame counter: a caret that skipped a frame doesn't glide from its stale place.
+    pub frame_nr: u64,
+    /// The part of the screen the canvas covers.
+    pub viewport: Rect,
+    /// The pass took editor input.
+    pub keys: bool,
+    /// A pointer press is in progress or ended this pass.
+    pub pointer: bool,
+    /// How much motion the interface shows.
+    pub motion: MotionMode,
+    /// A fingerprint of the view this pass shows (zoom, scroll, size): a caret that moved with a
+    /// changed view doesn't glide.
+    pub view: u64,
 }
 
 /// What the canvas knows about the caret in one frame.
@@ -127,18 +143,20 @@ pub struct CaretGlide {
     cause: u64,
     view: u64,
     frame_nr: u64,
+    /// The monotonic time (ms) of the last [`CaretGlide::restart`]; 0 until one.
+    restarted: f64,
 }
 
 impl Default for CaretGlide {
     fn default() -> Self {
-        CaretGlide::with_secs(glide_secs())
+        CaretGlide::with_secs(GLIDE_SECS)
     }
 }
 
 impl CaretGlide {
     /// A caret whose glides and fades take `secs` seconds (0 or less: it jumps and blinks hard).
     pub fn with_secs(secs: f64) -> Self {
-        let secs = if secs.is_finite() { secs.clamp(0.0, MAX_GLIDE_SECS) } else { GLIDE_SECS };
+        let secs = if secs.is_finite() { secs.max(0.0) } else { GLIDE_SECS };
         CaretGlide {
             secs,
             target: None,
@@ -151,7 +169,13 @@ impl CaretGlide {
             cause: 0,
             view: 0,
             frame_nr: 0,
+            restarted: 0.0,
         }
+    }
+
+    /// How long a glide and each fade of the blink take, in seconds.
+    pub fn secs(&self) -> f64 {
+        self.secs
     }
 
     /// Advance to this frame; returns where and how strongly to draw the caret (content space).
@@ -267,6 +291,22 @@ impl CaretGlide {
         self.drawn = None;
         self.opacity = 0.0;
     }
+
+    /// Restarts the blink from fully shown at `now_ms` (monotonic milliseconds) after caret
+    /// activity. The drawn caret and its glide stay, unlike [`reset`](Self::reset).
+    pub fn restart(&mut self, now_ms: f64) {
+        self.restarted = now_ms;
+        self.fade = None;
+        if self.drawn.is_some() {
+            self.opacity = 1.0;
+        }
+    }
+
+    /// Milliseconds from the last [`restart`](Self::restart) to `now_ms` (from creation when none):
+    /// the caret's idle time, which the blink and AutoSave's wait read.
+    pub fn since_restart_ms(&self, now_ms: f64) -> f64 {
+        now_ms - self.restarted
+    }
 }
 
 /// How far along an animation that started at `started` and lasts `secs` is at `now`: 0 to 1, or
@@ -298,7 +338,7 @@ pub fn blink(since: f64, fade: f64) -> f32 {
 }
 
 /// The blink is part-way through a fade: keep repainting.
-fn blink_fading(since: f64, fade: f64) -> bool {
+pub(crate) fn blink_fading(since: f64, fade: f64) -> bool {
     since.is_finite() && since >= BLINK_SECS && (since % BLINK_SECS) < fade
 }
 
@@ -315,28 +355,8 @@ fn is_finite(b: Bar) -> bool {
     b[0].x.is_finite() && b[0].y.is_finite() && b[1].x.is_finite() && b[1].y.is_finite()
 }
 
-/// The glide's duration: [`GLIDE_SECS`], or `WORDCRAFT_CARET_GLIDE_MS` when set (tests ignore it).
-fn glide_secs() -> f64 {
-    if cfg!(test) {
-        return GLIDE_SECS;
-    }
-    static SECS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *SECS.get_or_init(|| parse_ms(std::env::var("WORDCRAFT_CARET_GLIDE_MS").ok().as_deref()))
-}
-
-fn parse_ms(value: Option<&str>) -> f64 {
-    match value.and_then(|s| s.trim().parse::<f64>().ok()) {
-        Some(ms) if ms.is_finite() => (ms / 1000.0).clamp(0.0, MAX_GLIDE_SECS),
-        _ => GLIDE_SECS,
-    }
-}
-
-/// Stable id for the caret glide's temporary animation state.
-fn state_id() -> egui::Id {
-    egui::Id::unique("caret_glide")
-}
-
 /// What puts the caret where it is: the document's revision and the caret's position in it.
+// lean: cause fingerprint until the engine emits a change cause
 fn cause_key(app: &WordApp) -> u64 {
     let s = &app.session;
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -347,64 +367,31 @@ fn cause_key(app: &WordApp) -> u64 {
     h.finish()
 }
 
-/// How the document is shown: which document, the zoom and where the pages sit.
-fn view_key(app: &WordApp, geo: &Geometry) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (app.session.document_id(), geo.scale.to_bits(), geo.cols, geo.size.x.to_bits()).hash(&mut h);
-    geo.rects.first().map(|r| (r.min.x.to_bits(), r.min.y.to_bits())).hash(&mut h);
-    h.finish()
-}
-
-/// The canvas's hook: `target` is where the caret belongs on screen this frame, `shown` whether
-/// it is drawn at all, `since_ms` how long ago its blink was restarted and `on` what the plain
-/// on-and-off blink says. Returns where and how strongly to draw it. `content_origin` is the scrolled
-/// content's top-left on screen.
-pub fn look(app: &WordApp, ui: &Ui, request: LookRequest<'_>) -> Look {
-    let LookRequest { content_origin, geometry: geo, target, shown, since_ms, on } = request;
-    // Turned off in Options, Animation effects off (the setting, or the system's under "Use system
-    // setting"), or egui's own switch for "no animations": the caret jumps and blinks on and off.
-    if !app.ui.caret_animation || !app.animations_on() || ui.style().animation_time <= 0.0 || glide_secs() <= 0.0 {
-        ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<CaretGlide>(state_id()).reset());
+/// Steps `glide` for this pass: where and how strongly to draw the caret. With the caret
+/// animation off, or any motion mode but the full one, the caret jumps and blinks on and off.
+pub fn look(glide: &mut CaretGlide, app: &WordApp, request: LookRequest) -> Look {
+    let LookRequest { content_origin, target, shown, since_ms, on, now, frame_nr, viewport, keys, pointer, motion, view } = request;
+    if !app.ui.caret_animation || !matches!(motion, MotionMode::Full) {
+        glide.reset();
         return Look { bar: target, opacity: if on { 1.0 } else { 0.0 }, moving: false };
     }
     let off = content_origin.to_vec2();
-    let since = since_ms / 1000.0;
-    let (keys, pointer, now) = ui.input(|i| {
-        let typed = |e: &egui::Event| {
-            matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(_))
-        };
-        (i.events.iter().any(typed), i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released(), i.time)
-    });
     let frame = Frame {
         target: [target[0] - off, target[1] - off],
         cause: cause_key(app),
-        view: view_key(app, geo),
+        view,
         shown,
-        viewport: ui.clip_rect().translate(-off),
+        viewport: viewport.translate(-off),
         now,
-        frame_nr: ui.ctx().cumulative_frame_nr(),
+        frame_nr,
         keys,
         pointer,
-        since_blink: since,
+        since_blink: since_ms / 1000.0,
     };
-    let (mut look, gliding, secs) = ui.ctx().data_mut(|d| {
-        let state = d.get_temp_mut_or_default::<CaretGlide>(state_id());
-        (state.frame(frame), state.is_gliding(), state.secs)
-    });
+    let mut look = glide.frame(frame);
     // At rest the caller's own pixel-snapped bar is drawn, untouched.
-    look.bar = if gliding { [look.bar[0] + off, look.bar[1] + off] } else { target };
-    if look.moving {
-        ui.ctx().request_repaint();
-    } else if shown && blink_fading(since, secs) {
-        // The blink's fade needs a handful of frames, not every one.
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
-    }
+    look.bar = if glide.is_gliding() { [look.bar[0] + off, look.bar[1] + off] } else { target };
     look
-}
-
-/// The caret's glide state this frame (for tests and tools).
-pub fn state(ctx: &egui::Context) -> CaretGlide {
-    ctx.data(|d| d.get_temp::<CaretGlide>(state_id())).unwrap_or_default()
 }
 
 #[cfg(test)]
