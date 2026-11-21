@@ -233,6 +233,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-05 | trivial | #19: ODT default language kept when styles are written from the model |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-10-29 | trivial | Page drawing indexes text-box warp lookups per paragraph (#3614); requested offsets only, bounded prefix traversal, original Linux display and persistence controls; readiness estimates unchanged |
+| 2026-10-29 | trivial | PDF figure tagging reuses requested paragraph prefixes within each export (#3614); alternative text, decorative roles and drawing/page order stay unchanged; synthetic controls, readiness estimates unchanged. |
 | 2026-10-31 | trivial | Pagination gap #4: a float anchored right after a page break inside a paragraph, before text, is drawn on the new page (#4262) |
 | 2026-10-31 | trivial | Pagination gap #4: a float anchored on a later page of a long paragraph is drawn on that page, also when footnotes or widow control move its line on (#4250) |
 | 2026-10-28 | trivial | Protected typing boundary lookup counts preceding objects once and indexes editable permission IDs (#3614); caret movement and enforcement policy are unchanged. |
