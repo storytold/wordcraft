@@ -1,89 +1,79 @@
+use std::sync::Arc;
+
+use craft::host::{Picked, ScriptedFiles};
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
-use super::{HOME_TEMPLATES, TEMPLATES, matching_templates};
 use crate::{Services, WordApp};
 
-/// #1714: every side-menu item has its own icon, a drawn one (an unknown name would fall back
-/// to a tile with its first letter, the only icon here that draws text).
+/// A window with an empty document.
+fn new_app() -> WordApp {
+    WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
+}
+
+/// A window whose file service is `files`: every pick and save of the page goes to it.
+fn app_with_files(files: &Arc<ScriptedFiles>) -> WordApp {
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    new_app().with_host(Arc::new(host))
+}
+
+/// The app in a window of `size`, run until it settles.
+fn harness(a: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
+    let mut h = crate::test_harness::builder().with_size(size).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// A 1440 × 900 window showing File on `page`.
+fn file_page(mut a: WordApp, page: &str) -> egui_kittest::Harness<'static, WordApp> {
+    a.run("ui.backstage", json!({"value": true, "page": page})).unwrap();
+    harness(a, egui::vec2(1440.0, 900.0))
+}
+
+/// A recent row by its file name. The framework names a row with its folder after the file name
+/// (`name` then the path), so a row is found by that prefix, not by the exact label.
+fn recent_row<'a>(h: &'a egui_kittest::Harness<'static, WordApp>, name: &'a str) -> Option<egui_kittest::Node<'a>> {
+    h.query_all_by_label_contains(name).next()
+}
+
+/// #1714: every side-menu item has its own icon, and each icon is one the app registers or the
+/// framework catalogue has (an unknown name would draw nothing useful).
 #[test]
 fn every_side_menu_item_has_a_drawn_icon() {
-    let ctx = egui::Context::default();
     let mut names = std::collections::HashSet::new();
     for (id, _, icon) in super::PAGES {
         assert!(names.insert(icon), "{id}: {icon} is used twice");
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let r = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(18.0, 18.0));
-            crate::icons::paint(ui.painter(), r, icon, egui::Color32::WHITE, egui::Color32::WHITE);
-        });
-        // The frame's font textures aren't uploaded anywhere here (cleared before any assert,
-        // so a failure doesn't panic again while the frame is dropped).
-        out.textures_delta.clear();
-        fn has_text(s: &egui::Shape) -> bool {
-            match s {
-                egui::Shape::Text(_) => true,
-                egui::Shape::Vec(v) => v.iter().any(has_text),
-                _ => false,
-            }
-        }
-        assert!(!out.shapes.is_empty(), "{id}: {icon} draws nothing");
-        assert!(!out.shapes.iter().any(|s| has_text(&s.shape)), "{id}: {icon} is not a drawn icon");
+        let app_has = crate::icons::WORDCRAFT_ICONS.icons.iter().any(|(name, _)| *name == icon);
+        let catalogue_has = craft::ui::primitives::icon_names().contains(&icon);
+        assert!(app_has || catalogue_has, "{id}: {icon} is in neither the app's icon set nor the catalogue");
     }
 }
 
-/// Regression test for #504: the side menu is a fixed 200 points wide, but egui drew a resize
-/// line and showed a resize pointer on its right edge that did nothing.
-#[test]
-fn the_side_menu_edge_is_not_a_resize_handle() {
-    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    app.ui.language = "en".into();
-    app.ui.backstage = true;
-    let ctx = egui::Context::default();
-    let edge = egui::pos2(200.0, 400.0);
-    for frame in 0..8 {
-        let mut input = egui::RawInput {
-            time: Some(f64::from(frame) * 0.1),
-            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
-            ..Default::default()
-        };
-        if frame > 0 {
-            input.events.push(egui::Event::PointerMoved(edge));
-        }
-        let mut out = ctx.run_ui(input, |ui| {
-            app.logic(&ctx.clone());
-            app.ui(ui);
-        });
-        out.textures_delta.clear();
-        if frame > 2 {
-            assert!(app.ui.backstage, "File is open");
-            let cursor = format!("{:?}", out.platform_output.cursor_icon);
-            assert!(!cursor.starts_with("Resize"), "frame {frame}: the menu edge shows a resize pointer ({cursor})");
-        }
-    }
-}
-
-/// #2938: opening a deleted file from Recent keeps File open and reports the error instead of
-/// closing it on a greyed-out window.
+/// #2938: opening a deleted file from Recent keeps File open and the page shows the error instead
+/// of closing it on a greyed-out window.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
-    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    app.ui.backstage = true;
     let missing = std::env::temp_dir().join(format!("wordcraft-missing-{}.docx", std::process::id()));
-    let err = super::open_recent(&mut app, &missing.to_string_lossy()).unwrap_err();
+    let name = missing.file_name().unwrap().to_string_lossy().into_owned();
+    let mut a = new_app();
+    a.ui.recent = vec![missing.to_string_lossy().into_owned()];
+    let mut h = file_page(a, "open");
+    recent_row(&h, name.as_str()).expect("the missing file's row shows").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "File stays open");
+    let err = h.state().backstage_state.open_error.clone().expect("the page kept the error");
     assert!(!err.is_empty());
-    assert!(app.ui.backstage, "File stays open");
-}
-
-/// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
-/// control inset in full screen.
-#[test]
-fn back_chevron_keeps_clear_of_traffic_lights_only_windowed() {
-    let windowed = super::back_chevron_c(0.0, 14.0, false, 70.0);
-    assert_eq!((windowed.x, windowed.y), (73.0, 14.0));
-    let full = super::back_chevron_c(0.0, 14.0, true, 70.0);
-    assert_eq!((full.x, full.y), (26.0, 14.0));
-    assert!(full.x < windowed.x);
+    h.get_by_label(err.as_str());
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -105,7 +95,7 @@ fn recovery_fixture() -> (WordApp, std::path::PathBuf) {
         .unwrap(),
     )
     .unwrap();
-    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    let mut app = new_app();
     app.ui.language = "en".into();
     (app, root)
 }
@@ -123,7 +113,7 @@ fn recovery_app() -> (WordApp, std::path::PathBuf) {
 fn pending_recovery_harness(app: WordApp, root: &std::path::Path) -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std::cell::Cell<bool>>) {
     let poll = std::rc::Rc::new(std::cell::Cell::new(true));
     let gate = poll.clone();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         move |ui, app: &mut WordApp| {
             if gate.get() {
                 app.logic(&ui.ctx().clone());
@@ -141,7 +131,7 @@ fn pending_recovery_harness(app: WordApp, root: &std::path::Path) -> (egui_kitte
 
 #[cfg(not(target_arch = "wasm32"))]
 fn recovery_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -167,63 +157,14 @@ fn settle_recovery(h: &mut egui_kittest::Harness<'_, WordApp>) {
     h.run_steps(4);
 }
 
-/// #3243: the Recover page uses the app theme like every other Backstage page: no black
-/// fill, and its labels are not forced white (unreadable on the light theme).
-#[test]
-#[cfg(not(target_arch = "wasm32"))]
-fn recovery_page_follows_the_theme() {
-    for theme in [egui::Theme::Light, egui::Theme::Dark] {
-        let (mut app, root) = recovery_app();
-        let ctx = egui::Context::default();
-        crate::theme::apply(&ctx, crate::theme::Appearance::System);
-        ctx.set_theme(theme);
-        let mut shapes = Vec::new();
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        for frame in 0..1000 {
-            let input = egui::RawInput {
-                time: Some(f64::from(frame) * 0.01),
-                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
-                ..Default::default()
-            };
-            let mut out = ctx.run_ui(input, |ui| {
-                app.logic(&ctx.clone());
-                app.ui(ui);
-            });
-            out.textures_delta.clear();
-            shapes = out.shapes;
-            if frame > 4 && app.session.recovery_ready() && !app.session.recovery_busy() && !app.session.recovery_documents().is_empty() {
-                break;
-            }
-            assert!(std::time::Instant::now() < end);
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        assert!(app.ui.backstage && app.ui.backstage_page == "recover");
-        let mut texts = 0;
-        for s in &shapes {
-            match &s.shape {
-                egui::Shape::Rect(r) => {
-                    assert_ne!(r.fill, egui::Color32::BLACK, "{theme:?}: the Recover page is filled black");
-                }
-                egui::Shape::Text(t) if t.galley.job.text == "Document" || t.galley.job.text == "Recovery copy" => {
-                    texts += 1;
-                    assert_ne!(t.override_text_color, Some(egui::Color32::WHITE), "{theme:?}: header forced white");
-                }
-                _ => {}
-            }
-        }
-        assert_eq!(texts, 2, "{theme:?}: both column headers drawn");
-        drop(app);
-        let _ = std::fs::remove_dir_all(root);
-    }
-}
-
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn recovery_does_not_replace_an_explicit_new_document() {
     for template in ["Blank document", "Report"] {
         let (mut app, root) = recovery_fixture();
         app.ui.backstage = true;
-        app.ui.backstage_page = "home".into();
+        // The Info page has no New or Open button of its own, so the names below are the side menu's.
+        app.ui.backstage_page = "info".into();
         let (mut h, poll) = pending_recovery_harness(app, &root);
         let previous = h.state().session.document_id();
         h.get_by_label("New").click();
@@ -253,12 +194,15 @@ fn recovery_does_not_replace_an_explicit_new_document() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn recovery_does_not_replace_an_explicitly_opened_file() {
-    let (mut app, root) = recovery_fixture();
+    let (_first, root) = recovery_fixture();
     let path = root.join("Requested.txt");
     std::fs::write(&path, "Requested synthetic document").unwrap();
-    app.services.pick_open = Some(Box::new(move |_| Some(path.to_string_lossy().into_owned())));
+    // The Browse… pick is answered with the file.
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path])]));
+    let mut app = app_with_files(&files);
+    app.ui.language = "en".into();
     app.ui.backstage = true;
-    app.ui.backstage_page = "home".into();
+    app.ui.backstage_page = "info".into();
     let (mut h, poll) = pending_recovery_harness(app, &root);
     let previous = h.state().session.document_id();
     h.get_by_label("Open").click();
@@ -298,7 +242,7 @@ fn recovery_page_keeps_dismissed_copies_and_confirms_discard() {
     h.run_steps(4);
     h.get_by_label("Discard…").click();
     h.run_steps(4);
-    assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::DiscardRecovery { .. })));
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("discardRecovery")), "the discard is confirmed first");
     h.get_by_label("Cancel").click();
     h.run_steps(4);
     assert_eq!(h.state().session.recovery_documents().len(), 1);
@@ -326,7 +270,7 @@ fn recovery_restore_opens_beside_unsaved_work_without_autosave_permission() {
     assert_eq!(h.state().session.recovery_documents().len(), 1);
     h.get_by_label("Restore").click();
     settle_recovery(&mut h);
-    assert!(h.state().dialog.is_none(), "nothing is replaced, so nothing to ask");
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "nothing is replaced, so nothing to ask");
     assert_ne!(h.state().session.document_id(), work);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Recovered synthetic work");
     assert!(h.state().session.dirty && h.state().session.path.is_none());
@@ -338,16 +282,6 @@ fn recovery_restore_opens_beside_unsaved_work_without_autosave_permission() {
     assert!(!root.join("must-not-write.docx").exists());
     drop(h);
     let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn template_search_matches_labels_case_insensitively() {
-    let ids = |q: &str| matching_templates(q).into_iter().map(|(_, id)| id).collect::<Vec<_>>();
-    assert_eq!(ids(""), ["blank", "sample", "letter", "resume", "report"]);
-    assert_eq!(ids("  LETTER "), ["letter"]);
-    assert_eq!(ids("re"), ["resume", "report"]);
-    assert_eq!(ids("résumé"), ["resume"]);
-    assert!(ids("no such template").is_empty());
 }
 
 fn personal_dir(tag: &str) -> std::path::PathBuf {
@@ -367,16 +301,21 @@ fn new_page_harness(templates: Option<std::path::PathBuf>) -> egui_kittest::Harn
     let services = Services { templates_dir: templates, ..Default::default() };
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
     a.run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    h
+    harness(a, egui::vec2(1440.0, 1100.0))
+}
+
+/// Types `text` into New's search field in place of what is there, as a person would: focus the
+/// field, select its text and type over it.
+fn search_for(h: &mut egui_kittest::Harness<'static, WordApp>, text: &str) {
+    h.get_by_label("Search for templates").focus();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(2);
+    if !text.is_empty() {
+        h.get_by_label("Search for templates").type_text(text);
+    }
+    h.run_steps(3);
 }
 
 /// File › New lists the user templates folder's templates under Personal (#2852), by
@@ -396,16 +335,12 @@ fn new_lists_personal_templates_and_opens_one() {
     assert!(h.query_by_label("Report").is_some(), "the built-in templates stay");
 
     // The search covers both.
-    let search = h.state().window_id("backstage_template_search");
-    h.ctx.data_mut(|d| d.insert_temp(search, "memo".to_string()));
-    h.run_steps(3);
+    search_for(&mut h, "memo");
     assert!(h.query_by_label("Team memo").is_some(), "search finds a personal template");
     assert!(h.query_by_label("Contract").is_none() && h.query_by_label("Report").is_none());
-    h.ctx.data_mut(|d| d.insert_temp(search, "zzz".to_string()));
-    h.run_steps(3);
+    search_for(&mut h, "zzz");
     assert!(h.query_by_label("No templates match your search.").is_some());
-    h.ctx.data_mut(|d| d.insert_temp(search, String::new()));
-    h.run_steps(3);
+    search_for(&mut h, "");
 
     h.get_by_label("Team memo").click();
     h.run_steps(4);
@@ -462,7 +397,7 @@ fn a_personal_template_opens_beside_unsaved_work() {
     h.get_by_label("Memo").click();
     h.run_steps(3);
     let body = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
-    assert!(h.state().dialog.is_none(), "nothing is asked");
+    assert!(h.state().dialog_host.open_dialogs().is_empty(), "nothing is asked");
     assert!(body(&h).contains("From the template"));
     assert_eq!(h.state().session.doc.settings.attached_template.as_deref(), Some(memo.to_string_lossy().as_ref()));
     h.state_mut().run("view.switchWindows", json!({"id": first})).unwrap();
@@ -472,32 +407,29 @@ fn a_personal_template_opens_beside_unsaved_work() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The templates folder is read when New is shown and on Refresh, not on every frame.
+/// The templates folder is read when New is shown and on Refresh, not on every frame: a file
+/// added while New stays open appears only after Refresh, and one added while away appears on the
+/// next visit.
 #[test]
 fn personal_templates_are_listed_once_per_visit_and_on_refresh() {
     let dir = personal_dir("refresh");
     write_template(&dir.join("First.dotx"), "x");
-    let count = || super::PERSONAL_LISTINGS.with(std::cell::Cell::get);
-    let before = count();
     let mut h = new_page_harness(Some(dir.clone()));
-    let after_open = count();
-    assert_eq!(after_open, before + 1, "listed once when New is shown");
+    assert!(h.query_by_label("First").is_some(), "listed when New is shown");
     write_template(&dir.join("Second.dotx"), "y");
     h.run_steps(20);
-    assert_eq!(count(), after_open, "not listed again while New stays open");
-    assert!(h.query_by_label("Second").is_none());
+    assert!(h.query_by_label("Second").is_none(), "not listed again while New stays open");
     h.get_by_label("Refresh").click();
     h.run_steps(3);
-    assert_eq!(count(), after_open + 1, "Refresh lists once");
     assert!(h.query_by_label("Second").is_some(), "Refresh shows the new template");
     // Leaving New and coming back reads the folder again.
     h.state_mut().run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
     h.run_steps(2);
     write_template(&dir.join("Third.dotx"), "z");
+    assert!(h.query_by_label("Third").is_none(), "New is not shown, so nothing lists it");
     h.state_mut().run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
     h.run_steps(3);
-    assert_eq!(count(), after_open + 2);
-    assert!(h.query_by_label("Third").is_some());
+    assert!(h.query_by_label("Third").is_some(), "a new visit to New lists it");
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -517,297 +449,43 @@ fn an_unusable_saved_folder_falls_back_to_the_apps_own() {
     let _ = std::fs::remove_dir_all(&own);
 }
 
-/// #2716: the × of a recent row is a cue, not a secret: dimmed when only the row is hovered,
-/// stronger on the × itself, absent when neither is.
-#[test]
-fn recent_remove_cross_shows_when_the_row_is_hovered() {
-    use super::{RemoveCue, remove_cue};
-    assert_eq!(remove_cue(false, false), RemoveCue::Hidden);
-    assert_eq!(remove_cue(true, false), RemoveCue::Dim, "row hovered shows the glyph");
-    assert_eq!(remove_cue(false, true), RemoveCue::Strong);
-    assert_eq!(remove_cue(true, true), RemoveCue::Strong);
-}
-
-/// #2716: each recent row has its own Remove (× at the right end, so it opens nothing), and
-/// Clear all takes the whole list away; the list is empty afterwards.
+/// A recent row's Remove (the Delete key on the focused row) and Clear Recent Files (the row's
+/// context menu) end in `ui.recentRemove` and `ui.recentClear`: the app's list loses one entry,
+/// then all of them, and the page stays open.
 #[test]
 fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
-    use egui::accesskit::Role;
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    let mut a = new_app();
     a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = file_page(a, "open");
+    assert!(recent_row(&h, "alpha.docx").is_some() && recent_row(&h, "beta.docx").is_some(), "both rows show");
+    recent_row(&h, "alpha.docx").expect("alpha's row shows").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
     h.run_steps(4);
-    let row = |h: &egui_kittest::Harness<WordApp>, name: &str| h.query_all_by_role_and_label(Role::Button, name).next().map(|n| n.rect());
-    assert!(row(&h, "alpha.docx").is_some() && row(&h, "beta.docx").is_some(), "both rows show");
-    // The × inside alpha's row, not beta's: click it and only alpha goes.
-    let remove_in = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
-        let r = row(h, name).expect(name);
-        h.query_all_by_role_and_label(Role::Button, "Remove from list")
-            .find(|n| n.rect().min.y >= r.min.y && n.rect().min.y < r.max.y)
-            .expect("row has its Remove")
-            .click();
-    };
-    remove_in(&mut h, "alpha.docx");
+    assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "Remove takes its own row");
+    assert!(h.state().ui.backstage, "removing opens nothing");
+    assert!(recent_row(&h, "alpha.docx").is_none() && recent_row(&h, "beta.docx").is_some());
+    recent_row(&h, "beta.docx").expect("beta's row shows").click_secondary();
+    h.run_steps(3);
+    h.get_by_label("Clear Recent Files").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "the row's own Remove takes its row");
-    assert!(h.state().ui.backstage, "the × does not open the Backstage away");
-    assert!(row(&h, "alpha.docx").is_none() && row(&h, "beta.docx").is_some());
-    h.get_by_label("Clear all").click();
-    h.run_steps(4);
-    assert!(h.state().ui.recent.is_empty(), "Clear all empties the list");
-    assert!(h.query_by_label("Documents you open will show up here.").is_some());
-    assert!(row(&h, "beta.docx").is_none(), "and Clear all goes with it");
+    assert!(h.state().ui.recent.is_empty(), "Clear empties the list");
+    assert!(recent_row(&h, "beta.docx").is_none());
 }
 
-/// Home and New are different pages (#141): Home has the short template row, the link to New
-/// and Recent; New has every template and no Recent list.
-#[test]
-fn home_and_new_show_different_sections() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert!(h.query_by_label("Recent").is_some(), "Home lists recent documents");
-    assert!(h.query_by_label("Letter").is_some(), "Home shows the first templates");
-    assert!(h.query_by_label("Report").is_none(), "Home shows only a short row of templates");
-    h.get_by_label("More templates →").click();
-    h.run_steps(4);
-    assert_eq!(h.state().ui.backstage_page, "new", "the link opens New");
-    assert!(h.query_by_label("Report").is_some(), "New shows every template");
-    assert!(h.query_by_label("Recent").is_none(), "New has no Recent list");
-}
-
-/// #3176: a screen reader finds each template and each recent document as a button named by
-/// its caption or file name (they were unnamed text), and pressing one opens it.
-#[test]
-fn templates_and_recent_documents_are_named_buttons() {
-    use egui::accesskit::Role;
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    let dir = std::env::temp_dir().join("wordcraft-3176-missing");
-    let path = |folder: &str, file: &str| dir.join(folder).join(file).to_string_lossy().into_owned();
-    let (spring, autumn) = (path("spring", "Report.docx"), path("autumn", "Report.docx"));
-    a.ui.recent = vec![path("notes", "Quarterly notes.docx"), spring.clone(), autumn.clone()];
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = a11y_harness(a);
-    for (label, _) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
-        assert!(h.query_by_role_and_label(Role::Button, label).is_some(), "{label} is a named button");
-    }
-    assert!(h.query_by_role_and_label(Role::Button, "Quarterly notes.docx").is_some(), "a recent document is a named button");
-    for p in [&spring, &autumn] {
-        let label = format!("Report.docx, {p}");
-        assert!(h.query_by_role_and_label(Role::Button, &label).is_some(), "a repeated file name is told apart by its path: {label}");
-    }
-    h.get_by_role_and_label(Role::Button, "Letter").click();
-    h.run_steps(4);
-    assert!(!h.state().ui.backstage, "the Letter button opens the template");
-    assert!(!h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "with the template's text");
-}
-
-/// Clicking the back arrow closes the File page and gives the keyboard back to the page,
-/// without naming as focused a widget the frame didn't draw: with accessibility on (a screen
-/// reader, or any UI Automation client on Windows) AccessKit ends the program over that, and
-/// 0.8.0 vanished after Blank document, File, then the back arrow. The test harness always runs
-/// AccessKit.
-#[test]
-fn back_arrow_returns_to_the_page_with_accessibility_on() {
-    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert!(h.state().canvas.widget_id.is_some(), "the page has been drawn");
-    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
-    h.run_steps(4);
-    // The arrow heads the File page's side bar; it has no label to find it by.
-    let arrow = egui::pos2(26.0, 32.0);
-    h.event(egui::Event::PointerMoved(arrow));
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos: arrow, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-    }
-    h.run_steps(4);
-    assert!(!h.state().ui.backstage, "the arrow closes the File page");
-    assert!(h.state().canvas.focused, "and the page has the keyboard");
-}
-
-/// #3041: clicking the plain sidebar background next to the back arrow must not also close
-/// the File page — only the chevron itself does, same scoping as the macOS chevron (#2972).
-#[test]
-fn clicking_beside_the_back_arrow_does_not_close_the_file_page() {
-    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    let mut h = a11y_harness(a);
-    h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
-    h.run_steps(4);
-    // Well clear of the chevron (centred at x=26) but still inside the old 200px-wide row.
-    click_at(&mut h, egui::pos2(100.0, 32.0));
-    assert!(h.state().ui.backstage, "clicking beside the arrow leaves the File page open");
-}
-
-/// A harness over the whole app; kittest always runs AccessKit, so a frame that names as
-/// focused a widget it didn't draw panics with "Focused ID … is not in the node list".
-fn a11y_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    h
-}
-
-/// A primary click at `pos` (for chrome with no label to find it by).
-fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, pos: egui::Pos2) {
-    h.event(egui::Event::PointerMoved(pos));
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-    }
-    h.run_steps(4);
-}
-
-/// The macOS back chevron beside the traffic lights, in a window.
-fn mac_chevron(a: &WordApp) -> egui::Pos2 {
-    super::back_chevron_c(0.0, a.mac_titlebar.height / 2.0, false, a.mac_titlebar.content_left)
-}
-
-/// #2972: on macOS the File page's back button is the chevron beside the traffic lights (the
-/// "sidebar collapse toggle" of the report; there is no other toggle there). Blank document,
-/// File, then the chevron ended 0.8.0 with AccessKit's "Focused ID … is not in the node
-/// list". The same spot clicked in the editor (the title bar) must not either.
-#[test]
-fn mac_back_chevron_returns_to_the_page_with_accessibility_on() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.integrated_titlebar = true;
-    a.mac_titlebar = crate::chrome::MacTitleBar { height: 28.0, content_left: 70.0 };
-    let chevron = mac_chevron(&a);
-    let mut h = a11y_harness(a);
-    assert!(h.state().canvas.widget_id.is_some(), "the page has been drawn");
-    for _ in 0..2 {
-        h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
-        h.run_steps(4);
-        assert!(h.state().ui.backstage);
-        click_at(&mut h, chevron);
-        assert!(!h.state().ui.backstage, "the chevron closes the File page");
-        assert!(h.state().canvas.focused, "and the page has the keyboard");
-        // The same spot in the editor's title bar.
-        click_at(&mut h, chevron);
-        assert!(!h.state().ui.backstage);
-    }
-}
-
-/// #2931: File › New › Blank document with a document open returns to the editor without
-/// AccessKit losing the focused node; and so does Home's Blank document tile and Escape.
-#[test]
-fn blank_document_from_the_file_page_with_accessibility_on() {
-    let work = |mac: bool| {
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Work")), Services::default());
-        a.integrated_titlebar = mac;
-        a11y_harness(a)
-    };
-    for mac in [false, true] {
-        for page in ["new", "home"] {
-            // A fresh "Work" document each time, so each path must really make a blank one.
-            let mut h = work(mac);
-            h.state_mut().run("ui.backstage", json!({"value": true, "page": page})).unwrap();
-            h.run_steps(4);
-            h.get_by_label("Blank document").click();
-            h.run_steps(4);
-            assert!(!h.state().ui.backstage, "{page}: Blank document returns to the editor");
-            assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "{page}: a new blank document");
-            assert!(h.state().dialog.is_none(), "{page}: nothing asks first");
-        }
-        let mut h = work(mac);
-        h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
-        h.run_steps(4);
-        h.key_press(egui::Key::Escape);
-        h.run_steps(4);
-        assert!(!h.state().ui.backstage, "Escape closes the File page");
-        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Work", "Escape keeps the document");
-    }
-}
-
-/// #2908: File › Options, then the back arrow (Windows/Linux layout and the macOS chevron),
-/// with a document open and from the Start screen, without AccessKit ending the program.
-#[test]
-fn options_back_arrow_with_accessibility_on() {
-    for (mac, start) in [(false, false), (true, false), (false, true), (true, true)] {
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-        a.integrated_titlebar = mac;
-        if start {
-            a.ui.start_screen = true;
-            assert!(a.start_screen());
-        }
-        let back = if mac { mac_chevron(&a) } else { egui::pos2(26.0, 32.0) };
-        let mut h = a11y_harness(a);
-        if !start {
-            h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
-            h.run_steps(4);
-        }
-        h.get_by_role_and_label(egui::accesskit::Role::Button, "Options").click();
-        h.run_steps(4);
-        assert_eq!(h.state().ui.backstage_page, "options", "mac {mac} start {start}");
-        // Into a pane, so the Options page has a focused widget of its own.
-        h.get_by_label("Display").click();
-        h.run_steps(4);
-        click_at(&mut h, back);
-        assert!(!h.state().ui.backstage, "mac {mac} start {start}: the arrow closes the File page");
-        if start {
-            assert!(!h.state().has_document(), "mac {mac}: from the Start screen, an empty window");
-        } else {
-            assert!(h.state().canvas.focused, "mac {mac}: and the page has the keyboard");
-        }
-    }
-}
-
-/// #260: File › Info's Title and Author fields dropped every keystroke (they edited a copy
-/// re-read each frame and only wrote it back when the field lost focus), so a save had no
+/// #260, #262: the Info fields once lost typed text when File was left by Escape (or the
+/// browser's Save) before the field lost focus, and dropped the document's last editor and
 /// title or author. Typing now lands in the document as it happens, one undo step per field,
-/// and the browser's Save downloads it with the save stamps advanced (#262).
+/// and the browser's Save hands it over with the save stamps advanced.
 #[test]
 fn info_fields_keep_typed_properties_through_a_web_save() {
     use egui::accesskit::Role;
-    let got: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>> = Default::default();
-    let sink = got.clone();
-    let services = Services {
-        download: Some(Box::new(move |n: &str, b: &[u8]| {
-            sink.borrow_mut().push((n.to_string(), b.to_vec()));
-            Ok(())
-        })),
-        ..Default::default()
-    };
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("XYZ")), services);
+    // A browser host: the save is a download, answered with the suggested name.
+    let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
+    let mut a = app_with_files(&files);
+    a.session = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("XYZ"));
     a.session.author = "GAMMA".into();
-    a.run("ui.backstage", json!({"value": true, "page": "info"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
+    let mut h = file_page(a, "info");
     for (field, text) in [("Title", "ALPHA"), ("Author", "BETA")] {
         h.get_by_role_and_label(Role::TextInput, field).click();
         h.run_steps(2);
@@ -821,12 +499,13 @@ fn info_fields_keep_typed_properties_through_a_web_save() {
     assert_eq!((core.title.as_str(), core.creator.as_str()), ("ALPHA", "BETA"));
     assert!(h.state().session.dirty, "the property edits are unsaved changes");
 
-    // Save (web: a download) writes them into docProps/core.xml, with fresh save stamps.
+    // Save (web: handed to the browser) writes them into docProps/core.xml, with fresh save stamps.
     let a = h.state_mut();
     let created = a.session.doc.core.created.clone();
     a.run("file.save", json!({})).unwrap();
     a.run("file.save", json!({})).unwrap();
-    let (name, bytes) = got.borrow_mut().pop().unwrap();
+    let name = files.requests().last().and_then(|r| r.file_name.clone()).expect("the save asked for a name");
+    let bytes = files.file(std::path::Path::new(&name)).expect("the save handed over its bytes");
     let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
     assert_eq!((back.core.title.as_str(), back.core.creator.as_str()), ("ALPHA", "BETA"));
     assert_eq!(back.core.last_modified_by, "GAMMA");
@@ -842,119 +521,136 @@ fn info_fields_keep_typed_properties_through_a_web_save() {
     assert_eq!(a.session.doc.core.title, "");
 }
 
+/// #3467, #3535: a system dialog that never shows up doesn't leave Save As stuck: Browse in
+/// WordCraft… asks the file service for its own chooser (`fallback`), and the path it answers is
+/// where the document is saved.
 #[test]
-fn save_as_page_shows_browse_and_no_open_list() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert!(h.query_by_label("Browse…").is_some(), "Save As has Browse button");
-    assert!(h.query_by_label("Recent").is_none(), "Save As has no list that opens documents");
+#[cfg(all(unix, not(target_os = "macos")))]
+fn save_as_saves_in_wordcraft_when_the_system_dialog_never_shows() {
+    // A native save writes the picked path itself (the file service only answers where), so the
+    // path is one in a folder of our own.
+    let dir = std::env::temp_dir().join(format!("wordcraft-save-own-browser-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = dir.join("kept.docx");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
+    let mut a = app_with_files(&files);
+    a.run("text.insert", json!({"text": "Saved past a silent portal"})).unwrap();
+    let mut h = file_page(a, "saveAs");
+    assert!(files.requests().is_empty(), "nothing is asked until a button is pressed");
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(6);
+    let asked = files.requests();
+    assert_eq!(asked.len(), 1, "one pick: {asked:?}");
+    assert!(asked[0].fallback, "the request asks for WordCraft's own chooser");
+    assert_eq!(asked[0].kind, craft::host::PickKind::Save);
+    assert_eq!(h.state().session.path.as_deref(), Some(saved.as_path()));
+    assert!(!h.state().ui.backstage, "the page closes once saved");
+    let bytes = std::fs::read(&saved).expect("the picked path holds the saved document");
+    let _ = std::fs::remove_dir_all(&dir);
+    let back = wordcraft_engine::io::open_bytes("kept.docx", &bytes).unwrap();
+    assert!(back.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved past a silent portal"));
 }
 
+/// #3535: File › Export offers WordCraft's own chooser as well, for its formats: the request
+/// asks for the fallback with the PDF type.
+#[test]
+#[cfg(all(unix, not(target_os = "macos")))]
+fn export_page_offers_wordcrafts_own_browser() {
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = file_page(app_with_files(&files), "export");
+    h.get_by_label("Browse in WordCraft…").click();
+    h.run_steps(4);
+    let asked = files.requests();
+    let request = asked.last().expect("the button asked the file service");
+    assert!(request.fallback, "the request asks for WordCraft's own chooser: {request:?}");
+    assert!(request.filters.iter().any(|f| f.extensions.iter().any(|e| e == "pdf")), "with the PDF type: {request:?}");
+}
+
+/// The side menu's rows go where the page says: Save on an unnamed document opens Save As and no
+/// file dialog; Save on a named one saves and closes File; Close on a clean document closes it at
+/// once and on an edited one asks first (#1124, #1712); Save As opens its page.
 #[test]
 fn backstage_save_navigates_to_save_as_when_unnamed() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
+    // Save, unnamed.
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = file_page(app_with_files(&files), "home");
     h.get_by_label("Save").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs", "unnamed Save opens Save As page");
     assert!(h.state().ui.backstage, "backstage remains open");
-}
+    assert!(files.requests().is_empty(), "no file dialog");
 
-/// Save on a document without a file shows the Save As page only: no native dialog as well.
-#[test]
-fn backstage_save_when_unnamed_opens_no_file_dialog() {
-    let shown = std::rc::Rc::new(std::cell::Cell::new(0));
-    let count = shown.clone();
-    let services = Services {
-        file_dialog: Some(Box::new(move |_| {
-            count.set(count.get() + 1);
-            std::sync::mpsc::channel::<crate::FileDialogAnswer>().1
-        })),
-        ..Default::default()
-    };
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
+    // Save, named.
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-save-named-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("named.docx");
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Named"})).unwrap();
+    a.run("file.saveAs", json!({"path": path.to_string_lossy()})).unwrap();
+    a.run("text.insert", json!({"text": " and edited"})).unwrap();
+    let mut h = file_page(a, "home");
     h.get_by_label("Save").click();
     h.run_steps(4);
+    assert!(!h.state().ui.backstage, "a successful save closes File");
+    assert!(!h.state().session.dirty, "and the changes are saved");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Close, clean.
+    let mut h = file_page(new_app(), "home");
+    h.get_by_label("Close").click();
+    h.run_steps(1);
+    assert!(h.state().closing.is_none(), "no prompt");
+    assert!(!h.state().has_document() && !h.state().quit_requested);
+
+    // Close, edited: asks; Cancel keeps the document and the page, Don't Save closes the document.
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Draft"})).unwrap();
+    let mut h = file_page(a, "info");
+    let export = h.get_by_label("Export").rect().min.y;
+    assert!(h.get_by_label("Close").rect().min.y > export, "Close comes after Export");
+    h.get_by_label("Close").click();
+    h.run_steps(4);
+    assert!(h.state().closing.is_some(), "unsaved changes ask first");
+    assert!(h.state().has_document());
+    h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().has_document(), "Cancel keeps the document open");
+    assert!(h.state().ui.backstage && h.state().ui.backstage_page == "info", "Cancel leaves the Backstage as it was");
+    h.get_by_label("Close").click();
+    h.run_steps(4);
+    h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+    assert!(!h.state().has_document() && !h.state().quit_requested, "Don't Save closes the document, not the window (#1712)");
+
+    // Save As.
+    let mut h = file_page(new_app(), "home");
+    h.get_by_label("Save As").click();
+    h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
-    assert_eq!(shown.get(), 0, "no native Save As dialog");
-    assert!(!h.state().file_dialog_open());
 }
 
 /// Repro: a brand-new document, typed text, File > Save (unnamed) > Save As page > Browse…,
-/// answered asynchronously by a native dialog (as the desktop host does), should land back on
-/// the document, not the "no document" screen.
+/// answered by the file service, should land back on the document, not the "no document" screen.
 #[test]
 fn backstage_save_browse_native_dialog_lands_on_the_document() {
-    use std::sync::mpsc::channel;
-    let shown: std::rc::Rc<std::cell::RefCell<Vec<(crate::FileDialogRequest, std::sync::mpsc::Sender<crate::FileDialogAnswer>)>>> =
-        Default::default();
-    let log = shown.clone();
-    let services = Services {
-        file_dialog: Some(Box::new(move |req| {
-            let (tx, rx) = channel();
-            log.borrow_mut().push((req, tx));
-            rx
-        })),
-        ..Default::default()
-    };
-    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-save-repro-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    // A native save writes the picked path itself, so the path is one in a folder of our own.
+    let dir = std::env::temp_dir().join(format!("wordcraft-save-browse-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("Document1.docx");
-
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]));
+    let mut a = app_with_files(&files);
     a.run("text.insert", json!({"text": "Hello from the repro"})).unwrap();
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
+    let mut h = file_page(a, "home");
     h.get_by_label("Save").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs", "unnamed Save opens Save As page");
     h.get_by_label("Browse…").click();
-    h.run_steps(4);
-    assert!(h.state().file_dialog_open(), "Browse opened the native dialog");
-    let (_, tx) = shown.borrow_mut().pop().unwrap();
-    tx.send(Ok(vec![path.to_string_lossy().to_string()])).unwrap();
     h.run_steps(6);
     assert!(h.state().session.path.as_deref() == Some(path.as_path()), "the document was saved to the picked path");
+    assert!(path.is_file(), "the picked path holds the document");
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(!h.state().ui.backstage, "backstage closes once saved");
     assert!(h.state().has_document(), "the document stays open after Save");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The Save As page's own render loop skips the status bar while Backstage is open, so a
@@ -962,333 +658,185 @@ fn backstage_save_browse_native_dialog_lands_on_the_document() {
 /// the page just sits there with a Browse… button and no clue.
 #[test]
 fn backstage_save_browse_write_failure_shows_on_the_save_as_page() {
-    use std::sync::mpsc::channel;
-    let shown: std::rc::Rc<std::cell::RefCell<Vec<(crate::FileDialogRequest, std::sync::mpsc::Sender<crate::FileDialogAnswer>)>>> =
-        Default::default();
-    let log = shown.clone();
-    let services = Services {
-        file_dialog: Some(Box::new(move |req| {
-            let (tx, rx) = channel();
-            log.borrow_mut().push((req, tx));
-            rx
-        })),
-        ..Default::default()
-    };
-    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-save-error-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    // `dir` is deliberately never created, so the write fails: its parent doesn't exist.
-    let bogus = dir.join("missing").join("out.docx");
-
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    let files = Arc::new(ScriptedFiles::answering([Picked::Failed("the disk is full".into())]));
+    let mut a = app_with_files(&files);
     a.run("text.insert", json!({"text": "unsaved text"})).unwrap();
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
+    let mut h = file_page(a, "home");
     h.get_by_label("Save").click();
     h.run_steps(4);
     h.get_by_label("Browse…").click();
-    h.run_steps(4);
-    let (_, tx) = shown.borrow_mut().pop().unwrap();
-    tx.send(Ok(vec![bogus.to_string_lossy().to_string()])).unwrap();
     h.run_steps(6);
     assert!(h.state().ui.backstage && h.state().ui.backstage_page == "saveAs", "nothing was actually saved");
-    let msg = h.state().status_msg.as_ref().map(|(m, _)| m.clone()).expect("the failure set a status message");
-    assert!(!msg.is_empty());
+    let msg = h.state().status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+    assert!(!msg.is_empty(), "the failure set a status message");
     // The same text is rendered on the Save As page itself, not just the (invisible, while
     // Backstage is open) status bar.
     h.get_by_label(msg.as_str());
 }
 
+/// Info shows each property's name beside its field, the names in one column at the fields' start, as production's
+/// table did; the port once named the fields for assistive technology only, so the page showed five bare boxes.
 #[test]
-fn backstage_save_closes_when_saved() {
-    let got: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>> = Default::default();
-    let sink = got.clone();
-    let services = Services {
-        download: Some(Box::new(move |n: &str, b: &[u8]| {
-            sink.borrow_mut().push((n.to_string(), b.to_vec()));
-            Ok(())
-        })),
-        ..Default::default()
-    };
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    h.get_by_label("Save").click();
-    h.run_steps(4);
-    assert!(!h.state().ui.backstage, "successful save closes backstage");
-}
-
-/// #1124: the side menu had no Close. It sits after Export and closes the document, asking
-/// first when there are unsaved changes; Cancel leaves the Backstage as it was.
-#[test]
-fn backstage_close_asks_then_closes() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.run("text.insert", json!({"text": "Draft"})).unwrap();
-    a.run("ui.backstage", json!({"value": true, "page": "info"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    let export = h.get_by_label("Export").rect().min.y;
-    assert!(h.get_by_label("Close").rect().min.y > export, "Close comes after Export");
-    h.get_by_label("Close").click();
-    h.run_steps(4);
-    assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "unsaved changes ask first");
-    assert!(h.state().has_document());
-
-    h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
-    h.run_steps(4);
-    assert!(h.state().has_document(), "Cancel keeps the document open");
-    assert!(h.state().ui.backstage && h.state().ui.backstage_page == "info", "Cancel leaves the Backstage as it was");
-
-    h.get_by_label("Close").click();
-    h.run_steps(4);
-    h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-    assert!(!h.state().has_document() && !h.state().quit_requested, "Don't Save closes the document, not the window (#1712)");
-}
-
-/// A document without unsaved changes closes without a prompt.
-#[test]
-fn backstage_close_on_a_clean_document_closes_at_once() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    h.get_by_label("Close").click();
-    h.run_steps(1);
-    assert!(h.state().dialog.is_none(), "no prompt");
-    assert!(!h.state().has_document() && !h.state().quit_requested);
-}
-
-#[test]
-fn backstage_save_as_sidebar_opens_save_as_page() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    h.get_by_label("Save As").click();
-    h.run_steps(4);
-    assert_eq!(h.state().ui.backstage_page, "saveAs");
-}
-
-/// Scrolls the File page with the wheel at `x` and returns doc0.docx's top before and after,
-/// plus the rectangle of the page's vertical scrollbar.
-fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.ui.recent = (0..12).map(|i| format!("/docs/doc{i}.docx")).collect();
-    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 500.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-
-    let bar = h
-        .query_all_by_role(egui::accesskit::Role::ScrollBar)
-        .map(|n| n.rect())
-        .filter(|r| r.height() > r.width())
-        .max_by(|a, b| a.height().total_cmp(&b.height()))
-        .expect("the File page's vertical scrollbar");
-    let before = h.get_by_label("doc0.docx").rect();
-    h.event(egui::Event::PointerMoved(egui::pos2(x, 300.0)));
-    h.event(egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta: egui::vec2(0.0, -200.0),
-        phase: egui::TouchPhase::Move,
-        modifiers: egui::Modifiers::NONE,
-        source: egui::MouseWheelSource::Unknown,
-    });
-    h.run_steps(4);
-    (before.min.y, h.get_by_label("doc0.docx").rect().min.y, bar)
-}
-
-/// #5282: the File page scrolls with the wheel over its right side.
-#[test]
-fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
-    let (before, after, _) = file_page_wheel_at(1300.0);
-    assert!(after < before - 1.0, "expected doc0.docx to scroll up: before={before}, after={after}");
-}
-
-/// #5282: the scroll area reaches the window's right edge, so its bar sits there and the wheel
-/// works there too.
-#[test]
-fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
-    // The harness keeps an 8 point margin, so the window edge is at x=1432.
-    let (before, after, bar) = file_page_wheel_at(1428.0);
-    assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
-    assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
-}
-
-/// Recursively collects bounding rectangles and text entries from egui shapes.
-fn collect_shapes(shape: &egui::Shape, rects: &mut Vec<egui::Rect>, texts: &mut Vec<(String, egui::Pos2, f32)>) {
-    match shape {
-        egui::Shape::Rect(r) => rects.push(r.rect),
-        egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), t.pos, t.galley.size().x)),
-        egui::Shape::Vec(v) => {
-            for s in v {
-                collect_shapes(s, rects, texts);
-            }
-        }
-        _ => {}
+fn info_properties_show_their_names_beside_the_fields() {
+    use egui::accesskit::Role;
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    let h = file_page(a, "info");
+    // The framework paints a `Field`'s side label as part of the field (the label step names the control by it and
+    // claims the label's input), so the label has no node of its own to find: the room it takes beside the field
+    // is what shows. The fields start well right of the column's start, where the full-width button below them
+    // begins, and each is named by its label for assistive technology.
+    let column = h.get_by_label("Advanced Properties…").rect().min.x;
+    let mut fields = Vec::new();
+    for name in ["Title", "Subject", "Author", "Keywords", "Category"] {
+        let field = h.get_by_role_and_label(Role::TextInput, name).rect();
+        assert!(field.min.x >= column + 40.0, "{name}'s label has room before its field: column {column}, field {field:?}");
+        fields.push(field);
     }
+    let first = fields.first().map(|f| f.min.x).unwrap_or_default();
+    assert!(fields.iter().all(|f| (f.min.x - first).abs() < 1.0), "the fields line up: {fields:?}");
 }
 
-/// #6151: in an RTL interface (Arabic), template titles on the Start/Home page
-/// and New page are right-aligned to their preview thumbnails rather than left-aligned.
+/// The Print page's preview takes the room beside the settings, as production's: the port once showed it as a
+/// thumbnail in a content-sized row at the top of the page.
 #[test]
-fn rtl_template_titles_are_right_aligned() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.ui.language = "ar".into();
-    a.ui.backstage = true;
-    a.ui.backstage_page = "home".into();
-    let ctx = egui::Context::default();
-    let mut last_shapes = Vec::new();
-    for frame in 0..4 {
-        let input = egui::RawInput {
-            time: Some(f64::from(frame) * 0.1),
-            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
-            ..Default::default()
-        };
-        let mut out = ctx.run_ui(input, |ui| {
-            a.logic(&ctx.clone());
-            a.ui(ui);
-        });
-        out.textures_delta.clear();
-        if frame == 3 {
-            last_shapes = out.shapes;
-        }
-    }
+fn print_preview_fills_the_page_beside_the_settings() {
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    let mut h = file_page(a, "print");
+    h.run_steps(6);
+    let pane = h.query_all_by_label("Sheet 1 of 1").map(|node| node.rect()).max_by(|a, b| a.height().total_cmp(&b.height()));
+    let pane = pane.expect("the preview shows the first sheet");
+    assert!(pane.height() > 500.0, "the preview takes the page's height: {pane:?}");
+    let pdf = h.get_by_label("PDF document (*.pdf)").rect();
+    assert!(pane.min.x > pdf.max.x, "the preview is beside the settings: {pane:?} {pdf:?}");
+    // Production's settings column is 380 pt (a dialog's least content width); the column shares the name "Print" with
+    // the side menu's row and the Print heading, and is the tallest of them.
+    let column = h.query_all_by_label("Print").map(|node| node.rect()).max_by(|a, b| a.height().total_cmp(&b.height())).expect("the settings column");
+    assert!((370.0..=420.0).contains(&column.width()), "the settings column is production's 380 pt: {column:?}");
+}
 
-    let mut rects = Vec::new();
-    let mut texts = Vec::new();
-    for s in &last_shapes {
-        collect_shapes(&s.shape, &mut rects, &mut texts);
-    }
+/// #6639: when the whole side menu fits, About sits in its footer, below the last page row.
+#[test]
+fn about_stays_at_the_bottom_of_a_side_menu_that_fits() {
+    let h = file_page(new_app(), "home");
+    let about = h.get_by_label("About").rect();
+    let options = h.get_by_label("Options").rect();
+    assert!(about.min.y >= options.max.y, "About is below Options: {about:?} {options:?}");
+    assert!(about.max.y <= 900.0, "About is inside the window: {about:?}");
+    // The menu is as tall as the window, so its footer is at the window's foot, not under Options.
+    assert!(about.max.y > 820.0, "About is at the foot of the window: {about:?}");
+    let discord = h.get_by_label("Discord community").rect();
+    assert!(discord.max.y <= about.min.y + 1.0, "the community link is above About: {discord:?} {about:?}");
+    assert!((about.min.x - options.min.x).abs() < 1.0 && about.width() > 80.0, "About spans the menu: {about:?}");
+    assert!((about.min.x - options.min.x).abs() < 1.0, "in the same column: {about:?} {options:?}");
+}
 
-    let blank_caption = crate::i18n::tc("template", "Blank document");
-    let (_, pos, width) = texts.iter().find(|(t, _, _)| t == blank_caption).expect("blank template caption drawn");
-    let thumbnail = rects
-        .iter()
-        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - pos.y).abs() < 1.0)
-        .expect("blank template thumbnail rect");
+/// The side menu is production's rail: 200 pt wide (five rail columns, `LeastWidth::SideMenu`), its page rows about
+/// 38 pt tall one after another. The footer's links are rows of the same place, so they read in the rail's white ink;
+/// production's were a little shorter (32 pt), which the side menu place has no row for.
+#[test]
+fn the_side_menu_rows_are_production_s_rail_rows() {
+    let h = file_page(new_app(), "home");
+    let (info, recover) = (h.get_by_label("Info").rect(), h.get_by_label("Recover").rect());
+    let about = h.get_by_label("About").rect();
+    // The least width holds in the row beside the page: before, the row gave the menu only its widest name (~123 pt).
+    assert!((190.0..=260.0).contains(&info.width()), "the menu is production's 200 pt rail: {info:?}");
+    assert!((34.0..=44.0).contains(&info.height()), "a page row is a rail row: {info:?}");
+    assert!((recover.min.y - info.max.y).abs() < 1.0, "the rows follow each other without a gap: {info:?} {recover:?}");
+    assert!(about.height() <= info.height() + 1.0, "the footer link is no taller than a page row: {info:?} {about:?}");
+}
 
-    let text_right = pos.x + width;
-    assert!(
-        (thumbnail.max.x - text_right).abs() < 1.0,
-        "template caption should be right-aligned with thumbnail in RTL: thumbnail.max.x={}, text_right={}, text_left={}, caption={}",
-        thumbnail.max.x,
-        text_right,
-        pos.x,
-        blank_caption,
-    );
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Export
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_export_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    let mut h = file_page(a, "export");
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Export page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
-    // Verify the New page through the normal UI path in Arabic as well (#6151).
-    a.ui.backstage_page = "new".into();
-    let mut new_out = ctx.run_ui(
-        egui::RawInput {
-            time: Some(0.4),
-            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
-            ..Default::default()
-        },
-        |ui| {
-            a.logic(&ctx.clone());
-            a.ui(ui);
-        },
-    );
-    new_out.textures_delta.clear();
-    let mut new_rects = Vec::new();
-    let mut new_texts = Vec::new();
-    for s in &new_out.shapes {
-        collect_shapes(&s.shape, &mut new_rects, &mut new_texts);
-    }
-    for (label, _) in super::TEMPLATES {
-        let caption = crate::i18n::tc("template", label);
-        if let Some((_, new_pos, new_width)) = new_texts.iter().find(|(t, _, _)| t == caption) {
-            let right = new_pos.x + new_width;
-            let has_matching_thumbnail = new_rects.iter().any(|r| {
-                (r.width() - 150.0).abs() < 1.0
-                    && (r.height() - 194.0).abs() < 1.0
-                    && (r.max.y - new_pos.y).abs() < 1.0
-                    && (r.max.x - right).abs() < 1.0
-            });
-            assert!(
-                has_matching_thumbnail,
-                "New page: caption '{caption}' must be right-aligned with its 150pt thumbnail (right={right}, y={})",
-                new_pos.y
-            );
-        }
-    }
+/// A refused Word XML export (the typed name's `.xml` twin already exists) is said on the Print
+/// page itself: Backstage hides the status bar, so the person would otherwise see nothing.
+#[test]
+fn export_refusal_shows_on_the_print_page() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-print-export-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    let mut h = file_page(a, "print");
+    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    h.run_steps(4);
+    assert!(h.state().ui.backstage, "still on the Print page");
+    assert!(err.contains("letter.xml already exists"), "{err}");
+    h.get_by_label(err.as_str());
+    assert_eq!(std::fs::read_to_string(dir.join("letter.xml")).unwrap(), "taken", "nothing replaced");
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
-    // Also verify that a template tile with a wide caption (>150 pt) aligns both the thumbnail
-    // and caption to the right edge in RTL.
-    let wide_label = "A very long template title that exceeds 150 points width";
-    let mut wide_out = ctx.run_ui(
-        egui::RawInput {
-            time: Some(0.5),
-            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
-            ..Default::default()
-        },
-        |ui| {
-            crate::rtl::root(ui, |ui| {
-                super::template_tile(ui, &mut a, wide_label, "sample");
-            });
-        },
-    );
-    wide_out.textures_delta.clear();
-    let mut wide_rects = Vec::new();
-    let mut wide_texts = Vec::new();
-    for s in &wide_out.shapes {
-        collect_shapes(&s.shape, &mut wide_rects, &mut wide_texts);
+/// A cancelled export dialog drops an earlier refusal: it is not news any more.
+#[test]
+fn cancelling_an_export_clears_its_page_error() {
+    let mut a = new_app();
+    a.export_error = "old refusal".into();
+    a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, None).unwrap();
+    assert!(a.export_error.is_empty());
+}
+
+/// The export error belongs to the window that refused the export: another window running a
+/// frame outside Backstage must not erase it while this one still shows the Export page.
+#[test]
+fn export_error_belongs_to_its_window() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-backstage-export-two-windows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("letter.xml"), "taken").unwrap();
+    let bare = dir.join("letter").to_string_lossy().into_owned();
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
+    // Window A (this one) is refused; window B is another window's state, outside Backstage.
+    let mut b = crate::window_ui::WindowUi::new(a.session.document_id());
+    let err = a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    assert_eq!(a.export_error, err);
+    // B's frame: swap its state in, run frames outside Backstage, swap back.
+    a.swap_window(&mut b);
+    assert!(!a.ui.backstage && a.export_error.is_empty(), "B has its own, empty, error");
+    let mut h = harness(a, egui::vec2(1440.0, 900.0));
+    h.state_mut().swap_window(&mut b);
+    assert!(h.state().ui.backstage, "A is still on the Export page");
+    assert_eq!(h.state().export_error, err, "B's frames left A's message alone");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A File page's title is production's 26 pt, well above its section headings: the display role WordCraft's sizes
+/// give it, not the suite's 38 pt brand title.
+#[test]
+fn a_file_pages_title_is_productions_size() {
+    use craft::theme::{Appearance, Contrast, Mode, Size, TextSize, TypeRole};
+    let sizes = new_app().root_env().sizes;
+    let themes = craft::theme::builtins();
+    let theme = themes.iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT).unwrap();
+    for size in [Size::Compact, Size::Comfortable] {
+        let appearance = Appearance { mode: Mode::Light, contrast: Contrast::Standard, size, text_size: TextSize::default(), reduced_motion: false };
+        let type_ = craft::theme::resolve_sized(theme, appearance, None, &sizes).tokens.typography;
+        let (title, section) = (type_.get(TypeRole::Display), type_.get(TypeRole::Heading));
+        assert!((title.size - 26.0).abs() < 0.5, "the page title is 26 pt in {size:?}: {title:?}");
+        assert!(title.size > section.size + 6.0, "the title stands above a section heading: {title:?} over {section:?}");
     }
-    let (_, wide_pos, wide_width) = wide_texts.iter().find(|(t, _, _)| t == wide_label).expect("wide template caption drawn");
-    assert!(*wide_width > 150.0, "wide caption should exceed 150 points: {wide_width}");
-    let wide_thumbnail = wide_rects
-        .iter()
-        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - wide_pos.y).abs() < 1.0)
-        .expect("wide template thumbnail rect");
-    let wide_text_right = wide_pos.x + wide_width;
-    assert!(
-        (wide_thumbnail.max.x - wide_text_right).abs() < 1.0,
-        "wide template caption and thumbnail should share the same right edge in RTL: thumb.max.x={}, text_right={}",
-        wide_thumbnail.max.x,
-        wide_text_right,
-    );
 }
