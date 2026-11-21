@@ -282,6 +282,19 @@ impl Border {
     pub fn is_visible(&self) -> bool {
         self.style != BorderStyle::None && self.width > 0.0
     }
+    /// The room the border takes across its line: its width, three times that for a double
+    /// border (two lines and the gap between them, each as wide as the line) and five times for a
+    /// triple one. Measured in Word for Windows between two table rows, at the top and at the
+    /// bottom of a table: a single border of 0.5, 1, 1.5 and 3 pt moves the next row down by its
+    /// width, a double one by 1.5, 3, 4.5 and 9 pt, a triple one by 2.5, 5, 7.5 and 15 pt.
+    pub fn band(&self) -> f32 {
+        let lines = match self.style {
+            BorderStyle::Double => 3.0,
+            BorderStyle::Triple => 5.0,
+            _ => 1.0,
+        };
+        self.width * lines
+    }
 }
 
 /// Borders on the four sides (plus inner borders for tables and runs of bordered paragraphs).
