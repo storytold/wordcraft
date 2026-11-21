@@ -92,6 +92,13 @@ fn convert_rejects_malformed_format_options_before_file_access() {
 }
 
 #[test]
+fn convert_rejects_an_extra_path_before_opening_input() {
+    let argv = args(&["in.docx", "out.xml", "--format", "flatopc", "extra.docx"]);
+    let result = run_convert(&argv, |_, _| Err("input opener was called".into()));
+    assert_eq!(result, Err("convert: unexpected positional argument `extra.docx`".into()));
+}
+
+#[test]
 fn help_or_h_after_a_subcommand_asks_for_the_usage() {
     for cmd in SUBCOMMANDS {
         assert!(wants_help(cmd, &args(&["in.docx", "--help"])), "{cmd}");
