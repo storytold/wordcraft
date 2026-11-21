@@ -152,7 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
-
+- 2026-11-18: Ribbon: a click on the tab shown hides the ribbon and, outside Focus, a click on any tab but File brings it back, as in Office (it took a double click).
 - 2026-11-20: `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root` (shared rule 18, #7124); without them it stops with an error naming the two flags, where it used to serve with access to every file the user can reach. `mcp --connect` is refused until the desktop app confines its control channel to the same roots (#3695, #5819). The help, `docs/mcp.md`, the README and `AGENTS.md` pass both roots in every example.
 
 - 2026-11-19: Layout: when strict column balancing moves an anchor line to the next column, it releases the floating object's wrap area from the abandoned column (#6821). Readiness estimates unchanged.
@@ -955,6 +955,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | trivial | Progress log: a single click on the tab shown hides the ribbon |
 | 2026-11-15 | trivial | Progress log: native, built-in and web picture choosers offer both TIFF extensions (`.tif`, `.tiff`); native drops, picked-file inbox dispatch and pasted picture paths recognize the same suffixes, with supported-compression limits retained (#6704). |
 | 2026-10-31 | trivial | dialogs are dialogs to screen readers, their tabs are tabs, the one shown selected, and colour fields and swatches say their colour |
 | 2026-11-01 | trivial | formatting shortcuts say what they did to screen readers |

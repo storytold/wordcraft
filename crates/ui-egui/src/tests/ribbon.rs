@@ -174,3 +174,21 @@ fn citations_provider_menu_has_zotero_checked() {
     let checked = items.first().map(|n| n.accesskit_node().toggled().is_some() || n.accesskit_node().is_selected().is_some());
     assert_eq!(checked, Some(true), "and it is marked as the chosen one");
 }
+
+/// #6996: a click on the tab shown hides the ribbon and a click on any tab brings it back, as in
+/// Office; a click on another tab while the ribbon is up only switches to it.
+#[test]
+fn a_click_on_the_shown_tab_hides_the_ribbon() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(app());
+    h.run_steps(4);
+    h.get_by_label("Insert").click();
+    h.run_steps(3);
+    assert!(h.state().ui.tab == "Insert" && !h.state().ui.ribbon_collapsed, "another tab only switches");
+    h.get_by_label("Insert").click();
+    h.run_steps(3);
+    assert!(h.state().ui.ribbon_collapsed, "a click on the tab shown hides the ribbon");
+    h.get_by_label("Home").click();
+    h.run_steps(3);
+    assert!(h.state().ui.tab == "Home" && !h.state().ui.ribbon_collapsed, "a click on any tab brings it back");
+}
