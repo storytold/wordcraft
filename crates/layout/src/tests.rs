@@ -16,6 +16,7 @@ pub(crate) mod linear;
 mod missing_glyphs;
 mod nbsp;
 mod nested_cant_split;
+mod note_separator_spacing;
 mod numeral;
 mod pages;
 mod styleref;
