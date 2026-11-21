@@ -50,6 +50,14 @@ pub(super) fn orientation_items(ui: &mut Ui, app: &mut WordApp) {
     let land = wordcraft_engine::cmd::page::sect(&app.session).landscape;
     MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "portrait"}))).label(tl!("Portrait")).radio_mark(!land).show(ui);
     MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": "landscape"}))).label(tl!("Landscape")).radio_mark(land).show(ui);
+    if wordcraft_engine::cmd::page::selection_sectionable(&app.session) {
+        Divider::horizontal().show(ui);
+        for (value, label) in [("portrait", "Portrait for Selected Text"), ("landscape", "Landscape for Selected Text")] {
+            MenuItem::command(CommandRef::with_params("layout.orientation", json!({"value": value, "apply": "selection"})))
+                .label(tl!(label))
+                .show(ui);
+        }
+    }
 }
 
 pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
