@@ -2379,6 +2379,35 @@ fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
     assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
 }
 
+#[test]
+fn rules_snap_by_the_scale_across_them_on_a_page_scaled_a_little_differently_each_way() {
+    // A page raster made to fill a whole number of pixels is scaled a pixel in a thousand or two
+    // differently across and down. A level rule lies where the scale down the page puts it, and
+    // an upright one where the scale across does.
+    for (kx, ky) in [(2.0, 2.002), (2.002, 2.0), (2.933, 2.9334), (1.3333, 1.3329)] {
+        let view = Affine::new([kx, 0.0, 0.0, ky, 37.3, 12.9]);
+        assert!(is_upright(view));
+        for i in 0..40 {
+            let pos = 10.0 + f64::from(i) * 17.37;
+            let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5).unwrap();
+            let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5).unwrap();
+            for (w, centre, lies) in [(w_h, (pos + oy) * ky + 12.9, pos * ky + 12.9), (w_v, (pos + ox) * kx + 37.3, pos * kx + 37.3)] {
+                let edge = centre - w / 2.0;
+                assert!((edge - edge.round()).abs() < 1e-9, "scales {kx} {ky}: edge {edge} is off the pixel grid");
+                // Snapped onto the grid from where it lies: never further than its own width and half a pixel.
+                assert!((centre - lies).abs() <= w / 2.0 + 0.5 + 1e-9, "scales {kx} {ky}: moved {} px", centre - lies);
+            }
+        }
+    }
+    // The case from review: a level rule at 250 pt, half a point wide, at 2.0 across and 2.002 down, is a pixel
+    // wide and centred on 500.5 already. It stays there.
+    let view = Affine::scale_non_uniform(2.0, 2.002);
+    let (w, (_, oy)) = snap_rule(view, (5.0, 250.0, 400.0, 250.0), 0.5).unwrap();
+    assert_eq!(w, 1.0);
+    assert!(((250.0 + oy) * 2.002 - 500.5).abs() < 1e-9, "centre {}", (250.0 + oy) * 2.002);
+    assert_eq!((rule_scale(view, true), rule_scale(view, false)), (2.002, 2.0));
+}
+
 /// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
 /// pixels are what they were before strict export existed (#6005).
 #[test]

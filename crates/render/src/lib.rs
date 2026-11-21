@@ -789,7 +789,8 @@ fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         }
         _ => {
             let (st, off) = match snap_rule(fr.view, (x0, y0, x1, y1), w) {
-                Some((w_px, off)) => (kurbo::Stroke { width: w_px / fr.view.as_coeffs()[0], ..st }, off),
+                // The width is across the rule: in points by the scale that way.
+                Some((w_px, off)) => (kurbo::Stroke { width: w_px / rule_scale(fr.view, y0 == y1), ..st }, off),
                 None => (st, (0.0, 0.0)),
             };
             ctx.set_stroke(st);
@@ -806,16 +807,28 @@ fn snap_rule(view: Affine, (x0, y0, x1, y1): (f64, f64, f64, f64), width: f64) -
     if !is_upright(view) {
         return None;
     }
-    let [k, _, _, _, tx, ty] = view.as_coeffs();
+    let [_, _, _, _, tx, ty] = view.as_coeffs();
     if y0 == y1 && x0 != x1 {
+        let k = rule_scale(view, true);
         let (w_px, c) = snap_hairline(y0 * k + ty, width * k);
         Some((w_px, (0.0, (c - ty) / k - y0)))
     } else if x0 == x1 && y0 != y1 {
+        let k = rule_scale(view, false);
         let (w_px, c) = snap_hairline(x0 * k + tx, width * k);
         Some((w_px, ((c - tx) / k - x0, 0.0)))
     } else {
         None
     }
+}
+
+/// Device pixels per point across a rule: down the page for a level rule, across it for an
+/// upright one. An upright view ([`is_upright`]) may scale the two a little differently (a page
+/// raster made to fill a whole number of pixels each way), and a rule's place and width are
+/// measured across it: with the other scale, a level rule low on such a page was snapped up to
+/// a pixel from where it lies, its edges between pixel rows.
+fn rule_scale(view: Affine, level: bool) -> f64 {
+    let [across, _, _, down, ..] = view.as_coeffs();
+    if level { down } else { across }
 }
 
 /// A line `width_px` wide centred at device coordinate `centre`, moved so both edges fall on whole
