@@ -90,7 +90,13 @@ impl<'a> Builder<'a> {
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
                 }
             };
-            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            // Font metrics follow the script of the shaped character. A combining mark keeps
+            // the base character's metrics, like it keeps the base character's face.
+            let arabic = match cur {
+                Some(k) if mark => k.arabic,
+                _ => sym.is_none() && wordcraft_fonts::word::is_arabic_script(dc),
+            };
+            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, arabic, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
                 Some(previous) => {
@@ -109,8 +115,17 @@ impl<'a> Builder<'a> {
 
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
     pub(super) fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u32 {
-        let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        self.style_for(rc, face_override, small, false)
+    }
+
+    /// [`Self::style`] for text that is `arabic` (Arabic-script letters): in a missing font it
+    /// takes the line height Word gives it ([`wordcraft_fonts::word::missing_arabic_line`]).
+    pub(super) fn style_for(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool, arabic: bool) -> u32 {
+        let family = lookup_family(self.env.doc, &rc.font);
+        let r = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
         let face = face_override.unwrap_or(r.face);
+        // A font isn't installed when it was substituted, or looked up as a missing roman font.
+        let arabic_line = if arabic { wordcraft_fonts::word::missing_arabic_line(&rc.font, r.substituted || family != rc.font) } else { None };
         // The display list reads every run's format (link target, strike kind, underline colour,
         // baseline shift…) from its StyleRun, so runs share one only when their formats are equal.
         // Keyed by a hash of the commonly varying fields (no allocation: this runs for every shaped
@@ -120,6 +135,8 @@ impl<'a> Builder<'a> {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (face.id(), small, &rc.font, rc.size.to_bits(), rc.bold, rc.italic, rc.color, rc.highlight, rc.shading).hash(&mut h);
             (rc.underline_color, rc.strike, rc.double_strike, &rc.link, rc.ins, rc.del, rc.hidden).hash(&mut h);
+            // The same format has another line height as Arabic text in a missing font.
+            arabic_line.is_some().hash(&mut h);
             h.finish()
         };
         let bucket = self.style_index.entry(key).or_default();
@@ -129,6 +146,7 @@ impl<'a> Builder<'a> {
             if s == small
                 && let Some(st) = self.styles.get(i as usize)
                 && st.face.id() == face.id()
+                && st.arabic_line == arabic_line.is_some()
                 && (Arc::ptr_eq(&st.rc, rc) || *st.rc == **rc)
             {
                 return i;
@@ -136,8 +154,8 @@ impl<'a> Builder<'a> {
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
         // A symbol font that isn't installed, or is installed one em tall (Apple's Symbol), takes
-        // the height Word gives it.
-        let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r) {
+        // the height Word gives it; so does Arabic text in a font that isn't installed.
+        let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r).or(arabic_line) {
             Some((a, d)) => (a * face.upem, d * face.upem),
             None => wordcraft_fonts::word::line_metrics(&face),
         };
@@ -157,6 +175,7 @@ impl<'a> Builder<'a> {
             rc: rc.clone(),
             ascent: (a * k) as f32,
             descent: (d * k) as f32,
+            arabic_line: arabic_line.is_some(),
             shift: rc.baseline_shift(),
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
@@ -336,7 +355,7 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style(rc, key.face, small);
+            let si = self.style_for(rc, key.face, small, key.arabic);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several

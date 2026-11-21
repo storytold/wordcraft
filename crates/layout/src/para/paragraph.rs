@@ -261,12 +261,25 @@ impl<'a> Shaped<'a> {
             if i < seg || !is_special(c) {
                 continue;
             }
+            let first = self.b.clusters.len();
             if let Some(s) = text.get(seg..i) {
                 self.b.shape_around(s, range.start + seg, rc, None, Dir::Para, ShapeContext { before, after: "" });
             }
             before = "";
             seg = i + c.len_utf8();
-            let style = self.b.style(rc, None, false);
+            // A break after Arabic text in a missing font has the same line metrics as that text.
+            // Spaces immediately before the break do not take part in the line's height.
+            let style = if matches!(c, LINE_BREAK | '\r' | PAGE_BREAK | COLUMN_BREAK) {
+                self.b
+                    .clusters
+                    .get(first..)
+                    .and_then(|clusters| clusters.iter().rfind(|c| c.kind != ClKind::Space))
+                    .map(|c| c.style)
+                    .filter(|&i| self.b.styles.get(i as usize).is_some_and(|st| st.arabic_line))
+            } else {
+                None
+            };
+            let style = style.unwrap_or_else(|| self.b.style(rc, None, false));
             let slot = Slot { start: range.start + i, end: range.start + i + c.len_utf8(), style, g: self.b.glyphs.len() as u32 };
             self.special(cx, c, slot, (rc, props));
         }
