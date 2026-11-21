@@ -743,6 +743,38 @@ fn an_mht_names_pictures_by_location_as_written() {
 }
 
 #[test]
+fn an_mht_matches_scheme_relative_locations_by_folded_host() {
+    // RFC 3986 §4.2: a scheme-relative location names no scheme, but its host still compares
+    // without letter case (§6.2.2.1), and inventing the page's `https:` would keep two writings
+    // of one attachment apart.
+    let red = solid_png(12, 6, [200, 0, 0]);
+    let blue = solid_png(7, 9, [0, 90, 200]);
+    let mht = format!(
+        "MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=\"B\"\r\n\r\n\
+         --B\r\nContent-Location: https://example.invalid/reports/index.html\r\nContent-Type: text/html; charset=\"utf-8\"\r\n\r\n\
+         <p><img src=\"//example.invalid/reports/Item.png\"></p><p><img src=\"//EXAMPLE.invalid/reports/item.png\"></p>\r\n\
+         --B\r\nContent-Location: //EXAMPLE.invalid/reports/Item.png\r\nContent-Transfer-Encoding: base64\r\nContent-Type: image/png\r\n\r\n{}\r\n\
+         --B\r\nContent-Location: //example.invalid/reports/item.png\r\nContent-Transfer-Encoding: base64\r\nContent-Type: image/png\r\n\r\n{}\r\n--B--\r\n",
+        craft_mime::base64::STANDARD.encode(&red),
+        craft_mime::base64::STANDARD.encode(&blue),
+    );
+    let d = import("mht", mht.as_bytes()).unwrap().unwrap();
+    let mut got = Vec::new();
+    for b in &d.body {
+        if let Block::Para(p) = &**b {
+            for o in &p.objects {
+                if let InlineObject::Image { media, .. } = o {
+                    got.push(d.media.get(media).map(|m| m.to_vec()).unwrap_or_default());
+                }
+            }
+        }
+    }
+    assert_eq!(got.len(), 2, "both references load");
+    assert_eq!(got[0], red, "Item.png is the first attachment");
+    assert_eq!(got[1], blue, "item.png is the second attachment");
+}
+
+#[test]
 fn chart_alt_text_is_an_image_alt_never_body_text() {
     let mut p = Paragraph::with_text("See below", CharProps::default());
     let chart = InlineObject::Graphic { w: 100.0, h: 50.0, alt: "Sales".into(), float: Default::default(), graphic: Arc::new(Default::default()) };

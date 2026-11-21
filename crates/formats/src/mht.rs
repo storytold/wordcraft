@@ -88,9 +88,15 @@ fn locations(root: &Part) -> HashMap<String, &Part> {
 
 /// What two locations must agree on to name the same resource: their scheme and host compare
 /// without regard to ASCII letter case (RFC 3986 §6.2.2.1), their path and query stay as
-/// written, and fragments go. A one-letter scheme is a Windows drive, not a scheme.
+/// written, and fragments go. A one-letter scheme is a Windows drive, not a scheme. A
+/// scheme-relative `//host/path` has no scheme to fold, so its marker `//` stays and only the
+/// host folds (§4.2) — inventing the page's scheme would keep two writings of one location apart.
 fn location_key(location: &str) -> String {
     let uri = location.split('#').next().unwrap_or("");
+    if let Some(rest) = uri.strip_prefix("//") {
+        let end = rest.find(['/', '?']).unwrap_or(rest.len());
+        return format!("//{}{}", rest.get(..end).unwrap_or("").to_ascii_lowercase(), rest.get(end..).unwrap_or(""));
+    }
     let Some((scheme, rest)) = uri.split_once(':').filter(|(s, _)| {
         s.len() > 1 && s.starts_with(|c: char| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
     }) else {
