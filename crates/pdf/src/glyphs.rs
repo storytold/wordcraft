@@ -176,9 +176,9 @@ fn split_composite_vowel_cluster(
     let is_vowel = matches!(chars.last().map(|c| c.1), Some('\u{0E33}' | '\u{0EB3}'));
     let has_sara_aa_glyph = n > 2 && cluster_glyphs.last().is_some_and(|g| sara_aa(g.0));
     let vowel_char = chars.last().map(|c| c.1).unwrap_or('\0');
-    let thai_structure = vowel_char == '\u{0E33}' && n >= 3 && marks == n - 3 && cluster_glyphs.get(1).is_some_and(|g| nikhahit(g.0));
+    let per_mark_structure = n >= 3 && marks == n - 3 && cluster_glyphs.get(1).is_some_and(|g| nikhahit(g.0));
     let lao_structure = vowel_char == '\u{0EB3}';
-    let structure = is_vowel && has_sara_aa_glyph && (thai_structure || lao_structure);
+    let structure = is_vowel && has_sara_aa_glyph && (per_mark_structure || lao_structure);
 
     if structure && let Some(&(vowel_off, _)) = chars.last() {
         let (nikhahit_char, sara_aa_char) = if vowel_char == '\u{0E33}' { ('\u{0E4D}', '\u{0E32}') } else { ('\u{0ECD}', '\u{0EB2}') };
@@ -195,7 +195,7 @@ fn split_composite_vowel_cluster(
         let mut parts = Vec::with_capacity(n);
         parts.push(cluster_start..cluster_start + c_len);
 
-        if thai_structure {
+        if per_mark_structure {
             parts.push(nikhahit_start..sara_aa_start);
             for k in 0..marks {
                 if let Some(&(char_off, ch)) = chars.get(k + 1) {

@@ -2594,6 +2594,14 @@ fn decomposed_sara_am_splits_into_base_nikhahit_and_sara_aa() {
     let (split_text, parts) = split_clusters(text, &glyphs, &ranges, &rev);
     assert_eq!(split_text, "น\u{0E4D}\u{0E32}");
     assert_eq!(parts, [0..3, 3..6, 6..9]);
+
+    let lao_text = "ນ້ຳ";
+    let lao_glyphs = [(1, 0.0, 0.0), (2, 4.0, 0.0), (3, 4.0, 0.0), (4, 8.0, 0.0)];
+    let lao_ranges = [0..9, 0..9, 0..9, 0..9];
+    let lao_rev: std::collections::HashMap<u32, char> = [(1, 'ນ'), (2, '\u{0ECD}'), (3, '\u{0EC9}'), (4, '\u{0EB2}')].into_iter().collect();
+    let (lao_split, lao_parts) = split_clusters(lao_text, &lao_glyphs, &lao_ranges, &lao_rev);
+    assert_eq!(lao_split, "ນ\u{0EC9}\u{0ECD}\u{0EB2}");
+    assert_eq!(lao_parts, [0..3, 6..9, 3..6, 9..12]);
 }
 
 /// Glyphs that don't match the NIKHAHIT/SARA AA structure keep the shared mark range, so
@@ -3608,6 +3616,20 @@ fn thai_repeated_sara_am_raw_tounicode_is_exact() {
     let raw = extract_raw_tounicode_text(&bytes).concat();
     let expected = "น\u{0E4D}\u{0E32} น\u{0E49}\u{0E4D}\u{0E32}";
     assert_eq!(raw.trim(), expected, "{raw:?}");
+}
+
+/// A document containing both `ນຳ` and `ນ້ຳ` extracts cleanly through raw ToUnicode without
+/// duplicating Lao NIKHAHIT (`\u{0ECD}`) (#5883).
+#[test]
+fn lao_repeated_sara_am_raw_tounicode_has_no_extra_nikhahit() {
+    let d = Document::from_text("ນຳ ນ້ຳ");
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let raw = extract_raw_tounicode_text(&bytes).concat();
+    assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
+    for word in raw.split_whitespace() {
+        assert!(word.chars().filter(|&c| c == '\u{0ECD}').count() <= 1, "extra U+0ECD in {word:?} ({raw:?})");
+    }
+    assert!(raw.contains("ນ\u{0EC9}\u{0ECD}\u{0EB2}"), "{raw:?}");
 }
 
 /// A document containing both SARA AM (`ำ`) and standalone SARA AA (`า`) (such as `ทำงาน` and `น้ำตา`)
