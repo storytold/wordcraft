@@ -2,7 +2,7 @@
 //! paragraphs and tables, apply character/paragraph formatting, copy a range to a fragment and
 //! paste a fragment.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -1638,6 +1638,41 @@ impl Document {
         Some(id)
     }
 
+    /// Whether reattaching a cut note would restore the copied note and every box it contains.
+    /// The paste-wide link allowance bounds repeated comparisons of shared box stories.
+    fn same_note_and_boxes(&self, note: u32, copied: &BTreeMap<u32, Part>, links_left: &mut usize) -> bool {
+        let mut seen = BTreeSet::from([note]);
+        let mut pending = vec![note];
+        while let Some(id) = pending.pop() {
+            let Some(source) = copied.get(&id) else { return false };
+            if (id != note && source.kind != PartKind::TextBox) || self.parts.get(&id) != Some(source) {
+                return false;
+            }
+            let mut within_limit = true;
+            for block in &source.blocks {
+                each_para(block, 0, &mut |p| {
+                    if !within_limit {
+                        return;
+                    }
+                    for box_id in box_ids(p) {
+                        let Some(left) = links_left.checked_sub(1) else {
+                            within_limit = false;
+                            break;
+                        };
+                        *links_left = left;
+                        if seen.insert(box_id) {
+                            pending.push(box_id);
+                        }
+                    }
+                });
+                if !within_limit {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Give every note the paste refers to, and `parts` holds the story of, a story of its own
     /// here, copied from `parts`, and point the references at it: the references in `blocks`, in
     /// the text box stories and in the notes themselves (the mark in a note's own story too), all
@@ -1666,9 +1701,10 @@ impl Document {
         // Each note's story here: its own (kept), or a new one (to be filled), or none.
         let mut map: BTreeMap<u32, Option<u32>> = BTreeMap::new();
         let mut fill: Vec<(u32, u32)> = Vec::new();
+        let mut reuse_links_left = MAX_PASTED_BOXES;
         for old in wanted {
             let Some(part) = parts.get(&old) else { continue };
-            let kept = !referenced.contains(&old) && self.parts.get(&old).is_some_and(|e| e.kind == part.kind && e.blocks == part.blocks);
+            let kept = !referenced.contains(&old) && self.same_note_and_boxes(old, parts, &mut reuse_links_left);
             if kept {
                 map.insert(old, Some(old));
                 continue;
@@ -1695,6 +1731,8 @@ impl Document {
             Some(Some(_)) | None => NoteMove::Keep,
             Some(None) => NoteMove::Remove,
         };
+        // Keep their removal in the reference map, but do not clone rejected note blocks.
+        parts.retain(|id, _| !matches!(map.get(id), Some(None)));
         rewrite_notes_in(blocks, parts, &to);
         for (old, new) in fill {
             let Some(part) = parts.get(&old) else { continue };

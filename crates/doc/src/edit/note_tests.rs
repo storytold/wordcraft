@@ -292,7 +292,7 @@ fn notes_in_notes_and_in_text_boxes_follow_their_copies() {
 #[test]
 fn notes_past_the_paste_budget_leave_no_dangling_reference() {
     let mut d = doc(&["Alpha beta"]);
-    add_note(&mut d, 5, "note");
+    let note = add_note(&mut d, 5, "note");
     let frag = d.copy_range(&Pos::body(0, 0), &Pos::body(0, 5 + OBJ_LEN));
     let mut blocks = frag.blocks.clone();
     let mut parts = frag.parts.clone();
@@ -302,6 +302,7 @@ fn notes_past_the_paste_budget_leave_no_dangling_reference() {
     d.adopt_notes(&mut blocks, &mut parts, &mut budget);
     assert_eq!(d.parts.len(), before, "no note was made");
     assert_eq!(budget.skipped, 1);
+    assert!(!parts.contains_key(&note), "a rejected note has no blocks to clone during rewriting");
     let Some(Block::Para(p)) = blocks.first() else { panic!() };
     assert!(p.objects.is_empty(), "the reference is gone");
     assert_eq!(p.text, "Alpha");
@@ -354,6 +355,35 @@ fn cut_and_paste_back_reuses_the_notes_story() {
     assert_eq!(pasted.len(), 1);
     assert_ne!(pasted[0], a, "the edited story stays as it was");
     assert!(!dst.plain_text(StoryRef::Part(pasted[0])).contains("edited"));
+}
+
+/// Reusing the old note would also reuse the story shown by a changed nested text box.
+#[test]
+fn cut_note_with_an_edited_nested_box_restores_the_copied_box_text() {
+    let mut d = doc(&["Alpha beta"]);
+    let note = add_note(&mut d, 5, "note");
+    let inner = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("copied text", CharProps::default()))]);
+    let mut outside = Paragraph::new();
+    outside.insert_object(0, box_shape(inner), &CharProps::default()).unwrap();
+    let outer = d.add_part(PartKind::TextBox, vec![para_block(outside)]);
+    let in_note = d.end_of(StoryRef::Part(note));
+    d.insert_object(&in_note, box_shape(outer), &CharProps::default()).unwrap();
+
+    let start = Pos::body(0, 0);
+    let end = d.end_of(StoryRef::Body);
+    let fragment = d.copy_range(&start, &end);
+    d.delete_range(&start, &end).unwrap();
+    let mut unchanged = d.clone();
+    unchanged.insert_fragment(&start, &fragment).unwrap();
+    assert_eq!(body_note_ids(&unchanged), [note], "an unchanged cut can still reuse the original note");
+
+    d.set_story(StoryRef::Part(inner), vec![para_block(Paragraph::with_text("changed box", CharProps::default()))]).unwrap();
+    d.insert_fragment(&start, &fragment).unwrap();
+    let [pasted] = body_note_ids(&d).try_into().unwrap();
+    assert_ne!(pasted, note);
+    let box_in = |id| d.para(StoryRef::Part(id), &Path::top(0)).unwrap().objects.iter().flat_map(InlineObject::text_boxes).next().unwrap();
+    assert_eq!(d.plain_text(StoryRef::Part(box_in(box_in(pasted)))), "copied text");
+    assert_eq!(d.plain_text(StoryRef::Part(inner)), "changed box");
 }
 
 /// An image object naming `key`.
