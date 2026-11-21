@@ -228,6 +228,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
     // runs with the box's text (#2357).
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
+    // Nor in a table cell for a frame placed on the page: Word keeps its text in the cell.
+    let cell_frame = |fr: &wordcraft_doc::props::TextFrame| !in_cell || fr.v_anchor == "text";
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
     for (i, b) in blocks.iter().enumerate() {
@@ -242,7 +244,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 // A text frame (a footer's page number in a frame, say) is placed apart, like a
                 // floating object, and the text after it wraps around it; it takes no room in
                 // the flow.
-                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
+                if let Some(fr) = pl.rp.frame.clone().filter(|fr| frames && cell_frame(fr)) {
                     let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
                     let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
                     let h = match fr.h {
