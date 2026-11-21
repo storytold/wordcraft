@@ -1827,3 +1827,20 @@ fn paragraph_without_the_window_service_stays_in_the_document_window() {
     h.run_steps(2);
     assert!(!is_open(h.state(), "paragraph"), "cancel closes it");
 }
+
+/// With `Services::paragraph_window` Tabs opens in a window of its own, as Paragraph does.
+#[test]
+fn tabs_open_in_their_own_window_with_the_window_service() {
+    let mut app = app_with("one");
+    app.services.paragraph_window = true;
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let id = open_named(&mut h, "tabs", json!({}));
+    let windowed = h
+        .state()
+        .dialog_host
+        .get_by_id::<super::dialogs_para::TabStopsHost>(id)
+        .map(craft::ui::dialog::StackDialog::windowed)
+        .unwrap_or_else(|| panic!("the tabs dialog is on the host"));
+    assert!(windowed, "the dialog asked for a window of its own");
+}

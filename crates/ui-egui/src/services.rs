@@ -28,7 +28,7 @@ pub struct Services {
     pub templates_dir: Option<std::path::PathBuf>,
     /// Files the system asked the app to open, and files dropped on a window, read once per frame.
     pub intake: Option<craft::platform::open::FileIntake>,
-    /// Desktop (macOS): show the Paragraph dialog in a window of its own, which the app keeps
-    /// above the document's window as a utility panel, instead of in the document window.
+    /// Desktop (macOS): show the Paragraph and Tabs dialogs in windows of their own, which the app
+    /// keeps above the document's window as utility panels, instead of in the document window.
     pub paragraph_window: bool,
 }

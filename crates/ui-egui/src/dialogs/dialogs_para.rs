@@ -117,7 +117,10 @@ pub(crate) fn tabs_dialog(app: &WordApp) -> Option<TabStopsHost> {
     let stops = stops.iter().map(|t| UiStop::new(t.pos, ui_align(t.align), ui_leader(t.leader))).collect();
     // Only pixel units read the resolution, and WordCraft never shows pixels.
     let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
-    Some(Keyed::new("tabs", TabStopsDialog::new(stops, default).unit(unit).held_ok()))
+    // On macOS (Services::paragraph_window) Tabs opens as a panel of its own, as Paragraph does, its content alone.
+    let windowed = app.services.paragraph_window;
+    let keyed = Keyed::new("tabs", TabStopsDialog::new(stops, default).unit(unit).held_ok().bare(windowed));
+    Some(if windowed { keyed.in_own_window(crate::i18n::t("Tabs")) } else { keyed })
 }
 
 fn ui_align(a: TabAlign) -> UiAlign {

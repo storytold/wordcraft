@@ -35,7 +35,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
     let format = read(app)?;
     // Only pixel units read the resolution, and WordCraft never shows pixels.
     let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
-    let dialog = ParagraphDialog::new(format).word(true).tab(tab).unit(unit).held_ok();
+    let dialog = ParagraphDialog::new(format).word(true).tab(tab).unit(unit).held_ok().bare(app.services.paragraph_window);
     let keyed = Keyed::new(key, dialog);
     // On macOS the Paragraph dialog opens as a utility panel in a window of its own
     // (Services::paragraph_window), titled as in the document window.
