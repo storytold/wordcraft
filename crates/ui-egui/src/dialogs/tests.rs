@@ -374,25 +374,28 @@ fn shortcut_text_is_swallowed_once() {
         frames(&mut h, 4);
         h
     };
-    // The shortcut and its text in one frame.
-    let mut h = fresh();
-    h.event(key(egui::Key::Q, true));
-    h.event(egui::Event::Text("q".into()));
-    frames(&mut h, 3);
-    // The app is in Focus, where the title bar's Search box is hidden, so the dialog takes the request (#5398).
-    assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
-    assert_eq!(query(&h), "", "Alt+Q's q, same frame");
-    // The text a frame late; then typing.
-    let mut h = fresh();
-    h.event(key(egui::Key::Q, true));
-    frames(&mut h, 1);
-    h.event(egui::Event::Text("q".into()));
-    frames(&mut h, 1);
-    assert_eq!(query(&h), "", "the q a frame late");
-    h.event(key(egui::Key::B, false));
-    h.event(egui::Event::Text("b".into()));
-    frames(&mut h, 2);
-    assert_eq!(query(&h), "b", "then typing lands");
+    // Alt+Q is the command search off macOS only (Option+Q types a character there; `tools.search` has no key).
+    if !cfg!(target_os = "macos") {
+        // The shortcut and its text in one frame.
+        let mut h = fresh();
+        h.event(key(egui::Key::Q, true));
+        h.event(egui::Event::Text("q".into()));
+        frames(&mut h, 3);
+        // The app is in Focus, where the title bar's Search box is hidden, so the dialog takes the request (#5398).
+        assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
+        assert_eq!(query(&h), "", "Alt+Q's q, same frame");
+        // The text a frame late; then typing.
+        let mut h = fresh();
+        h.event(key(egui::Key::Q, true));
+        frames(&mut h, 1);
+        h.event(egui::Event::Text("q".into()));
+        frames(&mut h, 1);
+        assert_eq!(query(&h), "", "the q a frame late");
+        h.event(key(egui::Key::B, false));
+        h.event(egui::Event::Text("b".into()));
+        frames(&mut h, 2);
+        assert_eq!(query(&h), "b", "then typing lands");
+    }
     // A palette opened by a click takes typing.
     let mut h = fresh();
     open_named(&mut h, "commands", json!({}));
