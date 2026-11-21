@@ -188,6 +188,8 @@ pub(crate) fn delete_selection_effect(s: &mut Session) -> Result<SelectionDelete
         SelectionDelete { at, content_changed: true, state_changed: true }
     };
     s.sel = crate::Selection::caret(effect.at.clone());
+    // The edit moved the caret: a wrap end it lands on shows at the start of its line.
+    s.caret_upstream = false;
     Ok(effect)
 }
 
@@ -449,6 +451,8 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     }
     s.sel = crate::Selection::caret(at);
     s.goal_x = None;
+    // Typing or pasting moves the caret past the text: no wrap stop survives the edit.
+    s.caret_upstream = false;
     let content_changed = deletion.content_changed || inserted;
     Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
 }

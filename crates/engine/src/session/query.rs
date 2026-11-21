@@ -272,6 +272,9 @@ impl Session {
     /// back does not bring it back (#6518). Assigning [`Self::sel`] directly skips this.
     pub fn set_selection(&mut self, sel: Selection) {
         self.sel = sel;
+        // A selection set from outside lands downstream; a caller that means the upstream
+        // wrap stop sets the flag after this.
+        self.caret_upstream = false;
         self.drop_stale_carried();
     }
 

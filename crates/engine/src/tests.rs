@@ -5644,6 +5644,7 @@ fn the_end_of_a_line_shortened_by_a_wrapped_object_is_a_caret_stop() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(at, pic, &Default::default()).unwrap();
@@ -5688,6 +5689,92 @@ fn the_end_of_a_line_shortened_by_a_wrapped_object_is_a_caret_stop() {
     run(&mut s, "caret.set", json!({"page": 0, "x": x, "y": y}));
     assert_eq!(s.sel.focus, Pos::body(0, at));
     assert!(s.caret_upstream);
+}
+
+/// A session whose one paragraph ends in a picture too wide for the room left on its line:
+/// line 1 ends short at the returned offset, the picture starts line 2.
+fn session_with_a_wrapped_object() -> (Session, usize) {
+    let mut s = s();
+    let text = "This is an inline formula,";
+    let at = text.len();
+    run(&mut s, "text.insert", json!({"text": text}));
+    let pic = wordcraft_doc::para::InlineObject::Image {
+        media: "picture".into(),
+        w: 400.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(at, pic, &Default::default()).unwrap();
+    s.touch();
+    (s, at)
+}
+
+/// A plain word wrap keeps its single arrow stop: Right walks one press per character, without
+/// pausing at the wrap offset after a line's trailing space. Only a line an inline object left
+/// short gets the second stop; End on a plain wrapped line stays before its trailing space.
+#[test]
+fn plain_word_wraps_keep_one_arrow_stop_per_character() {
+    let mut s = s();
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(6);
+    run(&mut s, "text.insert", json!({"text": text}));
+    let laid = run(&mut s, "document.layout", json!({}));
+    assert!(laid["pages"][0]["lines"].as_u64().unwrap() > 1, "the text wraps");
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    let mut presses = 0;
+    while s.sel.focus.off < text.len() {
+        run(&mut s, "caret.right", json!({}));
+        presses += 1;
+        assert!(presses <= text.len(), "Right stalled at a plain wrap");
+    }
+    assert_eq!(presses, text.len(), "one Right per character, no extra stop at a plain wrap");
+    // End on a wrapped line stays before its trailing space; Right from there crosses it at once.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    run(&mut s, "caret.end", json!({}));
+    let off = s.sel.focus.off;
+    assert!(off < text.len() && text.as_bytes()[off] == b' ', "End stays before the trailing wrap space");
+    assert!(!s.caret_upstream);
+    run(&mut s, "caret.right", json!({}));
+    assert_eq!(s.sel.focus.off, off + 1);
+}
+
+/// An edit moves the caret, and the upstream wrap stop does not survive it: typing `x` at a
+/// wrap end and Backspace back to the same offset shows the next line's start, not the old
+/// line's end again. Delete clears the stop too.
+#[test]
+fn edits_clear_the_wrap_end_affinity() {
+    let (mut s, at) = session_with_a_wrapped_object();
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, at - 1)}));
+    run(&mut s, "caret.right", json!({}));
+    assert!(s.caret_upstream);
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    assert_eq!(s.sel.focus, Pos::body(0, at + 1));
+    assert!(!s.caret_upstream, "typing clears the wrap stop");
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, at));
+    assert!(!s.caret_upstream, "Backspace back to the wrap offset shows the next line's start");
+    run(&mut s, "caret.left", json!({}));
+    assert!(s.caret_upstream);
+    run(&mut s, "text.delete", json!({}));
+    assert!(!s.caret_upstream, "Delete clears the wrap stop");
+}
+
+/// A snapshot taken with the caret at a wrap end restores that stop with the selection.
+#[test]
+fn a_snapshot_restores_the_wrap_end_affinity() {
+    let (mut s, at) = session_with_a_wrapped_object();
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, at - 1)}));
+    run(&mut s, "caret.right", json!({}));
+    assert!(s.caret_upstream);
+    let snap = s.edit_snapshot();
+    run(&mut s, "caret.right", json!({}));
+    assert!(!s.caret_upstream);
+    s.restore(snap);
+    assert_eq!(s.sel.focus, Pos::body(0, at));
+    assert!(s.caret_upstream, "restore brings the caret's wrap stop back");
 }
 
 #[test]

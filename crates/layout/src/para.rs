@@ -231,14 +231,42 @@ impl ParaLayout {
         }
         self.lines.len().saturating_sub(1)
     }
-    /// The wrapped line that ends at `off`, when `off` also starts the line after it: the end
-    /// of the previous line, a caret stop of its own (Word: Left from the next line's start
-    /// first shows the caret after the last character). `None` at a paragraph or hard break.
+    /// Whether line `li` was left short by an inline object that didn't fit its room and moved
+    /// whole to the next line, which starts with that object. Only such a line's end is a caret
+    /// stop of its own; a line that wrapped at a space keeps its trailing space out of the
+    /// caret's stops, an object after the space or not.
+    pub fn object_wrap_end(&self, li: usize) -> bool {
+        let Some(l) = self.lines.get(li) else { return false };
+        if l.end != LineEnd::Wrap || l.stop <= l.start {
+            return false;
+        }
+        let Some(next) = self.lines.get(li + 1) else { return false };
+        let starts_with_object = self
+            .clusters
+            .get(next.c0..next.c1)
+            .into_iter()
+            .flatten()
+            .find(|c| c.kind != ClKind::Marker)
+            .is_some_and(|c| matches!(c.kind, ClKind::Object(_)));
+        let ends_at_space = self
+            .clusters
+            .get(l.c0..l.c1)
+            .into_iter()
+            .flatten()
+            .rev()
+            .find(|c| c.kind != ClKind::Marker)
+            .is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Tab));
+        starts_with_object && !ends_at_space
+    }
+    /// The wrapped line that ends at `off`, when `off` also starts the line after it and an
+    /// inline object left that line short: the end of the previous line, a caret stop of its
+    /// own (Word: Left from the next line's start first shows the caret after the last
+    /// character). `None` at a paragraph or hard break, and at a plain word wrap.
     pub fn wrap_end_line(&self, off: usize) -> Option<usize> {
         let next = self.line_of(off);
         let prev = next.checked_sub(1)?;
         let l = self.lines.get(prev)?;
-        (l.end == LineEnd::Wrap && l.stop == off).then_some(prev)
+        (l.stop == off && self.object_wrap_end(prev)).then_some(prev)
     }
     /// Caret x on a bidirectional line: the leading edge of the cluster after `off` (the right
     /// edge of right-to-left text), except where `off` leaves an embedded run (the cluster before
@@ -313,12 +341,16 @@ impl ParaLayout {
             if !self.is_edit_boundary(off) {
                 continue;
             }
-            // Don't place the caret after a line-ending break on its own line. A wrapped line's
-            // end is a stop: the caret shows there (after its last character) and at the start
-            // of the next line, the same offset with the other affinity.
+            // Don't place the caret after a line-ending break on its own line, nor past a
+            // plain wrap's trailing space. A line an inline object left short is different:
+            // its end is a stop, the caret shows there (after its last character) and at the
+            // start of the next line, the same offset with the other affinity.
             if k == l.c1 && k > l.c0 {
                 let lastc = self.clusters.get(k - 1);
                 if lastc.is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)) {
+                    continue;
+                }
+                if l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some() && !self.object_wrap_end(li) {
                     continue;
                 }
             }

@@ -687,8 +687,16 @@ fn the_end_of_a_line_shortened_by_a_wrapped_object_is_a_caret_stop() {
     let text = "This is an inline formula,";
     let at = text.len();
     let mut d = Document::from_text(text);
-    let pic =
-        InlineObject::Image { media: "picture".into(), w: 400.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: "picture".into(),
+        w: 400.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(at, pic, &Default::default()).unwrap();
     let l = lay(&d);
     let lines = crate::hit::page_lines(&l.pages[0], StoryRef::Body);
@@ -714,6 +722,118 @@ fn the_end_of_a_line_shortened_by_a_wrapped_object_is_a_caret_stop() {
     let before_x = first.x + first.para.x_of(first.li, at - 1).unwrap();
     assert_eq!(l.hit(0, before_x + (end_x - before_x) * 0.25, y, StoryRef::Body), Some(Pos::body(0, at - 1)));
     assert_eq!(l.hit(0, end_x + 1.0, y, StoryRef::Body), Some(pos));
+}
+
+/// A plain word wrap keeps the caret off its trailing space, as before: a click at the line's
+/// far end lands before that space, End stays before it, and the wrap offset is not a stop of
+/// its own. Only a line an inline object left short gets the second stop.
+#[test]
+fn a_plain_word_wrap_keeps_its_trailing_space_out_of_the_caret_stops() {
+    let d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(6));
+    let l = lay(&d);
+    let lines = crate::hit::page_lines(&l.pages[0], StoryRef::Body);
+    assert!(lines.len() > 1, "the text wraps");
+    let first = &lines[0];
+    let stop = first.para.lines[first.li].stop;
+    assert_eq!(first.para.lines[first.li].end, para::LineEnd::Wrap);
+    // A click at the line's far end lands before the trailing wrap space, not after it.
+    let y = (first.top + first.bottom) / 2.0;
+    let end_x = first.x + first.para.x_of(first.li, stop).unwrap();
+    let (pos, upstream) = l.hit_affinity(0, end_x + 2.0, y, StoryRef::Body).unwrap();
+    assert!(pos.off < stop, "the click lands at {}, the wrap stop is {stop}", pos.off);
+    assert!(!upstream);
+    // End stays before the trailing space too, and the wrap offset is not a stop of its own.
+    let (_, b) = l.line_bounds(&Pos::body(0, 0), 0).unwrap();
+    assert!(b.off < stop);
+    assert!(!l.at_wrap_end(&Pos::body(0, stop), 0));
+}
+
+/// A line that wrapped at its trailing space keeps its single stop even when an inline object
+/// follows the space: the line wrapped at the space, it was not left short of room.
+#[test]
+fn a_space_wrap_before_an_object_keeps_its_single_stop() {
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(6);
+    let at = text.len();
+    let mut d = Document::from_text(&text);
+    let pic = InlineObject::Image {
+        media: "picture".into(),
+        w: 600.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(at, pic, &Default::default()).unwrap();
+    let l = lay(&d);
+    let pos = Pos::body(0, at);
+    assert!(!l.at_wrap_end(&pos, 0), "a line that wrapped at its space keeps a single stop");
+    let lines = crate::hit::page_lines(&l.pages[0], StoryRef::Body);
+    let last = lines
+        .iter()
+        .rev()
+        .find(|lh| lh.para.lines.get(lh.li).is_some_and(|ln| ln.stop == at && ln.end == para::LineEnd::Wrap))
+        .expect("the text's last line ends at the wrap offset");
+    assert!(!last.para.object_wrap_end(last.li));
+    let end_x = last.x + last.para.x_of(last.li, at).unwrap();
+    let y = (last.top + last.bottom) / 2.0;
+    let (hit, upstream) = l.hit_affinity(0, end_x + 2.0, y, StoryRef::Body).unwrap();
+    assert!(hit.off < at, "the click lands before the trailing space, at {}", hit.off);
+    assert!(!upstream);
+}
+
+/// A wide, tall inline object that moves whole to the next page leaves the last line of the
+/// page before short. Its end is the same caret stop across the page break: the offset starts
+/// the next page's line, but the stop belongs to the short line on the page before, and a click
+/// there carries it.
+#[test]
+fn a_wrap_end_across_a_page_break_is_still_a_caret_stop() {
+    // No trailing space: the object leaves the last line short, it does not wrap at a space.
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(20);
+    let text = text.trim_end();
+    let at = text.len();
+    let mut d = Document::from_text(text);
+    let pic = InlineObject::Image {
+        media: "picture".into(),
+        w: 400.0,
+        h: 200.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(at, pic, &Default::default()).unwrap();
+    d.last_section.page_h = 360.0;
+    let l = lay(&d);
+    assert!(l.pages.len() >= 2, "the tall picture moves to a page of its own");
+    // The page whose line starts with the object.
+    let obj_page = l
+        .pages
+        .iter()
+        .position(|p| {
+            crate::hit::page_lines(p, StoryRef::Body).iter().any(|lh| {
+                lh.para.lines.get(lh.li).is_some_and(|ln| matches!(lh.para.clusters.get(ln.c0).map(|c| c.kind), Some(para::ClKind::Object(_))))
+            })
+        })
+        .unwrap();
+    assert!(obj_page >= 1, "the object starts a later page, not the first");
+    let pos = Pos::body(0, at);
+    assert!(l.at_wrap_end(&pos, obj_page), "the wrap end across the page break is a stop");
+    let up = l.caret_on_affinity(&pos, obj_page, true).unwrap();
+    assert_eq!(up.page, obj_page - 1, "the upstream caret is drawn on the short line's page");
+    let down = l.caret_on_affinity(&pos, obj_page, false).unwrap();
+    assert_eq!(down.page, obj_page);
+    // A click at the end of the short line carries the same stop.
+    let prev_lines = crate::hit::page_lines(&l.pages[obj_page - 1], StoryRef::Body);
+    let last = prev_lines.last().unwrap();
+    assert_eq!(last.para.lines[last.li].stop, at);
+    let end_x = last.x + last.para.x_of(last.li, at).unwrap();
+    let y = (last.top + last.bottom) / 2.0;
+    let (hit, upstream) = l.hit_affinity(obj_page - 1, end_x + 1.0, y, StoryRef::Body).unwrap();
+    assert_eq!(hit, pos);
+    assert!(upstream);
 }
 
 #[test]

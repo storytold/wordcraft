@@ -462,7 +462,7 @@ impl DocLayout {
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
         let at = |l: &LineHit| {
             let off = l.para.off_at_x(l.li, x - l.x);
-            let upstream = l.para.lines.get(l.li).is_some_and(|ln| ln.end == crate::LineEnd::Wrap && ln.stop == off);
+            let upstream = l.para.object_wrap_end(l.li) && l.para.lines.get(l.li).is_some_and(|ln| ln.stop == off);
             (Pos { story: l.story, path: l.path.clone(), off }, upstream)
         };
         if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
@@ -727,7 +727,9 @@ impl DocLayout {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
             let down = para.line_of(pos.off);
-            let at_end = upstream.then(|| para.wrap_end_line(pos.off)).flatten().filter(|li| *li >= *l0);
+            // No piece filter: the short line may be on the page before, and the range check
+            // below routes the caret to the piece that holds it.
+            let at_end = upstream.then(|| para.wrap_end_line(pos.off)).flatten();
             let li = at_end.unwrap_or(down);
             if li < *l0 || li >= *l1 {
                 continue;
@@ -781,7 +783,9 @@ impl DocLayout {
             if li < *l0 || li >= *l1 {
                 continue;
             }
-            return para.wrap_end_line(pos.off).is_some_and(|prev| prev >= *l0);
+            // The short line may sit on the page before this piece's (the object moved to a
+            // new page): the stop is the offset's, not the piece's.
+            return para.wrap_end_line(pos.off).is_some();
         }
         false
     }
@@ -817,7 +821,7 @@ impl DocLayout {
         };
         if let Some(l) = target {
             let off = l.para.off_at_x(l.li, gx - l.x);
-            let up = l.para.lines.get(l.li).is_some_and(|ln| ln.end == crate::LineEnd::Wrap && ln.stop == off);
+            let up = l.para.object_wrap_end(l.li) && l.para.lines.get(l.li).is_some_and(|ln| ln.stop == off);
             return Some((Pos { story: l.story, path: l.path.clone(), off }, gx, up));
         }
         // Next/previous page.
@@ -826,7 +830,7 @@ impl DocLayout {
         let lines = page_lines(p, pos.story);
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
-        let up = l.para.lines.get(l.li).is_some_and(|ln| ln.end == crate::LineEnd::Wrap && ln.stop == off);
+        let up = l.para.object_wrap_end(l.li) && l.para.lines.get(l.li).is_some_and(|ln| ln.stop == off);
         Some((Pos { story: l.story, path: l.path.clone(), off }, gx, up))
     }
 
@@ -857,18 +861,19 @@ impl DocLayout {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
             let down = para.line_of(pos.off);
-            let at_end = upstream.then(|| para.wrap_end_line(pos.off)).flatten().filter(|li| *li >= *l0);
+            let at_end = upstream.then(|| para.wrap_end_line(pos.off)).flatten();
             let li = at_end.unwrap_or(down);
             if li < *l0 || li >= *l1 {
                 continue;
             }
             let l = para.lines.get(li)?;
             let mut end = l.stop;
-            // Don't put the caret after a trailing break on that line. A wrapped line's end is
-            // its last offset, drawn after its last character.
+            // Don't put the caret after a trailing break on that line. A plain wrap's end stays
+            // before its trailing space; a line an inline object left short ends at its last
+            // offset, drawn after its last character.
             if matches!(l.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > l.start {
                 end = para.clusters.get(l.c1.saturating_sub(1)).map(|c| c.start).unwrap_or(end);
-            } else if l.end == crate::LineEnd::Wrap && !l.vis.is_empty() {
+            } else if l.end == crate::LineEnd::Wrap && (!l.vis.is_empty() || !para.object_wrap_end(li)) {
                 // Bidirectional lines: their last reachable offset in logical order.
                 end = para.line_offsets(li).into_iter().max().unwrap_or(end);
             }
