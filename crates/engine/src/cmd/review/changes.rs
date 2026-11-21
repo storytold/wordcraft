@@ -7,13 +7,14 @@ fn resolve_runs(
     to: usize,
     (props_num, props_fmt): (bool, bool),
     accept: bool,
+    styles: Option<&wordcraft_doc::StyleSheet>,
 ) -> Result<(), CmdError> {
     if props_fmt && para.props.fmt_change.is_some() {
-        fmt_revisions::resolve_para_fmt(&mut para.props, accept);
+        fmt_revisions::resolve_para_fmt_with_styles(&mut para.props, accept, styles);
         para.touch();
     }
     if props_num && para.props.num_change.is_some() {
-        fmt_revisions::resolve_para_num(&mut para.props, accept);
+        fmt_revisions::resolve_para_num_with_styles(&mut para.props, accept, styles);
         para.touch();
     }
     let ranges: Vec<(usize, usize, bool, bool, bool)> = para
@@ -46,8 +47,9 @@ fn resolve_para(
     (props_num, props_fmt): (bool, bool),
     accept: bool,
 ) -> Result<(), CmdError> {
+    let styles = s.doc.styles.clone();
     let para = s.doc.para_mut(story, path)?;
-    resolve_runs(para, from, to, (props_num, props_fmt), accept)?;
+    resolve_runs(para, from, to, (props_num, props_fmt), accept, Some(&styles))?;
     if !mark {
         return Ok(());
     }
@@ -161,6 +163,7 @@ pub(crate) struct ParaNumTarget {
 pub(crate) struct NavigatedTarget {
     pub(crate) document: u64,
     pub(crate) sel: Selection,
+    pub(crate) index: usize,
 }
 
 /// The navigated style change, when the selection is still the one navigation made.
@@ -196,13 +199,13 @@ fn resolve_style_change(s: &mut Session, t: &StyleTarget, accept: bool) -> bool 
     true
 }
 
-/// Select change `c` and remember which style, numbering or paragraph format change it is, if it is one.
-fn select_change(s: &mut Session, c: &Change) {
+/// Select change `c` at `index` and remember which style, numbering or paragraph format change it is, if it is one.
+fn select_change(s: &mut Session, index: usize, c: &Change) {
     s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
     s.review_style = c.style.clone().zip(c.rev).map(|(style, rev)| StyleTarget { document: s.document_id(), sel: s.sel.clone(), style, rev });
     s.review_para_fmt = if c.para_fmt { Some(ParaFmtTarget { document: s.document_id(), sel: s.sel.clone(), path: c.a.path.clone() }) } else { None };
     s.review_para_num = if c.para_num { Some(ParaNumTarget { document: s.document_id(), sel: s.sel.clone(), path: c.a.path.clone() }) } else { None };
-    s.review_navigated = Some(NavigatedTarget { document: s.document_id(), sel: s.sel.clone() });
+    s.review_navigated = Some(NavigatedTarget { document: s.document_id(), sel: s.sel.clone(), index });
 }
 
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
@@ -294,7 +297,7 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
     for b in blocks.iter_mut() {
         let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
         let len = p.len();
-        resolve_runs(p, 0, len, (true, true), accept)?;
+        resolve_runs(p, 0, len, (true, true), accept, None)?;
         if p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
             fmt_revisions::resolve_char(&mut p.mark, accept);
             if let Some(sec) = p.section.as_deref_mut() {
@@ -411,6 +414,24 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     {
         return if next { select_next_unresolved(s) } else { sel_result(s) };
     }
+    if let Some(t) = navigated_para
+        && s.doc.para(t.sel.anchor.story, &t.path).is_some_and(|p| p.props.fmt_change.is_some())
+    {
+        let a = s.sel.ordered().0;
+        resolve_para(s, a.story, &t.path, (0, 0), false, (false, true), accept)?;
+        s.sel = Selection::caret(a);
+        s.clamp_selection();
+        return if next { select_next_unresolved(s) } else { sel_result(s) };
+    }
+    if let Some(t) = navigated_num
+        && s.doc.para(t.sel.anchor.story, &t.path).is_some_and(|p| p.props.num_change.is_some())
+    {
+        let a = s.sel.ordered().0;
+        resolve_para(s, a.story, &t.path, (0, 0), false, (true, false), accept)?;
+        s.sel = Selection::caret(a);
+        s.clamp_selection();
+        return if next { select_next_unresolved(s) } else { sel_result(s) };
+    }
     let (a, b) = s.sel.ordered();
     // Capture this before text revisions are resolved: accepting a deletion or rejecting an
     // insertion can change the body's end position. Whole body is only resolved on explicit whole-body
@@ -431,14 +452,6 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let mark_fmt = s.doc.para_at(&a).is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
         let para_fmt = s.doc.para_at(&a).is_some_and(|p| p.props.fmt_change.is_some());
         match found {
-            _ if navigated_para.as_ref().is_some_and(|t| t.path == a.path) => {
-                caret_props = Some(a.path.clone());
-                (a.clone(), a)
-            }
-            _ if navigated_num.as_ref().is_some_and(|t| t.path == a.path) => {
-                caret_num = Some(a.path.clone());
-                (a.clone(), a)
-            }
             _ if !navigated_any && num_fmt => {
                 caret_num = Some(a.path.clone());
                 (a.clone(), a)
@@ -448,7 +461,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
                 caret_mark = Some(a.path.clone());
                 (a.clone(), a)
             }
-            None if para_fmt => {
+            None if !navigated_any && para_fmt => {
                 caret_props = Some(a.path.clone());
                 (a.clone(), a)
             }
@@ -470,13 +483,12 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let to = if path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
-        let is_navigated_fmt = navigated_para.as_ref().is_some_and(|t| t.path == path);
         let multi_para = a.path != b.path;
-        let props_fmt = (ranged && (multi_para || to > from)) || caret_props.as_ref() == Some(&path);
-        let props_num =
-            (ranged && (multi_para || (whole_body && !is_navigated_fmt)) && (path != a.path || from == 0)) || caret_num.as_ref() == Some(&path);
+        let props_fmt = (!navigated_any && ranged && (multi_para || to > from)) || caret_props.as_ref() == Some(&path);
+        let props_num = (!navigated_any && ranged && (whole_body || path != b.path || to > from) && (path != a.path || from == 0))
+            || caret_num.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), mark, (props_num, props_fmt), accept)?;
-        if ranged {
+        if !navigated_any && ranged {
             resolve_cell(s, a.story, &path, accept)?;
         }
     }
@@ -517,7 +529,7 @@ fn changes(s: &Session) -> Vec<Change> {
             }
         }
         if let Some(ch) = &p.props.num_change {
-            out.push(Change::para_num(mk(&path, 0), mk(&path, 0), ch.rev, fmt_revisions::para_num_diff(&p.props)));
+            out.push(Change::para_num(mk(&path, 0), mk(&path, 0), ch.rev, fmt_revisions::para_num_diff_with_styles(&p.props, Some(&s.doc.styles))));
         }
         if let Some(ch) = &p.props.fmt_change {
             out.push(Change::para_format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props)));
@@ -697,16 +709,19 @@ pub(super) fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
     } else if let Some(t) = navigated_para_fmt(s) {
         list.iter().position(|c| c.para_fmt && c.a.path == t.path)
     } else {
-        None
+        s.review_navigated
+            .as_ref()
+            .filter(|t| t.document == s.document_id() && t.sel == s.sel)
+            .and_then(|t| list.get(t.index).filter(|c| c.a == t.sel.anchor && c.b == t.sel.focus).map(|_| t.index))
     };
-    let t = match at {
-        Some(i) if dir > 0 && i + 1 < list.len() => list.get(i + 1),
-        Some(i) if dir < 0 && i > 0 => list.get(i - 1),
-        _ if dir > 0 => list.iter().find(|c| c.a >= caret.1 && (c.a > caret.0 || c.b > caret.1)).or(list.first()),
-        _ => list.iter().rev().find(|c| c.b <= caret.0 && (c.b < caret.1 || c.a < caret.0)).or(list.last()),
+    let target_idx = match at {
+        Some(i) if dir > 0 && i + 1 < list.len() => Some(i + 1),
+        Some(i) if dir < 0 && i > 0 => Some(i - 1),
+        _ if dir > 0 => list.iter().position(|c| c.a >= caret.1 && (c.a > caret.0 || c.b > caret.1)).or((!list.is_empty()).then_some(0)),
+        _ => list.iter().rposition(|c| c.b <= caret.0 && (c.b < caret.1 || c.a < caret.0)).or_else(|| list.len().checked_sub(1)),
     };
-    if let Some(c) = t {
-        select_change(s, c);
+    if let Some((idx, c)) = target_idx.and_then(|idx| list.get(idx).map(|c| (idx, c))) {
+        select_change(s, idx, c);
     }
     sel_result(s)
 }
@@ -717,8 +732,8 @@ pub(super) fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
 fn select_next_unresolved(s: &mut Session) -> CmdResult {
     let list = changes(s);
     let caret = s.sel.ordered().0;
-    if let Some(c) = list.iter().find(|c| c.a >= caret).or(list.first()) {
-        select_change(s, c);
+    if let Some((idx, c)) = list.iter().enumerate().find(|(_, c)| c.a >= caret).or_else(|| list.first().map(|c| (0, c))) {
+        select_change(s, idx, c);
     }
     sel_result(s)
 }

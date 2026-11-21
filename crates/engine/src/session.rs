@@ -108,9 +108,9 @@ pub struct Session {
     pub new_header_parts: Vec<u32>,
     /// The body selection a command left for a header or footer: `insert.closeHeader` puts it back.
     pub hf_return: Option<Selection>,
-    /// The style-definition change Next / Previous Change selected, for the Accept or Reject that
-    /// follows (`cmd::review`). It names its document and selection, so it is shared by the open
-    /// documents and stops counting once either changes.
+    /// Which style, paragraph-formatting, or numbering change Next / Previous Change just selected,
+    /// for the Accept or Reject that follows (`cmd::review`). Stored per open document in
+    /// [`DocState`] and cleared once the selection or document state changes.
     pub(crate) review_style: Option<crate::cmd::review::StyleTarget>,
     pub(crate) review_para_fmt: Option<crate::cmd::review::ParaFmtTarget>,
     pub(crate) review_para_num: Option<crate::cmd::review::ParaNumTarget>,

@@ -33,6 +33,10 @@ impl Session {
         self.edit_marks.clear();
         self.new_header_parts.clear();
         self.hf_return = None;
+        self.review_style = None;
+        self.review_para_fmt = None;
+        self.review_para_num = None;
+        self.review_navigated = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
         self.view.follow_prefs(&self.prefs);
@@ -237,6 +241,10 @@ impl Session {
         self.pending_at = pending_at;
         self.also_selected.clear();
         self.member = None;
+        self.review_style = None;
+        self.review_para_fmt = None;
+        self.review_para_num = None;
+        self.review_navigated = None;
         self.history.truncate(history_len);
         self.redo = redo;
         self.typing_open = typing_open;

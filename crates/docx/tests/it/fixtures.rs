@@ -2215,7 +2215,7 @@ fn numbering_change_without_active_list_roundtrips() {
     assert_eq!(anc.original, "%1:1:0:.", "an imported cache is kept as written");
 }
 
-/// `w:original` caches the previous numbering definition (ECMA-376 §17.3.1.20), not a list id;
+/// `w:original` caches the previous numbering definition (ECMA-376 Part 1 §17.3.1.19 / Part 4 §14.7.1.2), not a list id;
 /// a change this app records writes that cache on save and reads the list back from it.
 #[test]
 fn numbering_change_caches_the_previous_definition() {

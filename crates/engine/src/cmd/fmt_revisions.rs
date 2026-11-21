@@ -39,22 +39,13 @@ type Slot<T> = Option<Box<PropChange<T>>>;
 /// What a [`Slot`] should become (which may be no change at all).
 struct Replacement<T>(Slot<T>);
 
-/// The prior revisions to check when testing whether an author owns an existing change.
-#[derive(Copy, Clone)]
-enum BeforeRevisions<'a> {
-    /// A snapshot of revisions taken before the command or transformation began.
-    Snapshot(&'a [Revision]),
-    /// A prefix length into `Recorder::revisions` representing the revisions present before
-    /// the current operation (avoiding cloning the revision vector).
-    Prefix(usize),
-}
-
 struct Recorder<'a> {
     author: String,
     date: String,
-    before: BeforeRevisions<'a>,
+    before: &'a [Revision],
     revisions: &'a mut Vec<Revision>,
     styles: Option<&'a StyleSheet>,
+    compare: bool,
     rid: Option<u32>,
 }
 
@@ -78,16 +69,7 @@ impl Recorder<'_> {
 
     /// Whether the revision at index `rev` was created by this author before the current operation.
     fn own(&self, rev: u32) -> bool {
-        let rev = rev as usize;
-        match self.before {
-            BeforeRevisions::Snapshot(before) => before.get(rev).is_some_and(|r| r.author == self.author),
-            BeforeRevisions::Prefix(len) => rev < len && self.revisions.get(rev).is_some_and(|r| r.author == self.author),
-        }
-    }
-
-    /// Whether this recorder is diffing paragraphs for document comparison.
-    fn is_compare(&self) -> bool {
-        matches!(self.before, BeforeRevisions::Prefix(_))
+        self.before.get(rev as usize).is_some_and(|r| r.author == self.author)
     }
 
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
@@ -143,70 +125,38 @@ impl Recorder<'_> {
             }
         }
         let mark = self.change(&b.mark, &a.mark, CharProps::formatting, |c| &c.fmt_change);
-        let effective_num_for = |p: &Paragraph| -> Option<NumRef> {
-            let style_num = self
-                .styles
-                .and_then(|st| st.resolve_para(&ParaProps { style: p.props.style.clone(), ..Default::default() }).numbering)
-                .filter(|n| n.num != 0);
-            match p.props.numbering {
-                Some(nr) if nr.num == 0 => {
-                    if style_num.is_some() {
-                        Some(NumRef { num: 0, level: nr.level })
-                    } else {
-                        None
-                    }
-                }
-                Some(nr) => Some(nr),
-                None => style_num,
-            }
-        };
-        let b_eff = effective_num_for(b);
-        let a_eff = effective_num_for(a);
-        let num_diff = b_eff != a_eff;
-        let num_change = if num_diff {
-            if self.is_compare() {
+        let (num_change, props) = if self.compare {
+            let b_eff = effective_num(&b.props, self.styles);
+            let a_eff = effective_num(&a.props, self.styles);
+            let num_diff = b_eff != a_eff;
+            let nc = if num_diff {
                 let rev = self.rid();
-                Some(wordcraft_doc::props::NumChange::boxed(rev, b.props.numbering))
+                let has_styled_num = style_active_num(self.styles, a.props.style.as_deref()).is_some();
+                let snapshot = if b_eff.is_none() && has_styled_num { Some(NumRef { num: 0, level: 0 }) } else { b_eff };
+                Some(wordcraft_doc::props::NumChange::boxed(rev, snapshot))
+            } else if a.props.num_change.is_some() {
+                None
             } else {
-                let had = b.props.num_change.as_ref();
-                let own = had.filter(|c| self.own(c.rev));
-                let change = match own {
-                    Some(c) if !c.is_parseable() => {
-                        Some(Box::new(wordcraft_doc::props::NumChange { rev: c.rev, original: c.original.clone(), snapshot: c.snapshot }))
-                    }
-                    Some(c) => {
-                        let prev = c.snapshot;
-                        let prev_eff = match prev {
-                            Some(nr) if nr.num == 0 => {
-                                let style_num = self
-                                    .styles
-                                    .and_then(|st| st.resolve_para(&ParaProps { style: a.props.style.clone(), ..Default::default() }).numbering)
-                                    .filter(|n| n.num != 0);
-                                if style_num.is_some() { Some(NumRef { num: 0, level: nr.level }) } else { None }
-                            }
-                            Some(nr) => Some(nr),
-                            None => self
-                                .styles
-                                .and_then(|st| st.resolve_para(&ParaProps { style: b.props.style.clone(), ..Default::default() }).numbering)
-                                .filter(|n| n.num != 0),
-                        };
-                        if prev_eff == a_eff {
-                            None
-                        } else {
-                            Some(Box::new(wordcraft_doc::props::NumChange { rev: c.rev, original: c.original.clone(), snapshot: prev }))
-                        }
-                    }
-                    None => {
-                        let rev = self.rid();
-                        wordcraft_doc::props::NumChange::boxed(rev, b.props.numbering)
-                    }
-                };
-                Some(change)
-            }
+                b.props.num_change.clone().map(Some)
+            };
+            // In Compare: check whether non-numbering paragraph properties changed.
+            // Strip numbering only for the diff comparison, not for the stored `old`.
+            let formatting_changed = strip_num(&b.props) != strip_num(&a.props);
+            let p_change = if formatting_changed {
+                let rev = self.rid();
+                let want = PropChange::boxed(rev, b.props.formatting());
+                (want != a.props.fmt_change).then_some(Replacement(want))
+            } else if a.props.fmt_change.is_some() {
+                None
+            } else {
+                b.props.fmt_change.as_ref().map(|c| Replacement(Some(c.clone())))
+            };
+            (nc, p_change)
         } else {
-            None
+            // Normal tracked edits: keep on pPrChange (fmt_change), preserving numbering in baseline.
+            let p_change = self.change(&b.props, &a.props, ParaProps::formatting, |p| &p.fmt_change);
+            (None, p_change)
         };
-        let props = self.change(&b.props, &a.props, strip_num, |p| &p.fmt_change);
         if runs.is_empty() && mark.is_none() && props.is_none() && num_change.is_none() {
             return;
         }
@@ -332,9 +282,10 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     let mut r = Recorder {
         author,
         date: super::now_iso(),
-        before: BeforeRevisions::Snapshot(&before.revisions),
+        before: &before.revisions,
         revisions: &mut doc.revisions,
         styles: Some(&styles),
+        compare: false,
         rid: None,
     };
     r.blocks(&before.body, &mut doc.body, 0);
@@ -370,12 +321,15 @@ impl ParaPropTracker {
         let mut r = Recorder {
             author: s.author.clone(),
             date: super::now_iso(),
-            before: BeforeRevisions::Snapshot(&self.before),
+            before: &self.before,
             revisions: &mut s.doc.revisions,
             styles: Some(&s.doc.styles),
+            compare: false,
             rid: None,
         };
-        r.change(before, after, strip_num, |p| &p.fmt_change).map(|Replacement(change)| change).unwrap_or_else(|| after.fmt_change.clone())
+        r.change(before, after, ParaProps::formatting, |p| &p.fmt_change)
+            .map(|Replacement(change)| change)
+            .unwrap_or_else(|| after.fmt_change.clone())
     }
 }
 
@@ -392,12 +346,13 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
     let mut r = Recorder {
         author: s.author.clone(),
         date: super::now_iso(),
-        before: BeforeRevisions::Snapshot(&revisions),
+        before: &revisions,
         revisions: &mut s.doc.revisions,
         styles: Some(&s.doc.styles),
+        compare: false,
         rid: None,
     };
-    if let Some(Replacement(want)) = r.change(before, &after, strip_num, |p| &p.fmt_change) {
+    if let Some(Replacement(want)) = r.change(before, &after, ParaProps::formatting, |p| &p.fmt_change) {
         let p = s.doc.para_mut(story, path)?;
         p.props.fmt_change = want;
         p.touch();
@@ -415,9 +370,7 @@ pub(crate) fn compare_formatting(
     author: &str,
     date: &str,
 ) {
-    let before_len = revisions.len();
-    let mut r =
-        Recorder { author: author.to_string(), date: date.to_string(), before: BeforeRevisions::Prefix(before_len), revisions, styles, rid: None };
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, styles, compare: true, rid: None };
     r.para(old, new);
 }
 
@@ -446,17 +399,44 @@ pub fn char_diff(c: &CharProps) -> Vec<Value> {
 
 /// The properties a paragraph's change set.
 pub fn para_diff(p: &ParaProps) -> Vec<Value> {
-    if let Some(ch) = &p.fmt_change { diff(&strip_num(&ch.old), &strip_num(p)) } else { Vec::new() }
+    if let Some(ch) = &p.fmt_change {
+        if p.num_change.as_ref().is_some_and(|nc| nc.is_parseable()) {
+            diff(&strip_num(&ch.old), &strip_num(p))
+        } else {
+            diff(&ch.old.formatting(), &p.formatting())
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+fn style_active_num(styles: Option<&StyleSheet>, style: Option<&str>) -> Option<NumRef> {
+    styles?.resolve_para(&ParaProps { style: style.map(str::to_owned), ..Default::default() }).numbering.filter(|n| n.num != 0)
+}
+
+fn effective_num(p: &ParaProps, styles: Option<&StyleSheet>) -> Option<NumRef> {
+    match p.numbering {
+        Some(nr) => (nr.num != 0).then_some(nr),
+        None => style_active_num(styles, p.style.as_deref()),
+    }
 }
 
 /// The properties a paragraph's numbering change sets.
 pub fn para_num_diff(p: &ParaProps) -> Vec<Value> {
-    if let Some(nc) = &p.num_change {
-        let old = ParaProps { numbering: nc.snapshot, ..p.formatting() };
-        diff(&old, &p.formatting())
-    } else {
-        Vec::new()
-    }
+    para_num_diff_with_styles(p, None)
+}
+
+/// The properties a paragraph's numbering change sets, resolving style-inherited numbering when `styles` is provided.
+pub fn para_num_diff_with_styles(p: &ParaProps, styles: Option<&StyleSheet>) -> Vec<Value> {
+    let Some(nc) = &p.num_change else {
+        return Vec::new();
+    };
+    let cur_num = if styles.is_some() { effective_num(p, styles) } else { p.numbering };
+    let old_num = if styles.is_some() { nc.snapshot.filter(|n| n.num != 0) } else { nc.snapshot };
+    let base = p.formatting();
+    let old = ParaProps { numbering: old_num, ..base.clone() };
+    let cur = ParaProps { numbering: cur_num, ..base };
+    diff(&old, &cur)
 }
 
 /// A style's paragraph/run property changes, grouped by revision. A single style edit normally
@@ -533,13 +513,38 @@ pub fn resolve_char(c: &mut CharProps, accept: bool) {
     }
 }
 
+fn rebase_numbering_for_style(eff: Option<NumRef>, target_style_num: Option<NumRef>) -> Option<NumRef> {
+    if eff == target_style_num {
+        None
+    } else if eff.is_some() {
+        eff
+    } else {
+        Some(NumRef { num: 0, level: 0 })
+    }
+}
+
 /// Accept (drop the record) or reject (restore the old formatting) a paragraph's formatting change.
-/// If an imported formatting change contains prior numbering and no separate numbering change is present,
-/// rejecting restores that prior numbering.
+/// When no parseable numbering change is present, rejecting restores the formatting baseline's numbering.
 pub fn resolve_para_fmt(p: &mut ParaProps, accept: bool) {
+    resolve_para_fmt_with_styles(p, accept, None);
+}
+
+/// Like [`resolve_para_fmt`], preserving effective numbering across a style restoration when a
+/// separate parseable numbering change is still pending and `styles` is provided.
+pub fn resolve_para_fmt_with_styles(p: &mut ParaProps, accept: bool, styles: Option<&StyleSheet>) {
     let Some(ch) = p.fmt_change.take() else { return };
     if !accept {
-        let num = if p.num_change.is_none() && ch.old.numbering.is_some() { ch.old.numbering } else { p.numbering };
+        let num = if p.num_change.as_ref().is_some_and(|nc| nc.is_parseable()) {
+            if let Some(st) = styles {
+                let cur_eff = effective_num(p, Some(st));
+                let old_style_num = style_active_num(Some(st), ch.old.style.as_deref());
+                rebase_numbering_for_style(cur_eff, old_style_num)
+            } else {
+                p.numbering
+            }
+        } else {
+            ch.old.numbering
+        };
         let nc = p.num_change.take();
         *p = ch.old.formatting();
         p.numbering = num;
@@ -548,17 +553,31 @@ pub fn resolve_para_fmt(p: &mut ParaProps, accept: bool) {
 }
 
 /// Accept (drop the record) or reject (restore previous numbering) a paragraph's list numbering change.
-/// If an imported formatting change is also present on the paragraph with its own numbering baseline,
-/// updates that baseline to match the resolved numbering so subsequent rejection of formatting does not clobber it.
+/// If a formatting change is also present on the paragraph, updates its numbering baseline to match
+/// the resolved numbering so subsequent rejection of formatting does not clobber it.
 pub fn resolve_para_num(p: &mut ParaProps, accept: bool) {
+    resolve_para_num_with_styles(p, accept, None);
+}
+
+/// Like [`resolve_para_num`], rebasing `fmt_change.old.numbering` with style inheritance when `styles` is provided.
+pub fn resolve_para_num_with_styles(p: &mut ParaProps, accept: bool, styles: Option<&StyleSheet>) {
     let Some(ch) = p.num_change.take() else { return };
-    if !accept && ch.is_parseable() {
+    let parseable = ch.is_parseable();
+    if !accept && parseable {
         p.numbering = ch.snapshot;
     }
-    if let Some(fc) = p.fmt_change.as_mut()
-        && fc.old.numbering.is_some()
-    {
-        fc.old.numbering = p.numbering;
+    if accept || parseable {
+        let new_old_num = if let Some(st) = styles {
+            let eff = effective_num(p, Some(st));
+            let old_style = p.fmt_change.as_ref().and_then(|fc| fc.old.style.as_deref());
+            let old_style_num = style_active_num(Some(st), old_style);
+            rebase_numbering_for_style(eff, old_style_num)
+        } else {
+            p.numbering
+        };
+        if let Some(fc) = p.fmt_change.as_mut() {
+            fc.old.numbering = new_old_num;
+        }
     }
 }
 

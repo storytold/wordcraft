@@ -240,7 +240,7 @@ fn start_for(num: &Num, abs: &AbstractNum, level: u8) -> u32 {
 }
 
 /// Compute the previous numbering cache (`w:original`) for `level` of `num` and `abs`
-/// in ECMA-376 §17.3.1.20 format.
+/// in ECMA-376 Part 1 §17.3.1.19 / Part 4 §14.7.1.2 format.
 fn change_original_def(num: &Num, abs: &AbstractNum, level: u8) -> Option<String> {
     let level = level.min(8);
     let lvl = level_for(num, abs, level)?;
@@ -304,7 +304,7 @@ impl Numbering {
         level_for(n, abs, level)
     }
     /// The previous numbering definition cached in `w:numberingChange`'s `w:original`
-    /// (ECMA-376 §17.3.1.20): one `%level:value:format:text` segment per level the label shows.
+    /// (ECMA-376 Part 1 §17.3.1.19 / Part 4 §14.7.1.2): one `%level:value:format:text` segment per level the label shows.
     /// The value is the level's start; Word caches the item's current number there, which the
     /// model does not keep.
     pub fn change_original(&self, num: u32, level: u8) -> Option<String> {
@@ -621,7 +621,7 @@ const MAX_ORIGINAL_CANDIDATES: usize = 10_000;
 mod tests {
     use super::*;
 
-    /// `w:original` caches the previous level definitions in ECMA-376 §17.3.1.20's format, and
+    /// `w:original` caches the previous level definitions in ECMA-376 Part 1 §17.3.1.19 / Part 4 §14.7.1.2's format, and
     /// those caches name their list back when a file is reopened.
     #[test]
     fn change_original_caches_the_previous_definitions() {

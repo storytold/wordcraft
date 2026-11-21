@@ -56,7 +56,10 @@ impl<'a> ReadCtx<'a> {
         if let Some(entry) = self.overrides.get(loc)
             && entry.original == original
         {
-            return entry.snapshot.filter(|nr| nr.num == 0 || (nr.level <= 8 && self.numbering.num(nr.num).is_some()));
+            return match entry.snapshot {
+                Some(nr) if nr.level <= 8 && (nr.num == 0 || self.numbering.num(nr.num).is_some()) => Some(nr),
+                _ => None,
+            };
         }
         // When the store existed but was incomplete (truncated), treat a missing entry as
         // unresolved rather than falling back to cache inference, which could resolve an
@@ -253,46 +256,47 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
 
     let mut num_overrides = HashMap::new();
     let mut store_complete = true;
-    let num_key = source
+    let parsed_store = source
         .passthrough
-        .keys()
-        .find(|k| k.eq_ignore_ascii_case(crate::num_change::PART))
-        .or_else(|| {
-            source
-                .passthrough
-                .iter()
-                .find_map(|(k, b)| (k.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("customxml/")) && crate::num_change::is_store(b)).then_some(k))
+        .iter()
+        .find_map(|(k, b)| {
+            k.eq_ignore_ascii_case(crate::num_change::PART).then(|| crate::num_change::read_from_bytes(b).map(|s| (k.clone(), s))).flatten()
         })
-        .cloned();
-    if let Some(key) = num_key {
-        let parsed_ok = if let Some(xml_bytes) = source.passthrough.get(&key) {
-            if let Some(store) = crate::num_change::read_from_bytes(xml_bytes) {
-                // Verify the document fingerprint: if another editor changed the structure
-                // (e.g. inserted a paragraph or renumbered lists), block positions or list
-                // identities shifted and all overrides are invalid. Drop them all and fall
-                // back to cache inference.
-                let doc_fp = crate::num_change::fingerprint_shared_model(&source, store.entries.values());
-                if store.fingerprint.is_some_and(|fp| fp != doc_fp) {
-                    // Fingerprint mismatch: document was modified externally. Ignore all
-                    // overrides to avoid attaching paragraphs to the wrong lists.
-                    store_complete = true;
-                } else {
-                    num_overrides = store.entries;
-                    store_complete = store.complete;
-                }
-                true
-            } else {
-                false
-            }
+        .or_else(|| {
+            source.passthrough.iter().find_map(|(k, b)| {
+                (k.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("customxml/")) && crate::num_change::is_store(b))
+                    .then(|| crate::num_change::read_from_bytes(b).map(|s| (k.clone(), s)))
+                    .flatten()
+            })
+        });
+    if let Some((key, store)) = parsed_store {
+        if !store.complete {
+            // Truncated/incomplete store: fail closed rather than falling back to cache inference.
+            store_complete = false;
         } else {
-            false
-        };
-        // Only remove a part found by the customxml/ fallback once it has actually parsed
-        // as our store, to avoid deleting another editor's custom XML part that merely
-        // contains the marker string.
-        if parsed_ok {
-            crate::num_change::remove_custom_xml_part(&mut source.passthrough, &key);
+            // Verify the document fingerprint: if another editor changed the structure
+            // (e.g. inserted a paragraph or renumbered lists), block positions or list
+            // identities shifted and all overrides are invalid.
+            // On mismatch, treat every numberingChange as unresolved instead of falling
+            // back to cache inference, which would attach paragraphs to the wrong lists.
+            let doc_fp = crate::num_change::fingerprint_shared_model(&source, store.entries.values());
+            if store.fingerprint != Some(doc_fp) {
+                store_complete = false;
+            } else {
+                num_overrides = store.entries;
+                store_complete = true;
+            }
         }
+        // Only remove a part once it has actually parsed as our store, to avoid deleting
+        // another editor's custom XML part that merely contains the marker string.
+        crate::num_change::remove_custom_xml_part(&mut source.passthrough, &key);
+    } else if source
+        .passthrough
+        .iter()
+        .any(|(k, b)| k.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("customxml/")) && crate::num_change::has_store_root(b))
+    {
+        // A damaged/unparseable store root still existed: fail closed rather than guessing via cache.
+        store_complete = false;
     }
     let part_labels = if num_overrides.is_empty() { HashMap::new() } else { crate::num_change::part_labels(&source) };
 
@@ -413,7 +417,7 @@ fn paragraph_value_to_shared(
         .collect::<Result<_, DocxError>>()?;
     let mut para_props = sanitize_para_props(source.props.clone());
     // An imported value is kept as written; one this app recorded is cached from the
-    // previous list's definitions, in the format ECMA-376 §17.3.1.20 gives.
+    // previous list's definitions, in the format ECMA-376 Part 1 §17.3.1.19 / Part 4 §14.7.1.2 gives.
     if let Some(nc) = para_props.num_change.as_deref_mut()
         && nc.original.is_empty()
         && let Some(nr) = nc.snapshot
@@ -587,11 +591,32 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
         document.passthrough.insert(CUSTOM_XML_ROOTS.into(), roots);
     }
 
-    crate::num_change::remove_custom_xml_part(&mut document.passthrough, crate::num_change::PART);
-    let overrides = crate::num_change::collect_overrides(source, &document);
-    let fingerprint = crate::num_change::fingerprint_shared_model(&document, &overrides);
-    if let Some(xml) = crate::num_change::write(&overrides, fingerprint)? {
-        crate::num_change::insert_custom_xml_part(&mut document.passthrough, crate::num_change::PART, xml);
+    let stale_store_keys: Vec<String> = document
+        .passthrough
+        .iter()
+        .filter(|(k, b)| {
+            k.eq_ignore_ascii_case(crate::num_change::PART)
+                && (crate::num_change::read_from_bytes(b).is_some() || crate::num_change::has_store_root(b))
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    for key in stale_store_keys {
+        crate::num_change::remove_custom_xml_part(&mut document.passthrough, &key);
+    }
+    let (overrides, complete) = crate::num_change::collect_overrides(source, &document);
+    if !overrides.is_empty() || !complete {
+        let fingerprint = crate::num_change::fingerprint_shared_model(&document, &overrides);
+        if let Some(xml) = crate::num_change::write(&overrides, fingerprint, complete)? {
+            let part = if !document.passthrough.keys().any(|k| k.eq_ignore_ascii_case(crate::num_change::PART)) {
+                crate::num_change::PART.to_string()
+            } else {
+                (1..=1000)
+                    .map(|i| format!("customxml/wordcraftnumchange-{i}.xml"))
+                    .find(|cand| !document.passthrough.keys().any(|k| k.eq_ignore_ascii_case(cand)))
+                    .ok_or_else(|| DocxError::Xml("no free customxml path for numbering-change snapshot store".into()))?
+            };
+            crate::num_change::insert_custom_xml_part(&mut document.passthrough, &part, xml);
+        }
     }
 
     Ok(document)
@@ -898,13 +923,12 @@ mod tests {
         // Convert to WordCraft: the fingerprint should mismatch and all overrides are dropped.
         let reopened = from_shared_model(shared).expect("from_shared_model");
 
-        // With overrides invalidated, both snapshots should come from cache inference.
-        // Since both lists share identical definitions, cache inference treats them as
-        // collisions and returns None for both.
+        // With overrides invalidated, the reader sets store_complete = false and fails closed
+        // to None rather than falling back to cache inference.
         let nc0 = reopened.body[1].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc0 (now at index 1)");
-        assert_eq!(nc0.snapshot, None, "fingerprint mismatch must invalidate overrides; with identical definitions, inference returns None");
+        assert_eq!(nc0.snapshot, None, "fingerprint mismatch must invalidate overrides and fail closed to None");
         let nc1 = reopened.body[2].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc1 (now at index 2)");
-        assert_eq!(nc1.snapshot, None, "fingerprint mismatch must invalidate overrides; with identical definitions, inference returns None");
+        assert_eq!(nc1.snapshot, None, "fingerprint mismatch must invalidate overrides and fail closed to None");
     }
 
     /// Snapshot overrides for a header part round-trip through save/reopen.
@@ -1008,25 +1032,117 @@ mod tests {
         });
         numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
 
-        let mut p = wordcraft_doc::para::Paragraph::with_text("Edited list item", Default::default());
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.revisions.push(wordcraft_doc::Revision {
+            kind: wordcraft_doc::RevisionKind::Format,
+            author: "Alice".into(),
+            date: "2026-01-01T00:00:00Z".into(),
+            move_name: None,
+        });
+        doc.body = (0..10_001)
+            .map(|i| {
+                let mut p = wordcraft_doc::para::Paragraph::with_text(&format!("Item {i}"), Default::default());
+                p.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) }));
+                Arc::new(wordcraft_doc::Block::Para(p))
+            })
+            .collect();
+
+        // Exceeding MAX_ENTRIES (10,000) writes a complete="false" stub.
+        // On read, missing entries must fail closed to None and never fall back to List 1.
+        let bytes = crate::write(&doc).expect("write docx");
+        let reopened = crate::read(&bytes).expect("read docx");
+        assert_eq!(reopened.body.len(), 10_001);
+        let nc = reopened.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
+        assert_eq!(nc.snapshot, None, "incomplete store must fail closed and not infer List 1");
+    }
+
+    /// When another editor inserts a paragraph above an item with an override, the fingerprint
+    /// mismatch invalidates all overrides and fails closed to None rather than inferring the wrong list.
+    #[test]
+    fn paragraph_insertion_causes_fingerprint_mismatch_and_fails_closed() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        numbering.abstracts.push(AbstractNum { id: 10, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum {
+            id: 20,
+            levels: vec![Level { format: wordcraft_doc::section::NumFormat::UpperRoman, text: "%1.".into(), ..Default::default() }],
+            ..Default::default()
+        });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        let mut p = wordcraft_doc::para::Paragraph::with_text("Item with override", Default::default());
         p.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) }));
 
         let mut doc = wordcraft_doc::Document::new();
         doc.numbering = Arc::new(numbering);
         doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p))];
 
-        // Build shared model and replace its store with an incomplete stub (`complete="false"`).
-        let mut shared = to_shared_model(&doc).expect("to_shared_model");
-        let fp = crate::num_change::fingerprint_shared_model(&shared, &[]);
-        let stub = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?><wordcraftNumChange xmlns="urn:wordcraft:numchange" kind="wordcraft-numchange-v1" complete="false" fp="{fp}"><entries>[]</entries></wordcraftNumChange>"#
-        )
-        .into_bytes();
-        crate::num_change::insert_custom_xml_part(&mut shared.passthrough, crate::num_change::PART, stub);
+        let bytes = crate::write(&doc).expect("write docx");
+        let mut shared = craft_docx::read(&bytes).expect("read shared model");
+
+        // External edit: insert a new paragraph above the item
+        shared
+            .body
+            .insert(0, Arc::new(craft_wordmodel::Block::Para(craft_wordmodel::para::Paragraph::with_text("Inserted above", Default::default()))));
 
         let reopened = from_shared_model(shared).expect("from_shared_model");
-        let nc = reopened.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
-        assert_eq!(nc.snapshot, None, "incomplete store must fail closed and not infer List 1");
+        let nc = reopened.body[1].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
+        assert_eq!(nc.snapshot, None, "fingerprint mismatch must fail closed to None rather than inferring List 1");
+    }
+
+    /// Two identical lists sharing an nsid preserve overrides across save and reopen.
+    #[test]
+    fn two_lists_sharing_nsid_preserves_overrides_across_save_and_reopen() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        // Both abstracts share the same nsid "ABCD1234"
+        numbering.abstracts.push(AbstractNum { id: 10, nsid: Some("ABCD1234".into()), levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum { id: 20, nsid: Some("ABCD1234".into()), levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        let mut p0 = wordcraft_doc::para::Paragraph::with_text("Item on list 1", Default::default());
+        p0.props.numbering = Some(NumRef { num: 2, level: 0 });
+        p0.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+
+        let mut p1 = wordcraft_doc::para::Paragraph::with_text("Item on list 2", Default::default());
+        p1.props.numbering = Some(NumRef { num: 1, level: 0 });
+        p1.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p0)), Arc::new(wordcraft_doc::Block::Para(p1))];
+
+        let bytes = crate::write(&doc).expect("write docx");
+        let shared = craft_docx::read(&bytes).expect("read shared model");
+        let reopened = from_shared_model(shared).expect("from_shared_model");
+
+        let nc0 = reopened.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc0");
+        assert_eq!(nc0.snapshot, Some(NumRef { num: 1, level: 0 }), "snapshot list 1 must roundtrip despite shared nsid");
+        let nc1 = reopened.body[1].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc1");
+        assert_eq!(nc1.snapshot, Some(NumRef { num: 2, level: 0 }), "snapshot list 2 must roundtrip despite shared nsid");
+    }
+
+    /// A store entry with num == 0 and level > 8 must be rejected by snapshot_for.
+    #[test]
+    fn store_entry_with_num_zero_and_level_above_eight_is_rejected() {
+        use wordcraft_doc::numbering::Numbering;
+        use wordcraft_doc::props::NumRef;
+
+        let numbering = Numbering::default();
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "b:0".into(),
+            crate::num_change::SnapshotEntry { loc: "b:0".into(), original: "none".into(), snapshot: Some(NumRef { num: 0, level: 9 }) },
+        );
+        let mut ctx = ReadCtx::new(&numbering, overrides, true);
+        assert_eq!(ctx.snapshot_for("b:0", "none"), None, "level 9 with num 0 must be rejected");
     }
 
     /// When another editor swaps w:numIds without moving any paragraph, the fingerprint
@@ -1126,5 +1242,151 @@ mod tests {
             Some(foreign.as_slice()),
             "foreign customXml part must not be removed"
         );
+    }
+
+    #[test]
+    fn swapping_colliding_paragraphs_invalidates_overrides() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        numbering.abstracts.push(AbstractNum { id: 10, nsid: Some("1111AAAA".into()), levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum { id: 20, nsid: Some("2222BBBB".into()), levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        // Both paragraphs have identical current numbering and identical w:original strings; only text & snapshots differ.
+        let mut p0 = wordcraft_doc::para::Paragraph::with_text("First item", Default::default());
+        p0.props.numbering = Some(NumRef { num: 2, level: 0 });
+        p0.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+
+        let mut p1 = wordcraft_doc::para::Paragraph::with_text("Second item", Default::default());
+        p1.props.numbering = Some(NumRef { num: 2, level: 0 });
+        p1.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p0)), Arc::new(wordcraft_doc::Block::Para(p1))];
+
+        let bytes = crate::write(&doc).expect("write docx");
+        let mut shared = craft_docx::read(&bytes).expect("read shared model");
+        shared.body.swap(0, 1);
+
+        let reopened = from_shared_model(shared).expect("from_shared_model");
+        for i in [0, 1] {
+            let nc = reopened.body[i].as_para().and_then(|p| p.props.num_change.as_deref()).expect("num_change preserved");
+            assert_eq!(nc.snapshot, None, "swapping colliding paragraphs must invalidate overrides for paragraph {i}");
+        }
+    }
+
+    #[test]
+    fn replacing_inferred_list_invalidates_store_and_inference() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        // Unique list 1 (inferred by original)
+        numbering.abstracts.push(AbstractNum {
+            id: 10,
+            nsid: Some("1111AAAA".into()),
+            levels: vec![Level { text: "%1)".into(), ..Level::default() }],
+            ..Default::default()
+        });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        // Colliding lists 2 and 3 (requires override)
+        numbering.abstracts.push(AbstractNum { id: 20, nsid: Some("2222BBBB".into()), levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+        numbering.abstracts.push(AbstractNum { id: 30, nsid: Some("3333CCCC".into()), levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 3, abstract_id: 30, ..Default::default() });
+
+        let mut p_inferred = wordcraft_doc::para::Paragraph::with_text("Inferred", Default::default());
+        p_inferred.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:)".into(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+
+        let mut p_override = wordcraft_doc::para::Paragraph::with_text("Override", Default::default());
+        p_override.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 3, level: 0 }) }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering);
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p_inferred)), Arc::new(wordcraft_doc::Block::Para(p_override))];
+
+        let bytes = crate::write(&doc).expect("write docx");
+        let mut shared = craft_docx::read(&bytes).expect("read shared model");
+
+        // Replace List 1's abstract level text while keeping override lists intact: even if the
+        // modified abstract were replaced with another list matching "%1:1:0:)", the fingerprint must fail closed.
+        let mut new_numbering = (*shared.numbering).clone();
+        new_numbering.abstracts[0].levels[0].text = "[%1]".into();
+        shared.numbering = Arc::new(new_numbering);
+
+        let reopened = from_shared_model(shared).expect("from_shared_model");
+        for i in [0, 1] {
+            let nc = reopened.body[i].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
+            assert_eq!(nc.snapshot, None, "modifying an inferred list invalidates store and disables inference");
+        }
+    }
+
+    #[test]
+    fn foreign_and_corrupted_custom_xml_edge_cases() {
+        use wordcraft_doc::numbering::{AbstractNum, Level, Num, Numbering};
+        use wordcraft_doc::props::{NumChange, NumRef};
+
+        let mut numbering = Numbering::default();
+        numbering.abstracts.push(AbstractNum { id: 10, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        numbering.abstracts.push(AbstractNum { id: 20, levels: vec![Level::default()], ..Default::default() });
+        numbering.nums.push(Num { id: 2, abstract_id: 20, ..Default::default() });
+
+        let mut p0 = wordcraft_doc::para::Paragraph::with_text("Item", Default::default());
+        p0.props.numbering = Some(NumRef { num: 1, level: 0 });
+        p0.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) }));
+
+        let mut doc = wordcraft_doc::Document::new();
+        doc.numbering = Arc::new(numbering.clone());
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Para(p0.clone()))];
+
+        // 1. Renamed store placed after a foreign part carrying our KIND marker.
+        let bytes = crate::write(&doc).expect("write docx");
+        let mut shared_renamed = craft_docx::read(&bytes).expect("read shared model");
+        let store_bytes = shared_renamed.passthrough.remove(crate::num_change::PART).expect("store part");
+        let foreign_marker = br#"<?xml version="1.0" encoding="UTF-8"?><other kind="wordcraft-numchange-v1"/>"#.to_vec();
+        shared_renamed.passthrough.insert("customxml/item1.xml".into(), Arc::new(foreign_marker.clone()));
+        shared_renamed.passthrough.insert("customxml/item2.xml".into(), store_bytes);
+
+        let reopened_renamed = from_shared_model(shared_renamed).expect("reopen renamed");
+        assert_eq!(reopened_renamed.passthrough.get("customxml/item1.xml").map(|b| b.as_slice()), Some(foreign_marker.as_slice()));
+        assert!(!reopened_renamed.passthrough.contains_key("customxml/item2.xml"));
+        let nc = reopened_renamed.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
+        assert_eq!(nc.snapshot, Some(NumRef { num: 2, level: 0 }));
+
+        // 2. Foreign custom XML at canonical PART path is preserved on export, while our store writes to an unused path.
+        let mut doc_foreign_at_part = doc.clone();
+        let foreign_at_part = br#"<?xml version="1.0" encoding="UTF-8"?><foreign/>"#.to_vec();
+        doc_foreign_at_part.passthrough.insert(crate::num_change::PART.into(), Arc::new(foreign_at_part.clone()));
+        let bytes_foreign = crate::write(&doc_foreign_at_part).expect("write with occupied PART");
+        let shared_foreign = craft_docx::read(&bytes_foreign).expect("read shared model");
+        assert_eq!(shared_foreign.passthrough.get(crate::num_change::PART).map(|b| b.as_slice()), Some(foreign_at_part.as_slice()));
+        assert!(shared_foreign.passthrough.contains_key("customxml/wordcraftnumchange-1.xml"), "fallback customxml path written");
+        let reopened_foreign = from_shared_model(shared_foreign).expect("reopen foreign PART");
+        assert_eq!(reopened_foreign.passthrough.get(crate::num_change::PART).map(|b| b.as_slice()), Some(foreign_at_part.as_slice()));
+        assert_eq!(
+            reopened_foreign.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).and_then(|nc| nc.snapshot),
+            Some(NumRef { num: 2, level: 0 })
+        );
+
+        // 3. Damaged <wordcraftNumChange part disables cache inference even when list is otherwise unique.
+        let mut uniq_numbering = Numbering::default();
+        uniq_numbering.abstracts.push(AbstractNum { id: 10, levels: vec![Level::default()], ..Default::default() });
+        uniq_numbering.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        let mut p_uniq = wordcraft_doc::para::Paragraph::with_text("Unique", Default::default());
+        p_uniq.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 1, level: 0 }) }));
+        let mut doc_uniq = wordcraft_doc::Document::new();
+        doc_uniq.numbering = Arc::new(uniq_numbering);
+        doc_uniq.body = vec![Arc::new(wordcraft_doc::Block::Para(p_uniq))];
+        let bytes_uniq = crate::write(&doc_uniq).expect("write uniq");
+        let mut shared_damaged = craft_docx::read(&bytes_uniq).expect("read uniq");
+        shared_damaged.passthrough.insert("customxml/item1.xml".into(), Arc::new(b"<wordcraftNumChange broken".to_vec()));
+        let reopened_damaged = from_shared_model(shared_damaged).expect("reopen damaged");
+        let nc_damaged = reopened_damaged.body[0].as_para().and_then(|p| p.props.num_change.as_deref()).expect("nc");
+        assert_eq!(nc_damaged.snapshot, None, "damaged store root must disable cache inference");
     }
 }

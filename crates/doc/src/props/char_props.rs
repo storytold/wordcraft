@@ -474,7 +474,7 @@ impl<T> PropChange<T> {
 pub struct NumChange {
     /// Index into `Document::revisions`.
     pub rev: u32,
-    /// The previous numbering definition as `w:original` caches it (ECMA-376 §17.3.1.20), or an
+    /// The previous numbering definition as `w:original` caches it (ECMA-376 Part 1 §17.3.1.19 / Part 4 §14.7.1.2), or an
     /// imported file's value. Empty for a change this app records; the DOCX writer fills it from
     /// `snapshot` and the document's list definitions.
     pub original: String,

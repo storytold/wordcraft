@@ -283,7 +283,7 @@ impl NumFormat {
             NumFormat::DollarText => "dollarText",
         }
     }
-    /// The numbering format code (`nfc`) ECMA-376 §17.3.1.20 uses in `w:numberingChange`'s
+    /// The numbering format code (`nfc`) ECMA-376 Part 1 §17.3.1.19 / Part 4 §14.7.1.2 uses in `w:numberingChange`'s
     /// `w:original` cache. The codes are not the ST_NumberFormat order past `chineseCountingThousand`
     /// (40 is application-defined), so they are listed out; formats the table leaves to the
     /// application use 60.

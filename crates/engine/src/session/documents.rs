@@ -53,6 +53,10 @@ pub struct DocState {
     pub(super) page_hint: usize,
     pub(super) new_header_parts: Vec<u32>,
     pub(super) hf_return: Option<Selection>,
+    pub(super) review_style: Option<crate::cmd::review::StyleTarget>,
+    pub(super) review_para_fmt: Option<crate::cmd::review::ParaFmtTarget>,
+    pub(super) review_para_num: Option<crate::cmd::review::ParaNumTarget>,
+    pub(super) review_navigated: Option<crate::cmd::review::NavigatedTarget>,
     pub(super) history: Vec<Arc<Undo>>,
     pub(super) undo_evicted: u64,
     pub(super) redo: Vec<Arc<Undo>>,
@@ -110,6 +114,10 @@ impl DocState {
             page_hint: 0,
             new_header_parts: Vec::new(),
             hf_return: None,
+            review_style: None,
+            review_para_fmt: None,
+            review_para_num: None,
+            review_navigated: None,
             history: Vec::new(),
             undo_evicted: 0,
             redo: Vec::new(),
@@ -249,12 +257,11 @@ impl Session {
             widened: _,
             edit_marks: _,
             go_back_step: _,
-            // Shared by every open document.
-            // Names the document it belongs to, so it never applies to another one.
             review_style: _,
             review_para_fmt: _,
             review_para_num: _,
             review_navigated: _,
+            // Shared by every open document.
             user_dict_path: _,
             default_user_dict_path: _,
             clipboard: _,
@@ -355,6 +362,10 @@ impl Session {
             widened,
             edit_marks,
             go_back_step,
+            review_style,
+            review_para_fmt,
+            review_para_num,
+            review_navigated,
         } = d;
         swap(&mut self.doc, doc);
         swap(&mut self.sel, sel);
@@ -405,6 +416,10 @@ impl Session {
         swap(&mut self.widened, widened);
         swap(&mut self.edit_marks, edit_marks);
         swap(&mut self.go_back_step, go_back_step);
+        swap(&mut self.review_style, review_style);
+        swap(&mut self.review_para_fmt, review_para_fmt);
+        swap(&mut self.review_para_num, review_para_num);
+        swap(&mut self.review_navigated, review_navigated);
         // A picked Drawing Canvas member (#2637) belongs to the document left behind.
         self.member = None;
     }
