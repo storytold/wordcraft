@@ -138,6 +138,8 @@ impl Session {
             others: _,
             order: _,
             untitled_count: _,
+            // What the Library has read from its folders: a cache, not an edit.
+            library: _,
             ime_body_epoch,
             // The IME revision and its caret token are process-global evidence, not document
             // state: a rollback must not reuse a revision.

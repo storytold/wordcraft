@@ -139,6 +139,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool}"#)
         .pure(),
+        // Insert › Library (#2868): pictures from the user's own folders beside the document.
+        CommandSpec::new("view.libraryPane", "Library", "Insert › Illustrations", |s, v| toggle(s, v, |x| &mut x.library_pane))
+            .params(r#"{"value"?: bool}"#)
+            .pure(),
         CommandSpec::new("view.newWindow", "New Window", "View › Window", |s, _| {
             s.push_ui_request(json!({"open": "newWindow"}));
             sel_result(s)

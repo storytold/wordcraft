@@ -28,6 +28,8 @@ wordcraft-docx = { workspace = true }
 wordcraft-docbin = { workspace = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
+# Insert ▸ Library (#2868): the Library core the Craft apps share (folders, bounds, caches, search).
+craft-library = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
