@@ -272,7 +272,7 @@ fn item_story(item: &Placed) -> Option<&StoryRef> {
         | Placed::Graphic { story, .. }
         | Placed::Object { story, .. } => Some(story),
         Placed::Shape { object, .. } => object.as_ref().map(|pos| &pos.story),
-        Placed::Fill { .. } | Placed::Rule { .. } | Placed::Clip { .. } => None,
+        Placed::Fill { .. } | Placed::Rule { .. } | Placed::Clip { .. } | Placed::Overflow { .. } => None,
     }
 }
 
