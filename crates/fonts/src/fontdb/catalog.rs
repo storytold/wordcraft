@@ -237,7 +237,43 @@ impl FontDb {
         if self.is_loaded(family) {
             return true;
         }
-        let paths = self.family_paths(family);
+        self.load_files(self.family_paths(family))
+    }
+
+    /// Load the installed files of `family` that aren't loaded yet. A family is loaded only in
+    /// part when craft-fonts carries some of its styles (Noto Sans Hebrew Regular), or when a
+    /// character's fallback loaded one of its files; the style a lookup asks for may be in the
+    /// rest. Each family's files are read once per font folder scan.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn load_rest_of(&self, family: &str) {
+        self.ensure_catalog();
+        let generation = self.catalog_gen.load(Ordering::Acquire);
+        let key = family.to_ascii_lowercase();
+        {
+            let done = self.completed.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if done.0 == generation && done.1.contains(&key) {
+                return;
+            }
+        }
+        let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut paths = self.family_paths(family);
+        {
+            let index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            paths.retain(|p| !index.loaded.contains(p) && !index.files.iter().any(|f| f.used && f.path == *p));
+        }
+        if !paths.is_empty() {
+            self.load_files(paths);
+        }
+        let mut done = self.completed.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if done.0 != generation {
+            *done = (generation, std::collections::HashSet::new());
+        }
+        done.1.insert(key);
+    }
+
+    /// Load the cataloged font files at `paths`. Returns whether any face was added.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_files(&self, paths: Vec<std::path::PathBuf>) -> bool {
         let files = paths.iter().filter_map(|p| std::fs::read(p).ok()).map(|b| (b, None)).collect();
         let added = self.add_fonts(files) > 0;
         // The fallback searches' index: these files are loaded fonts now.

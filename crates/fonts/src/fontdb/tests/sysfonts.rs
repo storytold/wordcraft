@@ -427,6 +427,41 @@ fn a_family_partly_loaded_by_a_character_fallback_is_loaded_whole_for_a_run() {
 }
 
 #[test]
+fn a_family_loaded_in_part_takes_the_asked_style_from_its_installed_files() {
+    // craft-fonts carries one weight of a family (Noto Sans Hebrew Regular). Bold text in it must
+    // get the installed Bold, not the carried Regular for the caller to embolden.
+    const CARRIED: &[u8] = include_bytes!("../../../../../assets/fonts/SourceSans3-Regular.ttf");
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    let dir = std::env::temp_dir().join(format!("dc-sysfonts-{}-loaded-in-part", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["SourceSans3-Regular.ttf", "SourceSans3-Bold.ttf"] {
+        std::fs::copy(assets.join(file), dir.join(file)).unwrap();
+    }
+    let db = || FontDb::with_static_fonts(vec![dir.clone()], [CARRIED].into_iter());
+    // Whichever style is asked for first.
+    for first in ["Bold", "Regular"] {
+        let db = db();
+        db.face(FALLBACK_FAMILY, first);
+        let (regular, bold) = (db.face(FALLBACK_FAMILY, "Regular"), db.face(FALLBACK_FAMILY, "Bold"));
+        assert_eq!(bold.family, FALLBACK_FAMILY, "asked {first} first");
+        assert!(bold.weight > regular.weight, "asked {first} first: {} against {}", bold.weight, regular.weight);
+        // The installed Regular doesn't replace the carried one.
+        assert_eq!(db.read_faces().iter().filter(|f| f.family == FALLBACK_FAMILY).count(), 2);
+    }
+    // No Bold installed when the folder is scanned (the Bold request scans it; the Regular one
+    // is answered by the carried face): the Regular, as before, and its files are not read again.
+    std::fs::remove_file(dir.join("SourceSans3-Bold.ttf")).unwrap();
+    let db = db();
+    let regular = db.face(FALLBACK_FAMILY, "Regular");
+    assert_eq!(db.face(FALLBACK_FAMILY, "Bold").id(), regular.id());
+    std::fs::copy(assets.join("SourceSans3-Bold.ttf"), dir.join("SourceSans3-Bold.ttf")).unwrap();
+    assert_eq!(db.face(FALLBACK_FAMILY, "Bold").id(), regular.id(), "read again without a rescan");
+    db.load_system_fonts();
+    assert!(db.face(FALLBACK_FAMILY, "Bold").weight > regular.weight, "a rescan finds the Bold installed since");
+}
+
+#[test]
 fn a_preferred_fallback_family_loads_only_when_it_maps_the_character() {
     // A character no loaded font covers loaded every installed family in the fallback list up
     // to one that covers it, and kept them all: an emoji loaded every CJK family a Mac has,
