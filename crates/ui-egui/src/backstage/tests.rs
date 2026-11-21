@@ -840,3 +840,21 @@ fn a_file_pages_title_is_productions_size() {
         assert!(title.size > section.size + 6.0, "the title stands above a section heading: {title:?} over {section:?}");
     }
 }
+
+/// #7171: in a window too short for the settings column its scroll bar shows, and the buttons stop where the bar's lane
+/// starts instead of running under it. The column also ends short of the preview.
+#[test]
+fn print_settings_buttons_stay_clear_of_the_bar_and_the_preview() {
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    a.run("ui.backstage", json!({"value": true, "page": "print"})).unwrap();
+    let mut h = harness(a, egui::vec2(700.0, 500.0));
+    h.run_steps(8);
+    let column = h.query_all_by_label("Print").map(|n| n.rect()).max_by(|a, b| a.height().total_cmp(&b.height())).expect("the settings column");
+    let pane = h.query_all_by_label("Sheet 1 of 1").map(|n| n.rect()).max_by(|a, b| a.height().total_cmp(&b.height())).expect("the preview");
+    assert!(pane.min.x >= column.max.x + 8.0, "a gap between the column and the preview: {column:?} {pane:?}");
+    for name in ["Save these pages as PDF…", "PDF document (*.pdf)"] {
+        let button = h.get_by_label(name).rect();
+        assert!(button.min.x >= column.min.x && button.max.x <= column.max.x - 4.0, "{name} leaves the bar's lane: {button:?} {column:?}");
+    }
+}
