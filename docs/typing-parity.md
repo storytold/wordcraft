@@ -356,6 +356,24 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   (#4917; `equation::tests::an_autocorrected_operator_waits_for_its_limits`,
   `a_math_name_is_corrected_by_any_character_that_cannot_continue_it`).
 
+- **AutoFormat Now** (`format.autoFormatNow`, Ctrl+Alt+K on Windows and Linux; Word's Format ›
+  AutoFormat › AutoFormat now) applies the as-you-type replacements to text already there: the
+  paragraphs the selection touches, or every body paragraph (table cells included) when it is
+  collapsed; headers, footers and notes are left alone. Straight quotes become curly by the same
+  opening rule as typing, `word--word` an em dash, `word -- word` and `word - word` an en dash
+  with the spaces kept, and a paragraph starting `* `, `- `, `> `, `1. ` or `1) ` a list item
+  without its label. Each change follows its AutoCorrect switch; objects, field results (a
+  paragraph inside a multi-paragraph result keeps its `1. ` label), tracked deletions and the
+  content of controls locked against editing stay as they are. With Track Changes on (or under
+  Tracked changes protection) the old characters stay as a tracked deletion before the new ones,
+  and a list label's removal and numbering are tracked, so Reject All gives back the original;
+  text that is wholly this author's own tracked insertion is rewritten in place, and a dash or
+  label only partly typed by them is tracked like any other. One undo step
+  (`tests::autoformat_now`). Under Read only or Comments protection with an editable exception,
+  a collapsed caret still means the whole body, so the command is refused when it would change
+  text outside the exception: select the exception's text first. Formatting restrictions refuse
+  it outright, as it applies numbering. Not yet compared with Word.
+
 ¹ From Word's documented AutoFormat and AutoCorrect options; not yet keystroke-compared with
 Word.
 ## English spelling by dialect (SCOWL, CP2)
@@ -628,6 +646,9 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 | 2026-11-13 | trivial | Backspace, then type: the new text takes the deleted character's formatting (the Bold button shows it) until the caret moves; Delete, deleted selections and tracked Backspace carry nothing; a Backspace or Ctrl+Backspace that deletes nothing at the start of the document keeps it; observed in Word for Windows (#6518) |
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
 | 2026-11-07 | trivial | Removing an already-empty paragraph preserves the following paragraph properties, mark and inline formatting. Delete, Backspace, selected marks, outline/TOC, DOCX and Undo/Redo have synthetic coverage (Leaf #152); no new Word or native acceptance run. |
+| 2026-11-06 | trivial | AutoFormat Now (Ctrl+Alt+K): quotes, dashes and typed list labels in existing text, one undo step |
+| 2026-11-08 | trivial | AutoFormat Now: tracked under Track Changes and Tracked changes protection (Reject All restores, own insertions rewritten in place), skips locked content controls, keeps labels inside field results and labels with a deleted character, linear in the body size |
+| 2026-11-16 | trivial | AutoFormat Now: a dash or list label only partly typed by the author under Track Changes is tracked, not rewritten in place, so Reject All restores the original; the doc says how protection exceptions and formatting restrictions treat the command |
 | 2026-10-30 | trivial | Equations: `\int` + Space waits for its limits; `_x^y` then Space builds them, Space alone builds the operator without, typing goes into its operand, and Enter or an arrow key builds it without going into the operand (#4917). Review: any character that can't continue `\name` corrects it (`\int_0^1`, `\alpha+`), and `∫∫` takes the operand into the inner operator; the Word rows are now observed in Word for Windows on #4938, Enter, arrows and `∫∫` are not |
 | 2026-11-06 | trivial | Track Changes: resolving away an empty paragraph with a section break removes it whole; the next paragraph keeps its style (#5667) |
 | 2026-11-03 | trivial | Alt+numpad codes type their character in text boxes too (Find what, dialog fields), not the digits or nothing (#4403) |
