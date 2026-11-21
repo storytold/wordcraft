@@ -246,6 +246,23 @@ fn length_units_follow_the_interface_language() {
 }
 
 #[test]
+fn screen_text_smoothing_options_round_trip_and_work_without_a_document() {
+    use wordcraft_engine::cmd::view::TextSmoothing;
+    let mut a = app();
+    a.start_screen();
+    a.run("view.textSmoothing", json!({"value":"grayscale"})).unwrap();
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(serde_json::from_slice::<Prefs>(&saved).unwrap());
+    assert_eq!(b.session.prefs.text_smoothing, TextSmoothing::Grayscale);
+    with_model(&mut b, true, |m| m.set("general.textSmoothing", PrefValue::Choice("subpixel".into())));
+    assert_eq!(b.session.prefs.text_smoothing, TextSmoothing::Subpixel);
+    // A value the option doesn't have changes nothing.
+    with_model(&mut b, true, |m| m.set("general.textSmoothing", PrefValue::Choice("lcd".into())));
+    assert_eq!(b.session.prefs.text_smoothing, TextSmoothing::Subpixel);
+}
+
+#[test]
 fn screen_paper_color_options_round_trip_and_work_without_a_document() {
     use wordcraft_engine::cmd::view::PaperColor;
     let mut a = app();

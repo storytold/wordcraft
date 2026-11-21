@@ -124,6 +124,8 @@ struct Strings {
     region_id: String,
     paper: Vec<(String, String)>,
     paper_id: String,
+    smoothing: Vec<(String, String)>,
+    smoothing_id: String,
     numerals: Vec<(String, String)>,
     numeral_id: String,
     proofing_language: String,
@@ -168,6 +170,8 @@ impl Strings {
 
         let paper = PaperColor::ALL.iter().map(|c| (id_of(c), tl!(c.label()).to_string())).collect();
         let paper_id = id_of(&app.session.prefs.paper_color);
+        let smoothing = wordcraft_engine::cmd::view::TextSmoothing::ALL.iter().map(|c| (id_of(c), tl!(c.label()).to_string())).collect();
+        let smoothing_id = id_of(&app.session.prefs.text_smoothing);
         let numerals = [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context, NumeralMode::System]
             .iter()
             .map(|m| (id_of(m), tl!(m.label()).to_string()))
@@ -194,6 +198,8 @@ impl Strings {
             region_id,
             paper,
             paper_id,
+            smoothing,
+            smoothing_id,
             numerals,
             numeral_id,
             proofing_language,
@@ -243,6 +249,7 @@ impl<'a> OptionsModel<'a> {
                 ("general.theme", Choice(ui.theme.code().to_string())),
                 ("general.interfaceSize", Choice(size)),
                 ("general.paperColor", Choice(id_of(&prefs.paper_color))),
+                ("general.textSmoothing", Choice(id_of(&prefs.text_smoothing))),
                 ("general.miniToolbar", Bool(ui.mini_toolbar)),
                 ("general.darkPage", Bool(view.dark_mode)),
                 ("general.showCommunity", Bool(ui.show_discord)),
@@ -334,6 +341,9 @@ impl PreferencesModel for OptionsModel<'_> {
                         )),
                         RowSpec::new("general.paperColor", tl!("Screen paper color:"), RowKind::choice(&s.paper_id, owned(&s.paper))).help(tl!(
                             "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
+                        )),
+                        RowSpec::new("general.textSmoothing", tl!("Screen text smoothing:"), RowKind::choice(&s.smoothing_id, owned(&s.smoothing))).help(tl!(
+                            "Screen only. Subpixel smoothing makes the edges of page text finer sideways, with faint colour in them, and takes longer to draw. Printing and exports are unchanged."
                         )),
                         b("general.miniToolbar", tl!("Show the mini toolbar when text is selected"), app.ui.mini_toolbar),
                         b("general.darkPage", tl!("Dark page (white text on black)"), app.session.view.dark_mode)
@@ -636,6 +646,7 @@ impl PreferencesModel for OptionsModel<'_> {
                 Err(_) => self.run("ui.interfaceSize", json!({"value": "auto"})),
             },
             ("general.paperColor", Choice(c)) => self.run("view.paperColor", json!({"value": c})),
+            ("general.textSmoothing", Choice(c)) => self.run("view.textSmoothing", json!({"value": c})),
             ("general.miniToolbar", Bool(v)) => self.app.ui.mini_toolbar = v,
             ("general.showCommunity", Bool(v)) => self.app.ui.show_discord = v,
             ("general.fontDownloadNotice", Bool(v)) => self.app.ui.font_download_notice = v,

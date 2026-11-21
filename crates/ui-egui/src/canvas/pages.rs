@@ -8,6 +8,9 @@ use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Rect, WordApp, json};
 // revision that the pages' pictures key on directly.
 pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    // A page drawn under the system's earlier text settings, or the user's earlier smoothing choice, must not pass
+    // for one drawn under these.
+    (crate::screen_text::current().key(), app.session.prefs.text_smoothing).hash(&mut h);
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
@@ -151,6 +154,9 @@ pub(crate) fn dark_page(app: &WordApp) -> bool {
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
+    // Pages, and only pages, follow the system's own text settings once they are known ([`crate::screen_text`]);
+    // `view_key` has them, so a change redraws the pages.
+    crate::screen_text::current().apply(&mut opts);
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
     opts.display.placeholders = true;
@@ -179,15 +185,100 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     opts
 }
 
-/// Render options for page rasters shown on screen, so a page looks as text does in the
-/// platform's other apps (exports never change): on macOS, text is darkened the way the system
-/// draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight` draws it
-/// there (not darkened: hinted text already has FreeType's weight, and darkening made it
-/// look semi-bold).
-pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
-    wordcraft_render::RenderOptions {
-        text_darkening: cfg!(target_os = "macos"),
-        hinting: cfg!(all(unix, not(target_os = "macos"))),
-        ..Default::default()
+/// Subpixel (LCD) text for the page rasters of a screen with `ppp` device pixels per point, as File › Options ›
+/// General › Screen text smoothing says. "Use system setting" draws it where the system asks for it
+/// ([`crate::screen_text`]) and the screen is below two device pixels per point: on a denser screen the stripes are
+/// too fine to gain from, and a page has four times the pixels to rasterise three times. "Subpixel (LCD)" draws it
+/// on any screen, in the system's stripe order, RGB when it names none (macOS never does).
+pub(super) fn lcd_for(
+    choice: wordcraft_engine::cmd::view::TextSmoothing,
+    asked: Option<crate::screen_text::SubpixelOrder>,
+    stripes: Option<crate::screen_text::SubpixelOrder>,
+    ppp: f32,
+) -> Option<wordcraft_render::LcdOrder> {
+    use crate::screen_text::SubpixelOrder;
+    use wordcraft_engine::cmd::view::TextSmoothing;
+    use wordcraft_render::LcdOrder;
+    let order = |stripes: SubpixelOrder| match stripes {
+        SubpixelOrder::Rgb => LcdOrder::Rgb,
+        SubpixelOrder::Bgr => LcdOrder::Bgr,
+    };
+    match choice {
+        TextSmoothing::Grayscale => None,
+        // The user's own choice, in the order of their screen even where the system has smoothing off (a BGR panel
+        // with ClearType off must not get RGB edges).
+        TextSmoothing::Subpixel => Some(asked.or(stripes).map(order).unwrap_or(LcdOrder::Rgb)),
+        // Written so a density that isn't a number is greyscale too.
+        TextSmoothing::System => asked.map(order).filter(|_| ppp < 2.0),
     }
+}
+
+/// The scale (pixels per document point) to rasterise a page picture at, and whether that is the screen's own.
+///
+/// The page view asks for a picture by its longest side in pixels, `side`, rounded up to a multiple of `step`, and
+/// scales what it gets to the page's place on screen. Rasterised at `side`, a page is up to `step` pixels larger
+/// than it shows and every glyph is resampled on the way to the screen, which undoes baselines put on whole pixels
+/// and makes subpixel text wrong (each colour's edge off its stripe). `native` is the view's own scale, device
+/// pixels per document point, when it is known: where it accounts for the side asked for (the page's `longest`
+/// side, in points, at that scale rounds up to `side`), the picture is rasterised at exactly that scale, one raster
+/// pixel per device pixel. Otherwise (another view's request, a fit zoom not settled yet, a part of a page shown
+/// reduced) it is rasterised at the side asked for, as before, and is not the screen's own.
+pub(super) fn raster_scale(side: u32, step: u32, longest: f32, native: Option<f32>) -> (f32, bool) {
+    let asked = side as f32 / longest;
+    let fits = |scale: f32| {
+        let pixels = longest * scale;
+        scale.is_finite() && scale > 0.0 && pixels.is_finite() && pixels <= side as f32 + 0.5 && pixels > side as f32 - step as f32 - 0.5
+    };
+    match native.filter(|scale| longest.is_finite() && longest > 0.0 && step > 0 && fits(*scale)) {
+        Some(scale) => (scale, true),
+        None => (asked, false),
+    }
+}
+
+/// The size in device pixels of the place on screen a page's picture is drawn in, when a picture of about
+/// `expected` pixels (its size at the view's scale) is that place's own.
+///
+/// The page view draws a picture as its painter does every picture: the place (`page`, in screen points, or the
+/// part `region` of it, in fractions) is rounded to whole pixels, and the picture is fitted inside it by its own
+/// proportions. A picture of exactly the rounded place's size is drawn one pixel for one. Any other is scaled:
+/// rasterised a whole pixel up each way, as a single scale gives, a 2016 × 2851 pixel place gets a 2017 × 2852
+/// picture squeezed by a twentieth of a percent, and the text slides off the pixel grid and back down the page.
+/// The rounded size depends on where the place starts, so it comes from where the view last put the page, not
+/// from the page's size. `None` where the place is not within a pixel and a half of `expected` each way: a
+/// place left over from another zoom, or numbers that aren't.
+pub(super) fn picture_pixels(page: egui::Rect, region: Option<egui::Rect>, ppp: f32, expected: (f32, f32)) -> Option<(u32, u32)> {
+    let place = match region {
+        Some(part) => {
+            let at = |f: egui::Pos2| egui::pos2(page.min.x + f.x * page.width(), page.min.y + f.y * page.height());
+            egui::Rect::from_min_max(at(part.min), at(part.max))
+        }
+        None => page,
+    };
+    let side = |lo: f32, hi: f32, expected: f32| {
+        let pixels = (hi * ppp).round() - (lo * ppp).round();
+        (pixels.is_finite() && expected.is_finite() && pixels >= 1.0 && (pixels - expected).abs() <= 1.5).then_some(pixels as u32)
+    };
+    Some((side(place.min.x, place.max.x, expected.0)?, side(place.min.y, place.max.y, expected.1)?))
+}
+
+/// Render options for rasters shown on screen other than the pages themselves (style and font previews, a dragged
+/// object), so their text looks as it does in the platform's other apps (exports never change): on macOS it is
+/// darkened the way the system draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight`
+/// draws it there (not darkened: hinted text already has FreeType's weight, and darkening made it look semi-bold).
+/// Baselines sit on whole device pixels (hinting does that; unhinted text is moved there). These are fixed per
+/// platform: such rasters are cached without the system's text settings in their keys, so they must not follow
+/// them. Pages do ([`page_render_options`]).
+pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions { baseline_snap: true, ..Default::default() };
+    crate::screen_text::ScreenText::PLATFORM.apply(&mut opts);
+    opts
+}
+
+/// Render options for the template thumbnails of File › New: the platform's text, as [`screen_render_options`],
+/// without the baseline snapping. A thumbnail is a page shrunk to a tile, drawn as it was before pages were
+/// sharpened.
+pub(crate) fn thumbnail_render_options() -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions::default();
+    crate::screen_text::ScreenText::PLATFORM.apply(&mut opts);
+    opts
 }

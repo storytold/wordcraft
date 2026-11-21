@@ -1227,6 +1227,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "tools.customizeRibbon"
             | "view.darkMode"
             | "view.paperColor"
+            | "view.textSmoothing"
             | "view.marks"
             | "view.ruler"
             | "view.numeral"

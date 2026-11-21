@@ -10,6 +10,10 @@ pub struct Prefs {
     /// On-screen paper for pages without a document background; excluded from saved documents.
     #[serde(deserialize_with = "lenient_paper_color")]
     pub paper_color: crate::cmd::view::PaperColor,
+    /// How the edges of page text are smoothed on screen (`view.textSmoothing`); excluded from
+    /// saved documents.
+    #[serde(deserialize_with = "lenient_text_smoothing")]
+    pub text_smoothing: crate::cmd::view::TextSmoothing,
     /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
     /// Word).
     pub markup: wordcraft_layout::display::MarkupOptions,
@@ -72,6 +76,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             paper_color: Default::default(),
+            text_smoothing: Default::default(),
             count_notes: true,
             markup: Default::default(),
             print_markup: false,
@@ -115,6 +120,12 @@ fn lenient_default_language<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Op
 }
 
 fn lenient_paper_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::cmd::view::PaperColor, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// Ignore an invalid saved text smoothing without discarding other preferences.
+fn lenient_text_smoothing<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::cmd::view::TextSmoothing, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
 }

@@ -159,13 +159,29 @@ pub struct RenderOptions {
     /// Colour for formatting marks.
     pub mark_color: Rgb,
     /// Thicken glyphs slightly the way macOS draws text on screen ("font smoothing"), so pages
-    /// look like they do in other Mac apps. For on-screen rasters only: exports stay exact.
-    pub text_darkening: bool,
+    /// look like they do in other Mac apps: 0 is none, 1 the system's default strength
+    /// ([`stem_darkening`]), and other values scale it, up to twice (the system's own setting
+    /// has a lighter and a stronger step). A value that isn't a number is none. For on-screen
+    /// rasters only: exports stay exact.
+    pub text_darkening: f32,
+    /// Put every glyph's baseline on a whole device pixel, for text that is neither rotated nor
+    /// mirrored. A baseline between two pixel rows spreads the feet of the letters (serifs, the
+    /// bottoms of stems) over both rows as two grey rows instead of one solid one, which reads as
+    /// blur. A glyph moves by half a pixel at most and never sideways, so lines break as without
+    /// it. Hinted text already sits like this. For on-screen rasters only: exports stay exact.
+    pub baseline_snap: bool,
     /// Hint text for the screen the way FreeType's `hintslight` does on Linux desktops: glyph
     /// baselines sit on whole pixels and their horizontal edges (x-height, cap height) are moved
     /// onto the pixel grid, so text looks as crisp as in other apps there. Nothing moves
     /// sideways, so lines break as without it. For on-screen rasters only: exports stay exact.
     pub hinting: bool,
+    /// Subpixel (LCD) antialiasing for text, for a screen whose colour stripes run in this order
+    /// (see [`LcdOrder`]); `None` is greyscale antialiasing. Text gets three times the detail
+    /// sideways, where slanted and round strokes need it most, at the price of faint colour at
+    /// its edges, and the page is rasterised three times. Everything but text is drawn as
+    /// without it. For on-screen rasters only, and only where the raster's pixels are the
+    /// screen's own: exports stay exact.
+    pub lcd: Option<LcdOrder>,
     /// Dark page (View › Switch Modes): every colour but pictures has its lightness inverted, so
     /// white paper turns black and black text white while hues stay the same. Screen only.
     pub dark: bool,
@@ -174,6 +190,20 @@ pub struct RenderOptions {
     /// Read Mode's Page Color: paper drawn instead of the document's page color and page
     /// picture. `None` shows the document's page background. Screen only.
     pub read_paper: Option<Rgb>,
+}
+
+/// The order of a screen's red, green and blue stripes, left to right, within each pixel.
+///
+/// With [`RenderOptions::lcd`] set, each colour channel of a pixel takes the text's coverage
+/// around its own stripe, a third of a pixel to one side of the pixel's middle or the other,
+/// instead of all three taking the coverage of the whole pixel. A pixel's stripes are a pixel
+/// wide in all, so each channel still averages over one pixel's width: this is the result of
+/// rasterising text at three times the width and averaging three neighbours (the box filter
+/// FreeType calls its light LCD filter), with no sharper filter and no fringe reduction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LcdOrder {
+    Rgb,
+    Bgr,
 }
 
 /// Default grey for a dark page's paper.
@@ -267,8 +297,10 @@ impl Default for RenderOptions {
             display: DisplayOptions::default(),
             paper: Rgb::WHITE,
             mark_color: Rgb(0x2B, 0x57, 0x9A),
-            text_darkening: false,
+            text_darkening: 0.0,
+            baseline_snap: false,
             hinting: false,
+            lcd: None,
             dark: false,
             dark_paper: DARK_PAPER,
             read_paper: None,
@@ -296,6 +328,52 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     // Over the cap the whole picture is drawn smaller, not cropped.
     let view = if (cw, ch) == (w, h) { view } else { Affine::scale_non_uniform(cw as f64 / w as f64, ch as f64 / h as f64) * view };
     let (w16, h16) = (cw as u16, ch as u16);
+    let drew_text = std::cell::Cell::new(false);
+    let mut pixels = raster_page(doc, page, (w16, h16), view, opts, Pass { shift: 0.0, drew_text: &drew_text });
+    // Subpixel text: the page twice more, its text a third of a pixel to each side, for the
+    // channels whose stripes sit there. A page without text is the same all three times.
+    if let Some(order) = opts.lcd
+        && drew_text.get()
+    {
+        let side = |shift: f64| raster_page(doc, page, (w16, h16), view, opts, Pass { shift, drew_text: &drew_text });
+        let (text_right, text_left) = (side(LCD_SHIFT), side(-LCD_SHIFT));
+        let (red, blue) = match order {
+            LcdOrder::Rgb => (&text_right, &text_left),
+            LcdOrder::Bgr => (&text_left, &text_right),
+        };
+        take_lcd_channels(&mut pixels, red, blue);
+    }
+    Rendered { width: w16 as u32, height: h16 as u32, pixels }
+}
+
+/// How far, in device pixels, the middle of a pixel's first or last colour stripe is from the
+/// middle of the pixel.
+const LCD_SHIFT: f64 = 1.0 / 3.0;
+
+/// One rasterisation of a page among the one or three that make its raster.
+#[derive(Clone, Copy)]
+struct Pass<'a> {
+    /// How far to the right text is drawn from its place, in device pixels (see
+    /// [`RenderOptions::lcd`]). Nothing else moves.
+    shift: f64,
+    /// Set once the pass has drawn text that `shift` moves.
+    drew_text: &'a std::cell::Cell<bool>,
+}
+
+/// The red of `pixels` from `red` and its blue from `blue`, two rasters of the same size
+/// (premultiplied RGBA8). Text shifted right puts under each pixel's middle what lay a third of a
+/// pixel to its left, where an RGB screen's red stripe is, and so on. The alpha stays, and
+/// no channel is left above it.
+fn take_lcd_channels(pixels: &mut [u8], red: &[u8], blue: &[u8]) {
+    for ((px, r), b) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(red.as_chunks::<4>().0).zip(blue.as_chunks::<4>().0) {
+        px[0] = r[0].min(px[3]);
+        px[2] = b[2].min(px[3]);
+    }
+}
+
+/// Rasterise a page into `size` pixels (premultiplied RGBA8) with `view` (page points → pixels).
+fn raster_page(doc: &Document, page: &Page, size: (u16, u16), view: Affine, opts: &RenderOptions, pass: Pass) -> Vec<u8> {
+    let (w16, h16) = size;
     let mut ctx = context_pool::CONTEXTS.take(w16, h16);
     ctx.set_transform(Affine::IDENTITY);
     ctx.set_paint(color(opts.paper_of(doc), 1.0));
@@ -314,7 +392,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
             ctx.push_opacity_layer(alpha);
         }
         for it in &items {
-            draw(&mut ctx, doc, it, view, &visible, opts);
+            draw(&mut ctx, doc, it, view, &visible, opts, pass);
         }
         if faded {
             ctx.pop_layer();
@@ -327,7 +405,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
         ctx.render(pm, &mut res);
     }
     context_pool::CONTEXTS.give_back(ctx);
-    Rendered { width: w16 as u32, height: h16 as u32, pixels }
+    pixels
 }
 
 /// The on-screen colour behind page point (`x`, `y`): the paper (page colour), then any
@@ -495,24 +573,30 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
 
 /// Does `view` map page points to device pixels without rotation, skew or mirroring, scaling both
 /// axes alike? Only then do hinted outlines (made on the pixel grid) line up with the screen.
+/// "Alike" allows the two axes a fifth of a percent apart: a page raster made to fill a whole
+/// number of pixels each way ([`render_area_to`]) is scaled that little differently across and
+/// down (a pixel in some two thousand), and is as upright as any.
 fn is_upright(view: Affine) -> bool {
     let [a, b, c, d, e, f] = view.as_coeffs();
-    [a, b, c, d, e, f].iter().all(|v| v.is_finite()) && b == 0.0 && c == 0.0 && a > 0.0 && (a - d).abs() <= a * 1e-6
+    [a, b, c, d, e, f].iter().all(|v| v.is_finite()) && b == 0.0 && c == 0.0 && a > 0.0 && (a - d).abs() <= a * 2e-3
 }
 
 /// How far, in device pixels, macOS-style font smoothing pushes each side of a glyph outline out
-/// at `ppem` device pixels per em. Values from Pathfinder (MIT/Apache-2.0), which measured them
-/// against macOS: 1.21% of the pixel size horizontally and 1.25 times that vertically, each
-/// capped at 0.3 px, and no darkening past 72 px per em. We stroke the outline, which grows it
-/// evenly, so this is the mean of the two.
+/// sideways at `ppem` device pixels per em. The value is Pathfinder's (MIT/Apache-2.0), which
+/// measured it against macOS: 1.21% of the pixel size, capped at 0.3 px, and no darkening past
+/// 72 px per em. Pathfinder also grows glyphs up and down (1.25 times as far). We don't: a third
+/// of a pixel of grey above and below every letter is what made page text look out of focus
+/// beside other Mac apps, whose letters end on a clean pixel row. Stems get thicker, which is
+/// the weight the smoothing is for; the tops and feet of the letters stay where the font puts
+/// them.
 pub fn stem_darkening(ppem: f64) -> f64 {
-    const FACTOR: [f64; 2] = [0.0121, 0.0121 * 1.25];
+    const FACTOR: f64 = 0.0121;
     const MAX_PX: f64 = 0.3;
     const MAX_PPEM: f64 = 72.0;
     if !ppem.is_finite() || ppem <= 0.0 || ppem > MAX_PPEM {
         return 0.0;
     }
-    FACTOR.iter().map(|f| (ppem * f).min(MAX_PX)).sum::<f64>() / 2.0
+    (ppem * FACTOR).min(MAX_PX)
 }
 
 /// A wavy line from `(x0, y0)` to `(x1, y1)`; at most 20 000 units long, so a huge extent can't make it endless.
@@ -596,6 +680,7 @@ struct Frame<'a> {
     opts: &'a RenderOptions,
     view: Affine,
     visible: &'a kurbo::Rect,
+    pass: Pass<'a>,
 }
 
 /// The rectangle in kurbo's terms.
@@ -607,12 +692,12 @@ fn kurbo_rect(rect: &wordcraft_geom::Rect) -> kurbo::Rect {
 /// `visible` is a culling area in those point coordinates; nested clips intersect it and turns
 /// transform it into the child's coordinates. Shape and path strokes apply their stored caps,
 /// while ink uses its tool's round ends and joins.
-fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
-    let fr = Frame { doc, opts, view, visible };
+fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions, pass: Pass) {
+    let fr = Frame { doc, opts, view, visible, pass };
     match it {
         Draw::Figure { draws, .. } => {
             for d in draws {
-                draw(ctx, doc, d, view, visible, opts);
+                draw(ctx, doc, d, view, visible, opts, pass);
             }
         }
         Draw::Fill { .. } => draw_fill(ctx, &fr, it),
@@ -634,7 +719,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.push_clip_layer(&r.to_path(0.1));
             let local = r.intersect(*visible);
             for it in items {
-                draw(ctx, doc, it, view, &local, opts);
+                draw(ctx, doc, it, view, &local, opts, pass);
             }
             ctx.pop_layer();
         }
@@ -642,14 +727,14 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let m = Affine::new(Draw::turn_matrix(*turn, *x, *y).map(f64::from));
             let local = m.inverse().transform_rect_bbox(*visible);
             for it in items {
-                draw(ctx, doc, it, view * m, &local, opts);
+                draw(ctx, doc, it, view * m, &local, opts, pass);
             }
         }
         Draw::Rotated { cx, cy, spin, items } => {
             let m = Affine::new(spin.matrix(*cx, *cy).map(f64::from));
             let local = m.inverse().transform_rect_bbox(*visible);
             for it in items {
-                draw(ctx, doc, it, view * m, &local, opts);
+                draw(ctx, doc, it, view * m, &local, opts, pass);
             }
         }
     }
@@ -704,7 +789,8 @@ fn draw_line(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         }
         _ => {
             let (st, off) = match snap_rule(fr.view, (x0, y0, x1, y1), w) {
-                Some((w_px, off)) => (kurbo::Stroke { width: w_px / fr.view.as_coeffs()[0], ..st }, off),
+                // The width is across the rule: in points by the scale that way.
+                Some((w_px, off)) => (kurbo::Stroke { width: w_px / rule_scale(fr.view, y0 == y1), ..st }, off),
                 None => (st, (0.0, 0.0)),
             };
             ctx.set_stroke(st);
@@ -721,16 +807,28 @@ fn snap_rule(view: Affine, (x0, y0, x1, y1): (f64, f64, f64, f64), width: f64) -
     if !is_upright(view) {
         return None;
     }
-    let [k, _, _, _, tx, ty] = view.as_coeffs();
+    let [_, _, _, _, tx, ty] = view.as_coeffs();
     if y0 == y1 && x0 != x1 {
+        let k = rule_scale(view, true);
         let (w_px, c) = snap_hairline(y0 * k + ty, width * k);
         Some((w_px, (0.0, (c - ty) / k - y0)))
     } else if x0 == x1 && y0 != y1 {
+        let k = rule_scale(view, false);
         let (w_px, c) = snap_hairline(x0 * k + tx, width * k);
         Some((w_px, ((c - tx) / k - x0, 0.0)))
     } else {
         None
     }
+}
+
+/// Device pixels per point across a rule: down the page for a level rule, across it for an
+/// upright one. An upright view ([`is_upright`]) may scale the two a little differently (a page
+/// raster made to fill a whole number of pixels each way), and a rule's place and width are
+/// measured across it: with the other scale, a level rule low on such a page was snapped up to
+/// a pixel from where it lies, its edges between pixel rows.
+fn rule_scale(view: Affine, level: bool) -> f64 {
+    let [across, _, _, down, ..] = view.as_coeffs();
+    if level { down } else { across }
 }
 
 /// A line `width_px` wide centred at device coordinate `centre`, moved so both edges fall on whole
@@ -762,23 +860,25 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     // Scaled letters (`w:w`): each glyph stretched across from its pen position.
     let sx = if x_scale.is_finite() && *x_scale > 0.0 { f64::from(*x_scale) } else { 1.0 };
     let skew = Affine::scale_non_uniform(sx, 1.0) * skew;
-    // Outline strokes, in font units: synthetic bold, then on-screen stem darkening (a
-    // stroke grows the outline by half its width on each side). Darkening is skipped for
-    // translucent text, where the stroke overlapping the fill would show as a darker rim.
+    // Synthetic bold strokes the outline, in font units.
     let px_per_pt = view.determinant().abs().sqrt();
-    let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
-    let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
-    let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
-    let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
+    let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 };
     if outline_stroke > 0.0 {
-        ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
+        ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(kurbo::Join::Miter));
     }
     // Emoji and other colour glyphs (#1269) are drawn from the font's colour data.
     let colour = face.has_color_glyphs();
     let ppem = *size as f64 * px_per_pt;
-    // Hinted outlines are in device pixels: only for an upright, unmirrored, evenly scaled
-    // view (not rotated text boxes), where the pixel grid lines up with the glyphs.
-    let hint_ppem = (opts.hinting && !colour && is_upright(view)).then_some(ppem as f32);
+    // On-screen stem darkening: each outline is widened along its own x axis, in one piece (see
+    // [`stem_darkening`] and [`widened`]). Skipped for translucent text, as it always was.
+    let strength = if opts.text_darkening.is_finite() { f64::from(opts.text_darkening).clamp(0.0, 2.0) } else { 0.0 };
+    let darken_px = if *alpha >= 1.0 { stem_darkening(ppem) * strength } else { 0.0 };
+    // Hinted outlines are in device pixels, and a snapped baseline is a row of them: only for an
+    // upright, unmirrored, evenly scaled view (not rotated text boxes), where the pixel grid
+    // lines up with the glyphs.
+    let upright = is_upright(view);
+    let hint_ppem = (opts.hinting && !colour && upright).then_some(ppem as f32);
+    let snap = opts.baseline_snap && upright;
     // The outline strokes in device pixels, for the hinted outlines.
     let stroke_px = outline_stroke * k * px_per_pt;
     let mut hinted_stroke = false;
@@ -795,37 +895,128 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
             ctx.set_paint(color(opts.ink(*c), *alpha));
             continue;
         }
-        if let Some(o) = hint_ppem.and_then(|p| db.hinted_outline(face, *gid, p)) {
-            if o.elements().is_empty() {
-                continue;
+        let pen = view * kurbo::Point::new(gx, gy);
+        let hinted = hint_ppem.and_then(|p| db.hinted_outline(face, *gid, p));
+        let hinted_now = hinted.is_some();
+        let (o, at) = if let Some(o) = hinted {
+            if outline_stroke > 0.0 && !hinted_stroke {
+                ctx.set_stroke(kurbo::Stroke::new(stroke_px).with_join(kurbo::Join::Miter));
+                hinted_stroke = true;
             }
             // The baseline on a whole pixel, as the hinting assumes.
-            let at = view * kurbo::Point::new(gx, gy);
-            ctx.set_transform(Affine::translate((at.x, at.y.round())) * skew);
-            ctx.fill_path(&o);
-            if outline_stroke > 0.0 {
-                if !hinted_stroke {
-                    ctx.set_stroke(kurbo::Stroke::new(stroke_px).with_join(join));
-                    hinted_stroke = true;
-                }
-                ctx.stroke_path(&o);
+            (o, Affine::translate((pen.x, pen.y.round())) * skew)
+        } else {
+            if outline_stroke > 0.0 && hinted_stroke {
+                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(kurbo::Join::Miter));
+                hinted_stroke = false;
             }
-            continue;
-        }
-        let o = db.outline(face, *gid);
+            let at = view * Affine::translate((gx, gy)) * skew * Affine::scale(k);
+            // The same baseline for text drawn from the font's own outlines.
+            let lift = if snap && pen.y.is_finite() { pen.y.round() - pen.y } else { 0.0 };
+            (db.outline(face, *gid), Affine::translate((0.0, lift)) * at)
+        };
         if o.elements().is_empty() {
             continue;
         }
-        ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
-        ctx.fill_path(&o);
+        // This pass's sideways shift, across the screen whichever way the text is turned.
+        fr.pass.drew_text.set(true);
+        ctx.set_transform(Affine::translate((fr.pass.shift, 0.0)) * at);
+        // The darkened outline is the glyph: synthetic bold strokes it too. Stroking the font's own
+        // outline there would cover the widening (the stroke reaches further than it does) and
+        // leave such text as light as without darkening.
+        let wide = (darken_px > 0.0).then(|| widened(&o, darken_px / widen_unit(hinted_now, k * px_per_pt, sx)));
+        let shape = wide.as_ref().unwrap_or(&o);
+        ctx.fill_path(shape);
         if outline_stroke > 0.0 {
-            if hinted_stroke {
-                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
-                hinted_stroke = false;
-            }
-            ctx.stroke_path(&o);
+            ctx.stroke_path(shape);
         }
     }
+}
+
+/// How many device pixels one unit of a glyph outline is across the screen, for turning a
+/// widening in device pixels into the outline's own units: a hinted outline is in device pixels
+/// already and the font's own in font units (`font_px` device pixels each), and both are then
+/// stretched `stretch` times across by scaled letters (`w:w`). Without the stretch for hinted
+/// outlines, text scaled to 400 % was widened four times too far.
+fn widen_unit(hinted: bool, font_px: f64, stretch: f64) -> f64 {
+    if hinted { stretch } else { font_px * stretch }
+}
+
+/// `path` with every edge moved `d` sideways, away from the ink: the shape a glyph makes when it
+/// is smeared `d` to the left and `d` to the right, so stems get `2 d` thicker while nothing
+/// grows up or down. One outline, filled once, so partly covered pixels are counted once (the
+/// outline drawn again beside itself counted them two and three times, which read as bold).
+///
+/// Each point moves with the edges it joins: by `d` where both face the same side, or one of
+/// them is level; not at all at the top or the foot of a curve, where one faces left and the
+/// other right. Curve control points move by the same rule along the control polygon. Which side
+/// of an edge is ink follows from the direction the outline runs in, read off its signed area,
+/// so the holes of letters narrow as their stems widen. An outline with no area, or with
+/// numbers that aren't finite, is returned as it is.
+fn widened(path: &BezPath, d: f64) -> BezPath {
+    use kurbo::PathEl;
+    let els = path.elements();
+    // The control polygon of each contour, as (first point index, point count).
+    let mut pts: Vec<kurbo::Point> = Vec::with_capacity(els.len() * 2);
+    let mut contours: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    for el in els {
+        match el {
+            PathEl::MoveTo(p) => {
+                if pts.len() > start {
+                    contours.push((start, pts.len() - start));
+                }
+                start = pts.len();
+                pts.push(*p);
+            }
+            PathEl::LineTo(p) => pts.push(*p),
+            PathEl::QuadTo(c, p) => pts.extend([*c, *p]),
+            PathEl::CurveTo(c1, c2, p) => pts.extend([*c1, *c2, *p]),
+            PathEl::ClosePath => {}
+        }
+    }
+    if pts.len() > start {
+        contours.push((start, pts.len() - start));
+    }
+    let ring = |first: usize, n: usize, i: usize| pts.get(first + i % n.max(1)).copied().unwrap_or_default();
+    let area: f64 =
+        contours.iter().map(|&(first, n)| (0..n).map(|i| ring(first, n, i).to_vec2().cross(ring(first, n, i + 1).to_vec2())).sum::<f64>()).sum();
+    if !(d.is_finite() && d > 0.0 && area.is_finite() && area != 0.0) {
+        return path.clone();
+    }
+    // Which way the edge from `a` to `b` faces: 1 right, -1 left, 0 for a level edge.
+    let faces = |a: kurbo::Point, b: kurbo::Point| {
+        let (run, rise) = ((b.x - a.x).abs(), b.y - a.y);
+        if rise.abs() <= 1e-6 * (run + rise.abs()) { 0.0 } else { (rise * area).signum() }
+    };
+    let mut moved = pts.clone();
+    for &(first, n) in &contours {
+        for i in 0..n {
+            let at = ring(first, n, i);
+            // The nearest different points before and after: a contour may repeat a point (a
+            // run of more than a few is left where it is).
+            let before = (1..n.min(8)).map(|step| ring(first, n, i + n - step)).find(|p| *p != at);
+            let after = (1..n.min(8)).map(|step| ring(first, n, i + step)).find(|p| *p != at);
+            let (Some(before), Some(after)) = (before, after) else { continue };
+            let push = (faces(before, at) + faces(at, after)).clamp(-1.0, 1.0);
+            if let Some(p) = moved.get_mut(first + i) {
+                p.x += push * d;
+            }
+        }
+    }
+    let mut next = moved.into_iter();
+    let mut take = || next.next().unwrap_or_default();
+    let mut out = BezPath::with_capacity(els.len());
+    for el in els {
+        out.push(match el {
+            PathEl::MoveTo(_) => PathEl::MoveTo(take()),
+            PathEl::LineTo(_) => PathEl::LineTo(take()),
+            PathEl::QuadTo(..) => PathEl::QuadTo(take(), take()),
+            PathEl::CurveTo(..) => PathEl::CurveTo(take(), take(), take()),
+            PathEl::ClosePath => PathEl::ClosePath,
+        });
+    }
+    out
 }
 
 fn draw_mark(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
@@ -1280,6 +1471,19 @@ pub fn render_area(doc: &Document, page: &Page, area: wordcraft_geom::Rect, scal
     render_region(doc, page, pw, ph, view, opts)
 }
 
+/// Render the page `area` (points) into exactly `w`×`h` pixels: the area fills the raster, scaled
+/// across and down by whatever that takes. For a raster that must be a given number of device
+/// pixels each way, where [`render_area`]'s single scale gives the next whole pixel up: a picture
+/// one pixel larger than its place on screen is scaled into it, and every glyph resampled.
+pub fn render_area_to(doc: &Document, page: &Page, area: wordcraft_geom::Rect, w: u32, h: u32, opts: &RenderOptions) -> Rendered {
+    let (w, h) = (w.clamp(1, MAX_SIDE), h.clamp(1, MAX_SIDE));
+    let (sx, sy) = (f64::from(w) / f64::from(area.w), f64::from(h) / f64::from(area.h));
+    let fine = |v: f64| v.is_finite() && v > 0.0;
+    let (sx, sy) = if fine(sx) && fine(sy) && area.x.is_finite() && area.y.is_finite() { (sx, sy) } else { (1.0, 1.0) };
+    let (x, y) = if area.x.is_finite() && area.y.is_finite() { (f64::from(area.x), f64::from(area.y)) } else { (0.0, 0.0) };
+    render_region(doc, page, w, h, Affine::scale_non_uniform(sx, sy) * Affine::translate((-x, -y)), opts)
+}
+
 /// Draw `items` (page points) alone, on nothing, over the page `area` (points) at `scale` px/pt:
 /// no paper, no watermark. A dragged object's preview.
 pub fn render_items(doc: &Document, items: &[Draw], area: wordcraft_geom::Rect, scale: f32, opts: &RenderOptions) -> Rendered {
@@ -1293,8 +1497,10 @@ pub fn render_items(doc: &Document, items: &[Draw], area: wordcraft_geom::Rect, 
         * Affine::translate((-x as f64, -y as f64));
     let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
+    // One pass, text in its place: an area raster (a preview, a dragged object) is greyscale.
+    let drew_text = std::cell::Cell::new(false);
     for it in items {
-        draw(&mut ctx, doc, it, view, &visible, opts);
+        draw(&mut ctx, doc, it, view, &visible, opts, Pass { shift: 0.0, drew_text: &drew_text });
     }
     ctx.flush();
     let mut pixels = vec![0u8; w16 as usize * h16 as usize * 4];

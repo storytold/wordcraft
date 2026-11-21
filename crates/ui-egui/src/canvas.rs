@@ -61,7 +61,7 @@ pub(crate) use links::follow_link;
 use links::{field_link, is_followable_link, is_generated_bookmark_link};
 pub use navigation::page_to_screen;
 use navigation::viewed_page;
-pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options};
+pub(crate) use pages::{PageKeys, dark_page, page_doc, page_screen_scale, preview_sel, screen_render_options, thumbnail_render_options};
 use pages::{page_render_options, shown_layout};
 use reading::{reading_anchor_page, reading_page_start, web_layout_width};
 use story::dims_body;
@@ -108,6 +108,11 @@ pub struct CanvasState {
     /// The page asks for the keyboard between this pass and the next ([`CanvasState::focus_page_after_pass`]): always
     /// (no ids), or only while focus is still on one of the ids.
     focus_after_pass: Option<Vec<egui::Id>>,
+    /// Where the page view put its pages (page, place in screen points) the last time two passes running put
+    /// them in the same places: the view at rest. Page pictures are made to fill these places exactly
+    /// (`source::WordPages`); while the view moves they stay as they were, so a scroll or a zoom under way makes
+    /// no picture again for a place it is only passing through.
+    pub(crate) settled_pages: Vec<(usize, Rect)>,
     /// How many page pictures the page view kept resident after the last pass (S-L352).
     pub(crate) resident_pictures: usize,
     /// The caret's glide and blink.
@@ -385,6 +390,7 @@ impl Default for CanvasState {
             shown: ShownPages::default(),
             focus_pending: true,
             focus_after_pass: None,
+            settled_pages: Vec::new(),
             resident_pictures: 0,
             glide: crate::caret_glide::CaretGlide::default(),
             comments: Default::default(),
@@ -703,7 +709,8 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
     let columns = Rect::from_min_max(full.min, pos2(full.max.x, (full.max.y - metrics.nav_bar).max(full.min.y)));
     let footer = Rect::from_min_max(pos2(full.min.x, columns.max.y), full.max);
     let mut state = std::mem::take(&mut app.canvas.reading);
-    let source = source::WordPages::new(app, layout, false, None);
+    // Read Mode sizes its columns itself: no view scale to rasterise at.
+    let source = source::WordPages::new(app, layout, false, None, None);
     let out = ReadingView::new(tl!("Document"), &source, &mut state, paper).zoom(zoom).show_at(ui, columns);
     let nav = ui
         .scope_builder(egui::UiBuilder::new().max_rect(footer), |ui| {
@@ -782,7 +789,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let options =
         LayoutOptions { markup: f64::from(markup_width(app)), min_columns: if app.session.view.multi_page { 2 } else { 1 }, ..LayoutOptions::WORD };
     let paper = DataColor::new(paper_color(app));
-    let source = source::WordPages::new(app, layout, dim_body, hidden);
+    let source = source::WordPages::new(app, layout, dim_body, hidden, Some(scale as f32));
     // The describer owns its snapshot, as the source does, so the page view can hold it while the body edits the app.
     let described = preview_sel(app).unwrap_or(app.session.sel_ends()).clone();
     let describer = crate::a11y::DocumentDescriber::new(source.doc(), layout.clone(), (described.anchor.clone(), described.focus.clone()));
@@ -952,6 +959,14 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     // A window's page has the keyboard from its first pass (production's `want_focus` started on), so typing lands
     // without a click; a modal dialog keeps the keyboard until it closes.
     let view_rect = body_view.map_or(body_rect, |v| v.rect);
+    // The same places two passes running: the view is at rest, and these are the places pictures are made for.
+    let placed = |pages: &[PlacedPage]| pages.iter().map(|p| (p.page, p.rect)).collect::<Vec<_>>();
+    let now = placed(&out.pages);
+    if now == placed(&app.canvas.shown.pages) && now != app.canvas.settled_pages {
+        app.canvas.settled_pages = now;
+        // The pictures of the places just settled are made on the next pass.
+        ui.ctx().request_repaint();
+    }
     app.canvas.shown =
         ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), view: view_rect, canvas: Some(out.canvas.response.id) };
     if app.canvas.focus_pending && !app.modal_open() {

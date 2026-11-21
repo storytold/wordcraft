@@ -265,7 +265,7 @@ fn stem_darkening_follows_the_macos_curve() {
     assert_eq!(stem_darkening(f64::NAN), 0.0);
     assert_eq!(stem_darkening(-5.0), 0.0);
     // Small text grows in proportion to its pixel size...
-    assert!((stem_darkening(10.0) - 10.0 * 0.0121 * 2.25 / 2.0).abs() < 1e-9);
+    assert!((stem_darkening(10.0) - 10.0 * 0.0121).abs() < 1e-9);
     // ...body text on a Retina screen hits the 0.3 px cap...
     assert_eq!(stem_darkening(30.0), 0.3);
     assert_eq!(stem_darkening(72.0), 0.3);
@@ -283,12 +283,29 @@ fn text_darkening_adds_ink_on_screen_only() {
     let d = Document::from_text("Marketing analytics lead with twelve years of measurement work.");
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let plain = render_page(&d, &l.pages[0], 2.0, &RenderOptions::default());
-    let dark = render_page(&d, &l.pages[0], 2.0, &RenderOptions { text_darkening: true, ..Default::default() });
+    let dark = render_page(&d, &l.pages[0], 2.0, &RenderOptions { text_darkening: 1.0, ..Default::default() });
     let (a, b) = (ink(&plain), ink(&dark));
     // About 0.3 px more on every edge of an 11 pt line at 2x: clearly more ink, not bold.
     assert!(b as f64 > a as f64 * 1.08 && (b as f64) < a as f64 * 1.6, "plain {a}, darkened {b}");
     // Off by default: exports and thumbnails are untouched.
-    assert!(!RenderOptions::default().text_darkening);
+    assert_eq!(RenderOptions::default().text_darkening, 0.0);
+}
+
+#[test]
+fn text_darkening_is_a_strength() {
+    let d = Document::from_text("Marketing analytics lead with twelve years of measurement work.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let at = |strength: f32| ink(&render_page(&d, &l.pages[0], 2.0, &RenderOptions { text_darkening: strength, ..Default::default() }));
+    // The system's lighter, default and stronger steps each add ink.
+    let (none, light, default, strong) = (at(0.0), at(0.5), at(1.0), at(1.5));
+    assert!(none < light && light < default && default < strong, "{none} {light} {default} {strong}");
+    assert_eq!(none, ink(&render_page(&d, &l.pages[0], 2.0, &RenderOptions::default())));
+    // No more than twice the default, and junk is no darkening at all.
+    assert_eq!(at(2.0), at(50.0));
+    assert_eq!(at(2.0), at(f32::INFINITY.min(f32::MAX)));
+    for junk in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+        assert_eq!(at(junk), none, "{junk}");
+    }
 }
 
 /// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
@@ -301,6 +318,315 @@ fn ink_columns(img: &Rendered) -> (usize, usize) {
     let w = img.width as usize;
     let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i % w.max(1)).collect();
     (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+}
+
+/// The first and last pixel rows with any ink.
+fn ink_row_span(img: &Rendered) -> (usize, usize) {
+    let w = img.width as usize;
+    let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i / w.max(1)).collect();
+    (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+}
+
+/// One line of flat-footed capitals in a bundled face: no letter dips under the baseline.
+fn flat_capitals() -> (Document, wordcraft_layout::DocLayout) {
+    let mut d = Document::from_text("THE FELT HILT FILE LIFT HEFT TILT");
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    (d, l)
+}
+
+#[test]
+fn a_snapped_baseline_ends_the_letters_on_a_whole_pixel_row() {
+    let (d, l) = flat_capitals();
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    // Scales that put the baseline at different places between two pixel rows.
+    let mut sharper = 0;
+    for scale in [1.0, 1.25, 1.45, 96.0 / 72.0 * 1.45, 2.0, 2.3] {
+        let plain = render_page(&d, &l.pages[0], scale, &RenderOptions::default());
+        let snapped = render_page(&d, &l.pages[0], scale, &snap);
+        // The row under the letters' feet: all of it white once the baseline is on a pixel
+        // boundary, where the unsnapped feet leave a grey row or end a row early.
+        let (_, foot) = ink_row_span(&snapped);
+        let w = snapped.width as usize;
+        let foot_row = &snapped.pixels[foot * w * 4..(foot + 1) * w * 4];
+        let darkest = foot_row.as_chunks::<4>().0.iter().map(|p| p[0]).min().unwrap_or(255);
+        assert!(darkest < 16, "scale {scale}: the feet fill their last row (darkest pixel {darkest})");
+        let (g0, g1) = (grey(&plain), grey(&snapped));
+        assert!(g1 <= g0, "scale {scale}: grey pixels: plain {g0}, snapped {g1}");
+        sharper += usize::from(g1 < g0);
+        // The same weight, and nothing moves sideways.
+        let (a, b) = (ink(&plain), ink(&snapped));
+        assert!((b as f64 - a as f64).abs() < a as f64 * 0.02, "scale {scale}: ink: plain {a}, snapped {b}");
+        assert_eq!(ink_columns(&plain), ink_columns(&snapped), "scale {scale}");
+        // No more than half a pixel up or down.
+        let ((t0, b0), (t1, b1)) = (ink_row_span(&plain), ink_row_span(&snapped));
+        assert!(t0.abs_diff(t1) <= 1 && b0.abs_diff(b1) <= 1, "scale {scale}: plain {t0}..{b0}, snapped {t1}..{b1}");
+    }
+    assert!(sharper >= 3, "snapping sharpened {sharper} of 6 scales");
+    // Off by default: exports and thumbnails are untouched.
+    assert!(!RenderOptions::default().baseline_snap);
+}
+
+#[test]
+fn rotated_views_keep_their_baselines() {
+    let (d, l) = flat_capitals();
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    let view = Affine::translate((300.0, -50.0)) * Affine::rotate(0.3) * Affine::scale(1.9);
+    let plain = render_region(&d, &l.pages[0], 600, 300, view, &RenderOptions::default());
+    assert!(ink(&plain) > 0);
+    assert_eq!(plain.pixels, render_region(&d, &l.pages[0], 600, 300, view, &snap).pixels);
+}
+
+#[test]
+fn darkening_thickens_stems_and_leaves_the_tops_and_feet_of_letters_alone() {
+    let (d, l) = flat_capitals();
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    let dark = RenderOptions { text_darkening: 1.0, ..snap.clone() };
+    for scale in [1.0, 1.45, 2.0] {
+        let plain = render_page(&d, &l.pages[0], scale, &snap);
+        let darkened = render_page(&d, &l.pages[0], scale, &dark);
+        // More ink, in the same pixel rows: nothing is added above the letters or under them
+        // (the stroke this replaces put a third of a pixel of grey on both).
+        assert!(ink(&darkened) as f64 > ink(&plain) as f64 * 1.05, "scale {scale}");
+        assert_eq!(ink_row_span(&plain), ink_row_span(&darkened), "scale {scale}");
+        // Sideways, less than a pixel each way.
+        let ((l0, r0), (l1, r1)) = (ink_columns(&plain), ink_columns(&darkened));
+        assert!(l1 <= l0 && l0 - l1 <= 1 && r1 >= r0 && r1 - r0 <= 1, "scale {scale}: plain {l0}..{r0}, darkened {l1}..{r1}");
+    }
+}
+
+#[test]
+fn widening_moves_edges_sideways_away_from_the_ink() {
+    // A 10 x 10 square with a 4 x 4 hole, the hole running the other way round.
+    let mut ring = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0).to_path(0.1);
+    ring.move_to((3.0, 3.0));
+    for p in [(3.0, 7.0), (7.0, 7.0), (7.0, 3.0)] {
+        ring.line_to(p);
+    }
+    ring.close_path();
+    for path in [ring.clone(), ring.reverse_subpaths()] {
+        let wide = widened(&path, 0.5);
+        // The square is 1 wider and the hole 1 narrower; neither is any taller.
+        let b = wide.bounding_box();
+        assert_eq!((b.x0, b.x1, b.y0, b.y1), (-0.5, 10.5, 0.0, 10.0));
+        assert!((wide.area().abs() - (11.0 * 10.0 - 3.0 * 4.0)).abs() < 1e-9, "{}", wide.area());
+        assert_eq!(wide.elements().len(), path.elements().len());
+    }
+    // A round shape: wider, no taller, and its top and bottom points stay put.
+    let disc = kurbo::Circle::new((0.0, 0.0), 5.0).to_path(1e-3);
+    let b = widened(&disc, 0.25).bounding_box();
+    assert!((b.width() - 10.5).abs() < 0.02 && (b.height() - 10.0).abs() < 0.02, "{b:?}");
+    // Nothing to widen, or nothing to widen by: the path comes back as it was.
+    let line = BezPath::from_vec(vec![kurbo::PathEl::MoveTo((0.0, 0.0).into()), kurbo::PathEl::LineTo((5.0, 5.0).into())]);
+    for (path, d) in [(&line, 0.5), (&ring, 0.0), (&ring, -1.0), (&ring, f64::NAN), (&ring, f64::INFINITY), (&BezPath::new(), 0.5)] {
+        assert_eq!(widened(path, d).elements(), path.elements(), "{d}");
+    }
+    // Hostile outlines don't panic: points that aren't numbers, and one point repeated.
+    let mut odd = BezPath::new();
+    odd.move_to((f64::NAN, 0.0));
+    odd.line_to((1.0, f64::INFINITY));
+    odd.quad_to((2.0, 2.0), (0.0, 0.0));
+    let _ = widened(&odd, 0.5);
+    let mut same = BezPath::new();
+    same.move_to((1.0, 1.0));
+    for _ in 0..50 {
+        same.line_to((1.0, 1.0));
+    }
+    same.line_to((4.0, 1.0));
+    same.line_to((4.0, 5.0));
+    same.close_path();
+    assert_eq!(widened(&same, 0.5).elements().len(), same.elements().len());
+}
+
+/// The sum of one colour channel's distance from white.
+fn channel_ink(img: &Rendered, channel: usize) -> u64 {
+    img.pixels.as_chunks::<4>().0.iter().map(|p| 255 - p[channel] as u64).sum()
+}
+
+#[test]
+fn lcd_text_takes_each_channel_from_around_its_own_stripe() {
+    let d = Document::from_text("Nobody has assembled this board yet. Italic and round strokes gain the most.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (w, h) = (700, 200);
+    let view = Affine::scale(1.25);
+    let lcd = |order| RenderOptions { lcd: Some(order), ..Default::default() };
+    let grey = render_region(&d, &l.pages[0], w, h, view, &RenderOptions::default());
+    let rgb = render_region(&d, &l.pages[0], w, h, view, &lcd(LcdOrder::Rgb));
+    let bgr = render_region(&d, &l.pages[0], w, h, view, &lcd(LcdOrder::Bgr));
+    assert!(ink(&grey) > 0);
+    // The page a third of a pixel to the right and to the left, in greyscale.
+    let moved = |dx: f64| render_region(&d, &l.pages[0], w, h, Affine::translate((dx, 0.0)) * view, &RenderOptions::default());
+    let (right, left) = (moved(1.0 / 3.0), moved(-1.0 / 3.0));
+    let mut coloured = 0;
+    let rasters = [&grey, &rgb, &bgr, &right, &left].map(|r| r.pixels.as_chunks::<4>().0);
+    for i in 0..rasters[0].len() {
+        let [g, c, m, r, l] = rasters.map(|px| px[i]);
+        // Green sits in the middle of the pixel: it and the alpha are the greyscale raster's.
+        assert_eq!((c[1], c[3]), (g[1], g[3]));
+        // Red is what a pixel a third to the left would see, blue a third to the right.
+        assert_eq!((c[0], c[2]), (r[0], l[2]), "pixel {i}");
+        // BGR stripes are the mirror image.
+        assert_eq!((m[0], m[1], m[2], m[3]), (c[2], c[1], c[0], c[3]));
+        coloured += usize::from(c[0] != c[2]);
+    }
+    assert!(coloured > 200, "{coloured} pixels have red and blue apart");
+    // No colour cast: each channel carries the same ink, to within a hundredth.
+    let [r, g, b] = [0, 1, 2].map(|c| channel_ink(&rgb, c) as f64);
+    assert!((r - g).abs() < g * 0.01 && (b - g).abs() < g * 0.01, "{r} {g} {b}");
+    // Off by default: exports and thumbnails are untouched.
+    assert_eq!(RenderOptions::default().lcd, None);
+}
+
+#[test]
+fn lcd_changes_nothing_but_text() {
+    let lcd = RenderOptions { lcd: Some(LcdOrder::Rgb), ..Default::default() };
+    // A page with no text: the same raster, from one pass.
+    let mut blank = Document::from_text("");
+    blank.settings.page_color = Some(Rgb(0x20, 0x60, 0xA0));
+    let l = layout(&blank, &mut LayoutCache::new(), &LayoutOptions::default());
+    assert_eq!(render_page(&blank, &l.pages[0], 0.5, &lcd).pixels, render_page(&blank, &l.pages[0], 0.5, &RenderOptions::default()).pixels);
+    // A page with text on a page colour: pixels differ only where the text is.
+    let mut d = Document::from_text("Coloured paper under one line of text.");
+    d.settings.page_color = Some(Rgb(0xFF, 0xF0, 0xC0));
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (grey, sub) = (render_page(&d, &l.pages[0], 1.25, &RenderOptions::default()), render_page(&d, &l.pages[0], 1.25, &lcd));
+    let w = grey.width as usize;
+    let paper = grey.pixels[..4].to_vec();
+    let inked: Vec<usize> = grey.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[..] != paper[..]).map(|(i, _)| i).collect();
+    let (top, bottom) = (inked.iter().map(|i| i / w).min().unwrap(), inked.iter().map(|i| i / w).max().unwrap());
+    let (first, last) = (inked.iter().map(|i| i % w).min().unwrap(), inked.iter().map(|i| i % w).max().unwrap());
+    let mut changed = 0;
+    for (i, (a, b)) in grey.pixels.as_chunks::<4>().0.iter().zip(sub.pixels.as_chunks::<4>().0).enumerate() {
+        if a != b {
+            changed += 1;
+            let (x, y) = (i % w, i / w);
+            assert!((top..=bottom).contains(&y) && x + 1 >= first && x <= last + 1, "pixel {x},{y} is outside the text");
+        }
+    }
+    assert!(changed > 50, "{changed}");
+}
+
+#[test]
+fn lcd_channels_never_exceed_the_alpha() {
+    // Premultiplied pixels: a colour above its alpha would be brighter than white.
+    let mut px = vec![10, 20, 30, 40, 200, 200, 200, 255];
+    take_lcd_channels(&mut px, &[90, 0, 0, 255, 7, 0, 0, 255], &[0, 0, 80, 255, 0, 0, 9, 255]);
+    assert_eq!(px, [40, 20, 40, 40, 7, 200, 9, 255]);
+    // Rasters of other sizes leave the rest alone and don't panic.
+    let mut px = vec![1, 2, 3, 255, 4, 5, 6, 255, 9];
+    take_lcd_channels(&mut px, &[50, 0, 0, 255], &[]);
+    assert_eq!(px, [1, 2, 3, 255, 4, 5, 6, 255, 9]);
+}
+
+/// The glyph runs of `text` in a bundled face at 12 pt, as the page draws them, each changed by
+/// `change`; and the area they are in.
+fn glyph_runs(text: &str, change: impl Fn(&mut Draw)) -> (Document, Vec<Draw>, wordcraft_geom::Rect) {
+    let mut d = Document::from_text(text);
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &l.pages[0];
+    let mut runs: Vec<Draw> = page_layers(&d, page, &DisplayOptions::default())
+        .into_iter()
+        .flat_map(|(_, items)| items)
+        .filter(|it| matches!(it, Draw::Glyphs { .. }))
+        .collect();
+    assert!(!runs.is_empty());
+    runs.iter_mut().for_each(change);
+    (d, runs, wordcraft_geom::Rect::new(0.0, 0.0, page.w, 200.0))
+}
+
+/// How much is drawn on nothing: the sum of the pixels' opacity.
+fn opacity(img: &Rendered) -> u64 {
+    img.pixels.as_chunks::<4>().0.iter().map(|p| p[3] as u64).sum()
+}
+
+#[test]
+fn synthetic_bold_is_darkened_too() {
+    // A face with no bold of its own is made bold by stroking its outlines. The stroke reaches
+    // further than the darkening does, so it has to stroke the darkened outline: the darkening
+    // then moves the bold text's edges as far as the regular text's, and adds about as much ink.
+    let added = |bold: bool, scale: f32| {
+        let (d, runs, area) = glyph_runs("Bold made by stroking the outline", |run| {
+            if let Draw::Glyphs { synth_bold, .. } = run {
+                *synth_bold = bold;
+            }
+        });
+        let dark = RenderOptions { text_darkening: 1.0, ..Default::default() };
+        let (plain, darkened) =
+            (opacity(&render_items(&d, &runs, area, scale, &RenderOptions::default())), opacity(&render_items(&d, &runs, area, scale, &dark)));
+        assert!(plain > 0 && darkened > plain, "bold {bold}: plain {plain}, darkened {darkened}");
+        (darkened - plain) as f64
+    };
+    for scale in [1.0, 2.0] {
+        let (regular, bold) = (added(false, scale), added(true, scale));
+        assert!(bold > regular * 0.75, "scale {scale}: ink added: {regular} regular, {bold} bold");
+    }
+}
+
+#[test]
+fn stretched_hinted_text_is_darkened_as_far_as_unstretched() {
+    // One letter, hinted, at its own width and scaled to 400 % (`w:w`): the darkening moves each
+    // edge the same distance on screen, so it adds about the same ink to both.
+    let added = |stretch: f32| {
+        let (d, runs, area) = glyph_runs("H", |run| {
+            if let Draw::Glyphs { x_scale, .. } = run {
+                *x_scale = stretch;
+            }
+        });
+        let hint = RenderOptions { hinting: true, ..Default::default() };
+        let dark = RenderOptions { text_darkening: 1.0, ..hint.clone() };
+        let (plain, darkened) = (opacity(&render_items(&d, &runs, area, 2.0, &hint)), opacity(&render_items(&d, &runs, area, 2.0, &dark)));
+        assert!(darkened > plain, "stretch {stretch}: plain {plain}, darkened {darkened}");
+        (darkened - plain) as f64
+    };
+    let (own, stretched) = (added(1.0), added(4.0));
+    assert!(stretched < own * 1.5 && stretched > own * 0.6, "ink added: {own} unstretched, {stretched} stretched");
+    // The conversion itself: a widening of `px` device pixels, in outline units, is `px` again
+    // once the outline is on screen.
+    for (hinted, font_px, stretch) in [(true, 0.02, 1.0), (true, 0.02, 4.0), (false, 0.02, 1.0), (false, 0.02, 4.0)] {
+        let on_screen = if hinted { stretch } else { font_px * stretch };
+        assert!((0.25 / widen_unit(hinted, font_px, stretch) * on_screen - 0.25).abs() < 1e-12, "{hinted} {stretch}");
+    }
+}
+
+#[test]
+fn an_area_rendered_to_a_pixel_size_fills_it_and_keeps_its_text_on_the_grid() {
+    let (d, l) = flat_capitals();
+    let page = &l.pages[0];
+    let area = wordcraft_geom::Rect::new(0.0, 0.0, page.w, page.h);
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    // A page 1746.155 × 2469.544 pixels at its scale, made 1746 × 2470: a pixel in two thousand off each way.
+    let scale = 1746.155 / page.w;
+    let (w, h) = (1746, (page.h * scale).round() as u32 + 1);
+    let exact = render_area_to(&d, page, area, w, h, &snap);
+    assert_eq!((exact.width, exact.height), (w, h));
+    // One scale gives the next whole pixel up each way: not the size asked for.
+    let up = render_area(&d, page, area, scale, &snap);
+    assert_eq!(up.width, 1747);
+    // The text is as it is at the page's own scale, feet on a whole pixel row: scaled that little differently
+    // across and down, the page is still upright.
+    let foot_is_dark = |img: &Rendered| {
+        let (_, foot) = ink_row_span(img);
+        let w = img.width as usize;
+        img.pixels[foot * w * 4..(foot + 1) * w * 4].as_chunks::<4>().0.iter().map(|p| p[0]).min().unwrap_or(255) < 16
+    };
+    assert!(foot_is_dark(&exact) && foot_is_dark(&up));
+    assert!(is_upright(Affine::scale_non_uniform(2.0, 2.002)) && is_upright(Affine::scale_non_uniform(2.933, 2.9334)));
+    assert!(!is_upright(Affine::scale_non_uniform(2.0, 2.01)));
+    // Hostile sizes and areas: clamped, never a panic.
+    for (area, w, h) in [
+        (wordcraft_geom::Rect::new(0.0, 0.0, 0.0, 0.0), 10, 10),
+        (wordcraft_geom::Rect::new(f32::NAN, f32::INFINITY, f32::NAN, -5.0), 10, 10),
+        (area, 0, 0),
+        (area, u32::MAX, 3),
+    ] {
+        let img = render_area_to(&d, page, area, w, h, &snap);
+        assert!(img.width >= 1 && img.height >= 1 && img.pixels.len() == img.width as usize * img.height as usize * 4);
+    }
 }
 
 #[test]
@@ -2051,6 +2377,35 @@ fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
     }
     assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5).is_none());
     assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
+}
+
+#[test]
+fn rules_snap_by_the_scale_across_them_on_a_page_scaled_a_little_differently_each_way() {
+    // A page raster made to fill a whole number of pixels is scaled a pixel in a thousand or two
+    // differently across and down. A level rule lies where the scale down the page puts it, and
+    // an upright one where the scale across does.
+    for (kx, ky) in [(2.0, 2.002), (2.002, 2.0), (2.933, 2.9334), (1.3333, 1.3329)] {
+        let view = Affine::new([kx, 0.0, 0.0, ky, 37.3, 12.9]);
+        assert!(is_upright(view));
+        for i in 0..40 {
+            let pos = 10.0 + f64::from(i) * 17.37;
+            let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5).unwrap();
+            let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5).unwrap();
+            for (w, centre, lies) in [(w_h, (pos + oy) * ky + 12.9, pos * ky + 12.9), (w_v, (pos + ox) * kx + 37.3, pos * kx + 37.3)] {
+                let edge = centre - w / 2.0;
+                assert!((edge - edge.round()).abs() < 1e-9, "scales {kx} {ky}: edge {edge} is off the pixel grid");
+                // Snapped onto the grid from where it lies: never further than its own width and half a pixel.
+                assert!((centre - lies).abs() <= w / 2.0 + 0.5 + 1e-9, "scales {kx} {ky}: moved {} px", centre - lies);
+            }
+        }
+    }
+    // The case from review: a level rule at 250 pt, half a point wide, at 2.0 across and 2.002 down, is a pixel
+    // wide and centred on 500.5 already. It stays there.
+    let view = Affine::scale_non_uniform(2.0, 2.002);
+    let (w, (_, oy)) = snap_rule(view, (5.0, 250.0, 400.0, 250.0), 0.5).unwrap();
+    assert_eq!(w, 1.0);
+    assert!(((250.0 + oy) * 2.002 - 500.5).abs() < 1e-9, "centre {}", (250.0 + oy) * 2.002);
+    assert_eq!((rule_scale(view, true), rule_scale(view, false)), (2.002, 2.0));
 }
 
 /// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
