@@ -6097,6 +6097,26 @@ fn paste_content_does_not_use_session_clipboard_when_html_matches_but_rtf_differ
     }
 }
 
+/// Pasting external RTF when plain text matches WordCraft's session clipboard does not return the
+/// old session fragment with its custom parts, even when privateClipboard is omitted (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+    }
+
+    let avail = crate::cmd::paste::available(&s, &json!({"text": my_text, "rtf": external_rtf}));
+    assert!(!avail.contains(&"formatted"), "formatted is unavailable when supplied RTF differs");
+}
+
 /// When another app copies different RTF (`privateClipboard: false`), plain text matching
 /// WordCraft's session clipboard does not return the old session fragment (#5785, #5859).
 #[test]
@@ -6112,6 +6132,23 @@ fn paste_content_does_not_use_session_clipboard_when_another_app_copied_rtf() {
     if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
         assert!(frag.parts.is_empty(), "session text box parts not reused when another app copied");
     }
+}
+
+/// The public `edit.paste` command does not reuse session text box parts when supplied RTF differs,
+/// even when privateClipboard is omitted (#5859).
+#[test]
+fn paste_command_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({"text": my_text, "rtf": external_rtf}));
+    assert_eq!(s.doc.parts.len(), 1, "no second text box part created from session fragment");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("External rich text"));
 }
 
 #[test]
