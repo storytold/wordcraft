@@ -821,11 +821,17 @@ fn proofing_language_options() {
 #[test]
 fn spreadsheet_takes_values_header_and_style() {
     let mut s = Session::new(Document::from_text(""));
-    s.run("insert.spreadsheet", &json!({"values": [["Month", "Cases"], ["Jan", 12], ["Feb", null]], "header": true, "style": "TableGrid"})).unwrap();
+    s.run(
+        "insert.spreadsheet",
+        &json!({"values": [["Month", "Cases"], ["Jan", 12], ["Feb", null], ["Mar", true]], "header": true, "style": "TableGrid"}),
+    )
+    .unwrap();
     let Some(Block::Table(t)) = s.doc.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
-    assert_eq!((t.rows.len(), t.rows[0].cells.len()), (3, 2));
+    assert_eq!((t.rows.len(), t.rows[0].cells.len()), (4, 2));
     assert!(t.rows[0].props.header && !t.rows[1].props.header);
     assert_eq!(t.rows[1].cells[1].blocks[0].as_para().unwrap().text, "12");
+    assert_eq!(t.rows[2].cells[1].blocks[0].as_para().unwrap().text, "");
+    assert_eq!(t.rows[3].cells[1].blocks[0].as_para().unwrap().text, "true");
     assert_eq!(t.props.style.as_deref(), Some("TableGrid"));
 }
 
@@ -851,20 +857,19 @@ fn spreadsheet_rejects_an_explicit_null_values_without_changing_anything() {
 fn spreadsheet_rejects_hostile_values() {
     let wide: Vec<Value> = (0..64).map(|i| json!(i)).collect();
     let many: Vec<Value> = (0..1001).map(|_| json!(["x"])).collect();
-    for bad in [
-        json!("x"),
-        json!(5),
-        json!([]),
-        json!(["a"]),
-        json!([["a", "b"], ["c"]]),
-        json!([wide]),
-        json!(many),
-        json!([[{"a": 1}]]),
-        json!([[[1]]]),
-        json!([[]]),
-    ] {
+    for bad in [json!("x"), json!(5), json!([]), json!(["a"]), json!([["a", "b"], ["c"]]), json!([wide]), json!(many), json!([[]])] {
         let mut s = Session::new(Document::from_text("keep"));
         assert!(s.run("insert.spreadsheet", &json!({"values": bad})).is_err(), "{bad}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "keep");
+        assert!(!s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))));
+    }
+    for cell in [json!({"a": 1}), json!([1])] {
+        let mut s = Session::new(Document::from_text("keep"));
+        let err = s.run("insert.spreadsheet", &json!({"values": [["keep"], [cell]]})).unwrap_err();
+        assert!(
+            matches!(err, CmdError::Params(ref message) if message == "`values` row 2 holds a cell that is not text, a number, a boolean or null"),
+            "{err}"
+        );
         assert_eq!(s.doc.plain_text(StoryRef::Body), "keep");
         assert!(!s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))));
     }
