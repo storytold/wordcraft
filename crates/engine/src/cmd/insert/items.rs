@@ -35,24 +35,45 @@ fn story_has_page_field(doc: &wordcraft_doc::Document, story: StoryRef, except: 
     false
 }
 
-fn page_number_paragraph(style: &str, align: Align, x_of_y: bool) -> Result<Paragraph, CmdError> {
-    let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+/// The paragraph `insert.pageNumber` makes in a header or footer: `pieces` in order, each text
+/// with the field after it ([`template_pieces`]), in `style`, aligned `align`; the fields bold
+/// when `bold` (a template's numbers are).
+fn page_number_paragraph(style: &str, align: Align, pieces: &[(&str, Option<&str>)], bold: bool) -> Result<Paragraph, CmdError> {
     let mut para = Paragraph::new().styled(style);
     para.props.align = Some(align);
     para.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Clear, leader: Default::default() }]);
-    if x_of_y {
-        para.insert_text(0, "Page  of ", &CharProps::default())?;
-        para.insert_object(5, field, &CharProps { bold: Some(true), ..Default::default() })?;
-        let end = para.len();
-        para.insert_object(
-            end,
-            InlineObject::Field { instr: "NUMPAGES".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
-            &CharProps { bold: Some(true), ..Default::default() },
-        )?;
-    } else {
-        para.insert_object(0, field, &CharProps::default())?;
+    let field_props = CharProps { bold: bold.then_some(true), ..Default::default() };
+    for (text, field) in pieces {
+        if !text.is_empty() {
+            let end = para.len();
+            para.insert_text(end, text, &CharProps::default())?;
+        }
+        if let Some(instr) = field {
+            let end = para.len();
+            para.insert_object(end, page_field(instr), &field_props)?;
+        }
     }
     Ok(para)
+}
+
+/// The template `p`'s text and fields spell (`{page}` for a PAGE field, `{pages}` for NUMPAGES),
+/// `None` when it holds another object: the template [`page_number_paragraph`] made it from, if it
+/// made it (#4466: a "Page X of Y" in any language, or a `text` template, is recognised again).
+fn template_of(p: &Paragraph) -> Option<String> {
+    let mut out = String::new();
+    let mut objects = p.objects.iter();
+    for c in p.text.chars() {
+        if c != wordcraft_doc::para::OBJ {
+            out.push(c);
+            continue;
+        }
+        match objects.next()? {
+            InlineObject::Field { instr, .. } if instr == "PAGE" => out.push_str("{page}"),
+            InlineObject::Field { instr, .. } if instr == "NUMPAGES" => out.push_str("{pages}"),
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 // Only cached display text is transferable; instructions, flags and formatting remain part of ownership.
@@ -76,19 +97,54 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
         _ => Align::Center,
     };
     let x_of_y = p::str(v, "format").is_some_and(|f| f.contains("of"));
-    let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let template = match p::str(v, "text") {
+        Some(t) => Some(t.chars().take(MAX_PAGE_TEXT).collect::<String>()),
+        None if x_of_y => {
+            // The document's language (its defaults, then the Normal style, as AutoCorrect reads
+            // it), else the editing language, else English.
+            let langs = [crate::cmd::doc_lang(&s.doc), s.editing_lang.clone()];
+            let (page, of) = langs.iter().flatten().find_map(|l| page_of_words(l)).unwrap_or(("Page", "of"));
+            Some(format!("{page} {{page}} {of} {{pages}}"))
+        }
+        None => None,
+    };
+    let pieces = match &template {
+        Some(t) => template_pieces(t),
+        None => vec![("", Some("PAGE"))],
+    };
+    // A template is a page number: without `{page}` it would add a paragraph each time, never
+    // found again as the page number it replaces.
+    if !pieces.iter().any(|(_, field)| *field == Some("PAGE")) {
+        return Err(CmdError::Params("`text` needs {page} where the page number goes".into()));
+    }
+    // The numbers of a template are bold; a lone PAGE field takes the text's formatting.
+    let bold = template.is_some();
     if position == "current" {
-        let props = s.typing_props();
-        let at = delete_selection(s)?;
-        let end = s.doc.insert_object(&at, field, &props)?;
-        s.sel = Selection::caret(end);
+        let mut props = s.typing_props();
+        let mut at = delete_selection(s)?;
+        // Typed in, as `insert_text` types text (#4466 review): a new insertion under Track
+        // Changes, and never the insertion or deletion of the text at the caret, nor its
+        // formatting change.
+        props.fmt_change = None;
+        props.del = None;
+        props.ins = s.doc.settings.track_changes.then(|| crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert));
+        let field_props = CharProps { bold: bold.then_some(true).or(props.bold), ..props.clone() };
+        for (text, field) in pieces {
+            if !text.is_empty() {
+                at = s.doc.insert_text(&at, text, &props)?;
+            }
+            if let Some(instr) = field {
+                at = s.doc.insert_object(&at, page_field(instr), &field_props)?;
+            }
+        }
+        s.sel = Selection::caret(at);
         return sel_result(s);
     }
     let header = position == "top";
     let id = hf_part(s, header);
     let story = StoryRef::Part(id);
     let style = if header { "Header" } else { "Footer" };
-    let mut para = page_number_paragraph(style, align, x_of_y)?;
+    let mut para = page_number_paragraph(style, align, &pieces, bold)?;
     // Replace only a top-level paragraph matching our generated structure. User text,
     // field switches/metadata and paragraph/run formatting must not be mistaken for a gallery number.
     // Cached field results and paragraph-mark formatting survive gallery changes and identical requests.
@@ -97,10 +153,13 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
             blocks.iter().enumerate().find_map(|(i, block)| {
                 let Block::Para(existing) = &**block else { return None };
                 let Some(align @ (Align::Left | Align::Center | Align::Right)) = existing.props.align else { return None };
+                // Made from the template its text spells, with its numbers bold or not.
+                let template = template_of(existing)?;
+                let pieces = template_pieces(&template);
                 [false, true]
                     .into_iter()
-                    .any(|x_of_y| {
-                        page_number_paragraph(style, align, x_of_y).is_ok_and(|mut p| {
+                    .any(|bold| {
+                        page_number_paragraph(style, align, &pieces, bold).is_ok_and(|mut p| {
                             if p.objects.len() != existing.objects.len() {
                                 return false;
                             }
@@ -142,6 +201,60 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     }
     blocks.push(para_block(para));
     Ok(json!({"story": id}))
+}
+
+/// A page-number template in order: each piece of text with the field after it, if any
+/// (`{page}` is PAGE, `{pages}` NUMPAGES).
+fn template_pieces(template: &str) -> Vec<(&str, Option<&'static str>)> {
+    let mut out = Vec::new();
+    let mut rest = template;
+    while !rest.is_empty() {
+        // The next placeholder (neither is found inside the other).
+        let next = ["{pages}", "{page}"].iter().filter_map(|k| rest.find(k).map(|i| (i, *k))).min_by_key(|(i, _)| *i);
+        let Some((i, k)) = next else {
+            out.push((rest, None));
+            break;
+        };
+        out.push((rest.get(..i).unwrap_or(""), Some(if k == "{pages}" { "NUMPAGES" } else { "PAGE" })));
+        rest = rest.get(i + k.len()..).unwrap_or("");
+    }
+    out
+}
+
+fn page_field(instr: &str) -> InlineObject {
+    InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() }
+}
+
+/// Longest `text` template `insert.pageNumber` takes, in characters.
+pub(super) const MAX_PAGE_TEXT: usize = 256;
+
+/// "Page" and "of" for a "Page X of Y" footer in a language (#4466); `None` where the language
+/// isn't listed.
+fn page_of_words(lang: &str) -> Option<(&'static str, &'static str)> {
+    Some(match wordcraft_doc::collate::language(Some(lang)).as_str() {
+        "en" => ("Page", "of"),
+        "it" => ("Pagina", "di"),
+        "fr" => ("Page", "sur"),
+        "de" => ("Seite", "von"),
+        "es" | "pt" => ("Página", "de"),
+        "ca" => ("Pàgina", "de"),
+        "gl" => ("Páxina", "de"),
+        "nl" => ("Pagina", "van"),
+        "ro" => ("Pagina", "din"),
+        "pl" => ("Strona", "z"),
+        "cs" | "sk" => ("Strana", "z"),
+        "sl" => ("Stran", "od"),
+        // Serbian is written in Cyrillic unless the tag says Latin (`sr-Latn`), as the interface does.
+        "sr" if !lang.split(['-', '_']).any(|t| t.eq_ignore_ascii_case("latn")) => ("Страница", "од"),
+        "hr" | "bs" | "sr" => ("Stranica", "od"),
+        "sv" => ("Sida", "av"),
+        "da" => ("Side", "af"),
+        "nb" | "nn" | "no" => ("Side", "av"),
+        "ru" => ("Страница", "из"),
+        "uk" => ("Сторінка", "з"),
+        "el" => ("Σελίδα", "από"),
+        _ => return None,
+    })
 }
 
 /// Insert date and time at the caret or selection, formatted with a Word picture or default format.
