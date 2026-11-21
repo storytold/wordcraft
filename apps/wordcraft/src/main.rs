@@ -639,9 +639,12 @@ fn main() -> eframe::Result {
 
 /// Minimal native macOS menu bar: the WordCraft app menu (About, Services, Hide, guarded Quit)
 /// and AppKit's Window menu (Minimize, Zoom, Bring All to Front, plus OS-injected Move & Resize
-/// window tiling).
+/// window tiling), yielding shortcuts the app's keymap already binds (such as ⌘M for `para.indent`).
 #[cfg(target_os = "macos")]
-fn macos_menu_layout(lang: wordcraft_ui_egui::i18n::Lang) -> craft::menu::Layout {
+fn macos_menu_layout(
+    lang: wordcraft_ui_egui::i18n::Lang,
+    keys: &dyn Fn(&craft::menu::Chord) -> Option<craft::menu::CommandRef>,
+) -> craft::menu::Layout {
     use craft::menu::{CommandRef, Item, ItemRole, LayoutOptions, Menu, MenuBar, MenuRole, mac_layout};
     use serde_json::json;
     use wordcraft_ui_egui::i18n;
@@ -649,13 +652,13 @@ fn macos_menu_layout(lang: wordcraft_ui_egui::i18n::Lang) -> craft::menu::Layout
     let about = Item::new(CommandRef::with_params("ui.dialog", json!({"name": "about"})), i18n::tr(lang, "About WordCraft")).role(ItemRole::About);
     let bar = MenuBar::new(vec![Menu::new("WordCraft", vec![about.into()]).role(MenuRole::App)]);
     let label = |s: &'static str| i18n::tr(lang, s).to_owned();
-    mac_layout(&bar, &LayoutOptions::new("WordCraft").label(&label))
+    mac_layout(&bar, &LayoutOptions::new("WordCraft").label(&label).keys(keys))
 }
 
 /// Install the native macOS app + Window menu bar, falling back to the app-only menu on failure.
 #[cfg(target_os = "macos")]
 fn install_macos_menu(ctx: &egui::Context, lang: wordcraft_ui_egui::i18n::Lang) -> Option<craft::menu::NativeMenu> {
-    let layout = macos_menu_layout(lang);
+    let layout = macos_menu_layout(lang, &|chord| craft::ui::runtime::commands::holder(ctx, chord));
     if let Some(menu) = craft::menu::mac::install(ctx, &layout.bar) {
         return Some(menu);
     }
@@ -666,11 +669,10 @@ fn install_macos_menu(ctx: &egui::Context, lang: wordcraft_ui_egui::i18n::Lang) 
     None
 }
 
-/// Dispatches native macOS menu clicks through `WordApp` and keeps modal gating and language in sync.
+/// Dispatches native macOS menu clicks through `WordApp` and keeps modal gating, language, and key
+/// holdings in sync.
 #[cfg(target_os = "macos")]
 fn update_macos_menu(menu: &mut craft::menu::NativeMenu, app: &mut WordApp, ctx: &egui::Context) {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-
     menu.set_gate(craft::menu::Gate::default().modal(app.dialog_host_mut().shows_modal()));
     for command in menu.take_clicks(ctx) {
         if let Err(error) = app.run(&command.id, command.params) {
@@ -679,9 +681,7 @@ fn update_macos_menu(menu: &mut craft::menu::NativeMenu, app: &mut WordApp, ctx:
     }
     menu.set_gate(craft::menu::Gate::default().modal(app.dialog_host_mut().shows_modal()));
     let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&app.ui.language);
-    let mut hasher = DefaultHasher::new();
-    lang.code().hash(&mut hasher);
-    menu.sync_with(hasher.finish(), || macos_menu_layout(lang));
+    menu.sync(macos_menu_layout(lang, &|chord| craft::ui::runtime::commands::holder(ctx, chord)));
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
@@ -1018,7 +1018,8 @@ mod smoke {
         run.app.app.start_screen();
         run.settle();
         let before = run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
-        let layout = super::macos_menu_layout(wordcraft_ui_egui::i18n::Lang::from_pref("en"));
+        let layout =
+            super::macos_menu_layout(wordcraft_ui_egui::i18n::Lang::from_pref("en"), &|chord| craft::ui::runtime::commands::holder(&run.ctx, chord));
         let about =
             layout.bar.items().into_iter().find(|item| item.role == Some(ItemRole::About)).expect("macOS menu bar has an About item").command.clone();
         run.app.native_menu = Some(NativeMenu::new(Box::new(Selection(vec![Event::Click(about)]))));
@@ -1039,17 +1040,66 @@ mod smoke {
         assert!(run.app.app.dialog_host_mut().is_empty(), "Escape dismisses About");
         assert_eq!(run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before);
     }
+
+    /// The real WordCraft runtime keymap keeps ⌘M on `para.indent` (moving Minimize to ⌃⌘M while
+    /// preserving the `Window` menu), and keymap changes re-sync the native menu bar.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_menu_syncs_keymap_changes_and_preserves_cmd_m() {
+        use craft::menu::{Backend, Builtin, Chord, Dispatch, Event, MenuBar, MenuRole, NativeMenu, Node, Standard};
+
+        struct Recording(Arc<Mutex<Option<MenuBar>>>);
+        impl Backend for Recording {
+            fn sync(&mut self, bar: &MenuBar) {
+                *self.0.lock().unwrap() = Some(bar.clone());
+            }
+            fn attach(&mut self, _: Dispatch) {}
+            fn drain(&mut self) -> Vec<Event> {
+                Vec::new()
+            }
+        }
+
+        let synced = Arc::new(Mutex::new(None));
+        let mut run = Run::new();
+        run.app.native_menu = Some(NativeMenu::new(Box::new(Recording(Arc::clone(&synced)))));
+        run.settle();
+
+        let bar = synced.lock().unwrap().clone().expect("native menu synced");
+        let window_menu = bar.menu(MenuRole::Window).expect("Window menu stays registered");
+        let ctrl_cmd_m = Chord::parse("Ctrl+Cmd+M").unwrap();
+        assert!(
+            window_menu
+                .children
+                .iter()
+                .any(|n| matches!(n, Node::Item(it) if Builtin::of(&it.command) == Some(Builtin::Minimize) && it.shortcut == Some(ctrl_cmd_m))),
+            "Minimize moves to Ctrl+Cmd+M when para.indent owns Cmd+M"
+        );
+        assert!(
+            !window_menu.children.iter().any(|n| matches!(n, Node::Standard { kind: Standard::Minimize, .. })),
+            "predefined Cmd+M Minimize is omitted while para.indent owns Cmd+M"
+        );
+
+        run.app.app.session.keymap_mut().insert("para.indent", vec![]);
+        run.settle();
+
+        let updated = synced.lock().unwrap().clone().expect("native menu re-synced after keymap update");
+        let updated_window = updated.menu(MenuRole::Window).expect("Window menu remains after keymap update");
+        assert!(
+            updated_window.children.iter().any(|n| matches!(n, Node::Standard { kind: Standard::Minimize, .. })),
+            "clearing para.indent restores Standard::Minimize"
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
 mod macos_menu_tests {
-    use craft::menu::{Builtin, ItemRole, MenuRole, Node, Standard};
+    use craft::menu::{Builtin, Chord, CommandRef, ItemRole, MenuRole, Node, Standard};
     use serde_json::json;
     use wordcraft_ui_egui::i18n;
 
     #[test]
     fn macos_menu_includes_app_menu_and_window_menu() {
-        let layout = super::macos_menu_layout(i18n::Lang::from_pref("en"));
+        let layout = super::macos_menu_layout(i18n::Lang::from_pref("en"), &|_| None);
         assert!(layout.clashes.is_empty(), "unexpected shortcut clashes: {:?}", layout.clashes);
 
         let app_menu = layout.bar.menu(MenuRole::App).expect("macOS menu bar has an App menu");
@@ -1069,6 +1119,37 @@ mod macos_menu_tests {
 
         let window_menu = layout.bar.menu(MenuRole::Window).expect("macOS menu bar registers a Window menu for OS tiling");
         for kind in [Standard::Minimize, Standard::Zoom, Standard::BringAllToFront] {
+            assert!(
+                window_menu.children.iter().any(|n| matches!(n, Node::Standard { kind: k, .. } if *k == kind)),
+                "Window menu missing standard item {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_menu_yields_cmd_m_to_para_indent_while_keeping_window_menu() {
+        let cmd_m = Chord::parse("Cmd+M").unwrap();
+        let ctrl_cmd_m = Chord::parse("Ctrl+Cmd+M").unwrap();
+        let layout = super::macos_menu_layout(i18n::Lang::from_pref("en"), &|chord| (*chord == cmd_m).then(|| CommandRef::new("para.indent")));
+        assert!(
+            layout.clashes.iter().any(|c| c.shortcut == cmd_m && c.command == CommandRef::new("para.indent")),
+            "expected Minimize clash to yield Cmd+M to para.indent: {:?}",
+            layout.clashes
+        );
+
+        let window_menu = layout.bar.menu(MenuRole::Window).expect("macOS menu bar registers a Window menu for OS tiling");
+        assert!(
+            window_menu
+                .children
+                .iter()
+                .any(|n| matches!(n, Node::Item(it) if Builtin::of(&it.command) == Some(Builtin::Minimize) && it.shortcut == Some(ctrl_cmd_m))),
+            "Minimize moves to Ctrl+Cmd+M when para.indent owns Cmd+M"
+        );
+        assert!(
+            !window_menu.children.iter().any(|n| matches!(n, Node::Standard { kind: Standard::Minimize, .. })),
+            "Window menu omits predefined Cmd+M Minimize when para.indent owns Cmd+M"
+        );
+        for kind in [Standard::Zoom, Standard::BringAllToFront] {
             assert!(
                 window_menu.children.iter().any(|n| matches!(n, Node::Standard { kind: k, .. } if *k == kind)),
                 "Window menu missing standard item {kind:?}"
