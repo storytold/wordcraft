@@ -487,3 +487,55 @@ fn find_replace_and_go_to_keys_like_word() {
     assert_eq!(h.state().ui.nav_tab, "results", "Find leaves Pages to show the selected-text matches");
     assert_eq!(h.state().session.find.results.len(), 2);
 }
+
+/// Opens Table Properties on the caret's table, draws it a few frames, presses OK and lets the
+/// held OK finish; returns whether the document recorded an edit.
+fn table_properties_ok_unchanged(a: &mut WordApp) -> bool {
+    a.run("table.properties", json!({})).unwrap();
+    let ctx = crate::test_harness::context();
+    for _ in 0..4 {
+        pump(a, &ctx);
+    }
+    assert!(a.dialog_host.get::<FormHost<dialogs::TableProperties>>().is_some(), "no table dialog: {:?}", open_key(a));
+    let depth = a.session.undo_depth();
+    let id = a.dialog_host.open_dialogs().first().map(|d| d.id).expect("the dialog is open");
+    let _ = a.dialog_host.confirm_by_id(&ctx, id);
+    for _ in 0..3 {
+        pump(a, &ctx);
+    }
+    assert!(a.dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
+    a.session.undo_depth() != depth
+}
+
+/// The caret's table, mutably, for setting up a test document.
+fn each_table(a: &mut WordApp, f: impl Fn(&mut wordcraft_doc::Table)) {
+    for b in &mut a.session.doc.body {
+        if let wordcraft_doc::Block::Table(t) = Arc::make_mut(b) {
+            f(t);
+        }
+    }
+}
+
+/// The dialog shows the indent the table is drawn at, its style's when it has none of its own,
+/// so OK with nothing changed leaves the table where it is.
+#[test]
+fn table_properties_show_a_style_indent() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    Arc::make_mut(&mut a.session.doc.styles).upsert(wordcraft_doc::styles::Style {
+        id: "Indented".into(),
+        name: "Indented".into(),
+        kind: wordcraft_doc::styles::StyleKind::Table,
+        table: Some(wordcraft_doc::styles::TableStyleParts { indent: Some(36.0), ..Default::default() }),
+        ..Default::default()
+    });
+    each_table(&mut a, |t| {
+        t.props.style = Some("Indented".into());
+        t.props.indent = None;
+    });
+    let f = dialogs::TableForm::read(&a).unwrap();
+    assert!((f.indent - 36.0).abs() < 0.01, "{} pt", f.indent);
+    assert!(!table_properties_ok_unchanged(&mut a), "OK with nothing changed records no edit");
+    let indent = a.session.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.props.indent) } else { None });
+    assert_eq!(indent, Some(None), "the table keeps its style's indent");
+}

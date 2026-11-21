@@ -582,6 +582,7 @@ fn resize_drag(s: &mut Session, v: &Value) -> CmdResult {
     if plan.widths.is_none() && plan.heights.is_empty() && plan.cells.is_empty() {
         return sel_result(s);
     }
+    let base = s.doc.table(target.story, &target.table).map_or(0.0, |t| s.doc.styles.table_indent(&t.props));
     let t = s.doc.table_mut(target.story, &target.table)?;
     if let Some(widths) = plan.widths {
         set_widths(t, widths);
@@ -594,7 +595,7 @@ fn resize_drag(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
     }
-    let moved = plan.indent_by.is_some_and(|d| move_left_edge(t, d));
+    let moved = plan.indent_by.is_some_and(|d| move_left_edge(t, base, d));
     if !plan.cells.is_empty() {
         regrid(t, &target.cols, &plan.cells)?;
     }
@@ -606,7 +607,8 @@ fn resize_drag(s: &mut Session, v: &Value) -> CmdResult {
         && let Some(got) = drawn_left(&s.layout(), page, &target)
         && (got - (target.left() + d)).abs() > 0.05
     {
-        move_left_edge(s.doc.table_mut(target.story, &target.table)?, target.left() + d - got);
+        let base = s.doc.table(target.story, &target.table).map_or(0.0, |t| s.doc.styles.table_indent(&t.props));
+        move_left_edge(s.doc.table_mut(target.story, &target.table)?, base, target.left() + d - got);
         touch(s, &target)?;
     }
     if plan.heights.is_empty() {
@@ -647,10 +649,11 @@ fn resize_drag(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Moves `t`'s left edge `by` points: its indent, or a floating table's offset; whether it did.
+/// Moves `t`'s left edge `by` points: its indent (from `base`, the indent it is drawn at, which may
+/// come from its style), or a floating table's offset; whether it did.
 /// A centred or right-aligned table keeps its alignment, as in Word: the first column's new width
 /// is all that changes, and the table stays centred or on its right edge.
-fn move_left_edge(t: &mut Table, by: f32) -> bool {
+fn move_left_edge(t: &mut Table, base: f32, by: f32) -> bool {
     match t.props.float.as_mut() {
         Some(f) => {
             f.h_align = None;
@@ -659,7 +662,7 @@ fn move_left_edge(t: &mut Table, by: f32) -> bool {
         }
         None if matches!(t.props.align, Some(Align::Center | Align::Right)) => false,
         None => {
-            t.props.indent = Some((t.props.indent.unwrap_or(0.0) + by).clamp(-MAX_LEN, MAX_LEN));
+            t.props.indent = Some((base + by).clamp(-MAX_LEN, MAX_LEN));
             true
         }
     }
