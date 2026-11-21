@@ -533,7 +533,10 @@ impl Document {
         self.reachable(roots, &|o| o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect(), true)
             .into_iter()
             .filter_map(|s| match s {
-                StoryRef::Part(id) => Some(id),
+                // The non-text-box roots (headers, footers, footnotes) are seeds of the walk
+                // and come back reachable; only the parts that really are text boxes belong
+                // in the answer.
+                StoryRef::Part(id) if self.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox) => Some(id),
                 _ => None,
             })
             .collect()

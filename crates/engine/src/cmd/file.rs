@@ -192,10 +192,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 let text = if raw { s.selected_text() } else { s.selected_final_text() };
                 o.insert("text".into(), json!(text));
                 o.insert("format".into(), super::format::state(s));
+                // The tracked-deleted runs the selection covers, as offsets from the selection's
+                // start in the stored text: anchor, focus and deleted are stored coordinates,
+                // text (unless raw) is the final text, where the deletions are already gone.
+                let del = s.selected_deleted_ranges();
+                if !del.is_empty() {
+                    o.insert("deleted".into(), json!(del.iter().map(|r| json!({"start": r.start, "end": r.end})).collect::<Vec<_>>()));
+                }
             }
             Ok(r)
         })
-        .params(r#"{"raw"?: bool (the stored text, tracked deletions included)} — text is the final text otherwise (deletions dropped)"#)
+        .params(r#"{"raw"?: bool (the stored text, tracked deletions included)} — text is the final text otherwise (deletions dropped); anchor and focus are stored-text offsets (what select.range takes), so with fields they are not offsets in text; deleted names the tracked deletions the selection covers, as stored offsets from the selection's start"#)
         .pure(),
         CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary).pure(),
         CommandSpec::new("document.setText", "Replace Document Text", "Agents", |s, v| {
@@ -926,11 +933,11 @@ mod tests {
         // body) with tracking on, so the stored document keeps it inside a tracked deletion.
         let mut at = None;
         for (i, b) in s.doc.body.iter().enumerate() {
-            if let Some(p) = b.as_para() {
-                if let Some(o) = p.text.find(OBJ) {
-                    at = Some((i, o));
-                    break;
-                }
+            if let Some(p) = b.as_para()
+                && let Some(o) = p.text.find(OBJ)
+            {
+                at = Some((i, o));
+                break;
             }
         }
         let (bi, off) = at.expect("the box's anchor is in a body paragraph");
@@ -944,5 +951,55 @@ mod tests {
 
         let raw: Value = s.run("document.inspect", &json!({"raw": true})).unwrap();
         assert!(raw.to_string().contains("BOX-SECRET-TEXT"), "raw gives the stored parts back");
+    }
+
+    /// `document.selection` names its coordinates: anchor, focus and `deleted` are stored-text
+    /// offsets, `text` (unless raw) is the final text. A tracked-deleted run the selection
+    /// covers is named in `deleted`, as stored offsets from the selection's start.
+    #[test]
+    fn the_selection_names_its_tracked_deletions_in_stored_offsets() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "Keep this. DROP-SECRET-TEXT Keep that.\n"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        let a = "Keep this. ".len();
+        let b = a + "DROP-SECRET-TEXT".len();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": a}, "focus": {"block": 0, "off": b}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+        // Select across the deletion: from the kept text before it into the kept text after.
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": b}})).unwrap();
+
+        let out = s.run("document.selection", &json!({})).unwrap();
+        // text is the final text: what the deletion holds is gone from it.
+        let text = out["text"].as_str().unwrap();
+        assert!(!text.contains("DROP-SECRET-TEXT"), "final text leaks a tracked deletion: {out}");
+        // deleted names the covered deletion, in stored offsets from the selection's start:
+        // the run sits at {a}..{b} in the stored text, the selection starts at 5.
+        assert_eq!(out["deleted"], json!([{"start": a - 5, "end": b - 5}]), "{out}");
+
+        // raw keeps the deleted text in `text`, the stored one.
+        let raw = s.run("document.selection", &json!({"raw": true})).unwrap();
+        assert!(raw["text"].as_str().unwrap().contains("DROP-SECRET-TEXT"), "raw gives the stored text back: {raw}");
+    }
+
+    /// Deleted ranges run across paragraphs as one stored text: a paragraph break counts one
+    /// byte, as the `\n` a paragraph break is in the selected text.
+    #[test]
+    fn the_selection_deleted_ranges_run_across_paragraphs() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "First line.\nSecond SECRET line.\n"})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        let a = "Second ".len();
+        let b = a + "SECRET".len();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": a}, "focus": {"block": 1, "off": b}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+        // Select from the first paragraph into the second, past the deletion's end: the
+        // trimmed first paragraph is "line." (5 bytes), then the break (1), then the run's
+        // offset in the second paragraph.
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 1, "off": b + 4}})).unwrap();
+
+        let out = s.run("document.selection", &json!({})).unwrap();
+        assert_eq!(out["deleted"], json!([{"start": 5 + 1 + a, "end": 5 + 1 + b}]), "{out}");
     }
 }
