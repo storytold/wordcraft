@@ -282,6 +282,8 @@ fn define(s: &mut Session, v: &Value) -> CmdResult {
         Some(n) => {
             // Change the list in place: every list sharing its definition follows.
             let aid = s.doc.numbering.num(n).map(|x| x.abstract_id).ok_or_else(|| CmdError::Params("no such list".into()))?;
+            let sharing: Vec<u32> = s.doc.numbering.nums.iter().filter(|x| x.abstract_id == aid).map(|x| x.id).collect();
+            preserve_num_change_originals(&mut s.doc, &sharing);
             if let Some(a) = Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|a| a.id == aid) {
                 a.levels = levels.clone();
                 if name.is_some() {
@@ -291,7 +293,6 @@ fn define(s: &mut Session, v: &Value) -> CmdResult {
             if let Some(x) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == n) {
                 x.level_overrides.clear();
             }
-            let sharing: Vec<u32> = s.doc.numbering.nums.iter().filter(|x| x.abstract_id == aid).map(|x| x.id).collect();
             touch_lists(s, &sharing)?;
             n
         }
@@ -416,6 +417,61 @@ fn preset(s: &mut Session, v: &Value) -> CmdResult {
     let mut r = sel_result(s)?;
     r["num"] = json!(num);
     Ok(r)
+}
+
+/// Materialize the historical `w:original` cache before `list.define` edits `nums` in place.
+fn preserve_num_change_originals(doc: &mut wordcraft_doc::Document, nums: &[u32]) {
+    let numbering = doc.numbering.clone();
+    preserve_blocks_originals(&mut doc.body, &numbering, nums, 0);
+    for part in doc.parts.values_mut() {
+        preserve_blocks_originals(&mut part.blocks, &numbering, nums, 0);
+    }
+    for g in &mut doc.glossary {
+        preserve_blocks_originals(&mut g.blocks, &numbering, nums, 0);
+    }
+}
+
+fn block_needs_original_preserve(block: &wordcraft_doc::Block, nums: &[u32], depth: usize) -> bool {
+    if depth > 32 {
+        return false;
+    }
+    match block {
+        wordcraft_doc::Block::Para(p) => {
+            p.props.num_change.as_deref().is_some_and(|nc| nc.original.is_empty() && nc.snapshot.is_some_and(|nr| nums.contains(&nr.num)))
+        }
+        wordcraft_doc::Block::Table(t) => {
+            t.rows.iter().any(|r| r.cells.iter().any(|c| c.blocks.iter().any(|b| block_needs_original_preserve(b, nums, depth + 1))))
+        }
+    }
+}
+
+fn preserve_blocks_originals(blocks: &mut wordcraft_doc::Blocks, numbering: &wordcraft_doc::numbering::Numbering, nums: &[u32], depth: usize) {
+    if depth > 32 {
+        return;
+    }
+    for block in blocks.iter_mut() {
+        if !block_needs_original_preserve(block, nums, depth) {
+            continue;
+        }
+        match Arc::make_mut(block) {
+            wordcraft_doc::Block::Para(p) => {
+                if let Some(nc) = p.props.num_change.as_deref_mut()
+                    && nc.original.is_empty()
+                    && let Some(nr) = nc.snapshot
+                    && nums.contains(&nr.num)
+                {
+                    nc.original = numbering.change_original(nr.num, nr.level).unwrap_or_default();
+                }
+            }
+            wordcraft_doc::Block::Table(t) => {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        preserve_blocks_originals(&mut cell.blocks, numbering, nums, depth + 1);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Lay out again every paragraph in one of `nums`.

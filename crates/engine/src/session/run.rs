@@ -58,6 +58,9 @@ impl Session {
     fn forget_review_style(&mut self, id: &str, mutates: bool) {
         if (mutates && !matches!(id, "review.accept" | "review.reject")) || id.starts_with("caret.") || id.starts_with("select.") {
             self.review_style = None;
+            self.review_para_fmt = None;
+            self.review_para_num = None;
+            self.review_navigated = None;
         }
     }
 

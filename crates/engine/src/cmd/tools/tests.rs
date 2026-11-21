@@ -906,6 +906,1412 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(text.contains("Visible text."), "{text}");
 }
 
+/// Save `revised` and Compare Documents against `original` (in memory), returning the result
+/// session and the command's JSON. `tag` names the temp file (tests run in parallel).
+fn compare_saved(tag: &str, original: Document, revised: &Document, opts: Value) -> (Session, Value) {
+    let path = std::env::temp_dir().join(format!("wc-compare-fmt-{}-{tag}.docx", std::process::id()));
+    crate::io::save_path(&path, revised).unwrap();
+    let mut args = opts;
+    if let Value::Object(o) = &mut args {
+        o.insert("path".into(), json!(path.to_string_lossy()));
+    }
+    let mut s = Session::new(original);
+    let r = s.run("review.compare", &args).unwrap();
+    let _ = std::fs::remove_file(&path);
+    (s, r)
+}
+
+/// A numbering-only difference emits `w:numberingChange` (`ParaProps.num_change`) instead of
+/// `w:pPrChange` (`ParaProps.fmt_change`). The snapshot keeps the original numbering and
+/// Reject restores it, in both directions (list added, list removed).
+#[test]
+fn compare_emits_numbering_change_for_numbering_only_differences() {
+    use wordcraft_doc::props::NumRef;
+
+    // Unit test: list added
+    let old = Paragraph::with_text("A", CharProps::default());
+    let mut new = Paragraph::with_text("A", CharProps::default());
+    new.props.numbering = Some(NumRef { num: 1, level: 0 });
+    let mut revs = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(&old, &mut new, &mut revs, None, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(new.props.fmt_change.is_none(), "numbering-only difference must not emit w:pPrChange");
+    let ch = new.props.num_change.as_ref().expect("numbering-only difference must emit w:numberingChange");
+    assert_eq!(ch.previous_numbering(), None, "snapshot keeps previous un-numbered state");
+    crate::cmd::fmt_revisions::resolve_para(&mut new.props, false);
+    assert!(new.props.num_change.is_none(), "reject drops the change record");
+    assert_eq!(new.props.numbering, None, "reject restores previous un-numbered state");
+
+    // Unit test: list removed
+    let mut old = Paragraph::with_text("B", CharProps::default());
+    old.props.numbering = Some(NumRef { num: 2, level: 1 });
+    let mut new = Paragraph::with_text("B", CharProps::default());
+    let mut revs = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(&old, &mut new, &mut revs, None, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(new.props.fmt_change.is_none(), "numbering-only difference must not emit w:pPrChange");
+    let ch = new.props.num_change.as_ref().expect("numbering-only difference must emit w:numberingChange");
+    assert_eq!(ch.previous_numbering(), Some(NumRef { num: 2, level: 1 }), "snapshot keeps exact original NumRef");
+    crate::cmd::fmt_revisions::resolve_para(&mut new.props, false);
+    assert!(new.props.num_change.is_none(), "reject drops the change record");
+    assert_eq!(new.props.numbering, Some(NumRef { num: 2, level: 1 }), "reject restores exact original NumRef");
+
+    // End to end: list applied to otherwise identical text
+    let mut rev = Session::new(Document::from_text("A"));
+    let r = rev.run("list.define", &json!({"levels": [{"format": "decimal", "text": "%1."}], "apply": false})).unwrap();
+    let num = r["num"].as_u64().unwrap() as u32;
+    rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 0 });
+    let (mut s, r) = compare_saved("num_added", Document::from_text("A"), &rev.doc, json!({}));
+    assert_eq!(r["changes"], 1, "numbering change is one change: {r}");
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p.props.numbering, Some(NumRef { num, level: 0 }), "the revised list survives the comparison");
+    assert!(p.props.fmt_change.is_none(), "list-only change does not emit w:pPrChange");
+    let ch = p.props.num_change.as_ref().expect("list-only change emits w:numberingChange");
+    assert_eq!(ch.previous_numbering(), None, "snapshot keeps previous un-numbered state");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p.props.numbering.is_none(), "reject restores the original un-numbered paragraph");
+    assert!(p.props.num_change.is_none(), "reject drops the change record");
+
+    // End to end: list removed from paragraph
+    let numbered = |text: &str| {
+        let mut s = Session::new(Document::from_text(text));
+        let r = s.run("list.define", &json!({"levels": [{"format": "decimal", "text": "%1."}], "apply": false})).unwrap();
+        let num = r["num"].as_u64().unwrap() as u32;
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 0 });
+        s.doc
+    };
+    let original = numbered("A");
+    let original_num =
+        original.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering.expect("the original paragraph is numbered");
+    let (mut s, r) = compare_saved("num_removed", original, &Document::from_text("A"), json!({}));
+    assert_eq!(r["changes"], 1, "removing a list is one change: {r}");
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p.props.numbering.is_none(), "the revised un-numbered paragraph survives");
+    assert!(p.props.fmt_change.is_none(), "removing a list does not emit w:pPrChange");
+    let ch = p.props.num_change.as_ref().expect("removing a list emits w:numberingChange");
+    assert_eq!(ch.previous_numbering(), Some(original_num), "snapshot carries exactly the original numbering");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p.props.numbering, Some(original_num), "reject restores exactly the original numbering");
+    assert!(p.props.num_change.is_none(), "reject drops the change record");
+
+    // DOCX roundtrip: list-removed paragraph with w:numberingChange serializes without w:ilvl/w:numId
+    let mut roundtrip_doc = Document::from_text("List removed");
+    roundtrip_doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Tester".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let mut nc = wordcraft_doc::props::NumChange::for_numbering(0, Some(NumRef { num: 42, level: 3 }));
+    nc.original = "1.".into();
+    roundtrip_doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change = Some(Box::new(nc));
+    let docx_bytes = wordcraft_docx::write(&roundtrip_doc).expect("docx writes successfully");
+    let mut z = craft_zip::Archive::open(&docx_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(xml.contains("<w:numberingChange"), "exported xml contains w:numberingChange: {xml}");
+    assert!(xml.contains(r#"w:original="1.""#), "exported xml serializes original numbering string: {xml}");
+
+    let read_doc = wordcraft_docx::read(&docx_bytes).expect("docx reads back successfully");
+    let read_p = read_doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(read_p.props.numbering.is_none(), "read paragraph has no active numbering");
+    let read_ch = read_p.props.num_change.as_ref().expect("read paragraph preserves num_change");
+    assert_eq!(read_ch.original, "1.", "read paragraph preserves original numbering string");
+    assert_eq!(read_ch.snapshot, None, "an original naming no list here creates no snapshot");
+}
+
+/// Review checks: numbering changes interact cleanly with format changes, unnumbered baselines,
+/// legacy unparseable original strings, and formatting balloon detection (`has_format_changes`).
+#[test]
+fn numbering_change_review_edge_cases() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    // 1. has_format_changes returns true when only num_change is present
+    let mut doc = Document::from_text("Test");
+    assert!(!crate::cmd::review::has_format_changes(&doc));
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change = NumChange::boxed(0, Some(NumRef { num: 1, level: 0 }));
+    assert!(crate::cmd::review::has_format_changes(&doc), "has_format_changes detects num_change");
+
+    // 2. resolve_para preserves active numbering when original is unparseable legacy format
+    let mut p = Paragraph::with_text("Legacy", CharProps::default());
+    p.props.numbering = Some(NumRef { num: 5, level: 1 });
+    p.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: None }));
+    crate::cmd::fmt_revisions::resolve_para(&mut p.props, false);
+    assert_eq!(p.props.numbering, Some(NumRef { num: 5, level: 1 }), "unparseable legacy original preserves active numbering");
+    assert!(p.props.num_change.is_none());
+
+    // 3. resolve_para clears numbering when original is explicitly empty or "none"
+    let mut p = Paragraph::with_text("None", CharProps::default());
+    p.props.numbering = Some(NumRef { num: 5, level: 1 });
+    p.props.num_change = Some(Box::new(NumChange { rev: 0, original: "none".into(), snapshot: None }));
+    crate::cmd::fmt_revisions::resolve_para(&mut p.props, false);
+    assert_eq!(p.props.numbering, None, "explicitly 'none' original clears numbering");
+
+    // 4. Preserve existing formatting baseline alongside numbering change
+    let mut old_p = Paragraph::with_text("Formatted", CharProps::default());
+    old_p.props.align = Some(wordcraft_doc::props::Align::Center);
+    let mut new_p = Paragraph::with_text("Formatted", CharProps::default());
+    new_p.props.align = Some(wordcraft_doc::props::Align::Center);
+    new_p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::props::ParaProps::default());
+    new_p.props.numbering = Some(NumRef { num: 1, level: 0 });
+
+    let mut revs = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(&old_p, &mut new_p, &mut revs, None, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(new_p.props.fmt_change.is_some(), "recording num_change preserves earlier fmt_change baseline");
+    assert!(new_p.props.num_change.is_some(), "num_change is recorded");
+
+    // 5. Compare baseline uses original numbering even if original has a same-author revision
+    let mut revs = Vec::new();
+    let mut orig_para = Paragraph::with_text("Step", CharProps::default());
+    orig_para.props.numbering = Some(NumRef { num: 1, level: 1 });
+    // orig_para had a prior revision where previous numbering was None
+    orig_para.props.num_change = Some(Box::new(NumChange::for_numbering(0, None)));
+    revs.push(wordcraft_doc::Revision { kind: RevisionKind::Format, author: "Author".into(), date: "2026-01-01T00:00:00Z".into(), move_name: None });
+
+    let mut revised_para = Paragraph::with_text("Step", CharProps::default());
+    revised_para.props.numbering = None; // Matches prior revision baseline, but differs from active numbering!
+
+    crate::cmd::fmt_revisions::compare_formatting(&orig_para, &mut revised_para, &mut revs, None, "Author", "2026-01-01T00:00:00Z");
+    assert!(revised_para.props.num_change.is_some(), "Compare does not clear num_change when revised matches prior revision baseline");
+    assert_eq!(
+        revised_para.props.num_change.as_ref().unwrap().previous_numbering(),
+        Some(NumRef { num: 1, level: 1 }),
+        "Compare baseline is original paragraph's active numbering"
+    );
+    crate::cmd::fmt_revisions::resolve_para(&mut revised_para.props, false);
+    assert_eq!(revised_para.props.numbering, Some(NumRef { num: 1, level: 1 }), "reject restores original paragraph active numbering");
+}
+
+/// Verify independent resolution of numbering and formatting revisions, and edit coalescing.
+#[test]
+fn numbering_change_independent_resolution_and_coalescing() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    // 6. Restoring both baselines when a paragraph carries both fmt_change and num_change
+    let mut p_both = Paragraph::with_text("Both", CharProps::default());
+    p_both.props.numbering = Some(NumRef { num: 1, level: 0 });
+    p_both.props.num_change = Some(Box::new(NumChange::for_numbering(0, None)));
+    let old_fmt =
+        wordcraft_doc::props::ParaProps { numbering: Some(NumRef { num: 1, level: 0 }), align: None, ..wordcraft_doc::props::ParaProps::default() };
+    p_both.props.align = Some(wordcraft_doc::props::Align::Center);
+    p_both.props.fmt_change = wordcraft_doc::props::PropChange::boxed(1, old_fmt);
+
+    crate::cmd::fmt_revisions::resolve_para(&mut p_both.props, false);
+    assert_eq!(p_both.props.align, None, "reject restores old alignment baseline");
+    assert_eq!(p_both.props.numbering, None, "reject restores unnumbered baseline from num_change");
+
+    // 7. review.changes emits both num_change and fmt_change independently before resolving
+    let mut doc_both = Document::from_text("Both changes");
+    doc_both.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_both.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Bob".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let p = doc_both.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.numbering = Some(NumRef { num: 1, level: 1 });
+    p.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 1, level: 0 }))));
+    p.props.align = Some(wordcraft_doc::props::Align::Center);
+    p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(1, wordcraft_doc::props::ParaProps::default());
+    let mut s_both = Session::new(doc_both);
+    let chs = s_both.run("review.changes", &json!({})).unwrap();
+    let ch_array = chs.as_array().expect("array of changes");
+    assert_eq!(ch_array.len(), 2, "both numbering and alignment changes are emitted");
+    assert_eq!(ch_array[0]["author"], "Alice", "numbering change author");
+    assert_eq!(ch_array[1]["author"], "Bob", "formatting change author");
+
+    // 7a. Accept numbering change independently, keeping formatting change pending
+    s_both.sel = Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 });
+    s_both.run("review.accept", &json!({"next": false})).unwrap();
+    let p_after_accept_num = s_both.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after_accept_num.props.num_change.is_none(), "numbering change was accepted and cleared");
+    assert!(p_after_accept_num.props.fmt_change.is_some(), "formatting change remains pending");
+    assert_eq!(p_after_accept_num.props.align, Some(wordcraft_doc::props::Align::Center));
+
+    // 7b. Reject formatting change independently, restoring alignment without affecting numbering
+    s_both.sel = Selection {
+        anchor: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 },
+        focus: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: p_after_accept_num.len() },
+    };
+    s_both.run("review.reject", &json!({"next": false})).unwrap();
+    let p_after_reject_fmt = s_both.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after_reject_fmt.props.fmt_change.is_none(), "formatting change resolved");
+    assert_eq!(p_after_reject_fmt.props.align, None, "alignment restored to None");
+    assert_eq!(p_after_reject_fmt.props.numbering, Some(NumRef { num: 1, level: 1 }), "numbering remains active");
+
+    // 8. ID collision through adoption: Reject restores remapped list ID and save persists correct list
+    let mut our_doc = Document::from_text("Our text");
+    let our_list = Arc::make_mut(&mut our_doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    let mut their_doc = Document::from_text("Their text");
+    their_doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Other".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let their_list = Arc::make_mut(&mut their_doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    assert_eq!(their_list, our_list, "deliberate source and target list ID collision");
+    let tp = their_doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    tp.props.numbering = None;
+    tp.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: their_list, level: 0 }))));
+
+    let frag = our_doc.adopt(their_doc);
+    let mut s = Session::new(our_doc);
+    s.doc.body = frag.blocks.into_iter().map(std::sync::Arc::new).collect();
+    s.run("review.rejectAll", &json!({})).unwrap();
+
+    let rejected_para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let restored_num = rejected_para.props.numbering.expect("reject restored numbering");
+    assert_ne!(restored_num.num, our_list, "restored numbering avoids collision with our list");
+
+    let docx_bytes = wordcraft_docx::write(&s.doc).expect("DOCX save succeeds");
+    let reread = wordcraft_docx::read(&docx_bytes).expect("DOCX read succeeds");
+    let reread_para = reread.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(reread_para.props.numbering, Some(restored_num), "persisted list assignment roundtrips cleanly");
+}
+
+#[test]
+fn numbering_change_coalescing_and_opaque_legacy() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    // 9. Coalescing successive numbering edits in a session preserves original baseline
+    let mut doc_track = Document::from_text("List item");
+    doc_track.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num: 1, level: 0 });
+    let mut s_track = Session::new(doc_track);
+    s_track.doc.settings.track_changes = true;
+    s_track.prefs.markup.track_formatting = true;
+    s_track.author = "Author".into();
+    // Edit 1: change level from 0 to 1
+    s_track.run("para.listLevel", &json!({"level": 1})).unwrap();
+    let p1 = s_track.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p1.props.fmt_change.is_some(), "tracked listLevel change records fmt_change (w:pPrChange)");
+    assert_eq!(p1.props.fmt_change.as_ref().unwrap().old.numbering, Some(NumRef { num: 1, level: 0 }));
+    assert!(p1.props.num_change.is_none(), "tracked listLevel change does not emit num_change");
+    // Edit 2: change level to 2 (coalesces with edit 1, keeping baseline level 0)
+    s_track.run("para.listLevel", &json!({"level": 2})).unwrap();
+    let p2 = s_track.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(
+        p2.props.fmt_change.as_ref().unwrap().old.numbering,
+        Some(NumRef { num: 1, level: 0 }),
+        "coalesced edit preserves original baseline level 0"
+    );
+    // Edit 3: restore baseline level 0 (clears fmt_change)
+    s_track.run("para.listLevel", &json!({"level": 0})).unwrap();
+    let p3 = s_track.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p3.props.fmt_change.is_none(), "restoring baseline clears fmt_change");
+
+    // 10. Successive edits preserve unparseable legacy original
+    let mut s_legacy = Session::new(Document::from_text("Legacy item"));
+    s_legacy.doc.settings.track_changes = true;
+    s_legacy.prefs.markup.track_formatting = true;
+    s_legacy.author = "Author".into();
+    s_legacy.doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Author".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let p_legacy = s_legacy.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p_legacy.props.numbering = Some(NumRef { num: 1, level: 0 });
+    p_legacy.props.num_change = Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: None }));
+    // Author modifies list level
+    s_legacy.run("para.listLevel", &json!({"level": 1})).unwrap();
+    let mut p_legacy_after = s_legacy.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().clone();
+    let nc_legacy = p_legacy_after.props.num_change.as_ref().expect("num_change preserved");
+    assert_eq!(nc_legacy.original, "%1:1:0:.", "unparseable original preserved across edits");
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p_legacy_after.props, false);
+    assert_eq!(
+        p_legacy_after.props.numbering,
+        Some(NumRef { num: 1, level: 0 }),
+        "rejecting tracked list formatting edit restores 1:0 even with opaque num_change"
+    );
+    assert_eq!(
+        p_legacy_after.props.num_change.as_ref().map(|nc| nc.original.as_str()),
+        Some("%1:1:0:."),
+        "unparseable num_change remains until explicitly resolved"
+    );
+    crate::cmd::fmt_revisions::resolve_para_num(&mut p_legacy_after.props, false);
+    assert!(p_legacy_after.props.num_change.is_none(), "resolve_para_num clears num_change");
+    assert_eq!(p_legacy_after.props.numbering, Some(NumRef { num: 1, level: 0 }), "unparseable num_change preserves restored 1:0 on reject");
+
+    // 11. Coalescing list additions, formatting changes, and list removals preserves unnumbered baseline
+    let mut s_coalesce = Session::new(Document::from_text("Unnumbered initially"));
+    s_coalesce.doc.settings.track_changes = true;
+    s_coalesce.prefs.markup.track_formatting = true;
+    s_coalesce.author = "Author".into();
+    // Step 1: Add bullets
+    s_coalesce.run("para.bullets", &json!({})).unwrap();
+    let p_c1 = s_coalesce.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_c1.props.numbering.is_some());
+    assert!(p_c1.props.fmt_change.is_some(), "tracked list edit records fmt_change (w:pPrChange)");
+    assert!(p_c1.props.num_change.is_none(), "tracked list edit does not emit num_change");
+    // Step 2: Format paragraph (center alignment)
+    s_coalesce.run("para.alignCenter", &json!({})).unwrap();
+    let p_c2 = s_coalesce.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p_c2.props.align, Some(wordcraft_doc::props::Align::Center));
+    assert!(p_c2.props.fmt_change.is_some());
+    // Verify fmt_change.old preserves the original unnumbered baseline
+    assert!(p_c2.props.fmt_change.as_ref().unwrap().old.numbering.is_none(), "fmt_change baseline retains initial unnumbered state");
+    // Step 3: Remove bullets (toggle off)
+    s_coalesce.run("para.bullets", &json!({"off": true})).unwrap();
+    let p_c3 = s_coalesce.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_c3.props.numbering.is_none_or(|n| n.num == 0), "numbering removed");
+    assert!(p_c3.props.fmt_change.is_some(), "alignment fmt_change remains active");
+    // Step 4: Reject all restores unnumbered and left-aligned baseline
+    s_coalesce.run("review.rejectAll", &json!({})).unwrap();
+    let p_c4 = s_coalesce.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_c4.props.numbering.is_none_or(|n| n.num == 0), "baseline unnumbered is preserved after rejection");
+    assert_eq!(p_c4.props.align, None, "alignment restored to default");
+
+    // 12. Tracked paragraph formatting on a numbered item preserves list in fmt_change baseline
+    let mut s_numbered = Session::new(Document::from_text("Numbered item"));
+    s_numbered.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num: 1, level: 0 });
+    s_numbered.doc.settings.track_changes = true;
+    s_numbered.prefs.markup.track_formatting = true;
+    s_numbered.author = "Author".into();
+    s_numbered.run("para.alignCenter", &json!({})).unwrap();
+    let p_num = s_numbered.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p_num.props.align, Some(wordcraft_doc::props::Align::Center));
+    let fc = p_num.props.fmt_change.as_ref().expect("fmt_change recorded");
+    assert_eq!(fc.old.numbering, Some(NumRef { num: 1, level: 0 }), "fmt_change baseline must retain list numbering");
+    assert!(p_num.props.num_change.is_none(), "tracked formatting edit does not emit num_change");
+    // Rejecting format change restores default alignment and preserves numbering
+    s_numbered.run("review.rejectAll", &json!({})).unwrap();
+    let p_num_rej = s_numbered.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p_num_rej.props.align, None, "alignment restored to default");
+    assert_eq!(p_num_rej.props.numbering, Some(NumRef { num: 1, level: 0 }), "numbering preserved after rejecting format change");
+}
+
+/// Verification for DOCX roundtrip of snapshot-only list removals and imported w:pPrChange rejection.
+#[test]
+fn numbering_change_snapshot_persistence_and_imported_ppr_change() {
+    use wordcraft_doc::props::{NumChange, NumRef, ParaProps, PropChange};
+
+    // 1. Snapshot-only list removal survives DOCX save, reload, and Reject restores the removed list.
+    let mut doc = Document::from_text("List removal roundtrip");
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let prior_num = NumRef { num: Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered), level: 3 };
+    let nc = NumChange::for_numbering(0, Some(prior_num));
+    assert!(nc.original.is_empty(), "the writer caches the previous definition when saving");
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change = Some(Box::new(nc));
+
+    let bytes = wordcraft_docx::write(&doc).expect("docx writes successfully");
+    let reloaded = wordcraft_docx::read(&bytes).expect("docx reads back successfully");
+    let reloaded_p = reloaded.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(reloaded_p.props.numbering.is_none(), "reloaded paragraph is unnumbered");
+    let reloaded_nc = reloaded_p.props.num_change.as_ref().expect("num_change preserved after reload");
+    assert_eq!(
+        reloaded_nc.original,
+        reloaded.numbering.change_original(prior_num.num, prior_num.level).unwrap(),
+        "the cache holds the previous list's definitions, not its id"
+    );
+    assert_eq!(reloaded_nc.snapshot, Some(prior_num), "snapshot recovered from the previous definitions across reload");
+
+    let mut session = Session::new(reloaded);
+    session.run("review.rejectAll", &json!({})).unwrap();
+    let rejected_p = session.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(rejected_p.props.numbering, Some(prior_num), "rejecting restores removed list from snapshot");
+    assert!(rejected_p.props.num_change.is_none(), "num_change cleared after reject");
+
+    // Also test when c.original was empty but c.snapshot was Some(prior_num):
+    // writer serializes snapshot into w:original and reload restores it.
+    let mut doc_empty_orig = Document::from_text("Empty original");
+    doc_empty_orig.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let empty_num = NumRef { num: Arc::make_mut(&mut doc_empty_orig.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered), level: 3 };
+    doc_empty_orig.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change =
+        Some(Box::new(NumChange { rev: 0, original: String::new(), snapshot: Some(empty_num) }));
+    let bytes_empty = wordcraft_docx::write(&doc_empty_orig).expect("docx writes empty orig");
+    let reloaded_empty = wordcraft_docx::read(&bytes_empty).expect("docx reads empty orig");
+    let reloaded_empty_nc = reloaded_empty.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change.as_ref().unwrap();
+    assert_eq!(reloaded_empty_nc.original, reloaded_empty.numbering.change_original(empty_num.num, empty_num.level).unwrap());
+    assert_eq!(reloaded_empty_nc.snapshot, Some(empty_num));
+
+    // 2. Imported w:pPrChange with prior numbering and no num_change restores numbering on reject.
+    let mut p_imported = ParaProps {
+        numbering: Some(NumRef { num: 5, level: 1 }),
+        fmt_change: Some(Box::new(PropChange { rev: 0, old: ParaProps { numbering: Some(NumRef { num: 3, level: 0 }), ..ParaProps::default() } })),
+        ..ParaProps::default()
+    };
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p_imported, false);
+    assert_eq!(p_imported.numbering, Some(NumRef { num: 3, level: 0 }), "imported prior numbering restored on reject");
+    assert!(p_imported.fmt_change.is_none());
+
+    // 3. Imported w:pPrChange when num_change IS present preserves independent num_change
+    let mut p_both = ParaProps {
+        numbering: Some(NumRef { num: 5, level: 1 }),
+        fmt_change: Some(Box::new(PropChange { rev: 0, old: ParaProps { numbering: Some(NumRef { num: 3, level: 0 }), ..ParaProps::default() } })),
+        num_change: Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 7, level: 2 })))),
+        ..ParaProps::default()
+    };
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p_both, false);
+    assert_eq!(p_both.numbering, Some(NumRef { num: 5, level: 1 }), "active numbering preserved for independent num_change");
+    assert!(p_both.num_change.is_some(), "num_change preserved");
+    crate::cmd::fmt_revisions::resolve_para_num(&mut p_both, false);
+    assert_eq!(p_both.numbering, Some(NumRef { num: 7, level: 2 }), "num_change resolved independently");
+
+    // 4. Rejecting fmt_change when no separate num_change exists restores ch.old.numbering
+    let mut p_added_list = ParaProps {
+        numbering: Some(NumRef { num: 10, level: 0 }),
+        fmt_change: Some(Box::new(PropChange {
+            rev: 0,
+            old: ParaProps { align: Some(wordcraft_doc::props::Align::Center), numbering: None, ..ParaProps::default() },
+        })),
+        ..ParaProps::default()
+    };
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p_added_list, false);
+    assert_eq!(p_added_list.numbering, None, "rejecting tracked list addition restores unnumbered baseline");
+    assert_eq!(p_added_list.align, Some(wordcraft_doc::props::Align::Center));
+
+    let mut p_kept_list = ParaProps {
+        numbering: Some(NumRef { num: 10, level: 0 }),
+        fmt_change: Some(Box::new(PropChange {
+            rev: 0,
+            old: ParaProps { align: None, numbering: Some(NumRef { num: 10, level: 0 }), ..ParaProps::default() },
+        })),
+        ..ParaProps::default()
+    };
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p_kept_list, false);
+    assert_eq!(p_kept_list.numbering, Some(NumRef { num: 10, level: 0 }), "rejecting format edit preserves baseline numbering");
+}
+
+/// Two separately created, identically formatted lists preserve exact original list identity across
+/// WordCraft DOCX round trips, while foreign packages without snapshot overrides treat colliding
+/// caches as unresolved rather than attaching to the first list.
+#[test]
+fn numbering_change_reject_with_two_identically_formatted_lists() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc = Document::from_text("First list item 1\nFirst list item 2\nSecond list item 1 (numbering removed)");
+    let list1 = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let list2 = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    assert_ne!(list1, list2, "distinct list instances");
+    assert_ne!(doc.numbering.num(list1).unwrap().abstract_id, doc.numbering.num(list2).unwrap().abstract_id, "distinct abstract definitions");
+
+    // List 1 has earlier items.
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num: list1, level: 0 });
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.numbering = Some(NumRef { num: list1, level: 0 });
+
+    // List 2 has an item that had its numbering changed (e.g. removed).
+    let p2 = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    p2.props.numbering = None;
+    p2.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: list2, level: 0 }))));
+
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    // 1. WordCraft round-trip: exact list2 identity survives save and reload.
+    let bytes = wordcraft_docx::write(&doc).expect("docx writes successfully");
+    let reloaded = wordcraft_docx::read(&bytes).expect("docx reads back successfully");
+
+    let p2_reloaded = reloaded.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    assert!(p2_reloaded.props.numbering.is_none());
+    let nc = p2_reloaded.props.num_change.as_ref().expect("num_change preserved after reload");
+    assert_eq!(nc.original, "%1:1:0:.");
+    assert_eq!(nc.snapshot, Some(NumRef { num: list2, level: 0 }), "app round-trip preserves exact original list identity");
+
+    let mut session = Session::new(reloaded);
+    session.run("review.rejectAll", &json!({})).unwrap();
+
+    let p2_after = session.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    assert_ne!(p2_after.props.numbering, Some(NumRef { num: list1, level: 0 }), "must not attach to unrelated first list");
+    assert_eq!(p2_after.props.numbering, Some(NumRef { num: list2, level: 0 }), "reject restores exact original second list");
+    assert!(p2_after.props.num_change.is_none(), "num_change cleared after reject");
+
+    // Verify counter state: list 1 stays at 1., 2. and list 2 starts independently at 1.
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    assert_eq!(counters.next_label(&session.doc.numbering, list1, 0).unwrap().0, "1.");
+    assert_eq!(counters.next_label(&session.doc.numbering, list1, 0).unwrap().0, "2.");
+    assert_eq!(counters.next_label(&session.doc.numbering, list2, 0).unwrap().0, "1.");
+
+    // 2. Foreign package (no WordCraft snapshot store): colliding caches stay unresolved,
+    // even if list2 is later edited in place via `list.define` so list1 becomes the sole cache match.
+    let mut shared = wordcraft_docx::to_shared_model(&doc).expect("to_shared_model");
+    shared.passthrough.clear();
+    let foreign_doc = wordcraft_docx::from_shared_model(shared).expect("read foreign shared model");
+    let foreign_nc = foreign_doc.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().props.num_change.as_ref().unwrap();
+    assert_eq!(foreign_nc.snapshot, None, "foreign colliding lists treat snapshot as unresolved rather than selecting list 1");
+
+    let mut foreign_session = Session::new(foreign_doc);
+    foreign_session.run("list.define", &json!({"num": list2, "levels": [{"format": "upperRoman", "text": "%1."}], "apply": false})).unwrap();
+    let resaved_bytes = wordcraft_docx::write(&foreign_session.doc).expect("resave after list.define");
+    let reopened_foreign = wordcraft_docx::read(&resaved_bytes).expect("reopen after list.define");
+    let reopened_nc = reopened_foreign.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().props.num_change.as_ref().unwrap();
+    assert_eq!(reopened_nc.original, "%1:1:0:.", "historical w:original preserved");
+    assert_eq!(reopened_nc.snapshot, None, "unresolved collision must not attach to sole remaining match list 1");
+
+    let mut reject_foreign = Session::new(reopened_foreign);
+    reject_foreign.run("review.rejectAll", &json!({})).unwrap();
+    let p2_foreign_after = reject_foreign.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    assert_eq!(p2_foreign_after.props.numbering, None, "unresolved change keeps active numbering rather than attaching to list 1");
+}
+
+/// Editing a snapshot's list in place via `list.define` preserves the historical `w:original` cache
+/// as written while keeping the paragraph bound to its edited list across save/reopen/Reject — never
+/// attaching to an unrelated list that is now the sole remaining match for `w:original`.
+#[test]
+fn numbering_change_edited_list_preserves_original_and_never_attaches_to_other_match() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    // Case 1: Imported / round-tripped revision with nonempty `w:original`, then `list.define` edits its list
+    // while another list still matches `%1:1:0:.`.
+    let mut doc = Document::from_text("Other list 1\nOther list 2\nEdited list item (removed)");
+    let list1 = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let list2 = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num: list1, level: 0 });
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.numbering = Some(NumRef { num: list1, level: 0 });
+    doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().props.num_change =
+        Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: list2, level: 0 }) }));
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s = Session::new(doc);
+    s.run("list.define", &json!({"num": list2, "levels": [{"format": "upperRoman", "text": "%1."}], "apply": false})).unwrap();
+    assert_eq!(s.doc.numbering.change_originals().get("%1:1:0:."), Some(&NumRef { num: list1, level: 0 }), "list 1 is now the sole cache match");
+
+    let saved = wordcraft_docx::write(&s.doc).expect("save after list.define");
+    let mut z = craft_zip::Archive::open(&saved, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(xml.contains(r#"w:original="%1:1:0:.""#), "historical w:original preserved in document.xml: {xml}");
+
+    let reopened = wordcraft_docx::read(&saved).expect("reopen after list.define");
+    let nc = reopened.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().props.num_change.as_ref().unwrap();
+    assert_eq!(nc.original, "%1:1:0:.");
+    assert_eq!(nc.snapshot, Some(NumRef { num: list2, level: 0 }), "snapshot stays on edited list 2, not sole match list 1");
+
+    let mut s_reopened = Session::new(reopened);
+    s_reopened.run("review.rejectAll", &json!({})).unwrap();
+    let p_rejected = s_reopened.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    assert_eq!(p_rejected.props.numbering, Some(NumRef { num: list2, level: 0 }), "Reject restores list 2, never list 1");
+
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    assert_eq!(counters.next_label(&s_reopened.doc.numbering, list1, 0).unwrap().0, "1.");
+    assert_eq!(counters.next_label(&s_reopened.doc.numbering, list1, 0).unwrap().0, "2.");
+    assert_eq!(counters.next_label(&s_reopened.doc.numbering, list2, 0).unwrap().0, "I.");
+
+    // Case 2: App-recorded revision (`original` initially empty) followed by `list.define` before first save.
+    let mut doc2 = Document::from_text("Other list\nIn-app recorded removal");
+    let other_list = Arc::make_mut(&mut doc2.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let target_list = Arc::make_mut(&mut doc2.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    doc2.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num: other_list, level: 0 });
+    doc2.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.num_change =
+        Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: target_list, level: 0 }))));
+    doc2.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s2 = Session::new(doc2);
+    s2.run("list.define", &json!({"num": target_list, "levels": [{"format": "upperRoman", "text": "%1."}], "apply": false})).unwrap();
+    let saved2 = wordcraft_docx::write(&s2.doc).expect("save doc2");
+    let reopened2 = wordcraft_docx::read(&saved2).expect("reopen doc2");
+    let nc2 = reopened2.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.num_change.as_ref().unwrap();
+    assert_eq!(nc2.original, "%1:1:0:.", "in-app revision captures historical cache before list.define overwrites levels");
+    assert_eq!(nc2.snapshot, Some(NumRef { num: target_list, level: 0 }));
+}
+
+/// Verification for tracking removal of style-inherited numbering and restoring fmt_change during Compare.
+#[test]
+fn style_inherited_numbering_and_compare_fmt_change_preservation() {
+    use wordcraft_doc::props::{NumRef, ParaProps, PropChange};
+    use wordcraft_doc::styles::{Style, StyleKind};
+
+    // 1. Style-inherited numbering removal emits num_change
+    let mut doc_styled = Document::from_text("List style text");
+    Arc::make_mut(&mut doc_styled.styles).upsert(Style {
+        id: "NumberedStyle".into(),
+        name: "NumberedStyle".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { numbering: Some(NumRef { num: 1, level: 0 }), ..ParaProps::default() },
+        ..Default::default()
+    });
+
+    let p = doc_styled.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.style = Some("NumberedStyle".into());
+    p.props.numbering = None;
+
+    let mut session = Session::new(doc_styled);
+    session.doc.settings.track_changes = true;
+    session.prefs.markup.track_formatting = true;
+    session.author = "Author".into();
+
+    session.run("para.bullets", &json!({"off": true})).unwrap();
+    let p_after = session.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p_after.props.numbering, Some(NumRef { num: 0, level: 0 }));
+    assert!(p_after.props.fmt_change.is_some(), "removing style-inherited numbering tracks fmt_change (w:pPrChange)");
+    assert!(p_after.props.num_change.is_none(), "tracked list edit does not emit num_change");
+
+    // Coalescing when neither value inherits a list: no spurious fmt_change
+    let doc_plain = Document::from_text("Plain text");
+    let mut s_plain = Session::new(doc_plain);
+    s_plain.doc.settings.track_changes = true;
+    s_plain.prefs.markup.track_formatting = true;
+    s_plain.author = "Author".into();
+    s_plain.run("para.bullets", &json!({"off": true})).unwrap();
+    let p_plain = s_plain.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_plain.props.fmt_change.is_none(), "no fmt_change when neither value inherits a list");
+
+    // 2. Compare preserves old.fmt_change when new has no fmt_change and formatting matches
+    let mut old_p = Paragraph::with_text("Formatted", CharProps::default());
+    old_p.props.align = Some(wordcraft_doc::props::Align::Center);
+    old_p.props.fmt_change = Some(Box::new(PropChange { rev: 0, old: ParaProps { align: None, ..ParaProps::default() } }));
+    let mut new_p = Paragraph::with_text("Formatted", CharProps::default());
+    new_p.props.align = Some(wordcraft_doc::props::Align::Center);
+    new_p.props.fmt_change = None;
+
+    let mut revs =
+        vec![wordcraft_doc::Revision { kind: RevisionKind::Format, author: "Author".into(), date: "2026-01-01T00:00:00Z".into(), move_name: None }];
+    crate::cmd::fmt_revisions::compare_formatting(&old_p, &mut new_p, &mut revs, None, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(new_p.props.fmt_change.is_some(), "Compare preserves original fmt_change when revised formatting matches");
+    assert_eq!(new_p.props.fmt_change.as_ref().unwrap().rev, 0);
+
+    // 3. Compare with styles: original with numbered style and no direct numbering, revised with num: 0
+    let mut styles = wordcraft_doc::StyleSheet::default();
+    styles.upsert(Style {
+        id: "NumberedStyle2".into(),
+        name: "NumberedStyle2".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { numbering: Some(NumRef { num: 1, level: 0 }), ..ParaProps::default() },
+        ..Default::default()
+    });
+    let mut old_styled_p = Paragraph::with_text("Inherited", CharProps::default());
+    old_styled_p.props.style = Some("NumberedStyle2".into());
+    old_styled_p.props.numbering = None;
+
+    let mut new_styled_p = Paragraph::with_text("Inherited", CharProps::default());
+    new_styled_p.props.style = Some("NumberedStyle2".into());
+    new_styled_p.props.numbering = Some(NumRef { num: 0, level: 0 });
+
+    let mut revs_styled = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(
+        &old_styled_p,
+        &mut new_styled_p,
+        &mut revs_styled,
+        Some(&styles),
+        "Reviewer",
+        "2026-01-01T00:00:00Z",
+    );
+    assert!(new_styled_p.props.num_change.is_some(), "Compare with styles detects removal of inherited numbering");
+    assert_eq!(
+        new_styled_p.props.num_change.as_ref().unwrap().previous_numbering(),
+        Some(NumRef { num: 1, level: 0 }),
+        "snapshot records effective inherited numbering from old style"
+    );
+    crate::cmd::fmt_revisions::resolve_para(&mut new_styled_p.props, false);
+    assert_eq!(new_styled_p.props.numbering, Some(NumRef { num: 1, level: 0 }), "Reject restores inherited numbering");
+    assert!(new_styled_p.props.num_change.is_none(), "num_change cleared on reject");
+
+    // 3b. Compare unnumbered paragraph against paragraph inheriting numbering from style:
+    // rejecting only the numbering change must suppress the style's numbering with num: 0.
+    let old_plain = Paragraph::with_text("List style applied", CharProps::default());
+    let mut new_style_num = Paragraph::with_text("List style applied", CharProps::default());
+    new_style_num.props.style = Some("NumberedStyle2".into());
+    new_style_num.props.numbering = None;
+
+    let mut revs_style_add = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(
+        &old_plain,
+        &mut new_style_num,
+        &mut revs_style_add,
+        Some(&styles),
+        "Reviewer",
+        "2026-01-01T00:00:00Z",
+    );
+    assert!(new_style_num.props.num_change.is_some(), "Compare detects style-inherited numbering addition");
+    assert_eq!(
+        new_style_num.props.num_change.as_ref().unwrap().previous_numbering(),
+        Some(NumRef { num: 0, level: 0 }),
+        "snapshot records num: 0 to suppress new style numbering if only num_change is rejected"
+    );
+    crate::cmd::fmt_revisions::resolve_para_num(&mut new_style_num.props, false);
+    assert_eq!(new_style_num.props.numbering, Some(NumRef { num: 0, level: 0 }));
+    assert_eq!(
+        styles.resolve_para(&new_style_num.props).numbering,
+        Some(NumRef { num: 0, level: 0 }),
+        "rejecting only num_change suppresses style-inherited bullet"
+    );
+
+    // 3c. Accepting style-inherited num_change rebases fmt_change baseline so rejecting fmt_change
+    // restores Normal style while preserving the accepted list numbering.
+    let mut new_accept_style = Paragraph::with_text("List style accepted", CharProps::default());
+    new_accept_style.props.style = Some("NumberedStyle2".into());
+    let mut revs_accept = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(
+        &old_plain,
+        &mut new_accept_style,
+        &mut revs_accept,
+        Some(&styles),
+        "Reviewer",
+        "2026-01-01T00:00:00Z",
+    );
+    crate::cmd::fmt_revisions::resolve_para_num_with_styles(&mut new_accept_style.props, true, Some(&styles));
+    assert!(new_accept_style.props.num_change.is_none());
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut new_accept_style.props, false);
+    assert_eq!(new_accept_style.props.style, None, "rejecting fmt_change restores Normal style");
+    assert_eq!(
+        new_accept_style.props.numbering,
+        Some(NumRef { num: 1, level: 0 }),
+        "rejecting fmt_change after accepting num_change preserves the accepted list numbering"
+    );
+
+    // 3d. Comparing two paragraphs suppressing NumberedStyle2 at different level metadata emits no num_change.
+    let mut sup_a = Paragraph::with_text("Suppressed A", CharProps::default());
+    sup_a.props.style = Some("NumberedStyle2".into());
+    sup_a.props.numbering = Some(NumRef { num: 0, level: 0 });
+    let mut sup_b = Paragraph::with_text("Suppressed B", CharProps::default());
+    sup_b.props.style = Some("NumberedStyle2".into());
+    sup_b.props.numbering = Some(NumRef { num: 0, level: 2 });
+    let mut revs_sup = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(&sup_a, &mut sup_b, &mut revs_sup, Some(&styles), "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(sup_b.props.num_change.is_none(), "two effectively unnumbered suppressed paragraphs emit no num_change");
+}
+
+/// Verification that selecting the whole body in a single-paragraph document resolves numbering changes.
+#[test]
+fn single_paragraph_whole_body_selection_resolves_numbering_change() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc = Document::from_text("Single paragraph list item");
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.numbering = None;
+    p.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 1, level: 0 }))));
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    // 1. Partial selection inside single paragraph does not resolve numbering change
+    let mut s_partial = Session::new(doc.clone());
+    s_partial.sel = Selection {
+        anchor: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 },
+        focus: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 },
+    };
+    s_partial.run("review.accept", &json!({})).unwrap();
+    let p_partial = s_partial.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_partial.props.num_change.is_some(), "partial range in single paragraph does not resolve numbering");
+
+    // 2. Select-all (whole body) in single paragraph document resolves numbering change on accept
+    let mut s_accept = Session::new(doc.clone());
+    s_accept.run("select.all", &json!({})).unwrap();
+    s_accept.run("review.accept", &json!({})).unwrap();
+    let p_accept = s_accept.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_accept.props.num_change.is_none(), "whole-body select in single-paragraph doc resolves numbering on accept");
+    assert_eq!(p_accept.props.numbering, None);
+
+    // 3. Select-all (whole body) in single paragraph document resolves numbering change on reject
+    let mut s_reject = Session::new(doc);
+    s_reject.run("select.all", &json!({})).unwrap();
+    s_reject.run("review.reject", &json!({})).unwrap();
+    let p_reject = s_reject.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_reject.props.num_change.is_none(), "whole-body select in single-paragraph doc resolves numbering on reject");
+    assert_eq!(p_reject.props.numbering, Some(NumRef { num: 1, level: 0 }), "reject restores snapshot numbering");
+
+    // 4. Navigating with review.next to paragraph-format revision preserves independent numbering revision
+    let mut doc_both = Document::from_text("Single paragraph with both format and numbering changes");
+    let p_both = doc_both.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p_both.props.numbering = None;
+    p_both.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 1, level: 0 }))));
+    p_both.props.align = Some(wordcraft_doc::props::Align::Center);
+    p_both.props.fmt_change =
+        Some(Box::new(wordcraft_doc::props::PropChange { rev: 1, old: wordcraft_doc::props::ParaProps { align: None, ..Default::default() } }));
+    doc_both.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_both.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Bob".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s_nav = Session::new(doc_both.clone());
+    // Initially caret is at (0, 0). Next change with b > 0 is fmt_change (0..len).
+    s_nav.run("review.nextChange", &json!({})).unwrap();
+    s_nav.run("review.reject", &json!({})).unwrap();
+    let p_after_nav_reject = s_nav.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after_nav_reject.props.fmt_change.is_none(), "rejecting navigated format revision clears fmt_change");
+    assert_eq!(p_after_nav_reject.props.align, None, "rejecting navigated format revision restores alignment");
+    assert!(p_after_nav_reject.props.num_change.is_some(), "rejecting navigated format revision preserves independent num_change");
+
+    // 5. Explicit select.all with both revisions present resolves both on accept
+    let mut s_all_accept = Session::new(doc_both.clone());
+    s_all_accept.run("select.all", &json!({})).unwrap();
+    s_all_accept.run("review.accept", &json!({})).unwrap();
+    let p_all_accept = s_all_accept.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_all_accept.props.fmt_change.is_none(), "select.all + accept resolves format change");
+    assert!(p_all_accept.props.num_change.is_none(), "select.all + accept resolves numbering change");
+
+    // 6. Explicit select.all with both revisions present resolves both on reject
+    let mut s_all_reject = Session::new(doc_both.clone());
+    s_all_reject.run("select.all", &json!({})).unwrap();
+    s_all_reject.run("review.reject", &json!({})).unwrap();
+    let p_all_reject = s_all_reject.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_all_reject.props.fmt_change.is_none(), "select.all + reject resolves format change");
+    assert_eq!(p_all_reject.props.align, None, "select.all + reject restores alignment");
+    assert!(p_all_reject.props.num_change.is_none(), "select.all + reject resolves numbering change");
+    assert_eq!(p_all_reject.props.numbering, Some(NumRef { num: 1, level: 0 }), "select.all + reject restores numbering snapshot");
+
+    // 7. Manually constructed whole-body range without navigation resolves both on reject and accept
+    let mut s_manual = Session::new(doc_both.clone());
+    let len = s_manual.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().len();
+    s_manual.sel = Selection {
+        anchor: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 },
+        focus: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: len },
+    };
+    s_manual.run("review.reject", &json!({})).unwrap();
+    let p_manual = s_manual.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_manual.props.fmt_change.is_none(), "manual whole-body range resolves format change on reject");
+    assert!(p_manual.props.num_change.is_none(), "manual whole-body range resolves numbering change on reject");
+    assert_eq!(p_manual.props.numbering, Some(NumRef { num: 1, level: 0 }), "manual whole-body range restores numbering snapshot");
+
+    let mut s_manual_accept = Session::new(doc_both);
+    s_manual_accept.sel = Selection {
+        anchor: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 },
+        focus: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: len },
+    };
+    s_manual_accept.run("review.accept", &json!({})).unwrap();
+    let p_manual_accept = s_manual_accept.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_manual_accept.props.fmt_change.is_none(), "manual whole-body range resolves format change on accept");
+    assert!(p_manual_accept.props.num_change.is_none(), "manual whole-body range resolves numbering change on accept");
+}
+
+#[test]
+fn empty_paragraph_coincident_revisions_navigation_and_resolution() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc_empty = Document::from_text("");
+    let p_empty = doc_empty.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p_empty.props.numbering = None;
+    p_empty.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 1, level: 0 }))));
+    p_empty.props.align = Some(wordcraft_doc::props::Align::Center);
+    p_empty.props.fmt_change =
+        Some(Box::new(wordcraft_doc::props::PropChange { rev: 1, old: wordcraft_doc::props::ParaProps { align: None, ..Default::default() } }));
+    doc_empty.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_empty.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Bob".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s_nav_empty = Session::new(doc_empty.clone());
+    s_nav_empty.run("review.nextChange", &json!({})).unwrap();
+    assert!(s_nav_empty.review_para_num.is_some(), "first nextChange in empty paragraph selects numbering change");
+    s_nav_empty.run("review.nextChange", &json!({})).unwrap();
+    assert!(s_nav_empty.review_para_fmt.is_some(), "second nextChange advances to format change in empty paragraph");
+    s_nav_empty.run("review.previousChange", &json!({})).unwrap();
+    assert!(s_nav_empty.review_para_num.is_some(), "previousChange moves back to numbering change in empty paragraph");
+
+    let mut s_empty = Session::new(doc_empty);
+    // In empty paragraph, previousChange from initial caret selects the last change: the paragraph format revision
+    s_empty.run("review.previousChange", &json!({})).unwrap();
+    s_empty.run("review.reject", &json!({})).unwrap();
+    let p_empty_after_fmt_reject = s_empty.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_empty_after_fmt_reject.props.fmt_change.is_none(), "rejecting navigated format in empty paragraph clears fmt_change");
+    assert_eq!(p_empty_after_fmt_reject.props.align, None, "rejecting navigated format restores alignment in empty paragraph");
+    assert!(p_empty_after_fmt_reject.props.num_change.is_some(), "rejecting navigated format in empty paragraph preserves num_change");
+
+    // Resolving remaining numbering change in empty paragraph
+    s_empty.run("review.reject", &json!({})).unwrap();
+    let p_empty_after_num_reject = s_empty.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_empty_after_num_reject.props.num_change.is_none(), "rejecting numbering change in empty paragraph clears num_change");
+    assert_eq!(p_empty_after_num_reject.props.numbering, Some(NumRef { num: 1, level: 0 }));
+}
+
+#[test]
+fn rejecting_format_and_numbering_restores_snapshot_numbering_not_formatting_baseline() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc_mixed = Document::from_text("Mixed paragraph");
+    let p_mixed = doc_mixed.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p_mixed.props.numbering = None;
+    p_mixed.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 7, level: 2 }))));
+    p_mixed.props.align = Some(wordcraft_doc::props::Align::Center);
+    p_mixed.props.fmt_change = Some(Box::new(wordcraft_doc::props::PropChange {
+        rev: 1,
+        old: wordcraft_doc::props::ParaProps { numbering: Some(NumRef { num: 3, level: 0 }), align: None, ..Default::default() },
+    }));
+    doc_mixed.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_mixed.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Bob".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s_mixed = Session::new(doc_mixed);
+    s_mixed.run("select.all", &json!({})).unwrap();
+    s_mixed.run("review.reject", &json!({})).unwrap();
+    let p_after_mixed_reject = s_mixed.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after_mixed_reject.props.fmt_change.is_none());
+    assert!(p_after_mixed_reject.props.num_change.is_none());
+    assert_eq!(
+        p_after_mixed_reject.props.numbering,
+        Some(NumRef { num: 7, level: 2 }),
+        "restores numbering snapshot 7:2 rather than formatting baseline 3:0"
+    );
+}
+
+#[test]
+fn accepting_numbering_then_rejecting_formatting_preserves_accepted_numbering() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut p = wordcraft_doc::props::ParaProps {
+        numbering: Some(NumRef { num: 5, level: 1 }),
+        num_change: Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 7, level: 2 })))),
+        align: Some(wordcraft_doc::props::Align::Center),
+        fmt_change: Some(Box::new(wordcraft_doc::props::PropChange {
+            rev: 1,
+            old: wordcraft_doc::props::ParaProps { numbering: Some(NumRef { num: 3, level: 0 }), align: None, ..Default::default() },
+        })),
+        ..Default::default()
+    };
+
+    crate::cmd::fmt_revisions::resolve_para_num(&mut p, true);
+    assert!(p.num_change.is_none(), "numbering change resolved on accept");
+    assert_eq!(p.numbering, Some(NumRef { num: 5, level: 1 }), "accepted numbering retained");
+
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p, false);
+    assert!(p.fmt_change.is_none(), "formatting change resolved on reject");
+    assert_eq!(p.align, None, "alignment restored to old formatting");
+    assert_eq!(
+        p.numbering,
+        Some(NumRef { num: 5, level: 1 }),
+        "rejecting formatting does not overwrite previously accepted numbering with stale baseline"
+    );
+}
+
+#[test]
+fn navigated_run_change_in_single_paragraph_preserves_numbering_change() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc = Document::from_text("Hello");
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.numbering = Some(NumRef { num: 1, level: 0 });
+    p.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 2, level: 0 }))));
+    p.runs[0].props.bold = Some(true);
+    p.runs[0].props.fmt_change =
+        Some(Box::new(wordcraft_doc::props::PropChange { rev: 1, old: wordcraft_doc::props::CharProps { bold: Some(false), ..Default::default() } }));
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Bob".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s = Session::new(doc);
+    // nextChange navigates to the run change spanning the entire paragraph text (0..5)
+    s.run("review.nextChange", &json!({})).unwrap();
+    assert_eq!(
+        s.sel.ordered(),
+        (
+            Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 },
+            Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 }
+        )
+    );
+
+    // Accepting navigated run change should resolve run formatting but preserve numbering change
+    s.run("review.accept", &json!({})).unwrap();
+    let p_after_run = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after_run.runs[0].props.fmt_change.is_none(), "run revision resolved");
+    assert!(p_after_run.props.num_change.is_some(), "independent numbering change preserved across navigated run resolution");
+
+    // Explicit select-all should resolve the remaining numbering change
+    s.run("select.all", &json!({})).unwrap();
+    s.run("review.accept", &json!({})).unwrap();
+    let p_after_all = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after_all.props.num_change.is_none(), "explicit select-all resolves numbering change");
+}
+
+#[test]
+fn stripped_formatting_baseline_preserves_none_numbering_on_numbering_accept() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut p = wordcraft_doc::props::ParaProps {
+        numbering: Some(NumRef { num: 2, level: 0 }),
+        num_change: Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 1, level: 0 })))),
+        align: Some(wordcraft_doc::props::Align::Center),
+        fmt_change: Some(Box::new(wordcraft_doc::props::PropChange {
+            rev: 1,
+            old: wordcraft_doc::props::ParaProps { numbering: None, align: None, ..Default::default() },
+        })),
+        ..Default::default()
+    };
+
+    crate::cmd::fmt_revisions::resolve_para_num(&mut p, true);
+    assert!(p.num_change.is_none());
+    assert_eq!(p.numbering, Some(NumRef { num: 2, level: 0 }));
+    assert_eq!(
+        p.fmt_change.as_ref().unwrap().old.numbering,
+        Some(NumRef { num: 2, level: 0 }),
+        "accepting numbering syncs fmt_change baseline numbering"
+    );
+
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p, false);
+    assert!(p.fmt_change.is_none());
+    assert_eq!(p.align, None);
+    assert_eq!(p.numbering, Some(NumRef { num: 2, level: 0 }), "subsequent formatting reject keeps accepted numbering");
+}
+
+#[test]
+fn empty_paragraph_navigated_mark_format_resolves_without_clobbering_numbering() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc = Document::from_text("");
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.numbering = Some(NumRef { num: 1, level: 0 });
+    p.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 2, level: 0 }))));
+    p.mark.bold = Some(true);
+    p.mark.fmt_change =
+        Some(Box::new(wordcraft_doc::props::PropChange { rev: 1, old: wordcraft_doc::props::CharProps { bold: Some(false), ..Default::default() } }));
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Bob".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s = Session::new(doc);
+    // In empty paragraph with num_change and mark.fmt_change:
+    // First nextChange targets the numbering revision
+    s.run("review.nextChange", &json!({})).unwrap();
+    assert!(s.review_para_num.is_some(), "first nextChange targets numbering revision");
+    // Second nextChange targets the mark format revision
+    s.run("review.nextChange", &json!({})).unwrap();
+    assert!(s.review_para_num.is_none(), "second nextChange targets mark format revision");
+
+    // previousChange from coincident mark format returns to the numbering revision via index
+    s.run("review.previousChange", &json!({})).unwrap();
+    assert!(s.review_para_num.is_some(), "previousChange returns to numbering revision");
+    s.run("review.nextChange", &json!({})).unwrap();
+    assert!(s.review_para_num.is_none(), "nextChange steps back to mark format revision");
+
+    // Accepting the navigated mark format revision should resolve mark formatting and keep num_change
+    s.run("review.accept", &json!({})).unwrap();
+    let p_after = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after.mark.fmt_change.is_none(), "mark format change resolved");
+    assert!(p_after.props.num_change.is_some(), "independent numbering change preserved");
+}
+
+#[test]
+fn empty_paragraph_navigated_mark_ins_del_resolves_without_clobbering_numbering() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc = Document::from_text("");
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.numbering = Some(NumRef { num: 1, level: 0 });
+    p.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 2, level: 0 }))));
+    p.mark.ins = Some(1);
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Insert,
+        author: "Bob".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s = Session::new(doc);
+    // In empty paragraph with num_change and mark.ins:
+    // First nextChange targets the numbering revision
+    s.run("review.nextChange", &json!({})).unwrap();
+    assert!(s.review_para_num.is_some(), "first nextChange targets numbering revision");
+    // Second nextChange targets the mark insert revision
+    s.run("review.nextChange", &json!({})).unwrap();
+
+    // Accepting the navigated mark revision should resolve mark insertion and keep num_change
+    s.run("review.accept", &json!({})).unwrap();
+    let p_after = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after.mark.ins.is_none(), "mark insertion resolved");
+    assert!(p_after.props.num_change.is_some(), "independent numbering change preserved");
+}
+
+#[test]
+fn navigated_review_state_does_not_leak_across_documents_to_suppress_numbering() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    // Document A: empty paragraph with a tracked mark format change so nextChange sets s.sel to (0..0),
+    // matching Document B's initial caret selection.
+    let mut doc_a = Document::from_text("");
+    let p_a = doc_a.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p_a.mark.bold = Some(true);
+    p_a.mark.fmt_change =
+        Some(Box::new(wordcraft_doc::props::PropChange { rev: 0, old: wordcraft_doc::props::CharProps { bold: Some(false), ..Default::default() } }));
+    doc_a.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s = Session::new(doc_a);
+    // Navigate in Document A: sets review_navigated target for Doc A
+    s.run("review.nextChange", &json!({})).unwrap();
+    assert!(s.review_navigated.is_some(), "navigation set in Document A");
+
+    // Document B: has a numbering change on the paragraph and an inserted run at offset 0.
+    let mut doc_b = Document::from_text("Item");
+    let p_b = doc_b.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p_b.props.numbering = Some(NumRef { num: 1, level: 0 });
+    p_b.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 2, level: 0 }))));
+    p_b.runs[0].props.ins = Some(1);
+    doc_b.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_b.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Insert,
+        author: "Bob".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    // Add and switch to Document B
+    s.add_document(doc_b);
+    assert_eq!(s.sel.ordered().0.off, 0, "caret is at offset 0 in Document B");
+
+    // Rejecting at caret in Document B must resolve the numbering change without being suppressed
+    // by Document A's stale navigation state, preserving Document B's inserted run.
+    s.run("review.reject", &json!({})).unwrap();
+
+    let p_after = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_after.props.num_change.is_none(), "numbering change resolved on reject");
+    assert_eq!(p_after.props.numbering, Some(NumRef { num: 2, level: 0 }), "original numbering restored");
+    assert_eq!(p_after.text, "Item", "inserted run was not deleted");
+    assert_eq!(p_after.runs[0].props.ins, Some(1), "inserted run revision preserved");
+}
+
+#[test]
+fn review_navigation_and_formatting_edge_cases() {
+    use wordcraft_doc::props::{Align, CharProps, NumChange, NumRef, ParaProps, PropChange};
+    use wordcraft_doc::styles::{Style, StyleKind};
+
+    // 1. style: None resolves Normal numbering in Compare when Normal defines a list.
+    let mut styles = wordcraft_doc::StyleSheet::default();
+    styles.upsert(Style {
+        id: "Normal".into(),
+        name: "Normal".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { numbering: Some(NumRef { num: 1, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    styles.upsert(Style { id: "PlainStyle".into(), name: "PlainStyle".into(), kind: StyleKind::Paragraph, ..Default::default() });
+    let old_normal = Paragraph::with_text("Normal item", CharProps::default());
+    let mut new_suppressed = Paragraph::with_text("Normal item", CharProps::default());
+    new_suppressed.props.numbering = Some(NumRef { num: 0, level: 0 });
+    let mut revs = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(&old_normal, &mut new_suppressed, &mut revs, Some(&styles), "Reviewer", "2026-01-01T00:00:00Z");
+    assert_eq!(
+        new_suppressed.props.num_change.as_ref().and_then(|nc| nc.previous_numbering()),
+        Some(NumRef { num: 1, level: 0 }),
+        "style: None inherits Normal list numbering in Compare"
+    );
+
+    // 2. Rejecting fmt_change first when moving from numbered style to unnumbered style keeps num: 0 until num_change is resolved.
+    let mut rev_plain_style = Paragraph::with_text("Normal item", CharProps::default());
+    rev_plain_style.props.style = Some("PlainStyle".into());
+    let mut revs_style = Vec::new();
+    crate::cmd::fmt_revisions::compare_formatting(
+        &old_normal,
+        &mut rev_plain_style,
+        &mut revs_style,
+        Some(&styles),
+        "Reviewer",
+        "2026-01-01T00:00:00Z",
+    );
+    crate::cmd::fmt_revisions::resolve_para_fmt_with_styles(&mut rev_plain_style.props, false, Some(&styles));
+    assert_eq!(rev_plain_style.props.style, None, "style restored to None (Normal)");
+    assert_eq!(
+        rev_plain_style.props.numbering,
+        Some(NumRef { num: 0, level: 0 }),
+        "rejecting fmt_change first suppresses restored Normal list until num_change is resolved"
+    );
+    crate::cmd::fmt_revisions::resolve_para_num_with_styles(&mut rev_plain_style.props, true, Some(&styles));
+    assert_eq!(rev_plain_style.props.numbering, Some(NumRef { num: 0, level: 0 }), "accepting num_change keeps paragraph unnumbered");
+
+    // 3. para_diff keeps numbering delta when num_change is opaque/unparseable.
+    let mut p_opaque = ParaProps {
+        numbering: Some(NumRef { num: 1, level: 1 }),
+        num_change: Some(Box::new(NumChange { rev: 0, original: "%1:1:0:.".into(), snapshot: None })),
+        fmt_change: Some(Box::new(PropChange { rev: 1, old: ParaProps { numbering: Some(NumRef { num: 1, level: 0 }), ..Default::default() } })),
+        ..Default::default()
+    };
+    let diff_entries = crate::cmd::fmt_revisions::para_diff(&p_opaque);
+    assert!(diff_entries.iter().any(|v| v["prop"] == "numbering"), "opaque num_change does not hide tracked numbering edit in para_diff");
+    crate::cmd::fmt_revisions::resolve_para_fmt(&mut p_opaque, false);
+    assert_eq!(p_opaque.numbering, Some(NumRef { num: 1, level: 0 }));
+
+    // 4. Navigated run formatting does not resolve overlapping para_fmt, and navigated para_fmt does not resolve run formatting.
+    let mut doc_overlap = Document::from_text("Overlap");
+    let p_ov = doc_overlap.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p_ov.props.align = Some(Align::Center);
+    p_ov.props.fmt_change = Some(Box::new(PropChange { rev: 0, old: ParaProps::default() }));
+    p_ov.runs[0].props.bold = Some(true);
+    p_ov.runs[0].props.fmt_change = Some(Box::new(PropChange { rev: 1, old: CharProps::default() }));
+    doc_overlap.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "A".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_overlap.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "B".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s_ov1 = Session::new(doc_overlap.clone());
+    s_ov1.run("review.nextChange", &json!({})).unwrap(); // selects para_fmt
+    assert!(s_ov1.review_para_fmt.is_some());
+    s_ov1.run("review.accept", &json!({})).unwrap();
+    let p_ov1 = s_ov1.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_ov1.props.fmt_change.is_none(), "navigated para_fmt resolved");
+    assert!(p_ov1.runs[0].props.fmt_change.is_some(), "overlapping run fmt_change preserved");
+
+    let mut s_ov2 = Session::new(doc_overlap);
+    s_ov2.run("review.nextChange", &json!({})).unwrap(); // para_fmt
+    s_ov2.run("review.nextChange", &json!({})).unwrap(); // run fmt_change
+    assert!(s_ov2.review_para_fmt.is_none());
+    s_ov2.run("review.accept", &json!({})).unwrap();
+    let p_ov2 = s_ov2.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_ov2.runs[0].props.fmt_change.is_none(), "navigated run fmt_change resolved");
+    assert!(p_ov2.props.fmt_change.is_some(), "overlapping para_fmt preserved");
+
+    // 5. Navigated inserted paragraph break does not resolve next paragraph's numbering change.
+    let mut doc_break = Document::from_text("First\nSecond");
+    doc_break.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins = Some(0);
+    let p_second = doc_break.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+    p_second.props.numbering = Some(NumRef { num: 1, level: 0 });
+    p_second.props.num_change = Some(Box::new(NumChange::for_numbering(1, None)));
+    doc_break.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Insert,
+        author: "A".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_break.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "B".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+    let mut s_break = Session::new(doc_break);
+    s_break.run("review.nextChange", &json!({})).unwrap(); // selects mark ins (p0.end .. p1.0)
+    s_break.run("review.accept", &json!({})).unwrap();
+    assert!(s_break.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins.is_none());
+    assert!(
+        s_break.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.num_change.is_some(),
+        "accepting navigated paragraph break must not resolve following paragraph's num_change"
+    );
+
+    // 6. Switching documents preserves each document's active review navigation target, and Session::restore clears post-snapshot targets.
+    let mut doc_m1 = Document::from_text("");
+    let pm1 = doc_m1.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    pm1.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 1, level: 0 }))));
+    pm1.mark.bold = Some(true);
+    pm1.mark.fmt_change = Some(Box::new(PropChange { rev: 1, old: CharProps::default() }));
+    doc_m1.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "A".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    doc_m1.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "B".into(),
+        date: "2026-01-02T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    let mut s_multi = Session::new(doc_m1);
+    let id_1 = s_multi.document_id();
+    let snap = s_multi.edit_snapshot();
+    s_multi.run("review.nextChange", &json!({})).unwrap(); // num_change
+    s_multi.run("review.nextChange", &json!({})).unwrap(); // mark.fmt_change
+    assert!(s_multi.review_para_num.is_none() && s_multi.review_navigated.is_some());
+
+    let mut doc_m2 = Document::from_text("");
+    doc_m2.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change =
+        Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 2, level: 0 }))));
+    doc_m2.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "A".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let id_2 = s_multi.add_document(doc_m2);
+    s_multi.run("review.nextChange", &json!({})).unwrap();
+    assert!(s_multi.review_para_num.is_some(), "doc 2 navigated to num_change");
+
+    s_multi.switch_document(id_1).unwrap();
+    assert!(s_multi.review_para_num.is_none() && s_multi.review_navigated.is_some(), "doc 1 kept its mark.fmt_change target across switch");
+    s_multi.switch_document(id_2).unwrap();
+    assert!(s_multi.review_para_num.is_some(), "doc 2 kept its num_change target");
+    s_multi.switch_document(id_1).unwrap();
+
+    // Restoring snapshot clears post-snapshot navigation targets.
+    s_multi.restore(snap);
+    assert!(s_multi.review_navigated.is_none() && s_multi.review_para_num.is_none() && s_multi.review_para_fmt.is_none());
+}
+
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
 fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
     let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
