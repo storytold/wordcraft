@@ -21,8 +21,8 @@ pub(super) fn references(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             Some("references.toc"),
             |ui, _| {
                 for (label, params) in [
-                    ("Automatic Table 1 (3 levels)", json!({"levels": 3})),
-                    ("Automatic Table 2 (2 levels)", json!({"levels": 2, "title": "Table of Contents"})),
+                    ("Automatic Table 1 (3 levels)", json!({"levels": 3, "title": crate::tl!("Contents").to_string()})),
+                    ("Automatic Table 2 (2 levels)", json!({"levels": 2, "title": crate::tl!("Table of Contents").to_string()})),
                 ] {
                     MenuItem::command(CommandRef::with_params("references.toc", params)).label(crate::tl!(label)).show(ui);
                 }
