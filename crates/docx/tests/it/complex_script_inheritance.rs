@@ -229,3 +229,47 @@ fn split_runs_add_no_phantom_tracked_formatting() {
         assert_eq!((old.rtl, old.lang_bidi.as_deref()), (run.props.rtl, run.props.lang_bidi.as_deref()));
     }
 }
+
+/// Thai text and `w:cs w:val="0"`, read from Word's markup, as Word draws it (measured in Word for
+/// Windows): a run that says `w:cs w:val="0"` itself draws its Thai in its other font and size; a
+/// character style's `w:cs w:val="0"` doesn't count in Word, so under a Normal with `w:cs` the
+/// Thai stays in the complex-script font and size. The same after a save.
+#[test]
+fn thai_text_and_cs_off_draw_as_in_word() {
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="s1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let defaults = r#"<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Tahoma"/><w:sz w:val="20"/><w:szCs w:val="40"/>"#;
+    let package = |normal_cs: bool, run: &str| {
+        let normal = if normal_cs { "<w:rPr><w:cs/></w:rPr>" } else { "" };
+        let styles = format!(
+            r#"<w:styles {ns}><w:docDefaults><w:rPrDefault><w:rPr>{defaults}</w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/>{normal}</w:style><w:style w:type="character" w:styleId="CsOff"><w:name w:val="CsOff"/><w:rPr><w:cs w:val="0"/></w:rPr></w:style></w:styles>"#
+        );
+        let document = format!(r#"<w:document {ns}><w:body><w:p><w:r><w:rPr>{run}</w:rPr><w:t>ทดสอบ</w:t></w:r></w:p></w:body></w:document>"#);
+        let mut z = craft_zip::Writer::new();
+        for (name, data) in [
+            ("_rels/.rels", root),
+            ("word/_rels/document.xml.rels", rels),
+            ("word/document.xml", document.as_str()),
+            ("word/styles.xml", styles.as_str()),
+        ] {
+            z.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
+        }
+        z.finish().unwrap()
+    };
+    let drawn = |d: &Document| {
+        let p = paragraph(d);
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        let c = if rc.uses_complex('ท') { rc.complex() } else { rc };
+        (c.font, c.size)
+    };
+    for (what, normal_cs, run, want) in [
+        ("the run's own w:cs off", false, r#"<w:cs w:val="0"/>"#, ("Arial", 10.0)),
+        ("a character style's w:cs off under a Normal with w:cs", true, r#"<w:rStyle w:val="CsOff"/>"#, ("Tahoma", 20.0)),
+    ] {
+        let d = wordcraft_docx::read(&package(normal_cs, run)).unwrap();
+        assert_eq!(drawn(&d), (want.0.to_string(), want.1), "{what}");
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(drawn(&again), (want.0.to_string(), want.1), "{what}, after a save");
+    }
+}
