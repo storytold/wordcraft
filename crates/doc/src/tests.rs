@@ -440,6 +440,51 @@ fn prune_text_boxes_drops_only_unshown_ones() {
     assert_eq!(d.prune_text_boxes(), 0);
 }
 
+/// The answer names text boxes only: the header, footnote and comment parts seed the walk and
+/// come back reachable, but they are not text boxes and must not be in the set.
+#[test]
+fn shown_text_boxes_names_only_text_boxes() {
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
+    let mut d = Document::from_text("body");
+    assert!(d.shown_text_boxes().is_empty(), "nothing to name without text boxes");
+    let boxed = d.add_part(PartKind::TextBox, para_of("shown"));
+    let orphan = d.add_part(PartKind::TextBox, para_of("deleted box"));
+    let hdr = d.add_part(PartKind::Header, para_of("header"));
+    let in_header = d.add_part(PartKind::TextBox, para_of("box in the header"));
+    let note = d.add_part(PartKind::Footnote, para_of("note"));
+    let comment = d.add_part(PartKind::Comment, para_of("comment"));
+    let _ = comment;
+    d.insert_object(&Pos::body(0, 0), shape(boxed), &CharProps::default()).unwrap();
+    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    d.insert_object(&at(hdr), shape(in_header), &CharProps::default()).unwrap();
+    d.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::NoteRef { kind: para::NoteKind::Footnote, id: note, custom: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        d.shown_text_boxes(),
+        std::collections::BTreeSet::from([boxed, in_header]),
+        "only the shown text boxes, not the header, the note, the comment or the orphan {orphan}: {}",
+        d.parts.keys().collect::<Vec<_>>().iter().map(|k| format!("{k}: {:?}", d.parts[k].kind)).collect::<Vec<_>>().join(", ")
+    );
+    assert!(!d.shown_text_boxes().contains(&orphan), "an unanchored box is not shown");
+}
+
 /// `blocks` in the only cell of `levels` tables, each nested in the next.
 fn nested_tables(levels: usize, blocks: Blocks) -> Blocks {
     (0..levels).fold(blocks, |inner, _| {
