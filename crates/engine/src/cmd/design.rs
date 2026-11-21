@@ -147,6 +147,9 @@ fn theme(s: &mut Session, v: &Value) -> CmdResult {
 
 fn style_set(s: &mut Session, v: &Value) -> CmdResult {
     let name = p::req_str(v, "name")?;
+    if !matches!(name, "default" | "basic" | "lines" | "shaded" | "casual" | "centered" | "minimalist" | "title") {
+        return Err(CmdError::Params(format!("unknown style set `{name}`")));
+    }
     let accent = s.doc.settings.theme_colors.get(4).copied().unwrap_or(styles::HEADING_BLUE);
     let mut fresh = wordcraft_doc::StyleSheet::builtin();
     let line = Border { style: BorderStyle::Single, width: 0.75, color: Some(accent), space: 1.0 };
