@@ -21,6 +21,7 @@ mod numeral;
 mod pages;
 mod styleref;
 mod table_contact;
+mod table_first_line;
 mod textbox;
 mod vertical;
 
@@ -4665,7 +4666,8 @@ fn tall_rows_split_across_pages() {
         .find_map(|i| if let Placed::Lines { path, para, .. } = i { (path.0 == vec![1, 0, 0, 0]).then_some(para.lines.len()) } else { None })
         .unwrap_or(0);
     assert_eq!(total, n);
-    // "Can't split" rows move whole instead.
+    // A "can't split" row taller than a page splits too, from the top of a page, as in Word (#6823);
+    // a shorter one moves on whole (`table_first_line`).
     let mut d2 = Document::from_text("before\nafter");
     t.rows[0].props.cant_split = true;
     d2.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
