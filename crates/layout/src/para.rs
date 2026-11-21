@@ -18,6 +18,8 @@ use crate::fields::{FIELD_SHADING, FieldCtx, field_code_text, field_text_on, ref
 
 mod bidi;
 mod builder;
+#[cfg(test)]
+pub(crate) use builder::TEST_TWINS;
 mod chars;
 mod grid;
 mod justify;
