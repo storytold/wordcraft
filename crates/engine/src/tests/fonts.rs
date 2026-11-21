@@ -476,6 +476,70 @@ fn a_padded_name_is_judged_by_the_face_its_text_is_drawn_in() {
 }
 
 #[test]
+fn italic_text_slanted_in_a_twin_changes_line_breaks() {
+    // "Segoe UI " is looked up spaces and all, so it is drawn in a substitute even where Segoe UI
+    // is installed. Selawik measures like Segoe UI but has no italic: italic text is slanted
+    // upright Selawik, wider than Segoe UI Italic, so its line breaks can move. Segoe UI Light
+    // is drawn in Selawik's Light face, whose typographic family is Selawik: its twin by the name
+    // Word lists, Selawik Light.
+    for (padded, font) in [("Segoe UI ", "Segoe UI"), ("Segoe UI Light ", "Segoe UI Light")] {
+        let italic = |text: &str| {
+            let props = wordcraft_doc::CharProps { font: Some(padded.into()), italic: Some(true), ..Default::default() };
+            wordcraft_doc::Paragraph::with_text(text, props)
+        };
+        let upright = missing_in(doc_of(vec![para_in("Text", padded)]));
+        let Some(segoe) = upright.iter().find(|f| f.font == font) else {
+            eprintln!("skipped: {padded:?} isn't missing here");
+            continue;
+        };
+        if segoe.shown_as.first().is_none_or(|f| f != "Selawik") {
+            eprintln!("skipped: {font} isn't drawn in Selawik here: {segoe:?}");
+            continue;
+        }
+        assert!(segoe.metric_compatible, "{segoe:?}");
+        // The font box warns about neither, as the status bar doesn't.
+        assert_eq!(crate::cmd::font::shown_as_warning(&wordcraft_doc::Document::new(), padded), None, "{font}");
+        let slanted = missing_in(doc_of(vec![para_in("Text", padded), italic("Italic")]));
+        assert!(!slanted.iter().find(|f| f.font == font).expect("listed").metric_compatible, "{slanted:?}");
+        // An emoji drawn in a fallback face, slanted or not, doesn't count.
+        let emoji = missing_in(doc_of(vec![para_in("Text", padded), italic("😀")]));
+        assert!(emoji.iter().find(|f| f.font == font).expect("listed").metric_compatible, "{emoji:?}");
+    }
+}
+
+#[test]
+fn a_font_table_alternate_to_the_twin_keeps_the_fonts_line() {
+    // A document can send missing Segoe UI Light to Selawik Light by name (`w:altName`). Selawik
+    // Light is then an installed font, not a substitute, but it still stands in for Segoe UI
+    // Light: the text keeps Segoe UI's line, as when Selawik Light is the substitute, so the
+    // notice is right to stay quiet. "Segoe UI Light " is missing even where Segoe UI Light is
+    // installed.
+    if !wordcraft_fonts::FontDb::global().has_family("Selawik Light") {
+        eprintln!("skipped: Selawik Light isn't installed here");
+        return;
+    }
+    let doc = |alternate: bool| {
+        let mut doc = doc_of(vec![para_in("Text", "Segoe UI Light ")]);
+        if alternate {
+            doc.settings.font_alt_names = vec![("Segoe UI Light ".into(), "Selawik Light".into())];
+        }
+        doc
+    };
+    let height = |doc: wordcraft_doc::Document| {
+        let layout = Session::new(doc).layout();
+        let para = layout.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { para, .. } => Some(para.height),
+            _ => None,
+        });
+        para.expect("a laid-out paragraph")
+    };
+    assert_eq!(height(doc(true)), height(doc(false)));
+    let m = missing_in(doc(true));
+    let light = m.iter().find(|f| f.font == "Segoe UI Light").expect("listed");
+    assert!(light.metric_compatible, "{light:?}");
+}
+
+#[test]
 fn an_east_asian_font_is_shown_as_the_face_its_text_is_drawn_in() {
     // MS Mincho is roman in many font tables, but Cambria is the run's font's substitute: an
     // East Asian font's text goes to the run's font or a fallback face, as the list says.
