@@ -5,7 +5,7 @@
 //! setting an agent changes and the same setting changed here take one path. Settings the app keeps
 //! outside the engine are written directly by [`OptionsModel::set`].
 
-use craft::behavior::{MotionMode, keyed};
+use craft::behavior::{EditEvent, MotionMode, keyed};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
 use craft::ui::display::{Elide, Shade, Text};
@@ -268,6 +268,7 @@ impl<'a> OptionsModel<'a> {
                 ("proofing.ignoreInternet", Bool(prefs.ignore_internet)),
                 ("proofing.checkSpelling", Bool(view.proofing)),
                 ("proofing.markGrammar", Bool(prefs.mark_grammar)),
+                ("proofing.customDictionaryFile", Text(String::new())),
             ],
             "save" => vec![("save.removePersonalInfo", Bool(false)), ("save.removeDateTime", Bool(false))],
             "language" => vec![("language.interface", Choice(crate::i18n::AUTO.to_string())), ("language.dictionariesFolder", Text(String::new()))],
@@ -426,7 +427,14 @@ impl PreferencesModel for OptionsModel<'_> {
                         b("proofing.markGrammar", tl!("Mark grammar errors as you type"), prefs.mark_grammar).enabled(app.session.view.proofing),
                     ],
                 ),
-                GroupSpec::new(Some(tl!("Custom dictionary")), vec![custom("proofing.customDictionary", tl!("Custom dictionary"))]),
+                GroupSpec::new(
+                    Some(tl!("Custom dictionary")),
+                    vec![
+                        RowSpec::new("proofing.customDictionaryFile", tl!("Dictionary file:"), RowKind::Custom)
+                            .help(tl!("A custom-word dictionary file (.dic or plain text) used in conjunction with the main dictionary. Empty uses custom-dictionary.txt.")),
+                        custom("proofing.customDictionary", tl!("Custom dictionary")),
+                    ],
+                ),
             ],
         );
 
@@ -666,6 +674,10 @@ impl PreferencesModel for OptionsModel<'_> {
             ("save.removePersonalInfo", Bool(v)) => self.run("file.privacyOptions", json!({"removePersonalInfo": v})),
             ("save.removeDateTime", Bool(v)) => self.run("file.privacyOptions", json!({"removeDateTime": v})),
             ("language.interface", Choice(c)) => self.run("ui.language", json!({"value": c})),
+            ("proofing.customDictionaryFile", Text(t)) => {
+                let t = t.trim();
+                self.options(json!({"customDictionary": if t.is_empty() { "auto" } else { t }}));
+            }
             ("language.dictionariesFolder", Text(t)) => {
                 let t = t.trim();
                 self.options(json!({"dictionariesFolder": if t.is_empty() { "auto" } else { t }}));
@@ -701,6 +713,7 @@ impl PreferencesModel for OptionsModel<'_> {
                     self.run("tools.autocorrect", json!({}));
                 }
             }
+            "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
             "proofing.customDictionary" => self.custom_dictionary(ui),
             "language.proofingLanguage" => {
                 Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
@@ -744,6 +757,23 @@ const CUSTOM_WORDS_SHOWN: u16 = 8;
 struct NewWord(String);
 
 impl OptionsModel<'_> {
+    /// The Dictionary file field. A text row reports every typed draft, and each would bind (and
+    /// later write to) whatever file the half-typed path names, so the path is committed only on
+    /// Enter or focus loss. The field is given the saved path and never writes it: the framework
+    /// holds the draft while an edit is open and drops it when the saved path changes (an agent's
+    /// `file.options`) or the page is left, so no edit open always shows the saved path.
+    fn custom_dictionary_file(&mut self, ui: &mut Ui) {
+        let saved = self.app.session.prefs.custom_dictionary.clone().unwrap_or_default();
+        let out = TextField::new(tl!("Dictionary file:"), Bind::given(saved)).limit(None).show(ui);
+        let committed = out.events.into_iter().find_map(|event| match event {
+            EditEvent::Commit { after, .. } => Some(after),
+            _ => None,
+        });
+        if let Some(path) = committed {
+            self.set("proofing.customDictionaryFile", PrefValue::Text(path));
+        }
+    }
+
     /// The custom dictionary: the words Add to Dictionary kept, each with a Remove button, and a
     /// field to add one.
     fn custom_dictionary(&mut self, ui: &mut Ui) {
