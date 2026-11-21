@@ -74,6 +74,7 @@ pub struct DocState {
     pub(super) md_source: Option<crate::cmd::md_source::MdSource>,
     pub(super) md_file: crate::cmd::md_source::FileText,
     pub(super) picture_looks: std::collections::HashMap<String, crate::cmd::objects::PictureLook>,
+    pub(super) hidden_first_footers: std::collections::BTreeMap<u32, wordcraft_doc::Blocks>,
     pub(super) versions: Vec<(String, String, Document)>,
     pub(super) autosave: bool,
     pub(super) bib_style: String,
@@ -131,6 +132,7 @@ impl DocState {
             md_source: None,
             md_file: Default::default(),
             picture_looks: Default::default(),
+            hidden_first_footers: Default::default(),
             versions: Vec::new(),
             autosave: true,
             bib_style,
@@ -235,6 +237,7 @@ impl Session {
             md_source: _,
             md_file: _,
             picture_looks: _,
+            hidden_first_footers: _,
             versions: _,
             autosave: _,
             bib_style: _,
@@ -338,6 +341,7 @@ impl Session {
             md_source,
             md_file,
             picture_looks,
+            hidden_first_footers,
             versions,
             autosave,
             bib_style,
@@ -388,6 +392,7 @@ impl Session {
         swap(&mut self.md_source, md_source);
         swap(&mut self.md_file, md_file);
         swap(&mut self.picture_looks, picture_looks);
+        swap(&mut self.hidden_first_footers, hidden_first_footers);
         swap(&mut self.versions, versions);
         swap(&mut self.autosave, autosave);
         swap(&mut self.bib_style, bib_style);
