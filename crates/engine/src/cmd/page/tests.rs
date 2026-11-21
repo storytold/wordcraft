@@ -762,6 +762,7 @@ fn take_view_put_view_tracks_hf_section_across_revisions_and_section_breaks() {
     s3.run("text.insert", &json!({"text": "Shared footer"})).unwrap();
     s3.run("insert.closeHeader", &json!({})).unwrap();
 
+    s3.run("caret.docStart", &json!({})).unwrap();
     s3.run("insert.editFooter", &json!({"page": 2})).unwrap();
     assert_eq!(section_index_of_focus(&s3), 2);
     let view3 = s3.take_view();
@@ -770,6 +771,7 @@ fn take_view_put_view_tracks_hf_section_across_revisions_and_section_breaks() {
     s3.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s3.run("text.insert", &json!({"text": "b"})).unwrap();
     s3.put_view(view3);
+    assert_eq!(s3.hf_section, None);
     assert_eq!(section_index_of_focus(&s3), 0, "removing a section break clears stale hf_section");
 }
 
