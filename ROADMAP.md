@@ -343,6 +343,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-10-27: File › Print: Return prints, as in Word, where ⌘P opens on Print as the default button; a field or list on the page keeps Return while it has the keyboard.
 - 2026-10-28: A window restored to a place no monitor covers now opens centred on the primary monitor. Before, a monitor replaced by one of the same size left the window off screen, and the app seemed to close as soon as it started.
 - 2026-10-29: Built-in citation refresh indexes source tags and bibliography numbers for each operation (#4888). Existing ordering, duplicate-tag first matches and saved sources remain unchanged.
+- 2026-10-25: Review › Accept and Reject and Home › Paste are split buttons: a click on the icon runs Accept and Move to Next, Reject and Move to Next or Paste, and a click on the label opens the menu. Before, a click anywhere on these buttons only opened the menu.
 - 2026-10-25: Select Recipients detects comma, semicolon and tab separators across quoted multiline headers. Quoted punctuation and doubled quotes stay in their cells; detection stops at the first unquoted record boundary. Existing tie preferences and parsing behavior remain unchanged.
 - 2026-10-25: Built-in styles and table styles write `w:bCs` beside `w:b` and `w:iCs` beside `w:i` in `word/styles.xml`, and `styles.modify` sets complex-script bold and italic alongside Latin when not given separately, so Arabic and Hebrew table headers and styled emphasis open bold or italic in Word and LibreOffice (#4198).
 
@@ -1036,6 +1037,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-02 | trivial | Honor page break before at a continuous section's mid-page top (#5287); its later-column case remains unmeasured in Word. Readiness unchanged. |
+| 2026-10-25 | trivial | Progress log: Accept, Reject and Paste are split buttons |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |

@@ -110,7 +110,7 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     );
     row.group(RibbonGroup::new("review.changes", tl!("Changes").to_string(), IconId::new("accept").into()), |ui| {
         SplitButton::<u8>::command(
-            CommandRef::new("review.accept"),
+            CommandRef::with_params("review.accept", json!({"next": true})),
             SplitMenu::Body(Box::new(|ui, _| {
                 MenuItem::command(CommandRef::with_params("review.accept", json!({"next": true})))
                     .label(tl!("Accept and Move to Next").to_string())
@@ -123,11 +123,13 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             })),
         )
         .label(tl!("Accept").to_string())
+        .tooltip(tl!("Accept and Move to Next").to_string())
+        .arrow_label(crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Accept"))]))
         .icon(IconId::new("accept"))
         .arrangement(Arrangement::Stacked)
         .show(ui);
         SplitButton::<u8>::command(
-            CommandRef::new("review.reject"),
+            CommandRef::with_params("review.reject", json!({"next": true})),
             SplitMenu::Body(Box::new(|ui, _| {
                 MenuItem::command(CommandRef::with_params("review.reject", json!({"next": true})))
                     .label(tl!("Reject and Move to Next").to_string())
@@ -140,6 +142,8 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             })),
         )
         .label(tl!("Reject").to_string())
+        .tooltip(tl!("Reject and Move to Next").to_string())
+        .arrow_label(crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Reject"))]))
         .icon(IconId::new("reject"))
         .arrangement(Arrangement::Stacked)
         .show(ui);

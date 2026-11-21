@@ -145,23 +145,24 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let st = wordcraft_engine::cmd::format::state(&app.session);
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     row.group(ribbon_group("clipboard", "Clipboard", "paste", Some("edit.clipboardPane")), |ui| {
-        // The face opens the menu and runs no command, so its tooltip adds Paste's key itself, as this
-        // platform writes it ("Paste (Ctrl+V)", "Paste (⌘V)" on macOS). The name screen readers read is "Paste".
-        let paste_tip = match craft::ui::runtime::commands::resolve(ui.ctx(), CommandRef::new("edit.paste")).chord {
-            Some(chord) => craft::ui::contract::tooltip::with_chord(tl!("Paste"), &chord, craft::ui::runtime::windows::os_of(ui.ctx())),
-            None => tl!("Paste").to_string(),
-        };
-        let face = Button::new(tl!("Paste").to_string()).icon(IconId::new("paste")).tooltip(paste_tip).arrangement(Arrangement::Stacked);
-        menu_button(ui, face, tl!("Paste").to_string(), Some("edit.paste"), |ui, _| {
-            for (label, id) in [
-                ("Paste", "edit.paste"),
-                ("Keep Text Only", "edit.pasteText"),
-                ("Merge Formatting", "edit.pasteMerge"),
-                ("Paste Special…", "edit.pasteSpecial"),
-            ] {
-                MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
-            }
-        });
+        SplitButton::<u8>::command(
+            CommandRef::new("edit.paste"),
+            SplitMenu::Body(Box::new(|ui, _| {
+                for (label, id) in [
+                    ("Paste", "edit.paste"),
+                    ("Keep Text Only", "edit.pasteText"),
+                    ("Merge Formatting", "edit.pasteMerge"),
+                    ("Paste Special…", "edit.pasteSpecial"),
+                ] {
+                    MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
+                }
+            })),
+        )
+        .label(tl!("Paste").to_string())
+        .arrow_label(crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Paste"))]))
+        .icon(IconId::new("paste"))
+        .arrangement(Arrangement::Stacked)
+        .show(ui);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for (icon, label, id) in [("cut", "Cut", "edit.cut"), ("copy", "Copy", "edit.copy")] {
                 Button::command(CommandRef::new(id))
