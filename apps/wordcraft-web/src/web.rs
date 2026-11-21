@@ -127,6 +127,17 @@ pub fn start() {
                     let mut app =
                         WordApp::new(session, services).with_host(host).with_settings(settings.clone()).with_control(ControlChannel::new(requests));
                     app.autosave = false;
+                    // `?chrome=none|notitlebar|nofiletab`: a host that embeds WordCraft in its own window and owns the
+                    // files can leave the title bar and/or the File tab undrawn (`Chrome`), as in GridCraft. An
+                    // unknown value keeps everything, as the default does. Before the Start screen, which is File.
+                    if let Some(chrome) = query_param("chrome") {
+                        match chrome.as_str() {
+                            "none" => app.chrome = wordcraft_ui_egui::Chrome { title_bar: false, file_tab: false },
+                            "notitlebar" => app.chrome.title_bar = false,
+                            "nofiletab" => app.chrome.file_tab = false,
+                            _ => {}
+                        }
+                    }
                     app.tell_about_font_downloads();
                     // A region chosen in File › Options replaces the browser's for the first blank
                     // document too (#838).

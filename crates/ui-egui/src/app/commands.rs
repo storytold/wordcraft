@@ -45,8 +45,7 @@ impl WordApp {
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
         let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
-            self.ui.backstage = true;
-            self.ui.backstage_page = "recover".into();
+            self.open_backstage(Some("recover"));
         }
         // A button whose command needs input the user hasn't given yet opens its dialog (#240).
         if let Some(name) = input_dialog(id, &params)
@@ -496,13 +495,12 @@ impl WordApp {
                 "addFont" => self.pick_font(),
                 "loadSystemFonts" => self.load_system_fonts(),
                 "print" => {
-                    self.ui.backstage = true;
-                    self.ui.backstage_page = "print".into();
+                    self.open_backstage(Some("print"));
                 }
                 "options" => {
-                    self.ui.backstage = true;
-                    self.ui.backstage_page = "options".into();
-                    if let Some(pane) = req.get("pane").and_then(Value::as_str) {
+                    if self.open_backstage(Some("options"))
+                        && let Some(pane) = req.get("pane").and_then(Value::as_str)
+                    {
                         self.ui.options_pane = pane.into();
                     }
                 }
@@ -563,7 +561,7 @@ impl WordApp {
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {
-                    self.ui.backstage = true;
+                    self.open_backstage(None);
                 } else {
                     self.ui.tab = tab;
                     self.ui.backstage = false;
@@ -571,7 +569,13 @@ impl WordApp {
                 json!({"tab": self.ui.tab})
             }
             "ui.backstage" => {
-                self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
+                if p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage) {
+                    if !self.open_backstage(None) {
+                        return Some(Ok(json!({"backstage": false})));
+                    }
+                } else {
+                    self.ui.backstage = false;
+                }
                 if let Some(pg) = s("page") {
                     self.ui.backstage_page = pg.into();
                 }

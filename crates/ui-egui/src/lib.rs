@@ -110,7 +110,7 @@ mod state;
 pub(crate) use app::works_without_document;
 // PLAN: assumed shell-w13 leaves `HostSaveFn` and `Inbox` out of `services` (sh.A14 removes `host_save` and `inbox`).
 pub use app::fonts::ui_fonts;
-pub use services::Services;
+pub use services::{Chrome, Services};
 pub use state::{AutoSaveBlock, keeps_everything};
 
 /// A status-bar message and when it stops showing.
@@ -380,6 +380,8 @@ pub struct WordApp {
     pub session: Session,
     pub ui: prefs::Prefs,
     pub services: Services,
+    /// The window chrome to draw (see [`Chrome`]).
+    pub chrome: Chrome,
     /// The app's host: files, jobs, settings sections and the language, shared with the framework.
     pub(crate) host: std::sync::Arc<craft::host::Host>,
     /// The saved preferences' store, shared with the host.
@@ -524,7 +526,7 @@ pub struct WordApp {
     /// The document the last print job was for: its window reports how the job went.
     print_document: Option<u64>,
     /// The open state of the Quick Access Toolbar menu, the undo list, the status menus and the missing-fonts box.
-    pub(crate) chrome: chrome::ChromeOpen,
+    pub(crate) chrome_open: chrome::ChromeOpen,
     /// The File page's state.
     pub(crate) backstage_state: backstage::BackstageState,
     /// File › Options' state.
