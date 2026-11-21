@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-11-15 · The Library (#2868): `library.*` commands, confined by the read root; headless `mcp` and `run` browse the app's Library folders. Previously 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-21 · `library.list` takes `refresh` and `library.search` takes `file` (#2868). Previously 2026-11-15 · The Library (#2868): `library.*` commands, confined by the read root; headless `mcp` and `run` browse the app's Library folders. Previously 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -143,8 +143,8 @@ craft-libs): the same commands and answers as DeckCraft's, with WordCraft's noun
 |---|---|
 | `library.folders` | the folders and how many pictures each holds |
 | `library.addFolder {path}`, `library.removeFolder {path}` | change the folder list, kept with the app's preferences (at most 32 folders) |
-| `library.list {folder?, file?, pictures?}` | the picture files of every folder or one, or one file, each with its one picture |
-| `library.search {query, limit?, folder?}` | pictures whose file name or format holds `query` |
+| `library.list {folder?, file?, pictures?, refresh?}` | the picture files of every folder or one, or one file, each with its one picture; `refresh` looks again at files that failed |
+| `library.search {query, limit?, folder?, file?}` | pictures whose file name or format holds `query`, in every folder, one folder or one file |
 | `library.thumbnail {file, picture: 0, width?}` | a picture drawn small, as base64 PNG |
 | `library.insert {file, width?, alt?}` | put the picture at the selection, as `insert.picture` does (one undo step) |
 

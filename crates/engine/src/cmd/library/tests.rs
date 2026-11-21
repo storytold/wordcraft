@@ -173,6 +173,10 @@ fn files_over_256_mb_are_listed_with_an_error_and_never_read() {
         assert_eq!(files.len(), 1);
         assert!(files[0]["error"].as_str().is_some_and(|e| e.contains("256 MB")), "{}", files[0]);
     }
+    // Refresh looks at the failed file again: still too large, still not read.
+    let files = list(&mut ss, json!({"refresh": true}));
+    assert!(files[0]["error"].as_str().is_some_and(|e| e.contains("256 MB")), "{}", files[0]);
+    assert_eq!(ss.library.sizes().3, 0, "no picture was opened");
     let path = s(&dir.join("huge.png"));
     assert!(ss.run("library.thumbnail", &json!({"file": path, "picture": 0})).is_err());
     assert!(ss.run("library.insert", &json!({"file": path})).is_err());
@@ -317,6 +321,12 @@ fn search_finds_file_names_and_formats_in_any_case() {
     ss.run("library.addFolder", &json!({"path": trips})).unwrap();
     let one = ss.run("library.search", &json!({"query": "harbour", "folder": trips})).unwrap();
     assert_eq!(one.as_array().map(Vec::len), Some(1), "{one}");
+    // In one file only, as the pane searches a few files a frame.
+    let dawn = s(&dir.join("Harbour at dawn.png"));
+    let one = ss.run("library.search", &json!({"query": "harbour", "file": dawn})).unwrap();
+    assert_eq!(names(one.as_array().unwrap()), ["Harbour at dawn.png"], "{one}");
+    assert_eq!((&one[0]["picture"], &one[0]["hidden"], &one[0]["match"]), (&json!(0), &json!(false), &json!("title")), "{one}");
+    assert_eq!(ss.run("library.search", &json!({"query": "kiln", "file": dawn})).unwrap(), json!([]));
     let limited = ss.run("library.search", &json!({"query": "a", "limit": 1})).unwrap();
     assert_eq!(limited.as_array().map(Vec::len), Some(1));
     assert_eq!(ss.run("library.search", &json!({"query": "nothing like it"})).unwrap(), json!([]));
@@ -456,6 +466,7 @@ fn a_read_root_confines_every_library_command() {
             ("library.thumbnail", json!({"file": secret, "picture": 0})),
             ("library.insert", json!({"file": secret})),
             ("library.list", json!({"file": secret})),
+            ("library.search", json!({"query": "secret", "file": secret})),
         ] {
             let e = ss.run(id, &p).unwrap_err();
             assert!(e.to_string().contains("outside the read root"), "{id}: {e}");
