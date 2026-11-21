@@ -329,6 +329,7 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
             };
             (apply_case_switch(instr, text), false)
         }
+        "SYMBOL" => (symbol_field_text(instr, result), false),
         // ASK and SET only assign text to a bookmark: they never show a result (ECMA-376 §17.16.5).
         "ASK" | "SET" => (String::new(), false),
         "STYLEREF" => match &ctx.styleref {
@@ -341,7 +342,161 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
 
 /// What Word prints for a `PAGEREF` to a bookmark the document doesn't have, in English (Word
 /// prints it in its interface language: see [`crate::LayoutOptions::bookmark_error`]).
+/// What a field that may be `locked` shows on page `page`: [`field_text_on`], except that a locked
+/// `SYMBOL` field shows its stored result, as updating keeps it. Layout, unlink and Find all read
+/// fields through this, so unlinking writes what is on screen.
+pub fn shown_field_text(instr: &str, result: &str, locked: bool, ctx: &FieldCtx, page: u32) -> (String, bool) {
+    if locked && field_name(instr) == "SYMBOL" {
+        return (result.to_string(), false);
+    }
+    field_text_on(instr, result, ctx, page)
+}
+
 pub const BOOKMARK_NOT_DEFINED: &str = "Error! Bookmark not defined.";
+
+/// The words of a field instruction: quoted text is one word (without its quotes) and a
+/// backslash starts a new word (`\f"Symbol"` is `\f`, `Symbol`).
+fn instr_words(instr: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = instr.chars();
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            words.push(chars.by_ref().take_while(|c| *c != '"').collect());
+        } else if c.is_whitespace() || c == '\\' {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            if c == '\\' {
+                word.push(c);
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// The character a `SYMBOL` field shows (ECMA-376 Part 1 §17.16.5.61): the code is decimal or
+/// `0x` hexadecimal (a negative decimal code down to -32768 is a signed 16-bit one, as older
+/// converters wrote codes above 0x7FFF: -3913 is 0xF0B7); in a symbol font (`\f`) it is a font
+/// code (0x20–0xFF, or its private-use form 0xF020–0xF0FF) shown as its Unicode equivalent, or
+/// nothing when it has none. Otherwise `\u` reads it as Unicode (Word shows nothing outside the
+/// Basic Multilingual Plane: a larger code keeps its low 16 bits), `\j` as one Shift-JIS
+/// character and the default (`\a` ANSI) as Windows-1252. Control characters other than tab show
+/// nothing. `\s` and `\h` only change size.
+pub fn symbol_text(instr: &str) -> String {
+    symbol_code_text(instr, &instr_words(instr)).unwrap_or_else(String::from)
+}
+
+/// What a `SYMBOL` field whose stored result is `result` shows: [`symbol_text`], except that a
+/// field naming a font with no symbol table here (`\f "MT Extra"`, Marlett, ZapfDingbats) whose
+/// code gives no character keeps a stored result, which was made with that font at hand. Without
+/// a font, Word shows `###` for an unreadable code whatever result is stored.
+pub fn symbol_field_text(instr: &str, result: &str) -> String {
+    let words = instr_words(instr);
+    match symbol_code_text(instr, &words) {
+        Ok(text) => text,
+        Err(_) if !result.is_empty() && symbol_font_arg(&words).is_some_and(|f| !wordcraft_doc::symbol_fonts::is_symbol_font(f)) => {
+            result.to_string()
+        }
+        Err(shown) => shown.to_string(),
+    }
+}
+
+/// The font a `SYMBOL` field's `\f` switch names.
+fn symbol_font_arg(words: &[String]) -> Option<&String> {
+    words.iter().position(|w| w.eq_ignore_ascii_case("\\f")).and_then(|i| words.get(i + 1)).filter(|w| !w.starts_with('\\'))
+}
+
+/// A `SYMBOL` field's code: decimal, `0x` hexadecimal, or a negative decimal read as a signed
+/// 16-bit number (-32768..=-1 is 0x8000..=0xFFFF).
+fn symbol_code(word: &str) -> Option<u32> {
+    if let Some(hex) = word.strip_prefix("0x").or_else(|| word.strip_prefix("0X")) {
+        return u32::from_str_radix(hex, 16).ok();
+    }
+    if word.starts_with('-') {
+        return word.parse::<i32>().ok().filter(|n| (-0x8000..=-1).contains(n)).and_then(|n| u32::try_from(n + 0x1_0000).ok());
+    }
+    word.parse::<u32>().ok()
+}
+
+/// The text a `SYMBOL` field's code gives (see [`symbol_text`]): `Err` when it gives no character,
+/// with what is shown then (`###` for a code that can't be read or is too large, nothing for one
+/// the font or encoding has no character for). Code 0 and control codes show nothing on purpose.
+fn symbol_code_text(instr: &str, words: &[String]) -> Result<String, &'static str> {
+    let code = words.get(1).filter(|w| !w.starts_with('\\')).and_then(|w| symbol_code(w));
+    let Some(mut code) = code else { return Err("###") };
+    let unicode = has_switch(instr, 'u');
+    if unicode {
+        code &= 0xFFFF;
+    }
+    // A raw CR or LF would end up in paragraph text when the field is unlinked.
+    let control = |c: char| c != '\t' && ('\0'..='\u{1f}').contains(&c);
+    if code == 0 || char::from_u32(code).is_some_and(control) {
+        return Ok(String::new());
+    }
+    let symbol_font = symbol_font_arg(words).filter(|f| wordcraft_doc::symbol_fonts::is_symbol_font(f));
+    let shown = match symbol_font {
+        // A font code is never a soft hyphen: look it up through its private-use form so Symbol
+        // 0xAD is its up arrow like every other code.
+        Some(font) if code <= 0xFF || (0xF020..=0xF0FF).contains(&code) => {
+            char::from_u32(0xF000 | (code & 0xFF)).and_then(|c| wordcraft_doc::symbol_fonts::symbol_char(font, c))
+        }
+        Some(_) if unicode => None,
+        _ if has_switch(instr, 'j') => shift_jis(code),
+        _ if code > 0xFF && !unicode => return Err("###"),
+        _ if unicode => char::from_u32(code),
+        _ => match code {
+            0x80..=0x9F => windows_1252(code),
+            _ => char::from_u32(code),
+        },
+    };
+    match shown {
+        Some(c) if control(c) => Ok(String::new()),
+        Some(c) => Ok(c.to_string()),
+        None => Err(""),
+    }
+}
+
+/// The one character the Shift-JIS code `code` (one byte, or two with the lead byte high) stands
+/// for; `None` when it is not exactly one valid character.
+fn shift_jis(code: u32) -> Option<char> {
+    // Word shows 0x5C and 0x7E as the ASCII backslash and tilde, not as Shift-JIS's yen sign and
+    // overline.
+    if code == 0x5C || code == 0x7E {
+        return char::from_u32(code);
+    }
+    let bytes: Vec<u8> = match code {
+        0..=0xFF => vec![u8::try_from(code).ok()?],
+        0x100..=0xFFFF => u16::try_from(code).ok()?.to_be_bytes().to_vec(),
+        _ => return None,
+    };
+    let (text, had_errors) = encoding_rs::SHIFT_JIS.decode_without_bom_handling(&bytes);
+    if had_errors {
+        return None;
+    }
+    let mut chars = text.chars();
+    chars.next().filter(|_| chars.next().is_none())
+}
+
+/// The character Windows-1252 puts at `code` in 0x80..=0x9F (`None` for its five unused codes).
+fn windows_1252(code: u32) -> Option<char> {
+    const HIGH: [u32; 32] = [
+        0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, // 0x80
+        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017D, 0, // 0x88
+        0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, // 0x90
+        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178, // 0x98
+    ];
+    let i = usize::try_from(code.checked_sub(0x80)?).ok()?;
+    HIGH.get(i).copied().filter(|u| *u != 0).and_then(char::from_u32)
+}
 
 /// Extract the bookmark target from a `PAGEREF` instruction.
 fn pageref_target(instr: &str) -> Option<&str> {

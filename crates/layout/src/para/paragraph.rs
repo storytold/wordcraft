@@ -10,7 +10,7 @@ use wordcraft_fonts::ShapeContext;
 
 use super::{
     Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
-    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
+    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, reference_link, shown_field_text,
 };
 
 /// A run's formatting resolved in the paragraph's style and table.
@@ -430,7 +430,7 @@ impl<'a> Shaped<'a> {
             // A locked page reference keeps its result, as Word prints and exports it.
             self.b.shape_atomic(result, slot.start, slot.end, &linked(rc, instr));
         } else {
-            self.field_result(cx, (instr, result), slot, rc);
+            self.field_result(cx, (instr, result, *locked), slot, rc);
         }
     }
 
@@ -445,14 +445,20 @@ impl<'a> Shaped<'a> {
         self.check_boxes.push(k);
     }
 
-    fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
+    fn field_result(&mut self, cx: &Cx, (instr, result, locked): (&str, &str, bool), slot: Slot, rc: &Arc<ResolvedChar>) {
         let (start, end) = (slot.start, slot.end);
         match wordcraft_doc::eq::parse_overstrike(instr) {
             Some(o) => overstrike(&mut self.b, &o, instr, start, end, rc, &mut self.enclosures),
             None => {
-                let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
+                let (t, page_dep) = shown_field_text(instr, result, locked, cx.env.fields, cx.env.fields.page_at(start));
                 self.has_page_fields |= page_dep;
-                self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                // A SYMBOL field's character is already Unicode: a run in a symbol font must not
+                // map it again as one of its own codes (© would become Symbol's 0xA9, ♥).
+                if crate::fields::field_name(instr) == "SYMBOL" {
+                    self.b.shape_atomic_unicode(&t, start, end, &linked(rc, instr));
+                } else {
+                    self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                }
             }
         }
     }
@@ -663,6 +669,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         levels,
         shown: Vec::new(),
         substituted: Vec::new(),
+        unicode_text: false,
     };
     let mut cx =
         Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp), shown: None };

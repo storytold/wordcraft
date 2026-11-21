@@ -22,6 +22,9 @@ pub(super) struct Builder<'a> {
     /// Fonts asked for that aren't installed, and the faces drawn instead (see
     /// `ParaLayout::substituted`).
     pub(super) substituted: Vec<(String, FaceRef)>,
+    /// The text being shaped is already Unicode (a `SYMBOL` field's character): a symbol font
+    /// does not map it again as its own codes (see [`Builder::shape_atomic_unicode`]).
+    pub(super) unicode_text: bool,
 }
 
 /// The fonts a run asks for that aren't installed (see [`Builder::note_missing_fonts`]).
@@ -256,7 +259,7 @@ impl<'a> Builder<'a> {
         let requested_missing = resolved.substituted || !family.eq_ignore_ascii_case(&rc.font);
         let primary = resolved.face;
         // Symbol-font characters are laid out as their Unicode equivalents.
-        let sym = SymbolRun::of(&rc.font, &resolved);
+        let sym = self.symbol_run(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         // A font isn't installed when it was substituted, or looked up as a missing roman font or
         // its font table alternate (#2702).
@@ -499,6 +502,23 @@ impl<'a> Builder<'a> {
             }
             i += n + 1;
         }
+    }
+
+    /// How a run in `font` maps its characters as symbol-font codes; `None` for text that is not
+    /// in a symbol font, or is already Unicode ([`Builder::unicode_text`]).
+    fn symbol_run<'f>(&self, font: &'f str, resolved: &wordcraft_fonts::word::Resolved) -> Option<SymbolRun<'f>> {
+        if self.unicode_text {
+            return None;
+        }
+        SymbolRun::of(font, resolved)
+    }
+
+    /// [`Builder::shape_atomic`] for text that is already Unicode, whatever font the run is set
+    /// in: a symbol font's character map is not applied to it (© stays ©, not Symbol's 0xA9 ♥).
+    pub(super) fn shape_atomic_unicode(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>) {
+        let was = std::mem::replace(&mut self.unicode_text, true);
+        self.shape_atomic(text, start, end, rc);
+        self.unicode_text = was;
     }
 
     /// One cluster for a whole object with its display text (fields, note references).
