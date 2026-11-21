@@ -209,6 +209,7 @@ impl Ctx<'_> {
         let mut p = Paragraph::with_text(&n.to_string(), CharProps { style, ..Default::default() });
         p.props.space_after = Some(0.0);
         p.props.space_before = Some(0.0);
+        (p.props.space_before_lines, p.props.space_after_lines) = (Some(0.0), Some(0.0));
         let env = para::ParaEnv {
             doc: self.doc,
             width: 60.0,
