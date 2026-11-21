@@ -16,6 +16,8 @@
 mod appimage_env;
 mod control_server;
 mod default_apps;
+#[cfg(target_os = "macos")]
+mod font_panel;
 mod prefs;
 mod region;
 
@@ -49,6 +51,9 @@ struct App {
     app: WordApp,
     /// The native panels behind the file service the app reaches through `Host::files`.
     panels: FilePanels,
+    /// The system font panel (macOS), shown through `Services::show_fonts`.
+    #[cfg(target_os = "macos")]
+    fonts: Option<std::rc::Rc<font_panel::FontPanel>>,
     /// Feeds the files dropped on the window into the app's intake (`Services::intake`), the one
     /// queue the OS's requests are read from.
     drops: IntakeSender,
@@ -64,6 +69,14 @@ impl App {
     /// One frame's logic: what the OS asked, the app, its file dialogs, then the root window's close
     /// path. Without `frame` (a test over no window) the dialogs have no parent window.
     fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.fonts {
+            for pick in panel.picks() {
+                apply_font_pick(&mut self.app, &pick);
+            }
+            let app = &mut self.app;
+            panel.follow(|| selection_face(app));
+        }
         self.app.logic(ctx);
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
         // A quit that waits for nothing (the documents are answered for) closes the root window.
@@ -194,6 +207,50 @@ fn x11_libraries() -> Result<(), String> {
         missing.push("libxkbcommon-x11.so.0 could not be loaded".into());
     }
     if missing.is_empty() { Ok(()) } else { Err(missing.join("; ")) }
+}
+
+/// The selection's font, as the ribbon's Font group shows it.
+#[cfg(target_os = "macos")]
+fn selection_face(app: &mut WordApp) -> font_panel::Face {
+    let st = app.session.run("format.state", &serde_json::json!({})).unwrap_or_default();
+    font_panel::Face {
+        family: st["font"].as_str().unwrap_or("").into(),
+        size: st["size"].as_f64().unwrap_or(12.0),
+        bold: st["bold"] == true,
+        italic: st["italic"] == true,
+    }
+}
+
+/// Formats the selection with what the user changed in the font panel, as the ribbon's Font
+/// group and the Font dialog do.
+#[cfg(target_os = "macos")]
+fn apply_font_pick(app: &mut WordApp, pick: &font_panel::Pick) {
+    use font_panel::Line;
+    use serde_json::json;
+    let family = pick.family.as_ref().map(|f| app.previews.font_stored(f));
+    let underline = |line: Line| match line {
+        Line::None => json!({"value": false}),
+        Line::Single => json!({"style": "single"}),
+        Line::Double => json!({"style": "double"}),
+    };
+    // Single and double strikethrough are separate properties; one is set, the other cleared.
+    let strike = |line: Line| [("format.strikethrough", line == Line::Single), ("format.doubleStrikethrough", line == Line::Double)];
+    let runs = [
+        family.map(|name| ("format.font", json!({"name": name}))),
+        pick.size.map(|size| ("format.size", json!({"size": size}))),
+        pick.bold.map(|value| ("format.bold", json!({"value": value}))),
+        pick.italic.map(|value| ("format.italic", json!({"value": value}))),
+        pick.color.map(|[r, g, b]| ("format.color", json!({"color": format!("{r:02X}{g:02X}{b:02X}")}))),
+        pick.underline.map(|line| ("format.underline", underline(line))),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(pick.strike.into_iter().flat_map(strike).map(|(id, value)| (id, json!({"value": value}))));
+    for (id, params) in runs {
+        if let Err(e) = app.run(id, params) {
+            log::warn!("font panel: {id}: {e}");
+        }
+    }
 }
 
 /// The type of the "make WordCraft the default app" button's action.
@@ -548,6 +605,17 @@ fn main() -> eframe::Result {
             }
             let spool = Spool::new(host.jobs_shared().clone());
             let mut app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
+            #[cfg(target_os = "macos")]
+            let fonts = objc2::MainThreadMarker::new().map(|mtm| {
+                let wake = ctx.clone();
+                std::rc::Rc::new(font_panel::FontPanel::new(mtm, move || wake.request_repaint()))
+            });
+            #[cfg(target_os = "macos")]
+            if let Some(panel) = fonts.clone() {
+                app.services.show_fonts = Some(Box::new(move |family, size, bold, italic| {
+                    panel.show(font_panel::Face { family: family.into(), size, bold, italic });
+                }));
+            }
             // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
             // the region check below reads the saved region the settings apply.
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
@@ -598,7 +666,16 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
-            Ok(Box::new(App { app, panels, drops, settings, spool, control: control_server }))
+            Ok(Box::new(App {
+                app,
+                panels,
+                #[cfg(target_os = "macos")]
+                fonts,
+                drops,
+                settings,
+                spool,
+                control: control_server,
+            }))
         }),
     );
     // The app is dropped by now: whatever it saved on the way out is in the store.
@@ -803,7 +880,21 @@ mod smoke {
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
             let app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None }, frames, ctx, sender }
+            Run {
+                app: App {
+                    app,
+                    panels,
+                    #[cfg(target_os = "macos")]
+                    fonts: None,
+                    drops,
+                    settings,
+                    spool,
+                    control: None,
+                },
+                frames,
+                ctx,
+                sender,
+            }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.
