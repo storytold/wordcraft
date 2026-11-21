@@ -297,7 +297,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 (true, false) => table::split_row(cur, nested_keep_cut(ctx.doc, cur, room)).or_else(|| table::split_row(cur, room)),
             };
             match split {
-                Some((a, b)) => {
+                Some((mut a, b)) => {
+                    table::lay_turned_in_part(ctx, StoryRef::Body, t, &[block as u32], 1, &mut a);
                     place(pb, &a);
                     table_notes(ctx, pb, &a.items);
                     rest = Some(b);

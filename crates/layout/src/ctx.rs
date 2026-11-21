@@ -40,6 +40,15 @@ pub(crate) struct Ctx<'a> {
     /// Whether tracked deletions are left out in the story being laid out
     /// ([`LayoutOptions::hides_deleted`]): the body's, or the story of the [`layout_box`] at work.
     pub(crate) hide_deleted: HideDeleted,
+    /// The turned table cell whose text the next [`crate::layout_box`] lays out, if any: where
+    /// its floating objects keep text clear in the turned text's frame.
+    pub(crate) turned_cell: Option<crate::table::TurnedCell>,
+    /// How many turned table cells' text is being laid out around the current point (cells
+    /// nested in turned cells).
+    pub(crate) turned_depth: u32,
+    /// How many turned cells' draft layouts (rows with no height, laid out again at the row's
+    /// height) are under way around the current point: tables in them skip their second pass.
+    pub(crate) turned_draft: u32,
     /// Whether body text (or its notes) laid out so far shows a page total (`NUMPAGES`,
     /// `SECTIONPAGES`), which is only known once the whole body is paginated.
     pub(crate) uses_totals: bool,
@@ -521,6 +530,9 @@ mod tests {
             chains: Default::default(),
             grid: Default::default(),
             hide_deleted: opts.hides_deleted(StoryRef::Body),
+            turned_cell: None,
+            turned_depth: 0,
+            turned_draft: 0,
             uses_totals: false,
             track_totals: false,
             pct_base: None,
