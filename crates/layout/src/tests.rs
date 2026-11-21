@@ -16289,3 +16289,37 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
+
+/// An empty paragraph closing a section mid-page draws no shading, with a continuous or a
+/// new-page break (Word); a paragraph with text keeps it.
+#[test]
+fn an_empty_section_closing_paragraph_is_not_shaded() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let fills = |mark: &str, start: SectionStart| {
+        let mut d = Document::from_text(&format!("Intro\nAAA\n{mark}\nBBB"));
+        let p = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+        p.props.shading = Rgb::parse("FFC000");
+        p.section = Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+        d.last_section.start = start;
+        let l = lay(&d);
+        l.pages[0].items.iter().filter(|i| matches!(i, Placed::Fill { .. })).count()
+    };
+    assert_eq!(fills("", SectionStart::Continuous), 0);
+    assert_eq!(fills("", SectionStart::NextPage), 0);
+    assert_eq!(fills("Mark", SectionStart::Continuous), 1);
+}
+
+/// A shaded, empty, section-closing paragraph with Page break before lands at the top of the
+/// next page, where it keeps its shading.
+#[test]
+fn an_empty_section_closing_paragraph_with_page_break_before_keeps_shading_at_page_top() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let mut d = Document::from_text("Intro\nAAA\n\nBBB");
+    let p = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+    p.props.shading = Rgb::parse("FFC000");
+    p.props.page_break_before = Some(true);
+    p.section = Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+    let l = lay(&d);
+    let fills: usize = l.pages.iter().map(|pg| pg.items.iter().filter(|i| matches!(i, Placed::Fill { .. })).count()).sum();
+    assert_eq!(fills, 1);
+}

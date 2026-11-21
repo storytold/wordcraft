@@ -18,6 +18,34 @@ use crate::WRAP_RELAYS;
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
 pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    // Word draws no shading for an empty paragraph that closes a section mid-page.
+    if p.section.is_some() && p.text.is_empty() && p.objects.is_empty() && !pb.at_top() && !pb.pages.is_empty() {
+        let at = (pb.pages.len(), pb.col);
+        let from = pb.page().map_or(0, |pg| pg.items.len());
+        place_para_inner(ctx, pb, p, block, body_top);
+        // A paragraph moved to another page or column (a page break before it, or no room) is at
+        // the top there and keeps its shading.
+        if (pb.pages.len(), pb.col) == at
+            && let Some(pg) = pb.pages.last_mut()
+            && pg.items.len() > from
+        {
+            let mut tail = pg.items.split_off(from);
+            let own: Vec<bool> =
+                tail.iter().zip(tail.iter().skip(1)).map(|(a, b)| matches!((a, b), (Placed::Fill { .. }, Placed::Lines { .. }))).collect();
+            let mut i = 0;
+            tail.retain(|_| {
+                let drop = own.get(i).copied().unwrap_or(false);
+                i += 1;
+                !drop
+            });
+            pg.items.extend(tail);
+        }
+        return;
+    }
+    place_para_inner(ctx, pb, p, block, body_top);
+}
+
+fn place_para_inner(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;
