@@ -85,6 +85,9 @@ pub struct CompareForm {
     pub character_level: bool,
     /// Show changes in: `original`, `revised` or `new`.
     pub show_in: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(skip)]
+    default_file_location: Option<String>,
 }
 
 impl Default for CompareForm {
@@ -99,13 +102,21 @@ impl Default for CompareForm {
             settings: [true; 10],
             character_level: false,
             show_in: "new".into(),
+            #[cfg(not(target_arch = "wasm32"))]
+            default_file_location: None,
         }
     }
 }
 
 impl CompareForm {
     pub fn new(app: &WordApp, combine: bool) -> CompareForm {
-        CompareForm { combine, author: app.session.author.clone(), ..CompareForm::default() }
+        CompareForm {
+            combine,
+            author: app.session.author.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            default_file_location: app.session.prefs.default_file_location.clone(),
+            ..CompareForm::default()
+        }
     }
 
     /// The `review.compare` / `review.combine` parameters; `None` until a revised document is
@@ -142,6 +153,9 @@ impl WordForm for CompareForm {
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let can = Env::of(ui).view().host().is_some_and(|h| h.files().can_pick());
+        let request = PickRequest::open("document");
+        #[cfg(not(target_arch = "wasm32"))]
+        let request = crate::file_dialogs::with_default_folder(request, self.default_file_location.as_deref(), false);
         let reason = (!can).then(|| Label::from(tl!("Comparing with another file needs the desktop app.").to_string()));
         let another = !self.original_current;
         let (mut original_pick, mut revised_pick): (Option<String>, Option<String>) = (None, None);
@@ -162,15 +176,15 @@ impl WordForm for CompareForm {
                 Field::new(Label::from(tl!("Another file").to_string())).enabled(another).show(ui, |ui, _| {
                     let mut row = PathRow::new(Label::from(tl!("Another file").to_string()), Bind::bound(&mut self.original))
                         .placeholder(Label::from(tl!("Another file").to_string()))
-                        .pick(PickRequest::open("document"));
+                        .pick(request.clone());
                     if let Some(r) = &reason {
                         row = row.browse_reason(r.clone());
                     }
                     original_pick = row.show(ui).picked;
                 });
                 Field::new(Label::from(tl!("Revised document").to_string())).show(ui, |ui, _| {
-                    let mut row = PathRow::new(Label::from(tl!("Revised document").to_string()), Bind::bound(&mut self.revised))
-                        .pick(PickRequest::open("document"));
+                    let mut row =
+                        PathRow::new(Label::from(tl!("Revised document").to_string()), Bind::bound(&mut self.revised)).pick(request.clone());
                     if let Some(r) = &reason {
                         row = row.browse_reason(r.clone());
                     }

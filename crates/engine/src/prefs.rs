@@ -48,6 +48,9 @@ pub struct Prefs {
     /// Template starts in (File › Options › Advanced › File locations, #2852). `None`: the app's
     /// own `Templates` folder in its settings folder.
     pub user_templates_folder: Option<String>,
+    /// The folder Open and Save As start in when nothing names a better one (File › Options ›
+    /// Save › Default local file location, #6721). `None`: the system dialog's own choice.
+    pub default_file_location: Option<String>,
     /// Formatting marks shown even while Show/Hide ¶ is off.
     pub marks: wordcraft_layout::display::FormattingMarks,
     /// Mark grammar errors as you type (with Check spelling as you type on).
@@ -83,6 +86,7 @@ impl Default for Prefs {
             dictionaries_folder: None,
             custom_dictionary: None,
             user_templates_folder: None,
+            default_file_location: None,
             marks: Default::default(),
             mark_grammar: true,
             check_spelling: true,

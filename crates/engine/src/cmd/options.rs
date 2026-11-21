@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: clear the configured folder), "customDictionary"?: string (a custom-word dictionary file like custom.dic, saved; auto: the default custom-dictionary.txt in the settings folder), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: clear the configured folder), "customDictionary"?: string (a custom-word dictionary file like custom.dic, saved; auto: the default custom-dictionary.txt in the settings folder), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "defaultFileLocation"?: string (fallback folder for Open and Save As, saved; a remembered folder takes priority; auto: clear the fallback; local folder only), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -140,6 +140,13 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         Some(Value::String(f)) => Some(folder_setting("userTemplatesFolder", f, true)?),
         Some(_) => return Err(CmdError::Params("`userTemplatesFolder` must be a folder path, or auto".into())),
     };
+    let default_location = match v.get("defaultFileLocation") {
+        None | Some(Value::Null) => None,
+        // A network folder is never looked at (as for the templates folder): the dialogs would
+        // make Windows authenticate to that host on every Open and Save As.
+        Some(Value::String(f)) => Some(folder_setting("defaultFileLocation", f, true)?),
+        Some(_) => return Err(CmdError::Params("`defaultFileLocation` must be a folder path, or auto".into())),
+    };
     let mut flag_values = Vec::new();
     for (k, f) in flags() {
         if let Some(b) = bool_param(v, k)? {
@@ -169,6 +176,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         || folder.is_some()
         || custom_dictionary.is_some()
         || templates_folder.is_some()
+        || default_location.is_some()
         || !flag_values.is_empty()
         || !mark_values.is_empty()
         || check_spelling.is_some()
@@ -202,6 +210,9 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     }
     if let Some(f) = templates_folder {
         s.prefs.user_templates_folder = f;
+    }
+    if let Some(f) = default_location {
+        s.prefs.default_file_location = f;
     }
     for (f, b) in flag_values {
         *f(&mut s.prefs) = b;
@@ -259,6 +270,7 @@ pub fn current(s: &Session) -> Value {
         "customDictionary": pr.custom_dictionary,
         "dictionariesFolder": pr.dictionaries_folder,
         "userTemplatesFolder": pr.user_templates_folder,
+        "defaultFileLocation": pr.default_file_location,
         "dictionaries": wordcraft_proof::installed_dictionaries()
             .into_iter()
             .map(|(lang, dic)| json!({"language": lang.tag(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
@@ -287,7 +299,7 @@ fn prepare_custom_dictionary(s: &Session, setting: Option<&str>) -> Result<(Opti
     }
 }
 
-/// A folder setting (`dictionariesFolder`, `userTemplatesFolder`): `auto` (or nothing) forgets
+/// A folder setting (`dictionariesFolder`, `userTemplatesFolder`, `defaultFileLocation`): `auto` (or nothing) forgets
 /// it; otherwise an existing folder, given as an absolute path or one starting with `~/`. With
 /// `local_only`, a network folder is refused before anything looks at it (#2852): even checking
 /// that it exists would make Windows authenticate to that host.

@@ -309,15 +309,62 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengconfined".to_string()), "kept in memory");
     wordcraft_proof::remove_word("zxqengconfined");
     assert!(!outside.exists(), "nothing written outside the write root");
-    for key in ["dictionariesFolder", "userTemplatesFolder"] {
+    for key in ["dictionariesFolder", "userTemplatesFolder", "defaultFileLocation"] {
         assert!(confined(&mut s, "file.options", json!({key: base.join("outside").to_string_lossy()})).is_err(), "{key}");
     }
     assert_eq!((s.prefs.dictionaries_folder.as_deref(), s.prefs.user_templates_folder.as_deref()), (None, None));
+    assert_eq!(s.prefs.default_file_location, None);
     // A folder inside the read root is still taken.
     let inside = base.join("in");
     assert!(confined(&mut s, "file.options", json!({"userTemplatesFolder": inside.to_string_lossy()})).is_ok());
     let _ = std::fs::remove_dir_all(&base);
     assert_eq!(s.prefs.user_templates_folder.as_deref(), Some(inside.to_string_lossy().as_ref()));
+}
+
+/// #6721: the default local file location is saved with the other preferences, read back by
+/// `file.options`, forgotten by `auto`, and a bad value changes nothing.
+#[test]
+fn default_file_location_is_set_read_cleared_and_refuses_bad_folders() {
+    let base = scratch_dir("default-location");
+    let folder = base.join("Documents");
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = base.join("note.txt");
+    std::fs::write(&file, "x").unwrap();
+    let mut s = s();
+    assert_eq!(s.prefs.default_file_location, None, "nothing is set to begin with");
+    assert_eq!(run(&mut s, "file.options", json!({"author": "Test Author"}))["defaultFileLocation"], json!(null));
+    let set = run(&mut s, "file.options", json!({"defaultFileLocation": folder.to_string_lossy()}));
+    assert_eq!(set["defaultFileLocation"], json!(folder.to_string_lossy()));
+    assert_eq!(set["opened"], json!(false), "setting it opens nothing");
+    let saved_json = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(saved_json["defaultFileLocation"], json!(folder.to_string_lossy()), "saved with the preferences");
+    let restored: crate::Prefs = serde_json::from_value(saved_json).unwrap();
+    assert_eq!(restored.default_file_location.as_deref(), Some(folder.to_string_lossy().as_ref()), "and restored");
+    let too_long = "x".repeat(5000);
+    let bad = [
+        json!("relative/folder"),
+        json!(folder.join("missing").to_string_lossy()),
+        json!(file.to_string_lossy()),
+        json!("/tmp/nul\u{0}byte"),
+        json!(too_long),
+        json!(r"\\server\share\docs"),
+        json!(5),
+        json!(["a"]),
+    ];
+    for b in bad {
+        assert!(s.run("file.options", &json!({"defaultFileLocation": b})).is_err(), "{b}");
+        assert_eq!(s.prefs.default_file_location.as_deref(), Some(folder.to_string_lossy().as_ref()), "a refused value changes nothing: {b}");
+    }
+    for unc in [r"\\server\share\docs", "//server/share"] {
+        let e = s.run("file.options", &json!({"defaultFileLocation": unc})).unwrap_err().to_string();
+        assert!(e.contains("network folder"), "{unc} is refused as a network folder, not for another reason: {e}");
+    }
+    run(&mut s, "file.options", json!({"defaultFileLocation": "auto"}));
+    assert_eq!(s.prefs.default_file_location, None, "auto forgets it");
+    run(&mut s, "file.options", json!({"defaultFileLocation": folder.to_string_lossy()}));
+    run(&mut s, "file.options", json!({"defaultFileLocation": ""}));
+    assert_eq!(s.prefs.default_file_location, None, "an empty value forgets it too");
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
@@ -5451,7 +5498,7 @@ fn hostile_file_params_never_panic() {
             json!({"path": path, "data": "not base64!"}),
             json!({"path": path, "data": "AAAA"}),
             json!({"path": path, "pagesPerSheet": 7, "range": "x", "pages": "9-1,,", "parity": "x", "copies": 3, "paper": "x"}),
-            json!({"dir": path, "name": path, "template": path, "userTemplatesFolder": path, "id": 1e30, "restore": 1e30, "save": path}),
+            json!({"dir": path, "name": path, "template": path, "userTemplatesFolder": path, "defaultFileLocation": path, "id": 1e30, "restore": 1e30, "save": path}),
         ]);
     }
 
