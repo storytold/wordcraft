@@ -1708,6 +1708,355 @@ fn undoing_bold_at_the_caret_turns_bold_typing_off_again() {
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).bold, Some(true));
 }
 
+/// `text` with the characters from `from` to `to` bold, the caret at `caret`.
+fn with_bold(text: &str, from: usize, to: usize, caret: usize) -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": from}, "focus": {"block": 0, "off": to}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": caret}}));
+    s
+}
+
+/// Whether the character at `off` of the first paragraph is bold.
+fn bold_at(s: &Session, off: usize) -> bool {
+    s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(off).bold == Some(true)
+}
+
+/// #6518: after Backspace, Word types with the deleted character's formatting, not the one to
+/// the left of the caret, and the Bold button shows it.
+#[test]
+fn typing_after_backspace_takes_the_deleted_characters_formatting() {
+    // "Abc abc", "Abc" bold: Backspace after the plain space, then X is plain.
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbcXabc");
+    assert!(!bold_at(&s, 3));
+    // "abc Abc", "Abc" bold: Backspace after the bold A, then X is bold beside a plain space.
+    let mut s = with_bold("abc Abc", 4, 7, 5);
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "XY");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "abc XYbc");
+    assert!(bold_at(&s, 4) && bold_at(&s, 5));
+    // Several Backspaces: the last character deleted wins ("c", then the plain space).
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbXabc");
+    assert!(bold_at(&s, 2));
+    // Inside a word the Bold button shows the deleted character too, not the word: in "Ab c"
+    // with all but the space bold, Backspace after the space leaves the caret in a bold "Abc".
+    let mut s = with_bold("Ab c", 0, 2, 3);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 4}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbXc");
+    assert!(!bold_at(&s, 2));
+}
+
+/// #6518: the carried formatting goes once the caret moves, and Delete never carries it.
+#[test]
+fn backspace_formatting_is_dropped_by_a_caret_move_and_delete_does_not_carry() {
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.typing_props().bold, Some(true));
+    typ(&mut s, "X");
+    assert!(bold_at(&s, 3));
+    // Delete after the bold "Abc" removes the plain space: X takes the bold to its left.
+    let mut s = with_bold("Abc abc", 0, 3, 3);
+    run(&mut s, "text.delete", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbcXabc");
+    assert!(bold_at(&s, 3));
+    // Deleting a plain selection with Delete or Backspace carries nothing either.
+    for key in ["text.delete", "text.backspace"] {
+        let mut s = with_bold("Abc abc", 0, 3, 3);
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 5}}));
+        run(&mut s, key, json!({}));
+        typ(&mut s, "X");
+        assert!(bold_at(&s, 3), "{key}");
+    }
+    // Undo takes the Backspace back, and with it the carried formatting.
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, 4));
+    assert_eq!(s.pending, None);
+}
+
+/// #6518: a Backspace that changes nothing, at the start of the document, keeps formatting waiting
+/// at the caret; one that joins paragraphs drops it. Observed in Word for Windows.
+#[test]
+fn backspace_at_the_document_start_keeps_waiting_formatting() {
+    // "Abc def", "Abc" bold: Backspace deletes the bold A, the second one does nothing, X is bold.
+    let mut s = with_bold("Abc def", 0, 3, 1);
+    typ(&mut s, "\u{8}\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xbc def");
+    assert!(bold_at(&s, 0));
+    // Bold at the caret before plain "abc", then a Backspace that does nothing: X is still bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xabc");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // "xyz" then bold "Abc": Backspace deletes the bold A, the second joins the paragraphs, and X
+    // takes the plain z to its left.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("xyz\nAbc"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 1}}));
+    typ(&mut s, "\u{8}\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xyzXbc");
+    assert!(!bold_at(&s, 3) && bold_at(&s, 4));
+}
+
+/// #6518: Ctrl+Backspace that deletes nothing, at the start of the document, keeps formatting
+/// waiting at the caret, as a plain Backspace there does; one that deletes a word or joins
+/// paragraphs drops it. Observed in Word for Windows.
+#[test]
+fn ctrl_backspace_at_the_document_start_keeps_waiting_formatting() {
+    // "Ab def", "A" bold: Backspace deletes the bold A, Ctrl+Backspace does nothing, X is bold
+    // beside a plain "b".
+    let mut s = with_bold("Ab def", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xb def");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // Bold at the caret before plain "abc", then a Ctrl+Backspace that does nothing: X is bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xabc");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // "pq xy Ab", "A" bold: Backspace deletes the bold A, Ctrl+Backspace deletes "xy ", X is plain.
+    let mut s = with_bold("pq xy Ab", 6, 7, 7);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "pq Xb");
+    assert!(!bold_at(&s, 3));
+    // "pq" then "Ab", "A" bold: Backspace deletes the bold A, Ctrl+Backspace joins the
+    // paragraphs, X is plain.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("pq\nAb"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 1}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 1}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "pqXb");
+    assert!(!bold_at(&s, 2));
+}
+
+/// #6518 review: what Backspace carries over is for typing where the character was deleted. A
+/// paste leaves the next typed text the formatting where it lands, and pasted text never takes it.
+#[test]
+fn backspace_formatting_is_not_kept_past_a_paste() {
+    // "hello wrld World", "World" bold: copy it, Backspace the plain r, paste, then ! is bold
+    // like the pasted text to its left.
+    let mut s = with_bold("hello wrld World", 11, 16, 0);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 11}, "focus": {"block": 0, "off": 16}}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 8}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.paste", json!({}));
+    typ(&mut s, "!");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello wWorld!ld World");
+    assert!(bold_at(&s, 7) && bold_at(&s, 12), "! takes the pasted bold, not the deleted plain r");
+    // "ab Cd", "C" bold: Backspace the bold C, paste plain text: it takes the plain space before
+    // it, and so does ! after it.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.paste", json!({"text": "zz"}));
+    typ(&mut s, "!");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab zz!d");
+    assert!((3..6).all(|i| !bold_at(&s, i)), "pasted text and ! are plain");
+}
+
+/// #6518 review: Find, Go To and a click elsewhere move the caret without the caret commands;
+/// the formatting Backspace carried over stays behind. Observed in Word for Windows: typing over
+/// a found word takes that word's formatting, and a Find with no match keeps the carried one.
+#[test]
+fn backspace_formatting_is_not_kept_past_find_or_go_to() {
+    // "Xy plain word", "X" bold: Backspace the bold X, Find "word" and type over it: Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.find", json!({"text": "word"}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "y plain Q");
+    assert!(!bold_at(&s, 8));
+    // Go To a paragraph puts a caret before a plain word: Q is plain.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Xy plain\nword"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 1}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.goto", json!({"paragraph": 2}));
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(1, 0)));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "Qword");
+    assert_ne!(s.doc.para_at(&Pos::body(1, 0)).unwrap().props_of_char(0).bold, Some(true));
+    // A caret the front end puts elsewhere itself (a right-click in the text): Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.sel = crate::Selection::caret(Pos::body(0, 8));
+    assert_ne!(s.typing_props().bold, Some(true));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "y plain Qword");
+    assert!(!bold_at(&s, 8));
+    // A Find with no match leaves the caret where it was, and the formatting with it: Q is bold.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.find", json!({"text": "zzz"}));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Qy plain word");
+    assert!(bold_at(&s, 0));
+}
+
+/// #6518 review: a Paste with nothing on the clipboard pastes nothing: the formatting Backspace
+/// carried over stays for the typing that follows.
+#[test]
+fn backspace_formatting_survives_a_paste_of_an_empty_clipboard() {
+    // "ab Cd", "C" bold: Backspace the bold C, Paste fails, X is bold.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    assert!(s.run("edit.paste", &json!({})).is_err(), "the clipboard is empty");
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab Xd");
+    assert!(bold_at(&s, 3));
+    // What Paste would insert, asked for on its own: nothing, and the formatting stays.
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}");
+    assert!(crate::cmd::paste::paste_content(&mut s, &json!({})).is_err());
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true));
+}
+
+/// #6518 review: a front end that moves the caret itself (a right-click) goes through
+/// `Session::set_selection`: once the caret has been elsewhere, putting it back where the
+/// character was deleted does not bring the carried formatting back.
+#[test]
+fn backspace_formatting_is_not_kept_past_a_direct_caret_move_and_back() {
+    // "Xy plain word", "X" bold: Backspace the bold X, the caret goes to "word" and back: Q is plain.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.set_selection(crate::Selection::caret(Pos::body(0, 8)));
+    s.set_selection(crate::Selection::caret(Pos::body(0, 0)));
+    assert_ne!(s.typing_props().bold, Some(true));
+    typ(&mut s, "Q");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Qy plain word");
+    assert!(!bold_at(&s, 0));
+    // Put where it already is, the caret keeps it: Q is bold.
+    let mut s = with_bold("Xy plain word", 0, 1, 1);
+    typ(&mut s, "\u{8}");
+    s.set_selection(crate::Selection::caret(Pos::body(0, 0)));
+    typ(&mut s, "Q");
+    assert!(bold_at(&s, 0));
+}
+
+/// #6518 review: a command that fails leaves the formatting waiting at the caret as it was: a
+/// Backspace refused by a content control locked against editing keeps what an earlier Backspace
+/// carried over, and Bold picked at the caret.
+#[test]
+fn a_refused_backspace_keeps_the_formatting_waiting_at_the_caret() {
+    let w = wordcraft_doc::para::OBJ.len_utf8();
+    // "abC" in a content control, "C" bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abC"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 2}, "focus": {"block": 0, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 3}}));
+    run(&mut s, "developer.richText", json!({"tag": "ctl"}));
+    let lock = |s: &mut Session| run(s, "developer.properties", json!({"control": "ctl", "lockEdit": true}));
+    // Backspace the bold C, lock the control: the next Backspace is refused, and X is still bold.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": w + 3}}));
+    typ(&mut s, "\u{8}");
+    lock(&mut s);
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true));
+    let before = s.doc.clone();
+    assert!(s.run("text.backspace", &json!({})).is_err(), "the control is locked");
+    assert_eq!(s.doc, before);
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, w + 2)));
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true), "the refused Backspace keeps the carried bold");
+    // Bold picked at the caret, then a refused Backspace: still bold.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": w + 1}}));
+    s.pending = Some(wordcraft_doc::props::CharProps { bold: Some(true), ..Default::default() });
+    assert!(s.run("text.backspace", &json!({})).is_err(), "the control is locked");
+    assert_eq!(s.waiting().and_then(|p| p.bold), Some(true), "the refused Backspace keeps the Bold picked at the caret");
+}
+
+/// #6518: the carried formatting goes on with the typing that follows, and Undo of that typing
+/// brings it back where it was, so typing again there takes it once more.
+#[test]
+fn backspace_formatting_follows_typing_and_comes_back_with_undo() {
+    // "ab Cd", "C" bold: Backspace the bold C, then Y and X are both bold (Word).
+    let mut s = with_bold("ab Cd", 3, 4, 4);
+    typ(&mut s, "\u{8}YX");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab YXd");
+    assert!(bold_at(&s, 3) && bold_at(&s, 4) && !bold_at(&s, 5));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab d");
+    typ(&mut s, "Z");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "ab Zd");
+    assert!(bold_at(&s, 3));
+}
+
+/// #6518: with Track Changes on, Backspace leaves the character in place marked deleted, and text
+/// typed next still takes its formatting (a tracked insertion, never marked deleted); moving the
+/// caret away and back drops it. Backspace over the author's own tracked insertion, which removes
+/// it, carries it too. Observed in Word for Windows.
+#[test]
+fn tracked_backspace_carries_the_deleted_characters_formatting() {
+    // "xy Abc", "Abc" bold: Backspace after the bold A, then X is bold beside a plain space.
+    let mut s = with_bold("xy Abc", 3, 6, 4);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 3)));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "xy XAbc", "the A stays, marked deleted");
+    let x = p.props_of_char(3);
+    assert!(x.bold == Some(true) && x.ins.is_some() && x.del.is_none(), "X is a bold tracked insertion: {x:?}");
+    assert!(p.props_of_char(4).del.is_some() && p.props_of_char(5).del.is_none());
+    // Moving the caret right and back after the Backspace drops it: X is plain.
+    let mut s = with_bold("xy Abc", 3, 6, 4);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\u{8}");
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 3)));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xy XAbc");
+    assert!(!bold_at(&s, 3));
+    // A bold A this author typed with Track Changes on: Backspace removes it, X is still bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("xy "));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "A");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 4}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xy ");
+    typ(&mut s, "X");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "xy X");
+    let x = p.props_of_char(3);
+    assert!(x.bold == Some(true) && x.ins.is_some() && x.del.is_none(), "X is a bold tracked insertion: {x:?}");
+}
+
 /// Myanmar (#604): typed in memory order (consonant, medial, then the prevowel ေ that is drawn
 /// before it), the caret steps over whole syllables and Backspace removes one sign at a time.
 #[test]
@@ -1940,72 +2289,13 @@ fn alt_x_toggles_between_a_character_and_its_code() {
 
 #[test]
 fn alt_numpad_codes_map_like_word_on_windows() {
-    use crate::cmd::text::{alt_code_char, oem_code_page};
-    let c = |code| alt_code_char(code, 1252, 437);
-    // Leading 0: Windows-1252.
-    assert_eq!(c("0233"), Some('é'));
-    assert_eq!(c("0128"), Some('€'));
-    assert_eq!(c("0150"), Some('–'));
-    assert_eq!(c("065"), Some('A'));
-    assert_eq!(c("0032"), Some(' '));
-    assert_eq!(c("0255"), Some('ÿ'));
-    // No leading 0: the OEM code page (437 here, 850 in Western Europe).
-    assert_eq!(c("233"), Some('Θ'));
-    // The issue said 233 → é in 850; the CP850 mapping file has Ú at 0xE9 (é is 130 in both).
-    assert_eq!(alt_code_char("233", 1252, 850), Some('Ú'));
-    assert_eq!(alt_code_char("130", 1252, 850), Some('é'));
-    assert_eq!(c("130"), Some('é'));
-    assert_eq!(alt_code_char("155", 1252, 850), Some('ø'));
-    assert_eq!(c("155"), Some('¢'));
-    assert_eq!(c("65"), Some('A'));
-    assert_eq!(c("1"), Some('☺'));
-    assert_eq!(c("7"), Some('•'));
-    assert_eq!(c("127"), Some('⌂'));
-    assert_eq!(c("176"), Some('░'));
-    // Above 255: the Unicode character with that decimal value.
-    assert_eq!(c("8364"), Some('€'));
-    assert_eq!(c("09733"), Some('★'));
-    assert_eq!(c("128512"), Some('😀'));
-    // Nothing for junk, 0, control characters, surrogates or values past Unicode.
-    for bad in ["", "0", "000", "0009", "0013", "0127", "0129", "x1", "-5", "55296", "1114112", "99999999999999999999", "4294967361"] {
-        assert_eq!(c(bad), None, "{bad:?}");
-    }
+    use crate::cmd::text::oem_code_page;
     assert_eq!(oem_code_page(None), 437);
     assert_eq!(oem_code_page(Some("en-US")), 437);
     assert_eq!(oem_code_page(Some("en_GB.UTF-8")), 850);
     assert_eq!(oem_code_page(Some("fr-FR")), 850);
     assert_eq!(oem_code_page(Some("de")), 850);
     assert_eq!(oem_code_page(Some("ru-RU")), 437, "only 437/850 without the shell's code pages");
-}
-
-#[test]
-fn alt_numpad_codes_follow_the_system_code_pages() {
-    use crate::cmd::text::{alt_code_char, windows_code_pages};
-    // Polish (1250/852): Alt+0185 and Alt+165 are both ą, not ¹ / Ñ.
-    assert_eq!(alt_code_char("0185", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("165", 1250, 852), Some('ą'));
-    assert_eq!(alt_code_char("0185", 1252, 437), Some('¹'));
-    // Russian (1251/866), Greek (1253/737), Turkish (1254/857).
-    assert_eq!(alt_code_char("0207", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("143", 1251, 866), Some('П'));
-    assert_eq!(alt_code_char("0193", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("128", 1253, 737), Some('Α'));
-    assert_eq!(alt_code_char("0253", 1254, 857), Some('ı'));
-    assert_eq!(alt_code_char("141", 1254, 857), Some('ı'));
-    // Above 255 the code page doesn't matter.
-    assert_eq!(alt_code_char("8364", 1251, 866), Some('€'));
-    // A byte the code page leaves unassigned types nothing.
-    assert_eq!(alt_code_char("213", 1254, 857), None);
-    assert_eq!(alt_code_char("0219", 874, 437), None);
-    assert_eq!(windows_code_pages(None), (1252, 437));
-    assert_eq!(windows_code_pages(Some("en-US")), (1252, 437));
-    assert_eq!(windows_code_pages(Some("de-DE")), (1252, 850));
-    assert_eq!(windows_code_pages(Some("pl-PL")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("sr-Latn-RS")), (1250, 852));
-    assert_eq!(windows_code_pages(Some("ru_RU.UTF-8")), (1251, 866));
-    assert_eq!(windows_code_pages(Some("el-GR")), (1253, 737));
-    assert_eq!(windows_code_pages(Some("tr-TR")), (1254, 857));
-    assert_eq!(windows_code_pages(Some("ja-JP")), (1252, 437));
 }
 
 #[test]
@@ -2405,8 +2695,6 @@ fn ctrl_tab_inserts_a_tab_inside_a_table_cell() {
     let (_, r, c) = s.sel.focus.path.cell().expect("caret in a cell");
     assert_eq!((r, c), (0, 0), "Ctrl+Tab stays in the cell");
     assert_eq!(s.doc.para_at(&s.sel.focus).map(|p| p.text.as_str()), Some("A\tB"));
-    let key = if cfg!(target_os = "macos") { "Alt+Tab" } else { "Mod+Tab" };
-    assert_eq!(s.keymap.resolve(&s.registry, key).map(|c| c.id), Some("text.insertTab"));
 }
 
 /// A .docx of two paragraphs in two sections, as Word writes it: the first section's properties

@@ -1,122 +1,166 @@
-use super::common::{graphic_size, stack};
-use super::language::mi_check;
-use super::{Rect, Sense, Stroke, Tokens, Ui, WordApp, big, group, json, menu_button, pos2, small, vec2};
+use craft::behavior::IconId;
+use craft::keymap::CommandRef;
+use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::ui::buttons::{Arrangement, Button, ToggleButton};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::Stack;
+use craft::ui::list::ThumbAspect;
+use craft::ui::menu::MenuItem;
+use craft::ui::tile_grid::{CaptionPlace, Tile};
+
+use super::common::{menu_button, size_field};
+use super::{WordApp, json};
+use crate::equation_tab::pick_tile;
+
+/// Chart Design and SmartArt Design › Size: the selected graphic's height and width in points. A
+/// size outside the range is shown as it is and writes nothing.
+fn graphic_size(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    row.group(RibbonGroup::new("size", tl!("Size").to_string(), IconId::new("size").into()), |ui| {
+        let (w0, h0) =
+            wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            for (label, key, v0) in [("H:", "height", h0), ("W:", "width", w0)] {
+                size_field(ui, app, label, key, v0, false, 36.0..=2000.0);
+            }
+        });
+    });
+}
 
 /// SmartArt Design: the selected graphic's items (Add Shape, Promote, Demote, Text Pane), its
 /// layout (a gallery of previews), its colours and Reset.
-pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
+pub(super) fn smart_art_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     use wordcraft_doc::smart_art::{SmartArtColors, SmartArtLayout};
     let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return };
     let theme = app.session.doc.settings.theme_colors.clone();
     // The Text Pane's current item, else the last.
     let current = app.smart_art_item.filter(|i| *i < g.items.len());
-    group(ui, "Create Graphic", None, app, |ui, app| {
-        big(ui, app, "addShape", "Add\nShape", "smartArt.addShape", current.map_or(json!({}), |i| json!({"after": i})), false);
-        stack(ui, |ui| {
+    let pane_open = app.session.view.smart_art_pane;
+    row.group(RibbonGroup::new("createGraphic", tl!("Create Graphic").to_string(), IconId::new("addShape").into()), |ui| {
+        Button::command(CommandRef::with_params("smartArt.addShape", current.map_or(json!({}), |i| json!({"after": i}))))
+            .label(tl!("Add\nShape").to_string())
+            .icon(IconId::new("addShape"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             let idx = current.map_or(json!({}), |i| json!({"index": i}));
-            small(ui, app, "promote", Some("Promote"), "Promote", crate::widgets::ButtonAction::new("smartArt.promote", idx.clone(), false));
-            small(ui, app, "demote", Some("Demote"), "Demote", crate::widgets::ButtonAction::new("smartArt.demote", idx, false));
-            small(
-                ui,
-                app,
-                "textPane",
-                Some("Text Pane"),
-                "Text Pane",
-                crate::widgets::ButtonAction::new("smartArt.textPane", json!({}), app.session.view.smart_art_pane),
-            );
+            Button::command(CommandRef::with_params("smartArt.promote", idx.clone()))
+                .label(tl!("Promote").to_string())
+                .icon(IconId::new("promote"))
+                .show(ui);
+            Button::command(CommandRef::with_params("smartArt.demote", idx)).label(tl!("Demote").to_string()).icon(IconId::new("demote")).show(ui);
+            ToggleButton::command(CommandRef::new("smartArt.textPane"))
+                .label(tl!("Text Pane").to_string())
+                .icon(IconId::new("textPane"))
+                .selected(pane_open)
+                .show(ui);
         });
     });
-    group(ui, "Layouts", None, app, |ui, app| {
-        let t = Tokens::get(ui.ctx());
-        crate::rtl::Table::new("smart_art_layout_gallery").columns(0).spacing(vec2(2.0, 2.0)).show(ui, |table| {
-            for layouts in SmartArtLayout::ALL.chunks(4) {
-                table.row(|row| {
-                    for layout in layouts.iter().copied() {
-                        row.cell(|ui| {
-                            let (r, resp) = ui.allocate_exact_size(vec2(46.0, 31.0), Sense::click());
-                            let on = g.layout == layout;
-                            let fill = if on {
-                                t.checked
-                            } else if resp.hovered() {
-                                t.hover
-                            } else {
-                                t.ribbon
-                            };
-                            ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
-                            crate::dialogs_smart_art::preview(ui.painter(), r.shrink(2.0), layout, g.colors, &theme, t.text_dim);
-                            if resp.on_hover_text(tl!(layout.label())).clicked() && !on {
-                                let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
-                            }
-                        });
-                    }
-                });
+    row.group(RibbonGroup::new("layouts", tl!("Layouts").to_string(), IconId::new("smartArtLayouts").into()), |ui| {
+        let layouts = SmartArtLayout::ALL;
+        let on = layouts.iter().position(|l| *l == g.layout);
+        let colors = g.colors;
+        let theme = &theme;
+        let line = ui.visuals().weak_text_color();
+        let picked = pick_tile(ui, tl!("Layouts"), 4, CaptionPlace::None, on, layouts.len(), |at| match layouts.get(at).copied() {
+            Some(layout) => Tile::new(tl!(layout.label()).to_string())
+                .thumb(ThumbAspect::new(46, 31), move |cx, r| crate::dialogs_smart_art::preview(cx, r, layout, colors, theme, line)),
+            None => Tile::new(String::new()),
+        });
+        // A pick of the current layout does nothing.
+        if let Some(layout) = picked.and_then(|i| layouts.get(i)).copied().filter(|l| *l != g.layout) {
+            let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
+        }
+    });
+    row.group(RibbonGroup::new("diagramStyles", tl!("Diagram Styles").to_string(), IconId::new("smartArtColors").into()), |ui| {
+        let theme = &theme;
+        let g = &g;
+        let face = Button::new(tl!("Change\nColors").to_string()).icon(IconId::new("smartArtColors")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Change\nColors").to_string(), None, |ui, _| {
+            let custom = g.has_custom_colors();
+            for colors in SmartArtColors::ALL {
+                MenuItem::command(CommandRef::with_params("smartArt.colors", json!({"variant": colors.id()})))
+                    .label(crate::dialogs_smart_art::colors_label(colors))
+                    .radio_mark(g.colors == colors && !custom)
+                    .sample(move |cx, r| crate::dialogs_smart_art::swatches(cx, r, colors, theme))
+                    .show(ui);
             }
+            // Active while items carry their own colours; set in the Text Pane.
+            let mut row = MenuItem::new(tl!("Custom").to_string())
+                .enabled(custom)
+                .radio_mark(custom)
+                .sample(move |cx, r| crate::dialogs_smart_art::custom_swatches(cx, r, g, theme));
+            if !custom {
+                row = row.tooltip(tl!("Set the colors in the Text Pane to use custom colors.").to_string());
+            }
+            row.show(ui);
         });
     });
-    group(ui, "Diagram Styles", None, app, |ui, app| {
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("smartArtColors", Some("Change\nColors"), "Change Colors", true, ""),
-            |ui, app| {
-                let custom = g.has_custom_colors();
-                for colors in SmartArtColors::ALL {
-                    let on = g.colors == colors && !custom;
-                    let resp = ui.add(egui::Button::new(crate::dialogs_smart_art::colors_label(colors)).selected(on).min_size(vec2(200.0, 24.0)));
-                    let sw = Rect::from_min_size(pos2(resp.rect.right() - 74.0, resp.rect.center().y - 6.0), vec2(66.0, 12.0));
-                    crate::dialogs_smart_art::swatches(ui.painter(), sw, colors, &theme);
-                    if resp.clicked() {
-                        let _ = app.run("smartArt.colors", json!({"variant": colors.id()}));
-                        ui.close();
-                    }
-                }
-                // Active while items carry their own colours; set in the Text Pane.
-                let resp = ui.add_enabled(custom, egui::Button::new(tl!("Custom")).selected(custom).min_size(vec2(200.0, 24.0)));
-                let sw = Rect::from_min_size(pos2(resp.rect.right() - 74.0, resp.rect.center().y - 6.0), vec2(66.0, 12.0));
-                crate::dialogs_smart_art::custom_swatches(ui.painter(), sw, &g, &theme);
-                if !custom {
-                    resp.on_disabled_hover_text(tl!("Set the colors in the Text Pane to use custom colors."));
-                }
-            },
-        );
+    row.group(RibbonGroup::new("reset", tl!("Reset").to_string(), IconId::new("resetGraphic").into()), |ui| {
+        Button::command(CommandRef::new("smartArt.reset"))
+            .label(tl!("Reset\nGraphic").to_string())
+            .icon(IconId::new("resetGraphic"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Reset", None, app, |ui, app| {
-        big(ui, app, "resetGraphic", "Reset\nGraphic", "smartArt.reset", json!({}), false);
-    });
-    graphic_size(ui, app);
+    graphic_size(row, app);
 }
 
 /// Chart Design: the selected chart's elements (title, legend, data labels), its data and type,
 /// and its size.
-pub(super) fn chart_design(app: &mut WordApp, ui: &mut Ui) {
+pub(super) fn chart_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let Some(chart) = wordcraft_engine::cmd::chart::selected_chart(&app.session) else { return };
-    group(ui, "Chart Layouts", None, app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("chartTitle", Some("Chart Title"), "Chart Title", true, ""), |ui, app| {
-            mi_check(ui, app, "None", chart.title.is_none(), "chart.title", json!({"text": null}));
+    row.group(RibbonGroup::new("chartLayouts", tl!("Chart Layouts").to_string(), IconId::new("chartTitle").into()), |ui| {
+        let chart = &chart;
+        let face = Button::new(tl!("Chart Title").to_string()).icon(IconId::new("chartTitle")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Chart Title").to_string(), None, |ui, _| {
             let text = chart.title.clone().unwrap_or_else(|| tl!("Chart Title").to_string());
-            mi_check(ui, app, "Above Chart", chart.title.is_some(), "chart.title", json!({"text": text}));
+            for (label, on, params) in
+                [("None", chart.title.is_none(), json!({"text": null})), ("Above Chart", chart.title.is_some(), json!({"text": text}))]
+            {
+                MenuItem::command(CommandRef::with_params("chart.title", params)).label(tl!(label).to_string()).radio_mark(on).show(ui);
+            }
         });
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("legend", Some("Legend"), "Legend", true, ""), |ui, app| {
-            mi_check(ui, app, "None", chart.legend.is_none(), "chart.legend", json!({"pos": "none"}));
+        let face = Button::new(tl!("Legend").to_string()).icon(IconId::new("legend")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Legend").to_string(), None, |ui, _| {
+            MenuItem::command(CommandRef::with_params("chart.legend", json!({"pos": "none"})))
+                .label(tl!("None").to_string())
+                .radio_mark(chart.legend.is_none())
+                .show(ui);
             for (label, pos) in [
                 ("Right", wordcraft_doc::chart::LegendPos::Right),
                 ("Top", wordcraft_doc::chart::LegendPos::Top),
                 ("Left", wordcraft_doc::chart::LegendPos::Left),
                 ("Bottom", wordcraft_doc::chart::LegendPos::Bottom),
             ] {
-                mi_check(ui, app, label, chart.legend == Some(pos), "chart.legend", json!({"pos": pos.id()}));
+                MenuItem::command(CommandRef::with_params("chart.legend", json!({"pos": pos.id()})))
+                    .label(tl!(label).to_string())
+                    .radio_mark(chart.legend == Some(pos))
+                    .show(ui);
             }
         });
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("dataLabels", Some("Data Labels"), "Data Labels", true, ""), |ui, app| {
-            mi_check(ui, app, "None", !chart.data_labels, "chart.dataLabels", json!({"on": false}));
-            mi_check(ui, app, "Show", chart.data_labels, "chart.dataLabels", json!({"on": true}));
+        let face = Button::new(tl!("Data Labels").to_string()).icon(IconId::new("dataLabels")).arrangement(Arrangement::Stacked);
+        let _ = menu_button(ui, face, tl!("Data Labels").to_string(), None, |ui, _| {
+            for (label, on) in [("None", false), ("Show", true)] {
+                MenuItem::command(CommandRef::with_params("chart.dataLabels", json!({"on": on})))
+                    .label(tl!(label).to_string())
+                    .radio_mark(chart.data_labels == on)
+                    .show(ui);
+            }
         });
     });
-    group(ui, "Data", None, app, |ui, app| {
-        big(ui, app, "chartData", "Edit\nData", "chart.editData", json!({}), false);
+    row.group(RibbonGroup::new("data", tl!("Data").to_string(), IconId::new("chartData").into()), |ui| {
+        Button::command(CommandRef::new("chart.editData"))
+            .label(tl!("Edit\nData").to_string())
+            .icon(IconId::new("chartData"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    group(ui, "Type", None, app, |ui, app| {
-        big(ui, app, "changeChartType", "Change\nChart Type", "chart.type", json!({}), false);
+    row.group(RibbonGroup::new("type", tl!("Type").to_string(), IconId::new("changeChartType").into()), |ui| {
+        Button::command(CommandRef::new("chart.type"))
+            .label(tl!("Change\nChart Type").to_string())
+            .icon(IconId::new("changeChartType"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
-    graphic_size(ui, app);
+    graphic_size(row, app);
 }
