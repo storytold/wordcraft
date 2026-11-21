@@ -2,7 +2,7 @@ use super::*;
 
 fn window(ppp: f32) -> H {
     let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Drawing cursor test")), Default::default());
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_pixels_per_point(ppp).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).with_pixels_per_point(ppp).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -91,7 +91,7 @@ fn cursor_footprint_tracks_colour_width_zoom_and_pixel_density() {
                     let at = hover_page(&mut h);
                     let ink = Color32::from_rgba_unmultiplied(rgb.0, rgb.1, rgb.2, alpha);
                     let radius = footprint(&h, at, ink);
-                    let expected = width * h.state().canvas.scale / 2.0;
+                    let expected = width * h.state().canvas.shown.pages.first().unwrap().scale as f32 / 2.0;
                     assert!((radius - expected).abs() < 0.01, "{command}, ppp={ppp}, zoom={zoom}: {radius} vs {expected}");
                 }
             }
@@ -138,7 +138,11 @@ fn drawing_cursor_does_not_cover_comment_controls() {
     // The pane and margin balloons are mutually exclusive review surfaces.
     for (pane, active) in [(true, false), (false, false), (false, true)] {
         h.state_mut().run("view.commentsPane", json!({"value": pane})).unwrap();
-        h.state_mut().canvas.balloon = active.then_some(id);
+        if active {
+            select_balloon(h.state_mut(), id);
+        } else {
+            deselect_balloon(h.state_mut());
+        }
         steps(&mut h, 4);
         let at = h
             .output()
@@ -172,7 +176,7 @@ fn custom_cursor_keeps_the_drawing_hotspot_and_stroke_eraser_working() {
     let at = hover_page(&mut h);
     let button = |h: &mut H, pressed| {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     };
     button(&mut h, true);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
