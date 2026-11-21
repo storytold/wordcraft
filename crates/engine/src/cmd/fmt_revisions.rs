@@ -13,9 +13,9 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_doc::props::VMerge;
-use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
+use wordcraft_doc::props::{CellProps, CharProps, NumRef, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
-use wordcraft_doc::styles::Style;
+use wordcraft_doc::styles::{Style, StyleSheet};
 use wordcraft_doc::table::{Cell, Row, Table};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, Revision, RevisionKind, StoryRef};
 
@@ -32,6 +32,8 @@ fn records(id: &str) -> bool {
 
 /// Tables nested deeper than this aren't compared (hostile documents).
 const MAX_DEPTH: usize = 16;
+/// A `numPr` that names only a level; the list comes from the based-on style.
+const LEVEL_ONLY: u32 = u32::MAX;
 
 /// A paragraph's, table's or cell's tracked formatting change, if it carries one.
 type Slot<T> = Option<Box<PropChange<T>>>;
@@ -77,6 +79,7 @@ impl Recorder<'_> {
         self.change_values(fb, fa, had, has)
     }
 
+    /// Determine replacement formatting revision values between `fb` (before) and `fa` (after).
     fn change_values<T: Clone + PartialEq>(&mut self, fb: T, fa: T, had: &Slot<T>, has: &Slot<T>) -> Option<Replacement<T>> {
         let want = if fb == fa {
             // Not formatted by this command: keep the change it carries (or carried).
@@ -139,7 +142,12 @@ impl Recorder<'_> {
         a.touch();
     }
 
+    /// Record formatting changes between matching blocks in `before` and `after`.
     fn blocks(&mut self, before: &Blocks, after: &mut Blocks, depth: usize) {
+        self.blocks_with(before, after, depth, false);
+    }
+
+    fn blocks_with(&mut self, before: &Blocks, after: &mut Blocks, depth: usize, compare_table: bool) {
         if before.len() != after.len() || depth > MAX_DEPTH {
             return;
         }
@@ -148,9 +156,14 @@ impl Recorder<'_> {
                 continue;
             }
             match (&**b, &**a) {
-                (Block::Para(pb), Block::Para(pa)) if pb.text == pa.text => {
+                (Block::Para(pb), Block::Para(pa)) if pb.text == pa.text || compare_table => {
+                    let same_text = pb.text == pa.text;
                     if let Block::Para(pa) = Arc::make_mut(a) {
-                        self.para(pb, pa);
+                        if same_text {
+                            self.para(pb, pa);
+                        } else if let Some(Replacement(w)) = self.change(&pb.props, &pa.props, ParaProps::formatting, |p| &p.fmt_change) {
+                            pa.props.fmt_change = w;
+                        }
                         // The section's properties on the paragraph (`w:sectPrChange`).
                         let (Some(b), Some(x)) = (pb.section.as_deref(), pa.section.as_deref_mut()) else { continue };
                         if let Some(Replacement(w)) = self.change(b, x, strip_section, |s| &s.fmt_change) {
@@ -160,26 +173,34 @@ impl Recorder<'_> {
                 }
                 (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() && tb.grid == ta.grid => {
                     let Block::Table(ta) = Arc::make_mut(a) else { continue };
-                    if let Some(Replacement(w)) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
-                        ta.props.fmt_change = w;
-                    }
-                    for (rb, ra) in tb.rows.iter().zip(ta.rows.iter_mut()) {
-                        if let Some(Replacement(w)) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
-                            ra.props.fmt_change = w;
-                        }
-                        if rb.cells.len() != ra.cells.len() {
-                            continue;
-                        }
-                        for (cb, ca) in rb.cells.iter().zip(ra.cells.iter_mut()) {
-                            // Merges are structure, not formatting: span and vertical merge stay out.
-                            if let Some(Replacement(w)) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
-                                ca.props.fmt_change = w;
-                            }
-                            self.blocks(&cb.blocks, &mut ca.blocks, depth + 1);
-                        }
-                    }
+                    self.table_with(tb, ta, depth, compare_table);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Record formatting changes between matching table rows, cells, and nested blocks.
+    fn table_with(&mut self, tb: &Table, ta: &mut Table, depth: usize, compare_table: bool) {
+        if tb.rows.len() != ta.rows.len() || tb.grid != ta.grid || depth > MAX_DEPTH {
+            return;
+        }
+        if let Some(Replacement(w)) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
+            ta.props.fmt_change = w;
+        }
+        for (rb, ra) in tb.rows.iter().zip(ta.rows.iter_mut()) {
+            if let Some(Replacement(w)) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
+                ra.props.fmt_change = w;
+            }
+            if rb.cells.len() != ra.cells.len() {
+                continue;
+            }
+            for (cb, ca) in rb.cells.iter().zip(ra.cells.iter_mut()) {
+                // Merges are structure, not formatting: span and vertical merge stay out.
+                if let Some(Replacement(w)) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
+                    ca.props.fmt_change = w;
+                }
+                self.blocks_with(&cb.blocks, &mut ca.blocks, depth + 1, compare_table);
             }
         }
     }
@@ -200,6 +221,8 @@ impl Recorder<'_> {
                 self.rid = Some(rev);
             }
             if let Some(Replacement(want)) = self.change_values(b.para.formatting(), a.para.formatting(), &b.para_change, &a.para_change) {
+                let own = b.para_change.as_ref().filter(|c| self.own(c.rev));
+                a.old_numbering_from_base = if own.is_some() { b.old_numbering_from_base } else { b.numbering_from_base };
                 a.para_change = want;
             }
             if let Some(Replacement(want)) = self.change_values(b.chr.formatting(), a.chr.formatting(), &b.chr_change, &a.chr_change) {
@@ -295,6 +318,68 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
 pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
     let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
     r.para(old, new);
+}
+
+/// Compare Documents: record paragraph-level property differences between `old` and `new` without
+/// touching run formatting (for paired paragraphs whose text was word-diffed).
+pub(crate) fn compare_para_props(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    if let Some(Replacement(w)) = r.change(&old.props, &new.props, ParaProps::formatting, |p| &p.fmt_change) {
+        new.props.fmt_change = w;
+    }
+}
+
+/// Compare Documents: record formatting changes between `old` table and `new` table as
+/// tracked formatting changes by `author`.
+pub(crate) fn compare_table_formatting(old: &Table, new: &mut Table, revisions: &mut Vec<Revision>, author: &str, date: &str) {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    r.table_with(old, new, 0, true);
+}
+
+/// Compare Documents: record how style `new` is formatted differently from `old` as
+/// tracked formatting changes by `author`.
+///
+/// Paragraph properties are skipped for [`wordcraft_doc::StyleKind::Character`] styles,
+/// and character properties are skipped for [`wordcraft_doc::StyleKind::Numbering`] styles.
+/// `before` is the document's revisions before the comparison, so a change the author already
+/// made keeps the formatting from before their first change. Returns `true` only when at least
+/// one formatting change revision was recorded on `new`.
+pub(crate) fn compare_style(
+    old: &wordcraft_doc::Style,
+    new: &mut wordcraft_doc::Style,
+    before: &[Revision],
+    revisions: &mut Vec<Revision>,
+    author: &str,
+    date: &str,
+) -> bool {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before, revisions, rid: None };
+    let mut changed = false;
+    let old_para_ch = old.para_change.clone().or_else(|| old.para.fmt_change.clone());
+    let new_para_ch = new.para_change.clone().or_else(|| new.para.fmt_change.clone());
+    if new.kind != wordcraft_doc::StyleKind::Character
+        && let Some(Replacement(want)) = r.change_values(old.para.formatting(), new.para.formatting(), &old_para_ch, &new_para_ch)
+    {
+        // The recorded old side is either the original style's earlier change (kept when the
+        // formatting matches or belongs to this author) or its current properties. Carry the
+        // matching provenance so rejecting writes the right list.
+        let same_formatting = old.para.formatting() == new.para.formatting();
+        let own = old_para_ch.as_ref().is_some_and(|c| before.get(c.rev as usize).is_some_and(|r| r.author == author));
+        let from_old_change = old_para_ch.is_some() && (same_formatting || own);
+        new.old_numbering_from_base = if from_old_change { old.old_numbering_from_base } else { old.numbering_from_base };
+        new.para_change = want.clone();
+        new.para.fmt_change = want;
+        changed = true;
+    }
+    let old_chr_ch = old.chr_change.clone().or_else(|| old.chr.fmt_change.clone());
+    let new_chr_ch = new.chr_change.clone().or_else(|| new.chr.fmt_change.clone());
+    if new.kind != wordcraft_doc::StyleKind::Numbering
+        && let Some(Replacement(want)) = r.change_values(old.chr.formatting(), new.chr.formatting(), &old_chr_ch, &new_chr_ch)
+    {
+        new.chr_change = want.clone();
+        new.chr.fmt_change = want;
+        changed = true;
+    }
+    changed
 }
 
 /// The properties a change sets, as the Style Inspector lists them: `[{"prop", "value"}]` in
@@ -408,6 +493,81 @@ pub fn resolve_para(p: &mut ParaProps, accept: bool) {
     }
 }
 
+/// Accept or reject tracked formatting changes on every style in `sheet`.
+///
+/// When `accept` is `true`, changes are accepted and revised formatting is kept.
+/// When `accept` is `false`, changes are rejected and previous formatting is restored.
+/// In either case, resolution clears `fmt_change` on each style's paragraph and character
+/// properties via [`resolve_para`] and [`resolve_char`].
+pub fn resolve_styles(sheet: &mut StyleSheet, accept: bool) {
+    // Rejecting restores the old side's provenance too: an explicit old list must stay explicit,
+    // while an old level-only list keeps inheriting from the base.
+    let old_provenance: Vec<Option<bool>> = sheet
+        .styles
+        .iter()
+        .map(|s| (!accept && (s.para_change.is_some() || s.para.fmt_change.is_some())).then_some(s.old_numbering_from_base))
+        .collect();
+    for (s, old) in sheet.styles.iter_mut().zip(old_provenance) {
+        resolve_style(s, accept);
+        if let Some(old) = old {
+            s.numbering_from_base = old;
+        }
+    }
+    recompute_inherited_numbering(sheet);
+}
+
+/// Recompute paragraph list numbering for styles that inherit numbering from a based-on style.
+pub(crate) fn recompute_inherited_numbering(sheet: &mut StyleSheet) {
+    let mut inheriting: Vec<usize> =
+        (0..sheet.styles.len()).filter(|&i| sheet.styles[i].numbering_from_base && sheet.styles[i].para.numbering.is_some()).collect();
+    inheriting.sort_by_key(|&i| style_depth(sheet, &sheet.styles[i].id).unwrap_or(usize::MAX));
+    for i in inheriting {
+        let (level, base) = {
+            let s = &sheet.styles[i];
+            let Some(level) = s.para.numbering.map(|n| n.level) else { continue };
+            let Some(base) = s.based_on.clone() else { continue };
+            (level, base)
+        };
+        let list = inherited_list(sheet, &base);
+        sheet.styles[i].para.numbering = list.map(|num| NumRef { num, level });
+    }
+}
+
+/// How many `based_on` hops `id` is from its root; a cycle or an over-deep chain sorts last.
+fn style_depth(sheet: &wordcraft_doc::styles::StyleSheet, id: &str) -> Option<usize> {
+    let mut id = Some(id);
+    let mut depth = 0;
+    while let Some(style_id) = id {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        depth += 1;
+        let st = sheet.styles.iter().find(|s| s.id == style_id)?;
+        id = st.based_on.as_deref();
+    }
+    Some(depth)
+}
+
+/// The nearest list a based-on chain names, in the sheet's current (possibly restored) state.
+fn inherited_list(sheet: &wordcraft_doc::styles::StyleSheet, base: &str) -> Option<u32> {
+    let mut id = Some(base);
+    let mut depth = 0;
+    while let Some(style_id) = id {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        depth += 1;
+        let st = sheet.styles.iter().find(|s| s.id == style_id)?;
+        if let Some(n) = st.para.numbering
+            && n.num != LEVEL_ONLY
+        {
+            return Some(n.num);
+        }
+        id = st.based_on.as_deref();
+    }
+    None
+}
+
 /// Accept or reject every table, row, cell and section change in `blocks` (paragraph changes
 /// are resolved with their text).
 pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
@@ -466,22 +626,32 @@ pub fn resolve_cell(c: &mut Cell, accept: bool) {
 
 /// Accept or reject a style definition change.
 pub fn resolve_style(st: &mut Style, accept: bool) {
-    if let Some(ch) = st.para_change.take().filter(|_| !accept) {
+    if let Some(ch) = st.para_change.take().or_else(|| st.para.fmt_change.take()).filter(|_| !accept) {
         st.para = ch.old;
+        st.numbering_from_base = st.old_numbering_from_base;
     }
-    if let Some(ch) = st.chr_change.take().filter(|_| !accept) {
+    st.para.fmt_change = None;
+    if let Some(ch) = st.chr_change.take().or_else(|| st.chr.fmt_change.take()).filter(|_| !accept) {
         st.chr = ch.old;
     }
+    st.chr.fmt_change = None;
 }
 
 /// Accept or reject one revision's property changes in a style definition (in a file the paragraph
 /// and run properties can carry different revisions).
 pub fn resolve_style_rev(st: &mut Style, rev: u32, accept: bool) {
-    if let Some(ch) = st.para_change.take_if(|ch| ch.rev == rev).filter(|_| !accept) {
+    if let Some(ch) = st.para_change.take_if(|ch| ch.rev == rev).or_else(|| st.para.fmt_change.take_if(|ch| ch.rev == rev)).filter(|_| !accept) {
         st.para = ch.old;
+        st.numbering_from_base = st.old_numbering_from_base;
     }
-    if let Some(ch) = st.chr_change.take_if(|ch| ch.rev == rev).filter(|_| !accept) {
+    if st.para.fmt_change.as_ref().is_some_and(|ch| ch.rev == rev) {
+        st.para.fmt_change = None;
+    }
+    if let Some(ch) = st.chr_change.take_if(|ch| ch.rev == rev).or_else(|| st.chr.fmt_change.take_if(|ch| ch.rev == rev)).filter(|_| !accept) {
         st.chr = ch.old;
+    }
+    if st.chr.fmt_change.as_ref().is_some_and(|ch| ch.rev == rev) {
+        st.chr.fmt_change = None;
     }
 }
 
