@@ -99,14 +99,17 @@ fn auto_space_room(st: &StyleRun) -> f32 {
 /// size for Times New Roman, 0.2203 for Arial, 0.2575 for Calibri, 0.2980 for Courier New,
 /// 0.3041 for Cambria — which is half each face's average character width. With different sizes
 /// either side, the room after the Latin run takes the Latin size, not the Asian one.
-pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
+///
+/// `ea_lacks(at, c)`: the run at byte `at` names an installed East Asian font that has no glyph
+/// for `c`. Word adds no room beside such a character, though a substituted face draws it (#6591).
+pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool, ea_lacks: impl Fn(usize, char) -> bool) -> Vec<(usize, f32)> {
     let mut out = Vec::new();
     if !de && !dn {
         return out;
     }
     let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
-    // The previous text cluster: index and its last character.
-    let mut prev: Option<(usize, char)> = None;
+    // The previous text cluster: index, its last character and its start byte.
+    let mut prev: Option<(usize, char, usize)> = None;
     for k in 0..b.clusters.len() {
         let Some(c) = b.clusters.get(k) else { break };
         match c.kind {
@@ -126,8 +129,13 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
             prev = None;
             continue;
         };
-        if let Some((pk, pc)) = prev
+        let start = c.start;
+        if let Some((pk, pc, pstart)) = prev
             && let Some(side) = crate::kinsoku::auto_space(pc, first, de, dn)
+            && !match side {
+                crate::kinsoku::AsianSide::Left => ea_lacks(pstart, pc),
+                crate::kinsoku::AsianSide::Right => ea_lacks(start, first),
+            }
         {
             let style = b.clusters.get(pk).map(|p| p.style as usize);
             let st = style.and_then(|i| b.styles.get(i));
@@ -142,7 +150,7 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
                 out.push((pk, gap));
             }
         }
-        prev = Some((k, last));
+        prev = Some((k, last, start));
     }
     out
 }
