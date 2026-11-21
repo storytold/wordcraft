@@ -1023,3 +1023,57 @@ fn split_paragraph_keeps_the_drop_cap_on_the_first_paragraph_only() {
     d.split_paragraph(&Pos::body(0, 0)).unwrap();
     assert_eq!((drop_cap(&d, 0), drop_cap(&d, 1)), (cap.clone(), cap));
 }
+
+/// A fragment adopted for a comparison comes with its media, remapped when this document has
+/// different bytes under the same key (the compare result keeps revised header images), and
+/// deduplicated when the same bytes already live under another key.
+#[test]
+fn adopt_fragment_brings_its_media_and_remaps_a_conflicting_key() {
+    let mut d = doc(&["destination"]);
+    d.media.insert("image1.png".into(), Arc::new(vec![1, 1, 1]));
+
+    let mut frag_media = std::collections::BTreeMap::new();
+    frag_media.insert("image1.png".into(), Arc::new(vec![2, 2, 2]));
+
+    let mut p = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p.objects.push(InlineObject::Image {
+        media: "image1.png".into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    let frag = Fragment { blocks: vec![Block::Para(p)], parts: Default::default(), media: frag_media };
+
+    let out = d.adopt_fragment(&frag);
+    assert_eq!(d.media["image1.png"].as_slice(), &[1, 1, 1], "the destination media stays");
+    assert_eq!(d.media.len(), 2, "the fragment media came in under a new key");
+    let other_key = d.media.keys().find(|k| k.as_str() != "image1.png").unwrap().clone();
+    assert_eq!(d.media[&other_key].as_slice(), &[2, 2, 2]);
+    let para = out[0].as_para().unwrap();
+    let remapped = para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
+    assert_eq!(remapped, other_key, "the adopted block points at the remapped key");
+
+    // Adopting another fragment that carries `[1, 1, 1]` under an unused key reuses `"image1.png"`.
+    let mut dup_media = std::collections::BTreeMap::new();
+    dup_media.insert("image99.png".into(), Arc::new(vec![1, 1, 1]));
+    let mut p2 = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p2.objects.push(InlineObject::Image {
+        media: "image99.png".into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    let out2 = d.adopt_fragment(&Fragment { blocks: vec![Block::Para(p2)], parts: Default::default(), media: dup_media });
+    assert_eq!(d.media.len(), 2, "identical bytes under an unused key are deduplicated");
+    let para2 = out2[0].as_para().unwrap();
+    let deduped = para2.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
+    assert_eq!(deduped, "image1.png", "the adopted block points at the existing key for those bytes");
+}

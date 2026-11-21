@@ -185,6 +185,16 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
         source.passthrough.remove(&key);
     }
 
+    let mut compare_hf = None;
+    let compare_key = source.passthrough.keys().find(|k| k.eq_ignore_ascii_case(crate::compare_hf::PART)).cloned();
+    if let Some(key) = compare_key
+        && let Some(xml_bytes) = source.passthrough.get(&key)
+        && let Some(flags) = crate::compare_hf::read_from_bytes(xml_bytes)
+    {
+        compare_hf = Some(flags);
+        source.passthrough.remove(&key);
+    }
+
     let craft_wordmodel::Document {
         body,
         last_section,
@@ -226,6 +236,9 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.glossary = glossary.into_iter().map(|g| glossary_value_from_shared(g, &mut graphics)).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_from_shared(missing_pictures)?;
     document.fit_state = fit_state;
+    if let Some(flags) = compare_hf {
+        document.hydrate_compare_hf(flags);
+    }
     Ok(document)
 }
 
@@ -403,39 +416,44 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
 
     // Handle fit_state preservation through custom XML passthrough
     if let Some(fit) = &source.fit_state {
-        let xml = crate::fit::write(fit)?;
-        document.passthrough.insert(crate::fit::PART.into(), Arc::new(xml));
-        const CUSTOM_XML_ROOTS: &str = "wordcraft:customXml.roots";
-        const EMBEDDED_PARTS: &str = "wordcraft:embedded.parts";
-
-        let manifest_entry = format!("P\t{}\tapplication/xml\n", crate::fit::PART);
-        let manifest = match document.passthrough.get_mut(EMBEDDED_PARTS) {
-            Some(existing) => {
-                let mut text = String::from_utf8_lossy(existing).to_string();
-                if !text.contains(crate::fit::PART) {
-                    text.push_str(&manifest_entry);
-                }
-                Arc::new(text.into_bytes())
-            }
-            None => Arc::new(manifest_entry.into_bytes()),
-        };
-        document.passthrough.insert(EMBEDDED_PARTS.into(), manifest);
-
-        let root_entry = format!("D\thttp://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml\t{}\n", crate::fit::PART);
-        let roots = match document.passthrough.get_mut(CUSTOM_XML_ROOTS) {
-            Some(existing) => {
-                let mut text = String::from_utf8_lossy(existing).to_string();
-                if !text.contains(crate::fit::PART) {
-                    text.push_str(&root_entry);
-                }
-                Arc::new(text.into_bytes())
-            }
-            None => Arc::new(root_entry.into_bytes()),
-        };
-        document.passthrough.insert(CUSTOM_XML_ROOTS.into(), roots);
+        keep_store(&mut document, crate::fit::PART, crate::fit::write(fit)?);
+    }
+    // The Compare flag record travels the same way (`CompareHfFlags`).
+    if let Some(flags) = source.compare_hf_for_save() {
+        keep_store(&mut document, crate::compare_hf::PART, crate::compare_hf::write(&flags)?);
     }
 
     Ok(document)
+}
+
+/// Adds one of our own custom XML stores to the package: its bytes as a passthrough part, and the
+/// relationship that reaches it from the package and the main document, so the reader finds it.
+fn keep_store(document: &mut craft_wordmodel::Document, part: &str, xml: Vec<u8>) {
+    const CUSTOM_XML_ROOTS: &str = "wordcraft:customXml.roots";
+    const EMBEDDED_PARTS: &str = "wordcraft:embedded.parts";
+    document.passthrough.insert(part.into(), Arc::new(xml));
+    push_line(document, EMBEDDED_PARTS, &format!("P\t{part}\tapplication/xml\n"), part);
+    push_line(
+        document,
+        CUSTOM_XML_ROOTS,
+        &format!("D\thttp://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml\t{part}\n"),
+        part,
+    );
+}
+
+/// Appends `line` to the passthrough manifest `key` unless it already names `part`.
+fn push_line(document: &mut craft_wordmodel::Document, key: &str, line: &str, part: &str) {
+    let text = match document.passthrough.get(key) {
+        Some(existing) => {
+            let mut text = String::from_utf8_lossy(existing).to_string();
+            if !text.contains(part) {
+                text.push_str(line);
+            }
+            text
+        }
+        None => line.to_string(),
+    };
+    document.passthrough.insert(key.into(), Arc::new(text.into_bytes()));
 }
 
 #[cfg(test)]

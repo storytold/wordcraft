@@ -79,6 +79,7 @@ impl Document {
             kept: Default::default(),
             missing_pictures: Default::default(),
             fit_state: None,
+            compare_hf: None,
         }
     }
 
@@ -158,6 +159,8 @@ impl Document {
             kept: _,
             missing_pictures: _,
             fit_state: _,
+            // A record Reject All consumes, not content: it travels with the revisions.
+            compare_hf: _,
         } = self;
         let Document {
             body: other_body,
@@ -180,6 +183,7 @@ impl Document {
             kept: _,
             missing_pictures: _,
             fit_state: _,
+            compare_hf: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
@@ -433,6 +437,9 @@ impl Document {
         let Some(Block::Para(p)) = self.body.get_mut(block).map(Arc::make_mut) else { return false };
         let Some(before) = p.section.take() else { return false };
         self.section_mut(block).absorb(&before);
+        if before.compare_title_page.0.is_some() || self.has_live_compare_title_page() {
+            self.sync_compare_hf_title_page();
+        }
         true
     }
 

@@ -1,4 +1,5 @@
 use super::{CmdError, CmdResult, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, fmt_revisions, json, p, pos_json, sel_result};
+use wordcraft_doc::Document;
 
 /// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
 fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, props: bool, accept: bool) -> Result<(), CmdError> {
@@ -242,6 +243,18 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
 }
 
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
+    // Compare turns on Different first page / Different odd & even pages so the First and Even
+    // stories it inserts can be shown; rejecting takes those stories back out, so the flags go
+    // back to what they were. Accepting keeps them, as the revised document had them.
+    //
+    // Hydrate any unhydrated `compare_hf` entries onto their current sections before the
+    // paragraph pass removes rejected blocks, then restore `title_page` after `resolve_section`
+    // so section-formatting rejections never overwrite the restored flag.
+    if accept {
+        s.doc.clear_compare_hf();
+    } else {
+        s.doc.prepare_compare_hf_for_reject();
+    }
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
@@ -255,6 +268,9 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    if !accept {
+        s.doc.restore_compare_hf();
+    }
     if s.doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
         for st in &mut std::sync::Arc::make_mut(&mut s.doc.styles).styles {
             fmt_revisions::resolve_style(st, accept);
@@ -324,6 +340,138 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
+fn story_has_revisions(doc: &Document, st: StoryRef) -> bool {
+    for path in doc.para_paths(st) {
+        if let Some(p) = doc.para(st, &path) {
+            if p.mark.ins.is_some()
+                || p.mark.del.is_some()
+                || p.mark.fmt_change.is_some()
+                || p.props.fmt_change.is_some()
+                || p.props.num_change.is_some()
+                || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())
+            {
+                return true;
+            }
+            for (_, c) in p.run_ranges() {
+                if c.ins.is_some() || c.del.is_some() || c.fmt_change.is_some() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn doc_has_revisions(doc: &Document) -> bool {
+    if story_has_revisions(doc, StoryRef::Body) {
+        return true;
+    }
+    for &k in doc.parts.keys() {
+        if story_has_revisions(doc, StoryRef::Part(k)) {
+            return true;
+        }
+    }
+    if doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
+        return true;
+    }
+    if doc.last_section.fmt_change.is_some() {
+        return true;
+    }
+    false
+}
+
+/// Updates one section's Compare `title_page` state after resolving a First header/footer by
+/// selection. Returns `true` when a live section tag was consumed.
+fn resolve_compare_hf_first_section(doc: &mut Document, sec_key: Option<usize>, end: usize, has_any_live_tag: bool, accept: bool) -> bool {
+    let tagged_orig = if sec_key.is_some() {
+        if let Some(wordcraft_doc::Block::Para(p)) = doc.body.get_mut(end).map(std::sync::Arc::make_mut)
+            && let Some(sec) = p.section.as_deref_mut()
+        {
+            sec.compare_title_page.0.take()
+        } else {
+            None
+        }
+    } else {
+        doc.last_section.compare_title_page.0.take()
+    };
+    let used_section_tag = tagged_orig.is_some();
+    let orig_tp = if let Some(orig) = tagged_orig {
+        Some(orig)
+    } else if !has_any_live_tag && let Some(flags) = doc.compare_hf.as_mut() {
+        flags.title_page.iter().position(|(k, _)| *k == sec_key).map(|idx| flags.title_page.remove(idx).1)
+    } else {
+        None
+    };
+    if !accept && let Some(orig) = orig_tp {
+        if sec_key.is_some() {
+            if let Some(wordcraft_doc::Block::Para(p)) = doc.body.get_mut(end).map(std::sync::Arc::make_mut)
+                && let Some(sec) = p.section.as_deref_mut()
+            {
+                sec.title_page = orig;
+            }
+        } else {
+            doc.last_section.title_page = orig;
+        }
+    }
+    used_section_tag
+}
+
+/// Updates Compare header/footer layout flags when selection-level Accept/Reject clears all
+/// revisions in header/footer story `part_id`.
+fn resolve_compare_hf_part(doc: &mut Document, part_id: u32, accept: bool) {
+    let sec_parts: Vec<(usize, usize, Option<u32>, Option<u32>, Option<u32>, Option<u32>)> = doc
+        .sections()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (end, sec))| (idx, end, sec.headers.first, sec.footers.first, sec.headers.even, sec.footers.even))
+        .collect();
+    let num_sections = sec_parts.len();
+    let mut matched_first = Vec::new();
+    let mut matched_even = false;
+    for &(sec_idx, end, h_first, f_first, h_even, f_even) in &sec_parts {
+        let sec_key = (sec_idx + 1 < num_sections).then_some(sec_idx);
+        if h_first == Some(part_id) || f_first == Some(part_id) {
+            let other_first_has_rev =
+                !accept && [h_first, f_first].into_iter().flatten().any(|id| id != part_id && story_has_revisions(doc, StoryRef::Part(id)));
+            if !other_first_has_rev {
+                matched_first.push((sec_key, end));
+            }
+        }
+        if h_even == Some(part_id) || f_even == Some(part_id) {
+            matched_even = true;
+        }
+    }
+    if !matched_first.is_empty() {
+        let has_any_live_tag = doc.has_live_compare_title_page();
+        let mut used_section_tag = false;
+        for (sec_key, end) in matched_first {
+            used_section_tag |= resolve_compare_hf_first_section(doc, sec_key, end, has_any_live_tag, accept);
+        }
+        if used_section_tag {
+            doc.sync_compare_hf_title_page();
+        }
+    }
+    if matched_even {
+        let any_even_has_rev = !accept
+            && sec_parts
+                .iter()
+                .any(|&(_, _, _, _, h_even, f_even)| [h_even, f_even].into_iter().flatten().any(|id| story_has_revisions(doc, StoryRef::Part(id))));
+        if let Some(flags) = doc.compare_hf.as_mut() {
+            if accept {
+                flags.even_odd = None;
+            } else if !any_even_has_rev && let Some(orig) = flags.even_odd.take() {
+                doc.settings.even_odd_headers = orig;
+            }
+        }
+    }
+    if let Some(flags) = &doc.compare_hf
+        && flags.title_page.is_empty()
+        && flags.even_odd.is_none()
+    {
+        doc.compare_hf = None;
+    }
+}
+
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // The style change Next / Previous Change selected: that one alone. A caret put at the
     // document start any other way resolves no style change.
@@ -376,7 +524,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let from = if path == a.path { a.off } else { 0 };
         let to = if path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
-        let mark = path != b.path || caret_mark.as_ref() == Some(&path);
+        let mark = path != b.path || caret_mark.as_ref() == Some(&path) || (to == len && matches!(a.story, StoryRef::Part(_)));
         let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {
@@ -385,6 +533,14 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
     resolve_styles_sel(s, whole_body, accept)?;
+    if let StoryRef::Part(part_id) = a.story
+        && !story_has_revisions(&s.doc, a.story)
+    {
+        resolve_compare_hf_part(&mut s.doc, part_id, accept);
+    }
+    if (s.doc.compare_hf.is_some() || s.doc.has_live_compare_title_page()) && !doc_has_revisions(&s.doc) {
+        s.doc.clear_compare_hf();
+    }
     s.sel = Selection::caret(a);
     s.clamp_selection();
     if next { select_next_unresolved(s) } else { sel_result(s) }

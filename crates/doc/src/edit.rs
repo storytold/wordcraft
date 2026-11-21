@@ -770,6 +770,11 @@ impl Document {
         if bl.is_empty() || matches!(bl.last().map(|b| &**b), Some(Block::Table(_))) {
             bl.push(para_block(Paragraph::new()));
         }
+        let removed_sec = matches!(&*b, Block::Para(p) if p.section.is_some());
+        let removed_tag = matches!(&*b, Block::Para(p) if p.section.as_ref().is_some_and(|s| s.compare_title_page.0.is_some()));
+        if story == crate::StoryRef::Body && path.0.len() == 1 && (removed_tag || (removed_sec && self.has_live_compare_title_page())) {
+            self.sync_compare_hf_title_page();
+        }
         Ok(Arc::try_unwrap(b).unwrap_or_else(|a| (*a).clone()))
     }
 
@@ -889,8 +894,15 @@ impl Document {
             if a.story == crate::StoryRef::Body && a.path.0.len() == 1 {
                 // Nearest first, as "link to previous" resolved them before the delete.
                 let following = self.section_mut(a.path.last());
+                let mut dropped_sec = false;
+                let mut dropped_tag = false;
                 for s in between.iter().rev().chain(before.iter()) {
                     following.absorb(s);
+                    dropped_sec = true;
+                    dropped_tag |= s.compare_title_page.0.is_some();
+                }
+                if dropped_tag || (dropped_sec && self.has_live_compare_title_page()) {
+                    self.sync_compare_hf_title_page();
                 }
             }
             return Ok(a);
@@ -1472,11 +1484,35 @@ impl Document {
 
     /// The blocks of `frag`, a fragment of another document, with every text box given a new
     /// story of its own here copied from the fragment's parts (as a paste does), to place them
-    /// in this document; a box the fragment has no story for keeps none.
+    /// in this document; a box the fragment has no story for keeps none. The media its objects
+    /// show comes along too, under a new key when this document has different bytes at the same
+    /// one.
     pub fn adopt_fragment(&mut self, frag: &Fragment) -> Vec<Block> {
         let mut blocks = frag.blocks.clone();
+        let mut parts = frag.parts.clone();
+        let mut media_remap = BTreeMap::new();
+        for (k, v) in &frag.media {
+            if self.media.get(k).is_some_and(|existing| existing.as_slice() == v.as_slice()) {
+                continue;
+            }
+            let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+            let new_key = self.add_media((**v).clone(), ext);
+            if new_key != *k {
+                media_remap.insert(k.clone(), new_key);
+            }
+        }
+        if !media_remap.is_empty() {
+            for b in &mut blocks {
+                remap_media_block(b, &media_remap);
+            }
+            for part in parts.values_mut() {
+                for b in &mut part.blocks {
+                    remap_media_block(Arc::make_mut(b), &media_remap);
+                }
+            }
+        }
         let mut budget = BoxBudget { local: false, ..BoxBudget::new() };
-        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         if budget.skipped > 0 {
             log::warn!(
                 "{} text boxes are left empty; their stories are past what one copy brings ({MAX_PASTED_BOXES} stories, {MAX_PASTED_BOX_BYTES} bytes)",

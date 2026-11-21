@@ -71,7 +71,7 @@ pub use table::{Cell, Row, Table};
 
 mod review;
 
-pub use review::{AUTO_TEXT_GALLERY, BuildingBlock, Comment, QUICK_PARTS_GALLERY, Revision, RevisionKind};
+pub use review::{AUTO_TEXT_GALLERY, BuildingBlock, Comment, CompareHfFlags, QUICK_PARTS_GALLERY, Revision, RevisionKind};
 
 mod block;
 mod compare;
@@ -149,6 +149,11 @@ pub struct Document {
     /// Cumulative fit-to-page typography reduction state; internal tracking outside user-visible custom properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit_state: Option<shrink::FitState>,
+    /// The header/footer selection flags Compare turned on so the First and Even stories it
+    /// inserted could be shown, with the values they had: `Reject All` puts them back, and it
+    /// must do so after a save and reopen too (#5837). Not a user-visible property.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compare_hf: Option<CompareHfFlags>,
 }
 
 #[cfg(test)]

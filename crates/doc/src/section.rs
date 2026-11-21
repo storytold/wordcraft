@@ -639,6 +639,20 @@ pub struct HeaderSet {
     pub even: Option<u32>,
 }
 
+/// Original `title_page` value before `review.compare` changed it (#5837).
+///
+/// Carried on the section itself so adding or removing section breaks keeps the flag bound to
+/// the section that originally owned it. Excluded from equality and serialization; persisted
+/// through [`crate::Document::compare_hf`] on DOCX save and reopen.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CompareTitlePage(pub Option<bool>);
+
+impl PartialEq for CompareTitlePage {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Columns {
@@ -833,6 +847,9 @@ pub struct SectionProps {
     /// the end of the document, `Some(false)` never.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance_columns: Option<bool>,
+    /// Original `title_page` before `review.compare` changed it (#5837).
+    #[serde(skip)]
+    pub compare_title_page: CompareTitlePage,
 }
 
 impl Default for SectionProps {
@@ -877,6 +894,7 @@ impl Default for SectionProps {
             no_endnote: None,
             footnote_columns: None,
             balance_columns: None,
+            compare_title_page: CompareTitlePage::default(),
         }
     }
 }
