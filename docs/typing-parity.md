@@ -355,6 +355,10 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   its operand, and an operator ending another one's operand (`∫∫`) takes what is typed next
   (#4917; `equation::tests::an_autocorrected_operator_waits_for_its_limits`,
   `a_math_name_is_corrected_by_any_character_that_cannot_continue_it`).
+- In an equation, stacked scripts nest to the right: `a^b^c` + Space builds `a` with the
+  superscript `b^c`, and `a_b_c` and `x^2^3` likewise. `a_b^c` is still one sub-superscript, and
+  `(a^b)^c` keeps its brackets. Observed in Word for Windows (Microsoft 365, build 16.0.20527) on
+  #6074 (`equation::tests::typed_stacked_scripts_nest_to_the_right`).
 
 ¹ From Word's documented AutoFormat and AutoCorrect options; not yet keystroke-compared with
 Word.
@@ -626,6 +630,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
 | 2026-11-13 | trivial | Backspace, then type: the new text takes the deleted character's formatting (the Bold button shows it) until the caret moves; Delete, deleted selections and tracked Backspace carry nothing; a Backspace or Ctrl+Backspace that deletes nothing at the start of the document keeps it; observed in Word for Windows (#6518) |
+| 2026-11-09 | trivial | Equation build-up: stacked scripts `a^b^c` nest to the right, `a^(b^c)`, as observed in Word for Windows (#6074) |
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
 | 2026-11-07 | trivial | Removing an already-empty paragraph preserves the following paragraph properties, mark and inline formatting. Delete, Backspace, selected marks, outline/TOC, DOCX and Undo/Redo have synthetic coverage (Leaf #152); no new Word or native acceptance run. |
 | 2026-10-30 | trivial | Equations: `\int` + Space waits for its limits; `_x^y` then Space builds them, Space alone builds the operator without, typing goes into its operand, and Enter or an arrow key builds it without going into the operand (#4917). Review: any character that can't continue `\name` corrects it (`\int_0^1`, `\alpha+`), and `∫∫` takes the operand into the inner operator; the Word rows are now observed in Word for Windows on #4938, Enter, arrows and `∫∫` are not |
