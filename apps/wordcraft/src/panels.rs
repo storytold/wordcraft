@@ -20,6 +20,9 @@ fn panel_titles() -> [&'static str; 1] {
 /// from. Call every frame; it does nothing once they are tied.
 pub fn tie(mtm: MainThreadMarker) {
     let titles = panel_titles();
+    // The match is exact: a document window's title always ends in " - WordCraft"
+    // (`windows::title`), so a document named "Paragraph" ("Paragraph - WordCraft") never matches
+    // the panel's bare translated title.
     let is_panel = |w: &NSWindow| titles.iter().any(|title| w.title().to_string() == *title);
     let ordered = NSApplication::sharedApplication(mtm).orderedWindows();
     let ordered: Vec<_> = ordered.iter().filter(|w| w.isVisible()).collect();
