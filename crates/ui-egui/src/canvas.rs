@@ -217,6 +217,10 @@ pub struct CanvasState {
     /// An automatic change (AutoCorrect, AutoFormat) altered the text around the caret: the
     /// input method is asked to start afresh (#1480).
     pub(crate) ime_reset: bool,
+    /// Where the input method was last told the caret is ([`crate::ime_spot`], #2932).
+    pub(crate) ime_spot: crate::ime_spot::ImeSpot,
+    /// Whether the canvas held keyboard focus on the previous IME report, to catch focus regain.
+    pub(crate) ime_was_focused: bool,
     /// A replacement or an unsupported IME mutation means the next observation must interrupt
     /// the live composition, whatever the surrounding text looks like.
     pub(crate) ime_interrupt_now: bool,
@@ -434,6 +438,8 @@ impl Default for CanvasState {
             table_stroke: None,
             ime_join_text: None,
             ime_reset: false,
+            ime_spot: Default::default(),
+            ime_was_focused: false,
             ime_interrupt_now: false,
             ime_interrupted_preedit: false,
             ime_window_cache: None,
@@ -490,9 +496,19 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
     reflow_anchor
 }
 
+/// Every frame notes its keys and clicks for the input method's spot, also one that won't place
+/// the caret (#2932).
+fn note_ime_input(app: &mut WordApp, ctx: &egui::Context) {
+    let frame_nr = ctx.cumulative_frame_nr();
+    let mut ime_spot = std::mem::take(&mut app.canvas.ime_spot);
+    ctx.input(|i| ime_spot.note_frame(frame_nr, &i.events));
+    app.canvas.ime_spot = ime_spot;
+}
+
 /// The layout the pass shows, after the viewport sizes are settled.
 fn prepare_layout(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32, ctx: &egui::Context) -> Arc<DocLayout> {
     let reflow_anchor = update_viewport(app, full, metrics, side, ctx);
+    note_ime_input(app, ctx);
     let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)

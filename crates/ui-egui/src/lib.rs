@@ -46,6 +46,7 @@ pub mod font_download;
 pub mod format_shape;
 pub mod i18n;
 pub mod icons;
+pub(crate) mod ime_spot;
 pub mod ink;
 pub mod keys;
 pub mod keytips;

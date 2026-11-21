@@ -547,7 +547,16 @@ fn main() -> eframe::Result {
                 prefs::load_user_dictionary(&mut session, &settings, path);
             }
             let spool = Spool::new(host.jobs_shared().clone());
-            let mut app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
+            #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(unused_mut))]
+            let mut app_services = services(spool.clone(), intake);
+            // On X11 input methods talk to the window over XIM, whose spot typing doesn't move
+            // (#2932).
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+                app_services.xim = matches!(cc.display_handle().map(|h| h.as_raw()), Ok(RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_)));
+            }
+            let mut app = WordApp::new(session, app_services).with_host(host).with_settings(settings.clone());
             // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
             // the region check below reads the saved region the settings apply.
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
