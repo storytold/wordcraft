@@ -553,7 +553,8 @@ impl Paragraph {
     /// The word around `off` (double-click): (start, end) without trailing space.
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
-        let is_w = |c: char| crate::bidi::is_word_char(c);
+        // Word's word unit takes a typographic apostrophe (’) like `'`, at either end too (#6517).
+        let is_w = |c: char| crate::bidi::is_word_char(c) || c == '’';
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
             if !is_w(c) {
@@ -784,6 +785,21 @@ mod tests {
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
+    }
+
+    #[test]
+    fn word_at_takes_a_typographic_apostrophe_like_a_straight_one() {
+        // Byte offsets: `’` is three bytes. Word: `don’t ` (#6517).
+        let p = Paragraph::with_text("don’t stop", CharProps::default());
+        assert_eq!(p.word_at(1), (0, 8));
+        assert_eq!(p.word_at(2), (0, 8));
+        let p = Paragraph::with_text("the dogs’ bone", CharProps::default());
+        assert_eq!(p.word_at(5), (4, 12));
+        let p = Paragraph::with_text("’tis here", CharProps::default());
+        assert_eq!(p.word_at(3), (0, 7));
+        assert_eq!(p.word_at(4), (0, 7));
+        let p = Paragraph::with_text("well-known", CharProps::default());
+        assert_eq!(p.word_at(1), (0, 4));
     }
 
     proptest::proptest! {

@@ -150,12 +150,11 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
         let _ = Menu::submenu_row(ui, tl!("Synonyms").to_string(), |ui, _cx| {
             for w in syn.iter().filter_map(|x| x.as_str()) {
                 if MenuItem::new(w.to_string()).show(ui).ran {
-                    let _ = app.run("select.word", json!({}));
-                    let (a, b) = app.session.sel.ordered();
-                    let trimmed = app.session.doc.para_at(&a).and_then(|p| p.text.get(a.off..b.off)).map(|t| t.trim_end().len()).unwrap_or(0);
-                    let end = wordcraft_doc::Pos { off: a.off + trimmed, ..b };
-                    app.session.set_selection(wordcraft_engine::Selection { anchor: a, focus: end });
-                    let _ = app.run("text.insert", json!({"text": w, "raw": true}));
+                    // The word the synonyms were looked up for: quotes around it stay (#6517).
+                    if let Some((a, b)) = wordcraft_engine::cmd::review::thesaurus_word(&app.session) {
+                        app.session.set_selection(wordcraft_engine::Selection { anchor: a, focus: b });
+                        let _ = app.run("text.insert", json!({"text": w, "raw": true}));
+                    }
                 }
             }
         });
