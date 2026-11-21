@@ -28,6 +28,9 @@ pub struct RowLayout {
     pub edge: f32,
     /// The row's cells: the items each one owns and where its content ends.
     pub cells: Vec<CellPart>,
+    /// Its turned cells that don't run on into the rows below: when the row splits, their text
+    /// is laid out again in the part left on the page ([`lay_turned_in_part`]).
+    pub(crate) turned: Vec<TurnedPart>,
 }
 
 /// A cell of a [`RowLayout`].
@@ -55,6 +58,34 @@ pub(crate) struct CellAlign {
     pub dy: f32,
     /// The height it was aligned by: the content and the cell's margins.
     pub height: f32,
+}
+
+/// A row's turned cell (see [`RowLayout::turned`]): what laying its text out again takes.
+#[derive(Clone)]
+pub(crate) struct TurnedPart {
+    /// Its index in the row's `cells`, and its row and cell in the table.
+    part: usize,
+    ri: usize,
+    ci: usize,
+    turn: TextDirection,
+    valign: VAlign,
+    /// List counters and equation count before the cell, and its table style parts.
+    snap: (Counters, u32),
+    region: Region,
+    /// The cell's left edge, width and margins; its margins and border bands top and bottom
+    /// together; its top margin and border band.
+    x: f32,
+    w: f32,
+    margins: [f32; 4],
+    insets: f32,
+    top: f32,
+    /// How far its lines reach across the cell.
+    across: f32,
+    /// Its text's items in the row's `items`.
+    content: std::ops::Range<usize>,
+    /// Where they go back in the items of the part left on the page (counted before any turned
+    /// text is put back): where they were among their cell's, so they're drawn in the same order.
+    at: usize,
 }
 
 pub struct TableLayout {
@@ -141,6 +172,82 @@ fn turned_box_aligned(
         b = lay(ctx, TurnedCell::new(turn, cw, len, off));
     }
     b
+}
+
+/// Turned cell text laid out again with line length `len`, from the list counters and equation
+/// count it started with (`snap`), so it keeps the same numbers: its items in the turned frame,
+/// and how far its lines reach across the cell. `cell` is its story, blocks, path, table style
+/// text and nesting depth; `off` where its lines sat across the cell last time (see
+/// [`turned_box_aligned`]).
+fn relay_turned(
+    ctx: &mut Ctx,
+    (story, blocks, cpath, text, depth): (StoryRef, &Blocks, &[u32], Option<&CellText>, usize),
+    (turn, cw, len): (TextDirection, f32, f32),
+    valign: VAlign,
+    off: f32,
+    snap: &(Counters, u32),
+) -> (Vec<Placed>, f32) {
+    // Same list numbers as the first layout: lay it out from the same counters.
+    let now = (std::mem::replace(&mut ctx.counters, snap.0.clone()), std::mem::replace(&mut ctx.eq_count, snap.1));
+    let b = turned_box_aligned(ctx, (turn, cw, len), valign, off, snap, |ctx, tc| {
+        turned_box(ctx, BoxInput::cell(story, blocks, cpath, len, text, depth), tc)
+    });
+    (ctx.counters, ctx.eq_count) = now;
+    (b.items, b.height.max(b.floats_bottom))
+}
+
+/// Place turned cell text (`items`, in its turned frame, its lines reaching `across`) in its cell
+/// (left edge `x`, `w` wide, margins `m`) in the row: its lines turned onto the row, `len` long
+/// from `top` below the row's top; its floating objects upright.
+fn turn_onto_row(
+    ctx: &mut Ctx,
+    items: &mut [Placed],
+    turn: TextDirection,
+    (x, w, m): (f32, f32, [f32; 4]),
+    valign: VAlign,
+    across: f32,
+    (top, len): (f32, f32),
+) {
+    // Lines stack across the cell from its start edge (right for top-to-bottom text,
+    // left for bottom-to-top); the vertical alignment moves them across it.
+    let cw = (w - m[1] - m[3]).max(0.0);
+    let off = valign_offset(valign, cw, across);
+    let (ox, oy) = match turn {
+        TextDirection::Up => (x + m[1] + off, top + len),
+        _ => (x + m[1] + cw - off, top),
+    };
+    // Floating pictures, shapes and text boxes anchored in the cell don't turn with
+    // its text: they stand upright at their offsets from the cell (a vertical form's
+    // text box anchored in a turned cell, placed beside the table). Word for Windows keeps them
+    // upright too, but places them from where the turned text starts; that isn't matched.
+    // Inline objects are drawn with their lines; a floating one's drawing, its area
+    // and its text box's text are placed apart from them.
+    // A group's text boxes too, each by the story it shows (a linked box's chain's).
+    let mut boxes: Vec<StoryRef> = Vec::new();
+    for it in &*items {
+        let Placed::Object { wrap, text_box, story: s, path: p, off, .. } = it else { continue };
+        if *wrap == wordcraft_doc::para::Wrap::Inline {
+            continue;
+        }
+        let members = ctx.doc.para(*s, p).and_then(|para| para.object_at(*off)).map(|o| o.text_boxes()).unwrap_or_default();
+        for id in members {
+            boxes.push(StoryRef::Part(crate::textbox::shown_story(ctx, id)));
+        }
+        boxes.extend(text_box.map(StoryRef::Part));
+    }
+    for it in items {
+        let upright = match it {
+            Placed::Object { wrap, .. } => *wrap != wordcraft_doc::para::Wrap::Inline,
+            Placed::Shape { .. } | Placed::Image { .. } | Placed::Graphic { .. } | Placed::Clip { .. } => true,
+            Placed::Lines { story: s, .. } => boxes.contains(s),
+            _ => false,
+        };
+        if upright {
+            it.translate(x + m[1], top);
+        } else {
+            it.turn(turn, ox, oy);
+        }
+    }
 }
 
 /// A turned cell's text laid out with line length `len`, its floating objects' wrap areas in its
@@ -829,6 +936,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         let exact = t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0));
         let mut items = Vec::new();
         let mut parts = Vec::with_capacity(cells.len());
+        let mut turned = Vec::new();
         for (ci, c) in cells.into_iter().enumerate() {
             let first = items.len();
             // A restart cell spans several rows: its height is their sum.
@@ -874,6 +982,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             // Turned text that doesn't fit across its cell is cut off at the cell's edges.
             let clip_turned = c.turned.is_some();
             let mut cell_items = c.items;
+            let mut turned_part = None;
             if let Some(tn) = c.turned {
                 dy = 0.0;
                 let m = c.margins;
@@ -889,64 +998,42 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     let mut cpath = path.to_vec();
                     cpath.extend([ri as u32, tn.ci as u32]);
                     let text = cell_text.iter().find(|(r, _)| *r == tn.region).map(|(_, c)| c);
-                    // Same list numbers as the first layout: lay it out from the same counters.
-                    let now = (std::mem::replace(&mut ctx.counters, tn.snap.0.clone()), std::mem::replace(&mut ctx.eq_count, tn.snap.1));
                     // From where its lines sat across the cell last time, for its objects' wrap
                     // areas, in the frame the first layout had (as wide as the cell, 4pt at
                     // least).
                     let cw = (c.w - m[1] - m[3]).max(4.0);
                     let off = valign_offset(c.valign, cw, tn.across);
-                    let b = turned_box_aligned(ctx, (tn.turn, cw, len), c.valign, off, &tn.snap, |ctx, tc| {
-                        turned_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth), tc)
+                    (cell_items, across) = relay_turned(ctx, (story, &cell.blocks, &cpath, text, depth), (tn.turn, cw, len), c.valign, off, &tn.snap);
+                }
+                turn_onto_row(ctx, &mut cell_items, tn.turn, (c.x, c.w, m), c.valign, across, (tn.top, len));
+                if c.vmerge == VMerge::None {
+                    turned_part = Some(TurnedPart {
+                        part: ci,
+                        ri,
+                        ci: tn.ci,
+                        turn: tn.turn,
+                        valign: c.valign,
+                        snap: tn.snap,
+                        region: tn.region,
+                        x: c.x,
+                        w: c.w,
+                        margins: m,
+                        insets: c.h,
+                        top: tn.top,
+                        across,
+                        content: 0..0,
+                        at: 0,
                     });
-                    (cell_items, across) = (b.items, b.height.max(b.floats_bottom));
-                    (ctx.counters, ctx.eq_count) = now;
-                }
-                // Lines stack across the cell from its start edge (right for top-to-bottom text,
-                // left for bottom-to-top); the vertical alignment moves them across it.
-                let cw = (c.w - m[1] - m[3]).max(0.0);
-                let off = valign_offset(c.valign, cw, across);
-                let (ox, oy) = match tn.turn {
-                    TextDirection::Up => (c.x + m[1] + off, tn.top + len),
-                    _ => (c.x + m[1] + cw - off, tn.top),
-                };
-                // Floating pictures, shapes and text boxes anchored in the cell don't turn with
-                // its text: they stand upright at their offsets from the cell (a vertical form's
-                // text box anchored in a turned cell, placed beside the table). Word for Windows keeps them
-                // upright too, but places them from where the turned text starts; that isn't matched.
-                // Inline objects are drawn with their lines; a floating one's drawing, its area
-                // and its text box's text are placed apart from them.
-                // A group's text boxes too, each by the story it shows (a linked box's chain's).
-                let mut boxes: Vec<StoryRef> = Vec::new();
-                for it in &cell_items {
-                    let Placed::Object { wrap, text_box, story: s, path: p, off, .. } = it else { continue };
-                    if *wrap == wordcraft_doc::para::Wrap::Inline {
-                        continue;
-                    }
-                    let members = ctx.doc.para(*s, p).and_then(|para| para.object_at(*off)).map(|o| o.text_boxes()).unwrap_or_default();
-                    for id in members {
-                        boxes.push(StoryRef::Part(crate::textbox::shown_story(ctx, id)));
-                    }
-                    boxes.extend(text_box.map(StoryRef::Part));
-                }
-                for it in &mut cell_items {
-                    let upright = match it {
-                        Placed::Object { wrap, .. } => *wrap != wordcraft_doc::para::Wrap::Inline,
-                        Placed::Shape { .. } | Placed::Image { .. } | Placed::Graphic { .. } | Placed::Clip { .. } => true,
-                        Placed::Lines { story: s, .. } => boxes.contains(s),
-                        _ => false,
-                    };
-                    if upright {
-                        it.translate(c.x + m[1], tn.top);
-                    } else {
-                        it.turn(tn.turn, ox, oy);
-                    }
                 }
             }
             let content = items.len();
             for mut it in cell_items {
                 it.translate(0.0, dy);
                 items.push(it);
+            }
+            if let Some(mut tp) = turned_part {
+                tp.content = content..items.len();
+                turned.push(tp);
             }
             let align = (dy > 0.0).then_some(CellAlign { content: content..items.len(), valign: c.valign, dy, height: align_h });
             let b = c.borders;
@@ -989,6 +1076,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             bottom: bottoms.get(ri).copied().unwrap_or(0.0),
             edge: edges.get(ri).copied().unwrap_or(0.0),
             cells: parts,
+            turned,
         });
     }
     TableLayout { x, width: total, rows: out }
@@ -1005,9 +1093,43 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
 /// the part left on the page when all its text fits there, and starts at the top of the cell
 /// otherwise. Each cell's text goes on at the top of the continuation, and the
 /// continuation is as tall as the cell needing the most room, and at least the rest of the row
-/// (a minimum height holds over the pages).
+/// (a minimum height holds over the pages). The row's turned cells keep their text in the part
+/// left on the page, to be laid out again at its height ([`lay_turned_in_part`]); the
+/// continuation has none of it.
 pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     split_row_with(row, cut, false)
+}
+
+/// Lay out the text of the turned cells of `part`, the part of a row [`split_row`] left on a
+/// page, again at the part's height: table `t` is at `path` in `story`, nested `depth` deep.
+/// Word keeps a split row's turned text in that part, its lines as long as the part is tall
+/// (starting at its bottom for bottom-to-top text), and puts none in the continuation (Word for
+/// Windows: a row of 70 upright lines beside a turned caption, split from the first page).
+/// Turned text otherwise moved on whole like a picture, and being as long as the whole row, it
+/// never fitted: the row was pushed on page after page.
+pub(crate) fn lay_turned_in_part(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], depth: usize, part: &mut RowLayout) {
+    let turned = std::mem::take(&mut part.turned);
+    if turned.is_empty() {
+        return;
+    }
+    let style = table_style(ctx, t);
+    // Items already put back before the next cell's place.
+    let mut added = 0usize;
+    for tp in turned {
+        let Some(cell) = t.rows.get(tp.ri).and_then(|r| r.cells.get(tp.ci)) else { continue };
+        let text = style.as_ref().map(|st| region_text(st, tp.region));
+        let mut cpath = path.to_vec();
+        cpath.extend([tp.ri as u32, tp.ci as u32]);
+        let cw = (tp.w - tp.margins[1] - tp.margins[3]).max(4.0);
+        let len = (part.height - tp.insets).clamp(4.0, TURNED_LIMIT);
+        let off = valign_offset(tp.valign, cw, tp.across);
+        let (mut items, across) =
+            relay_turned(ctx, (story, &cell.blocks, &cpath, text.as_ref(), depth), (tp.turn, cw, len), tp.valign, off, &tp.snap);
+        turn_onto_row(ctx, &mut items, tp.turn, (tp.x, tp.w, tp.margins), tp.valign, across, (tp.top, len));
+        let at = tp.at.saturating_add(added).min(part.items.len());
+        added += items.len();
+        part.items.splice(at..at, items);
+    }
 }
 
 /// [`split_row`] for the first part of a row on a page that already holds something: `None`
@@ -1034,6 +1156,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let background = |it: &Placed| matches!(it, Placed::Clip { rect, .. } if areas.contains(rect));
     // Each cell's items: every item of a row is in one of its cells.
     let (mut cells, mut ends, realign) = cells_from_top(row, limit);
+    let turned_at = without_turned_text(row, &mut cells);
     // A nested table's cell is deeper than the row's own.
     let own_depth = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
     // The first line of each paragraph that moves on (`l1` when all of them stay), by cell and
@@ -1155,9 +1278,12 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let geo_shift = |bottom: f32, shift: f32| if bottom >= row.height - 0.01 { rest } else { shift };
     let (mut a, mut b) = (Vec::new(), Vec::new());
     let mut parts = Vec::with_capacity(cells.len());
-    for ((((c, items), splits), &shift), end) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts).zip(&ends) {
+    // Where each cell's turned text goes back in `a`.
+    let mut put_back = vec![usize::MAX; cells.len()];
+    for (ci, ((((c, items), splits), &shift), end)) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts).zip(&ends).enumerate() {
         let start = b.len();
-        for (it, &split) in items.iter().zip(splits) {
+        for (k, (it, &split)) in items.iter().zip(splits).enumerate() {
+            mark_put_back(&mut put_back[ci], turned_at.get(ci) == Some(&Some(k)), a.len());
             // A background picture: the part above the cut stays, and the continuation's area
             // shows the rest of it, from the cut down.
             if let Placed::Clip { rect, spin, items: pictures } = it
@@ -1267,16 +1393,45 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                 }
             }
         }
+        // Turned text that came last in its cell goes back after what the cell keeps.
+        put_back[ci] = put_back[ci].min(a.len());
         parts.push(CellPart { top: c.top, items: start..b.len(), end: end.map(|e| e - shift), align: None });
     }
+    let turned = row.turned.iter().map(|tp| TurnedPart { at: put_back.get(tp.part).copied().unwrap_or(usize::MAX), ..tp.clone() }).collect();
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
+        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new(), turned },
+        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts, turned: Vec::new() },
     ))
 }
 
 type CellItems<'a> = Vec<std::borrow::Cow<'a, [Placed]>>;
+
+/// Where a cell's turned text goes back in the part left on the page: `at` when it was `here`.
+fn mark_put_back(slot: &mut usize, here: bool, at: usize) {
+    if here {
+        *slot = at;
+    }
+}
+
+/// Leave the text of `row`'s own turned cells out of their items (`cells`, by cell): when the
+/// row splits it is neither kept nor moved on, but laid out again in the part left on the page
+/// ([`lay_turned_in_part`]). By cell, where the text was among the cell's items left.
+fn without_turned_text(row: &RowLayout, cells: &mut CellItems<'_>) -> Vec<Option<usize>> {
+    let mut at = vec![None; cells.len()];
+    for tp in &row.turned {
+        let (Some(c), Some(items)) = (row.cells.get(tp.part), cells.get_mut(tp.part)) else { continue };
+        let start = tp.content.start.saturating_sub(c.items.start).min(items.len());
+        let end = tp.content.end.saturating_sub(c.items.start).min(items.len());
+        if start < end {
+            items.to_mut().drain(start..end);
+        }
+        if let Some(a) = at.get_mut(tp.part) {
+            *a = Some(start);
+        }
+    }
+    at
+}
 
 /// The items of each cell of a row being split, with each cell's content end, and the cells
 /// aligned to the middle or bottom that fit above `limit`. Those cells go back to the top first:

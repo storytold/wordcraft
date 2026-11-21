@@ -2839,6 +2839,46 @@ fn turned_text_never_makes_a_row_taller() {
     assert!(cell(&lay(&d)).0 < 72.0 + 2.0);
 }
 
+/// A row taller than a page, of upright lines beside a turned caption, splits from the page it
+/// starts on, and the caption stays in the part on that page, its lines as long as that part is
+/// tall (Word for Windows: 70 lines beside a short `btLr` caption take 2 pages, the caption at
+/// the bottom of the first part, none in the second). WordCraft moved the turned text on whole, like a picture,
+/// and being as long as the whole row it never fitted: the row was pushed on page after page.
+#[test]
+fn a_split_row_keeps_its_turned_text_in_the_part_on_the_page() {
+    crate::test_fonts();
+    for dir in [TextDirection::Up, TextDirection::Down] {
+        let mut d = turned_table(dir, "Side caption", None);
+        if let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) {
+            t.rows[0].cells[0].blocks =
+                (1..=70).map(|i| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("entry {i}"), Default::default()))).collect();
+        }
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 2, "{dir:?}: split from the first page");
+        let cell = |p: usize| {
+            l.pages[p].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, clip, .. } = i { Some((*rect, *clip)) } else { None })
+        };
+        let turned =
+            |p: usize| l.pages[p].items.iter().filter(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [1, 0, 1, 0])).collect::<Vec<_>>();
+        let (part, clip) = cell(0).expect("the row starts on the first page");
+        assert!(clip);
+        let lines = turned(0);
+        assert_eq!(lines.len(), 1, "{dir:?}: the caption on the first page");
+        let b = lines[0].turned_bounds().unwrap();
+        // Its lines run the part's height, not the whole row's.
+        assert!(b.y >= part.y - 0.5 && b.bottom() <= part.bottom() + 0.5, "{dir:?}: inside the part on the page: {b:?} in {part:?}");
+        assert!(b.h > part.h - 4.0, "{dir:?}: as long as the part is tall: {b:?} in {part:?}");
+        // Drawn where it was among the row's items (a cell's area comes after its content): after
+        // the cell before it, before its own cell's borders and area and the next cell.
+        let at = |f: &dyn Fn(&Placed) -> bool| l.pages[0].items.iter().position(f).unwrap();
+        let text = at(&|i| matches!(i, Placed::Lines { path, .. } if path.0 == [1, 0, 1, 0]));
+        assert!(at(&|i| matches!(i, Placed::Cell { cell: 0, .. })) < text, "{dir:?}: after the cell before it");
+        assert!(text < at(&|i| matches!(i, Placed::Cell { cell: 1, .. })), "{dir:?}: before its own cell's area");
+        assert!(cell(1).is_some(), "{dir:?}: the row goes on on the second page");
+        assert!(turned(1).is_empty(), "{dir:?}: no turned text there");
+    }
+}
+
 /// Turned cells in at-least rows nested in one another are laid out a bounded number of times
 /// (an earlier search for each one's line length multiplied the layouts per level, so a few
 /// nested levels took millions of layouts and opening the file hung).
@@ -2895,7 +2935,9 @@ fn nested_turned_cells_in_rows_with_no_height_are_laid_out_a_bounded_number_of_t
     };
     for levels in [3, 6] {
         let n = count(levels);
-        assert!(n <= levels * (levels + 3) / 2, "{levels} levels: turned cells laid out {n} times");
+        // The outer row splits (the tables in it reach past the page), and its turned text is laid
+        // out once more in the part on the first page: n(n + 3)/2 layouts without the split.
+        assert!(n <= levels * (levels + 2), "{levels} levels: turned cells laid out {n} times");
     }
 }
 
@@ -5427,6 +5469,7 @@ fn split_row_rejects_a_hostile_cut() {
         items: vec![line(0.0), line(150.0)],
         bottom,
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
+        turned: Vec::new(),
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -9718,6 +9761,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
+        turned: Vec::new(),
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -13673,6 +13717,7 @@ fn split_cell_moves_image_frame() {
             edge: 0.0,
             items: vec![kept, image, frame],
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
+            turned: Vec::new(),
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
