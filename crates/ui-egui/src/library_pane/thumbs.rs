@@ -6,7 +6,9 @@
 //! (to raise for storytold/craft-libs#1584), a picture not drawn yet is answered with a
 //! placeholder of the pane's own blank-cell colour and shape, and when the drawer has finished
 //! it, the texture the pane made of the placeholder is given the thumbnail ([`swap`]): the pane
-//! names its textures `library {file} {index} {width}`, which the pane's tests here pin. A
+//! names its textures `library {file} {index} {width}`, which the pane's tests here pin. The pane
+//! keeps a cell the shape of the first image it was given, so the thumbnail comes in the
+//! placeholder's shape with the picture centred in it ([`letterboxed`]), never stretched. A
 //! picture that can't be drawn gets the pane's "?" the same way.
 //!
 //! What waits is dropped when the pane shows another folder or tab, or is closed; the pane then
@@ -17,6 +19,8 @@
 use std::collections::{HashMap, VecDeque};
 
 use egui::{Color32, ColorImage, TextureOptions};
+use image::RgbaImage;
+use image::imageops::FilterType;
 use serde_json::Value;
 use wordcraft_engine::library::drawer::{self, Answer, Drawer, Key};
 use wordcraft_engine::library::{MAX_THUMB_HEIGHT, Pictures, THUMB_WIDTHS, Thumbnail};
@@ -231,7 +235,7 @@ fn swap(t: &mut Thumbs, ctx: &egui::Context) {
         if waiting.is_empty() {
             continue;
         }
-        let image = match thumb.ok().and_then(|th| color_image(&th.png)) {
+        let image = match thumb.ok().and_then(|th| letterboxed(&th.png, key.width)) {
             Some(img) => img,
             None => t.failed_image(),
         };
@@ -258,15 +262,40 @@ fn swap(t: &mut Thumbs, ctx: &egui::Context) {
     }
 }
 
-/// A thumbnail's PNG as an image egui can draw, when it is a thumbnail's size.
-fn color_image(png: &[u8]) -> Option<ColorImage> {
+/// A thumbnail's PNG decoded, when it is a thumbnail's size.
+fn decoded(png: &[u8]) -> Option<RgbaImage> {
     let max = u64::from(*THUMB_WIDTHS.end()) * u64::from(MAX_THUMB_HEIGHT) * 4;
     let img = wordcraft_geom::picture::decode(png, max).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 || w > *THUMB_WIDTHS.end() || h > MAX_THUMB_HEIGHT {
         return None;
     }
-    Some(ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw()))
+    Some(img)
+}
+
+/// A finished thumbnail as the texture of a cell the pane gave the placeholder: the pane keeps a
+/// cell the shape of the first image it was given, so the thumbnail comes in the placeholder's
+/// shape, at most `width` pixels wide, the picture centred in it at its own shape and the bands
+/// clear. `None` when the PNG isn't a thumbnail's size.
+fn letterboxed(png: &[u8], width: u32) -> Option<ColorImage> {
+    let img = decoded(png)?;
+    let (pw, ph) = (u64::from(PLACEHOLDER.0), u64::from(PLACEHOLDER.1));
+    let (w, h) = (u64::from(img.width()), u64::from(img.height()));
+    // The smallest box of the placeholder's shape the thumbnail fits in, no wider than asked for.
+    let boxed = w.max((h * pw).div_ceil(ph));
+    let most = u64::from(width.clamp(*THUMB_WIDTHS.start(), *THUMB_WIDTHS.end()));
+    let img = if boxed > most {
+        let fit = |side: u64| u32::try_from(((side * most + boxed / 2) / boxed).max(1)).ok();
+        image::imageops::resize(&img, fit(w)?, fit(h)?, FilterType::Triangle)
+    } else {
+        img
+    };
+    let (iw, ih) = (u64::from(img.width()), u64::from(img.height()));
+    let cw = boxed.min(most).max(iw);
+    let ch = ((cw * ph + pw / 2) / pw).max(ih);
+    let mut canvas = RgbaImage::new(u32::try_from(cw).ok()?, u32::try_from(ch).ok()?);
+    image::imageops::replace(&mut canvas, &img, i64::try_from((cw - iw) / 2).ok()?, i64::try_from((ch - ih) / 2).ok()?);
+    Some(ColorImage::from_rgba_unmultiplied([usize::try_from(cw).ok()?, usize::try_from(ch).ok()?], canvas.as_raw()))
 }
 
 /// The pane's "?" for a picture that can't be drawn, on its blank-cell colour, drawn here
@@ -325,12 +354,55 @@ mod tests {
         assert_eq!(img.pixels.last(), Some(&bg));
     }
 
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let img = RgbaImage::from_pixel(w, h, image::Rgba([200, 40, 40, 255]));
+        wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(img)).unwrap()
+    }
+
     #[test]
     fn only_thumbnail_sized_pngs_become_textures() {
-        let png = |w, h| wordcraft_geom::picture::encode_png(&image::DynamicImage::ImageRgba8(image::RgbaImage::new(w, h))).unwrap();
-        assert_eq!(color_image(&png(512, 40)).map(|i| i.size), Some([512, 40]));
-        assert!(color_image(&png(513, 40)).is_none());
-        assert!(color_image(&png(8, MAX_THUMB_HEIGHT + 1)).is_none());
-        assert!(color_image(b"not a png").is_none());
+        assert_eq!(decoded(&png(512, 40)).map(|i| i.dimensions()), Some((512, 40)));
+        assert!(decoded(&png(513, 40)).is_none());
+        assert!(decoded(&png(8, MAX_THUMB_HEIGHT + 1)).is_none());
+        assert!(decoded(b"not a png").is_none());
+        assert!(letterboxed(b"not a png", 160).is_none());
+    }
+
+    /// The opaque part of `img`: its left, top, width and height.
+    fn picture_in(img: &ColorImage) -> (usize, usize, usize, usize) {
+        let [w, h] = img.size;
+        let opaque = |x: usize, y: usize| img.pixels.get(y * w + x).is_some_and(|p| p.a() > 0);
+        let cols: Vec<usize> = (0..w).filter(|&x| (0..h).any(|y| opaque(x, y))).collect();
+        let rows: Vec<usize> = (0..h).filter(|&y| (0..w).any(|x| opaque(x, y))).collect();
+        let (x0, y0) = (cols.first().copied().unwrap_or(0), rows.first().copied().unwrap_or(0));
+        (x0, y0, cols.len(), rows.len())
+    }
+
+    #[test]
+    fn a_late_thumbnail_keeps_the_placeholder_shape_with_the_picture_centred_at_its_own() {
+        // Already the shape: as drawn.
+        let img = letterboxed(&png(160, 120), 160).unwrap();
+        assert_eq!((img.size, picture_in(&img)), ([160, 120], (0, 0, 160, 120)));
+        // A portrait photo: clear bands left and right.
+        let img = letterboxed(&png(120, 160), 160).unwrap();
+        assert_eq!(img.size, [160, 120]);
+        let (x, y, w, h) = picture_in(&img);
+        assert_eq!((y, h), (0, 120));
+        assert_eq!(x, (160 - w) / 2, "centred");
+        assert!((w as f32 / h as f32 - 0.75).abs() < 0.02, "{w} × {h}");
+        // A panorama: bands above and below.
+        let img = letterboxed(&png(400, 100), 256).unwrap();
+        assert_eq!(img.size, [256, 192]);
+        let (x, y, w, h) = picture_in(&img);
+        assert_eq!((x, w, h), (0, 256, 64));
+        assert_eq!(y, (192 - 64) / 2, "centred");
+        // A small picture isn't enlarged: the pane scales the cell.
+        let img = letterboxed(&png(30, 40), 160).unwrap();
+        assert_eq!(img.size, [54, 41]);
+        assert_eq!(picture_in(&img), (12, 0, 30, 40));
+        // The tallest thumbnail stays within the width asked for, a pixel wide at least.
+        let img = letterboxed(&png(1, MAX_THUMB_HEIGHT), 512).unwrap();
+        assert_eq!(img.size, [512, 384]);
+        assert_eq!(picture_in(&img).2, 1);
     }
 }

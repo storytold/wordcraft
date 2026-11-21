@@ -256,6 +256,23 @@ fn a_large_photo_never_holds_up_a_frame_and_its_thumbnail_arrives() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The pane keeps a cell the shape of the first image it was given, which for a picture drawn in
+/// the background is the placeholder's 4:3: the thumbnail comes in that shape, the photo inside
+/// it, so a portrait photo is not squashed to fill the cell.
+#[test]
+fn a_portrait_photo_drawn_in_the_background_is_not_squashed() {
+    let dir = folder("portrait");
+    std::fs::write(dir.join("tall.jpg"), noisy_jpeg(600, 800)).unwrap();
+    let mut h = open_on(&dir);
+    let file = listed(&h, "tall.jpg");
+    step_until(&mut h, |h| texture(h, &file).is_some_and(|s| s[0] > 4));
+    let [w, ht] = texture(&h, &file).unwrap();
+    assert!((ht as f32 / w as f32 - 0.75).abs() < 0.02, "{w} × {ht}, drawn in a 4:3 cell");
+    assert!(w >= 128, "{w} × {ht}: about the width asked for");
+    assert_eq!(h.state().library_thumbs.waiting(), (0, 0));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A PNG whose header says `w` × `h`, with no pixels to speak of: listed, never drawn.
 fn png_claiming(w: u32, h: u32) -> Vec<u8> {
     fn crc(bytes: &[u8]) -> u32 {
