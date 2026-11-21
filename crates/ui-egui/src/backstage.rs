@@ -797,9 +797,15 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
     let info = ui.ctx().data_mut(|d| match d.get_temp::<(InfoKey, serde_json::Value)>(info_id()) {
         Some((k, v)) if k == key => v,
         _ => {
-            let v = app.session.run("file.info", &json!({})).unwrap_or_default();
-            d.insert_temp(info_id(), (key.clone(), v.clone()));
-            v
+            // Only a successful read is cached: a failed one (Null) pinned under this key
+            // would blank the Info page until the document or its state changes again.
+            match app.session.run("file.info", &json!({})) {
+                Ok(v) => {
+                    d.insert_temp(info_id(), (key.clone(), v.clone()));
+                    v
+                }
+                Err(_) => serde_json::Value::Null,
+            }
         }
     });
     // Properties at the reading start, so at the right in a mirrored interface, Statistics after.

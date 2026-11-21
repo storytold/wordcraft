@@ -45,13 +45,18 @@ fn remove_header_clears_every_section_and_its_part() {
     if let Some(Block::Para(p)) = doc.body.first_mut().map(Arc::make_mut) {
         p.section = Some(Box::new(SectionProps::default()));
     }
+    // Both sections carry a header: the removal must clear every section, as the name says.
     let first = doc.add_part(PartKind::Header, vec![para_block(Paragraph::new().styled("Header"))]);
     doc.section_mut(0).headers.default = Some(first);
+    let last = doc.add_part(PartKind::Header, vec![para_block(Paragraph::new().styled("Header"))]);
+    doc.last_section.headers.default = Some(last);
     let (mut s, _) = (Session::new(doc), ());
     s.run("insert.removeHeader", &json!({})).unwrap();
     let Some(Block::Para(p)) = s.doc.body.first().map(|b| &**b) else { panic!("first block") };
     assert!(p.section.as_ref().is_some_and(|sec| sec.headers.default.is_none()), "the first section's header is cleared");
     assert!(!s.doc.parts.contains_key(&first), "the header part the first section named is removed");
+    assert!(s.doc.last_section.headers.default.is_none(), "the last section's header is cleared");
+    assert!(!s.doc.parts.contains_key(&last), "the header part the last section named is removed");
     assert_eq!(s.run("file.inspect", &json!({})).unwrap()["found"]["headers"], json!(0));
 }
 

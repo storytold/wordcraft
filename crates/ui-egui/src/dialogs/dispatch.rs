@@ -1627,7 +1627,13 @@ fn inspect_document_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bo
     let found = report.get("found").cloned().unwrap_or(json!({}));
     let count = |k: &str| found.get(k).and_then(Value::as_u64).unwrap_or(0);
     if let Some(m) = message {
-        ui.label(egui::RichText::new(m.clone()).weak());
+        // A failed read (no report) must not read as a clean document: the error stands out
+        // instead of the weak note a finished removal gets.
+        if report.is_null() {
+            ui.label(egui::RichText::new(m.clone()).color(ui.visuals().error_fg_color));
+        } else {
+            ui.label(egui::RichText::new(m.clone()).weak());
+        }
         ui.add_space(6.0);
     }
     ui.label(tl!("Inspect the document for content you may want to remove before sharing it:"));

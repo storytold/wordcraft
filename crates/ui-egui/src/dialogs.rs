@@ -859,8 +859,12 @@ impl Dialog {
             "customProperties" => Dialog::CustomProperties(Box::new(CustomPropertiesForm::read(app))),
             "inspectDocument" => {
                 // Word's Document Inspector: the last Inspect's report, Remove All per category.
-                let report = app.session.run("file.inspect", &json!({})).unwrap_or_default();
-                Dialog::InspectDocument { report, message: None }
+                // A failed read must not read as a clean document: Null reports every category
+                // as "None", so the error is named where the counts would otherwise stand.
+                match app.session.run("file.inspect", &json!({})) {
+                    Ok(report) => Dialog::InspectDocument { report, message: None },
+                    Err(e) => Dialog::InspectDocument { report: Value::Null, message: Some(e.to_string()) },
+                }
             }
             "controlProperties" => match crate::dialogs_controls::ControlForm::read(app) {
                 Some(form) => Dialog::Control { form: Box::new(form) },

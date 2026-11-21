@@ -153,6 +153,7 @@ pub fn tool_definitions() -> Value {
                 json!({"remove": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["comments", "revisions", "properties", "hidden", "headers"]},
+                    "minItems": 1,
                     "description": "Remove the listed content"
                 }}),
                 &[]
@@ -341,14 +342,19 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             // The items are checked against the categories the inspector removes: an unknown one
             // ("hiddenText" for "hidden") is ignored by the inspector but reported as removed,
             // though the content stays.
-            Some(Value::Array(remove)) if !remove.is_empty() => {
-                if remove.iter().all(|c| REMOVE_CATEGORIES.contains(&c.as_str().unwrap_or(""))) {
+            Some(Value::Array(remove)) => {
+                if remove.is_empty() {
+                    // An explicit `remove` means a cleanup was asked for: a structure read
+                    // would be mistaken for one, so an empty list is refused like a bad item.
+                    ToolResult::error(
+                        "`remove` must name at least one category: \"comments\", \"revisions\", \"properties\", \"hidden\" or \"headers\"",
+                    )
+                } else if remove.iter().all(|c| REMOVE_CATEGORIES.contains(&c.as_str().unwrap_or(""))) {
                     wrap(b.call("file.inspect", addressed(json!({"remove": remove}), doc)))
                 } else {
                     ToolResult::error("`remove` items must be \"comments\", \"revisions\", \"properties\", \"hidden\" or \"headers\"")
                 }
             }
-            Some(Value::Array(_)) => wrap(b.call("document.inspect", addressed(json!({}), doc))),
             Some(_) => {
                 ToolResult::error("`remove` must be an array of categories: [\"comments\", \"revisions\", \"properties\", \"hidden\", \"headers\"]")
             }

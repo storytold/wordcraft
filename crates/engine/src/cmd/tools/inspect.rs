@@ -324,14 +324,21 @@ fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::B
     }
 }
 
-/// Whether the table holds any text at all: a paragraph with text, in a cell or in a nested table.
+/// Whether the table holds any text at all: a paragraph with text, in a cell or in a nested
+/// table. Nested tables come from the document, so the recursion is bounded like the caller's.
 fn table_has_text(t: &wordcraft_doc::table::Table) -> bool {
-    t.rows.iter().any(|r| {
-        r.cells.iter().any(|c| {
-            c.blocks.iter().any(|b| match &**b {
-                Block::Para(p) => !p.text.is_empty(),
-                Block::Table(t) => table_has_text(t),
+    fn has(t: &wordcraft_doc::table::Table, depth: usize) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        t.rows.iter().any(|r| {
+            r.cells.iter().any(|c| {
+                c.blocks.iter().any(|b| match &**b {
+                    Block::Para(p) => !p.text.is_empty(),
+                    Block::Table(t) => has(t, depth + 1),
+                })
             })
         })
-    })
+    }
+    has(t, 0)
 }

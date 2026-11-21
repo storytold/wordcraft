@@ -30,7 +30,9 @@ resent; inspect the document before deciding whether to repeat the operation you
 
 Read-only inspection and in-memory `ui.render` / `ui.screenshot` calls may retry once. With a
 string `path`, rendering or taking a screenshot writes a file and is not retried after an
-unknown outcome. Unreadable replies are reported as errors without replaying the request.
+unknown outcome. `inspect_document` with `remove` is a mutation, however: it is never
+automatically resent, and a lost reply reports `outcome unknown`. Unreadable replies are
+reported as errors without replaying the request.
 
 On stdio, an invalid UTF-8 request line returns JSON-RPC parse error `-32700`. It never reaches
 the backend, and the server continues with the next line instead of substituting characters
