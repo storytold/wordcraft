@@ -3,8 +3,8 @@ use super::render::entry;
 use super::sources::bib_order;
 use super::styles::style;
 use super::{
-    Block, CharProps, CmdError, CmdResult, Document, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader,
-    TabStop, Value, delete_selection, heading_letter, p, sel_result, sort_key,
+    Block, CharProps, CmdError, CmdResult, Document, FieldCode, InlineObject, Paragraph, Path, Pos, Selection, Session, SortKey, StoryRef, TabAlign,
+    TabLeader, TabStop, Value, delete_selection, heading_letter, p, sel_result, sort_key,
 };
 use crate::cmd::references::{page_at, page_formats, page_text};
 use std::sync::Arc;
@@ -65,7 +65,30 @@ fn generated_list_with(s: &mut Session, instr: &str, title: &str, leader: Option
         seed.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Right, leader }]);
         s.doc.insert_block(StoryRef::Body, &Path::top(i.saturating_add(1)), Block::Para(seed))?;
     }
-    update_generated(s)
+    // Rebuilding a list above this one can change its number of entries and so this list's
+    // place: find it again afterwards as the same-numbered list title. A list above it still
+    // held as a field around its entries (as Word and ODT files hold one) counts too: the update
+    // makes it a list title like this one's.
+    let ordinal =
+        (0..i).filter(|&k| s.doc.body.get(k).and_then(|b| b.as_para()).and_then(list_kind).is_some() || wrapped_list(s, k).is_some()).count();
+    update_generated(s)?;
+    let i = s.doc.body.iter().enumerate().filter(|(_, b)| b.as_para().and_then(list_kind).is_some()).nth(ordinal).map_or(i, |(k, _)| k);
+    // Like Word, the caret lands in a paragraph right after the list, ready to keep typing — not
+    // inside its own title or entries, where typing (or Enter) would corrupt them (the same fix
+    // as references.toc's insert_toc, for its sibling generated lists: bibliography, table of
+    // figures, table of authorities and, through insert_index's first-creation path, the index).
+    let mut after = i + 1;
+    while s.doc.body.get(after).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)) {
+        after += 1;
+    }
+    // Another generated list's title, or a table of contents' (#3227), right after it is no
+    // place to type either.
+    let is_para = s.doc.body.get(after).and_then(|b| b.as_para()).is_some_and(|p| list_kind(p).is_none() && !holds_toc(p));
+    if !is_para {
+        s.doc.insert_block(StoryRef::Body, &Path::top(after), Block::Para(Paragraph::new()))?;
+    }
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(after), off: 0 });
+    Ok(())
 }
 
 /// Most paragraphs a list held as a field around its entries spans.
@@ -109,7 +132,12 @@ fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize, usize, usize)> 
     None
 }
 
-fn list_kind(p: &Paragraph) -> Option<String> {
+/// Whether `p` holds a table of contents' field (the paragraph WordCraft puts its title in).
+fn holds_toc(p: &Paragraph) -> bool {
+    p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if instr.trim_start().starts_with("TOC")))
+}
+
+pub(super) fn list_kind(p: &Paragraph) -> Option<String> {
     p.objects.iter().find_map(list_field)
 }
 
@@ -471,6 +499,54 @@ mod tests {
             p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
         }
         Session::new(d)
+    }
+
+    /// The title of the generated list the caret follows: walks back past its entries.
+    fn list_before_caret(s: &Session) -> Option<String> {
+        let mut k = s.sel.focus.path.last().checked_sub(1)?;
+        loop {
+            let p = s.doc.body.get(k)?.as_para()?;
+            if let Some(kind) = list_kind(p) {
+                return Some(kind);
+            }
+            if p.props.style.as_deref() != Some(ENTRY_STYLE) {
+                return None;
+            }
+            k = k.checked_sub(1)?;
+        }
+    }
+
+    /// #3230 review: a list above the insertion point still held as a field around its entries
+    /// (a Word bibliography) becomes a list title while every list is rebuilt; the caret still
+    /// lands after the new list, not after that one, pages away.
+    #[test]
+    fn a_new_list_below_a_wrapped_one_leaves_the_caret_after_the_new_one() {
+        let mut s = wrapped("Old one\nOld two\nBody text\nMore text", 0, 1, "Old two".len());
+        assert!(wrapped_list(&s, 0).is_some());
+        s.run("caret.docEnd", &serde_json::json!({})).unwrap();
+        s.run("references.tableOfAuthorities", &serde_json::json!({})).unwrap();
+        assert!(list_before_caret(&s).is_some_and(|k| k.starts_with("TOA")), "caret follows {:?} at {:?}", list_before_caret(&s), s.sel.focus);
+        let para = s.doc.para_at(&s.sel.focus).unwrap();
+        assert!(list_kind(para).is_none() && !holds_toc(para));
+    }
+
+    /// #3230 review: a list inserted right above a table of contents leaves the caret in a new
+    /// paragraph between them, not in the table of contents' title (#3227).
+    #[test]
+    fn a_new_list_above_a_table_of_contents_leaves_the_caret_out_of_its_title() {
+        // The table of contents goes in the empty first paragraph, so it starts the document.
+        let mut s = Session::new(Document::from_text("\nIntro"));
+        s.run("caret.docEnd", &serde_json::json!({})).unwrap();
+        s.run("para.style", &serde_json::json!({"style": "Heading1"})).unwrap();
+        s.run("caret.docStart", &serde_json::json!({})).unwrap();
+        s.run("references.toc", &serde_json::json!({})).unwrap();
+        s.run("caret.docStart", &serde_json::json!({})).unwrap();
+        assert!(s.doc.para_at(&s.sel.focus).is_some_and(holds_toc), "at the table of contents' title");
+        s.run("references.bibliography", &serde_json::json!({})).unwrap();
+        let para = s.doc.para_at(&s.sel.focus).unwrap();
+        assert!(!holds_toc(para) && list_kind(para).is_none(), "caret at {:?}: {:?}", s.sel.focus, para.plain_text());
+        let next = s.doc.body.get(s.sel.focus.path.last() + 1).and_then(|b| b.as_para());
+        assert!(next.is_some_and(holds_toc), "the table of contents follows");
     }
 
     fn texts(s: &Session) -> Vec<String> {
