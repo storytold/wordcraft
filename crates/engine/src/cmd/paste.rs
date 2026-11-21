@@ -338,21 +338,22 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.props = para.clone();
             for run in &mut p.runs {
                 let src = std::mem::replace(&mut run.props, base.clone());
+                let e = emphasis_of(s, &src);
                 // Emphasis the source shows in either script is kept for both, as the Bold and
                 // Italic buttons set it: text pasted into a run marked `w:cs` (Thai from a WPS or
                 // Word file) is drawn with the complex-script bold and italic.
-                if shown(src.bold, src.bold_cs, &src) {
+                if shown(e.bold, e.bold_cs, &e) {
                     run.props.bold = Some(true);
                     run.props.bold_cs = Some(true);
                 }
-                if shown(src.italic, src.italic_cs, &src) {
+                if shown(e.italic, e.italic_cs, &e) {
                     run.props.italic = Some(true);
                     run.props.italic_cs = Some(true);
                 }
-                if src.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None) {
-                    run.props.underline = src.underline;
+                if e.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None) {
+                    run.props.underline = e.underline;
                 }
-                if src.strike == Some(true) {
+                if e.strike == Some(true) {
                     run.props.strike = Some(true);
                 }
                 run.props.link = src.link;
@@ -363,6 +364,24 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.touch();
         });
     }
+}
+
+/// The formatting a pasted run's emphasis is judged by: its own, over its character style
+/// chain's. Word keeps the bold, italic, underline and strikethrough a character style gives the
+/// source, as direct formatting, but not a paragraph style's (measured in Word for Windows), so
+/// the paragraph style isn't consulted.
+fn emphasis_of(s: &Session, src: &wordcraft_doc::CharProps) -> wordcraft_doc::CharProps {
+    use wordcraft_doc::styles::StyleKind;
+    let mut e = wordcraft_doc::CharProps::default();
+    if let Some(id) = src.style.as_deref() {
+        for st in s.doc.styles.chain(id) {
+            if st.kind == StyleKind::Character || st.kind == StyleKind::Paragraph {
+                e.overlay(&st.chr);
+            }
+        }
+    }
+    e.overlay(&wordcraft_doc::CharProps { style: None, ..src.clone() });
+    e
 }
 
 /// Whether a run with these Latin and complex-script values of a toggle (bold or italic) shows

@@ -1928,6 +1928,56 @@ fn paste_merge_formatting_leaves_plain_what_the_source_draws_plain() {
 }
 
 #[test]
+fn paste_merge_formatting_keeps_a_character_styles_emphasis_not_a_paragraph_styles() {
+    // #7177 review, measured in Word for Windows: Merge Formatting keeps the bold, italic,
+    // underline and strikethrough a character style gives the source, as direct formatting, but
+    // drops a paragraph style's.
+    use wordcraft_doc::props::Underline;
+    use wordcraft_doc::styles::{Style, StyleKind};
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let on = wordcraft_doc::CharProps {
+        bold: Some(true),
+        bold_cs: Some(true),
+        italic: Some(true),
+        italic_cs: Some(true),
+        underline: Some(Underline::Single),
+        strike: Some(true),
+        ..Default::default()
+    };
+    let sheet = Arc::make_mut(&mut s.doc.styles);
+    sheet.upsert(Style { id: "ChEmph".into(), name: "ChEmph".into(), kind: StyleKind::Character, chr: on.clone(), ..Default::default() });
+    sheet.upsert(Style { id: "PEmph".into(), name: "PEmph".into(), kind: StyleKind::Paragraph, chr: on, ..Default::default() });
+    let pasted = |s: &Session, para_style: Option<&str>, props: wordcraft_doc::CharProps| {
+        let mut frag = wordcraft_doc::edit::Fragment::from_text("ไทย Thai");
+        for b in &mut frag.blocks {
+            crate::cmd::paste::each_para(b, 0, &mut |p| {
+                p.props.style = para_style.map(str::to_string);
+                p.runs.iter_mut().for_each(|r| r.props = props.clone());
+            });
+        }
+        crate::cmd::paste::merge_formatting(s, &mut frag);
+        let mut out = Vec::new();
+        for b in &mut frag.blocks {
+            crate::cmd::paste::each_para(b, 0, &mut |p| {
+                out.extend(p.runs.iter().map(|r| s.doc.styles.resolve_char(p.props.style.as_deref(), &r.props)));
+            });
+        }
+        out
+    };
+    for cs in [None, Some(true)] {
+        for r in pasted(&s, None, wordcraft_doc::CharProps { style: Some("ChEmph".into()), cs, ..Default::default() }) {
+            assert!(r.bold && r.bold_cs && r.italic && r.italic_cs && r.strike, "character style, cs {cs:?}: {r:?}");
+            assert_eq!(r.underline, Underline::Single, "character style, cs {cs:?}");
+        }
+        for r in pasted(&s, Some("PEmph"), wordcraft_doc::CharProps { cs, ..Default::default() }) {
+            assert!(!r.bold && !r.bold_cs && !r.italic && !r.italic_cs && !r.strike, "paragraph style, cs {cs:?}: {r:?}");
+            assert_eq!(r.underline, Underline::None, "paragraph style, cs {cs:?}");
+        }
+    }
+}
+#[test]
 fn pasted_rtf_sections_link_their_headers_to_the_previous() {
     // #1378: the RTF's own header part ids mean nothing in this document; a pasted section
     // break keeps its page but links its headers and footers to the previous section.
