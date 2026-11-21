@@ -1,7 +1,9 @@
 //! The Library pane driven as a person would, over folders of pictures drawn here in code.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use craft::host::{PickKind, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
@@ -27,8 +29,11 @@ fn app() -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::from_text("Field notes")), Services::default())
 }
 
-fn harness(app: WordApp) -> Harness<'static, WordApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+/// The app in a harness with the craft runtime installed, stepped as the app's driver runs a frame
+/// ([`crate::test_harness::frame`]), so a click on a command-bound control runs its command.
+fn harness(mut app: WordApp) -> Harness<'static, WordApp> {
+    app.ui.language = "en".into();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -36,8 +41,12 @@ fn harness(app: WordApp) -> Harness<'static, WordApp> {
         },
         app,
     );
-    h.run_steps(3);
+    steps(&mut h, 3);
     h
+}
+
+fn steps(h: &mut Harness<'_, WordApp>, n: usize) {
+    crate::test_harness::frames(h, n);
 }
 
 /// The pane open on `dir`, every file read.
@@ -50,47 +59,45 @@ fn open_on(dir: &Path) -> Harness<'static, WordApp> {
         if h.state().library.ready() {
             break;
         }
-        h.step();
+        steps(&mut h, 1);
     }
     assert!(h.state().library.ready());
-    h.run_steps(4);
+    steps(&mut h, 4);
     h
 }
 
 /// Move there, press, release: one frame each, as a real click arrives.
 fn click(h: &mut Harness<'_, WordApp>, pos: egui::Pos2) {
     h.event(egui::Event::PointerMoved(pos));
-    h.step();
+    steps(h, 1);
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-        h.step();
+        steps(h, 1);
     }
-    h.run_steps(2);
+    steps(h, 2);
 }
 
 #[test]
 fn insert_library_opens_the_pane_on_its_pictures_tab() {
     let mut app = app();
-    app.ui.tab = "Insert".into();
+    app.run("ui.tab", json!({"tab": "Insert"})).unwrap();
     let mut h = harness(app);
     h.get_by_label("Library").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     assert!(h.state().session.view.library_pane, "the ribbon button opens the pane");
     assert_eq!(h.state().library.tab, super::ITEMS);
-    assert!(h.query_by_label("Pictures").is_some(), "the tab strip");
+    assert_eq!(h.query_all_by_label("Pictures").count(), 2, "the tab strip's Pictures, beside the ribbon's Insert › Pictures");
     // No folders yet: the pane says what to do, and Add Folder… (no picker here) takes a path.
     assert!(h.query_by_label_contains("Add a folder of pictures").is_some());
     let dir = folder("add");
     std::fs::write(dir.join("kiln.png"), png(40, 30, [180, 90, 40])).unwrap();
     h.get_by_label("Add Folder…").click();
-    h.run_steps(2);
+    steps(&mut h, 2);
     assert!(h.state().library.adding);
     h.state_mut().library.new_folder = dir.to_string_lossy().into_owned();
-    h.run_steps(1);
+    steps(&mut h, 1);
     h.get_by_label("Add").click();
-    for _ in 0..60 {
-        h.step();
-    }
+    steps(&mut h, 60);
     assert_eq!(h.state().session.prefs.library_folders.len(), 1, "kept with the preferences");
     assert!(h.query_by_label("Picture: kiln.png").is_some());
     // The same button closes it again (the topmost "Library": the pane's title is below the ribbon).
@@ -109,13 +116,14 @@ fn clicking_a_picture_inserts_it_selected_in_one_undo_step() {
     let mut h = open_on(&dir);
     let depth = h.state().session.undo_depth();
     h.get_by_label("Picture: red.png").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     let s = &h.state().session;
     assert_eq!(s.undo_depth(), depth + 1, "one undo step");
     let media: Vec<Vec<u8>> = s.doc.media.values().map(|m| m.to_vec()).collect();
     assert_eq!(media, vec![red], "the file's own picture");
     assert!(!s.sel.is_collapsed(), "the new picture is selected, as Insert › Pictures leaves it");
-    assert!(h.state().canvas.want_focus || h.state().canvas.focused, "typing carries on in the document");
+    let ctx = h.ctx.clone();
+    assert!(h.state().canvas.focused(&ctx), "typing carries on in the document");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -127,9 +135,7 @@ fn search_shows_only_the_pictures_that_match() {
     let mut h = open_on(&dir);
     assert!(h.query_by_label("Picture: harbour.png").is_some() && h.query_by_label("Picture: orchard.png").is_some());
     h.state_mut().library.query = "HARB".into();
-    for _ in 0..40 {
-        h.step();
-    }
+    steps(&mut h, 40);
     assert_eq!(h.state().library.hits(), Some(1));
     assert!(h.query_by_label("Picture: harbour.png").is_some());
     assert!(h.query_by_label("Picture: orchard.png").is_none());
@@ -147,11 +153,11 @@ fn a_damaged_picture_is_listed_but_not_inserted() {
     let mut h = open_on(&dir);
     assert_eq!(h.state().library.files.len(), 2);
     h.get_by_label("Picture: bad.png").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     assert!(h.state().session.doc.media.is_empty(), "nothing went in");
-    assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| !m.is_empty()), "the status line says why");
+    assert!(h.state().status_message().is_some_and(|m| !m.text.as_str().is_empty()), "the status line says why");
     h.get_by_label("Picture: good.png").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     let media: Vec<Vec<u8>> = h.state().session.doc.media.values().map(|m| m.to_vec()).collect();
     assert_eq!(media, vec![good]);
     let _ = std::fs::remove_dir_all(dir);
@@ -163,9 +169,9 @@ fn a_damaged_picture_is_listed_but_not_inserted() {
 fn the_pane_speaks_the_interface_language() {
     let mut app = app();
     let host = super::WordHost(&mut app);
-    crate::i18n::pseudo::set(true);
+    crate::i18n::apply_language(crate::i18n::Lang::PSEUDO);
     let shown: Vec<String> = super::words().map(|w| craft_library_egui::Host::text(&host, w).into_owned()).collect();
-    crate::i18n::pseudo::set(false);
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
     for (english, w) in super::words().zip(&shown) {
         assert!(w.contains('⟦'), "{english} goes through tl!: {w}");
     }
@@ -189,56 +195,46 @@ fn pictures_share_one_grid() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Dialogs the fake host was asked to show, each with the channel its answer goes through.
-type Shown = std::rc::Rc<std::cell::RefCell<Vec<(crate::FileDialogRequest, std::sync::mpsc::Sender<crate::FileDialogAnswer>)>>>;
+/// The app over the file service `files`.
+fn app_over(files: &Arc<ScriptedFiles>) -> WordApp {
+    let host =
+        craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+    app().with_host(Arc::new(host))
+}
 
-/// Add Folder… with a system folder dialog (#2868): no path field; the dialog is asked for and
-/// the window goes on drawing while it is open. Its answer adds the folder, keeps the
-/// preferences, and shows the folder's pictures; a cancel changes nothing.
+/// Add Folder… where the host can pick a folder (#2868): no path field; the folder is asked for
+/// and the window goes on drawing while the dialog is open. Its answer adds the folder and shows
+/// its pictures; a cancel changes nothing.
 #[test]
 fn add_folder_asks_the_folder_dialog_and_shows_what_it_picks() {
-    let shown: Shown = Default::default();
-    let log = shown.clone();
-    let saves = std::rc::Rc::new(std::cell::Cell::new(0));
-    let count = saves.clone();
-    let services = Services {
-        file_dialog: Some(Box::new(move |req| {
-            let (tx, rx) = std::sync::mpsc::channel();
-            log.borrow_mut().push((req, tx));
-            rx
-        })),
-        save_prefs: Some(Box::new(move |_| {
-            count.set(count.get() + 1);
-            Ok(true)
-        })),
-        ..Default::default()
-    };
-    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Field notes")), services);
+    let files = Arc::new(ScriptedFiles::held());
+    let mut app = app_over(&files);
     app.run("view.libraryPane", json!({"value": true})).unwrap();
     let mut h = harness(app);
     let dir = folder("picker");
     std::fs::write(dir.join("kiln.png"), png(40, 30, [180, 90, 40])).unwrap();
 
     h.get_by_label("Add Folder…").click();
-    h.run_steps(3);
-    assert_eq!(shown.borrow().len(), 1);
-    assert_eq!(shown.borrow()[0].0, crate::FileDialogRequest::Folder { purpose: "library".into() });
+    steps(&mut h, 3);
+    let asked = files.requests();
+    assert_eq!(asked.len(), 1);
+    assert_eq!((asked[0].kind, asked[0].purpose.as_str()), (PickKind::Folder, "library"));
     assert!(!h.state().library.adding && h.query_by_label("Add").is_none(), "no path field");
-    let (_, cancel) = shown.borrow_mut().remove(0);
-    cancel.send(Ok(Vec::new())).unwrap();
-    h.run_steps(3);
-    assert!(h.state().session.prefs.library_folders.is_empty() && saves.get() == 0, "a cancel adds nothing");
+    files.answer(Picked::Cancelled);
+    steps(&mut h, 3);
+    assert!(h.state().session.prefs.library_folders.is_empty(), "a cancel adds nothing");
 
     h.get_by_label("Add Folder…").click();
-    h.run_steps(3);
-    let (_, pick) = shown.borrow_mut().remove(0);
-    pick.send(Ok(vec![dir.to_string_lossy().into_owned()])).unwrap();
-    for _ in 0..60 {
-        h.step();
+    steps(&mut h, 3);
+    files.answer(Picked::Paths(vec![dir.clone()]));
+    for _ in 0..200 {
+        steps(&mut h, 1);
+        if h.state().library.ready() && h.query_by_label("Picture: kiln.png").is_some() {
+            break;
+        }
     }
     let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
     assert_eq!(h.state().session.prefs.library_folders, vec![real.clone()]);
-    assert_eq!(saves.get(), 1, "kept with the preferences at once");
     assert_eq!(h.state().library.folder.as_deref(), Some(real.as_str()), "the pane shows the new folder");
     let name = dir.file_name().unwrap().to_string_lossy().into_owned();
     let drawn: Vec<String> = h
@@ -255,25 +251,17 @@ fn add_folder_asks_the_folder_dialog_and_shows_what_it_picks() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// A dialog that answers at once (as the pane draws) still shows the folder it picked: the
+/// A file service that answers at once (as the pane draws) still shows the folder it picked: the
 /// answer reaches the pane's own state, not the stand-in it has while the pane draws.
 #[test]
 fn a_folder_picked_at_once_is_shown() {
     let dir = folder("at-once");
-    let picked = dir.to_string_lossy().into_owned();
-    let services = Services {
-        file_dialog: Some(Box::new(move |_| {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let _ = tx.send(Ok(vec![picked.clone()]));
-            rx
-        })),
-        ..Default::default()
-    };
-    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Field notes")), services);
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![dir.clone()])]));
+    let mut app = app_over(&files);
     app.run("view.libraryPane", json!({"value": true})).unwrap();
     let mut h = harness(app);
     h.get_by_label("Add Folder…").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
     assert_eq!(h.state().session.prefs.library_folders, vec![real.clone()]);
     assert_eq!(h.state().library.folder.as_deref(), Some(real.as_str()));

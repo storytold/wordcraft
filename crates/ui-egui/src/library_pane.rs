@@ -3,21 +3,22 @@
 //! the pictures in the user's Library folders; clicking one inserts it at the selection, as
 //! Insert › Pictures does, while the document stays open for editing.
 //!
-//! Add Folder… asks for a folder in the system's dialog (the built-in browser where there is none,
-//! #576) without waiting for it: the answer adds the folder on a later frame
-//! ([`AfterPick::LibraryFolder`](crate::file_dialogs::AfterPick::LibraryFolder)). Where nothing
-//! can pick a folder (the web) it shows the pane's path field. A tab of WordCraft's own (icons,
+//! Add Folder… asks the host's file service for a folder (the system's dialog, or the framework's
+//! chooser where there is none, #576) without waiting for it: the answer adds the folder on a
+//! later frame ([`AfterPick::LibraryFolder`](crate::file_dialogs::AfterPick::LibraryFolder)).
+//! Where nothing can pick a folder (the web) it shows the pane's path field. A tab of WordCraft's own (icons,
 //! diagrams, charts) would join the strip in [`LABELS`] and be drawn in `WordHost`'s `Host::tab`.
 
 use std::borrow::Cow;
 
+use craft::host::PickRequest;
 use craft_library_egui::{Host, Labels, Palette};
 pub use craft_library_egui::{ITEMS, MAX_SHOWN_FILES, State};
 use egui::Ui;
 use serde_json::Value;
 
 use crate::WordApp;
-use crate::file_dialogs::{AfterPick, FileDialogRequest};
+use crate::file_dialogs::AfterPick;
 use crate::theme::Tokens;
 
 /// WordCraft's words in the shared pane, in English: every one goes through the interface catalog
@@ -63,10 +64,10 @@ impl Host for WordHost<'_> {
         if r.is_ok() {
             match id {
                 "library.addFolder" | "library.removeFolder" => {
-                    let _ = self.0.save_prefs_now();
+                    let _ = self.0.flush_prefs();
                 }
                 // Typing carries on in the document after a picture goes in.
-                "library.insert" => self.0.canvas.want_focus = true,
+                "library.insert" => self.0.canvas.focus_page_after_pass(),
                 _ => {}
             }
         }
@@ -85,8 +86,7 @@ impl Host for WordHost<'_> {
         if !self.0.has_folder_picker() {
             return None;
         }
-        let req = FileDialogRequest::Folder { purpose: "library".into() };
-        let _ = self.0.ask_file(req, AfterPick::LibraryFolder);
+        let _ = self.0.ask_file(PickRequest::folder("library"), AfterPick::LibraryFolder);
         Some(None)
     }
     fn can_place(&self) -> bool {
@@ -103,6 +103,16 @@ impl Host for WordHost<'_> {
 
 /// Draw the pane's body.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
+    // The pane area runs a body once to measure it, then again to draw it, in the same pass. The
+    // shared pane is plain egui: run twice, its controls would take the same ids in two places, and
+    // a click could be taken by both runs (one picture inserted twice). It fills the room it can be
+    // seen in, so a measuring run only takes that room and reads, asks and draws nothing.
+    if craft::ui::runtime::measure::active(ui.ctx()) {
+        let finite = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        let height = ui.available_height().min(ui.clip_rect().bottom() - ui.cursor().top());
+        ui.allocate_space(egui::vec2(finite(ui.available_width()), finite(height)));
+        return;
+    }
     let pal = palette(&Tokens::get(ui.ctx()));
     // The pane's state is the app's; it is lent to the pane while the app is the pane's host. The
     // pane scrolls its own grid, so its folder and search controls stay in view.

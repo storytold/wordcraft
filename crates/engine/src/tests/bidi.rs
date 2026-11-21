@@ -157,6 +157,41 @@ fn font_commands_override_inherited_complex_script_properties_explicitly() {
 }
 
 #[test]
+fn bold_and_italic_buttons_follow_what_a_complex_script_run_shows() {
+    // Thai marked `w:cs` with `w:b`/`w:i` and no `w:bCs`/`w:iCs` is drawn plain, so the buttons
+    // are off and the first click makes it bold and italic.
+    let mut s = session("ทดสอบ", false);
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for r in &mut p.runs {
+        (r.props.cs, r.props.bold, r.props.italic) = (Some(true), Some(true), Some(true));
+    }
+    run(&mut s, "select.all", json!({}));
+    let state = run(&mut s, "format.state", json!({}));
+    assert_eq!((state["bold"].as_bool(), state["italic"].as_bool()), (Some(false), Some(false)));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "format.italic", json!({}));
+    let c = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props_of_char(0).clone();
+    assert_eq!((c.bold_cs, c.italic_cs), (Some(true), Some(true)));
+    let state = run(&mut s, "format.state", json!({}));
+    assert_eq!((state["bold"].as_bool(), state["italic"].as_bool()), (Some(true), Some(true)));
+
+    // A right-to-left run is drawn with its complex-script values too.
+    let mut s = session("שלום", true);
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for r in &mut p.runs {
+        (r.props.rtl, r.props.bold, r.props.bold_cs, r.props.italic, r.props.italic_cs) =
+            (Some(true), Some(true), Some(false), Some(true), Some(false));
+    }
+    run(&mut s, "select.all", json!({}));
+    let state = run(&mut s, "format.state", json!({}));
+    assert_eq!((state["bold"].as_bool(), state["italic"].as_bool()), (Some(false), Some(false)));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "format.italic", json!({}));
+    let c = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props_of_char(0).clone();
+    assert_eq!((c.bold, c.bold_cs, c.italic, c.italic_cs), (Some(true), Some(true), Some(true), Some(true)));
+}
+
+#[test]
 fn arrow_keys_move_visually_in_rtl_text() {
     let fa = "سلام دنیا";
     let mut s = session(fa, true);
@@ -327,4 +362,40 @@ fn a_latin_link_inserted_into_reopened_hebrew_is_saved_left_to_right() {
     assert_eq!(s.caret_props().rtl, Some(true));
     assert_eq!(s.typing_props().rtl, None);
     assert_eq!(s.typing_props().lang_bidi.as_deref(), Some("he-IL"), "the bidi language stays");
+}
+
+/// #4198: inserting a styled table, typing Arabic into the header row with `para.rtl` and
+/// saving as DOCX keeps `w:bCs` beside `w:b` in the table style's header row and first column.
+#[test]
+fn arabic_table_header_row_and_modified_styles_carry_complex_script_bold_and_italic() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2, "style": "Grid Table 4 – Blue"}));
+    run(&mut s, "para.rtl", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": "العنوان"}));
+    let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
+    let reopened = crate::io::open_bytes("x.docx", &bytes).unwrap();
+    let blue = reopened.styles.table_style("GridTable4AccentBlue").unwrap();
+    assert_eq!((blue.parts.header_chr.bold, blue.parts.header_chr.bold_cs), (Some(true), Some(true)));
+    assert_eq!((blue.parts.first_col_chr.bold, blue.parts.first_col_chr.bold_cs), (Some(true), Some(true)));
+
+    // Modifying a style's bold or italic without an explicit complex-script value formats both
+    // scripts, while an explicit `boldCs` / `italicCs` still wins.
+    run(&mut s, "styles.modify", json!({"style": "Heading 1", "chr": {"bold": true, "italic": true}}));
+    let h1 = s.doc.styles.get("Heading1").unwrap();
+    assert_eq!((h1.chr.bold, h1.chr.bold_cs, h1.chr.italic, h1.chr.italic_cs), (Some(true), Some(true), Some(true), Some(true)));
+    run(&mut s, "styles.modify", json!({"style": "Heading 1", "chr": {"bold": true, "boldCs": false, "italic": false}}));
+    let h1 = s.doc.styles.get("Heading1").unwrap();
+    assert_eq!((h1.chr.bold, h1.chr.bold_cs, h1.chr.italic, h1.chr.italic_cs), (Some(true), Some(false), Some(false), Some(false)));
+    run(&mut s, "styles.modify", json!({"style": "Heading 1", "chr": {"bold": true}}));
+    let h1 = s.doc.styles.get("Heading1").unwrap();
+    assert_eq!((h1.chr.bold, h1.chr.bold_cs), (Some(true), Some(false)), "omitted boldCs keeps a distinct complex-script override");
+    run(&mut s, "styles.modify", json!({"style": "TOC Heading", "chr": {"font": "Georgia", "bold": true}}));
+    let toc = s.doc.styles.get("TOCHeading").unwrap();
+    assert_eq!(toc.chr.bold_cs, None, "child style keeps inheriting parent's distinct complex-script override");
+    let styles = std::sync::Arc::make_mut(&mut s.doc.styles);
+    styles.default_chr.italic = Some(true);
+    styles.default_chr.italic_cs = Some(false);
+    run(&mut s, "styles.modify", json!({"style": "Normal", "chr": {"italic": true}}));
+    let normal = s.doc.styles.get("Normal").unwrap();
+    assert_eq!(normal.chr.italic_cs, None, "style keeps inheriting document default's distinct complex-script override");
 }
