@@ -16,6 +16,8 @@ mod commands;
 mod control;
 mod files;
 pub(crate) use files::Closing;
+#[cfg(test)]
+pub(crate) use files::clean_save_name;
 pub(crate) mod fonts;
 mod frame;
 mod input;
