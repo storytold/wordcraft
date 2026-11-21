@@ -374,25 +374,28 @@ fn shortcut_text_is_swallowed_once() {
         frames(&mut h, 4);
         h
     };
-    // The shortcut and its text in one frame.
-    let mut h = fresh();
-    h.event(key(egui::Key::Q, true));
-    h.event(egui::Event::Text("q".into()));
-    frames(&mut h, 3);
-    // The app is in Focus, where the title bar's Search box is hidden, so the dialog takes the request (#5398).
-    assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
-    assert_eq!(query(&h), "", "Alt+Q's q, same frame");
-    // The text a frame late; then typing.
-    let mut h = fresh();
-    h.event(key(egui::Key::Q, true));
-    frames(&mut h, 1);
-    h.event(egui::Event::Text("q".into()));
-    frames(&mut h, 1);
-    assert_eq!(query(&h), "", "the q a frame late");
-    h.event(key(egui::Key::B, false));
-    h.event(egui::Event::Text("b".into()));
-    frames(&mut h, 2);
-    assert_eq!(query(&h), "b", "then typing lands");
+    // Alt+Q is the command search off macOS only (Option+Q types a character there; `tools.search` has no key).
+    if !cfg!(target_os = "macos") {
+        // The shortcut and its text in one frame.
+        let mut h = fresh();
+        h.event(key(egui::Key::Q, true));
+        h.event(egui::Event::Text("q".into()));
+        frames(&mut h, 3);
+        // The app is in Focus, where the title bar's Search box is hidden, so the dialog takes the request (#5398).
+        assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
+        assert_eq!(query(&h), "", "Alt+Q's q, same frame");
+        // The text a frame late; then typing.
+        let mut h = fresh();
+        h.event(key(egui::Key::Q, true));
+        frames(&mut h, 1);
+        h.event(egui::Event::Text("q".into()));
+        frames(&mut h, 1);
+        assert_eq!(query(&h), "", "the q a frame late");
+        h.event(key(egui::Key::B, false));
+        h.event(egui::Event::Text("b".into()));
+        frames(&mut h, 2);
+        assert_eq!(query(&h), "b", "then typing lands");
+    }
     // A palette opened by a click takes typing.
     let mut h = fresh();
     open_named(&mut h, "commands", json!({}));
@@ -1690,4 +1693,95 @@ fn font_dialog_effects_stand_two_to_a_line_and_kerning_on_one() {
     // The size field and the text after it share the name; the field comes first.
     let size = h.query_all_by_label("Points and above").map(|node| node.rect()).min_by(|a, b| a.min.x.total_cmp(&b.min.x)).expect("the kerning size");
     assert!((kern.center().y - size.center().y).abs() < 4.0 && kern.max.x <= size.min.x, "the kerning size is on the check box's line");
+}
+
+/// #5057: keep the accessibility contract when dialogs move onto the framework.
+#[test]
+fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
+    use egui::accesskit::Role;
+    let mut app = app_with("Lanterns");
+    // The framework palette lists the document theme; use a known colour rather than its default.
+    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0xC0, 0, 0)];
+    let mut h = app_harness(app);
+    open_named(&mut h, "paragraph", json!({}));
+    assert!(h.query_by_role_and_label(Role::Dialog, "Paragraph").is_some(), "Paragraph is a dialog");
+    assert!(h.query_by_role_and_label(Role::Window, "Paragraph").is_none(), "not only a window");
+    assert_eq!(h.get_by_role_and_label(Role::Tab, "Indents and Spacing").accesskit_node().is_selected(), Some(true));
+    assert_eq!(h.get_by_role_and_label(Role::Tab, "Line and Page Breaks").accesskit_node().is_selected(), Some(false));
+    assert!(h.query_by_role_and_label(Role::Button, "Indents and Spacing").is_none(), "not a button");
+    let ctx = h.ctx.clone();
+    close_all(h.state_mut(), &ctx);
+    h.run_steps(2);
+    open_named(&mut h, "font", json!({}));
+    // The framework's split field has a face and a menu arrow; the latter opens the palette.
+    h.query_all_by_role_and_label(Role::Button, "Font color: Automatic").last().expect("named colour field").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("#C00000").is_some(), "the swatches say their colour");
+    h.get_by_label("#C00000").click();
+    h.run_steps(3);
+    assert!(h.query_all_by_role_and_label(Role::Button, "Font color: #C00000").next().is_some(), "the field says the colour picked");
+}
+
+/// #5057: every caller retains its translated label and selected colour.
+#[test]
+fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
+    use egui::accesskit::Role;
+    let mut app = app_with("Lanterns");
+    // The framework palette lists the document theme; use a known colour rather than its default.
+    app.session.doc.settings.theme_colors = vec![wordcraft_doc::Rgb(0xC0, 0, 0)];
+    let mut h = app_harness(app);
+    for (dialog, names) in [("font", vec!["Font color: Automatic"]), ("borders", vec!["Color: Automatic"]), ("shading", vec!["Fill No Color"])] {
+        let ctx = h.ctx.clone();
+        close_all(h.state_mut(), &ctx);
+        h.run_steps(2);
+        open_named(&mut h, dialog, json!({}));
+        for name in names {
+            assert!(h.query_all_by_role_and_label(Role::Button, name).next().is_some(), "{dialog}: {name}");
+        }
+    }
+    h.query_all_by_role_and_label(Role::Button, "Fill No Color").last().expect("shading colour field").click();
+    h.run_steps(3);
+    h.get_by_label("#C00000").click();
+    h.run_steps(3);
+    assert!(h.query_all_by_role_and_label(Role::Button, "Fill #C00000").next().is_some());
+    let ctx = h.ctx.clone();
+    close_all(h.state_mut(), &ctx);
+    h.state_mut().run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    open_named(&mut h, "newTableStyle", json!({}));
+    for name in ["Font color: No Color", "Fill color: No Color"] {
+        assert!(h.query_all_by_role_and_label(Role::Button, name).next().is_some(), "newTableStyle: {name}");
+    }
+
+    // Draw the shared app field directly: the app frame selects its configured language.
+    crate::i18n::apply_language(crate::i18n::fixture_lang(
+        "x-fixture",
+        "\tFont color:\tFont-color-FX:\n\tAutomatic\tAutomatic-FX\n\tFill\tFill-FX\n\tNo Color\tNo-Color-FX\n",
+    ));
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(600.0, 300.0)).build_ui_state(
+        |ui, values: &mut [String; 2]| {
+            use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
+            use craft::ui::runtime::env::Label;
+            ui.push_id("font", |ui| {
+                let empty = ColorFieldEmpty::Automatic {
+                    label: Label::from(tl!("Automatic")),
+                    value: "auto",
+                    face: AutoFace::One(craft::theme::Srgba::rgb(0.0, 0.0, 0.0)),
+                };
+                color_field(ui, &Label::from(tl!("Font color:")), &mut values[0], &empty, &Palette::default());
+            });
+            ui.push_id("fill", |ui| {
+                color_field(ui, &Label::from(tl!("Fill")), &mut values[1], &ColorFieldEmpty::NoColor, &Palette::default());
+            });
+        },
+        ["auto".to_string(), String::new()],
+    );
+    h.run_steps(3);
+    let found: Vec<_> = ["Font-color-FX: Automatic-FX", "Fill-FX No-Color-FX"]
+        .into_iter()
+        .map(|name| (name, h.query_all_by_role_and_label(Role::Button, name).next().is_some()))
+        .collect();
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
+    for (name, present) in found {
+        assert!(present, "the translated field is {name}");
+    }
 }
