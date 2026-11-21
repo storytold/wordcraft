@@ -282,7 +282,8 @@ into `%LOCALAPPDATA%\Programs\ArtCraft\WordCraft`, and needs no administrator ri
 and asks for an administrator. Install only one copy: a copy for another scope is refused, so
 uninstall first to change who WordCraft is installed for. Installers and executables are code-signed.
 
-**If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
+**If the app doesn't open on Windows:** on 64-bit builds with a usable DirectX 12 GPU, the
+desktop app initializes only DirectX 12 by default.
 Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
 `atio6axx.dll`) before the window appears, so the app would flash in Task Manager and quit.
 `WGPU_BACKEND` overrides the default for troubleshooting (for example `dx12` or `vulkan`). In
