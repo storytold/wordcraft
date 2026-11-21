@@ -231,10 +231,24 @@ const PORTUGUESE: DateNames = DateNames {
     default: "dd/MM/yyyy",
 };
 
+/// Italian (observed names, as Word writes them in date fields): lower-case names, `MMM` = `nov`,
+/// `ddd` = `mar`, and `dd/MM/yyyy` for a field without a picture.
+const ITALIAN: DateNames = DateNames {
+    months: ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+    days: ["giovedì", "venerdì", "sabato", "domenica", "lunedì", "martedì", "mercoledì"],
+    default: "dd/MM/yyyy",
+};
+
 /// Choose month and weekday names according to the primary language subtag.
 fn date_names(lang: Option<&str>) -> &'static DateNames {
     let primary = lang.and_then(|l| l.trim().split(['-', '_']).next()).unwrap_or("");
-    if primary.eq_ignore_ascii_case("pt") { &PORTUGUESE } else { &ENGLISH }
+    if primary.eq_ignore_ascii_case("pt") {
+        &PORTUGUESE
+    } else if primary.eq_ignore_ascii_case("it") {
+        &ITALIAN
+    } else {
+        &ENGLISH
+    }
 }
 
 /// The picture Word gives a `DATE` field that has no `\@` switch, in the field's language.

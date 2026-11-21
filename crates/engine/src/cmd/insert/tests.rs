@@ -391,6 +391,20 @@ fn format_date_uses_the_local_offset() {
     assert_eq!(format_date_at("M/d/yyyy H:mm", 1_793_401_200, 0), "10/30/2026 23:00");
 }
 
+/// #6280: Italian date fields use the lower-case names Word writes, `ddd`/`MMM` as their first
+/// three letters, and `dd/MM/yyyy` for a field without a picture.
+#[test]
+fn italian_date_names_follow_word() {
+    // Noon on Tuesday 10 November 2026, UTC.
+    let show = |pic| super::items::format_date_at_in(pic, Some("it-IT"), 1_794_312_000, 0);
+    assert_eq!(show("d MMMM yyyy"), "10 novembre 2026");
+    assert_eq!(show("dddd d MMMM yyyy"), "martedì 10 novembre 2026");
+    assert_eq!(show("ddd d MMM yyyy"), "mar 10 nov 2026");
+    assert_eq!(default_date_picture(Some("it-IT")), "dd/MM/yyyy");
+    // The primary subtag is enough, as for Portuguese.
+    assert_eq!(super::items::format_date_at_in("dddd", Some("it"), 1_794_312_000, 0), "martedì");
+}
+
 #[test]
 fn local_civil_date_follows_the_utc_offset() {
     let pic = "dddd d MMMM yyyy HH:mm";
