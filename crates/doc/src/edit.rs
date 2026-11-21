@@ -612,24 +612,20 @@ enum NoteMove {
 /// Apply `f` to every note reference in `b`: point it elsewhere or take it out of the text.
 fn rewrite_note_refs(b: &mut Block, f: &dyn Fn(u32) -> NoteMove) {
     each_para_mut(b, 0, &mut |p| {
-        // The references to take out, found before any id changes, last first.
-        let mut gone: Vec<usize> = p
-            .objects_with_offsets()
-            .filter(|(_, o)| matches!(o, InlineObject::NoteRef { id, .. } if matches!(f(*id), NoteMove::Remove)))
-            .map(|(off, _)| off)
-            .collect();
-        let mut changed = !gone.is_empty();
-        for o in p.objects.iter_mut() {
-            if let InlineObject::NoteRef { id, .. } = o
-                && let NoteMove::To(new) = f(*id)
-            {
-                *id = new;
-                changed = true;
+        let mut changed = false;
+        p.retain_objects(|object| {
+            if let InlineObject::NoteRef { id, .. } = object {
+                match f(*id) {
+                    NoteMove::Keep => {}
+                    NoteMove::To(new) => {
+                        *id = new;
+                        changed = true;
+                    }
+                    NoteMove::Remove => return false,
+                }
             }
-        }
-        while let Some(off) = gone.pop() {
-            let _ = p.delete(off, off.saturating_add(crate::para::OBJ.len_utf8()));
-        }
+            true
+        });
         if changed {
             p.touch();
         }
@@ -1688,7 +1684,7 @@ impl Document {
     /// budget is spent, or no part id is free) leaves its references out of the text. References
     /// to notes `parts` has no story for stay as they are. The notes' text boxes get stories of
     /// their own too.
-    fn adopt_notes(&mut self, blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, budget: &mut BoxBudget) {
+    fn adopt_notes(&mut self, blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, budget: &mut BoxBudget) -> usize {
         let mut found = std::collections::BTreeSet::new();
         let mut queue = Vec::new();
         for b in blocks.iter() {
@@ -1703,13 +1699,14 @@ impl Document {
         let wanted: Vec<u32> =
             found.into_iter().filter(|id| parts.get(id).is_some_and(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote))).collect();
         if wanted.is_empty() {
-            return;
+            return 0;
         }
         let referenced = self.referenced_notes();
         // Each note's story here: its own (kept), or a new one (to be filled), or none.
         let mut map: BTreeMap<u32, Option<u32>> = BTreeMap::new();
         let mut fill: Vec<(u32, u32)> = Vec::new();
         let mut reuse_links_left = MAX_PASTED_BOXES;
+        let mut skipped = 0;
         for &old in &wanted {
             let Some(part) = parts.get(&old) else { continue };
             let kept = !referenced.contains(&old) && self.can_reuse_note(old, parts, &wanted, &mut reuse_links_left);
@@ -1717,19 +1714,18 @@ impl Document {
                 map.insert(old, Some(old));
                 continue;
             }
-            // Charged like a text box story: the copy deep-copies every block.
+            // Notes are copied once per source id. Charge their bytes, leaving story slots for text boxes.
             let slots = part.blocks.len().saturating_mul(std::mem::size_of::<Arc<Block>>());
             let cost = part.blocks.iter().fold(slots, |a, b| a.saturating_add(block_cost(b).0));
-            let new = if budget.stories > 0 && budget.bytes >= cost { self.try_add_part(part.kind, Vec::new()).ok() } else { None };
+            let new = if budget.bytes >= cost { self.try_add_part(part.kind, Vec::new()).ok() } else { None };
             match new {
                 Some(new) => {
-                    budget.stories = budget.stories.saturating_sub(1);
                     budget.bytes = budget.bytes.saturating_sub(cost);
                     fill.push((old, new));
                     map.insert(old, Some(new));
                 }
                 None => {
-                    budget.skipped = budget.skipped.saturating_add(1);
+                    skipped += 1;
                     map.insert(old, None);
                 }
             }
@@ -1753,6 +1749,7 @@ impl Document {
                 p.blocks = note.into_iter().map(Arc::new).collect();
             }
         }
+        skipped
     }
 
     /// The blocks of `frag`, a fragment of another document, with every text box given a new
@@ -1773,6 +1770,11 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
+        self.insert_fragment_with_note_report(pos, frag).map(|(end, _)| end)
+    }
+
+    /// Insert a fragment and report how many note stories could not be copied.
+    pub fn insert_fragment_with_note_report(&mut self, pos: &Pos, frag: &Fragment) -> Result<(Pos, usize)> {
         let mut media_remap = BTreeMap::new();
         for (k, v) in &frag.media {
             if let Some(existing) = self.media.get(k) {
@@ -1792,7 +1794,7 @@ impl Document {
             fit_tables(b, room, &mut blocks);
         }
         if blocks.is_empty() {
-            return Ok(pos.clone());
+            return Ok((pos.clone(), 0));
         }
         if self.para_at(pos).is_none() {
             return Err(DocError::BadPath(pos.path.to_string()));
@@ -1812,10 +1814,14 @@ impl Document {
         let mut budget = BoxBudget::new();
         // Pasted notes get stories of their own too. A note's story holds no notes: pasting into
         // one leaves the references out.
-        if self.is_note_story(pos.story) {
+        let skipped_notes = if self.is_note_story(pos.story) {
             rewrite_notes_in(&mut blocks, &mut parts, &|_| NoteMove::Remove);
+            0
         } else {
-            self.adopt_notes(&mut blocks, &mut parts, &mut budget);
+            self.adopt_notes(&mut blocks, &mut parts, &mut budget)
+        };
+        if skipped_notes > 0 {
+            log::warn!("Paste left out {skipped_notes} notes because their stories could not be copied.");
         }
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         if budget.skipped > 0 {
@@ -1841,7 +1847,7 @@ impl Document {
             target.append(tail);
             target.props = keep;
             target.section = sect;
-            return Ok(Pos { off: pos.off + added, ..pos.clone() });
+            return Ok((Pos { off: pos.off + added, ..pos.clone() }, skipped_notes));
         }
         // Multi-block: split, merge first into left part, last into right part.
         let after = self.split_paragraph(pos)?;
@@ -1877,13 +1883,13 @@ impl Document {
                 let sect = tail.section.clone();
                 r.append(tail);
                 r.section = sect;
-                Ok(Pos { story: pos.story, path: right, off })
+                Ok((Pos { story: pos.story, path: right, off }, skipped_notes))
             }
             Some(t @ Block::Table(_)) => {
                 self.insert_block(pos.story, &right, t)?;
-                Ok(Pos { story: pos.story, path: right.with_last(idx + 1), off: 0 })
+                Ok((Pos { story: pos.story, path: right.with_last(idx + 1), off: 0 }, skipped_notes))
             }
-            None => Ok(Pos { story: pos.story, path: right, off: 0 }),
+            None => Ok((Pos { story: pos.story, path: right, off: 0 }, skipped_notes)),
         }
     }
 

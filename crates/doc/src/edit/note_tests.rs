@@ -184,6 +184,31 @@ fn paste_into_a_note_leaves_the_references_out() {
     assert!(d.plain_text(StoryRef::Part(a)).contains("Alpha"), "the text still went in");
 }
 
+#[test]
+fn note_reference_removal_scales_with_paragraph_length() {
+    let cost = |count: usize| {
+        let mut p = Paragraph::new();
+        let bold = CharProps { bold: Some(true), ..CharProps::default() };
+        for _ in 0..count {
+            p.insert_object(p.len(), note_ref(1), &CharProps::default()).unwrap();
+            p.insert_text(p.len(), "?", &bold).unwrap();
+        }
+        p.insert_object(p.len(), note_ref(2), &CharProps::default()).unwrap();
+        let mut block = Block::Para(p);
+        let steps = crate::work::count(|| {
+            rewrite_note_refs(&mut block, &|id| if id == 1 { NoteMove::Remove } else { NoteMove::To(3) });
+        });
+        let p = block.as_para().unwrap();
+        assert_eq!(p.text, format!("{}{OBJ}", "?".repeat(count), OBJ = crate::para::OBJ));
+        assert_eq!(p.objects, vec![note_ref(3)]);
+        assert_eq!(p.runs.len(), 2);
+        assert_eq!(p.runs[0].len, "?".len() * count);
+        assert_eq!(p.runs[0].props, bold);
+        steps
+    };
+    assert!(cost(256) <= 5 * cost(64));
+}
+
 /// Several references to one note, and many notes: each note is copied once, every reference
 /// follows its own copy, and the paste stays in step with the copy.
 #[test]
@@ -192,24 +217,26 @@ fn many_notes_and_repeated_references_paste_cleanly() {
     let first = add_note(&mut d, 0, "n0");
     // A second reference to the same note.
     d.insert_object(&Pos::body(0, 0), note_ref(first), &CharProps::default()).unwrap();
-    for i in 1..300 {
+    let notes = MAX_PASTED_BOXES + 1;
+    for i in 1..notes {
         add_note(&mut d, 0, &format!("n{i}"));
     }
-    // 301 references to 300 notes; the two to the first note come last (each new one went first).
+    // Each new reference went first, so the two to the first note come last.
     let len = d.para(StoryRef::Body, &Path::top(0)).unwrap().len();
     let frag = d.copy_range(&Pos::body(0, 0), &Pos::body(0, len));
-    assert_eq!(frag.parts.len(), 300);
+    assert_eq!(frag.parts.len(), notes);
     let parts_before = d.parts.len();
     let at = d.end_of(StoryRef::Body);
-    d.insert_fragment(&at, &frag).unwrap();
-    assert_eq!(d.parts.len(), parts_before + 300);
+    let (_, omitted) = d.insert_fragment_with_note_report(&at, &frag).unwrap();
+    assert_eq!(omitted, 0);
+    assert_eq!(d.parts.len(), parts_before + notes);
     let ids = body_note_ids(&d);
-    assert_eq!(ids.len(), 301 * 2);
-    let (old, new) = ids.split_at(301);
-    assert_eq!(old[299], first);
-    assert_eq!(old[300], first);
+    assert_eq!(ids.len(), (notes + 1) * 2);
+    let (old, new) = ids.split_at(notes + 1);
+    assert_eq!(&old[notes - 1..], &[first, first]);
+    let old: std::collections::BTreeSet<_> = old.iter().copied().collect();
     assert!(new.iter().all(|id| !old.contains(id)), "no reference of the paste names an old note");
-    assert_eq!(new[299], new[300], "the two references to one note still name one story");
+    assert_eq!(new[notes - 1], new[notes], "the two references to one note still name one story");
     for id in new {
         assert_eq!(mark_id(&d, *id), Some(*id));
     }
@@ -298,27 +325,22 @@ fn notes_past_the_paste_budget_leave_no_dangling_reference() {
     let mut parts = frag.parts.clone();
     let before = d.parts.len();
     let mut budget = BoxBudget::new();
-    budget.stories = 0;
-    d.adopt_notes(&mut blocks, &mut parts, &mut budget);
+    budget.bytes = 0;
+    assert_eq!(d.adopt_notes(&mut blocks, &mut parts, &mut budget), 1);
     assert_eq!(d.parts.len(), before, "no note was made");
-    assert_eq!(budget.skipped, 1);
+    assert_eq!(budget.skipped, 0);
     assert!(!parts.contains_key(&note), "a rejected note has no blocks to clone during rewriting");
     let Some(Block::Para(p)) = blocks.first() else { panic!() };
     assert!(p.objects.is_empty(), "the reference is gone");
     assert_eq!(p.text, "Alpha");
-    // Bytes run out the same way.
+    // Exhausted text box slots still leave room for the note.
     let (mut blocks, mut parts) = (frag.blocks.clone(), frag.parts.clone());
     let mut budget = BoxBudget::new();
-    budget.bytes = 0;
-    d.adopt_notes(&mut blocks, &mut parts, &mut budget);
-    assert_eq!(d.parts.len(), before);
-    // With budget the note is made and charged.
-    let (mut blocks, mut parts) = (frag.blocks.clone(), frag.parts.clone());
-    let mut budget = BoxBudget::new();
-    let (stories, bytes) = (budget.stories, budget.bytes);
-    d.adopt_notes(&mut blocks, &mut parts, &mut budget);
+    budget.stories = 0;
+    let bytes = budget.bytes;
+    assert_eq!(d.adopt_notes(&mut blocks, &mut parts, &mut budget), 0);
     assert_eq!(d.parts.len(), before + 1);
-    assert_eq!(budget.stories, stories - 1);
+    assert_eq!(budget.stories, 0);
     assert!(budget.bytes < bytes);
 }
 
@@ -426,9 +448,10 @@ fn cut_note_follows_the_copied_or_removed_nested_note() {
         let mut blocks = frag.blocks.clone();
         let mut parts = frag.parts.clone();
         let mut budget = BoxBudget::new();
-        budget.stories = 1;
-        limited.adopt_notes(&mut blocks, &mut parts, &mut budget);
-        assert!(!parts.contains_key(&inner), "the nested note exceeds the remaining story budget");
+        let outer_blocks = &parts[&outer].blocks;
+        budget.bytes = outer_blocks.iter().map(|b| block_cost(b).0 + std::mem::size_of::<Arc<Block>>()).sum();
+        assert_eq!(limited.adopt_notes(&mut blocks, &mut parts, &mut budget), 1);
+        assert!(!parts.contains_key(&inner), "the nested note exceeds the remaining byte budget");
         let Some(Block::Para(p)) = blocks.first() else { panic!() };
         let new_outer = p
             .objects
