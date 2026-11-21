@@ -552,8 +552,7 @@ fn main() -> eframe::Result {
             if prefs::enabled()
                 && let Some(path) = prefs::user_dict_path()
             {
-                prefs::load_user_dictionary(&settings, &path);
-                session.user_dict_path = Some(path);
+                prefs::load_user_dictionary(&mut session, &settings, path);
             }
             let spool = Spool::new(host.jobs_shared().clone());
             let mut app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
