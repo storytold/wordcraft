@@ -254,7 +254,10 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
         .scroll(Scroll::vertical())
         .header(move |ui, _| {
             ui.add_space(band);
-            let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back).show(ui);
+            // Escape remains available without a document. Only the Start screen's button is disabled.
+            let _ = IconButton::command(IconSpec::svg(IconId::new("chevronLeft")), BackstagePageCommand::Back)
+                .enabled(!back_disabled(has_document, current))
+                .show(ui);
         })
         // The community link above About, both at the reading start, as production's bottom links: rows of the side
         // menu place too, so they read in the rail's white ink over the brand colour, not a panel button's dark ink.
@@ -355,6 +358,12 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str, ctx: &egui::Context) {
         }
         _ => app.ui.backstage_page = id.into(),
     }
+}
+
+/// Whether Back is greyed out (#6782): on the Start screen, where no document is open and the page
+/// is Home, New or Open, there is nothing to go back to.
+fn back_disabled(has_document: bool, page: &str) -> bool {
+    !has_document && matches!(page, "home" | "new" | "open")
 }
 
 /// The Backstage pages that work while no document is open (#1129).

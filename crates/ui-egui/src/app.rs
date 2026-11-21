@@ -268,8 +268,8 @@ impl WordApp {
 
     /// Start-up with no document to open (#766): show File › Home (Blank document, the templates
     /// and Recent), as Word starts, when the Start screen setting is on (the default). No document
-    /// is open until the user picks Blank document or a template or opens a file (#1129): Esc or
-    /// the back arrow shows an empty window with the ribbon greyed out, as Word does. Hosts call
+    /// is open until the user picks Blank document or a template or opens a file (#1129): Escape
+    /// shows an empty window with the ribbon greyed out. Hosts call
     /// this after [`WordApp::apply_prefs`] when they have nothing to open; [`WordApp::new`] never
     /// does, so tests, `ui_shot` and windows opened for a document start in the editor. Returns
     /// whether the Start screen shows.
