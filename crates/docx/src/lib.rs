@@ -4,6 +4,7 @@
 //! between the shared `craft-wordmodel` and WordCraft's application document model.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod field_fidelity;
 mod fit;
 mod model_bridge;
 
@@ -63,8 +64,12 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Docu
     let shared_opts =
         craft_docx::ReadOptions { password: opts.password, chunks: opts.chunks.as_ref().map(|_| &bridge_importer as craft_docx::ChunkImporter) };
 
+    let (forms, rewritten) = field_fidelity::preprocess_read(bytes);
+    let bytes = rewritten.as_deref().unwrap_or(bytes);
     let shared = craft_docx::read_with(bytes, &shared_opts)?;
-    from_shared_model(shared)
+    let mut doc = from_shared_model(shared)?;
+    field_fidelity::postprocess_read(&mut doc, &forms);
+    Ok(doc)
 }
 
 /// Read a Word XML file (`.xml`).
@@ -76,13 +81,13 @@ pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
 /// Write a document as `.docx`.
 pub fn write(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocxError> {
     let shared = to_shared_model(doc)?;
-    craft_docx::write(&shared)
+    craft_docx::write(&shared).map(|bytes| field_fidelity::postprocess_write(doc, bytes))
 }
 
 /// Write a document with a specific package flavor.
 pub fn write_as(doc: &wordcraft_doc::Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
     let shared = to_shared_model(doc)?;
-    craft_docx::write_as(&shared, flavor)
+    craft_docx::write_as(&shared, flavor).map(|bytes| field_fidelity::postprocess_write(doc, bytes))
 }
 
 /// Write a document as a Flat OPC XML file.
