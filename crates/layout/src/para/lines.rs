@@ -30,6 +30,9 @@ struct Breaker<'e> {
     /// Word 2013+ layout (compatibility mode 15): the narrowest span beside a Tight or Through
     /// object is the same as beside any other ([`min_span`]).
     layout_2013: bool,
+    /// Word 2003's indent rules (`w:doNotSuppressIndentation`) before Word 2013's layout, for an
+    /// unnumbered paragraph: a row starts right after a floating object before the indent.
+    tight_indent: bool,
     /// Word stretches a justified line ending in a manual line break unless the document says not to.
     expand_break: bool,
     /// Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
@@ -194,6 +197,13 @@ impl<'e> Breaker<'e> {
             tab_origin: if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 },
             shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             layout_2013: settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
+            tight_indent: settings.do_not_suppress_indentation
+                && settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
+                && level.is_none()
+                && pl.label.is_none()
+                // A drop cap sits at the indent: starting its lines at a float's edge would put
+                // them over the letter.
+                && pl.drop_cap.is_none(),
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
@@ -240,11 +250,14 @@ impl<'e> Breaker<'e> {
         let mut guard = 0;
         loop {
             let lo = self.row_left(pl);
-            match row_spans(self.exclusions, self.top, self.est_h, self.table_h, lo, self.base_right, self.layout_2013)
+            let row = (self.top, self.est_h, self.table_h);
+            match row_spans(self.exclusions, row, (lo, self.base_right), self.tight_indent, self.layout_2013)
                 .map(|mut spans| (spans.pop_front(), spans))
             {
                 Ok((Some((a, b)), rest)) => {
-                    let narrowed = !rest.is_empty() || a > lo || b < self.base_right;
+                    // Under Word 2003's indent rules a row can start left of the indent too.
+                    let moved = if self.tight_indent { (a - lo).abs() > 0.01 } else { a > lo };
+                    let narrowed = !rest.is_empty() || moved || b < self.base_right;
                     self.row_rest = rest;
                     self.row_first = self.lines.len();
                     return (a, b.max(a + MIN_LINE_WIDTH), narrowed);
@@ -1088,6 +1101,23 @@ fn min_span(e: &Exclusion, current: bool) -> f32 {
     }
 }
 
+/// Where a row starts under Word 2003's indent rules: right after the floating objects that end
+/// at or before the indent `lo` on this row and let text past their right side (their outline's
+/// right edge for Tight and Through wrapping), never left of the paragraph's own left edge (0) or
+/// right of `lo`; `lo` if there are none.
+fn tight_row_start(exclusions: &[Exclusion], (top, h, table_h): (f32, f32, f32), lo: f32) -> f32 {
+    exclusions
+        .iter()
+        .filter(|e| !e.top_bottom && e.side != WrapText::Left && e.right <= lo && e.intersects_row(top, h, table_h, f32::NEG_INFINITY, lo))
+        .filter_map(|e| match &e.contour {
+            None => Some(e.right),
+            Some(c) => c.occupied(top - e.top, top + h - e.top).into_iter().map(|(_, b)| b + e.left).reduce(f32::max),
+        })
+        .reduce(f32::max)
+        // A float out in the left margin doesn't pull the text into the margin after it.
+        .map_or(lo, |edge| edge.max(0.0).min(lo))
+}
+
 /// How far below a line's top its baseline sits. Multiple spacing at or above single keeps the
 /// text at the top of the line and puts the extra leading below the baseline; below single it
 /// shrinks the whole box, ascent included (Word's output for docxide-pdf's fixtures: 1.15-spaced
@@ -1103,8 +1133,18 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object); a span must be
 /// as wide as the minimum of each object it borders (`current`: Word 2013 layout or later).
-/// `Err(y)`: none here, try again at `y` (below what's in the way).
-fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32, current: bool) -> Result<VecDeque<(f32, f32)>, f32> {
+/// `Err(y)`: none here, try again at `y` (below what's in the way). With `tight_indent` (Word
+/// 2003's indent rules, `w:doNotSuppressIndentation`) a row starts right after a floating object
+/// that ends before `lo`, the indent ignored (ECMA-376 Part 4 §14.8.3.12: a paragraph indented
+/// 1" tightly wraps an object at 0.25").
+fn row_spans(
+    exclusions: &[Exclusion],
+    (top, h, table_h): (f32, f32, f32),
+    (lo, hi): (f32, f32),
+    tight_indent: bool,
+    current: bool,
+) -> Result<VecDeque<(f32, f32)>, f32> {
+    let lo = if tight_indent { tight_row_start(exclusions, (top, h, table_h), lo) } else { lo };
     let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.intersects_row(top, h, table_h, lo, hi)).collect();
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
         return Err(below);
@@ -1169,7 +1209,7 @@ mod tests {
     /// Whether a line at the top of a 100pt row finds a span `gap` points wide beside `e`.
     fn fits(e: Exclusion, gap: f32, current: bool) -> bool {
         let hi = e.right + gap;
-        row_spans(&[e], 0.0, 12.0, 12.0, 0.0, hi, current).is_ok()
+        row_spans(&[e], (0.0, 12.0, 12.0), (0.0, hi), false, current).is_ok()
     }
 
     /// #6316: 18pt beside pictures and shapes; Tight and Through 9pt before Word 2013 layout;
@@ -1185,7 +1225,7 @@ mod tests {
         // A span between a picture and a table needs the table's 20.
         let both = |gap: f32| {
             let table = Exclusion { left: 50.0 + gap, right: 300.0, ..area(0.0, true, false) };
-            row_spans(&[area(50.0, false, false), table], 0.0, 12.0, 12.0, 0.0, 300.0, true).is_ok()
+            row_spans(&[area(50.0, false, false), table], (0.0, 12.0, 12.0), (0.0, 300.0), false, true).is_ok()
         };
         assert!(both(20.0) && !both(19.9));
         // A span bordered only by a picture needs 18, whichever order the objects come in, also
@@ -1194,7 +1234,7 @@ mod tests {
         let table = area(70.0, true, false);
         let picture = Exclusion { left: 80.0, right: 100.0, ..area(0.0, false, false) };
         for order in [[table.clone(), picture.clone()], [picture.clone(), table.clone()]] {
-            let spans = row_spans(&order, 0.0, 12.0, 12.0, 0.0, 119.0, true);
+            let spans = row_spans(&order, (0.0, 12.0, 12.0), (0.0, 119.0), false, true);
             assert_eq!(spans, Ok(VecDeque::from([(100.0, 119.0)])), "{order:?}");
         }
     }
