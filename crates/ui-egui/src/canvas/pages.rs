@@ -110,7 +110,14 @@ impl PageBands {
         let mut frames: std::collections::HashMap<u32, (f32, f32)> = std::collections::HashMap::new();
         for it in page.items.iter().chain(&page.header).chain(&page.footer) {
             if let Placed::Object { text_box: Some(id), rect, spin, .. } = it {
-                frames.insert(*id, frame_band(*rect, *spin));
+                let band = frame_band(*rect, *spin);
+                frames
+                    .entry(*id)
+                    .and_modify(|f| {
+                        f.0 = f.0.min(band.0);
+                        f.1 = f.1.max(band.1);
+                    })
+                    .or_insert(band);
             }
         }
         let mut items = Vec::with_capacity(page.items.len() + page.header.len() + page.footer.len());

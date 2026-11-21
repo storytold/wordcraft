@@ -37,6 +37,9 @@ wordcraft-pdf = { path = "crates/pdf" }
 # reads the ca-valencia pack), #589 (French elision suggestions first), #497 (flag-based
 # compounding), #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font
 # store's `language-pack` kind is #486 (CP4.1).
+# Temporary fork pin (https://github.com/Afnankabiro/craft-libs) for companion PR storytold/craft-libs#2760
+# (texture region updates and texture_revision query). Removal condition: once storytold/craft-libs#2760
+# merges to next, repoint all craft-libs dependencies and patches back to storytold/craft-libs.
 wordcraft-proof = { package = "craft-proof", git = "https://github.com/Afnankabiro/craft-libs", rev = "9f0164d5c7db530551aeaaabe30f89842fdb5b63", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/Afnankabiro/craft-libs", rev = "9f0164d5c7db530551aeaaabe30f89842fdb5b63", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/Afnankabiro/craft-libs", rev = "9f0164d5c7db530551aeaaabe30f89842fdb5b63", version = "=0.1.0" }

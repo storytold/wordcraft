@@ -2777,3 +2777,105 @@ fn cell_clip_state_and_rect_changes_mark_dirty_bands() {
     let changed = b1.changed_rows(&b2, 1.0, 792).expect("changed band");
     assert!(changed.start <= 18 && changed.end >= 232, "dirty rows cover both old clipped and new unclipped rects: {changed:?}");
 }
+
+/// #1109 review: two linked text boxes with a rotated first box retain the union of all
+/// frame bands for their story, ensuring that patching the computed changed rows reproduces
+/// the full render without missing the rotated box's ink extent.
+#[test]
+fn linked_text_boxes_with_rotated_first_box_patch_matches_full_render() {
+    let mut doc = wordcraft_doc::Document::from_text("Body paragraph anchor.");
+    let text = "First text line in rotated box one.\nSecond line overflowing into box two.\nThird line in box two.";
+    let b1 = doc
+        .add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    let b2 =
+        doc.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("", Default::default()))]);
+    doc.parts.get_mut(&b1).unwrap().body.next = Some(b2);
+
+    let float1 = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, rot: 45.0, x: 100.0, y: 100.0, ..Default::default() };
+    let shape1 = wordcraft_doc::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 160.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: float1,
+        story: Some(b1),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    doc.insert_object(&wordcraft_doc::Pos::body(0, 0), shape1, &Default::default()).unwrap();
+
+    let float2 = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, rot: 0.0, x: 100.0, y: 350.0, ..Default::default() };
+    let shape2 = wordcraft_doc::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 160.0,
+        h: 120.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: float2,
+        story: Some(b2),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    doc.insert_object(&wordcraft_doc::Pos::body(0, 0), shape2, &Default::default()).unwrap();
+
+    let before_doc = doc.clone();
+    let mut session_before = wordcraft_engine::Session::new(before_doc.clone());
+    let layout_before = session_before.layout();
+    let page_before = layout_before.pages.first().expect("page exists");
+    let bands_before = pages::PageBands::of(page_before);
+
+    // Edit the text in the first box (rotated)
+    let mut after_doc = before_doc.clone();
+    let new_text = "Edited text in rotated box one.\nSecond line overflowing into box two.\nThird line in box two.";
+    after_doc.parts.get_mut(&b1).unwrap().blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(new_text, Default::default()))];
+    let mut session_after = wordcraft_engine::Session::new(after_doc.clone());
+    let layout_after = session_after.layout();
+    let page_after = layout_after.pages.first().expect("page exists");
+    let bands_after = pages::PageBands::of(page_after);
+
+    let scale = 1.0;
+    let total_rows = (page_after.h * scale).ceil() as usize;
+    let changed = bands_before.changed_rows(&bands_after, scale, total_rows).expect("changed band covers the edit");
+    assert!(!changed.is_empty(), "changed band is not empty");
+
+    // The changed band must cover the rotated first box's bounds
+    let r1 = wordcraft_geom::Rect::new(100.0, 100.0, 160.0, 60.0);
+    let (exp_top, _) = pages::frame_band(r1, wordcraft_geom::Spin::new(45.0, false, false));
+    assert!((changed.start as f32) <= exp_top, "changed band top {} encompasses rotated frame top {}", changed.start, exp_top);
+
+    // Verify the patched texture matches the full render
+    let opts = screen_render_options();
+    let mut patched = wordcraft_render::render_page(&before_doc, page_before, scale, &opts);
+    let full_after = wordcraft_render::render_page(&after_doc, page_after, scale, &opts);
+
+    let y = changed.start as f32 / scale;
+    let band_rows = changed.len();
+    let band_area = wordcraft_geom::Rect::new(0.0, y, page_after.w, (band_rows as f32 - 0.01).max(0.01) / scale);
+    let patch = wordcraft_render::render_area(&after_doc, page_after, band_area, scale, &opts);
+
+    let w = patched.width as usize;
+    let row_bytes = w * 4;
+    let dest_start = changed.start * row_bytes;
+    let dest_end = changed.end * row_bytes;
+    patched.pixels[dest_start..dest_end].copy_from_slice(&patch.pixels);
+
+    assert_eq!(patched.pixels.len(), full_after.pixels.len());
+    let mut diff_count = 0;
+    let mut max_diff = 0i32;
+    for i in 0..patched.pixels.len() {
+        let diff = (patched.pixels[i] as i32 - full_after.pixels[i] as i32).abs();
+        if diff > 0 {
+            diff_count += 1;
+            max_diff = max_diff.max(diff);
+        }
+    }
+    assert!(
+        max_diff <= 1 && diff_count * 1000 <= patched.pixels.len(),
+        "patched texture matches full render: max_diff={max_diff}, diff_count={diff_count}"
+    );
+}
