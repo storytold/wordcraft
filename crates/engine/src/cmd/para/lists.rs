@@ -172,6 +172,12 @@ fn own_format(st: &Style) -> Value {
     if let Some(x) = pp.indent_left {
         f.insert("indentLeft".into(), json!(x));
     }
+    if let Some(x) = pp.indent_right {
+        f.insert("indentRight".into(), json!(x));
+    }
+    if let Some(x) = pp.indent_first {
+        f.insert("indentFirst".into(), json!(x));
+    }
     if let Some(LineSpacing::Multiple(m)) = pp.line_spacing {
         f.insert("lineSpacing".into(), json!(m));
     }
