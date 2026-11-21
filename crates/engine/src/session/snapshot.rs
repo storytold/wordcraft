@@ -33,6 +33,7 @@ impl Session {
         self.edit_marks.clear();
         self.new_header_parts.clear();
         self.hf_return = None;
+        self.hf_section = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
         self.view.follow_prefs(&self.prefs);
@@ -100,6 +101,7 @@ impl Session {
             // Headers just created to edit: closing checks they still exist and are empty.
             new_header_parts: _,
             hf_return: _,
+            hf_section: _,
             // Which navigated style change Accept/Reject acts on: it checks the selection itself.
             review_style: _,
             history,

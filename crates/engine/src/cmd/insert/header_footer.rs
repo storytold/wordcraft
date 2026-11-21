@@ -88,6 +88,7 @@ pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResu
     Ok(json!({"story": id}))
 }
 
+/// Edit the header or footer shown on `page`, or at the caret's current body position.
 pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let mut page = p::u64(v, "page").map(|page| usize::try_from(page).unwrap_or(usize::MAX));
     if page.is_none() && s.sel.focus.story == StoryRef::Body {
@@ -116,7 +117,11 @@ pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
         return s.run(cmd, &params);
     };
     if let Some(page) = page {
+        // The page's section is what section commands act on; the body position Close Header and
+        // Footer returns to stays where it was (#3331).
         s.page_hint = page;
+        let sec = s.layout().pages.get(page).map(|pg| pg.section);
+        s.hf_section = sec.map(|sec| sec.min(s.doc.sections().len().saturating_sub(1)));
     }
     s.touch();
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
@@ -131,11 +136,14 @@ fn shown_hf(s: &mut Session, page: usize, header: bool) -> Result<Option<u32>, C
     Ok(shown.filter(|id| s.doc.parts.contains_key(id)))
 }
 
+/// Create and edit a header or footer on `page`, or in the caret's section.
 pub(super) fn create_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let id = match p::u64(v, "page") {
         Some(page) => {
             let page = usize::try_from(page).unwrap_or(usize::MAX);
+            let sec = s.layout().pages.get(page).map(|pg| pg.section).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
             s.page_hint = page;
+            s.hf_section = Some(sec.min(s.doc.sections().len().saturating_sub(1)));
             page_hf_part(s, page, header)?
         }
         None => {

@@ -108,6 +108,10 @@ pub struct Session {
     pub new_header_parts: Vec<u32>,
     /// The body selection a command left for a header or footer: `insert.closeHeader` puts it back.
     pub hf_return: Option<Selection>,
+    /// The section of the page whose header or footer is open, which section commands act on
+    /// (#5855). Kept apart from `page_hint`, which stops naming that section once a taller footer
+    /// repaginates the pages, and from `hf_return`, which stays the body position to go back to.
+    pub(crate) hf_section: Option<usize>,
     /// The style-definition change Next / Previous Change selected, for the Accept or Reject that
     /// follows (`cmd::review`). It names its document and selection, so it is shared by the open
     /// documents and stops counting once either changes.

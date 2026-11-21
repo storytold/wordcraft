@@ -53,6 +53,7 @@ pub struct DocState {
     pub(super) page_hint: usize,
     pub(super) new_header_parts: Vec<u32>,
     pub(super) hf_return: Option<Selection>,
+    pub(super) hf_section: Option<usize>,
     pub(super) history: Vec<Arc<Undo>>,
     pub(super) undo_evicted: u64,
     pub(super) redo: Vec<Arc<Undo>>,
@@ -110,6 +111,7 @@ impl DocState {
             page_hint: 0,
             new_header_parts: Vec::new(),
             hf_return: None,
+            hf_section: None,
             history: Vec::new(),
             undo_evicted: 0,
             redo: Vec::new(),
@@ -214,6 +216,7 @@ impl Session {
             page_hint: _,
             new_header_parts: _,
             hf_return: _,
+            hf_section: _,
             history: _,
             undo_evicted: _,
             redo: _,
@@ -317,6 +320,7 @@ impl Session {
             page_hint,
             new_header_parts,
             hf_return,
+            hf_section,
             history,
             undo_evicted,
             redo,
@@ -367,6 +371,7 @@ impl Session {
         swap(&mut self.page_hint, page_hint);
         swap(&mut self.new_header_parts, new_header_parts);
         swap(&mut self.hf_return, hf_return);
+        swap(&mut self.hf_section, hf_section);
         swap(&mut self.history, history);
         swap(&mut self.undo_evicted, undo_evicted);
         swap(&mut self.redo, redo);

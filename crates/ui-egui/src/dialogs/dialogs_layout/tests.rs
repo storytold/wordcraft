@@ -858,3 +858,133 @@ fn manual_hyphenation_yes_and_no_walk_the_words_by_byte_offsets() {
     }
     assert!(g.done, "the walk ends");
 }
+
+#[test]
+fn parse_page_start_rejects_non_finite_and_fractional_input() {
+    use super::page::parse_page_start;
+    assert_eq!(parse_page_start("5", "decimal"), Some(5.0));
+    assert_eq!(parse_page_start(" 42 ", "decimal"), Some(42.0));
+    assert_eq!(parse_page_start("1.9", "decimal"), None);
+    assert_eq!(parse_page_start("inf", "decimal"), None);
+    assert_eq!(parse_page_start("+inf", "decimal"), None);
+    assert_eq!(parse_page_start("-inf", "decimal"), None);
+    assert_eq!(parse_page_start("NaN", "decimal"), None);
+    assert_eq!(parse_page_start("iv", "decimal"), Some(4.0));
+    assert_eq!(parse_page_start("b", "lowerLetter"), Some(2.0));
+}
+
+/// #5855: in Page Number Format, editing the "Start at:" spin box while "Continue from previous
+/// section" is selected switches the radio button to "Start at:" and accepts decimal, Roman or
+/// letter numerals, updating the footer on the current section's page, while focus alone leaves
+/// numbering continuous.
+#[test]
+fn page_numbers_dialog_edits_start_at_and_updates_footer() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let harness = |a: WordApp| {
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        )
+    };
+    let footer_shown = |app: &mut WordApp, page: usize| -> String {
+        app.session.layout().pages[page]
+            .footer
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect()
+    };
+    let type_start_at = |h: &mut egui_kittest::Harness<'_, WordApp>, text: &str| {
+        h.get_by_role_and_label(Role::SpinButton, "Start at:").click();
+        crate::test_harness::frames(h, 2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        crate::test_harness::frames(h, 1);
+        h.get_by_role_and_label(Role::SpinButton, "Start at:").type_text(text);
+        crate::test_harness::frames(h, 2);
+    };
+    let click_ok = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let ok = h.get_by_role_and_label(Role::Button, "OK").rect().center();
+        h.event(egui::Event::PointerMoved(ok));
+        h.event(egui::Event::PointerButton { pos: ok, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        crate::test_harness::frames(h, 2);
+        h.event(egui::Event::PointerButton { pos: ok, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        crate::test_harness::frames(h, 2);
+    };
+
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Front"})).unwrap();
+    a.run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    a.run("text.insert", json!({"text": "Body"})).unwrap();
+    a.run("insert.editFooter", json!({"page": 1})).unwrap();
+    a.run("insert.pageNumber", json!({"position": "bottom"})).unwrap();
+    assert_eq!(footer_shown(&mut a, 1), "2");
+
+    // Typing "5" into "Start at:" while "Continue from previous section" is chosen switches to
+    // "Start at:" and applies on OK.
+    a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    let mut h = harness(a);
+    crate::test_harness::frames(&mut h, 4);
+    type_start_at(&mut h, "5");
+    click_ok(&mut h);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(5));
+    assert_eq!(footer_shown(h.state_mut(), 1), "5");
+
+    // Typing a Roman numeral ("iv") into "Start at:" while "Continue from previous section" is
+    // chosen selects "Start at:" and parses the Roman numeral.
+    h.state_mut().run("layout.pageNumberFormat", json!({"format": "lowerRoman", "start": null})).unwrap();
+    assert_eq!(footer_shown(h.state_mut(), 1), "ii");
+    h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    crate::test_harness::frames(&mut h, 4);
+    type_start_at(&mut h, "iv");
+    click_ok(&mut h);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, Some(4));
+    assert_eq!(footer_shown(h.state_mut(), 1), "iv");
+
+    // Focusing the "Start at:" field without editing must not change the radio button: with
+    // "Continue" selected, focus alone leaves numbering continuous.
+    h.state_mut().run("layout.pageNumberFormat", json!({"format": "decimal", "start": null})).unwrap();
+    assert_eq!(footer_shown(h.state_mut(), 1), "2");
+    h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    crate::test_harness::frames(&mut h, 4);
+    h.get_by_role_and_label(Role::SpinButton, "Start at:").focus();
+    crate::test_harness::frames(&mut h, 2);
+    click_ok(&mut h);
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "focus alone preserves continue");
+    assert_eq!(footer_shown(h.state_mut(), 1), "2");
+
+    // Pressing Escape while typing "5" into "Start at:" discards the draft and restores
+    // "Continue from previous section".
+    h.state_mut().run("layout.pageNumberFormat", json!({"format": "decimal", "start": null})).unwrap();
+    assert_eq!(footer_shown(h.state_mut(), 1), "2");
+    h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    crate::test_harness::frames(&mut h, 4);
+    type_start_at(&mut h, "5");
+    h.key_press(egui::Key::Escape);
+    crate::test_harness::frames(&mut h, 2);
+    click_ok(&mut h);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "Escape cancels typed Start at and restores continue");
+    assert_eq!(footer_shown(h.state_mut(), 1), "2");
+
+    // Clicking "Continue from previous section" while "Start at:" is focused keeps "Continue"
+    // selected even as "Start at:" blurs and commits.
+    h.state_mut().run("layout.pageNumberFormat", json!({"format": "decimal", "start": 7})).unwrap();
+    assert_eq!(footer_shown(h.state_mut(), 1), "7");
+    h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+    crate::test_harness::frames(&mut h, 4);
+    type_start_at(&mut h, "9");
+    h.get_by_role_and_label(Role::RadioButton, "Continue from previous section").click();
+    crate::test_harness::frames(&mut h, 2);
+    click_ok(&mut h);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "clicking Continue overrides focused Start at blur commit");
+    assert_eq!(footer_shown(h.state_mut(), 1), "2");
+}
