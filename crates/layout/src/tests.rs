@@ -13,6 +13,8 @@ mod complex;
 mod float_top;
 mod grid;
 mod header_legacy_float;
+mod item_display_clip;
+mod item_display_warp;
 mod keep_next_section;
 mod ligature;
 pub(crate) mod linear;
