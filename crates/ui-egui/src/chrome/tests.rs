@@ -436,3 +436,42 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     let focus = wide.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").rect();
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
+
+/// The macOS window as the desktop app runs it: Os::Mac with its caps; `inset` is whether the app told the shell its
+/// frame is the inset one (`InstallSpec::frame`, see `frame_decision` in the app's `main.rs`). Without it the shell
+/// treats the window as OS-framed.
+fn mac_harness(a: WordApp, inset: bool) -> egui_kittest::Harness<'static, WordApp> {
+    use craft::host::target::{Caps, Os, ShellInfo};
+    use craft::ui::shell::Frame;
+    use craft::window::policy::{Decision, Desktop, DesktopKind, MacInset};
+    let spec = move || {
+        let shell = ShellInfo::default().os(Os::Mac).caps(Caps::native(Os::Mac));
+        let spec = craft::ui::InstallSpec::new(shell, std::sync::Arc::new(craft::ui::testing::windows::NoWindows));
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        if inset { spec.frame(Decision { frame: Frame::Inset(MacInset::default()), overridden: None, desktop }) } else { spec }
+    };
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(app_frame, a);
+    crate::test_harness::frames(&mut h, 6);
+    h
+}
+
+/// #7149 item 1: on macOS the title bar moves the window by its free band, and AutoSave starts after the traffic
+/// lights. Without the frame the shell had no band and no room for the lights.
+#[test]
+fn the_mac_title_bar_moves_the_window_and_clears_the_traffic_lights() {
+    use egui::accesskit::Role;
+    let lights = craft::window::policy::MacInset::default().leading;
+    let mut h = mac_harness(new_app(), true);
+    let title = title_rect(&h);
+    let at = egui::pos2(title.max.x + 8.0, title.center().y);
+    assert!(drag_moves_the_window(&mut h, at), "a drag of the free title bar at {at:?} moves the window");
+    let autosave = h.get_by_role_and_label(Role::Switch, "AutoSave").rect();
+    assert!(autosave.min.x >= lights, "AutoSave starts at {} under the traffic lights ({lights})", autosave.min.x);
+
+    // The app as it was: no decided frame, so no move band and AutoSave at the window's edge.
+    let mut h = mac_harness(new_app(), false);
+    let title = title_rect(&h);
+    let at = egui::pos2(title.max.x + 8.0, title.center().y);
+    assert!(!drag_moves_the_window(&mut h, at), "without the frame the title bar has no band (the bug this pins)");
+    assert!(h.get_by_role_and_label(Role::Switch, "AutoSave").rect().min.x < lights);
+}
