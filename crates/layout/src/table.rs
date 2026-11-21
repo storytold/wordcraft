@@ -74,7 +74,7 @@ const TURNED_LIMIT: f32 = 1584.0;
 
 /// The cell of `row` whose grid columns take in all of `g .. g + span`.
 fn cell_over(row: &wordcraft_doc::table::Row, g: usize, span: usize) -> Option<&wordcraft_doc::Cell> {
-    let mut at = 0usize;
+    let mut at = row.first_grid();
     for c in &row.cells {
         let end = at.saturating_add(c.span());
         if at <= g && end >= g.saturating_add(span) {
@@ -652,7 +652,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             // No one cell across: an inherited line skips the stretches whose cells draw their own.
             let gaps = |across: Option<&wordcraft_doc::table::Row>, mine: Option<Border>, f: fn(&Borders) -> Option<Border>| -> Vec<(f32, f32)> {
                 let Some(r) = across.filter(|r| mine.is_none() && cell_over(r, g, span).is_none()) else { return Vec::new() };
-                let mut at = 0usize;
+                let mut at = r.first_grid();
                 let mut out = Vec::new();
                 for c in &r.cells {
                     let end = at.saturating_add(c.span());

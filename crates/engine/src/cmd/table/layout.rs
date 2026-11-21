@@ -345,7 +345,7 @@ fn cell_borders(t: &mut Table, cells: &[(usize, usize)], kind: &str, line: Optio
         .rows
         .iter()
         .map(|row| {
-            let mut at = 0usize;
+            let mut at = row.first_grid();
             row.cells
                 .iter()
                 .map(|c| {

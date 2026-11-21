@@ -3619,6 +3619,28 @@ fn bottom_border_over_a_merged_cell_is_one_line() {
     assert!(lines.iter().filter(|l| (l.0 - y).abs() < 0.01).all(|l| l.3 == Stroke::Double), "{lines:?}");
 }
 
+#[test]
+fn cell_border_commands_respect_skipped_grid_columns() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    let tp = s.sel.focus.path.cell().unwrap().0;
+    let t = s.doc.table_mut(StoryRef::Body, &tp).unwrap();
+    t.rows[1].cells.remove(0);
+    t.rows[1].props.grid_before = 1;
+
+    caret_in_cell(&mut s, 0, 0);
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "double"}));
+    let cb = cell_borders(&s);
+    assert_eq!(cb[0][0].and_then(|b| b.bottom).map(|b| b.style), Some(BorderStyle::Double));
+    assert!(cb[1].iter().all(Option::is_none), "the lower row skips column zero: {cb:?}");
+
+    caret_in_cell(&mut s, 0, 1);
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "triple"}));
+    let cb = cell_borders(&s);
+    assert_eq!(cb[1][0].and_then(|b| b.top).map(|b| b.style), Some(BorderStyle::Triple));
+    assert!(cb[1][1].is_none(), "the lower row starts in column one: {cb:?}");
+}
+
 /// #1740 review: the caret in a cell merged down takes the whole merged cell: its sides run down
 /// every row it spans and its bottom is the merge's last row's.
 #[test]

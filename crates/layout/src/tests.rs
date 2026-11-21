@@ -13296,6 +13296,41 @@ fn a_cell_border_beats_the_table_border_on_a_shared_edge() {
     assert!(on_y.iter().any(|l| l.3 == display::Stroke::Solid), "the second column keeps its line: {on_y:?}");
 }
 
+#[test]
+fn shared_table_borders_respect_skipped_grid_columns() {
+    let inherited = Border::single(0.5);
+    let own = Border { style: BorderStyle::Double, width: 1.5, color: None, space: 0.0 };
+    for merge_above in [false, true] {
+        let mut d = Document::from_text("before");
+        let mut t = Table::new(2, 3, 468.0);
+        t.props.style = None;
+        t.props.borders = Some(Borders { between: Some(inherited), ..Default::default() });
+        if merge_above {
+            t.merge(0, 0, 1, 2);
+        }
+        t.rows[1].cells.remove(0);
+        t.rows[1].props.grid_before = 1;
+        t.rows[1].cells[1].props.borders = Some(Borders { top: Some(own), ..Default::default() });
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let last = cell_rect(&l, 0, 1, 1).unwrap();
+        let edge: Vec<_> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Placed::Rule { x0, y0, x1, y1, border } if (y0 - last.y).abs() < 0.01 && (y1 - last.y).abs() < 0.01 => Some((*x0, *x1, *border)),
+                _ => None,
+            })
+            .collect();
+        assert!(edge.iter().any(|&(a, z, b)| b == own && (a - last.x).abs() < 0.01 && (z - last.right()).abs() < 0.01));
+        assert!(
+            edge.iter().all(|&(a, z, b)| if b == own { a >= last.x - 0.01 } else { z <= last.x + 0.01 }),
+            "shared edge at {} with merged upper cells {merge_above}: {edge:?}",
+            last.x
+        );
+    }
+}
+
 /// #1740: two cells' own borders on one edge (ECMA-376 §17.4.66): no line gives way to a line,
 /// the heavier wins (width times the style's number), then the earlier style, then the darker
 /// colour, then the upper or left cell's.
