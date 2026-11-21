@@ -307,7 +307,40 @@ fn frames_round_trip_and_bad_frames_are_errors() {
     assert!(wire::read_frame(&mut [0u8, 0, 0].as_slice()).is_err());
     // Length over the cap, and a truncated payload.
     assert!(matches!(wire::read_frame(&mut [0u8, 0, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF].as_slice()), Err(ZoteroError::Protocol(_))));
+    let over_cap = (wire::MAX_FRAME as u32 + 1).to_be_bytes();
+    let over_cap_hdr = [0, 0, 0, 1, over_cap[0], over_cap[1], over_cap[2], over_cap[3]];
+    assert!(matches!(wire::read_frame(&mut over_cap_hdr.as_slice()), Err(ZoteroError::Protocol(_))));
     assert!(wire::read_frame(&mut [0u8, 0, 0, 1, 0, 0, 0, 9, b'x'].as_slice()).is_err());
+    // Zero-length payload frame.
+    let empty = wire::read_frame(&mut [0u8, 0, 0, 5, 0, 0, 0, 0].as_slice()).unwrap();
+    assert_eq!(empty, Some(Frame { txid: 5, payload: Vec::new() }));
+}
+
+#[test]
+fn frame_bounds_and_interrupted_reads() {
+    struct InterruptedOnce<'a>(&'a [u8], bool);
+    impl std::io::Read for InterruptedOnce<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.1 {
+                self.1 = true;
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "retry"));
+            }
+            let n = buf.len().min(self.0.len()).min(3);
+            buf[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+
+    let mut raw = Vec::new();
+    wire::write_frame(&mut raw, 9, b"ok").unwrap();
+    let mut reader = InterruptedOnce(&raw, false);
+    assert_eq!(wire::read_frame(&mut reader).unwrap(), Some(Frame { txid: 9, payload: b"ok".to_vec() }));
+
+    let oversized = vec![0u8; wire::MAX_FRAME + 1];
+    let mut sink = Vec::new();
+    assert!(matches!(wire::write_frame(&mut sink, 1, &oversized), Err(ZoteroError::Protocol(_))));
+    assert!(sink.is_empty());
 }
 
 #[test]

@@ -23,6 +23,7 @@ impl Session {
         self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.pending_at = None;
         self.typing = None;
         self.also_selected.clear();
         self.member = None;
@@ -51,7 +52,7 @@ impl Session {
     /// A snapshot to put back with [`Session::restore`], for a caller that runs a command and
     /// may want to take it back without a trace (cheap: the document's blocks are shared).
     ///
-    /// Covered: `doc`, `sel`, the undo stack (its length, and its oldest steps when it is near
+    /// Covered: `doc`, `sel`, `pending` with `pending_at`, the undo stack (its length, and its oldest steps when it is near
     /// the limit), `redo`, the open typing group, the pending `join_next_undo`,
     /// `join_next_equation_edit` and body replacement promises, whether the typing group has a
     /// step of its own, and `dirty`. `rev`,
@@ -71,12 +72,14 @@ impl Session {
             doc,
             sel,
             view: _,
-            pending: _,
+            pending,
+            pending_at,
             last_highlight: _,
             path: _,
             file_name: _,
             // The custom dictionary file, like the file path: host wiring, not an edit.
             user_dict_path: _,
+            default_user_dict_path: _,
             dirty,
             clipboard: _,
             // Like the clipboard: what the next paste can make a move of.
@@ -151,6 +154,8 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            // Derived from `document_id` and `rev`: rebuilt on the next read, not an edit.
+            findings: _,
             ribbon: _,
             // A preference for new documents, like `prefs`: not part of this document.
             editing_lang: _,
@@ -179,6 +184,8 @@ impl Session {
         EditSnapshot {
             doc: doc.clone(),
             sel: sel.clone(),
+            pending: pending.clone(),
+            pending_at: pending_at.clone(),
             history_len: history.len(),
             evicted: *undo_evicted,
             head,
@@ -194,12 +201,14 @@ impl Session {
     }
 
     /// Put a snapshot back: the commands run since leave no trace in the document, the
-    /// selection or undo/redo (undo steps the limit pushed out meanwhile come back). The layout
+    /// selection, the formatting waiting at the caret or undo/redo (undo steps the limit pushed out meanwhile come back). The layout
     /// is recomputed.
     pub fn restore(&mut self, snap: EditSnapshot) {
         let EditSnapshot {
             doc,
             sel,
+            pending,
+            pending_at,
             history_len,
             evicted,
             head,
@@ -221,6 +230,8 @@ impl Session {
         self.autocap = None;
         self.doc = doc;
         self.sel = sel;
+        self.pending = pending;
+        self.pending_at = pending_at;
         self.also_selected.clear();
         self.member = None;
         self.history.truncate(history_len);
