@@ -4341,3 +4341,41 @@ fn enter_in_a_drop_cap_paragraph_makes_a_normal_paragraph() {
         assert_eq!(second.drop_cap_font, None, "{position}");
     }
 }
+
+/// A page break (Mod+Enter) at the end of a paragraph puts the caret at the top of the next page,
+/// where the next characters appear (Word, #4247), and typing keeps it there.
+#[test]
+fn caret_after_page_break_is_on_next_page() {
+    let mut s = typed("one");
+    run(&mut s, "text.pageBreak", json!({}));
+    let l = s.layout();
+    assert_eq!(l.pages.len(), 2);
+    let body = l.pages[1].body;
+    let c = l.caret(&s.sel.focus).unwrap();
+    assert_eq!(c.page, 1, "caret after the break: {c:?}");
+    assert!((c.x - body.x).abs() < 0.5 && c.top >= body.y - 0.5 && c.top < body.y + 6.0, "caret after the break: {c:?}, body {body:?}");
+    typ(&mut s, "x");
+    let typed_at = s.layout().caret(&s.sel.focus).unwrap();
+    assert_eq!(typed_at.page, 1);
+    assert!((typed_at.top - c.top).abs() < 0.5, "typed caret {typed_at:?} vs empty caret {c:?}");
+    assert!(typed_at.x > c.x);
+}
+
+/// Up and Down from the caret after a trailing page break (drawn on the next page) are not stuck:
+/// Up reaches the text before the break.
+#[test]
+fn caret_up_down_after_page_break_is_not_stuck() {
+    let mut s = typed("one");
+    run(&mut s, "text.pageBreak", json!({}));
+    let end = s.sel.focus.clone();
+    run(&mut s, "caret.up", json!({}));
+    assert!(s.sel.focus.off < end.off, "Up stayed at {:?}", s.sel.focus);
+    let up = s.sel.focus.clone();
+    run(&mut s, "caret.down", json!({}));
+    assert_eq!(s.sel.focus, end, "Down from the text before the break");
+    run(&mut s, "caret.up", json!({}));
+    assert_eq!(s.sel.focus, up, "Up after Down");
+    // Down from the caret drawn on the next page has no line below: focus stays.
+    run(&mut s, "caret.down", json!({}));
+    assert_eq!(s.sel.focus, end);
+}

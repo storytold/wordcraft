@@ -16289,3 +16289,53 @@ fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
         assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
+
+/// The caret after a page break that ends a paragraph is drawn at the top of the next page,
+/// where text typed there appears (#4247).
+#[test]
+fn caret_after_trailing_page_break_is_on_next_page() {
+    let mut d = Document::from_text("one");
+    d.insert_text(&Pos::body(0, 3), "\u{000C}", &Default::default()).unwrap();
+    let l = lay(&d);
+    let c = l.caret(&Pos::body(0, 4)).unwrap();
+    let mut d2 = d.clone();
+    d2.insert_text(&Pos::body(0, 4), "x", &Default::default()).unwrap();
+    let typed = lay(&d2).caret(&Pos::body(0, 4)).unwrap();
+    assert_eq!((c.page, typed.page), (1, 1), "{c:?} {typed:?}");
+    assert!((c.x - typed.x).abs() < 0.5 && (c.top - typed.top).abs() < 0.5, "{c:?} {typed:?}");
+}
+
+/// A page break ending a paragraph in a table cell doesn't move the caret to the next page:
+/// the cell is not split at the break, so its lines stay where they are laid out.
+#[test]
+fn caret_after_page_break_in_a_cell_stays_in_the_cell() {
+    let mut d = Document::from_text("one\n\ntwo");
+    d.insert_text(&Pos::body(0, 3), "\u{000C}", &Default::default()).unwrap();
+    let mut t = Table::new(1, 1, 400.0);
+    let p = wordcraft_doc::Paragraph::with_text("A\u{000C}B", Default::default());
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.body.insert(1, Arc::new(Block::Table(t)));
+    let l = lay(&d);
+    assert!(l.pages.len() >= 2);
+    let cell = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off };
+    let a = l.caret(&cell(0)).unwrap();
+    let after = l.caret(&cell(3)).unwrap();
+    assert_eq!(after.page, a.page, "{a:?} {after:?}");
+    assert!(after.top >= a.top && after.x > a.x, "{a:?} {after:?}");
+}
+
+/// Up and Down from the caret drawn on the next page after a trailing page break start from the
+/// paragraph's laid-out line: Up reaches the text before the break.
+#[test]
+fn vertical_from_caret_after_trailing_page_break() {
+    let mut d = Document::from_text("one");
+    d.insert_text(&Pos::body(0, 3), "\u{000C}", &Default::default()).unwrap();
+    let l = lay(&d);
+    let from = Pos::body(0, 4);
+    assert_eq!(l.caret(&from).unwrap().page, 1);
+    let (up, _) = l.vertical(&from, None, -1, 0).unwrap();
+    assert!(up.off < 4, "{up:?}");
+    assert!(l.vertical(&from, None, 1, 0).is_none());
+    let pg = l.line_toward(&from, 0, 0.0, 0.0, -1).unwrap();
+    assert!(pg.off < 4, "{pg:?}");
+}

@@ -7,7 +7,7 @@ use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
-use crate::para::{PARA_MARK_WIDTH, ParaLayout, StyleRun};
+use crate::para::{LineEnd, PARA_MARK_WIDTH, ParaLayout, StyleRun};
 use crate::{DocLayout, Page, Placed};
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
@@ -705,6 +705,13 @@ impl DocLayout {
     }
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
+        self.caret_placed(pos, page_hint).map(|(drawn, _)| drawn)
+    }
+
+    /// The caret as drawn, and where its paragraph's line is really laid out. They differ only
+    /// for the empty last line after a trailing page break, drawn on the next page; vertical
+    /// movement and clicks search from the laid-out one, as the next page has no line there.
+    fn caret_placed(&self, pos: &Pos, page_hint: usize) -> Option<(Caret, Caret)> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
             let li = para.line_of(pos.off);
@@ -722,7 +729,26 @@ impl DocLayout {
             let base = top + (l.baseline - l.top);
             let ctop = (base - asc).max(top);
             let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
-            return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
+            // The empty last line after a page break that ends the paragraph is kept on the
+            // break's page (its mark shows there), but text typed there starts the next page:
+            // the caret is drawn where it will appear, at the top of the next page's body (Word).
+            // Only a top-level body paragraph moves: a cell, text box or header keeps its lines.
+            // With columns the caret keeps its column offset on the next page.
+            let after_break = li > *l0
+                && li + 1 == para.lines.len()
+                && l.start == l.stop
+                && pos.story == StoryRef::Body
+                && pos.path.0.len() == 1
+                && para.lines.get(li - 1).is_some_and(|p| p.end == LineEnd::PageBreak);
+            let real = Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w };
+            if after_break
+                && *turn == TextDirection::Horizontal
+                && let (Some(here), Some(next)) = (self.pages.get(pi), self.pages.get(pi + 1))
+            {
+                let x = r.x + (next.body.x - here.body.x);
+                return Some((Caret { page: pi + 1, x, top: next.body.y + (ctop - top), height: r.h, width: r.w }, real));
+            }
+            return Some((real, real));
         }
         None
     }
@@ -753,8 +779,8 @@ impl DocLayout {
 
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
-        let c = self.caret_on(pos, page_hint)?;
-        let gx = goal_x.unwrap_or(c.x);
+        let (drawn, c) = self.caret_placed(pos, page_hint)?;
+        let gx = goal_x.unwrap_or(drawn.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
         let cands: Vec<&LineHit> = lines.iter().filter(|l| beyond(l, &c, dir)).collect();
@@ -792,7 +818,7 @@ impl DocLayout {
     /// page x `x`; the position at `x` on it. Unlike [`DocLayout::hit`], how far the lines are
     /// sideways never keeps the caret on its own line. `None` when no line is that way.
     pub fn line_toward(&self, pos: &Pos, page_hint: usize, x: f32, y: f32, dir: i32) -> Option<Pos> {
-        let c = self.caret_on(pos, page_hint)?;
+        let (_, c) = self.caret_placed(pos, page_hint)?;
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
         let dy = |l: &LineHit| band_dist(y, l.top, l.bottom - l.top);
