@@ -29,7 +29,6 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
     if kind == StyleKind::Character {
         return crate::cmd::format::apply(s, &|c| c.style = Some(id.clone()));
     }
-    let (a, b) = s.sel.ordered();
     // A style linked to a list level (a heading in a numbered-headings list) brings its number.
     let numbered = s.doc.styles.resolve_para(&ParaProps { style: Some(id.clone()), ..Default::default() }).numbering.is_some();
     fmt(s, &|p| {
@@ -40,31 +39,106 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
             p.numbering = None;
         }
     })?;
-    // A paragraph style resets direct character formatting that matches nothing (Word keeps
-    // direct formatting unless it covers most of the paragraph; we clear font/size/colour).
-    if a.path == b.path || a == b {
-        let paths = s.doc.paths_between(&a, &b);
-        for path in paths {
-            let para = s.doc.para_mut(a.story, &path)?;
-            let len = para.len();
-            para.format(0, len, &|c| {
-                c.font = None;
-                c.font_cs = None;
-                c.font_ea = None;
-                c.size = None;
-                c.size_cs = None;
-                c.color = None;
-            })?;
-            para.mark.font = None;
-            para.mark.font_cs = None;
-            para.mark.font_ea = None;
-            para.mark.size = None;
-            para.mark.size_cs = None;
-            para.mark.color = None;
-        }
-    }
+    reset_direct_formatting(s)?;
     s.pending = None;
     sel_result(s)
+}
+
+/// A character property a paragraph style can reset: whether a run sets it directly, and how to
+/// clear it.
+type Reset = (fn(&CharProps) -> bool, fn(&mut CharProps));
+
+/// The direct character formatting applying a paragraph style can reset, as observed in Word.
+/// Word keeps highlight, superscript and subscript, scale, shading, borders, the underline's
+/// colour, language, no-proof and the character style whatever they cover, so they are not here.
+const RESETS: [Reset; 24] = [
+    (|c| c.font.is_some(), |c| c.font = None),
+    (|c| c.font_cs.is_some(), |c| c.font_cs = None),
+    (|c| c.font_ea.is_some(), |c| c.font_ea = None),
+    (|c| c.size.is_some(), |c| c.size = None),
+    (|c| c.size_cs.is_some(), |c| c.size_cs = None),
+    (|c| c.color.is_some(), |c| c.color = None),
+    (|c| c.bold.is_some(), |c| c.bold = None),
+    (|c| c.bold_cs.is_some(), |c| c.bold_cs = None),
+    (|c| c.italic.is_some(), |c| c.italic = None),
+    (|c| c.italic_cs.is_some(), |c| c.italic_cs = None),
+    (|c| c.underline.is_some(), |c| c.underline = None),
+    (|c| c.strike.is_some(), |c| c.strike = None),
+    (|c| c.double_strike.is_some(), |c| c.double_strike = None),
+    (|c| c.caps.is_some(), |c| c.caps = None),
+    (|c| c.small_caps.is_some(), |c| c.small_caps = None),
+    (|c| c.spacing.is_some(), |c| c.spacing = None),
+    (|c| c.position.is_some(), |c| c.position = None),
+    (|c| c.kern.is_some(), |c| c.kern = None),
+    (|c| c.hidden.is_some(), |c| c.hidden = None),
+    (|c| c.emboss.is_some(), |c| c.emboss = None),
+    (|c| c.engrave.is_some(), |c| c.engrave = None),
+    (|c| c.outline.is_some(), |c| c.outline = None),
+    (|c| c.shadow.is_some(), |c| c.shadow = None),
+    (|c| c.emphasis.is_some(), |c| c.emphasis = None),
+];
+
+/// Clear `resets` in `a..b` of `para` (bytes), and in its mark when `mark`.
+fn clear_resets(para: &mut wordcraft_doc::Paragraph, a: usize, b: usize, mark: bool, resets: &[fn(&mut CharProps)]) -> Result<(), CmdError> {
+    if resets.is_empty() {
+        return Ok(());
+    }
+    let reset = |c: &mut CharProps| {
+        for f in resets {
+            f(c);
+        }
+    };
+    para.format(a, b, &reset)?;
+    if mark {
+        reset(&mut para.mark);
+    }
+    para.touch();
+    Ok(())
+}
+
+/// What applying a paragraph style does to direct character formatting, as observed in Word:
+/// - A caret, or a selection of a whole paragraph or of several paragraphs: the selection from its
+///   start to the end of its first paragraph decides, the paragraph mark counted as one character
+///   (the whole paragraph for a caret). Each property in [`RESETS`] set directly on at least half
+///   of those characters is reset in every selected paragraph, text and mark. One set on less
+///   stays everywhere, even where it covers a whole later paragraph.
+/// - A selection inside one paragraph: only the selection loses that formatting. Outside it,
+///   nothing changes, however much of the paragraph it covers.
+fn reset_direct_formatting(s: &mut Session) -> Result<(), CmdError> {
+    let story = s.sel.focus.story;
+    let (a, b) = s.sel.ordered();
+    let paths = crate::cmd::selected_paths(s);
+    let Some(first) = paths.first() else { return Ok(()) };
+    let all: Vec<fn(&mut CharProps)> = RESETS.iter().map(|(_, clear)| *clear).collect();
+    if a != b && a.path == b.path && paths.len() == 1 {
+        let para = s.doc.para_mut(story, first)?;
+        let (from, to) = (para.clamp(a.off), para.clamp(b.off));
+        if from > 0 || to < para.len() {
+            return clear_resets(para, from, to, false, &all);
+        }
+    }
+    // Characters of the first paragraph from `start`, the mark included, and how many of them set
+    // each property.
+    let para = s.doc.para(story, first).ok_or_else(|| CmdError::Failed("the selected paragraph is gone".into()))?;
+    let start = if a != b && a.path == *first { para.clamp(a.off) } else { 0 };
+    let total = para.text.get(start..).map_or(0, |t| t.chars().count()).saturating_add(1);
+    let mut set = [0usize; RESETS.len()];
+    let runs = para.run_ranges().map(|(r, c)| (para.text.get(r.start.max(start)..r.end.max(start)).map_or(0, |t| t.chars().count()), c));
+    for (n, c) in runs.chain(std::iter::once((1, &para.mark))) {
+        for (count, (has, _)) in set.iter_mut().zip(RESETS.iter()) {
+            if has(c) {
+                *count = count.saturating_add(n);
+            }
+        }
+    }
+    let reset: Vec<fn(&mut CharProps)> =
+        set.iter().zip(RESETS.iter()).filter(|(count, _)| count.saturating_mul(2) >= total).map(|(_, (_, clear))| *clear).collect();
+    for path in &paths {
+        let para = s.doc.para_mut(story, path)?;
+        let len = para.len();
+        clear_resets(para, 0, len, true, &reset)?;
+    }
+    Ok(())
 }
 
 pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
