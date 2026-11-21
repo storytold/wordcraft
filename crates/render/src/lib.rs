@@ -1136,7 +1136,9 @@ fn draw_shape(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     if let Some(s) = stroke {
         ctx.set_paint(color(fr.opts.ink(*s), 1.0));
         ctx.set_stroke(
-            kurbo::Stroke::new(if stroke_width.is_nan() { 0.25 } else { stroke_width.clamp(0.25, 200.0) } as f64)
+            // As the PDF exporter strokes it, and as `LineDash::pattern_with_cap` sizes the caps:
+            // 0.25 to 200 pt, a non-finite width 0.75 pt.
+            kurbo::Stroke::new(if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 } as f64)
                 .with_caps(screen_cap(*cap))
                 .with_dashes(0.0, safe_dashes(dash.iter().map(|v| f64::from(*v)), path_len_bound(&path))),
         );
