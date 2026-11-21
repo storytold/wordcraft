@@ -2302,3 +2302,580 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// One page band entry for the band-math tests: item `id` inking `top..bottom` points.
+fn item(id: u64, top: f32, bottom: f32) -> ItemBand {
+    ItemBand { id, top, bottom }
+}
+
+fn bands(w: f32, h: f32, items: Vec<ItemBand>) -> PageBands {
+    PageBands { w, h, items, held: Vec::new() }
+}
+
+/// #1109: an edit re-renders the rows its changed lines ink, plus a pad, and nothing else.
+#[test]
+fn a_changed_line_redraws_its_old_and_new_band_with_the_pad() {
+    let a = bands(612.0, 792.0, vec![item(1, 300.0, 312.0)]);
+    let b = bands(612.0, 792.0, vec![item(2, 300.0, 324.0)]);
+    // 300 - 32 = 268 pt and 324 + 32 = 356 pt, at 2 px a point.
+    assert_eq!(a.changed_rows(&b, 2.0, 1584), Some(536..712));
+    assert_eq!(b.changed_rows(&a, 2.0, 1584), Some(536..712), "the same band whichever way round");
+    // A line that moved up leaves its old ink behind unless the old band is redrawn too.
+    let c = bands(612.0, 792.0, vec![item(3, 600.0, 612.0)]);
+    assert_eq!(a.changed_rows(&c, 2.0, 1584), Some(536..1288));
+}
+
+#[test]
+fn an_unchanged_page_has_no_rows_to_redraw() {
+    let a = bands(612.0, 792.0, vec![item(1, 72.0, 100.0), item(2, 200.0, 220.0)]);
+    let b = bands(612.0, 792.0, vec![item(1, 72.0, 100.0), item(2, 200.0, 220.0)]);
+    assert_eq!(a.changed_rows(&b, 2.0, 1584), Some(0..0));
+    // An item added at the end of the page counts as changed, an empty page as nothing.
+    let empty = bands(612.0, 792.0, Vec::new());
+    assert_eq!(empty.changed_rows(&empty, 2.0, 1584), Some(0..0));
+    assert!(empty.changed_rows(&a, 2.0, 1584).is_some_and(|r| !r.is_empty()), "a first item is a change");
+}
+
+#[test]
+fn a_removed_item_redraws_the_band_it_used_to_ink() {
+    // The last paragraph of a page was deleted: its ink has to go, and it is not in the new
+    // layout to be drawn over again.
+    let a = bands(100.0, 400.0, vec![item(1, 10.0, 20.0), item(7, 300.0, 320.0)]);
+    let b = bands(100.0, 400.0, vec![item(1, 10.0, 20.0)]);
+    assert_eq!(a.changed_rows(&b, 2.0, 800), Some(536..704));
+    assert_eq!(b.changed_rows(&a, 2.0, 800), Some(536..704), "and the same when it comes back");
+}
+
+#[test]
+fn band_rows_snap_out_to_whole_pixels() {
+    // Floored at the top and ceiled at the bottom: a partly changed pixel row is redrawn.
+    let a = bands(100.0, 1000.0, vec![item(1, 10.3, 12.1)]);
+    let b = bands(100.0, 1000.0, vec![item(2, 10.3, 12.1)]);
+    let rows = a.changed_rows(&b, 3.0, 3000).unwrap();
+    assert_eq!(rows.start, 0, "the pad reaches past the top of this page");
+    assert_eq!(rows.end, ((12.1 + BAND_PAD_PT) * 3.0).ceil() as usize);
+    // A band lower down keeps its floored top.
+    let a = bands(100.0, 1000.0, vec![item(1, 410.3, 412.1)]);
+    let b = bands(100.0, 1000.0, vec![item(2, 410.3, 412.1)]);
+    let rows = a.changed_rows(&b, 3.0, 3000).unwrap();
+    assert_eq!(rows.start, ((410.3 - BAND_PAD_PT) * 3.0).floor() as usize);
+    assert_eq!(rows.end, ((412.1 + BAND_PAD_PT) * 3.0).ceil() as usize);
+}
+
+#[test]
+fn band_rows_are_clamped_to_the_raster() {
+    // An extent far off the page (a shape anchored a thousand pages away) never asks for rows
+    // that are not there.
+    let rows = 20_000;
+    let a = bands(100.0, 10_000.0, vec![item(1, -1.0e9, 5.0)]);
+    let b = bands(100.0, 10_000.0, vec![item(2, -1.0e9, 5.0)]);
+    assert_eq!(a.changed_rows(&b, 2.0, rows), Some(0..74));
+    let a = bands(100.0, 10_000.0, vec![item(1, 9_990.0, 1.0e9)]);
+    let b = bands(100.0, 10_000.0, vec![item(2, 9_990.0, 1.0e9)]);
+    assert_eq!(a.changed_rows(&b, 2.0, rows), Some(19_916..rows));
+}
+
+#[test]
+fn a_hostile_extent_draws_the_page_whole() {
+    // Nothing about such a page can be trusted to a band, so it is drawn whole.
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let a = bands(100.0, 400.0, vec![item(1, 100.0, 120.0)]);
+        let b = bands(100.0, 400.0, vec![item(2, 100.0, bad)]);
+        assert!(a.changed_rows(&b, 2.0, 800).is_none(), "{bad}");
+        assert!(b.changed_rows(&a, 2.0, 800).is_none(), "{bad}");
+    }
+}
+
+#[test]
+fn another_page_size_another_scale_or_a_big_change_draws_the_page_whole() {
+    let a = bands(612.0, 792.0, vec![item(1, 100.0, 120.0)]);
+    let grown = bands(612.0, 793.0, vec![item(2, 100.0, 120.0)]);
+    let shrunk = bands(612.0, 791.0, vec![item(2, 100.0, 120.0)]);
+    assert!(a.changed_rows(&grown, 2.0, 1584).is_none(), "the page grew");
+    assert!(a.changed_rows(&shrunk, 2.0, 1584).is_none(), "the page shrank");
+    for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert!(a.changed_rows(&grown, bad, 1584).is_none(), "{bad} px a point");
+    }
+    assert!(a.changed_rows(&grown, 2.0, 0).is_none(), "no raster to draw into");
+    // Two thirds of the page changed: a band that big saves nothing.
+    let top = bands(100.0, 400.0, vec![item(1, 0.0, 130.0)]);
+    let bottom = bands(100.0, 400.0, vec![item(2, 270.0, 400.0)]);
+    assert!(top.changed_rows(&bottom, 2.0, 800).is_none());
+    // A fifth of it does: a band.
+    let top = bands(100.0, 400.0, vec![item(1, 0.0, 50.0)]);
+    let bottom = bands(100.0, 400.0, vec![item(2, 0.0, 50.0)]);
+    assert_eq!(top.changed_rows(&bottom, 2.0, 800), Some(0..164));
+}
+
+/// A table cell carries its rectangle and clip state: moving or resizing a cell marks its
+/// band dirty.
+#[test]
+fn cell_moves_mark_dirty_bands() {
+    let cell = |y: f32| Placed::Cell {
+        rect: wordcraft_geom::Rect::new(10.0, y, 90.0, 20.0),
+        covered: false,
+        table: Default::default(),
+        row: 0,
+        cell: 0,
+        story: StoryRef::Body,
+        clip: false,
+    };
+    let page = Page { w: 612.0, h: 792.0, items: vec![cell(100.0)], ..Default::default() };
+    let other = Page { w: 612.0, h: 792.0, items: vec![cell(300.0)], ..Default::default() };
+    let (a, b) = (PageBands::of(&page), PageBands::of(&other));
+    assert_eq!(a.items.len(), 1);
+    assert_eq!(b.items.len(), 1);
+    let changed = a.changed_rows(&b, 2.0, 1584).expect("a changed band");
+    assert!(!changed.is_empty(), "a cell move marks a nonempty dirty row range");
+}
+
+/// Layout objects that draw nothing (`Object`) are there for hit testing, handles and wrapping:
+/// they never reach a page band.
+#[test]
+fn layout_objects_never_reach_a_band() {
+    let obj = |y: f32| Placed::Object {
+        rect: wordcraft_geom::Rect::new(10.0, y, 90.0, 20.0),
+        spin: Default::default(),
+        story: StoryRef::Body,
+        path: Default::default(),
+        off: 0,
+        text_box: None,
+        wrap: Default::default(),
+        origin: wordcraft_geom::Point::new(0.0, 0.0),
+        group_boxes: Vec::new(),
+    };
+    let page = Page { w: 612.0, h: 792.0, items: vec![obj(100.0)], ..Default::default() };
+    let other = Page { w: 612.0, h: 792.0, items: vec![obj(300.0)], ..Default::default() };
+    let (a, b) = (PageBands::of(&page), PageBands::of(&other));
+    assert!(a.items.is_empty() && b.items.is_empty());
+    assert_eq!(a.content(), b.content());
+    assert_eq!(a.changed_rows(&b, 2.0, 1584), Some(0..0));
+}
+
+/// #1109: a text box's frame is not a drawn item of its own, so moving it changes only the
+/// band its own lines carry. The fingerprint has to include that band, or the page keeps its
+/// stale texture until an unrelated edit moves something else.
+#[test]
+fn a_moved_text_box_frame_invalidates_the_page_fingerprint() {
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("before after"));
+    s.run("insert.textBox", &json!({"text": "Box text"})).unwrap();
+    let layout = s.layout();
+    let page = layout
+        .pages
+        .iter()
+        .find(|p| p.items.iter().any(|it| matches!(it, Placed::Object { text_box: Some(_), .. })))
+        .expect("the text box's frame is on a page");
+    let before = PageBands::of(page);
+    let mut moved = page.clone();
+    for it in &mut moved.items {
+        if let Placed::Object { rect, .. } = it {
+            rect.y += 120.0;
+        }
+    }
+    let after = PageBands::of(&moved);
+    assert_ne!(before.content(), after.content(), "a frame-only move changed no fingerprint");
+    let rows = before.changed_rows(&after, 2.0, (page.h * 2.0) as usize);
+    assert!(rows.as_ref().is_some_and(|r| !r.is_empty()), "no band to redraw: {rows:?}");
+}
+
+/// Every drawn item of a real page inks somewhere inside the band `PageBands::of` recorded for
+/// it, so a re-render of a changed line can't leave its neighbours' ink out.
+#[test]
+fn a_real_pages_bands_hold_their_items_geometry() {
+    let mut s = wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document());
+    let layout = s.layout();
+    let page = &layout.pages[0];
+    let h = page.h;
+    let snapshot = PageBands::of(page);
+    assert!(!snapshot.items.is_empty(), "a body-text page has drawn items");
+    assert_eq!(snapshot.content(), PageBands::of(page).content(), "the fingerprint holds still");
+    assert_ne!(snapshot.content(), 0);
+    let mut drawn = 0;
+    for it in page.items.iter().chain(&page.header).chain(&page.footer) {
+        let Some(id) = pages::item_fingerprint(it) else { continue };
+        let band = snapshot.items[drawn];
+        assert_eq!(band.id, id);
+        let (top, bottom) = pages::item_band(it, h);
+        assert!(band.top <= top && band.bottom >= bottom, "{it:?}: {top}..{bottom} outside {}..{}", band.top, band.bottom);
+        assert!(band.top <= band.bottom && band.top.is_finite() && band.bottom.is_finite());
+        assert!(band.top >= -BAND_PAD_PT && band.bottom <= h + BAND_PAD_PT, "{it:?}: {}..{}", band.top, band.bottom);
+        drawn += 1;
+    }
+    assert_eq!(drawn, snapshot.items.len());
+    assert_eq!(snapshot.changed_rows(&snapshot, 2.0, (h * 2.0) as usize), Some(0..0));
+}
+
+/// #2635 review: a texture tag names paragraph layouts, graphics and freeforms by `Arc`
+/// address. The layout cache can evict one and the allocator can then give its address to
+/// different content, which a tag holding only the hash would accept as the same page. Every
+/// named `Arc` is held by the snapshot instead, so no address it compares against is reused
+/// until the tag itself is replaced.
+#[test]
+fn a_texture_tag_keeps_every_layout_its_fingerprint_names_alive() {
+    let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("A band of text"));
+    let layout = session.layout();
+    let lines =
+        layout.pages.iter().flat_map(|page| &page.items).find(|it| matches!(it, Placed::Lines { .. })).cloned().expect("the text is laid out");
+    let Placed::Lines { para, .. } = &lines else { panic!("the found item is a line") };
+    let para = std::sync::Arc::downgrade(para);
+    drop(session);
+    drop(layout);
+
+    let freeform = std::sync::Arc::new(wordcraft_doc::freeform::Freeform::default());
+    let graphic = std::sync::Arc::new(wordcraft_doc::graphic::Graphic::default());
+    let (freeform_weak, graphic_weak) = (std::sync::Arc::downgrade(&freeform), std::sync::Arc::downgrade(&graphic));
+    let page = Page {
+        w: 612.0,
+        h: 792.0,
+        items: vec![
+            lines,
+            Placed::Shape {
+                rect: wordcraft_geom::Rect::new(10.0, 10.0, 40.0, 40.0),
+                kind: Default::default(),
+                fill: None,
+                stroke: None,
+                stroke_width: 1.0,
+                freeform: Some(freeform),
+                effects: Default::default(),
+                spin: Default::default(),
+                extra: Default::default(),
+                object: None,
+                alt: String::new(),
+            },
+            Placed::Graphic {
+                rect: wordcraft_geom::Rect::new(60.0, 10.0, 40.0, 40.0),
+                graphic,
+                story: StoryRef::Body,
+                path: Default::default(),
+                off: 0,
+                spin: Default::default(),
+            },
+        ],
+        ..Default::default()
+    };
+    let bands = PageBands::of(&page);
+    drop(page);
+
+    assert!(para.upgrade().is_some(), "the tag dropped the paragraph whose address it fingerprints");
+    assert!(freeform_weak.upgrade().is_some(), "the tag dropped the freeform whose address it fingerprints");
+    assert!(graphic_weak.upgrade().is_some(), "the tag dropped the graphic whose address it fingerprints");
+    // Held only as long as a texture may be compared against them: no leak after the retag.
+    drop(bands);
+    assert!(para.upgrade().is_none(), "the snapshot keeps a paragraph alive after it is dropped");
+    assert!(freeform_weak.upgrade().is_none(), "the snapshot keeps a freeform alive after it is dropped");
+    assert!(graphic_weak.upgrade().is_none(), "the snapshot keeps a graphic alive after it is dropped");
+}
+
+/// How a band re-render of `rows` at `row0` of a page's raster disagrees with the whole-page
+/// render's pixels there: the largest channel difference and the number of differing pixels.
+fn band_mismatch(
+    doc: &wordcraft_doc::Document,
+    page: &Page,
+    row0: usize,
+    rows: usize,
+    scale: f32,
+    opts: &wordcraft_render::RenderOptions,
+    whole: &wordcraft_render::Rendered,
+) -> (i32, usize) {
+    let img = wordcraft_render::render_area(
+        doc,
+        page,
+        wordcraft_geom::Rect::new(0.0, row0 as f32 / scale, page.w, (rows as f32 - 0.01).max(0.01) / scale),
+        scale,
+        opts,
+    );
+    let w = whole.width as usize;
+    assert_eq!((img.width as usize, img.height as usize), (w, rows), "the band raster is the page's width and the band's height");
+    let (mut max, mut differing) = (0i32, 0usize);
+    for y in 0..rows {
+        for x in 0..w {
+            let full = &whole.pixels[((row0 + y) * w + x) * 4..((row0 + y) * w + x) * 4 + 4];
+            let band = &img.pixels[(y * w + x) * 4..(y * w + x) * 4 + 4];
+            if full == band {
+                continue;
+            }
+            differing += 1;
+            for c in 0..4 {
+                max = max.max((full[c] as i32 - band[c] as i32).abs());
+            }
+        }
+    }
+    (max, differing)
+}
+
+/// #1109: a band re-render must give the pixels the whole-page render gives in the rows it
+/// covers, or a keystroke would leave stale ink or a hole behind. vello_cpu's coverage
+/// rounding moves by one level on a handful of pixels when the raster origin does (a band
+/// starts at another row), so one level is allowed; anything structural — a lost glyph, a
+/// line's ink still or no longer there — is far bigger than that.
+#[test]
+fn a_band_re_render_matches_the_whole_page_row_for_row() {
+    let mut pages = 0;
+    for doc in [wordcraft_engine::sample::sample_document(), crate::tests::perf::big_table_doc(600, 4)] {
+        let mut s = wordcraft_engine::Session::new(doc);
+        let layout = s.layout();
+        let (scale, opts) = (2.0, screen_render_options());
+        for page in layout.pages.iter().take(4) {
+            let whole = wordcraft_render::render_page(&s.doc, page, scale, &opts);
+            assert!(whole.width > 10 && whole.height > 400);
+            for (row0, rows) in [(0usize, 33usize), (137, 91), (whole.height as usize - 64, 64)] {
+                let (max, differing) = band_mismatch(&s.doc, page, row0, rows, scale, &opts, &whole);
+                assert!(max <= 1, "a band at row {row0} of page {} differs by {max} levels over {differing} pixels", page.number);
+                assert!(
+                    differing * 1000 <= rows * whole.width as usize,
+                    "a band at row {row0} of page {} differs in {differing} pixels",
+                    page.number
+                );
+            }
+            pages += 1;
+        }
+    }
+    assert!(pages >= 5, "bands were checked on several pages: {pages}");
+}
+
+/// A harness painting `doc` with the canvas focused for typing, stepped until its first
+/// pages are on screen.
+fn canvas_harness(doc: wordcraft_doc::Document) -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+    a.canvas.focus_pending = true;
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    crate::test_harness::frames(&mut h, 6);
+    h
+}
+
+/// #1109: a keystroke in a paragraph or a table cell re-renders the band its lines ink and
+/// updates the page's own texture where it lies — no whole-page raster, no new upload.
+#[test]
+fn a_keystroke_redraws_a_band_of_the_page_not_the_whole_page() {
+    let para = wordcraft_doc::Document::from_text("Some text in a paragraph long enough to hold a few lines and leave the rest of the page alone.");
+    for (doc, caret) in [
+        (para, json!({"story": "body", "path": [0], "off": 10})),
+        (crate::tests::perf::big_table_doc(600, 4), json!({"story": "body", "path": [1, 0, 0, 0], "off": 0})),
+    ] {
+        let mut h = canvas_harness(doc);
+        h.state_mut().session.run("caret.set", &caret).ok();
+        crate::test_harness::frames(&mut h, 3);
+        let page_h = h.state_mut().session.layout().pages.first().map_or(1.0, |p| p.h);
+        let (full, band) = (h.state().canvas.full_renders, h.state().canvas.partial_renders);
+        assert!(full > 0, "the page was laid out and drawn");
+        let rendered = h.state().canvas.rendered_pages.lock().unwrap().get(&0).cloned().expect("page 0 is rendered");
+        let before = rendered.bands;
+        let scale = rendered.scale;
+        let rows = ((page_h * scale).ceil() as u32) as usize;
+        h.event(egui::Event::Text("x".into()));
+        crate::test_harness::frame(&mut h);
+        assert_eq!(h.state().canvas.full_renders, full, "the keystroke drew no whole page");
+        assert_eq!(h.state().canvas.partial_renders, band + 1, "the keystroke redrew one band");
+        let after = h.state().canvas.rendered_pages.lock().unwrap().get(&0).cloned().expect("still there").bands;
+        let changed = before.changed_rows(&after, scale, rows).expect("a band, not the whole page");
+        assert!(!changed.is_empty() && changed.len() * 4 < rows, "the keystroke redrew {changed:?} of {rows} rows");
+    }
+}
+
+/// #1109 review: a line with text effects (glow, shadow, outline) expands its band by the ink
+/// extent of the effect; reflections fall back to the whole page.
+#[test]
+fn text_effects_expand_placed_line_bands_and_reflections_fall_back() {
+    let glow_fx = wordcraft_doc::wordart::TextEffects {
+        glow: Some(wordcraft_doc::effects::Glow { color: wordcraft_doc::Rgb(255, 0, 0), size: 15.0, transparency: 0.0 }),
+        ..Default::default()
+    };
+    let glow_props = wordcraft_doc::CharProps { text_effects: Some(Box::new(glow_fx)), ..Default::default() };
+    let mut glow_doc = wordcraft_doc::Document::default();
+    glow_doc.body =
+        vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("Glow effect on this line", glow_props)))];
+    let mut glow_session = wordcraft_engine::Session::new(glow_doc);
+    let glow_layout = glow_session.layout();
+    let glow_page = glow_layout.pages.first().expect("page exists");
+    let glow_placed = glow_page.items.iter().find(|it| matches!(it, Placed::Lines { .. })).expect("lines placed");
+    let (top_glow, bot_glow) = pages::item_band(glow_placed, glow_page.h);
+
+    let plain_doc = wordcraft_doc::Document::from_text("Glow effect on this line");
+    let mut plain_s = wordcraft_engine::Session::new(plain_doc);
+    let plain_layout = plain_s.layout();
+    let plain_page = plain_layout.pages.first().expect("page exists");
+    let plain_placed = plain_page.items.iter().find(|it| matches!(it, Placed::Lines { .. })).expect("lines placed");
+    let (top_plain, bot_plain) = pages::item_band(plain_placed, plain_page.h);
+
+    assert_eq!((top_plain - top_glow).round(), 15.0, "glow expands band top by size");
+    assert_eq!((bot_glow - bot_plain).round(), 15.0, "glow expands band bottom by size");
+
+    let refl_fx = wordcraft_doc::wordart::TextEffects { reflection: Some(wordcraft_doc::wordart::Reflection::default()), ..Default::default() };
+    let refl_props = wordcraft_doc::CharProps { text_effects: Some(Box::new(refl_fx)), ..Default::default() };
+    let mut refl_doc = wordcraft_doc::Document::default();
+    refl_doc.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("Reflection line", refl_props)))];
+    let mut refl_s = wordcraft_engine::Session::new(refl_doc);
+    let refl_layout = refl_s.layout();
+    let refl_page = refl_layout.pages.first().expect("page exists");
+    let refl_placed = refl_page.items.iter().find(|it| matches!(it, Placed::Lines { .. })).expect("lines placed");
+    let (top_refl, bot_refl) = pages::item_band(refl_placed, refl_page.h);
+    assert_eq!((top_refl, bot_refl), (0.0, refl_page.h), "reflection falls back to whole page");
+}
+
+/// #1109 review: an idle frame where no new raster or texture is painted resets render_ms to 0.
+#[test]
+fn an_idle_frame_resets_render_ms_to_zero() {
+    let doc = wordcraft_doc::Document::from_text("Idle frame test");
+    let mut h = canvas_harness(doc);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(h.state().canvas.render_ms, 0.0, "idle frame reports 0.0 render_ms");
+    assert_eq!(h.state().canvas.raster_ms, 0.0, "idle frame reports 0.0 raster_ms");
+}
+
+/// #1109 review: a cell records its clip state and rectangle so changes from clipped to unclipped
+/// (or changing exact row height) mark the union of both bands dirty, even when overflow exceeds BAND_PAD_PT.
+#[test]
+fn cell_clip_state_and_rect_changes_mark_dirty_bands() {
+    let cell_unclipped = Placed::Cell {
+        rect: wordcraft_geom::Rect::new(10.0, 50.0, 200.0, 150.0),
+        covered: false,
+        table: wordcraft_doc::Path(vec![0]),
+        row: 0,
+        cell: 0,
+        story: wordcraft_doc::StoryRef::Part(0),
+        clip: false,
+    };
+    let cell_clipped = Placed::Cell {
+        rect: wordcraft_geom::Rect::new(10.0, 50.0, 200.0, 50.0),
+        covered: false,
+        table: wordcraft_doc::Path(vec![0]),
+        row: 0,
+        cell: 0,
+        story: wordcraft_doc::StoryRef::Part(0),
+        clip: true,
+    };
+
+    let fp_unclipped = pages::item_fingerprint(&cell_unclipped);
+    let fp_clipped = pages::item_fingerprint(&cell_clipped);
+    assert!(fp_unclipped.is_some() && fp_clipped.is_some(), "both states produce fingerprints");
+    assert_ne!(fp_unclipped, fp_clipped, "clip state and rect change produce different fingerprints");
+
+    let (top_u, bot_u) = pages::item_band(&cell_unclipped, 792.0);
+    let (top_c, bot_c) = pages::item_band(&cell_clipped, 792.0);
+    assert_eq!((top_c, bot_c), (50.0, 100.0), "clipped cell band is 50..100");
+    assert_eq!((top_u, bot_u), (50.0, 200.0), "unclipped cell band is 50..200 (100pt overflow > BAND_PAD_PT)");
+
+    let b1 = pages::PageBands {
+        w: 612.0,
+        h: 792.0,
+        items: vec![pages::ItemBand { id: fp_clipped.expect("fp_c"), top: top_c, bottom: bot_c }],
+        held: Vec::new(),
+    };
+    let b2 = pages::PageBands {
+        w: 612.0,
+        h: 792.0,
+        items: vec![pages::ItemBand { id: fp_unclipped.expect("fp_u"), top: top_u, bottom: bot_u }],
+        held: Vec::new(),
+    };
+    let changed = b1.changed_rows(&b2, 1.0, 792).expect("changed band");
+    assert!(changed.start <= 18 && changed.end >= 232, "dirty rows cover both old clipped and new unclipped rects: {changed:?}");
+}
+
+/// #1109 review: two linked text boxes with a rotated first box retain the union of all
+/// frame bands for their story, ensuring that patching the computed changed rows reproduces
+/// the full render without missing the rotated box's ink extent.
+#[test]
+fn linked_text_boxes_with_rotated_first_box_patch_matches_full_render() {
+    let mut doc = wordcraft_doc::Document::from_text("Body paragraph anchor.");
+    let text = "First text line in rotated box one.\nSecond line overflowing into box two.\nThird line in box two.";
+    let b1 = doc
+        .add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    let b2 =
+        doc.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("", Default::default()))]);
+    doc.parts.get_mut(&b1).unwrap().body.next = Some(b2);
+
+    let float1 = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, rot: 45.0, x: 100.0, y: 100.0, ..Default::default() };
+    let shape1 = wordcraft_doc::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 160.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: float1,
+        story: Some(b1),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    doc.insert_object(&wordcraft_doc::Pos::body(0, 0), shape1, &Default::default()).unwrap();
+
+    let float2 = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, rot: 0.0, x: 100.0, y: 350.0, ..Default::default() };
+    let shape2 = wordcraft_doc::InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 160.0,
+        h: 120.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: float2,
+        story: Some(b2),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    doc.insert_object(&wordcraft_doc::Pos::body(0, 0), shape2, &Default::default()).unwrap();
+
+    let before_doc = doc.clone();
+    let mut session_before = wordcraft_engine::Session::new(before_doc.clone());
+    let layout_before = session_before.layout();
+    let page_before = layout_before.pages.first().expect("page exists");
+    let bands_before = pages::PageBands::of(page_before);
+
+    // Edit the text in the first box (rotated)
+    let mut after_doc = before_doc.clone();
+    let new_text = "Edited text in rotated box one.\nSecond line overflowing into box two.\nThird line in box two.";
+    after_doc.parts.get_mut(&b1).unwrap().blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(new_text, Default::default()))];
+    let mut session_after = wordcraft_engine::Session::new(after_doc.clone());
+    let layout_after = session_after.layout();
+    let page_after = layout_after.pages.first().expect("page exists");
+    let bands_after = pages::PageBands::of(page_after);
+
+    let scale = 1.0;
+    let total_rows = (page_after.h * scale).ceil() as usize;
+    let changed = bands_before.changed_rows(&bands_after, scale, total_rows).expect("changed band covers the edit");
+    assert!(!changed.is_empty(), "changed band is not empty");
+
+    // The changed band must cover the rotated first box's bounds
+    let r1 = wordcraft_geom::Rect::new(100.0, 100.0, 160.0, 60.0);
+    let (exp_top, _) = pages::frame_band(r1, wordcraft_geom::Spin::new(45.0, false, false));
+    assert!((changed.start as f32) <= exp_top, "changed band top {} encompasses rotated frame top {}", changed.start, exp_top);
+
+    // Verify the patched texture matches the full render
+    let opts = screen_render_options();
+    let mut patched = wordcraft_render::render_page(&before_doc, page_before, scale, &opts);
+    let full_after = wordcraft_render::render_page(&after_doc, page_after, scale, &opts);
+
+    let y = changed.start as f32 / scale;
+    let band_rows = changed.len();
+    let band_area = wordcraft_geom::Rect::new(0.0, y, page_after.w, (band_rows as f32 - 0.01).max(0.01) / scale);
+    let patch = wordcraft_render::render_area(&after_doc, page_after, band_area, scale, &opts);
+
+    let w = patched.width as usize;
+    let row_bytes = w * 4;
+    let dest_start = changed.start * row_bytes;
+    let dest_end = changed.end * row_bytes;
+    patched.pixels[dest_start..dest_end].copy_from_slice(&patch.pixels);
+
+    assert_eq!(patched.pixels.len(), full_after.pixels.len());
+    let mut diff_count = 0;
+    let mut max_diff = 0i32;
+    for i in 0..patched.pixels.len() {
+        let diff = (patched.pixels[i] as i32 - full_after.pixels[i] as i32).abs();
+        if diff > 0 {
+            diff_count += 1;
+            max_diff = max_diff.max(diff);
+        }
+    }
+    assert!(
+        max_diff <= 1 && diff_count * 1000 <= patched.pixels.len(),
+        "patched texture matches full render: max_diff={max_diff}, diff_count={diff_count}"
+    );
+}

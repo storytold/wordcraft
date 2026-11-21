@@ -30,6 +30,9 @@ pub(super) struct WordPages {
     options: wordcraft_render::RenderOptions,
     /// The page a drag took an object off, and the object: rendered without it.
     hidden: Option<(usize, Pos)>,
+    rendered_pages: Arc<std::sync::Mutex<std::collections::HashMap<usize, super::pages::RenderedPage>>>,
+    telemetry: Arc<std::sync::Mutex<super::CanvasTelemetry>>,
+    generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl WordPages {
@@ -39,7 +42,20 @@ impl WordPages {
         let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
         let options = page_render_options(app, dim_body);
         let doc = Arc::new(page_doc(app).clone());
-        WordPages { doc, layout: layout.clone(), keys: RefCell::new(std::mem::take(&mut app.canvas.page_keys)), view, options, hidden }
+        let rendered_pages = Arc::clone(&app.canvas.rendered_pages);
+        let telemetry = Arc::clone(&app.canvas.telemetry);
+        let generation = Arc::clone(&app.canvas.generation);
+        WordPages {
+            doc,
+            layout: layout.clone(),
+            keys: RefCell::new(std::mem::take(&mut app.canvas.page_keys)),
+            view,
+            options,
+            hidden,
+            rendered_pages,
+            telemetry,
+            generation,
+        }
     }
 
     /// The pass's document snapshot, shared with the accessibility describer so the pass holds one copy.
@@ -74,16 +90,102 @@ impl ThumbSource<usize> for WordPages {
         let cap = wordcraft_render::MAX_SIDE as f32 / longest;
         let scale = request.side as f32 / longest;
         let scale = if scale.is_finite() { scale.clamp(0.01, cap.max(0.01)) } else { 1.0 };
-        let (doc, layout) = (Arc::clone(&self.doc), Arc::clone(&self.layout));
         let mut options = self.options.clone();
         options.display.hide_object = self.hidden.as_ref().filter(|(hidden, _)| *hidden == index).map(|(_, pos)| pos.clone());
+
+        let current_bands = self.keys.borrow_mut().snapshot(&self.layout, index).1;
+        let total_rows = ((p.h.min(1e6) * scale).ceil() as u32).clamp(1, wordcraft_render::MAX_SIDE) as usize;
+        let target_revision = Revision::of(&(self.revision(&index, request), request.side, None::<[u32; 4]>));
+
+        if whole && request.patchable {
+            let patch_rows = {
+                let cache = self.rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                cache.get(&index).and_then(|prev| {
+                    if Some(prev.revision) == request.resident_revision && prev.view == self.view && prev.scale.to_bits() == scale.to_bits() {
+                        prev.bands.changed_rows(&current_bands, scale, total_rows)
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            if let Some(rows) = patch_rows {
+                let band_rows = rows.end.saturating_sub(rows.start);
+                if band_rows > 0 && rows.end <= total_rows {
+                    let y = rows.start as f32 / scale;
+                    let band_area = wordcraft_geom::Rect::new(0.0, y, pw, (band_rows as f32 - 0.01).max(0.01) / scale);
+                    let t0 = craft::platform::clock::monotonic_ms();
+                    let img = wordcraft_render::render_area(&self.doc, p, band_area, scale, &options);
+                    let elapsed = craft::platform::clock::monotonic_ms() - t0;
+                    {
+                        let mut telem = self.telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        telem.partial_renders += 1;
+                        telem.raster_ms += elapsed;
+                    }
+                    let job_generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let mut cache = self.rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        cache.insert(
+                            index,
+                            super::pages::RenderedPage {
+                                revision: target_revision,
+                                view: self.view,
+                                scale,
+                                bands: current_bands,
+                                generation: job_generation,
+                            },
+                        );
+                    }
+                    let image = egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels);
+                    return ThumbRender::Region { origin: [0, rows.start as u32], image };
+                } else if band_rows == 0 {
+                    let job_generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let mut cache = self.rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        cache.insert(
+                            index,
+                            super::pages::RenderedPage {
+                                revision: target_revision,
+                                view: self.view,
+                                scale,
+                                bands: current_bands,
+                                generation: job_generation,
+                            },
+                        );
+                    }
+                    return ThumbRender::Region { origin: [0, 0], image: egui::ColorImage::new([0, 0], vec![]) };
+                }
+            }
+        }
+
+        let (doc, layout) = (Arc::clone(&self.doc), Arc::clone(&self.layout));
+        let rendered_pages = Arc::clone(&self.rendered_pages);
+        let telemetry = Arc::clone(&self.telemetry);
+        let view = self.view;
+        let bands = current_bands;
+        let job_generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         ThumbRender::Later(Box::new(move |_cancel| {
             let Some(page) = layout.pages.get(index) else { return Ok(LoadedPicture::Blank) };
+            let t0 = craft::platform::clock::monotonic_ms();
             let img = if whole {
                 wordcraft_render::render_page(&doc, page, scale, &options)
             } else {
                 wordcraft_render::render_area(&doc, page, area, scale, &options)
             };
+            let elapsed = craft::platform::clock::monotonic_ms() - t0;
+            {
+                let mut telem = telemetry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                telem.full_renders += 1;
+                telem.raster_ms += elapsed;
+            }
+            if whole {
+                let mut cache = rendered_pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let obsolete = cache.get(&index).is_some_and(|existing| existing.generation > job_generation);
+                if !obsolete {
+                    cache.insert(index, super::pages::RenderedPage { revision: target_revision, view, scale, bands, generation: job_generation });
+                }
+            }
             // Both are premultiplied RGBA8, so the pixels go across as they are.
             Ok(LoadedPicture::Image(egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels)))
         }))

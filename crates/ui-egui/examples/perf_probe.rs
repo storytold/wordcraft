@@ -103,16 +103,27 @@ fn main() {
             step(h);
         }
         let mut frames = Vec::new();
-        let mut lay = Vec::new();
+        let (mut lay, mut ren, mut ras, mut full, mut band) = (Vec::new(), Vec::new(), Vec::new(), 0, 0);
         for _ in 0..40 {
+            let (pages, bands) = (h.state().canvas.full_renders, h.state().canvas.partial_renders);
             request(&tx, "ui.type", json!({"text": "a"}));
-            frames.push(step(h));
+            let a = step(h);
+            let raster = h.state().canvas.raster_ms;
+            let render = h.state().canvas.render_ms;
             // the frame after (relayout of a long paragraph may finish there)
-            frames.push(step(h));
+            let b = step(h);
+            frames.push(a);
+            frames.push(b);
             lay.push(h.state_mut().session.layout().ms);
+            ren.push(render + h.state().canvas.render_ms);
+            // Rasterising the page (or band), summed over both frames: what the keystroke costs
+            // the CPU to draw, apart from the rest of the canvas work.
+            ras.push(raster + h.state().canvas.raster_ms);
+            full += h.state().canvas.full_renders - pages;
+            band += h.state().canvas.partial_renders - bands;
         }
         let typed = frames.chunks(2).map(|c| c[0] + c[1]).collect::<Vec<_>>();
-        json!({"frame_with_key_ms": stats(&frames.iter().step_by(2).copied().collect::<Vec<_>>()), "two_frames_ms": stats(&typed), "layout_ms": stats(&lay)})
+        json!({"frame_with_key_ms": stats(&frames.iter().step_by(2).copied().collect::<Vec<_>>()), "two_frames_ms": stats(&typed), "layout_ms": stats(&lay), "render_ms": stats(&ren), "raster_ms": stats(&ras), "page_rasters": full, "band_rasters": band})
     };
     let mid = h.state().session.doc.body.get(doc_block).and_then(|b| b.as_para()).map(|p| p.len() / 2).unwrap_or(0);
     // a char boundary at or before the middle
@@ -146,10 +157,26 @@ fn main() {
     // Zoom, ribbon tabs, resize: the frame after the change.
     let mut zoom = Vec::new();
     for z in [50, 75, 100, 150, 200, 100] {
+        let (full0, band0) = (h.state().canvas.full_renders, h.state().canvas.partial_renders);
         exec(&tx, "view.zoom", json!({"value": z}));
         let a = step(&mut h);
+        let raster_a = h.state().canvas.raster_ms;
+        let render_a = h.state().canvas.render_ms;
         let b = step(&mut h);
-        zoom.push(json!({"zoom": z, "frame_ms": (a * 10.0).round() / 10.0, "next_ms": (b * 10.0).round() / 10.0}));
+        let raster_b = h.state().canvas.raster_ms;
+        let render_b = h.state().canvas.render_ms;
+        let (full, band) = (h.state().canvas.full_renders, h.state().canvas.partial_renders);
+        zoom.push(json!({
+            "zoom": z,
+            "frame_ms": (a * 10.0).round() / 10.0,
+            "next_ms": (b * 10.0).round() / 10.0,
+            // The zoom's rasterising and canvas work spread over both frames.
+            "raster_ms": ((raster_a + raster_b) * 10.0).round() / 10.0,
+            "render_ms": ((render_a + render_b) * 10.0).round() / 10.0,
+            "rasters": full + band - full0 - band0,
+            "page_rasters": full - full0,
+            "band_rasters": band - band0,
+        }));
     }
     out["zoom"] = json!(zoom);
     let mut tabs = Vec::new();
