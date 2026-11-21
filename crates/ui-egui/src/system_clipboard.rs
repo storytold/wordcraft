@@ -1,27 +1,26 @@
-//! The system clipboard for the Paste commands (#584, #687, #833).
+//! The system clipboard for the Paste and Copy commands (#584, #687, #833).
 //!
-//! egui's paste events carry only text, or pixels when there is no text, so the host reads the
-//! rest through [`crate::Services`]:
+//! Everything goes through the installed clipboard, reached with `ClipboardHandle::of(ctx)`:
 //! another program's formatted copy as HTML or RTF (Paste keeps its formatting, Merge Formatting
 //! its emphasis), a picture for Paste Special, and the names of the formats there so a paste that
 //! finds nothing usable says what the clipboard holds instead of "empty". Everything read here
-//! comes from other programs: sizes are capped before it reaches the engine.
+//! comes from other programs: the platform read bounds every size, and the text payloads are
+//! capped again before they reach the engine.
 
+use std::sync::Arc;
+
+use craft::platform::clipboard::{HTML, RTF, Written};
+// PLAN(app-hub): craft facade path of the framework's clipboard handle, and the craft-platform dependency
+use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
 use serde_json::Value;
 use wordcraft_engine::cmd::paste::{MAX_PASTE_BYTES, MAX_PICTURE_BYTES};
 
 use crate::{WordApp, paste_picture};
 
-/// Straight RGBA8 pixels for a native image copy. Decode limits are applied before allocation.
-#[derive(Clone, Debug)]
-pub struct CopyImage {
-    /// Width in pixels.
-    pub width: usize,
-    /// Height in pixels.
-    pub height: usize,
-    /// Raw uncompressed RGBA pixel bytes (4 bytes per pixel).
-    pub rgba: Vec<u8>,
-}
+/// Longest side of a copied picture, in pixels.
+const MAX_SIDE: usize = 16_000;
+/// Most pixels in a copied picture (200 MB of RGBA).
+const MAX_PIXELS: usize = 50_000_000;
 
 /// The commands that paste the clipboard.
 pub(crate) fn is_paste(id: &str) -> bool {
@@ -33,6 +32,21 @@ const MAX_NAMES: usize = 6;
 /// Longest format name shown.
 const MAX_NAME_CHARS: usize = 60;
 
+/// The clipboard of the app's window; `None` before the app has a context.
+pub(crate) fn handle(app: &WordApp) -> Option<ClipboardHandle> {
+    app.ctx.as_ref().map(ClipboardHandle::of)
+}
+
+/// The text of the `mime` flavour of the clipboard when it is there, not blank and within
+/// [`MAX_PASTE_BYTES`].
+fn read_markup(clip: &ClipboardHandle, mime: &str) -> Option<String> {
+    let flavor = clip.read(&[mime]).ok().flatten()?;
+    if flavor.data.len() > MAX_PASTE_BYTES {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&flavor.data).into_owned()).filter(|t| !t.trim().is_empty())
+}
+
 /// Add what the system clipboard holds to a paste command's params: its text (the ribbon and
 /// context-menu Paste send none), its HTML and RTF, and for Paste Special its picture. Params a
 /// caller already gave are kept. `Some` when the paste was done here instead (copied picture
@@ -41,30 +55,19 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     if !is_paste(id) {
         return None;
     }
+    let clip = handle(app)?;
     let o = params.as_object_mut()?;
     // A caller that captured ownership already (Paste Special's dialog) keeps that value.
-    if app.services.clipboard_is_own.is_some() && !o.contains_key("privateClipboard") {
-        let own = app.clipboard_published && app.services.clipboard_is_own.as_ref().is_some_and(|f| f());
+    if !o.contains_key("privateClipboard") {
+        let own = app.clipboard_published && clip.holds_ours();
         o.insert("privateClipboard".into(), Value::Bool(own));
     }
-    // Out of reach, the host's clipboard holds nothing, or only another program's earlier copy
-    // that the compositor gave Xwayland: read none of it.
-    let unreachable = app.services.clipboard_unreachable.as_ref().is_some_and(|f| f());
-    if unreachable
-        && params.get("text").is_none()
-        && let Some(r) = defer(app, id, params)
-    {
-        return Some(r);
-    }
-    let o = params.as_object_mut()?;
-    if !unreachable
-        && !o.contains_key("text")
-        && let Some(text) = app.services.clipboard_text.as_ref().and_then(|f| f()).filter(|t| !t.is_empty())
+    if !o.contains_key("text")
+        && let Some(text) = clip.read_text().ok().flatten().filter(|t| !t.is_empty())
     {
         // Picture files copied in a file manager reach us as their paths: paste the pictures,
-        // as Ctrl+V does, unless the caller brought HTML or RTF.
+        // as Ctrl+V does.
         if id == "edit.paste"
-            && !["html", "rtf"].iter().any(|k| o.contains_key(*k))
             && app.session.math.is_none()
             && paste_picture::names_picture_files(&text)
             && let Some(r) = paste_picture::paste(app)
@@ -73,19 +76,15 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         }
         o.insert("text".into(), Value::String(text));
     }
-    // A clipboard that only mirrors Xwayland is read while it holds the text being pasted.
-    let unreachable = unreachable && !params.get("text").and_then(Value::as_str).is_some_and(|t| host_has(app, t));
-    let o = params.as_object_mut()?;
     // Keep Text Only needs nothing more; a caller that passed formats of its own (an agent, Paste
     // Special's OK) has them already.
-    if id == "edit.pasteText" || unreachable || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
+    if id == "edit.pasteText" || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
         return None;
     }
-    let fits = |t: &String| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES;
-    if let Some(html) = app.services.clipboard_html.as_ref().and_then(|f| f()).filter(fits) {
+    if let Some(html) = read_markup(&clip, HTML) {
         o.insert("html".into(), Value::String(html));
     }
-    if let Some(rtf) = app.services.clipboard_rtf.as_ref().and_then(|f| f()).filter(fits) {
+    if let Some(rtf) = read_markup(&clip, RTF) {
         o.insert("rtf".into(), Value::String(rtf));
     }
     // Native bitmap/image formats are for other programs. Our own paste keeps the original
@@ -104,425 +103,15 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     None
 }
 
-/// Whether the host's clipboard holds the copy that `text` (egui's text for a paste) came from, so
-/// its HTML, RTF and copied files go with it: always when the host can read the clipboard
-/// ([`crate::Services::clipboard_unreachable`] is false); when it sees only what the compositor
-/// copies over to Xwayland ([`crate::Services::clipboard_mirrored`]), only while that copy's text
-/// is `text`, line endings aside. Another program's earlier copy there has other text.
-pub(crate) fn host_has(app: &WordApp, text: &str) -> bool {
-    if !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f()) {
-        return true;
-    }
-    let lines = |s: &str| s.replace("\r\n", "\n");
-    app.services.clipboard_mirrored.as_ref().is_some_and(|f| f())
-        && app.services.clipboard_text.as_ref().and_then(|f| f()).is_some_and(|t| lines(&t) == lines(text))
-}
-
-/// Said when the text comes after another document or window was brought forward.
-pub(crate) const CANCELLED: &str = "the paste was cancelled: another document or window is active";
-/// Said when the text comes after the document was edited another way (an agent's edit).
-pub(crate) const CHANGED: &str = "the paste was cancelled: the document changed while it waited";
-
-/// How long a deferred Paste waits for egui's text before saying there is none: longer than the
-/// three seconds egui-winit's Wayland bridge may take to deliver it, so a late answer is still
-/// claimed here and never reaches the page as an ordinary paste.
-const PASTE_WAIT_SECS: f64 = 3.5;
-/// Frames a deferred Paste lets go by before asking egui: the menu it came from closes first.
-/// egui-winit drops a paste whose keyboard focus changed between the request and the text, and
-/// a closing context menu changes it.
-const PASTE_SETTLE_FRAMES: u8 = 2;
-
-/// A menu or ribbon Paste waiting for the clipboard's text from egui (see [`defer`]).
-pub(crate) struct PendingPaste {
-    id: String,
-    params: Value,
-    /// egui's input time when it was asked, once it has been.
-    since: Option<f64>,
-    /// Frames left before egui is asked.
-    settle: u8,
-    /// The text egui read, claimed from the raw input ([`claim`]), pasted next frame.
-    text: Option<String>,
-    /// The picture egui read instead (the clipboard held no text), claimed the same way.
-    image: Option<std::sync::Arc<egui::ColorImage>>,
-    /// Ctrl (Cmd) has been down since the Paste was chosen (a Paste shortcut's own key).
-    command_held: bool,
-    /// The document and window the Paste was chosen in: the text goes there or nowhere.
-    document: u64,
-    window: u64,
-    /// The egui viewport of that window: egui is asked there, and answers in its input.
-    viewport: egui::ViewportId,
-    /// The document's revision when the Paste was chosen: an edit made since (an agent's, over
-    /// the control channel or MCP) may have moved the caret.
-    rev: u64,
-}
-
-/// A waiting Paste chosen in a window with a viewport of its own: that viewport's input reaches
-/// [`crate::windows::ViewportInput`], not the host's raw-input hook, so the plugin scans it
-/// ([`scan`]) and [`tick`] picks up what it found.
-pub(crate) struct ViewportPaste {
-    pub(crate) viewport: egui::ViewportId,
-    pub(crate) id: String,
-    pub(crate) wait: Wait,
-    /// What the viewport's input held, once it held something.
-    pub(crate) found: Option<Scan>,
-}
-
-impl ViewportPaste {
-    /// Scan `viewport`'s next pass's input, when the Paste waits for it and has found nothing yet.
-    pub(crate) fn input_hook(&mut self, ctx: &egui::Context, viewport: egui::ViewportId, events: &mut Vec<egui::Event>) {
-        if self.viewport != viewport || self.found.is_some() {
-            return;
-        }
-        let held = |key: &egui::Key| ctx.input_for(viewport, |i| i.keys_down.contains(key));
-        match scan(&self.id, &mut self.wait, held, events) {
-            Scan::Nothing => {}
-            found => self.found = Some(found),
-        }
-    }
-}
-
-/// The state of a waiting Paste that [`scan`] reads and updates.
-#[derive(Clone, Copy)]
-pub(crate) struct Wait {
-    /// egui has been asked (and not since told to ask again).
-    pub(crate) asked: bool,
-    /// Ctrl (Cmd) has been down since the Paste was chosen.
-    pub(crate) command_held: bool,
-}
-
-/// What one pass's input held for a waiting Paste.
-pub(crate) enum Scan {
-    Nothing,
-    /// The person moved on first: the wait ends.
-    Cancelled,
-    Read(Read),
-}
-
-/// When the host can't open the system clipboard at all (a Wayland session without a working
-/// data-control protocol and with no X11 fallback, #1368, #6635), or sees only what the
-/// compositor copies over to Xwayland (a Wayland session without data-control), the menu and
-/// ribbon Paste found no text, or another program's earlier copy, while Ctrl+V worked: Ctrl+V's
-/// text comes through egui's own Wayland clipboard. Called only then ([`fill`]). Ask egui for a paste the same way and run the command when its text arrives
-/// ([`deliver`]), once the menu it came from has closed ([`tick`]). Paste Special waits the same
-/// way, and its dialog then lists the text (#6635); its dialog's OK, which names the format
-/// chosen, runs at once. egui answers in the input of the window that asked: the main window's
-/// passes through [`claim`], and the input of a window with a viewport of its own (File › New,
-/// View › New Window) through [`ViewportPaste`].
-fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
-    // A paste that brings its own content (an agent's html, rtf or picture) has what it needs;
-    // only Keep Text Only must have the clipboard's text.
-    let brings_content = ["html", "rtf", "picture"].iter().any(|k| params.get(*k).is_some());
-    if (id == "edit.pasteSpecial" && params.get("as").is_some()) || (brings_content && id != "edit.pasteText") {
-        return None;
-    }
-    let ctx = app.ctx.clone()?;
-    log::debug!("{id}: the system clipboard can't be opened; reading the text through egui");
-    app.pending_paste = Some(PendingPaste {
-        id: id.to_string(),
-        params: params.clone(),
-        since: None,
-        settle: PASTE_SETTLE_FRAMES,
-        text: None,
-        image: None,
-        command_held: ctx.input(|i| i.modifiers.command),
-        document: app.session.document_id(),
-        window: app.windows.shown(),
-        viewport: app.choosing_viewport(&ctx),
-        rev: app.session.rev(),
-    });
-    // What a window found for an earlier Paste isn't this one's answer.
-    app.viewport_paste(&ctx, |v| *v = None);
-    ctx.request_repaint();
-    Some(Ok(serde_json::json!({"pending": "paste"})))
-}
-
-/// Take the paste event egui sent for the waiting Paste out of the frame's raw input, before the
-/// page's own handling: the page only reads typing while it has the keyboard focus, which it
-/// doesn't have yet as the menu closes, and with it the event would paste a second time. Only
-/// a Paste that has asked egui claims one; any other paste event is Ctrl+V's own.
-///
-/// A key, a click or typing before the text comes ends the wait instead: the person has moved on
-/// (egui-winit drops the request when the focus moves, as a click in a search box does), and a
-/// Ctrl+V of theirs after it is meant for wherever they are now, not for the document. A held
-/// key's repeat (the Enter or KeyTip that chose Paste) is not new input, nor is the text a
-/// letter's repeat types, which egui-winit sends right after the key; egui is asked again after
-/// it. The raw input doesn't mark
-/// repeats yet (egui does that later in the pass), so a press of a key egui already has down
-/// counts as one. Ctrl (Cmd) going down is new input too: the Ctrl+V shortcut sends no key event,
-/// only its paste, which would otherwise be taken for the waiting Paste's answer.
-///
-/// This is the main window's input; another window's goes through [`ViewportPaste`].
-pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
-    let ctx = app.ctx.clone();
-    let held = |key: &egui::Key| ctx.as_ref().is_some_and(|c| c.input(|i| i.keys_down.contains(key)));
-    let Some(p) = app.pending_paste.as_mut().filter(|p| p.text.is_none() && p.image.is_none() && p.viewport == egui::ViewportId::ROOT) else {
-        return;
-    };
-    let mut wait = Wait { asked: p.since.is_some(), command_held: p.command_held };
-    let found = scan(&p.id, &mut wait, held, events);
-    p.apply(wait);
-    match found {
-        Scan::Nothing => {}
-        Scan::Cancelled => app.pending_paste = None,
-        Scan::Read(Read::Text(t)) => p.text = Some(t),
-        Scan::Read(Read::Picture(image)) => p.image = Some(image),
-    }
-}
-
-impl PendingPaste {
-    /// Take what a [`scan`] changed: told to ask again, or Ctrl let go.
-    fn apply(&mut self, wait: Wait) {
-        if !wait.asked {
-            self.since = None;
-        }
-        self.command_held = wait.command_held;
-    }
-}
-
-/// Read one pass's input `events` for the waiting Paste `id` (see [`claim`]), taking out the paste
-/// event that answers it. `held` tells whether egui already has a key down.
-pub(crate) fn scan(id: &str, wait: &mut Wait, held: impl Fn(&egui::Key) -> bool, events: &mut Vec<egui::Event>) -> Scan {
-    // The last event was a held key's repeat: the text after it is the repeat's own.
-    let mut after_repeat = false;
-    // Keys let go earlier in these events: pressed again, they are new input.
-    let mut released = Vec::new();
-    for (i, e) in events.iter().enumerate() {
-        let repeat = std::mem::take(&mut after_repeat);
-        match e {
-            egui::Event::Key { key, pressed: false, .. } => released.push(*key),
-            egui::Event::Key { key, pressed: true, repeat: false, .. } if held(key) && !released.contains(key) => {
-                after_repeat = true;
-                // egui-winit's Wayland bridge drops a read in flight at any key press, repeats
-                // included: ask again (next tick).
-                wait.asked = false;
-            }
-            egui::Event::Text(_) if repeat => {}
-            egui::Event::ModifiersChanged(m) if m.command && !wait.command_held => {
-                log::debug!("{id}: a shortcut came first; the paste is cancelled");
-                return Scan::Cancelled;
-            }
-            // Ctrl held since the Paste was chosen (its own shortcut's) counts once it is let go.
-            egui::Event::ModifiersChanged(m) => wait.command_held &= m.command,
-            egui::Event::Paste(_) | egui::Event::PasteImage(_) if wait.asked => {
-                // Left in, a picture would reach the page, whose Paste would ask egui again.
-                return match events.remove(i) {
-                    egui::Event::Paste(t) => Scan::Read(Read::Text(t)),
-                    egui::Event::PasteImage(image) => Scan::Read(Read::Picture(image)),
-                    _ => Scan::Nothing,
-                };
-            }
-            egui::Event::Key { pressed: true, repeat: false, .. } => {
-                log::debug!("{id}: a key came first; the paste is cancelled");
-                return Scan::Cancelled;
-            }
-            // egui-winit drops its read in flight at an IME commit and when the window loses the
-            // focus, so no text would come.
-            egui::Event::Paste(_)
-            | egui::Event::PasteImage(_)
-            | egui::Event::PointerButton { pressed: true, .. }
-            | egui::Event::Text(_)
-            | egui::Event::Ime(egui::ImeEvent::Commit(_))
-            | egui::Event::WindowFocused(false) => {
-                log::debug!("{id}: other input came first; the paste is cancelled");
-                return Scan::Cancelled;
-            }
-            _ => {}
-        }
-    }
-    Scan::Nothing
-}
-
-/// What egui read for the waiting Paste.
-pub(crate) enum Read {
-    Text(String),
-    Picture(std::sync::Arc<egui::ColorImage>),
-}
-
-/// Run the waiting Paste with what egui read. `false` when nothing was waiting. Another
-/// document or window active since the Paste was chosen (another window brought forward, even
-/// one on the same document with its own caret; a document opened) cancels it rather than
-/// pasting there.
-fn deliver(app: &mut WordApp, read: Read) -> bool {
-    let Some(PendingPaste { id, mut params, document, window, viewport, rev, .. }) = app.pending_paste.take() else {
-        return false;
-    };
-    if app.session.document_id() != document || app.windows.shown() != window || app.active_viewport() != viewport {
-        log::debug!("{id}: another document or window is active; the paste is cancelled");
-        app.status(CANCELLED.to_string());
-        return true;
-    }
-    if app.session.rev() != rev {
-        log::debug!("{id}: the document changed while the paste waited; the paste is cancelled");
-        app.status(CHANGED.to_string());
-        return true;
-    }
-    let text = match read {
-        Read::Text(text) => text,
-        Read::Picture(image) => {
-            deliver_picture(app, &id, params, &image);
-            return true;
-        }
-    };
-    let text = text.as_str();
-    log::debug!("{id}: egui read {} bytes of text", text.len());
-    // Picture files copied in a file manager reach us as their paths: paste the pictures, as
-    // Ctrl+V does, never the paths as text.
-    if id == "edit.paste" && app.session.math.is_none() && paste_picture::paste_named_files(app, text) {
-        return true;
-    }
-    if let Some(o) = params.as_object_mut() {
-        o.insert("text".into(), Value::String(text.to_string()));
-    }
-    let _ = app.run(&id, params);
-    true
-}
-
-/// The picture egui read when the clipboard held no text: Paste inserts it, one undo step as any
-/// pasted picture, and Paste Special lists it. Keep Text Only and Merge Formatting have no text
-/// to paste.
-fn deliver_picture(app: &mut WordApp, id: &str, mut params: Value, image: &egui::ColorImage) {
-    if !matches!(id, "edit.paste" | "edit.pasteSpecial") || app.session.math.is_some() {
-        app.status(NO_TEXT.to_string());
-        return;
-    }
-    let [width, height] = image.size;
-    // Checked before the pixels are copied.
-    if !paste_picture::fits(width, height) {
-        app.status(format!("the clipboard picture is too large to paste ({width} × {height} pixels)"));
-        return;
-    }
-    let rgba = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-    let data = match paste_picture::png_from_rgba(width, height, rgba) {
-        Ok(png) => wordcraft_engine::cmd::insert::base64_encode(&png),
-        Err(e) => {
-            app.status(e);
-            return;
-        }
-    };
-    log::debug!("{id}: egui read a {width} × {height} picture");
-    if id == "edit.pasteSpecial" && data.len() > MAX_PICTURE_BYTES {
-        app.status(format!("the clipboard picture is larger than {} MB", MAX_PICTURE_BYTES >> 20));
-        return;
-    }
-    if id == "edit.pasteSpecial" {
-        if let Some(o) = params.as_object_mut() {
-            o.insert("picture".into(), Value::String(data));
-            // The clipboard holds no text: without this the engine would offer an earlier copy's.
-            o.insert("text".into(), Value::String(String::new()));
-        }
-        let _ = app.run(id, params);
-        return;
-    }
-    let r = app.execute("insert.picture", serde_json::json!({"data": data}));
-    if let Err(e) = &r {
-        app.status(e.clone());
-    }
-    app.select_inserted_picture(&r);
-}
-
-/// Said when a waiting Paste gets no text.
-const NO_TEXT: &str = "the clipboard has no text to paste";
-
-/// Each frame: paste what egui read, else ask egui for it once the menu has closed (and Ctrl is
-/// up), asking again after a held key's repeat, and if
-/// nothing came in time (the clipboard is empty), say so instead of waiting for ever.
-pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
-    take_found(app, ctx);
-    wait(app, ctx);
-    hand_over(app, ctx);
-}
-
-/// Take what a window with a viewport of its own found in its input for the waiting Paste
-/// ([`ViewportPaste`]).
-fn take_found(app: &mut WordApp, ctx: &egui::Context) {
-    let Some(viewport) = app.pending_paste.as_ref().map(|p| p.viewport).filter(|v| *v != egui::ViewportId::ROOT) else {
-        return;
-    };
-    let Some((wait, found)) = app.viewport_paste(ctx, |v| v.as_mut().filter(|v| v.viewport == viewport).map(|v| (v.wait, v.found.take()))).flatten()
-    else {
-        return;
-    };
-    let Some(p) = app.pending_paste.as_mut() else { return };
-    p.apply(wait);
-    match found {
-        None | Some(Scan::Nothing) => {}
-        Some(Scan::Cancelled) => app.pending_paste = None,
-        Some(Scan::Read(Read::Text(t))) => p.text = Some(t),
-        Some(Scan::Read(Read::Picture(image))) => p.image = Some(image),
-    }
-}
-
-/// Give the waiting Paste's state to its window's viewport for its next pass, or clear it when no
-/// Paste waits there.
-fn hand_over(app: &mut WordApp, ctx: &egui::Context) {
-    let waiting = app.pending_paste.as_ref().filter(|p| p.viewport != egui::ViewportId::ROOT && p.text.is_none() && p.image.is_none()).map(|p| {
-        ViewportPaste { viewport: p.viewport, id: p.id.clone(), wait: Wait { asked: p.since.is_some(), command_held: p.command_held }, found: None }
-    });
-    app.viewport_paste(ctx, |v| *v = waiting);
-}
-
-/// The waiting Paste's own steps each frame (see [`tick`]).
-fn wait(app: &mut WordApp, ctx: &egui::Context) {
-    let now = ctx.input(|i| i.time);
-    let read = app.pending_paste.as_mut().and_then(|p| p.text.take().map(Read::Text).or_else(|| p.image.take().map(Read::Picture)));
-    if let Some(read) = read {
-        deliver(app, read);
-        return;
-    }
-    let Some(p) = app.pending_paste.as_mut() else { return };
-    match p.since {
-        None if p.settle > 0 => {
-            p.settle -= 1;
-            ctx.request_repaint();
-        }
-        // Chosen with Ctrl (Cmd) down, as Paste Special's shortcut is: asked once it is let go
-        // (its release wakes the UI). Until then a Ctrl+V's paste can't be told from the
-        // answer, and comes before the asking, so it stays Ctrl+V's.
-        None if p.command_held => {}
-        None => {
-            p.since = Some(now);
-            ctx.send_viewport_cmd_to(p.viewport, egui::ViewportCommand::RequestPaste);
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(PASTE_WAIT_SECS + 0.1));
-        }
-        Some(since) if now - since > PASTE_WAIT_SECS => {
-            log::debug!("{}: no text came from egui", p.id);
-            app.pending_paste = None;
-            app.status(NO_TEXT.to_string());
-        }
-        Some(_) => {}
-    }
-}
-
-/// Put a copy on the system clipboard: its HTML and RTF beside the text (the formatting, #1523,
-/// and equations as MathML, #816; a lone equation in the MathML formats too, #1297) when the host
-/// can set them, else the text through egui. egui sets its text at the end of the frame, which
-/// would replace the rest, so only one of them runs.
-pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, rtf: &str, mathml: &str) -> bool {
-    if text.is_empty() {
-        // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
-        // else Paste would find the text copied before it and paste that instead of our copy.
-        if !html.is_empty() {
-            if !(html.is_empty() && rtf.is_empty()) && app.services.set_clipboard_rich.as_ref().is_some_and(|f| f(text, html, rtf, mathml)) {
-                return true;
-            }
-            ctx.copy_text(String::new());
-        }
-        return false;
-    }
-    if !(html.is_empty() && rtf.is_empty()) && app.services.set_clipboard_rich.as_ref().is_some_and(|f| f(text, html, rtf, mathml)) {
-        return true;
-    }
-    ctx.copy_text(text.to_string());
-    false
-}
-
 /// Return whether the command result `r` contains any copied payload (text, HTML, RTF, or MathML).
 fn has_copied_content(r: &Value) -> bool {
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
     !s("text").is_empty() || !s("html").is_empty() || !s("rtf").is_empty() || !s("mathml").is_empty()
 }
 
-/// Put what Copy or Cut returned on the system clipboard (see [`put`]).
+/// Put what Copy or Cut returned on the system clipboard: a lone picture as an image with its
+/// HTML and text; anything else as text, HTML and RTF (equations as MathML, #816; a lone
+/// equation in the MathML formats too, #1297; formatting for other programs, #1523).
 ///
 /// When `r` contains no copied content (e.g. Copy on a collapsed selection),
 /// this does nothing: it avoids overwriting external clipboard contents with
@@ -532,28 +121,40 @@ pub(crate) fn put_result(app: &mut WordApp, ctx: &egui::Context, r: &Value) {
         return;
     }
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
-    app.clipboard_published = false;
-    if app.services.set_clipboard_image.is_some()
-        && let Some(res) = copied_image(app)
-    {
-        match res {
-            Ok(image) => {
-                let set = app.services.set_clipboard_image.as_ref().map(|f| f(&image, s("html"), s("text"))).unwrap_or(false);
-                if set {
-                    app.clipboard_published = true;
-                    return;
-                }
-            }
-            Err(e) => {
-                app.status(format!("Couldn't copy the picture: {e}"));
-            }
+    let item = |make: fn(Arc<str>) -> ClipItem, text: &str| (!text.is_empty()).then(|| make(Arc::from(text)));
+    let items: Vec<ClipItem> = match copied_image(app) {
+        Some(Ok(image)) => {
+            [Some(ClipItem::Image(Arc::new(image))), item(ClipItem::Html, s("html")), item(ClipItem::Text, s("text"))].into_iter().flatten().collect()
         }
+        Some(Err(e)) => {
+            app.clipboard_published = false;
+            app.status(format!("Couldn't copy the picture: {e}"));
+            return;
+        }
+        None => {
+            [item(ClipItem::Text, s("text")), item(ClipItem::Html, s("html")), item(ClipItem::Rtf, s("rtf")), item(ClipItem::MathMl, s("mathml"))]
+                .into_iter()
+                .flatten()
+                .collect()
+        }
+    };
+    let result = ClipboardHandle::of(ctx).offer(&items);
+    if let Err(e) = &result {
+        log::warn!("clipboard: {e}");
     }
-    app.clipboard_published = put(app, ctx, s("text"), s("html"), s("rtf"), s("mathml"));
+    app.clipboard_published = matches!(result, Ok(Written::Written));
+}
+
+/// RGBA8 pixels as an egui image, refused when the length doesn't match the size.
+fn color_image(width: usize, height: usize, rgba: &[u8]) -> Result<egui::ColorImage, String> {
+    if width.checked_mul(height).and_then(|n| n.checked_mul(4)) != Some(rgba.len()) {
+        return Err("the picture's size doesn't match its pixels".into());
+    }
+    Ok(egui::ColorImage::from_rgba_unmultiplied([width, height], rgba))
 }
 
 /// Extract the single copied image from the clipboard fragment, if that is all that was copied.
-fn copied_image(app: &WordApp) -> Option<Result<CopyImage, String>> {
+fn copied_image(app: &WordApp) -> Option<Result<egui::ColorImage, String>> {
     use wordcraft_doc::{Block, para::InlineObject};
     let fragment = app.session.clipboard.as_ref()?;
     let [Block::Para(para)] = fragment.blocks.as_slice() else { return None };
@@ -576,36 +177,25 @@ fn copied_image(app: &WordApp) -> Option<Result<CopyImage, String>> {
             }];
             let doc = fragment.to_document();
             let image = wordcraft_render::render_items(&doc, &items, rect, 96.0 / 72.0, &Default::default());
-            Ok(CopyImage { width: image.width as usize, height: image.height as usize, rgba: image.to_straight() })
+            color_image(image.width as usize, image.height as usize, &image.to_straight())
         }
         None => decode_image(bytes),
     })
 }
 
-/// Decode raster image bytes into unpremultiplied RGBA8 pixels under bounded size limits.
-fn decode_image(bytes: &[u8]) -> Result<CopyImage, String> {
+/// Decode raster image bytes into an unpremultiplied RGBA8 image under bounded size limits.
+fn decode_image(bytes: &[u8]) -> Result<egui::ColorImage, String> {
     if bytes.len() as u64 > paste_picture::MAX_FILE_BYTES {
         return Err("the picture file is larger than 200 MB".into());
     }
-    let reader = || image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string());
-    let (w, h) = reader()?.into_dimensions().map_err(|e| e.to_string())?;
+    let (w, h) = wordcraft_geom::picture::dimensions(bytes).ok_or_else(|| "unsupported or unreadable picture".to_string())?;
     let pixels = (w as usize).checked_mul(h as usize);
-    if w == 0
-        || h == 0
-        || w as usize > paste_picture::MAX_SIDE
-        || h as usize > paste_picture::MAX_SIDE
-        || pixels.is_none_or(|n| n > paste_picture::MAX_PIXELS)
-    {
+    if w == 0 || h == 0 || w as usize > MAX_SIDE || h as usize > MAX_SIDE || pixels.is_none_or(|n| n > MAX_PIXELS) {
         return Err(format!("the picture is too large to copy ({w} × {h} pixels)"));
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(paste_picture::MAX_SIDE as u32);
-    limits.max_image_height = Some(paste_picture::MAX_SIDE as u32);
-    limits.max_alloc = Some((paste_picture::MAX_PIXELS as u64).saturating_mul(4));
-    let mut reader = reader()?;
-    reader.limits(limits);
-    let rgba = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
-    Ok(CopyImage { width: w as usize, height: h as usize, rgba: rgba.into_raw() })
+    let budget = (MAX_PIXELS as u64).saturating_mul(8);
+    let img = wordcraft_geom::picture::decode_for_drawing(bytes, budget, MAX_SIDE as u32).map_err(|e| e.to_string())?;
+    color_image(w as usize, h as usize, &img.into_rgba8().into_raw())
 }
 
 /// Format names worth showing: not the clipboard protocol's own bookkeeping targets.
@@ -617,10 +207,10 @@ fn shown(name: &str) -> bool {
         && !n.starts_with("application/x-qt-")
 }
 
-/// What to say when a paste found nothing it can use: the formats on the clipboard when the
-/// host lists them (#833), else that it is empty.
+/// What to say when a paste found nothing it can use: the formats on the clipboard when it lists
+/// them (#833), else that it is empty.
 pub(crate) fn nothing_to_paste(app: &WordApp) -> String {
-    let names: Vec<String> = app.services.clipboard_formats.as_ref().map(|f| f()).unwrap_or_default();
+    let names: Vec<String> = handle(app).map(|h| h.formats()).unwrap_or_default();
     let mut shown_names: Vec<String> = Vec::new();
     for n in names.iter().filter(|n| shown(n)) {
         let n: String = n.trim().chars().take(MAX_NAME_CHARS).collect();
@@ -652,16 +242,88 @@ pub(crate) fn explain(app: &mut WordApp, id: &str, r: Result<Value, String>) -> 
     }
 }
 
+/// An app over an installed in-memory clipboard, for the paste and picture tests.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Services;
-    use crate::paste_picture::ClipboardPicture;
-    use serde_json::json;
+pub(crate) mod testing {
+    use std::path::PathBuf;
+
+    use craft::platform::clipboard::{Clipboard, ClipboardBackend, ClipboardError, ClipboardImage, Flavor, MemoryClipboard, RGBA8, URI_LIST};
     use wordcraft_engine::Session;
 
-    fn app(services: Services) -> WordApp {
-        WordApp::new(Session::new(wordcraft_doc::Document::new()), services)
+    use crate::{Services, WordApp};
+
+    /// [`MemoryClipboard`] that also answers `read_files` from a held `text/uri-list`, as the system and event
+    /// clipboards do (the framework's memory clipboard answers none, so a test of copied files would find the
+    /// clipboard holding only the list's text).
+    #[derive(Default)]
+    struct FilesClipboard(MemoryClipboard);
+
+    impl ClipboardBackend for FilesClipboard {
+        fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError> {
+            self.0.write(flavors)
+        }
+
+        fn read(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Flavor>, ClipboardError> {
+            self.0.read(mimes, limit)
+        }
+
+        fn read_image(&mut self, limit: u64) -> Result<Option<ClipboardImage>, ClipboardError> {
+            self.0.read_image(limit)
+        }
+
+        fn read_files(&mut self, limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+            let Some(list) = self.0.read(&[URI_LIST], u64::MAX)? else { return Ok(None) };
+            let files: Vec<PathBuf> = String::from_utf8_lossy(&list.data)
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("file://").map(PathBuf::from).filter(|path| path.is_absolute()))
+                .take(limit.saturating_add(1))
+                .collect();
+            Ok((!files.is_empty()).then_some(files))
+        }
+
+        fn has(&mut self, mimes: &[&str]) -> bool {
+            self.0.has(mimes)
+        }
+
+        fn formats(&mut self) -> Vec<String> {
+            self.0.formats()
+        }
+    }
+
+    /// An empty document whose window's clipboard holds `flavors`.
+    pub(crate) fn app_holding(flavors: &[Flavor]) -> WordApp {
+        let mut clipboard = Clipboard::new(FilesClipboard::default());
+        if !flavors.is_empty() {
+            let _ = clipboard.write(flavors).unwrap();
+        }
+        let ctx = egui::Context::default();
+        // PLAN: assumed craft::ui::install(&Context, InstallSpec) and craft::ui::testing::install_spec() from craft-ui-contract
+        craft::ui::install(&ctx, crate::test_harness::install_spec().clipboard(clipboard)).unwrap();
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.ctx = Some(ctx);
+        a
+    }
+
+    /// A `width` × `height` picture of one grey value, as an `RGBA8` flavour.
+    pub(crate) fn rgba8(width: u32, height: u32, value: u8) -> Flavor {
+        let mut data = Vec::new();
+        data.extend_from_slice(&width.to_le_bytes());
+        data.extend_from_slice(&height.to_le_bytes());
+        data.extend(std::iter::repeat_n(value, (width * height * 4) as usize));
+        Flavor::new(RGBA8, data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::{app_holding, rgba8};
+    use super::*;
+    use craft::platform::clipboard::{Flavor, TEXT};
+    use serde_json::json;
+
+    fn bold_at(a: &WordApp, off: usize) -> bool {
+        let focus = a.session.sel.focus.clone();
+        a.session.doc.para_at(&focus).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)
     }
 
     fn first_para(a: &WordApp) -> String {
@@ -669,821 +331,132 @@ mod tests {
         a.session.doc.para_at(&focus).map(|p| p.text.clone()).unwrap_or_default()
     }
 
-    fn bold_at(a: &WordApp, off: usize) -> bool {
-        let focus = a.session.sel.focus.clone();
-        a.session.doc.para_at(&focus).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)
-    }
-
-    /// Ctrl+V (a paste event with the text) and the ribbon's Paste keep another program's
-    /// formatting from the clipboard's HTML (#687); Keep Text Only doesn't.
+    /// Which flavours each paste command sends: HTML formatting for Paste and Merge Formatting,
+    /// none for Keep Text Only, RTF when the HTML is absent or over the cap.
     #[test]
-    fn paste_keeps_formatting_from_the_system_clipboard_html() {
-        let services = Services {
-            clipboard_text: Some(Box::new(|| Some("plain strong".into()))),
-            clipboard_html: Some(Box::new(|| Some("<p>plain <b>strong</b></p>".into()))),
-            ..Default::default()
-        };
-        let mut a = app(services);
-        // Ctrl+V: the paste event carries the text.
-        a.run("edit.paste", json!({"text": "plain strong"})).unwrap();
-        assert_eq!(first_para(&a), "plain strong");
-        assert!(!bold_at(&a, 0) && bold_at(&a, 7));
-        a.run("edit.undo", json!({})).unwrap();
-        // The ribbon's Paste sends nothing.
-        a.run("edit.paste", json!({})).unwrap();
-        assert!(bold_at(&a, 7));
-        a.run("edit.undo", json!({})).unwrap();
-        // Merge Formatting inserts it, keeping the bold.
-        a.run("edit.pasteMerge", json!({})).unwrap();
-        assert_eq!(first_para(&a), "plain strong");
-        assert!(bold_at(&a, 7));
-        a.run("edit.undo", json!({})).unwrap();
-        a.run("edit.pasteText", json!({})).unwrap();
-        assert!(!bold_at(&a, 7));
-        // Paste Special lists what is on the system clipboard.
+    fn paste_keeps_formatting_from_the_system_clipboard_flavours() {
+        let html = Flavor::new(HTML, b"<p>plain <b>strong</b></p>".to_vec());
+        for (id, bold) in [("edit.paste", true), ("edit.pasteMerge", true), ("edit.pasteText", false)] {
+            let mut a = app_holding(&[Flavor::text("plain strong"), html.clone()]);
+            a.run(id, json!({})).unwrap();
+            assert_eq!(first_para(&a), "plain strong", "{id}");
+            assert_eq!(bold_at(&a, 7), bold, "{id}");
+            assert!(!bold_at(&a, 0), "{id}");
+        }
+        let mut a = app_holding(&[Flavor::text("plain strong"), html.clone()]);
         let r = a.run("edit.pasteSpecial", json!({})).unwrap();
         let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().filter_map(|f| f["id"].as_str()).collect();
         assert_eq!(ids, ["html", "text"]);
-    }
-
-    /// RTF is used where the clipboard has no HTML; oversized payloads are dropped, not pasted.
-    #[test]
-    fn rtf_and_oversized_clipboard_payloads() {
-        let services = Services {
-            clipboard_text: Some(Box::new(|| Some("bold".into()))),
-            clipboard_html: Some(Box::new(|| Some(format!("<b>{}</b>", "x".repeat(MAX_PASTE_BYTES))))),
-            clipboard_rtf: Some(Box::new(|| Some(r"{\rtf1\ansi {\b bold}}".into()))),
-            ..Default::default()
-        };
-        let mut a = app(services);
-        a.run("edit.paste", json!({})).unwrap();
-        assert_eq!(first_para(&a), "bold");
-        assert!(bold_at(&a, 0), "the RTF's bold, not the oversized HTML");
+        let rtf = Flavor::new(RTF, br"{\rtf1\ansi {\b bold}}".to_vec());
+        let huge = Flavor::new(HTML, format!("<b>{}</b>", "x".repeat(MAX_PASTE_BYTES)).into_bytes());
+        for flavors in [vec![Flavor::text("bold"), rtf.clone()], vec![Flavor::text("bold"), huge, rtf]] {
+            let mut a = app_holding(&flavors);
+            a.run("edit.paste", json!({})).unwrap();
+            assert_eq!(first_para(&a), "bold");
+            assert!(bold_at(&a, 0), "the RTF's bold");
+        }
     }
 
     /// Paste Special lists a picture on the system clipboard and pastes it.
     #[test]
     fn paste_special_offers_the_clipboard_picture() {
-        let services = Services {
-            clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Pixels { width: 4, height: 4, rgba: vec![200; 64] }))),
-            ..Default::default()
-        };
-        let mut a = app(services);
+        let mut a = app_holding(&[rgba8(4, 4, 200)]);
         let r = a.run("edit.pasteSpecial", json!({})).unwrap();
         let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().filter_map(|f| f["id"].as_str()).collect();
         assert_eq!(ids, ["picture"]);
-        // Choosing it in the dialog (or naming it) pastes the picture.
         let r = a.run("edit.pasteSpecial", json!({"as": "picture"})).unwrap();
         assert_eq!(r["pastedAs"], "picture");
         assert_eq!(a.session.doc.media.len(), 1);
     }
 
-    /// A clipboard holding nothing WordCraft can paste says what it holds (#833); one that can't
-    /// be read says why; a truly empty one says it is empty.
+    /// A clipboard holding nothing pasteable says what it holds; an empty one says it is empty; a
+    /// long list is capped; an unreadable picture says it couldn't be read.
     #[test]
     fn nothing_to_paste_says_what_the_clipboard_holds() {
-        let services = Services {
-            clipboard_formats: Some(Box::new(|| vec!["TARGETS".into(), "image/x-unknown".into(), "text/x-moz-url".into(), "image/x-unknown".into()])),
-            clipboard_picture: Some(Box::new(|| None)),
-            ..Default::default()
-        };
-        let mut a = app(services);
-        let e = a.run("edit.paste", json!({})).unwrap_err();
-        assert_eq!(e, "nothing on the clipboard can be pasted here (it holds image/x-unknown, text/x-moz-url)");
-        assert_eq!(a.run("edit.pasteMerge", json!({})).unwrap_err(), e);
-        let many = Services { clipboard_formats: Some(Box::new(|| (0..20).map(|i| format!("f{i}")).collect())), ..Default::default() };
-        assert!(nothing_to_paste(&app(many)).ends_with("f5 and 14 more)"));
-        let mut a = app(Services::default());
-        assert_eq!(a.run("edit.paste", json!({})).unwrap_err(), "the clipboard is empty");
-        let unreadable = Services {
-            clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Unreadable("its format isn't supported".into())))),
-            ..Default::default()
-        };
-        let e = app(unreadable).run("edit.paste", json!({})).unwrap_err();
-        assert!(e.contains("couldn't be read") && e.contains("isn't supported"), "{e}");
+        let a = app_holding(&[]);
+        let empty = nothing_to_paste(&a);
+        let mut a = app_holding(&[Flavor::new("text/x-moz-url", b"x".to_vec())]);
+        let holds = a.run("edit.paste", json!({})).unwrap_err();
+        assert!(holds.contains("text/x-moz-url") && !empty.contains("text/x-moz-url"), "{holds} / {empty}");
+        assert_ne!(holds, empty);
+        assert_eq!(a.run("edit.pasteMerge", json!({})).unwrap_err(), holds);
+        let many: Vec<Flavor> = (0..20).map(|i| Flavor::new(format!("x-f/{i}"), vec![1])).collect();
+        let capped = nothing_to_paste(&app_holding(&many));
+        assert!(capped.contains("more") && capped.len() < many.iter().map(|f| f.mime.len() + 2).sum::<usize>() + holds.len() + 40, "{capped}");
+        // A picture whose pixels don't match its header can't be read.
+        let mut broken = 1u32.to_le_bytes().to_vec();
+        broken.extend_from_slice(&1u32.to_le_bytes());
+        let mut b = app_holding(&[Flavor::new(RGBA8_MIME, broken)]);
+        assert!(b.run("edit.paste", json!({})).is_err());
+        assert!(b.session.doc.media.is_empty(), "no picture is inserted from an unreadable one");
     }
 
+    const RGBA8_MIME: &str = craft::platform::clipboard::RGBA8;
+
+    /// The flavours written for an equation alone, text around an equation, and plain text.
     #[test]
     fn copying_an_equation_puts_its_html_on_the_system_clipboard() {
-        // #816: the host gets HTML with the equation as MathML beside the text, and RTF.
-        let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, String, String, String)>::new()));
-        let sink = got.clone();
-        let mut a = app(Services {
-            set_clipboard_rich: Some(Box::new(move |t, h, r, m| {
-                sink.borrow_mut().push((h.to_string(), t.to_string(), m.to_string(), r.to_string()));
-                true
-            })),
-            ..Default::default()
-        });
+        let mut a = app_holding(&[]);
+        let ctx = a.ctx.clone().unwrap();
+        let clip = ClipboardHandle::of(&ctx);
+        let flavor = |mime: &str| clip.read(&[mime]).ok().flatten().map(|f| String::from_utf8_lossy(&f.data).into_owned());
+        let has_mathml = || clip.formats().iter().any(|f| f.contains("mathml"));
         a.run("document.setText", json!({"text": "Speed "})).unwrap();
         a.run("caret.docEnd", json!({})).unwrap();
         a.run("insert.equation", json!({"linear": "y=2x_s", "edit": false})).unwrap();
         a.run("select.all", json!({})).unwrap();
-        let ctx = egui::Context::default();
         let r = a.run("edit.copy", json!({})).unwrap();
         put_result(&mut a, &ctx, &r);
-        let got_now = got.borrow().clone();
-        assert_eq!(got_now.len(), 1);
-        assert!(got_now[0].0.contains("<math") && got_now[0].1.contains("y=2x_s"), "{got_now:?}");
-        // With text around it, no MathML formats: Word would paste the equation alone (#1297).
-        assert!(got_now[0].2.is_empty(), "{got_now:?}");
-        // Text without an equation gets HTML too, so other programs keep its formatting (#1523),
-        // and RTF for the programs that read that (gap-clipboard-rtf).
+        assert!(flavor(HTML).is_some_and(|h| h.contains("<math")));
+        assert!(flavor(TEXT).is_some_and(|t| t.contains("y=2x_s")));
+        assert!(!has_mathml(), "text around an equation has no MathML flavour");
         a.run("select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 5}})).unwrap();
         let r = a.run("edit.copy", json!({})).unwrap();
         put_result(&mut a, &ctx, &r);
-        let got_now = got.borrow().clone();
-        assert_eq!(got_now.len(), 2);
-        assert!(got_now[1].0.contains("Speed") && !got_now[1].0.contains("<math") && got_now[1].1 == "Speed", "{got_now:?}");
-        assert!(got_now[1].2.is_empty(), "{got_now:?}");
-        assert!(got_now[1].3.starts_with("{\\rtf1") && got_now[1].3.contains("Speed"), "{got_now:?}");
-        // The equation alone: its MathML for the platform's MathML formats too (#1297).
+        assert!(flavor(HTML).is_some_and(|h| h.contains("Speed") && !h.contains("<math")));
+        assert_eq!(flavor(TEXT).as_deref(), Some("Speed"));
+        assert!(flavor(RTF).is_some_and(|r| r.starts_with("{\\rtf1") && r.contains("Speed")));
+        assert!(!has_mathml());
         a.run("select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 9}})).unwrap();
         let r = a.run("edit.copy", json!({})).unwrap();
         put_result(&mut a, &ctx, &r);
-        let got_now = got.borrow().clone();
-        assert_eq!(got_now.len(), 3);
-        assert!(got_now[2].2.starts_with("<math") && got_now[2].2.contains("<msub>") && got_now[2].1 == "y=2x_s", "{got_now:?}");
+        assert!(has_mathml(), "the equation alone has a MathML flavour");
+        assert_eq!(flavor(TEXT).as_deref(), Some("y=2x_s"));
     }
 
-    /// A desktop whose system clipboard can't be opened (a Wayland session without a working
-    /// data-control protocol and with no X11 fallback, #1368): the host reads no text, as an empty
-    /// clipboard would.
-    fn unreachable() -> Services {
-        Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| true)), ..Default::default() }
-    }
-
-    /// Whether a pass's output asks egui for a paste.
-    fn asks_paste(out: &egui::FullOutput) -> bool {
-        out.viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::RequestPaste)))
-    }
-
-    /// Runs `id` (no text, as the context menu and ribbon send) inside an egui pass at `time`, as
-    /// the app does: its result and whether egui was asked for a paste in that pass.
-    fn menu_paste(a: &mut WordApp, ctx: &egui::Context, id: &str) -> (Result<Value, String>, bool) {
-        let mut r = None;
-        let out = ctx.run_pass(egui::RawInput { time: Some(0.0), ..Default::default() }, |ctx| {
-            a.ctx = Some(ctx.clone());
-            r = Some(a.run(id, json!({})));
-        });
-        let asked = asks_paste(&out);
-        out.drop_without_applying_deltas();
-        (r.unwrap(), asked)
-    }
-
-    /// One app frame at `time` with `events`, as `WordApp` runs it: the raw input hook claims, then
-    /// the frame's logic ticks. Whether egui was asked for a paste, and the events left for the
-    /// page.
-    fn frame(a: &mut WordApp, ctx: &egui::Context, time: f64, mut events: Vec<egui::Event>) -> (bool, Vec<egui::Event>) {
-        claim(a, &mut events);
-        let left = events.clone();
-        let out = ctx.run_pass(egui::RawInput { time: Some(time), events, ..Default::default() }, |ctx| tick(a, ctx));
-        let asked = asks_paste(&out);
-        out.drop_without_applying_deltas();
-        (asked, left)
-    }
-
-    fn paste(t: &str) -> egui::Event {
-        egui::Event::Paste(t.into())
-    }
-
-    /// The context menu's Paste with the system clipboard out of reach waits for the menu to
-    /// close, asks egui for the text as Ctrl+V gets it, and pastes it once: the event is taken
-    /// before the page sees it (the page isn't focused yet, and would paste it again). A Ctrl+V
-    /// before egui is asked, and any paste event after, are left to the page.
-    #[test]
-    fn menu_paste_without_the_system_clipboard_reads_the_text_through_egui() {
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        let (r, asked) = menu_paste(&mut a, &ctx, "edit.paste");
-        assert_eq!(r.unwrap(), json!({"pending": "paste"}));
-        assert!(!asked, "not while the menu is closing");
-        let (asked, left) = frame(&mut a, &ctx, 0.01, vec![paste("ctrl+v")]);
-        assert!(!asked && left.len() == 1, "a paste before egui is asked is Ctrl+V's");
-        assert!(a.pending_paste.is_none(), "and replaces the menu's, which stops waiting");
-        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-        assert!(!frame(&mut a, &ctx, 0.01, vec![]).0);
-        assert!(!frame(&mut a, &ctx, 0.02, vec![]).0);
-        assert!(frame(&mut a, &ctx, 0.03, vec![]).0, "asked once the menu has closed");
-        assert_eq!(first_para(&a), "", "nothing is pasted before the text comes");
-        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("from another program")]);
-        assert!(left.is_empty(), "the page never sees the claimed text");
-        assert_eq!(first_para(&a), "from another program");
-        assert!(a.pending_paste.is_none());
-        let (_, left) = frame(&mut a, &ctx, 0.2, vec![paste("again")]);
-        assert_eq!(left.len(), 1, "a later paste event is Ctrl+V's own");
-        assert_eq!(first_para(&a), "from another program");
-    }
-
-    /// A Wayland session without data-control, where the host's clipboard opens through Xwayland
-    /// but holds only another program's earlier copy: the menu Paste still waits for egui's text,
-    /// and pastes neither that copy's text nor its HTML.
-    #[test]
-    fn menu_paste_ignores_the_hosts_copy_when_it_is_out_of_reach() {
-        let services = Services {
-            clipboard_text: Some(Box::new(|| Some("an older copy".into()))),
-            clipboard_html: Some(Box::new(|| Some("<p>an <b>older</b> copy</p>".into()))),
-            clipboard_unreachable: Some(Box::new(|| true)),
-            ..Default::default()
-        };
-        let mut a = app(services);
-        let ctx = egui::Context::default();
-        let (r, _) = menu_paste(&mut a, &ctx, "edit.paste");
-        assert_eq!(r.unwrap(), json!({"pending": "paste"}));
-        frame(&mut a, &ctx, 0.01, vec![]);
-        frame(&mut a, &ctx, 0.02, vec![]);
-        assert!(frame(&mut a, &ctx, 0.03, vec![]).0, "egui is asked");
-        frame(&mut a, &ctx, 0.1, vec![paste("the current copy")]);
-        assert_eq!(first_para(&a), "the current copy");
-        assert!(!bold_at(&a, 4), "the earlier copy's HTML isn't pasted");
-    }
-
-    /// A host clipboard that mirrors Xwayland, read while it holds the text egui gave the paste:
-    /// Ctrl+V and the menu Paste keep its formatting, and an earlier copy there, with other text,
-    /// stays unread.
-    #[test]
-    fn a_mirrored_clipboard_holding_the_pasted_text_keeps_its_formatting() {
-        let mirrored = |text: &'static str| Services {
-            clipboard_text: Some(Box::new(move || Some(text.into()))),
-            clipboard_html: Some(Box::new(|| Some("<p>a <b>bold</b> line</p>".into()))),
-            clipboard_unreachable: Some(Box::new(|| true)),
-            clipboard_mirrored: Some(Box::new(|| true)),
-            ..Default::default()
-        };
-        // Ctrl+V brings egui's text.
-        for (host, bold) in [("a bold line", true), ("an older copy", false)] {
-            let mut a = app(mirrored(host));
-            a.ctx = Some(egui::Context::default());
-            a.run("edit.paste", json!({"text": "a bold line"})).unwrap();
-            assert_eq!(first_para(&a), "a bold line", "{host:?}");
-            assert_eq!(bold_at(&a, 3), bold, "{host:?}");
-        }
-        // CRLF on one side and LF on the other is the same text.
-        let mut a = app(mirrored("a bold\r\nline"));
-        a.ctx = Some(egui::Context::default());
-        a.run("edit.paste", json!({"text": "a bold\nline"})).unwrap();
-        assert!(bold_at(&a, 3));
-        // The menu Paste waits for egui's text, then reads the host's HTML beside it.
-        let mut a = app(mirrored("a bold line"));
-        let ctx = egui::Context::default();
-        assert_eq!(menu_paste(&mut a, &ctx, "edit.paste").0.unwrap(), json!({"pending": "paste"}));
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        frame(&mut a, &ctx, 0.1, vec![paste("a bold line")]);
-        assert_eq!(first_para(&a), "a bold line");
-        assert!(bold_at(&a, 3));
-    }
-
-    /// Text that only names a picture file, with a mirrored host clipboard holding that text: the
-    /// host's copy is read, as with the clipboard in reach, so its picture is pasted even when no
-    /// such file is here; with other text there, a path naming no file stays text. A host copy
-    /// with the text but no copied files leaves the text as text, though the file it names exists.
-    #[test]
-    fn a_mirrored_clipboard_holding_a_named_file_is_read() {
-        let path = if cfg!(windows) { r"C:\no-such-dir\copied.png" } else { "/no-such-dir/copied.png" };
-        for (host, inserted) in [(path, true), ("an older copy", false)] {
-            let services = Services {
-                clipboard_text: Some(Box::new(move || Some(host.into()))),
-                clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Pixels { width: 2, height: 2, rgba: vec![255; 16] }))),
-                clipboard_unreachable: Some(Box::new(|| true)),
-                clipboard_mirrored: Some(Box::new(|| true)),
-                ..Default::default()
-            };
-            let mut a = app(services);
-            assert_eq!(paste_picture::paste_named_files(&mut a, path), inserted, "{host}");
-            assert_eq!(!a.session.doc.media.is_empty(), inserted, "{host}");
-        }
-        // The mirrored copy holds the text but no picture: it is plain text, as with the clipboard
-        // in reach.
-        let dir = std::env::temp_dir().join(format!("wc-mirrored-named-file-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("copied.png");
-        std::fs::write(&file, paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap()).unwrap();
-        let named = file.to_string_lossy().into_owned();
-        let host = named.clone();
-        let services = Services {
-            clipboard_text: Some(Box::new(move || Some(host.clone()))),
-            clipboard_picture: Some(Box::new(|| None)),
-            clipboard_unreachable: Some(Box::new(|| true)),
-            clipboard_mirrored: Some(Box::new(|| true)),
-            ..Default::default()
-        };
-        let mut a = app(services);
-        assert!(!paste_picture::paste_named_files(&mut a, &named), "{named}");
-        assert!(a.session.doc.media.is_empty(), "{named}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// An edit made another way while the Paste waits (an agent's, over the control channel or
-    /// MCP) may have moved the caret: the paste is cancelled with a message.
-    #[test]
-    fn an_edit_while_the_paste_waits_cancels_it() {
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        a.execute("text.insert", json!({"text": "agent"})).unwrap();
-        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("late")]);
-        assert!(left.is_empty(), "the text was the menu Paste's");
-        assert!(a.pending_paste.is_none());
-        assert_eq!(first_para(&a), "agent");
-        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(CHANGED));
-    }
-
-    /// The text goes to the document the Paste was chosen in: with another one shown by the time
-    /// it comes, the paste is cancelled with a message, and neither document changes.
-    #[test]
-    fn a_paste_is_cancelled_when_another_document_is_shown() {
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        let first = a.session.document_id();
-        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        a.run("file.new", json!({})).unwrap();
-        let second = a.session.document_id();
-        assert_ne!(first, second);
-        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("meant for the first")]);
-        assert!(left.is_empty(), "the text was the menu Paste's, not a new Ctrl+V");
-        assert!(a.pending_paste.is_none());
-        assert_eq!(first_para(&a), "", "not pasted into the document shown now");
-        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(CANCELLED));
-        a.session.switch_document(first).unwrap();
-        assert_eq!(first_para(&a), "", "nor into the one it was meant for, unseen");
-    }
-
-    /// egui-winit's Wayland bridge may deliver the text up to three seconds after the request: an
-    /// answer that slow is still the menu Paste's, claimed and pasted, never left to the page as
-    /// an ordinary paste after a "no text" message.
-    #[test]
-    fn a_slow_answer_within_the_bridge_budget_is_still_claimed() {
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        frame(&mut a, &ctx, 1.5, vec![]);
-        assert!(a.pending_paste.is_some(), "still waiting after a second and a half");
-        let (_, left) = frame(&mut a, &ctx, 0.03 + 2.95, vec![paste("slow")]);
-        assert!(left.is_empty(), "claimed, not left to the page");
-        assert_eq!(first_para(&a), "slow");
-        assert!(a.status_msg.is_none(), "no 'no text' message before it");
-    }
-
-    /// Input before the text comes (a click in a search box, a key) ends the wait: a Ctrl+V the
-    /// person makes after it is theirs, for wherever they are now, and stays in the events.
-    /// Moving the pointer or letting go of the menu's click doesn't count.
-    #[test]
-    fn other_input_before_the_text_ends_the_wait() {
-        let click = |pressed| egui::Event::PointerButton {
-            pos: egui::pos2(10.0, 10.0),
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::default(),
-        };
-        let key = egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::default() };
-        // An IME commit and the window losing the focus end egui-winit's read too.
-        let ime = egui::Event::Ime(egui::ImeEvent::Commit("あ".into()));
-        for interrupt in [click(true), key, egui::Event::Text("a".into()), ime, egui::Event::WindowFocused(false)] {
-            let mut a = app(unreachable());
-            let ctx = egui::Context::default();
-            menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-            frame(&mut a, &ctx, 0.01, vec![click(false), egui::Event::PointerMoved(egui::pos2(5.0, 5.0))]);
-            for t in [0.02, 0.03] {
-                frame(&mut a, &ctx, t, vec![]);
-            }
-            assert!(a.pending_paste.as_ref().is_some_and(|p| p.since.is_some()), "a release and a move don't end it");
-            let (_, left) = frame(&mut a, &ctx, 0.2, vec![interrupt.clone(), paste("for the search box")]);
-            assert!(a.pending_paste.is_none(), "{interrupt:?} ends the wait");
-            assert_eq!(left.len(), 2, "the later paste is left where the person is: {interrupt:?}");
-            assert_eq!(first_para(&a), "");
-            assert!(a.status_msg.is_none(), "no 'no text' message later");
-        }
-    }
-
-    /// A clipboard holding only a picture: egui answers with the picture, which is claimed (left
-    /// for the page, its Paste would ask egui again, and again). Paste inserts it as one picture,
-    /// Paste Special lists it, and Keep Text Only says there is no text.
-    #[test]
-    fn a_picture_egui_reads_is_claimed_and_pasted() {
-        let picture = || egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([3, 2], vec![egui::Color32::RED; 6])));
-        for id in ["edit.paste", "edit.pasteSpecial", "edit.pasteText"] {
-            let mut a = app(unreachable());
-            // An earlier copy made here, older than the picture on the clipboard.
-            a.run("text.insert", json!({"text": "older"})).unwrap();
-            a.run("select.all", json!({})).unwrap();
-            a.run("edit.copy", json!({})).unwrap();
-            a.run("caret.docEnd", json!({})).unwrap();
-            let ctx = egui::Context::default();
-            menu_paste(&mut a, &ctx, id).0.unwrap();
-            for t in [0.01, 0.02, 0.03] {
-                frame(&mut a, &ctx, t, vec![]);
-            }
-            let (_, left) = frame(&mut a, &ctx, 0.1, vec![picture()]);
-            assert!(left.is_empty(), "{id}: the picture never reaches the page");
-            frame(&mut a, &ctx, 0.2, vec![]);
-            assert!(a.pending_paste.is_none(), "{id}");
-            assert!(!frame(&mut a, &ctx, 0.3, vec![]).0, "{id}: egui isn't asked again");
-            match id {
-                "edit.paste" => assert_eq!(a.session.doc.media.len(), 1),
-                "edit.pasteSpecial" => {
-                    let Some(crate::dialogs::Dialog::PasteSpecial { formats, .. }) = &a.dialog else { panic!("no Paste Special dialog") };
-                    assert_eq!(formats, &["picture"], "the earlier copy's text isn't offered");
-                    assert!(a.session.doc.media.is_empty(), "nothing is pasted until OK");
-                }
-                _ => {
-                    assert!(a.session.doc.media.is_empty());
-                    assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(NO_TEXT));
-                }
-            }
-        }
-    }
-
-    /// The key that chose Paste (Enter in the menu, a KeyTip letter), still held, repeats:
-    /// egui-winit sends each repeat as a press that isn't marked as one yet, followed for a letter
-    /// by the text it types, and neither ends the wait. A press of another key does, and so does
-    /// text that follows no repeat.
-    #[test]
-    fn a_held_keys_repeat_doesnt_end_the_wait() {
-        let press = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::default() };
-        for (key, repeat) in
-            [(egui::Key::Enter, vec![press(egui::Key::Enter)]), (egui::Key::V, vec![press(egui::Key::V), egui::Event::Text("v".into())])]
-        {
-            let mut a = app(unreachable());
-            let ctx = egui::Context::default();
-            ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![press(key)], ..Default::default() }, |_| {}).drop_without_applying_deltas();
-            menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-            for t in [0.01, 0.02, 0.03] {
-                frame(&mut a, &ctx, t, repeat.clone());
-            }
-            // egui-winit's Wayland bridge drops the read at the repeat: egui is asked again.
-            assert!(frame(&mut a, &ctx, 0.5, repeat.clone()).0, "{key:?}: asked again after a repeat");
-            assert!(a.pending_paste.as_ref().is_some_and(|p| p.since.is_some()), "{key:?}: the held key's repeats don't end it");
-            frame(&mut a, &ctx, 0.6, vec![press(egui::Key::A)]);
-            assert!(a.pending_paste.is_none(), "{key:?}: another key does");
-        }
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![press(egui::Key::V)], ..Default::default() }, |_| {})
-            .drop_without_applying_deltas();
-        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-        frame(&mut a, &ctx, 0.01, vec![egui::Event::Text("v".into())]);
-        assert!(a.pending_paste.is_none(), "text on its own does");
-        // Let go and pressed again in one batch, the key is typing, not a repeat.
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![press(egui::Key::V)], ..Default::default() }, |_| {})
-            .drop_without_applying_deltas();
-        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-        let release =
-            egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::default() };
-        frame(&mut a, &ctx, 0.01, vec![release, press(egui::Key::V), egui::Event::Text("v".into())]);
-        assert!(a.pending_paste.is_none(), "a new press does");
-    }
-
-    /// Ctrl+V while Paste Special waits sends no key event, only its paste: Ctrl going down ends
-    /// the wait, and the paste is left to the page as Ctrl+V's, not run as Paste Special. Ctrl
-    /// already down when the Paste was chosen (its own shortcut) counts only once let go, and egui
-    /// isn't asked until then.
-    #[test]
-    fn ctrl_going_down_ends_the_wait() {
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        menu_paste(&mut a, &ctx, "edit.pasteSpecial").0.unwrap();
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        let ctrl = |down| egui::Event::ModifiersChanged(if down { egui::Modifiers::COMMAND } else { egui::Modifiers::NONE });
-        let (_, left) = frame(&mut a, &ctx, 0.1, vec![ctrl(true), paste("ctrl+v")]);
-        assert!(a.pending_paste.is_none());
-        assert_eq!(left.len(), 2, "the paste is Ctrl+V's");
-        assert!(a.dialog.is_none(), "Paste Special doesn't open");
-
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![ctrl(true)], ..Default::default() }, |ctx| {
-            a.ctx = Some(ctx.clone());
-            a.run("edit.paste", json!({})).unwrap();
-        })
-        .drop_without_applying_deltas();
-        for t in [0.01, 0.02, 0.03] {
-            assert!(!frame(&mut a, &ctx, t, vec![ctrl(true)]).0, "not asked while the shortcut's Ctrl is held");
-        }
-        assert!(a.pending_paste.is_some(), "the shortcut's own Ctrl, still held");
-        assert!(frame(&mut a, &ctx, 0.04, vec![ctrl(false)]).0, "asked once it is let go");
-        frame(&mut a, &ctx, 0.05, vec![ctrl(true)]);
-        assert!(a.pending_paste.is_none(), "pressed again, it ends the wait");
-
-        // Paste Special chosen with Ctrl down, then V pressed again with Ctrl still down: the
-        // paste is Ctrl+V's, not Paste Special's answer.
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![ctrl(true)], ..Default::default() }, |ctx| {
-            a.ctx = Some(ctx.clone());
-            a.run("edit.pasteSpecial", json!({})).unwrap();
-        })
-        .drop_without_applying_deltas();
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("ctrl+v")]);
-        assert_eq!(left.len(), 1, "left to the page as Ctrl+V's");
-        assert!(a.pending_paste.is_none() && a.dialog.is_none(), "Paste Special doesn't open");
-    }
-
-    /// Keep Text Only and Merge Formatting wait the same way and run as themselves.
-    #[test]
-    fn the_waiting_paste_keeps_its_own_command() {
-        for id in ["edit.pasteText", "edit.pasteMerge"] {
-            let mut a = app(unreachable());
-            let ctx = egui::Context::default();
-            menu_paste(&mut a, &ctx, id).0.unwrap();
-            for t in [0.01, 0.02, 0.03] {
-                frame(&mut a, &ctx, t, vec![]);
-            }
-            frame(&mut a, &ctx, 0.1, vec![paste("plain")]);
-            assert_eq!(first_para(&a), "plain", "{id}");
-            assert_eq!(a.session.last_command.as_ref().map(|(c, _)| c.as_str()), Some(id), "{id} ran, not Paste");
-        }
-    }
-
-    /// The context menu's Paste Special waits the same way, then opens its dialog listing the
-    /// text egui read, instead of saying the clipboard is empty (#6635).
-    #[test]
-    fn paste_special_waits_and_lists_the_text() {
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        assert_eq!(menu_paste(&mut a, &ctx, "edit.pasteSpecial").0.unwrap(), json!({"pending": "paste"}));
-        assert!(a.dialog.is_none(), "no dialog before the text comes");
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("listed")]);
-        assert!(left.is_empty());
-        let Some(crate::dialogs::Dialog::PasteSpecial { formats, payload, .. }) = &a.dialog else { panic!("no Paste Special dialog") };
-        assert!(formats.iter().any(|f| f == "text"), "{formats:?}");
-        assert_eq!(payload.get("text").and_then(Value::as_str), Some("listed"));
-        assert_eq!(first_para(&a), "", "nothing is pasted until OK");
-    }
-
-    /// A copied picture file reaches egui's paste as its path, and the host, which can't open the
-    /// clipboard, reads no picture: the waiting Paste inserts the file the path names, as Ctrl+V
-    /// does, and never types the path into the document. A path to a missing file names no copied
-    /// file, and pastes as text.
-    #[test]
-    fn a_waiting_paste_of_copied_picture_files_inserts_the_pictures() {
-        let dir = std::env::temp_dir().join(format!("wc-waiting-paste-files-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("copied.png");
-        std::fs::write(&file, paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap()).unwrap();
-        let address = |f: &std::path::Path| format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, f.to_string_lossy().replace('\\', "/"));
-        for (path, inserted) in [(address(&file), true), (address(&dir.join("missing.png")), false)] {
-            let unreadable = || Some(paste_picture::ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into()));
-            let mut a = app(Services { clipboard_picture: Some(Box::new(unreadable)), ..unreachable() });
-            let ctx = egui::Context::default();
-            menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-            for t in [0.01, 0.02, 0.03] {
-                frame(&mut a, &ctx, t, vec![]);
-            }
-            frame(&mut a, &ctx, 0.1, vec![paste(&path)]);
-            assert!(a.pending_paste.is_none());
-            let typed = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(".png");
-            assert_eq!(typed, !inserted, "the path is pasted as text only when it names no file: {path}");
-            assert_eq!(!a.session.doc.media.is_empty(), inserted, "{path}");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// No answer within `PASTE_WAIT_SECS` of asking (the clipboard is empty): the wait ends with a
-    /// message, and a paste event after that is left to the page.
-    #[test]
-    fn a_paste_that_gets_no_text_gives_up_with_a_message() {
-        let mut a = app(unreachable());
-        let ctx = egui::Context::default();
-        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
-        for t in [0.01, 0.02, 0.03] {
-            frame(&mut a, &ctx, t, vec![]);
-        }
-        frame(&mut a, &ctx, 0.5, vec![]);
-        assert!(a.pending_paste.is_some(), "still waiting");
-        frame(&mut a, &ctx, 0.03 + PASTE_WAIT_SECS + 0.1, vec![]);
-        assert!(a.pending_paste.is_none());
-        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some("the clipboard has no text to paste"));
-        let (_, left) = frame(&mut a, &ctx, 0.03 + PASTE_WAIT_SECS + 1.0, vec![paste("late")]);
-        assert_eq!(left.len(), 1);
-        assert_eq!(first_para(&a), "");
-    }
-
-    /// Only an unreachable clipboard waits: one that opens but is empty says so at once, a paste
-    /// that brings its text (Ctrl+V, an agent) runs as before, Paste Special's OK runs at once, and
-    /// with no window yet (the CLI, MCP) nothing waits.
-    #[test]
-    fn only_a_menu_paste_with_the_clipboard_out_of_reach_waits() {
-        let ctx = egui::Context::default();
-        let empty = Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| false)), ..Default::default() };
-        let mut a = app(empty);
-        assert!(menu_paste(&mut a, &ctx, "edit.paste").0.is_err());
-        assert!(a.pending_paste.is_none());
-
-        let mut a = app(unreachable());
-        a.ctx = Some(ctx.clone());
-        a.run("edit.paste", json!({"text": "typed"})).unwrap();
-        assert_eq!(first_para(&a), "typed");
-        assert!(a.pending_paste.is_none());
-        // Paste Special's OK names the format chosen and runs at once.
-        a.run("edit.pasteSpecial", json!({"text": "ok", "as": "text"})).unwrap();
-        assert!(a.pending_paste.is_none());
-
-        let mut a = app(unreachable());
-        assert!(a.run("edit.paste", json!({})).is_err());
-        assert!(a.pending_paste.is_none());
-
-        // A paste that brings its own formatted content runs at once, with it.
-        let mut a = app(unreachable());
-        a.ctx = Some(ctx.clone());
-        a.run("edit.paste", json!({"html": "<p>plain <b>strong</b></p>"})).unwrap();
-        assert!(a.pending_paste.is_none());
-        assert_eq!(first_para(&a), "plain strong");
-        assert!(bold_at(&a, 7));
-    }
-
-    /// A paste that brings its own HTML or RTF pastes it, never the host's clipboard picture instead,
-    /// whether the clipboard is out of reach or holds no text, and a picture that can't be read
-    /// doesn't stop it.
-    #[test]
-    fn a_paste_bringing_its_own_content_skips_the_hosts_picture() {
-        let pixels = || Some(ClipboardPicture::Pixels { width: 4, height: 4, rgba: vec![200; 64] });
-        let unreadable = || Some(ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into()));
-        let reachable =
-            || Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| false)), ..Default::default() };
-        let cases: [(Services, &str); 3] = [
-            (Services { clipboard_picture: Some(Box::new(pixels)), ..unreachable() }, "out of reach, with a picture"),
-            (Services { clipboard_picture: Some(Box::new(unreadable)), ..unreachable() }, "out of reach, unreadable"),
-            (Services { clipboard_picture: Some(Box::new(pixels)), ..reachable() }, "no text, with a picture"),
-        ];
-        for (services, case) in cases {
-            let mut a = app(services);
-            a.ctx = Some(egui::Context::default());
-            a.run("edit.paste", json!({"html": "<p>plain <b>strong</b></p>"})).unwrap();
-            assert!(a.session.doc.media.is_empty(), "{case}");
-            assert_eq!(first_para(&a), "plain strong", "{case}");
-            assert!(bold_at(&a, 7), "{case}");
-        }
-        // RTF the same.
-        let mut a = app(Services { clipboard_picture: Some(Box::new(pixels)), ..unreachable() });
-        a.ctx = Some(egui::Context::default());
-        a.run("edit.paste", json!({"rtf": r"{\rtf1\ansi {\b bold}}"})).unwrap();
-        assert!(a.session.doc.media.is_empty());
-        assert_eq!(first_para(&a), "bold");
-        // With no HTML or RTF of its own (Paste reads no `picture` param), the paste still takes
-        // the host's picture.
-        for params in [json!({}), json!({"picture": "AAAA"})] {
-            let mut a = app(Services { clipboard_picture: Some(Box::new(pixels)), ..reachable() });
-            a.run("edit.paste", params.clone()).unwrap();
-            assert_eq!(a.session.doc.media.len(), 1, "{params}");
-        }
-        // HTML on the host's clipboard beside its picture isn't the caller's: the picture wins.
-        let host_html = Services {
-            clipboard_picture: Some(Box::new(pixels)),
-            clipboard_html: Some(Box::new(|| Some("<p>the <b>host's</b> copy</p>".into()))),
-            ..reachable()
-        };
-        let mut a = app(host_html);
-        a.run("edit.paste", json!({})).unwrap();
-        assert_eq!(a.session.doc.media.len(), 1);
-        // Copied picture files, which the host's text names, don't replace the caller's HTML either.
-        let dir = std::env::temp_dir().join(format!("wc-paste-brings-html-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("copied.png");
-        std::fs::write(&file, paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap()).unwrap();
-        let (named, copied) = (file.to_string_lossy().into_owned(), file.clone());
-        let files = Services {
-            clipboard_text: Some(Box::new(move || Some(named.clone()))),
-            clipboard_picture: Some(Box::new(move || Some(ClipboardPicture::Files(vec![copied.clone()])))),
-            clipboard_unreachable: Some(Box::new(|| false)),
-            ..Default::default()
-        };
-        let mut a = app(files);
-        a.run("edit.paste", json!({"html": "<p>plain <b>strong</b></p>"})).unwrap();
-        assert!(a.session.doc.media.is_empty());
-        assert_eq!(first_para(&a), "plain strong");
-        let _ = std::fs::remove_dir_all(&dir);
+    fn app_with_copied_picture() -> WordApp {
+        let mut a = app_holding(&[]);
+        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
+        a.run("insert.picture", json!({"data": data})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        let ctx = a.ctx.clone().unwrap();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &r);
+        a
     }
 
     #[test]
     fn copying_an_image_publishes_image_and_html_to_system_clipboard() {
-        let got_image = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(usize, usize, String, String)>::new()));
-        let sink = got_image.clone();
-        let services = Services {
-            set_clipboard_image: Some(Box::new(move |img, html, text| {
-                sink.borrow_mut().push((img.width, img.height, html.to_string(), text.to_string()));
-                true
-            })),
-            ..Default::default()
-        };
-        let mut a = app(services);
-        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
-        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
-        a.run("insert.picture", json!({"data": data})).unwrap();
-        a.run("select.all", json!({})).unwrap();
-        let ctx = egui::Context::default();
-        let r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&mut a, &ctx, &r);
+        let a = app_with_copied_picture();
         assert!(a.clipboard_published);
-        let got = got_image.borrow().clone();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].0, 2);
-        assert_eq!(got[0].1, 2);
-        assert!(got[0].2.contains("<img src=\"data:image/png;base64,"));
+        let clip = handle(&a).unwrap();
+        let image = clip.read_image().unwrap().unwrap();
+        assert_eq!((image.width, image.height), (2, 2));
+        let html = clip.read(&[HTML]).unwrap().unwrap();
+        assert!(String::from_utf8_lossy(&html.data).contains("<img src=\"data:image/png;base64,"));
     }
 
+    /// After our own copy the paste keeps the fragment, not the clipboard's bitmap.
     #[test]
     fn pasting_own_image_uses_private_clipboard_fragment() {
-        let services =
-            Services { set_clipboard_image: Some(Box::new(|_, _, _| true)), clipboard_is_own: Some(Box::new(|| true)), ..Default::default() };
-        let mut a = app(services);
-        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
-        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
-        a.run("insert.picture", json!({"data": data})).unwrap();
-        a.run("select.all", json!({})).unwrap();
-        let ctx = egui::Context::default();
-        let r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&mut a, &ctx, &r);
-        assert!(a.clipboard_published);
-
+        let mut a = app_with_copied_picture();
         a.run("document.setText", json!({"text": ""})).unwrap();
-        assert_eq!(a.session.doc.body.len(), 1);
         assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty());
-
         let mut params = json!({});
         fill(&mut a, "edit.paste", &mut params);
         assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(true)));
         a.run("edit.paste", params).unwrap();
-
         assert!(!a.session.doc.media.is_empty());
-    }
-
-    /// Paste Special captures ownership when it opens; `fill` must keep that captured value
-    /// when the dialog submits, even if the clipboard changed meanwhile. Callers that pass no
-    /// flag still get it read from the clipboard ownership service.
-    #[test]
-    fn fill_keeps_a_callers_private_clipboard_flag() {
-        let services = Services { clipboard_is_own: Some(Box::new(|| true)), ..Default::default() };
-        let mut a = app(services);
-        a.clipboard_published = true;
-
-        let mut params = json!({"privateClipboard": false, "text": "Bold"});
-        fill(&mut a, "edit.pasteSpecial", &mut params);
-        assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(false)), "the captured flag wins");
-
-        let mut params = json!({});
-        fill(&mut a, "edit.paste", &mut params);
-        assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(true)), "without a flag fill reads ownership");
-    }
-
-    #[test]
-    fn empty_copy_does_not_publish_or_overwrite_clipboard_state() {
-        let got_image = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(usize, usize, String, String)>::new()));
-        let sink = got_image.clone();
-        let services = Services {
-            set_clipboard_image: Some(Box::new(move |img, html, text| {
-                sink.borrow_mut().push((img.width, img.height, html.to_string(), text.to_string()));
-                true
-            })),
-            ..Default::default()
-        };
-        let mut a = app(services);
-        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
-        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
-        a.run("insert.picture", json!({"data": data})).unwrap();
-        a.run("select.all", json!({})).unwrap();
-        let ctx = egui::Context::default();
-        let r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&mut a, &ctx, &r);
-        assert!(a.clipboard_published);
-        assert_eq!(got_image.borrow().len(), 1);
-
-        a.run("caret.docEnd", json!({})).unwrap();
-        assert!(a.session.sel.is_collapsed());
-
-        let empty_r = a.run("edit.copy", json!({})).unwrap();
-        put_result(&mut a, &ctx, &empty_r);
-
-        assert_eq!(got_image.borrow().len(), 1, "empty copy must not call set_clipboard_image");
-        assert!(a.clipboard_published, "empty copy must not change published-copy state");
-
-        let mut a2 = app(Services { set_clipboard_image: Some(Box::new(|_, _, _| true)), ..Default::default() });
-        assert!(!a2.clipboard_published);
-        let empty_r2 = a2.run("edit.copy", json!({})).unwrap();
-        put_result(&mut a2, &ctx, &empty_r2);
-        assert!(!a2.clipboard_published, "empty copy must not change published-copy state when false");
     }
 }
