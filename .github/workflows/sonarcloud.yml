@@ -20,5 +20,5 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     with:
       # Same craft-fonts commit as ci.yml: the UI glyph tests need its CJK and Arabic fonts.
-      fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      fonts-ref: aced4137c022f1f587624d48e81ec77e1914a9cc
     secrets: inherit
