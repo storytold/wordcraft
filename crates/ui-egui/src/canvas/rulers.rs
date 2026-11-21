@@ -46,7 +46,11 @@ pub(crate) fn page_rulers(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui
     let mut values = RulerValues::default();
     let mut doc_tabs: Vec<TabStop> = Vec::new();
     if let Some(rp) = &rp {
-        values.stops = rp.tabs.iter().filter_map(|t| Some(RulerStop::new(t.pos, ruler_align(t.align)?, ruler_leader(t.leader)))).collect();
+        // The ruler counts stops from the paragraph's start edge (the right edge in a
+        // right-to-left paragraph, #7095); the document counts them from the column's left
+        // edge, so right-to-left stops are mirrored around the column width.
+        values.stops =
+            rp.tabs.iter().filter_map(|t| Some(RulerStop::new(mirror_tab(t.pos, rtl, w), ruler_align(t.align)?, ruler_leader(t.leader)))).collect();
         values.stops.sort_by(|a, b| a.position.total_cmp(&b.position));
         values.left_indent = rp.indent_left;
         values.first_line_indent = rp.indent_first;
@@ -113,7 +117,7 @@ pub(crate) fn page_rulers(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui
                 let _ = a.run("para.indents", p);
             });
         }
-        if last && let Some(p) = tab_commands(&doc_tabs, &doc_stops(&v.stops)) {
+        if last && let Some(p) = tab_commands(&doc_tabs, &doc_stops(&v.stops, rtl, w)) {
             let _ = app.run("para.tabs", p);
         }
     });
@@ -281,9 +285,16 @@ pub(crate) fn tab_commands(before: &[TabStop], after: &[TabStop]) -> Option<Valu
     (!p.is_empty()).then_some(Value::Object(p))
 }
 
+/// A tab stop position between the document and the ruler: the document counts from the
+/// column's left edge, the ruler from the paragraph's start edge (its right edge in a
+/// right-to-left paragraph, #7095). Left to right the two agree.
+fn mirror_tab(pos: f32, rtl: bool, width: f32) -> f32 {
+    if rtl { width - pos } else { pos }
+}
+
 /// The document's stops for the ruler's.
-fn doc_stops(stops: &[RulerStop]) -> Vec<TabStop> {
-    stops.iter().map(|s| TabStop { pos: s.position, align: doc_align(s.align), leader: doc_leader(s.leader) }).collect()
+fn doc_stops(stops: &[RulerStop], rtl: bool, width: f32) -> Vec<TabStop> {
+    stops.iter().map(|s| TabStop { pos: mirror_tab(s.position, rtl, width), align: doc_align(s.align), leader: doc_leader(s.leader) }).collect()
 }
 
 /// The ruler's kind of stop for the document's; a clearing stop is not shown.
@@ -417,5 +428,31 @@ mod tests {
         assert_eq!(tab_commands(&[right], &[]), Some(json!({ "clear": [36.0] })));
         // A stop placed and taken off again in one gesture: nothing.
         assert_eq!(tab_commands(&[], &[]), None);
+    }
+
+    /// Right-to-left paragraphs count ruler stops from the start (right) edge while the
+    /// document counts them from the column's left edge (#7095): the feed and the commit
+    /// mirror around the column width, so a marker sits where its text aligns and a drag
+    /// writes where the marker was put.
+    #[test]
+    fn rtl_tab_stops_mirror_around_the_column() {
+        let w = 500.0;
+        // Left to right the two agree.
+        assert_eq!(mirror_tab(360.0, false, w), 360.0);
+        assert_eq!(doc_stops(&[RulerStop::new(360.0, RulerAlign::Left, RulerLeader::None)], false, w)[0].pos, 360.0);
+        // Right to left a stop 360 points from the left shows 140 from the start edge.
+        assert_eq!(mirror_tab(360.0, true, w), 140.0);
+        assert_eq!(doc_stops(&[RulerStop::new(140.0, RulerAlign::Left, RulerLeader::None)], true, w)[0].pos, 360.0);
+        // The round trip is stable: showing then committing a stop changes nothing.
+        for pos in [0.0, 36.0, 250.0, 500.0] {
+            assert_eq!(mirror_tab(mirror_tab(pos, true, w), true, w), pos);
+        }
+        // A drag on the ruler writes where the marker was put: the marker the feed showed
+        // at 140 (the document's 360) dragged to 200 commits the document's 300, and the
+        // text aligns under the marker instead of at its mirror.
+        let before = [stop(360.0, TabAlign::Left, TabLeader::None)];
+        let after = doc_stops(&[RulerStop::new(200.0, RulerAlign::Left, RulerLeader::None)], true, w);
+        assert_eq!(after, [stop(300.0, TabAlign::Left, TabLeader::None)]);
+        assert_eq!(tab_commands(&before, &after), Some(json!({ "clear": [360.0], "set": [stop(300.0, TabAlign::Left, TabLeader::None)] })));
     }
 }
