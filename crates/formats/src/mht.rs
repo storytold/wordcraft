@@ -1,6 +1,8 @@
 //! MHT / MHTML (Single File Web Page) import via `craft-mime` and `craft-html`.
 
-use std::sync::Arc;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use craft_mime::{Body, Part};
 use wordcraft_doc::{Document, SectionProps};
@@ -49,14 +51,72 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Document {
         return crate::txt::import_on(text, page);
     };
     let html = crate::html::decode_as(part_bytes(root), root.content_type.get("charset"));
-    let base = root.content_location().unwrap_or("");
-    let resources = craft_mime::Resources::of(&msg.root);
-    let left = std::cell::Cell::new(PICTURE_BUDGET);
-    let loader = |src: &str| -> Option<Arc<Vec<u8>>> {
-        let part = resources.find(src.trim(), base)?;
-        let data = part_bytes(part);
-        left.set(left.get().checked_sub(data.len())?);
-        Some(Arc::new(data.to_vec()))
-    };
+    let pictures = Pictures::new(&msg.root, root.content_location().unwrap_or(""), PICTURE_BUDGET);
+    let loader = |src: &str| pictures.load(src);
     crate::html::import_on(&html, &loader, page)
+}
+
+/// The picture parts a page names. While the document keeps a part's copy, every `img` that names
+/// the part shares it; a copy the document does not keep (not a picture) is freed. `loaded` keeps
+/// a `Weak` for each part loaded, also after its copy is freed, so it holds at most one entry per
+/// part, and `craft_mime::Limits::max_parts` bounds the number of parts.
+struct Pictures<'a> {
+    resources: craft_mime::Resources<'a>,
+    base: &'a str,
+    loaded: RefCell<HashMap<*const Part, Weak<Vec<u8>>>>,
+    left: Cell<usize>,
+}
+
+impl<'a> Pictures<'a> {
+    fn new(root: &'a Part, base: &'a str, budget: usize) -> Self {
+        Pictures { resources: craft_mime::Resources::of(root), base, loaded: RefCell::new(HashMap::new()), left: Cell::new(budget) }
+    }
+
+    /// The bytes of the part `src` names, charged to the budget for every `img`.
+    fn load(&self, src: &str) -> Option<Arc<Vec<u8>>> {
+        let part = self.resources.find(src.trim(), self.base)?;
+        let data = part_bytes(part);
+        self.left.set(self.left.get().checked_sub(data.len())?);
+        let key: *const Part = part;
+        let mut loaded = self.loaded.borrow_mut();
+        if let Some(kept) = loaded.get(&key).and_then(Weak::upgrade) {
+            return Some(kept);
+        }
+        let copy = Arc::new(data.to_vec());
+        loaded.insert(key, Arc::downgrade(&copy));
+        Some(copy)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PAGE: &[u8] = b"MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/html\r\nContent-Location: file:///c:/page.htm\r\n\r\n<p><img src=\"a.png\"><img src=\"a.png\"></p>\r\n--b\r\nContent-Type: image/png\r\nContent-Location: file:///c:/a.png\r\n\r\nabcdef\r\n--b--\r\n";
+
+    #[test]
+    fn a_part_named_twice_is_copied_once() {
+        let msg = craft_mime::parse(PAGE, &craft_mime::Limits::DEFAULT);
+        let pictures = Pictures::new(&msg.root, "file:///c:/page.htm", PICTURE_BUDGET);
+        let (Some(a), Some(b)) = (pictures.load("a.png"), pictures.load(" a.png ")) else {
+            panic!("the picture part was not found");
+        };
+        assert_eq!(a.as_slice(), b"abcdef");
+        assert!(Arc::ptr_eq(&a, &b), "each reference made its own copy of the part");
+        // A copy nobody keeps is not held for later references.
+        drop((a, b));
+        assert!(pictures.loaded.borrow().values().all(|w| w.strong_count() == 0));
+        assert!(pictures.load("a.png").is_some());
+    }
+
+    #[test]
+    fn every_reference_is_charged_to_the_budget() {
+        let msg = craft_mime::parse(PAGE, &craft_mime::Limits::DEFAULT);
+        let pictures = Pictures::new(&msg.root, "file:///c:/page.htm", 10);
+        // The first copy stays alive, so the second load is a reference to it.
+        let first = pictures.load("a.png");
+        assert!(first.is_some());
+        assert!(pictures.load("a.png").is_none(), "6 more bytes do not fit in the 4 left");
+        drop(first);
+    }
 }
