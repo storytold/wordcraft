@@ -61,6 +61,7 @@ fn deleted_char_props(s: &Session, a: &Pos, f: &Pos) -> Option<wordcraft_doc::pr
 
 fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     // Kept for a Backspace that changes nothing, which leaves Word's carried formatting alone.
     let kept = (s.pending.take(), s.pending_at.take());
     if !s.sel.is_collapsed() {
@@ -93,6 +94,9 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         let carried = deleted_char_props(s, &a, &f);
         s.sel = Selection { anchor: a.clone(), focus: f };
         let effect = delete_selection_effect(s)?;
+        if let Some(l) = lead_in {
+            super::lead_in::keep_after_deleting(s, l);
+        }
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
             classified: true,
             content_changed: effect.content_changed,
@@ -175,8 +179,12 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 pub(super) fn delete(s: &mut Session, v: &Value) -> CmdResult {
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     let r = delete_inner(s, v)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     Ok(r)
 }
 
@@ -257,12 +265,16 @@ pub(super) fn delete_word_back(s: &mut Session, v: &Value) -> CmdResult {
         return backspace(s, v);
     }
     let a = Pos { off: para.word_start(f.off), ..f.clone() };
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     // Formatting a Backspace just carried over belongs to that deletion, not this one.
     s.pending = None;
     s.pending_at = None;
     s.sel = Selection { anchor: a, focus: f };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     sel_result(s)
 }
 
@@ -276,9 +288,13 @@ pub(super) fn delete_word_fwd(s: &mut Session, v: &Value) -> CmdResult {
         return delete(s, v);
     }
     let b = Pos { off: para.word_end(f.off), ..f.clone() };
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     s.sel = Selection { anchor: f, focus: b };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     sel_result(s)
 }
 
@@ -293,8 +309,12 @@ pub(super) fn delete_sentence_back(s: &mut Session, v: &Value) -> CmdResult {
     f.off = para.clamp(f.off);
     let Some((previous, _)) = para.text.get(..f.off).and_then(|text| text.char_indices().next_back()) else { return sel_result(s) };
     let start = para.sentence_at(previous).0;
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     s.sel = Selection { anchor: Pos { off: start, ..f.clone() }, focus: f };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     sel_result(s)
 }

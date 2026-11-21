@@ -100,6 +100,10 @@ pub struct AutoCorrectPrefs {
     /// letter or digit makes it Heading 1 (Heading 2 or 3 after one or two leading tabs).
     /// Off by default.
     pub heading_styles: bool,
+    /// Format beginning of list item like the one before it: after Enter at the end of a list
+    /// item, the new item's text up to its first punctuation character takes the character
+    /// formatting the whole lead-in of the item before shares. Off by default.
+    pub format_list_item_start: bool,
     /// A second Space after a word, number or closing bracket or quote turns the first into a
     /// period (macOS's "Add period with double-space"); off by default.
     pub double_space_period: bool,
@@ -141,6 +145,7 @@ impl Default for AutoCorrectPrefs {
             border_lines: true,
             tab_indent: false,
             heading_styles: false,
+            format_list_item_start: false,
             double_space_period: false,
             entries: Vec::new(),
             removed: Vec::new(),
@@ -314,10 +319,20 @@ pub fn lenient_autocorrect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Aut
     Ok(serde_json::from_value::<AutoCorrectPrefs>(v).map(AutoCorrectPrefs::cleaned).unwrap_or_default())
 }
 
-/// `tools.autocorrect`: change AutoCorrect Options and report them.
+/// `tools.autocorrect`: change AutoCorrect Options and report them. A request that is refused
+/// leaves the options, and a list item's lead-in being typed, as they were.
 pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
+    let before = (s.prefs.autocorrect.clone(), s.lead_in.clone(), s.pending.clone());
+    let result = change_autocorrect_options(s, v);
+    if result.is_err() {
+        (s.prefs.autocorrect, s.lead_in, s.pending) = before;
+    }
+    result
+}
+
+fn change_autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
     let ac = &mut s.prefs.autocorrect;
-    for (k, f) in [
+    let switches = [
         ("enabled", &mut ac.enabled as &mut bool),
         ("replaceText", &mut ac.replace_text),
         ("twoInitialCaps", &mut ac.two_initial_caps),
@@ -336,14 +351,25 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         ("borderLines", &mut ac.border_lines),
         ("tabIndent", &mut ac.tab_indent),
         ("headingStyles", &mut ac.heading_styles),
+        ("formatListItemStart", &mut ac.format_list_item_start),
         ("doubleSpacePeriod", &mut ac.double_space_period),
         ("autoAddFirstLetter", &mut ac.auto_add_first_letter),
         ("autoAddInitialCaps", &mut ac.auto_add_initial_caps),
-    ] {
+    ];
+    // A supplied option that isn't true or false is an error, and no option changes.
+    if let Some((k, _)) = switches.iter().find(|(k, _)| v.get(*k).is_some_and(|x| !x.is_boolean())) {
+        return Err(CmdError::Params(format!("`{k}` must be true or false")));
+    }
+    for (k, f) in switches {
         if let Some(b) = p::bool(v, k) {
             *f = b;
         }
     }
+    // Turning the option off ends a list item's lead-in: turning it back on doesn't bring it back.
+    if !(ac.enabled && ac.format_list_item_start) {
+        crate::cmd::text::end_lead_in(s);
+    }
+    let ac = &mut s.prefs.autocorrect;
     let bad = |t: &str, max: usize| t.trim().is_empty() || t.chars().count() > max || t.contains(['\n', '\r']);
     if let Some(add) = v.get("add") {
         let (Some(f), Some(t)) = (add.get("from").and_then(Value::as_str), add.get("to").and_then(Value::as_str)) else {
@@ -413,6 +439,7 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         "borderLines": ac.border_lines,
         "tabIndent": ac.tab_indent,
         "headingStyles": ac.heading_styles,
+        "formatListItemStart": ac.format_list_item_start,
         "doubleSpacePeriod": ac.double_space_period,
         "autoAddFirstLetter": ac.auto_add_first_letter,
         "autoAddInitialCaps": ac.auto_add_initial_caps,
