@@ -31,8 +31,8 @@ fn lone_table(frag: &Fragment) -> Option<&Table> {
     table
 }
 
-/// Whether every row has one cell of one column and no merge, offset or inline object, and every
-/// cell has a paragraph: a table that can be laid over another cell by cell. Its width in columns.
+/// The width of a rectangular table that can be pasted cell by cell. Merges, offsets,
+/// objects and content control wrappers require preserving the table structure.
 fn plain_source(t: &Table) -> Option<usize> {
     let cols = t.rows.first()?.cells.len();
     let simple = |c: &Cell| {
@@ -43,8 +43,14 @@ fn plain_source(t: &Table) -> Option<usize> {
             && c.blocks.iter().all(|b| matches!(&**b, Block::Para(p) if p.objects.is_empty() && p.section.is_none()))
     };
     let ok = cols > 0
+        && t.controls.is_empty()
         && t.rows.iter().all(|r| {
-            r.cells.len() == cols && r.first_grid() == 0 && r.grid_after() == 0 && r.props.exceptions.is_none() && r.cells.iter().all(simple)
+            r.cells.len() == cols
+                && r.first_grid() == 0
+                && r.grid_after() == 0
+                && r.props.exceptions.is_none()
+                && r.controls.is_empty()
+                && r.cells.iter().all(simple)
         });
     ok.then_some(cols)
 }
@@ -127,10 +133,10 @@ fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) ->
 /// `false` (nothing done; the caller pastes as before, nesting the table) when:
 /// - the selection is not a caret in a cell, or the clipboard is not one table;
 /// - Track Changes is on (the cell edits aren't tracked here);
-/// - the copied table has merged cells, ragged rows, empty cells, pictures or other objects, or a
-///   paragraph with a section break, or the destination table has merged cells or offset rows, or
-///   a control in a cell that would be overwritten, at any depth of nested tables (they are not
-///   laid over);
+/// - the copied table has merged cells, ragged rows, empty cells, pictures or other objects,
+///   a paragraph with a section break, or a control wrapping the table, a row or a cell;
+/// - the destination table has merged cells or offset rows, or a control in a cell that would be
+///   overwritten at any depth of nested tables;
 /// - the caret is in a content control that shows its placeholder (the ordinary paste replaces
 ///   the placeholder);
 /// - the destination has one column and the copy more (a layout wrapper), or the paste would pass

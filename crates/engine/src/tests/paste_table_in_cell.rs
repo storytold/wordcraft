@@ -142,6 +142,36 @@ fn paste_as_nested_table_nests_the_table_in_the_cell() {
 }
 
 #[test]
+fn pasting_a_wrapped_table_keeps_its_source_controls() {
+    use wordcraft_doc::{ContentControl, ControlKind};
+
+    for on_row in [false, true] {
+        // A same-width copy can insert rows at column zero or overwrite cells further right.
+        for col in [0, 1] {
+            let mut s = dest(1, col);
+            let mut source = table("s", 2, 3);
+            let controls = if on_row { &mut source.rows[0].controls } else { &mut source.controls };
+            let mut wrapper = ContentControl::new(ControlKind::RichText);
+            wrapper.tag = "source wrapper".into();
+            controls.open.push(wrapper);
+            controls.close = 1;
+            let expected = controls.clone();
+
+            copy(&mut s, source);
+            paste(&mut s);
+
+            let pasted = t0(&s).rows[1].cells[col]
+                .blocks
+                .iter()
+                .find_map(|b| b.as_table())
+                .unwrap_or_else(|| panic!("the wrapped source should nest (row wrapper: {on_row}, column: {col})"));
+            let controls = if on_row { &pasted.rows[0].controls } else { &pasted.controls };
+            assert_eq!(controls, &expected, "row wrapper: {on_row}, column: {col}");
+        }
+    }
+}
+
+#[test]
 fn what_cannot_be_laid_over_the_cells_nests_as_before() {
     let nests = |s: &mut Session| {
         paste(s);
