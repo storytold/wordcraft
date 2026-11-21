@@ -1785,3 +1785,24 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
         assert!(present, "the translated field is {name}");
     }
 }
+
+/// Compare's Browse… asks for a "compare" pick, so its remembered folder is its own and the
+/// macOS host doesn't confuse it with File › Open's "document" pick (which the framework shows
+/// as a free-standing panel).
+#[test]
+fn compare_browse_asks_for_a_compare_pick() {
+    use egui_kittest::kittest::Queryable;
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let a = app_with("text").with_host(std::sync::Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build()));
+    let mut h = app_harness(a);
+    crate::test_harness::frames(&mut h, 4);
+    h.state_mut().run("ui.dialog", json!({"name": "compare"})).unwrap();
+    crate::test_harness::frames(&mut h, 4);
+    // "Another file" enables the row's Browse… button.
+    h.query_all_by_label("Another file").next().expect("Another file").click_accesskit();
+    crate::test_harness::frames(&mut h, 4);
+    h.query_all_by_label("Browse…").next().expect("Browse…").click_accesskit();
+    crate::test_harness::frames(&mut h, 4);
+    let purposes: Vec<_> = files.requests().iter().map(|r| r.purpose.clone()).collect();
+    assert_eq!(purposes, ["compare"], "Compare's Browse… asks for a compare pick");
+}
