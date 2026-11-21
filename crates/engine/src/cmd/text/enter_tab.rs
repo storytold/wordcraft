@@ -4,31 +4,26 @@ use super::autoformat::{
 use super::unicode::ins_char;
 use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
 
-/// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
-fn sample_text(s: &Session) -> Option<String> {
-    let at = &s.sel.focus;
-    let para = s.doc.para_at(at)?;
-    if !s.sel.is_collapsed() || at.off != para.len() {
-        return None;
-    }
-    let (args, sentences) = if let Some(args) = para.text.strip_prefix("=rand(") {
-        (
-            args,
-            [
-                "A blank page leaves room for a new idea.",
-                "The morning light falls across a notebook on the desk.",
-                "Small changes in spacing can give a story a different rhythm.",
-            ],
-        )
+/// The sentences a sample-text formula repeats.
+const RAND_SENTENCES: [&str; 3] = [
+    "A blank page leaves room for a new idea.",
+    "The morning light falls across a notebook on the desk.",
+    "Small changes in spacing can give a story a different rhythm.",
+];
+const LOREM_SENTENCES: [&str; 3] = [
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+    "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+    "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+];
+
+/// A sample-text formula: `=rand(p,l)` or `=lorem(p,l)`, with `p` paragraphs of `l` lines
+/// each. `None` when the text is not a formula, or its counts are out of range (bounded
+/// counts keep typed input from allocating without limit).
+fn sample_formula(text: &str) -> Option<(usize, usize, &'static [&'static str])> {
+    let (args, sentences) = if let Some(args) = text.strip_prefix("=rand(") {
+        (args, &RAND_SENTENCES[..])
     } else {
-        (
-            para.text.strip_prefix("=lorem(")?,
-            [
-                "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-                "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-                "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
-            ],
-        )
+        (text.strip_prefix("=lorem(")?, &LOREM_SENTENCES[..])
     };
     let args = args.strip_suffix(')')?;
     if args.contains(['(', ')']) {
@@ -43,6 +38,23 @@ fn sample_text(s: &Session) -> Option<String> {
         count(args).map(|p| (p, 3))
     };
     let (paragraphs, lines) = counts.unwrap_or((5, 3));
+    Some((paragraphs, lines, sentences))
+}
+
+/// The paragraph the sample-text formula would expand, if the caret is at the end of one.
+fn sample_paragraph(s: &Session) -> Option<&wordcraft_doc::Paragraph> {
+    let at = &s.sel.focus;
+    let para = s.doc.para_at(at)?;
+    if !s.sel.is_collapsed() || at.off != para.len() {
+        return None;
+    }
+    Some(para)
+}
+
+/// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
+fn sample_text(s: &Session) -> Option<String> {
+    let para = sample_paragraph(s)?;
+    let (paragraphs, lines, sentences) = sample_formula(&para.text)?;
     let mut text = String::new();
     for _ in 0..paragraphs {
         for sentence in sentences.iter().cycle().take(lines) {
@@ -54,6 +66,13 @@ fn sample_text(s: &Session) -> Option<String> {
         text.push('\r');
     }
     Some(text)
+}
+
+/// The paragraphs the sample-text formula at the caret expands into, if Enter would expand
+/// it now.
+fn sample_expansion_paragraphs(s: &Session) -> Option<usize> {
+    let para = sample_paragraph(s)?;
+    sample_formula(&para.text).map(|(paragraphs, _, _)| paragraphs)
 }
 
 /// `text.newParagraph`: Enter, unless the selection is in a control that takes no paragraph break.
@@ -69,7 +88,10 @@ pub(super) fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
 /// Most lines `text.insert` with `paragraphs` types in one call, for every caller (control
 /// channel, CLI, MCP): each line is an Enter, with its AutoFormat and AutoCorrect, so the work
 /// grows with the line count. More is refused before anything is typed (#3692).
-pub const MAX_TYPED_PARAGRAPHS: usize = 10_000;
+///
+/// The same limit as any other text insertion ([`crate::cmd::MAX_INSERTED_PARAGRAPHS`]): one call
+/// may not make more paragraphs however its text arrives.
+pub const MAX_TYPED_PARAGRAPHS: usize = crate::cmd::MAX_INSERTED_PARAGRAPHS;
 
 /// `text.insert` with `paragraphs`: each line typed as it is (`raw`), and between lines the
 /// paragraph break Enter makes ([`enter`]: its AutoFormat and AutoCorrect), all in one command, so
@@ -79,16 +101,42 @@ pub const MAX_TYPED_PARAGRAPHS: usize = 10_000;
 /// refused before anything is typed.
 pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
     let text = text.replace("\r\n", "\n");
-    let lines = text.split(['\n', '\r', '\u{2029}']).count();
-    if lines > MAX_TYPED_PARAGRAPHS {
-        return Err(CmdError::Params(format!("text.insert: `text` has {lines} lines; type at most {MAX_TYPED_PARAGRAPHS} paragraphs per call")));
+    let lines: Vec<&str> = text.split(['\n', '\r', '\u{2029}']).collect();
+    if lines.len() > MAX_TYPED_PARAGRAPHS {
+        return Err(CmdError::Params(format!(
+            "text.insert: `text` has {} lines; type at most {MAX_TYPED_PARAGRAPHS} paragraphs per call",
+            lines.len()
+        )));
+    }
+    // A sample-text formula expands into paragraphs of its own when Enter ends it
+    // (`=rand(200,1)` is 200 paragraphs), so the paragraphs the call would make are counted
+    // before any of it is typed: the breaks between the lines, plus the paragraphs each
+    // formula expands to.
+    let paragraphs = paragraphs_made(s, &lines);
+    if paragraphs > MAX_TYPED_PARAGRAPHS {
+        return Err(CmdError::Params(format!(
+            "text.insert: `text` would make {paragraphs} paragraphs; type at most {MAX_TYPED_PARAGRAPHS} paragraphs per call"
+        )));
     }
     typing_options(s, &text);
-    for (i, line) in text.split(['\n', '\r', '\u{2029}']).enumerate() {
+    // The paragraphs the call really makes are counted as it goes: before each Enter, what
+    // that Enter will make is known — a plain break, the paragraphs a sample-text formula
+    // expands into, or the cells of the table a table line becomes. A request over the limit
+    // is refused before the paragraphs are made.
+    let mut made = 0usize;
+    for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             if crate::cmd::controls::refuses_paragraph(s) {
                 return Err(CmdError::Disabled("text.insert: this content control takes no paragraph breaks".into()));
             }
+            let adds = paragraphs_of_enter(s);
+            if made + adds > MAX_TYPED_PARAGRAPHS {
+                return Err(CmdError::Params(format!(
+                    "text.insert: `text` would make {} paragraphs; type at most {MAX_TYPED_PARAGRAPHS} paragraphs per call",
+                    made + adds
+                )));
+            }
+            made += adds;
             enter(s, false)?;
         }
         if !line.is_empty() {
@@ -96,6 +144,70 @@ pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
         }
     }
     sel_result(s)
+}
+
+/// The paragraphs the Enter at the caret makes: a plain break, the paragraphs a
+/// sample-text formula expands into, or the cells of the table a table line becomes.
+fn paragraphs_of_enter(s: &Session) -> usize {
+    if let Some(paragraphs) = sample_expansion_paragraphs(s) {
+        return paragraphs;
+    }
+    if let Some(cols) = super::autoformat::table_line(s, &s.sel.focus) {
+        // The line's paragraph becomes a table of one row: a paragraph per cell, less the
+        // paragraph it replaces.
+        return cols.len().saturating_sub(1);
+    }
+    1
+}
+
+/// The paragraphs `lines` would make: the breaks between them, plus the paragraphs a
+/// sample-text formula expands to when Enter ends it.
+///
+/// A formula expands only when it ends a paragraph of its own, so what the first Enter
+/// expands is the paragraph the first line is typed into: the caret's paragraph with the
+/// selection replaced by that line.
+fn paragraphs_made(s: &Session, lines: &[&str]) -> usize {
+    let mut n = lines.len().saturating_sub(1);
+    // The first Enter ends the paragraph the first line is typed into. It expands a formula
+    // only when the selection is collapsed then: an empty first line leaves the selection
+    // as it is, and a selection that is not collapsed is deleted with the formula rather
+    // than expanded.
+    if let Some(first) = lines.first()
+        && (!first.is_empty() || s.sel.is_collapsed())
+        && let Some(text) = first_paragraph_text(s, first)
+        && let Some((paragraphs, _, _)) = sample_formula(&text)
+    {
+        n += paragraphs - 1;
+    }
+    // The other Enters end the paragraph of the line before them.
+    for line in lines.iter().skip(1).take(lines.len().saturating_sub(2)) {
+        if let Some((paragraphs, _, _)) = sample_formula(line) {
+            n += paragraphs - 1;
+        }
+    }
+    n
+}
+
+/// The text of the paragraph the first line is typed into, as it will be when the first
+/// Enter ends it: the caret's paragraph with the selection replaced by that line.
+///
+/// `None` when the first line does not leave the caret at the end of that paragraph, which
+/// is where a formula has to be for Enter to expand it.
+fn first_paragraph_text(s: &Session, first: &str) -> Option<String> {
+    let para = s.doc.para_at(&s.sel.focus)?;
+    let text = para.text.as_str();
+    let path = &s.sel.focus.path;
+    let (a, b) = s.sel.ordered();
+    // The caret ends where the first line ends: at the paragraph's end only when the
+    // selection ended there.
+    if &b.path != path || b.off != text.len() {
+        return None;
+    }
+    let start = if &a.path == path { a.off.min(text.len()) } else { 0 };
+    let mut out = String::with_capacity(text.len() + first.len());
+    out.push_str(text.get(..start)?);
+    out.push_str(first);
+    Some(out)
 }
 
 /// Enter's paragraph break once a control has allowed it: `=rand()` sample text, AutoFormat of a

@@ -128,8 +128,8 @@ pub fn tool_definitions() -> Value {
             "type_text",
             "Type text",
             &format!(
-                "Type at the caret (replacing the selection). Use \\n... for line breaks inside text; use execute text.newParagraph for new paragraphs, or `paragraphs: true` to split lines into paragraphs (one undo step, at most {} lines).",
-                wordcraft_engine::cmd::text::MAX_TYPED_PARAGRAPHS
+                "Type at the caret (replacing the selection). Use \\n... for line breaks inside text; use execute text.newParagraph for new paragraphs, or `paragraphs: true` to split lines into paragraphs (one undo step). A text may make at most {} paragraphs.",
+                wordcraft_engine::cmd::MAX_INSERTED_PARAGRAPHS
             ),
             with_doc(obj(json!({"text": s("Text"), "paragraphs": {"type": "boolean"}}), &["text"])),
             false

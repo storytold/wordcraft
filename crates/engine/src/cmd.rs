@@ -347,6 +347,32 @@ pub(crate) struct InsertEffect {
     pub state_changed: bool,
 }
 
+/// The most paragraphs one call may put into the document, whichever way the text arrives:
+/// typed, pasted, replaced in, or set as the whole body. Each paragraph costs about a kilobyte
+/// of document (its properties and marks), so a text of nothing but line breaks grows the
+/// document far faster than the request that carried it: 500 000 breaks became 721 MB of
+/// document, and the layout that followed took 17 seconds.
+///
+/// The typed-paragraph path (`text.insert` with `paragraphs: true`) is held to the same number,
+/// so one call cannot make more paragraphs whichever way its text arrives. Real documents stay
+/// well below it: a long chapter is a few thousand paragraphs.
+pub const MAX_INSERTED_PARAGRAPHS: usize = 10_000;
+
+/// Refuse an insertion that would make more than [`MAX_INSERTED_PARAGRAPHS`] paragraphs, before
+/// any of it is typed or pasted, so a refused text leaves the document as it was. `paragraphs` is
+/// how many paragraphs the insertion would add to the document.
+pub(super) fn check_inserted_paragraphs(paragraphs: usize) -> Result<(), CmdError> {
+    if paragraphs > MAX_INSERTED_PARAGRAPHS {
+        return Err(too_many_paragraphs(paragraphs));
+    }
+    Ok(())
+}
+
+/// The error an insertion over the limit gives.
+fn too_many_paragraphs(paragraphs: usize) -> CmdError {
+    CmdError::Params(format!("the insertion would make {paragraphs} paragraphs; a call may make at most {MAX_INSERTED_PARAGRAPHS} paragraphs"))
+}
+
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     insert_text(s, text, true, None).map(|_| ())
@@ -376,6 +402,20 @@ pub fn type_text_with_lang(s: &mut Session, text: &str, language: Option<&str>) 
 /// right-to-left direction when its first strong letter is RTL, and returns whether content or state
 /// changed.
 fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>) -> Result<InsertEffect, CmdError> {
+    // The text is counted before any of it is typed, so a text over the limit is refused with
+    // the document untouched. Each piece of it is a paragraph of about a kilobyte of document,
+    // so a megabyte of line breaks is a gigabyte of document.
+    //
+    // The paragraphs it makes are the breaks between its pieces, not the pieces: the first
+    // piece joins the paragraph the caret is in, so it adds nothing. The count is the same one
+    // the aggregate checks count (the breaks a replacement carries), so a text that one route
+    // accepts is not refused by another.
+    let breaks = text.split(['\r', '\u{2029}']).count().saturating_sub(1);
+    // A one-line control takes no paragraph break: the text stays one paragraph there, so the
+    // count does not apply to it.
+    if breaks > MAX_INSERTED_PARAGRAPHS && !(enter && controls::suppresses_paragraph_breaks(s)) {
+        return Err(too_many_paragraphs(breaks));
+    }
     // Formatting Backspace carried over is for typing at the place it was deleted (#6518).
     if enter {
         s.drop_stale_carried();
@@ -391,6 +431,22 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     let placeholder_changed = prepared.is_some();
     if let Some(p) = prepared {
         props = p;
+    }
+    // The caret may have moved since the count (a field end, a check box that is left before
+    // the text goes in), so the count is checked again here, before the selection is deleted:
+    // a refused text leaves the document and the selection as they were.
+    //
+    // Whether the breaks are suppressed is settled here too, and the same condition decides
+    // both: the text goes in where the selection was, and only a selection wholly inside a
+    // one-line control keeps its breaks together. The suppression below uses this as well,
+    // so the limit is skipped exactly where the breaks are not made.
+    //
+    // Typed line breaks are the Enter key between the lines: in a one-line control it does
+    // nothing, so the lines run together and the control stays one paragraph (pasted text
+    // keeps its breaks, as before).
+    let no_breaks = enter && controls::suppresses_paragraph_breaks(s);
+    if breaks > MAX_INSERTED_PARAGRAPHS && !no_breaks {
+        return Err(too_many_paragraphs(breaks));
     }
     // Pasted text is text: pending properties left by AutoCorrect don't give it a symbol's font (#2036).
     if !enter {
@@ -416,10 +472,6 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     let mut at = s.sel.focus.clone();
     let mut first = true;
     let mut inserted = false;
-    // Typed line breaks are the Enter key between the lines: in a one-line control it does
-    // nothing, so the lines run together and the control stays one paragraph (pasted text keeps
-    // its breaks, as before).
-    let no_breaks = enter && controls::refuses_paragraph(s);
     for part in text.split(['\r', '\u{2029}']) {
         if !first && !no_breaks {
             at = split_para_as(s, &at, enter)?;

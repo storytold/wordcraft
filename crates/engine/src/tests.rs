@@ -5336,6 +5336,201 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
+/// A text of nothing but line breaks makes a paragraph each, and a paragraph costs about a
+/// kilobyte of document, so a megabyte of breaks grew the document into a gigabyte and the
+/// layout that followed took seconds. Every route that turns text into paragraphs is held to
+/// the same cap, and a refused text leaves the document as it was.
+#[test]
+fn a_text_may_not_make_unbounded_paragraphs() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let over = MAX_INSERTED_PARAGRAPHS + 1;
+    // Every route into the document: typed, pasted, replaced in, and a body replaced wholesale.
+    for (id, params) in [
+        ("text.insert", json!({"text": "x\r".repeat(over), "raw": true})),
+        ("document.setText", json!({"text": "x\n".repeat(over)})),
+        ("edit.pasteText", json!({"text": "x\r".repeat(over)})),
+        ("edit.paste", json!({"text": "x\r".repeat(over)})),
+        ("edit.pasteMerge", json!({"text": "x\n".repeat(over)})),
+    ] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "keep"}));
+        let (before, depth) = (body_texts(&s), s.undo_depth());
+        match s.run(id, &params) {
+            Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{id}: {m}"),
+            r => panic!("{id}: not refused: {r:?}"),
+        }
+        assert_eq!(body_texts(&s), before, "{id}: nothing inserted");
+        assert_eq!(s.undo_depth(), depth, "{id}: no undo step");
+    }
+    // Replace All: the replacement is repeated for every match, so its paragraph marks add up.
+    let mut r = s();
+    run(&mut r, "text.insert", json!({"text": "x".repeat(20)}));
+    let before = body_texts(&r);
+    match r.run("edit.replaceAll", &json!({"text": "x", "with": "^p".repeat(over)})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
+        r => panic!("edit.replaceAll: not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&r), before, "edit.replaceAll: nothing replaced");
+    // At the cap the text still goes in, every break a paragraph of its own.
+    let mut s = s();
+    let at_cap = vec!["y"; MAX_INSERTED_PARAGRAPHS].join("\r");
+    run(&mut s, "text.insert", json!({"text": at_cap, "raw": true}));
+    assert_eq!(body_texts(&s).len(), MAX_INSERTED_PARAGRAPHS);
+}
+
+/// The cap is on paragraphs added, not split pieces: the first piece joins the paragraph at
+/// the caret. Replacement, pasted text and rich fragments must agree at the exact boundary.
+#[test]
+fn paragraph_insertion_boundary_is_consistent() {
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let replacement = "^p".repeat(MAX_INSERTED_PARAGRAPHS);
+    for track_changes in [false, true] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "x"}));
+        if track_changes {
+            run(&mut s, "review.trackChanges", json!({"value": true}));
+        }
+        run(&mut s, "edit.replaceAll", json!({"text": "x", "with": replacement}));
+    }
+
+    let mut pasted = s();
+    run(&mut pasted, "edit.pasteText", json!({"text": "x\r".repeat(MAX_INSERTED_PARAGRAPHS)}));
+    assert_eq!(body_texts(&pasted).len(), MAX_INSERTED_PARAGRAPHS + 1);
+}
+
+/// Rich HTML/RTF fragments and sample-text formula expansion cannot bypass the same
+/// request-wide paragraph limit enforced for plain text.
+#[test]
+fn rich_paste_and_sample_expansion_respect_paragraph_limit() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+
+    let mut rich = s();
+    let before = body_texts(&rich);
+    let html = "<p>x</p>".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    match rich.run("edit.paste", &json!({"html": html})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
+        r => panic!("rich HTML paste was not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&rich), before, "rich paste changed the document");
+
+    let mut expanded = s();
+    // Each formula is ended by Enter and expands to 200 paragraphs of its own. 51 of them
+    // make 10,200 paragraphs, though the request itself has only 52 lines.
+    let text = "=rand(200,1)\n".repeat(51);
+    match expanded.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("would make 10200 paragraphs"), "{m}"),
+        r => panic!("sample-text expansion was not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&expanded), vec![String::new()], "sample expansion changed the document");
+
+    // At the cap the expansion still goes in: 50 formulas make exactly 10,000 paragraphs.
+    let mut at_cap = s();
+    let text = "=rand(200,1)\n".repeat(50);
+    run(&mut at_cap, "text.insert", json!({"text": text, "paragraphs": true, "raw": true}));
+    assert_eq!(at_cap.doc.paragraph_count(), MAX_INSERTED_PARAGRAPHS + 1);
+}
+
+/// A formula already at the caret is expanded by the first Enter, so it counts too:
+/// 49 more of them and one plain line make 10,001 paragraphs.
+#[test]
+fn a_formula_at_the_caret_counts_with_the_first_enter() {
+    use crate::CmdError;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "=rand(200,1)", "raw": true}));
+    let text = format!("\n{}", "=rand(200,1)\n".repeat(49)) + "x\n";
+    match s.run("text.insert", &json!({"text": text, "paragraphs": true, "raw": true})) {
+        Err(CmdError::Params(m)) => assert!(m.contains("would make 10001 paragraphs"), "{m}"),
+        r => panic!("the formula at the caret was not counted: {r:?}"),
+    }
+    assert_eq!(body_texts(&s), vec!["=rand(200,1)"], "the expansion changed the document");
+}
+
+/// An empty first line leaves the selection as it is, and a selection that is not collapsed
+/// is deleted with the formula rather than expanded: the first Enter makes no paragraphs
+/// beyond the break itself, so the request is under the cap and goes in.
+#[test]
+fn an_empty_first_line_over_a_selection_is_not_expanded() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "=rand(200,1)x", "raw": true}));
+    // The last character is selected.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 12}, "focus": {"block": 0, "off": 13}}));
+    // An initial newline, 49 formulas and one plain line: 9,802 paragraphs, under the cap.
+    let text = format!("\n{}", "=rand(200,1)\n".repeat(49)) + "y\n";
+    run(&mut s, "text.insert", json!({"text": text, "paragraphs": true, "raw": true}));
+    assert_eq!(s.doc.paragraph_count(), 9_803, "the paragraphs the request made");
+}
+
+/// The one-line control exemption holds only for a selection wholly inside it: a selection
+/// that reaches out of the control leaves the caret outside it when it is deleted, where
+/// the breaks are honored, so the limit applies there too.
+#[test]
+fn a_selection_out_of_a_one_line_control_is_still_capped() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let over = "x\r".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    // A one-line control between two texts, so a selection can reach out of it in either
+    // direction: from before it to inside it, and from inside it to after it.
+    let control = |s: &mut Session| {
+        run(s, "text.insert", json!({"text": "Name: "}));
+        run(s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
+        run(s, "text.insert", json!({"text": " tail"}));
+    };
+    for (anchor, focus) in [(0, 10), (17, 10)] {
+        let mut s = s();
+        control(&mut s);
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": anchor}, "focus": {"block": 0, "off": focus}}));
+        let before = body_texts(&s);
+        match s.run("text.insert", &json!({"text": over.clone(), "raw": true})) {
+            Err(CmdError::Params(m)) => assert!(m.contains("at most 10000 paragraphs"), "{m}"),
+            r => panic!("{anchor}->{focus}: not refused: {r:?}"),
+        }
+        assert_eq!(body_texts(&s), before, "{anchor}->{focus}: nothing typed");
+    }
+    // A selection wholly inside the control keeps its exemption: the breaks are suppressed
+    // there, so the text stays one paragraph.
+    let mut s = s();
+    control(&mut s);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 0, "off": 12}}));
+    run(&mut s, "text.insert", json!({"text": over.clone(), "raw": true}));
+    assert_eq!(s.doc.paragraph_count(), 1, "the control stayed one paragraph");
+}
+
+/// A refused text leaves the document exactly as it was: the selection it would have replaced
+/// is still there, so refusing costs the user nothing and undoes to nothing.
+#[test]
+fn a_refused_text_leaves_the_selection_alone() {
+    use crate::CmdError;
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    let before = body_texts(&s);
+    let over = "x\r".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    match s.run("text.insert", &json!({"text": over, "raw": true})) {
+        Err(CmdError::Params(_)) => {}
+        r => panic!("not refused: {r:?}"),
+    }
+    assert_eq!(body_texts(&s), before, "the selection was deleted anyway");
+}
+
+/// The count runs before the text is inserted, so a refused text leaves the selection it
+/// would have replaced alone: the helper itself refuses it, not the command around it.
+#[test]
+fn a_refused_text_leaves_the_selection_alone_without_the_command() {
+    use crate::cmd::MAX_INSERTED_PARAGRAPHS;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    let before = body_texts(&s);
+    let selection = s.sel.clone();
+    let over = "x\r".repeat(MAX_INSERTED_PARAGRAPHS + 1);
+    assert!(crate::cmd::type_text(&mut s, &over).is_err(), "not refused");
+    assert_eq!(body_texts(&s), before, "the selection was deleted anyway");
+    assert_eq!(s.sel, selection, "the selection moved");
+}
+
 fn hostile_junk() -> [serde_json::Value; 10] {
     [
         json!(null),

@@ -773,6 +773,12 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     let story = s.sel.focus.story;
     let results = search_full(s, story, true)?;
     let n = results.len();
+    // Every match is replaced, and a paragraph mark in the replacement splits the paragraph, so
+    // the breaks the replacement carries are counted over all the matches before any of them is
+    // replaced. The replacement is the caller's, and each break is a paragraph of about a
+    // kilobyte of document, so a megabyte of marks would be a gigabyte of document.
+    let breaks: usize = results.iter().filter_map(|f| f.rep.as_deref()).map(|r| r.split(['\r', '\u{2029}']).count().saturating_sub(1)).sum();
+    super::check_inserted_paragraphs(breaks)?;
     super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
     for Found { a, b, rep } in results.into_iter().rev() {
         let with = rep.unwrap_or_default();
