@@ -450,6 +450,11 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 /// source run's formatting. An object's flattened text (or a broken marker's placeholder) maps
 /// to the marker's own range, which is the nearest formatting the object has; an equation kept
 /// whole takes its marker's run, which is where its own colour lives.
+///
+/// A token never crosses the start or end of a symbol-font run. That run's characters (a manual
+/// bullet opening the paragraph) keep their own token and so their `w:sym` encoding, and the
+/// words after them keep theirs as text: one token for both would give the words the symbol
+/// font, or the symbol none (#5924).
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, start: usize, end: usize, c: char, characters: bool) {
         cur.push(c);
@@ -461,7 +466,12 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     let mut cur = String::new();
     let mut cur_start = 0usize;
     let mut objects = p.objects.iter();
+    // Run ranges come in order, so the edges are sorted.
+    let sym_edges: Vec<usize> = p.run_ranges().filter(|(_, c)| c.sym_font.is_some()).flat_map(|(r, _)| [r.start, r.end]).collect();
     for (i, c) in p.text.char_indices() {
+        if !cur.is_empty() && sym_edges.binary_search(&i).is_ok() {
+            v.push(Tok::Text(std::mem::take(&mut cur), cur_start..i));
+        }
         let marker = i..i + OBJ.len_utf8();
         if c != OBJ {
             if cur.is_empty() {
@@ -551,9 +561,9 @@ impl<'a> SideProps<'a> {
     /// from the token's first byte, so a token that starts unlinked can lose a mid-token link).
     ///
     /// A symbol font is kept only when the whole token lies in its run. It belongs to that run's
-    /// own characters (a manual bullet opening the paragraph); a word token that starts on the
-    /// bullet and runs past it ("•\ts0 ") would give it to its words, and the writer saves each
-    /// of them as a `w:sym`, so the words leave the file's text (#5924).
+    /// own characters (a manual bullet opening the paragraph), and [`tokens`] ends a token where
+    /// such a run ends, so this only guards a token that still runs past it: the writer would
+    /// save each of its words as a `w:sym`, and the words would leave the file's text (#5924).
     fn props_of(&mut self, t: &Tok<'_>) -> CharProps {
         let range = match t {
             Tok::Text(_, range) | Tok::Obj(_, range) => range,

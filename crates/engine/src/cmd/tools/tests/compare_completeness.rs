@@ -255,7 +255,23 @@ fn compare_keeps_the_words_of_a_diffed_paragraph_that_opens_with_a_symbol() {
     let original = format!("{}{}{}", keep(1), para(&format!("{bullet}{}", runs(&words("s", 0, 120), 9))), keep(2));
     let revised =
         format!("{}{}{}", keep(1), para(&format!("{bullet}{}", runs(&format!("{} {}", words("s", 0, 40), words("s", 80, 120)), 13))), keep(2));
-    assert_complete("symbol-first", &original, &revised, json!({}));
+    let xml = assert_complete("symbol-first", &original, &revised, json!({}));
+    assert!(xml.contains(r#"w:char="F0B7""#), "symbol-first: the bullet lost its symbol encoding");
+}
+
+#[test]
+fn compare_keeps_a_symbol_openers_encoding_and_the_words_after_it() {
+    // A genuine Symbol bullet right before the paragraph's words, with no tab between: the bullet
+    // stays a `w:sym` in the bullet's font, and the words (the deleted one too) stay text.
+    let bullet = r#"<w:r><w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol"/></w:rPr><w:sym w:font="Symbol" w:char="F0B7"/></w:r>"#;
+    let original = format!("{}{}{}", keep(1), para(&format!("{bullet}{}", run(" Project status is on track"))), keep(2));
+    let revised = format!("{}{}{}", keep(1), para(&format!("{bullet}{}", run(" Project is on track today"))), keep(2));
+    for level in ["word", "character"] {
+        let xml = assert_complete("symbol-opener", &original, &revised, json!({"level": level}));
+        assert!(xml.contains(r#"w:char="F0B7""#), "{level}: the bullet lost its symbol encoding");
+        assert!(!xml.contains("\u{F0B7}"), "{level}: the bullet was written as plain text");
+        assert_eq!(xml.matches("<w:sym ").count(), 1, "{level}: only the bullet is a symbol");
+    }
 }
 
 #[test]
