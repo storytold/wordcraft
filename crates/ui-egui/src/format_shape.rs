@@ -512,7 +512,7 @@ fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency
     if picked.changed
         && let Some(n) = Rgb::parse(&hex)
     {
-        apply(app, Some(&Fill::Solid { color: n, transparency }));
+        let _ = app.run("shape.fill", json!({"color": n.hex()}));
         return;
     }
     let out = SliderField::new(tl!("Transparency"), Bind::given(f64::from(transparency)), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);

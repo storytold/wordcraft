@@ -2192,7 +2192,7 @@ fn arrange_align_and_position_use_text_box_anchor_section() {
 #[test]
 fn chart_primary_with_added_shape_allows_rotation() {
     let mut s = Session::new(wordcraft_doc::Document::new());
-    s.run("insert.chart", &json!({})).unwrap();
+    s.run("insert.chart", &json!({"type": "column"})).unwrap();
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
     s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
     s.run("select.objects", &json!({"index": 0})).unwrap();
