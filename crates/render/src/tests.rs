@@ -594,6 +594,42 @@ fn stretched_hinted_text_is_darkened_as_far_as_unstretched() {
 }
 
 #[test]
+fn an_area_rendered_to_a_pixel_size_fills_it_and_keeps_its_text_on_the_grid() {
+    let (d, l) = flat_capitals();
+    let page = &l.pages[0];
+    let area = wordcraft_geom::Rect::new(0.0, 0.0, page.w, page.h);
+    let snap = RenderOptions { baseline_snap: true, ..Default::default() };
+    // A page 1746.155 × 2469.544 pixels at its scale, made 1746 × 2470: a pixel in two thousand off each way.
+    let scale = 1746.155 / page.w;
+    let (w, h) = (1746, (page.h * scale).round() as u32 + 1);
+    let exact = render_area_to(&d, page, area, w, h, &snap);
+    assert_eq!((exact.width, exact.height), (w, h));
+    // One scale gives the next whole pixel up each way: not the size asked for.
+    let up = render_area(&d, page, area, scale, &snap);
+    assert_eq!(up.width, 1747);
+    // The text is as it is at the page's own scale, feet on a whole pixel row: scaled that little differently
+    // across and down, the page is still upright.
+    let foot_is_dark = |img: &Rendered| {
+        let (_, foot) = ink_row_span(img);
+        let w = img.width as usize;
+        img.pixels[foot * w * 4..(foot + 1) * w * 4].as_chunks::<4>().0.iter().map(|p| p[0]).min().unwrap_or(255) < 16
+    };
+    assert!(foot_is_dark(&exact) && foot_is_dark(&up));
+    assert!(is_upright(Affine::scale_non_uniform(2.0, 2.002)) && is_upright(Affine::scale_non_uniform(2.933, 2.9334)));
+    assert!(!is_upright(Affine::scale_non_uniform(2.0, 2.01)));
+    // Hostile sizes and areas: clamped, never a panic.
+    for (area, w, h) in [
+        (wordcraft_geom::Rect::new(0.0, 0.0, 0.0, 0.0), 10, 10),
+        (wordcraft_geom::Rect::new(f32::NAN, f32::INFINITY, f32::NAN, -5.0), 10, 10),
+        (area, 0, 0),
+        (area, u32::MAX, 3),
+    ] {
+        let img = render_area_to(&d, page, area, w, h, &snap);
+        assert!(img.width >= 1 && img.height >= 1 && img.pixels.len() == img.width as usize * img.height as usize * 4);
+    }
+}
+
+#[test]
 fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
     let mut d =
         Document::from_text("Every Thursday evening the old print shop fills with people who make things. Painters set up by the north windows.");

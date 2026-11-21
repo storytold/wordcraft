@@ -235,6 +235,32 @@ pub(super) fn raster_scale(side: u32, step: u32, longest: f32, native: Option<f3
     }
 }
 
+/// The size in device pixels of the place on screen a page's picture is drawn in, when a picture of about
+/// `expected` pixels (its size at the view's scale) is that place's own.
+///
+/// The page view draws a picture as its painter does every picture: the place (`page`, in screen points, or the
+/// part `region` of it, in fractions) is rounded to whole pixels, and the picture is fitted inside it by its own
+/// proportions. A picture of exactly the rounded place's size is drawn one pixel for one. Any other is scaled:
+/// rasterised a whole pixel up each way, as a single scale gives, a 2016 × 2851 pixel place gets a 2017 × 2852
+/// picture squeezed by a twentieth of a percent, and the text slides off the pixel grid and back down the page.
+/// The rounded size depends on where the place starts, so it comes from where the view last put the page, not
+/// from the page's size. `None` where the place is not within a pixel and a half of `expected` each way: a
+/// place left over from another zoom, or numbers that aren't.
+pub(super) fn picture_pixels(page: egui::Rect, region: Option<egui::Rect>, ppp: f32, expected: (f32, f32)) -> Option<(u32, u32)> {
+    let place = match region {
+        Some(part) => {
+            let at = |f: egui::Pos2| egui::pos2(page.min.x + f.x * page.width(), page.min.y + f.y * page.height());
+            egui::Rect::from_min_max(at(part.min), at(part.max))
+        }
+        None => page,
+    };
+    let side = |lo: f32, hi: f32, expected: f32| {
+        let pixels = (hi * ppp).round() - (lo * ppp).round();
+        (pixels.is_finite() && expected.is_finite() && pixels >= 1.0 && (pixels - expected).abs() <= 1.5).then_some(pixels as u32)
+    };
+    Some((side(place.min.x, place.max.x, expected.0)?, side(place.min.y, place.max.y, expected.1)?))
+}
+
 /// Render options for rasters shown on screen other than the pages themselves (style and font previews, a dragged
 /// object), so their text looks as it does in the platform's other apps (exports never change): on macOS it is
 /// darkened the way the system draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight`

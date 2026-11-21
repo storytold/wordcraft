@@ -573,9 +573,12 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
 
 /// Does `view` map page points to device pixels without rotation, skew or mirroring, scaling both
 /// axes alike? Only then do hinted outlines (made on the pixel grid) line up with the screen.
+/// "Alike" allows the two axes a fifth of a percent apart: a page raster made to fill a whole
+/// number of pixels each way ([`render_area_to`]) is scaled that little differently across and
+/// down (a pixel in some two thousand), and is as upright as any.
 fn is_upright(view: Affine) -> bool {
     let [a, b, c, d, e, f] = view.as_coeffs();
-    [a, b, c, d, e, f].iter().all(|v| v.is_finite()) && b == 0.0 && c == 0.0 && a > 0.0 && (a - d).abs() <= a * 1e-6
+    [a, b, c, d, e, f].iter().all(|v| v.is_finite()) && b == 0.0 && c == 0.0 && a > 0.0 && (a - d).abs() <= a * 2e-3
 }
 
 /// How far, in device pixels, macOS-style font smoothing pushes each side of a glyph outline out
@@ -1453,6 +1456,19 @@ pub fn render_area(doc: &Document, page: &Page, area: wordcraft_geom::Rect, scal
     let ph = ((h * scale).ceil() as u32).clamp(1, MAX_SIDE);
     let view = Affine::scale(scale as f64) * Affine::translate((-x as f64, -y as f64));
     render_region(doc, page, pw, ph, view, opts)
+}
+
+/// Render the page `area` (points) into exactly `w`×`h` pixels: the area fills the raster, scaled
+/// across and down by whatever that takes. For a raster that must be a given number of device
+/// pixels each way, where [`render_area`]'s single scale gives the next whole pixel up: a picture
+/// one pixel larger than its place on screen is scaled into it, and every glyph resampled.
+pub fn render_area_to(doc: &Document, page: &Page, area: wordcraft_geom::Rect, w: u32, h: u32, opts: &RenderOptions) -> Rendered {
+    let (w, h) = (w.clamp(1, MAX_SIDE), h.clamp(1, MAX_SIDE));
+    let (sx, sy) = (f64::from(w) / f64::from(area.w), f64::from(h) / f64::from(area.h));
+    let fine = |v: f64| v.is_finite() && v > 0.0;
+    let (sx, sy) = if fine(sx) && fine(sy) && area.x.is_finite() && area.y.is_finite() { (sx, sy) } else { (1.0, 1.0) };
+    let (x, y) = if area.x.is_finite() && area.y.is_finite() { (f64::from(area.x), f64::from(area.y)) } else { (0.0, 0.0) };
+    render_region(doc, page, w, h, Affine::scale_non_uniform(sx, sy) * Affine::translate((-x, -y)), opts)
 }
 
 /// Draw `items` (page points) alone, on nothing, over the page `area` (points) at `scale` px/pt:

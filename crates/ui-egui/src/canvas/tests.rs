@@ -2165,6 +2165,72 @@ fn a_page_picture_is_rasterised_at_the_screens_own_scale_where_the_view_accounts
 }
 
 #[test]
+fn a_page_picture_is_made_as_many_pixels_as_its_place_on_screen() {
+    use super::pages::picture_pixels;
+    use egui::{pos2, vec2};
+    // An A4 page at 110 % on a 2x screen, centred in a window: 1746.155 × 2469.544 pixels starting at 642.923.
+    // Its place rounds to 643..2389 across and 356..2826 down.
+    let page = Rect::from_min_size(pos2(321.4615, 178.0), vec2(873.0775, 1234.772));
+    let expected = (1746.155, 2469.544);
+    assert_eq!(picture_pixels(page, None, 2.0, expected), Some((1746, 2470)));
+    // The same page half a pixel further right ends on the next pixel and starts on the same one: 1747 across.
+    assert_eq!(picture_pixels(page.translate(vec2(0.25, 0.0)), None, 2.0, expected), Some((1747, 2470)));
+    // The upper half of it, as the page view asks for a part: the part's own place, rounded the same way.
+    let half = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 0.5));
+    assert_eq!(picture_pixels(page, Some(half), 2.0, (1746.155, 1234.772)), Some((1746, 1235)));
+    // A place left from another zoom, or a part shown reduced, is not this picture's: no size.
+    assert_eq!(picture_pixels(page, None, 2.0, (1587.4, 2245.0)), None);
+    assert_eq!(picture_pixels(page, Some(half), 2.0, (873.0, 617.0)), None);
+    // Numbers that aren't.
+    for (page, ppp, expected) in [
+        (Rect::from_min_size(pos2(f32::NAN, 0.0), vec2(800.0, 1100.0)), 2.0, expected),
+        (Rect::from_min_size(pos2(0.0, 0.0), vec2(f32::INFINITY, 1100.0)), 2.0, expected),
+        (page, f32::NAN, expected),
+        (page, 0.0, expected),
+        (page, 2.0, (f32::NAN, 2469.5)),
+        (Rect::NOTHING, 2.0, expected),
+    ] {
+        assert_eq!(picture_pixels(page, None, ppp, expected), None, "{page:?} {ppp} {expected:?}");
+    }
+}
+
+#[test]
+fn page_pictures_fill_the_place_the_view_last_rested_at() {
+    use super::source::WordPages;
+    use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
+    use egui::{pos2, vec2};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let layout = a.session.layout();
+    let (pw, ph) = (layout.pages[0].w, layout.pages[0].h);
+    let view_scale = 96.0 / 72.0 * 1.1;
+    let request = ThumbRequest::for_cell(pw.max(ph) * view_scale, 2.0);
+    // Before the view has rested anywhere: one scale, a whole pixel up each way.
+    let fresh = WordPages::new(&mut a, &layout, false, None, Some(view_scale));
+    let plan = fresh.plan(0, &request).unwrap();
+    assert_eq!((plan.pixels, plan.scale), (None, view_scale * 2.0));
+    let fresh_revision = fresh.revision(&0, &request);
+    a.canvas.page_keys = fresh.into_keys();
+    // At rest, a third of a pixel into a pixel: the picture is its place's size, and another picture than before.
+    let place = Rect::from_min_size(pos2(321.4615, 178.0), vec2(pw * view_scale, ph * view_scale));
+    a.canvas.settled_pages = vec![(0, place)];
+    let rested = WordPages::new(&mut a, &layout, false, None, Some(view_scale));
+    let plan = rested.plan(0, &request).unwrap();
+    let (w, h) = plan.pixels.expect("a place to fill");
+    assert_eq!(w as f32, (place.max.x * 2.0).round() - (place.min.x * 2.0).round());
+    assert_eq!(h as f32, (place.max.y * 2.0).round() - (place.min.y * 2.0).round());
+    assert_ne!(rested.revision(&0, &request), fresh_revision);
+    assert!(rested.plan(1, &request).is_none_or(|plan| plan.pixels.is_none()), "a page with no place");
+    a.canvas.page_keys = rested.into_keys();
+    // A place from another zoom is not this zoom's; Read Mode's columns use none.
+    let zoomed = WordPages::new(&mut a, &layout, false, None, Some(view_scale * 1.3));
+    assert_eq!(zoomed.plan(0, &ThumbRequest::for_cell(pw.max(ph) * view_scale * 1.3, 2.0)).unwrap().pixels, None);
+    a.canvas.page_keys = zoomed.into_keys();
+    let reading = WordPages::new(&mut a, &layout, false, None, None);
+    assert_eq!(reading.plan(0, &request).unwrap().pixels, None);
+    a.canvas.page_keys = reading.into_keys();
+}
+
+#[test]
 fn page_pictures_take_subpixel_text_only_at_the_screens_own_scale() {
     use super::source::WordPages;
     use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
@@ -2412,4 +2478,98 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let s = &h.state().session;
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
+}
+
+/// The pictures drawn in the last pass that are at least 300 texels wide (a page's, not an icon's or the font
+/// atlas's glyphs): how many device pixels each is drawn across and down, and how many texels it shows.
+fn drawn_pictures(
+    shapes: &[egui::epaint::ClippedShape],
+    sizes: &std::collections::HashMap<egui::TextureId, [usize; 2]>,
+    ppp: f32,
+) -> Vec<([f32; 2], [f32; 2])> {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(egui::TextureId, Rect, Rect)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, found)),
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                let (mut at, mut uv) = (Rect::NOTHING, Rect::NOTHING);
+                for v in &mesh.vertices {
+                    at.extend_with(v.pos);
+                    uv.extend_with(v.uv);
+                }
+                found.push((mesh.texture_id, at, uv));
+            }
+            egui::Shape::Rect(rect) => {
+                if let Some(brush) = &rect.brush
+                    && brush.fill_texture_id != egui::TextureId::default()
+                {
+                    found.push((brush.fill_texture_id, rect.rect, brush.uv));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    shapes.iter().for_each(|clipped| walk(&clipped.shape, &mut found));
+    found
+        .into_iter()
+        .filter_map(|(id, at, uv)| {
+            let size = sizes.get(&id).filter(|size| size[0] >= 300)?;
+            let texels = [uv.width() * size[0] as f32, uv.height() * size[1] as f32];
+            (texels[0] >= 300.0).then_some(([at.width() * ppp, at.height() * ppp], texels))
+        })
+        .collect()
+}
+
+/// The page view scales a picture into its place, so a page's picture has to be exactly as many pixels each way
+/// as that place: a pixel more (what one scale and rounding up give) squeezes it by a twentieth of a percent and
+/// the text slides off the pixel grid and back down the page, which reads as blur. Run through the real page view
+/// and its picture store, at several zooms and screen densities, on the passes a renderer would draw.
+#[test]
+fn a_page_at_rest_is_drawn_one_texel_per_device_pixel() {
+    for ppp in [1.0_f32, 2.0] {
+        let ctx = crate::test_harness::context();
+        crate::test_harness::cjk_stand_in(&ctx);
+        ctx.set_pixels_per_point(ppp);
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "The quick brown fox jumps over the lazy dog."})).unwrap();
+        app.run("layout.size", json!({"name": "A4"})).unwrap();
+        let mut sizes = std::collections::HashMap::new();
+        for (step, zoom) in [100, 110, 137].into_iter().enumerate() {
+            app.run("view.zoom", json!({"value": zoom})).unwrap();
+            // Until the view has come to rest and the worker has made the picture for where it rests.
+            let mut seen = Vec::new();
+            let exact = |pictures: &[([f32; 2], [f32; 2])]| {
+                !pictures.is_empty()
+                    && pictures.iter().all(|(drawn, texels)| (drawn[0] - texels[0]).abs() < 0.01 && (drawn[1] - texels[1]).abs() < 0.01)
+            };
+            for frame in 0..600 {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 950.0))),
+                    time: Some(step as f64 * 100.0 + frame as f64 * 0.05),
+                    max_texture_side: Some(8192),
+                    ..Default::default()
+                };
+                if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
+                    viewport.native_pixels_per_point = Some(ppp);
+                }
+                craft::ui::shell::embed::before_input(&ctx, |out| app.frame_input(out));
+                let mut out = ctx.run_ui(input, |ui| {
+                    crate::test_harness::logic(ui.ctx(), &mut app);
+                    app.ui(ui);
+                });
+                for (id, deltas) in &out.textures_delta.set {
+                    for delta in deltas.iter().filter(|delta| delta.pos.is_none()) {
+                        sizes.insert(*id, delta.image.size());
+                    }
+                }
+                seen = drawn_pictures(&out.shapes, &sizes, ppp);
+                out.textures_delta.clear();
+                if frame > 3 && exact(&seen) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(exact(&seen), "{zoom} % at {ppp}x: (pixels drawn, texels shown) {seen:?}");
+        }
+    }
 }
