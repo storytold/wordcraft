@@ -71,6 +71,7 @@ fn opt_string(obj: &serde_json::Map<String, Value>, key: &str) -> Result<Option<
 }
 
 pub fn parse(text: &str, base: Option<&Path>) -> Result<Script, String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let v: Value = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
     let obj = v.as_object().ok_or("a script is a JSON object with a `commands` list")?;
     let list = match obj.get("commands") {
