@@ -48,7 +48,11 @@ pub fn markup_width(app: &WordApp) -> f32 {
 /// Page Width jumped to 110% (issue #67). `zoom` is the page view's shown zoom (1.0 = 100%).
 pub fn sync_fit_zoom(app: &mut WordApp, zoom: f64) {
     let v = &mut app.session.view;
-    if v.fit.is_empty() || v.read_mode || v.mode != wordcraft_layout::ViewMode::Print || !zoom.is_finite() {
+    if v.fit.is_empty()
+        || v.read_mode
+        || !(v.mode == wordcraft_layout::ViewMode::Print || (v.mode == wordcraft_layout::ViewMode::Draft && v.fit == "pageWidth"))
+        || !zoom.is_finite()
+    {
         return;
     }
     v.zoom = zoom.clamp(0.1, 5.0) as f32;

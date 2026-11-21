@@ -622,7 +622,7 @@ fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
     state.continuous = true;
     state.cover = false;
     state.page_gaps = !web;
-    state.fit = if web {
+    state.fit = if web && !(v.mode == wordcraft_layout::ViewMode::Draft && v.fit == "pageWidth") {
         Fit::None
     } else {
         match v.fit.as_str() {

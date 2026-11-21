@@ -1,5 +1,9 @@
 # WordCraft roadmap
 
+> **Draft Page Width update:** 2026-11-21 · Page Width fits the Draft column to the window and keeps subsequent zoom controls in sync (#6113); readiness estimates unchanged.
+
+The #6113 fix now uses the shared PageView fit state after the #7101 interface port. Both Draft regression tests and all 836 UI tests passed with `--features craft/ui-testing`; WASM, asset and layering checks passed. `cargo xtask ci` remains blocked by existing `nonminimal_bool` warnings in engine code unchanged by this fix. No new native Word comparison was made.
+
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-18 · **Change:** trivial (progress log: TIFF picture chooser, drop and pasted-path routing, #6704); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
@@ -161,6 +165,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-17: File formats, codecs and protocols now come from the shared libraries (storytold/craft-libs#778): legacy code pages (craft-codepage, #6785), plain-text encoding detection (craft-mime, #6950), the ZIP entry-count guard (craft-zip, #6948), Read Aloud's Speech Dispatcher wire format (craft-ssip, #6951), picture probes for clipboard DIBs, JPEG memory, PNG and WebP (craft-image-codecs, #6949, #6955) and the MCP stdio server (craft-mcp-server, #6956), all with craft-libs pinned at main `93dac78c` (#6954, #6960). Opening documents and pictures behaves as before, except that large non-interleaved JPEGs are refused sooner (a 4:4:4 picture from about 60 Mpx, was 67 Mpx), invalid PNGs are refused more strictly, a lossless WebP's transparency is now seen, and MCP clients get tool errors for unknown or mistyped arguments and a 1,000-message batch cap (docs/mcp.md). The old code stays as test-only references the shared code is checked against.
 - 2026-11-15: Get the Missing Fonts. A document opened from a file that is missing fonts their publisher gives away (Microsoft's Aptos family, the default in recent Word documents; Cascadia Code and Mono) brings up a box naming each font, the font drawn instead, the publisher's download page and how to install the download, with Don't show this again. `font.missing` reports the same page, so agents get it without the box. WordCraft links to the page only; it downloads and bundles nothing.
 - 2026-10-30: Track Changes: a list item deleted whole, text and paragraph mark, shows its number as deleted text, in the deletion's colour and with its mark (struck through by default, or caret, #, bold, italic, underline), and hides it with No Markup or when Track Changes Options hide deletions (#4828). Readiness unchanged.
+- 2026-11-10: Page Width works in Draft view (#6113): the fixed-width column fits the window, follows resizing, and updates the zoom used by Zoom In/Out.
+
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 
@@ -949,6 +955,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-30 | trivial | the Paste button is named "Paste" for screen readers, without macOS's key on other platforms; the status bar's Go To hint shows the platform's key |
 | 2026-11-18 | trivial | Progress log: border boxes close their corners |
 | 2026-10-30 | trivial | Progress log: under Track Changes a list item deleted whole shows its number as deleted text, in the deletion's colour and mark (#4828); readiness unchanged |
+| 2026-11-10 | trivial | #6113: Page Width fits Draft's fixed 800 pt column to the window, follows resizing, and keeps subsequent zoom controls in sync; Web and Outline retain manual zoom. |
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
 | 2026-11-08 | trivial | Progress log: freestanding custom.dic dictionary file support in File › Options › Proofing (#5840) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
