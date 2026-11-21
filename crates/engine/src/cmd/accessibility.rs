@@ -38,7 +38,7 @@ struct Checker<'a> {
 }
 
 fn at(path: &Path, off: usize) -> Pos {
-    Pos { story: StoryRef::Body, path: path.clone(), off }
+    Pos::new(StoryRef::Body, path.clone(), off)
 }
 
 impl Checker<'_> {

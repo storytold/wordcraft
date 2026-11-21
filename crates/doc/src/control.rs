@@ -732,7 +732,7 @@ impl Document {
             while is_start(off) {
                 off += w;
             }
-            return Pos { off, ..p.clone() };
+            return p.at(off);
         }
         if p.off == para.len() && off >= w && is_end(off - w) {
             // Step back over the trailing ends that close block-level controls.
@@ -741,7 +741,7 @@ impl Document {
             while off >= w && is_end(off - w) && block_ends.contains(&(off - w)) {
                 off -= w;
             }
-            return Pos { off, ..p.clone() };
+            return if off == p.off { p.clone() } else { p.at(off) };
         }
         p.clone()
     }

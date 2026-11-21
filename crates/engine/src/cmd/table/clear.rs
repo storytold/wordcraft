@@ -77,7 +77,7 @@ fn clear_spans(s: &mut Session, depth: usize, spans: &[(Pos, Pos)]) -> CmdResult
     let first_block = |p: &Pos| {
         let mut v = p.path.0.get(..depth).unwrap_or_default().to_vec();
         v.push(0);
-        Pos { story: p.story, path: Path(v), off: 0 }
+        Pos::new(p.story, Path(v), 0)
     };
     for (a, b) in spans {
         crate::cmd::controls::check_delete(s, a, b)?;
@@ -121,7 +121,7 @@ pub(super) fn text_spans(s: &Session, story: StoryRef, prefixes: &[Vec<u32>]) ->
             let first = inside.next()?.clone();
             let last = inside.next_back().cloned().unwrap_or_else(|| first.clone());
             let end = s.doc.para(story, &last).map_or(0, Paragraph::len);
-            Some((Pos { story, path: first, off: 0 }, Pos { story, path: last, off: end }))
+            Some((Pos::new(story, first, 0), Pos::new(story, last, end)))
         })
         .collect()
 }

@@ -170,7 +170,7 @@ fn relative_font_sizes_keep_column_cell_and_text_box_targets() {
     let mut s = Session::new(Document::from_text("Body"));
     let id = s.run("insert.textBox", &json!({"text": "AB"})).unwrap()["story"].as_u64().unwrap() as u32;
     let story = StoryRef::Part(id);
-    let at = |off| Pos { story, path: Path::top(0), off };
+    let at = |off| Pos::new(story, Path::top(0), off);
     for (a, b, size) in [(0, 1, 20.0), (1, 2, 10.0)] {
         s.doc.format_range(&at(a), &at(b), &|c| c.size = Some(size)).unwrap();
     }

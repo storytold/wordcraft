@@ -41,7 +41,7 @@ pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     let path = insert_block_at_caret(s, Block::Table(t))?;
     let mut first = path.0.clone();
     first.extend([0, 0, 0]);
-    s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
+    s.sel = Selection::caret(Pos::new(story, Path(first), 0));
     Ok(json!({"table": path.0}))
 }
 

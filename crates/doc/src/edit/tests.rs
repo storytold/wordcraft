@@ -18,7 +18,7 @@ fn paths_between_matches_every_path_filtered() {
     let all = d.para_paths(StoryRef::Body);
     for a in &all {
         for b in &all {
-            let (pa, pb) = (Pos { story: StoryRef::Body, path: a.clone(), off: 0 }, Pos { story: StoryRef::Body, path: b.clone(), off: 0 });
+            let (pa, pb) = (Pos::new(StoryRef::Body, a.clone(), 0), Pos::new(StoryRef::Body, b.clone(), 0));
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
             let want: Vec<Path> = all.iter().filter(|p| *p >= lo && *p <= hi).cloned().collect();
             assert_eq!(d.paths_between(&pa, &pb), want, "{a:?} {b:?}");
@@ -54,9 +54,9 @@ fn delete_range_with_bad_end_leaves_document_unchanged() {
     // Range entering a table with a bad offset at its start: the cell text stays.
     let mut d = doc(&["before", "after"]);
     d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(2, 1, 200.0))).unwrap();
-    d.insert_text(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 }, "x", &CharProps::default()).unwrap();
+    d.insert_text(&Pos::new(StoryRef::Body, Path(vec![1, 0, 0, 0]), 0), "x", &CharProps::default()).unwrap();
     let before = d.plain_text(StoryRef::Body);
-    let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0 };
+    let cell = Pos::new(StoryRef::Body, Path(vec![1, 1, 0, 0]), 0);
     assert!(d.delete_range(&Pos::body(0, 99), &cell).is_err());
     assert_eq!(d.plain_text(StoryRef::Body), before);
 }
@@ -173,12 +173,12 @@ fn pasting_a_table_into_its_own_cell_stops_at_max_table_depth() {
     // doubled the nesting, until saving, copying or closing the document overflowed the stack.
     let mut d = doc(&["x", ""]);
     d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(1, 1, 100.0))).unwrap();
-    d.insert_text(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 }, "a", &CharProps::default()).unwrap();
+    d.insert_text(&Pos::new(StoryRef::Body, Path(vec![1, 0, 0, 0]), 0), "a", &CharProps::default()).unwrap();
     for _ in 0..8 {
         let all = d.copy_range(&Pos::body(0, 0), &Pos::body(d.body.len() - 1, 0));
         let at = deepest(&d);
         let off = d.para(StoryRef::Body, &at).map_or(0, Paragraph::len);
-        d.insert_fragment(&Pos { story: StoryRef::Body, path: at, off }, &all).unwrap();
+        d.insert_fragment(&Pos::new(StoryRef::Body, at, off), &all).unwrap();
     }
     assert_eq!(body_height(&d), MAX_TABLE_DEPTH);
     // Nothing is lost: every copy's text is there, below the limit as paragraphs.
@@ -220,7 +220,7 @@ fn pasted_text_box_gets_its_own_story() {
     let f = d.copy_range(&Pos::body(0, 0), &Pos::body(0, 5));
     assert_eq!(f.parts.keys().copied().collect::<Vec<_>>(), vec![id]);
     // Edit the original after copying: the paste keeps the copied text.
-    d.insert_text(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 6 }, " later", &CharProps::default()).unwrap();
+    d.insert_text(&Pos::new(StoryRef::Part(id), Path::top(0), 6), " later", &CharProps::default()).unwrap();
     d.insert_fragment(&Pos::body(1, 2), &f).unwrap();
     let pasted = boxes_in(&d, &Path::top(1));
     let [Some(new)] = pasted[..] else { panic!("{pasted:?}") };
@@ -229,7 +229,7 @@ fn pasted_text_box_gets_its_own_story() {
     assert_eq!(d.plain_text(StoryRef::Part(new)), "Inside");
     assert_eq!(d.plain_text(StoryRef::Part(id)), "Inside later");
     // Editing the copy leaves the original alone; a second paste is a third story.
-    d.insert_text(&Pos { story: StoryRef::Part(new), path: Path::top(0), off: 0 }, "Copy: ", &CharProps::default()).unwrap();
+    d.insert_text(&Pos::new(StoryRef::Part(new), Path::top(0), 0), "Copy: ", &CharProps::default()).unwrap();
     assert_eq!(d.plain_text(StoryRef::Part(id)), "Inside later");
     d.insert_fragment(&Pos::body(1, 0), &f).unwrap();
     let again = boxes_in(&d, &Path::top(1));
@@ -267,7 +267,7 @@ fn text_box_pasted_into_another_document_brings_its_text() {
 fn text_box_in_a_copied_table_gets_its_own_story() {
     let mut d = doc(&["before", "after"]);
     d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(1, 1, 200.0))).unwrap();
-    let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 };
+    let cell = Pos::new(StoryRef::Body, Path(vec![1, 0, 0, 0]), 0);
     let id = text_box(&mut d, &cell, "In a cell");
     let f = d.copy_range(&Pos::body(0, 0), &Pos::body(2, 5));
     assert!(f.parts.contains_key(&id));
@@ -309,7 +309,7 @@ fn self_nested_text_box_paste_is_bounded() {
     let mut d = doc(&["x"]);
     let id = text_box(&mut d, &Pos::body(0, 1), "loop");
     // The box contains a box showing itself.
-    d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, box_shape(Some(id)), &CharProps::default()).unwrap();
+    d.insert_object(&Pos::new(StoryRef::Part(id), Path::top(0), 0), box_shape(Some(id)), &CharProps::default()).unwrap();
     let f = d.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3));
     let before = d.parts.len();
     d.insert_fragment(&Pos::body(0, 0), &f).unwrap();
@@ -472,7 +472,7 @@ fn tables_in_paths() {
     let paths = d.para_paths(StoryRef::Body);
     assert_eq!(paths.len(), 6);
     assert_eq!(paths[1], Path(vec![1, 0, 0, 0]));
-    let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 };
+    let cell = Pos::new(StoryRef::Body, Path(vec![1, 0, 1, 0]), 0);
     let e = d.insert_text(&cell, "x", &CharProps::default()).unwrap();
     assert_eq!(e.off, 1);
     assert_eq!(d.next_para(StoryRef::Body, &Path(vec![1, 0, 1, 0])), Some(Path(vec![1, 1, 0, 0])));
@@ -527,7 +527,7 @@ fn bad_positions_error() {
     assert!(d.split_paragraph(&Pos::body(0, 99)).is_err());
     let c = d.clamp(&Pos::body(9, 9));
     assert_eq!(c, Pos::body(0, 2));
-    assert!(d.delete_range(&Pos { story: StoryRef::Part(3), path: Path::top(0), off: 0 }, &Pos::body(0, 0)).is_err());
+    assert!(d.delete_range(&Pos::new(StoryRef::Part(3), Path::top(0), 0), &Pos::body(0, 0)).is_err());
 }
 
 // delete_range over whole tables (#1844), in the body, a header and a footnote.
@@ -548,7 +548,7 @@ fn story_doc(kind: Option<PartKind>, lines: &[&str]) -> (Document, StoryRef) {
 const STORIES: [Option<PartKind>; 3] = [None, Some(PartKind::Header), Some(PartKind::Footnote)];
 
 fn at(story: StoryRef, path: &[u32], off: usize) -> Pos {
-    Pos { story, path: Path(path.to_vec()), off }
+    Pos::new(story, Path(path.to_vec()), off)
 }
 
 /// Insert an `rows`×`cols` table at `path` whose cells hold `texts`, row by row.
@@ -681,7 +681,7 @@ fn a_table_nested_deeper_than_the_paragraph_walk_is_never_removed_whole() {
     let mut d = doc(&["before", "after"]);
     d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(t)).unwrap();
     let first = d.para_paths(StoryRef::Body).into_iter().find(|p| p.0.first() == Some(&1)).unwrap();
-    d.delete_range(&Pos { story: StoryRef::Body, path: first, off: 0 }, &Pos::body(2, 0)).unwrap();
+    d.delete_range(&Pos::new(StoryRef::Body, first, 0), &Pos::body(2, 0)).unwrap();
     assert!(d.body.get(1).is_some_and(|b| b.as_table().is_some()), "a table with paragraphs the walk never saw was removed");
 }
 #[test]
@@ -891,9 +891,7 @@ fn an_adopted_notes_text_box_gets_a_story_of_its_own() {
     let note = theirs.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("note", CharProps::default()))]);
     let their_box = theirs.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("their box", CharProps::default()))]);
     assert_eq!(their_box, our_box);
-    theirs
-        .insert_object(&Pos { story: StoryRef::Part(note), path: Path::top(0), off: 0 }, box_shape(Some(their_box)), &CharProps::default())
-        .unwrap();
+    theirs.insert_object(&Pos::new(StoryRef::Part(note), Path::top(0), 0), box_shape(Some(their_box)), &CharProps::default()).unwrap();
     theirs
         .insert_object(&Pos::body(0, 0), InlineObject::NoteRef { kind: NoteKind::Footnote, id: note, custom: String::new() }, &CharProps::default())
         .unwrap();

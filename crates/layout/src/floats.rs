@@ -248,7 +248,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
             vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin, fx: *fx }]
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
-            let object = wordcraft_doc::Pos { story, path: Path(path.to_vec()), off };
+            let object = wordcraft_doc::Pos::new(story, Path(path.to_vec()), off);
             vec![Placed::Shape {
                 rect,
                 kind: *kind,
@@ -288,7 +288,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                             freeform: None,
                             spin,
                             extra: Default::default(),
-                            object: Some(wordcraft_doc::Pos { story, path: Path(path.to_vec()), off }),
+                            object: Some(wordcraft_doc::Pos::new(story, Path(path.to_vec()), off)),
                             alt: String::new(),
                         },
                         Placed::Clip { rect, spin, items: members },

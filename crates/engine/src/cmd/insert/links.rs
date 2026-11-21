@@ -133,7 +133,7 @@ pub fn bookmark_span(doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> 
         let off = para.object_offsets().into_iter().find(|o| {
             (path != start.path || *o > start.off) && matches!(para.object_at(*o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
         })?;
-        Some(Pos { story: start.story, path, off })
+        Some(Pos::new(start.story, path, off))
     });
     let end = end.unwrap_or_else(|| from.clone());
     (from, end)

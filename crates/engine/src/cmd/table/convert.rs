@@ -142,7 +142,7 @@ pub(super) fn to_text(s: &mut Session, v: &Value) -> CmdResult {
     for (k, b) in blocks.into_iter().enumerate() {
         s.doc.insert_block(story, &tp.with_last(tp.last() + k), b)?;
     }
-    s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: caret, off: 0 }));
+    s.sel = Selection::caret(s.doc.clamp(&Pos::new(story, caret, 0)));
     sel_result(s)
 }
 
@@ -417,7 +417,7 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.insert_block(a.story, &a.path, Block::Table(t))?;
     let mut first = a.path.0.clone();
     first.extend([0, 0, 0]);
-    s.sel = Selection::caret(Pos { story: a.story, path: Path(first), off: 0 });
+    s.sel = Selection::caret(Pos::new(a.story, Path(first), 0));
     match fit {
         Some(mode) => autofit(s, &json!({ "mode": mode })),
         None => sel_result(s),
@@ -474,7 +474,7 @@ pub(super) fn quick_table(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.insert_block(story, &new.path, Block::Table(t))?;
     let mut first = new.path.0.clone();
     first.extend([0, 0, 0]);
-    s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
+    s.sel = Selection::caret(Pos::new(story, Path(first), 0));
     let _ = StoryRef::Body;
     sel_result(s)
 }

@@ -289,12 +289,12 @@ impl Document {
     /// First and last positions of a story.
     pub fn start_of(&self, s: StoryRef) -> Pos {
         let path = self.para_paths(s).into_iter().next().unwrap_or_else(|| Path::top(0));
-        Pos { story: s, path, off: 0 }
+        Pos::new(s, path, 0)
     }
     pub fn end_of(&self, s: StoryRef) -> Pos {
         let path = self.para_paths(s).pop().unwrap_or_else(|| Path::top(0));
         let off = self.para(s, &path).map(|p| p.len()).unwrap_or(0);
-        Pos { story: s, path, off }
+        Pos::new(s, path, off)
     }
 
     /// The position just after the shape that owns text box story `part` (body first, then the
@@ -306,7 +306,7 @@ impl Document {
                 let Some(p) = self.para(story, &path) else { continue };
                 for (off, o) in p.objects_with_offsets() {
                     if o.text_boxes().contains(&part) {
-                        return Some(Pos { story, path, off: off + para::OBJ.len_utf8() });
+                        return Some(Pos::new(story, path, off + para::OBJ.len_utf8()));
                     }
                 }
             }
@@ -329,13 +329,15 @@ impl Document {
     /// Clamp a position into the document (valid path, char boundary).
     pub fn clamp(&self, p: &Pos) -> Pos {
         if let Some(para) = self.para_at(p) {
-            return Pos { story: p.story, path: p.path.clone(), off: para.clamp(p.off) };
+            let off = para.clamp(p.off);
+            let affinity = (off == p.off).then_some(p.affinity).flatten();
+            return Pos::with_affinity(p.story, p.path.clone(), off, affinity);
         }
         let story = if self.story(p.story).is_some() { p.story } else { StoryRef::Body };
         let all = self.para_paths(story);
         let path = all.iter().rev().find(|q| **q <= p.path).or(all.first()).cloned().unwrap_or_else(|| Path::top(0));
         let off = self.para(story, &path).map(|q| q.clamp(p.off)).unwrap_or(0);
-        Pos { story, path, off }
+        Pos::new(story, path, off)
     }
 
     /// The whole text of a story, paragraphs separated by `\n` (tables: cells by `\t`).
@@ -879,7 +881,7 @@ impl Document {
                 for (off, o) in p.objects_with_offsets() {
                     match o {
                         InlineObject::PermStart { id, group, editor } => {
-                            let start = Pos { story, path: path.clone(), off: off + para::OBJ.len_utf8() };
+                            let start = Pos::new(story, path.clone(), off + para::OBJ.len_utf8());
                             open.entry(*id).or_default().push(out.len());
                             out.push(PermRange { id: *id, group: group.clone(), editor: editor.clone(), start: start.clone(), end: start });
                         }
@@ -887,7 +889,7 @@ impl Document {
                             if let Some(i) = open.get_mut(id).and_then(Vec::pop)
                                 && let Some(r) = out.get_mut(i)
                             {
-                                r.end = Pos { story, path: path.clone(), off };
+                                r.end = Pos::new(story, path.clone(), off);
                             }
                         }
                         _ => {}
@@ -912,7 +914,7 @@ impl Document {
             if let Some(p) = self.para(StoryRef::Body, &path) {
                 for (off, o) in p.objects_with_offsets() {
                     if let InlineObject::BookmarkStart { name } = o {
-                        out.push((name.clone(), Pos { story: StoryRef::Body, path: path.clone(), off }));
+                        out.push((name.clone(), Pos::new(StoryRef::Body, path.clone(), off)));
                     }
                 }
             }

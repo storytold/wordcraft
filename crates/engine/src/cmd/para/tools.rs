@@ -39,7 +39,7 @@ fn check_target_edits(s: &mut Session, story: StoryRef, paths: &[Path]) -> Resul
         .iter()
         .filter_map(|path| {
             let len = s.doc.para(story, path)?.len();
-            Some((Pos { story, path: path.clone(), off: 0 }, Pos { story, path: path.clone(), off: len }))
+            Some((Pos::new(story, path.clone(), 0), Pos::new(story, path.clone(), len)))
         })
         .collect();
     for (a, b) in ranges {
@@ -69,7 +69,7 @@ fn delete_in_para(s: &mut Session, story: StoryRef, path: &Path, a: usize, b: us
     if a >= b {
         return Ok(());
     }
-    let at = |off: usize| Pos { story, path: path.clone(), off };
+    let at = |off: usize| Pos::new(story, path.clone(), off);
     crate::cmd::controls::check_delete(s, &at(a), &at(b))?;
     if s.doc.settings.track_changes {
         track_delete(s, &at(a), &at(b))?;
@@ -121,7 +121,7 @@ pub(super) fn convert_breaks(s: &mut Session, v: &Value) -> CmdResult {
     for path in paths.iter().rev() {
         let Some(para) = s.doc.para(story, path) else { continue };
         for (i, _) in break_ranges(para).into_iter().rev() {
-            let new = split_para(s, &Pos { story, path: path.clone(), off: i })?;
+            let new = split_para(s, &Pos::new(story, path.clone(), i))?;
             // The break stays at the head of the new paragraph; the paragraph break replaces it.
             delete_in_para(s, story, &new.path, 0, 1)?;
         }
@@ -144,11 +144,11 @@ pub(super) fn blank_between(s: &mut Session, v: &Value) -> CmdResult {
     if after {
         let last = paths.last().ok_or_else(|| CmdError::Failed("no paragraph selected".into()))?;
         let len = s.doc.para(story, last).map(|p| p.len()).unwrap_or(0);
-        split_para(s, &Pos { story, path: last.clone(), off: len })?;
+        split_para(s, &Pos::new(story, last.clone(), len))?;
     }
     for path in paths[..paths.len().saturating_sub(1)].iter().rev() {
         let len = s.doc.para(story, path).map(|p| p.len()).unwrap_or(0);
-        split_para(s, &Pos { story, path: path.clone(), off: len })?;
+        split_para(s, &Pos::new(story, path.clone(), len))?;
     }
     sel_result(s)
 }
@@ -174,7 +174,7 @@ pub(super) fn remove_blank(s: &mut Session, v: &Value) -> CmdResult {
             continue;
         }
         let next = path.with_last(path.last() + 1);
-        let (a, b) = (Pos { story, path: path.clone(), off: 0 }, Pos { story, path: next, off: 0 });
+        let (a, b) = (Pos::new(story, path.clone(), 0), Pos::new(story, next, 0));
         crate::cmd::controls::check_delete(s, &a, &b)?;
         if s.doc.settings.track_changes {
             track_delete(s, &a, &b)?;

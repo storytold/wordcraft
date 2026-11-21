@@ -84,7 +84,7 @@ pub fn anchors(doc: &Document) -> Vec<(u32, Pos)> {
             if !doc.comments.contains_key(id) || root(doc, *id) != *id || !seen.insert(*id) {
                 continue;
             }
-            out.push((*id, Pos { story: StoryRef::Body, path: path.clone(), off }));
+            out.push((*id, Pos::new(StoryRef::Body, path.clone(), off)));
             if out.len() >= MAX_BALLOONS {
                 return out;
             }

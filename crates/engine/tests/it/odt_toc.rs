@@ -148,7 +148,7 @@ fn an_odt_toc_with_numbered_headings_keeps_its_entries_on_one_line() {
             continue;
         };
         let Some(tab) = p.text.find('\t') else { continue };
-        let pos = |off| wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(i), off };
+        let pos = |off| wordcraft_doc::Pos::body(i, off);
         let title = layout.caret(&pos(tab + 1)).unwrap();
         let end = layout.caret(&pos(p.len())).unwrap();
         assert!(p.plain_text().contains("Planning") || p.plain_text().contains("Budget"), "{:?}", p.text);

@@ -222,6 +222,7 @@ impl ParaLayout {
             let next_start = self.lines.get(i + 1).map(|n| n.start);
             match next_start {
                 Some(ns) if off < ns => return i,
+                Some(ns) if off == ns && self.clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().any(|c| c.start == off)) => return i,
                 Some(_) => {}
                 None => return i,
             }
@@ -231,6 +232,34 @@ impl ParaLayout {
         }
         self.lines.len().saturating_sub(1)
     }
+    /// Visual box and outer bidi level for cluster `k` on bidirectional line `l`. For a field
+    /// fragment (`c.level.is_some()`), returns the fragment's combined visual extent on `l` with
+    /// the paragraph's outer placeholder level so document caret edges follow the paragraph's
+    /// direction while glyph painting still uses the per-cluster inner levels in `l.vis`.
+    fn vis_unit(&self, l: &Line, k: usize) -> Option<VisCl> {
+        let c = self.clusters.get(k)?;
+        if c.level.is_some() {
+            let mut a = k;
+            while a > l.c0 && self.clusters.get(a - 1).is_some_and(|nc| nc.level.is_some() && nc.start == c.start && nc.end == c.end) {
+                a -= 1;
+            }
+            let mut b = k + 1;
+            while b < l.c1 && self.clusters.get(b).is_some_and(|nc| nc.level.is_some() && nc.start == c.start && nc.end == c.end) {
+                b += 1;
+            }
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            for j in a..b {
+                let v = l.vis.get(j - l.c0)?;
+                min_x = min_x.min(v.x);
+                max_x = max_x.max(v.x + v.w);
+            }
+            let level = self.bidi_levels.get(c.start).copied().unwrap_or(u8::from(l.rtl));
+            return Some(VisCl { x: min_x, w: (max_x - min_x).max(0.0), level });
+        }
+        l.vis.get(k - l.c0).copied()
+    }
+
     /// Caret x on a bidirectional line: the leading edge of the cluster after `off` (the right
     /// edge of right-to-left text), except where `off` leaves an embedded run (the cluster before
     /// it has the higher level), which keeps the caret at that run's trailing edge, so each
@@ -243,11 +272,11 @@ impl ParaLayout {
         *from = k.unwrap_or(l.c1);
         let Some(k) = k else { return Some(l.end_x()) };
         let c = self.clusters.get(k)?;
-        let here = l.vis.get(k - l.c0)?;
+        let here = self.vis_unit(l, k)?;
         if off > c.start || k == l.c0 {
             return Some(here.leading());
         }
-        let prev = l.vis.get(k - 1 - l.c0)?;
+        let prev = self.vis_unit(l, k - 1)?;
         Some(if prev.level > here.level { prev.trailing() } else { here.leading() })
     }
 
@@ -268,26 +297,88 @@ impl ParaLayout {
         }
     }
 
+    /// Returns whether cluster `k` on line `li` is a continuation fragment of an inline
+    /// object that started on an earlier line.
+    pub(crate) fn is_continuation_cluster(&self, li: usize, k: usize) -> bool {
+        let Some(l) = self.lines.get(li) else { return false };
+        if l.c0 == 0 || k < l.c0 || k >= l.c1 {
+            return false;
+        }
+        let Some(c) = self.clusters.get(k) else { return false };
+        if c.start >= c.end {
+            return false;
+        }
+        self.clusters.get(l.c0 - 1).is_some_and(|prev| prev.start == c.start && prev.end == c.end)
+    }
+
+    /// Returns whether line `li` begins with a continuation fragment of an inline
+    /// object that started on an earlier line.
+    pub(crate) fn is_line_continuation(&self, li: usize) -> bool {
+        let Some(l) = self.lines.get(li) else { return false };
+        self.is_continuation_cluster(li, l.c0)
+    }
+
+    /// The visual line for `pos`: honours `pos.affinity` only when `pos.off` is a valid caret
+    /// offset on that line ([`Self::line_offsets`]), falling back to [`Self::line_of`].
+    pub fn line_for(&self, pos: &wordcraft_doc::Pos) -> usize {
+        pos.affinity.filter(|&a| a < self.lines.len() && self.line_offsets(a).contains(&pos.off)).unwrap_or_else(|| self.line_of(pos.off))
+    }
+
+    /// Visual-line affinity for a hit or vertical move onto line `li` at `off`: `Some(li)` when
+    /// `li` begins with a continuation fragment and `off` is a valid caret offset on `li`.
+    pub(crate) fn continuation_affinity(&self, li: usize, off: usize) -> Option<usize> {
+        (self.is_line_continuation(li) && self.line_offsets(li).contains(&off)).then_some(li)
+    }
+
+    /// Returns whether line `li` contains visible text or an inline object starting at `off`.
+    pub fn line_has_start(&self, li: usize, off: usize) -> bool {
+        let Some(l) = self.lines.get(li) else { return false };
+        (l.c0..l.c1).any(|k| self.clusters.get(k).is_some_and(|c| c.start == off && !self.is_continuation_cluster(li, k)))
+    }
+
+    /// Caret position identifying the start of visual line `li`, retaining `Some(li)` affinity
+    /// and a valid caret offset on `li` when `li` begins with a continuation fragment.
+    pub fn line_start_pos(&self, story: wordcraft_doc::StoryRef, path: wordcraft_doc::Path, li: usize) -> Option<wordcraft_doc::Pos> {
+        let line = self.lines.get(li)?;
+        let off = if self.is_line_continuation(li) { self.line_offsets(li).into_iter().min().unwrap_or(line.start) } else { line.start };
+        Some(wordcraft_doc::Pos::with_affinity(story, path, off, self.continuation_affinity(li, off)))
+    }
+
     /// Caret offsets a click or arrow key can reach on line `li`: whole-grapheme starts and the
     /// line end, except after a line-ending break or past a wrapped line's trailing space.
     pub fn line_offsets(&self, li: usize) -> Vec<usize> {
         let Some(l) = self.lines.get(li) else { return Vec::new() };
-        let mut v: Vec<usize> =
-            (l.c0..l.c1).filter_map(|k| self.clusters.get(k).filter(|c| self.is_edit_boundary(c.start)).map(|c| c.start)).collect();
+        let mut v: Vec<usize> = (l.c0..l.c1)
+            .filter_map(|k| {
+                let c = self.clusters.get(k)?;
+                let off = if self.is_continuation_cluster(li, k) { c.end } else { c.start };
+                self.is_edit_boundary(off).then_some(off)
+            })
+            .collect();
+        v.dedup();
         let last_break =
             l.c1 > l.c0 && self.clusters.get(l.c1 - 1).is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak));
         let wrapped = l.c1 > l.c0 && l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some();
         if !last_break && !wrapped || l.c1 == l.c0 {
             v.push(l.stop);
         }
+        if v.is_empty() && self.is_line_continuation(li) {
+            if self.is_edit_boundary(l.stop) {
+                v.push(l.stop);
+            } else if self.is_edit_boundary(l.start) {
+                v.push(l.start);
+            }
+        }
+        v.dedup();
         v
     }
 
     /// Byte offset closest to x on line `li`.
     pub fn off_at_x(&self, li: usize, x: f32) -> usize {
         let Some(l) = self.lines.get(li) else { return self.text_len };
+        let fallback = if self.is_line_continuation(li) { self.line_offsets(li).into_iter().min().unwrap_or(l.start) } else { l.start };
         if !l.vis.is_empty() {
-            let mut best = (l.start, f32::MAX);
+            let mut best = (fallback, f32::MAX);
             for (off, cx) in self.line_carets(li) {
                 let d = cx.map_or(f32::MAX, |cx| (cx - x).abs());
                 if d < best.1 {
@@ -296,11 +387,26 @@ impl ParaLayout {
             }
             return best.0;
         }
-        let mut best = l.start;
+        let mut best = fallback;
         let mut bestd = f32::MAX;
         for k in l.c0..=l.c1 {
             let Some(cx) = l.xs.get(k - l.c0) else { break };
-            let off = if k < l.c1 { self.clusters.get(k).map(|c| c.start).unwrap_or(l.stop) } else { l.stop };
+            // Skip internal paint clusters belonging to the same inline-object fragment on this
+            // line so clicks snap to the fragment's outer edges rather than internal word starts.
+            if k > l.c0
+                && k < l.c1
+                && let (Some(prev), Some(curr)) = (self.clusters.get(k - 1), self.clusters.get(k))
+                && prev.start == curr.start
+                && prev.end == curr.end
+            {
+                continue;
+            }
+            let off = if k < l.c1 {
+                let c = self.clusters.get(k);
+                if self.is_continuation_cluster(li, k) { c.map(|c| c.end).unwrap_or(l.stop) } else { c.map(|c| c.start).unwrap_or(l.stop) }
+            } else {
+                l.stop
+            };
             if !self.is_edit_boundary(off) {
                 continue;
             }

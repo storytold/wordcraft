@@ -49,6 +49,7 @@ struct Slot {
 }
 
 impl Slot {
+    /// Build a cluster spanning this slot with the given kind and dimensions.
     fn cluster(self, kind: ClKind, adv: f32, (obj_h, obj_d): (f32, f32)) -> Cluster {
         Cluster {
             start: self.start,
@@ -62,6 +63,7 @@ impl Slot {
             obj_h,
             obj_d,
             dot: false,
+            level: None,
         }
     }
 }
@@ -69,6 +71,7 @@ impl Slot {
 /// The paragraph as shaped so far, with what the layout takes from its contents.
 struct Shaped<'a> {
     b: Builder<'a>,
+    mark_style: u32,
     has_page_fields: bool,
     notes: Vec<(usize, u32)>,
     obj_index: usize,
@@ -176,9 +179,10 @@ fn linked(rc: &Arc<ResolvedChar>, instr: &str) -> Arc<ResolvedChar> {
 }
 
 impl<'a> Shaped<'a> {
-    fn new(b: Builder<'a>, eq_counter: u32) -> Self {
+    fn new(b: Builder<'a>, mark_style: u32, eq_counter: u32) -> Self {
         Shaped {
             b,
+            mark_style,
             has_page_fields: false,
             notes: Vec::new(),
             obj_index: 0,
@@ -308,6 +312,7 @@ impl<'a> Shaped<'a> {
         // In margin: they keep their indent and the letter hangs left of them.
         let indent = if rp.drop_cap_margin { 0.0 } else { w + rp.drop_cap_distance };
         self.drop_cap = Some((self.b.clusters.len() - before, rp.drop_cap, indent));
+        self.b.drop_cap_indent = Some(indent);
         self.drop_cap_w = w;
         // The letter hangs beside the text; lines flow at the indent `break_lines` adds.
         for c in self.b.clusters.iter_mut().skip(before) {
@@ -445,14 +450,18 @@ impl<'a> Shaped<'a> {
         self.check_boxes.push(k);
     }
 
+    /// Shape a field result or overstrike equation into paragraph clusters.
     fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
         let (start, end) = (slot.start, slot.end);
         match wordcraft_doc::eq::parse_overstrike(instr) {
             Some(o) => overstrike(&mut self.b, &o, instr, start, end, rc, &mut self.enclosures),
             None => {
+                if self.b.label.is_none() && cx.env.label.is_some() {
+                    self.b.label = shape_list_label(cx, &mut self.b, self.mark_style);
+                }
                 let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
                 self.has_page_fields |= page_dep;
-                self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+                self.b.shape_field(&t, start, end, &linked(rc, instr), cx.rp);
             }
         }
     }
@@ -528,18 +537,29 @@ impl<'a> BreakText<'a> {
 /// Mark the clusters a line may break after.
 fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
-    for c in clusters {
-        c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    let n = clusters.len();
+    for i in 0..n {
+        let is_last_of_object = i + 1 == n || clusters[i + 1].start != clusters[i].start;
+        let c = &mut clusters[i];
+        let break_at_end = is_last_of_object && opps.contains(&c.end);
+        c.break_after = c.break_after || break_at_end || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }
 }
 
 /// The list label, shaped; none on a paragraph containing only a page break: Word hides it there.
 /// The list counter has already advanced, so the following item keeps its number.
 fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
-    let (p, rp) = (cx.p, cx.rp);
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
-    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only)?;
+    if break_only {
+        return None;
+    }
+    b.label.take().or_else(|| shape_list_label(cx, b, mark_style))
+}
+
+fn shape_list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
+    let (p, rp) = (cx.p, cx.rp);
+    let (text, lvl) = cx.env.label.as_ref()?;
     let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
@@ -654,7 +674,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let b = Builder {
+    let mut b = Builder {
         env,
         styles: Vec::new(),
         style_index: Default::default(),
@@ -663,13 +683,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         levels,
         shown: Vec::new(),
         substituted: Vec::new(),
+        span_bound: None,
+        drop_cap_indent: None,
+        label: None,
     };
     let mut cx =
         Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp), shown: None };
     cx.shown = shown_text(&cx);
-    let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
-    let mark_style = sh.b.style(&mark_rc, None, false);
+    let mark_style = b.style(&mark_rc, None, false);
+    let mut sh = Shaped::new(b, mark_style, env.eq_number);
     for (range, props) in p.run_ranges() {
         sh.run(&cx, range, props);
     }
@@ -820,7 +843,8 @@ fn word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
+/// Compute UAX #14 line break opportunities in `text`, respecting slash-break rules.
+pub(super) fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash before a letter,

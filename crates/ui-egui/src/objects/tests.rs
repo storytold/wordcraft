@@ -639,7 +639,7 @@ fn a_text_box_does_not_snap_to_its_own_contents() {
     app.run("select.range", json!({"anchor": bx.pos(), "focus": end})).unwrap();
     app.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 200, "width": 200, "height": 150})).unwrap();
     let id = app.session.layout().find_object(0, |o| o.text_box.is_some()).and_then(|o| o.text_box).unwrap();
-    let inner = Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 };
+    let inner = Pos::new(StoryRef::Part(id), wordcraft_doc::Path::top(0), 0);
     app.session.doc.insert_object(&inner, floating_rect(30.0, 20.0), &Default::default()).unwrap();
     app.session.touch();
     let layout = app.session.layout();

@@ -887,7 +887,7 @@ fn a_link_to_a_bookmark_puts_the_caret_at_its_start() {
     );
     steps(&mut h, 6);
     // Between the link's "h" and "e".
-    let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(1), off: 5 }).unwrap();
+    let c = h.state_mut().session.layout().caret(&Pos::new(StoryRef::Body, wordcraft_doc::Path::top(1), 5)).unwrap();
     let at = screen(&mut h, c.x, c.top + c.height / 2.0);
     h.event(egui::Event::PointerMoved(at));
     h.app_frame();
@@ -945,7 +945,7 @@ fn ctrl_click_on_a_cross_reference_goes_to_its_target() {
     let obj = wordcraft_doc::para::OBJ.len_utf8();
     let (before, after) = {
         let l = h.state_mut().session.layout();
-        let pos = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(last), off };
+        let pos = |off| Pos::new(StoryRef::Body, wordcraft_doc::Path::top(last), off);
         (l.caret(&pos(4)).unwrap(), l.caret(&pos(4 + obj)).unwrap())
     };
     let at = screen(&mut h, (before.x + after.x) / 2.0, before.top + before.height / 2.0);
@@ -978,7 +978,7 @@ fn right_clicking_a_link_hides_the_hover_tooltip() {
     );
     steps(&mut h, 6);
     // Between the link's "h" and "e".
-    let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 }).unwrap();
+    let c = h.state_mut().session.layout().caret(&Pos::new(StoryRef::Body, wordcraft_doc::Path::top(0), 5)).unwrap();
     let at = screen(&mut h, c.x, c.top + c.height / 2.0);
     h.event(egui::Event::PointerMoved(at));
     rest_for_tip(&mut h);
@@ -1016,7 +1016,7 @@ fn a_handled_press_skips_the_link_tooltip() {
         a,
     );
     steps(&mut h, 6);
-    let c = h.state_mut().session.layout().caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 }).unwrap();
+    let c = h.state_mut().session.layout().caret(&Pos::new(StoryRef::Body, wordcraft_doc::Path::top(0), 5)).unwrap();
     let at = screen(&mut h, c.x, c.top + c.height / 2.0);
     h.event(Event::PointerMoved(at));
     rest_for_tip(&mut h);

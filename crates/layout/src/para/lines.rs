@@ -7,7 +7,7 @@ use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
 use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
 
 /// Narrow cells and float spans must retain their usable width.
-const MIN_LINE_WIDTH: f32 = 1.0;
+pub(super) const MIN_LINE_WIDTH: f32 = 1.0;
 
 /// What a paragraph's lines are broken with: the paragraph's measures and the state the lines
 /// are broken in, from one to the next.
@@ -130,7 +130,7 @@ struct DecimalScan {
 }
 
 /// The objects' exclusions mirrored across a line of `width`, for a right-to-left paragraph.
-fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
+pub(super) fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
     exclusions
         .iter()
         .map(|e| Exclusion {
@@ -146,6 +146,41 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
             ..e.clone()
         })
         .collect()
+}
+
+/// Compute the label's `x` position and where text starts after the label and its suffix on the
+/// first line for a span starting at `left`.
+pub(super) fn label_placement(
+    rp: &wordcraft_doc::resolve::ResolvedPara,
+    (default_tab, hanging_at, tab_origin): (f32, Option<f32>, f32),
+    level: Option<&Level>,
+    lab: &super::model::Label,
+    styles: &[super::model::StyleRun],
+    left: f32,
+) -> (f32, f32) {
+    // The number is aligned at the first-line indent: its left edge, centre or right edge.
+    let lx = match level.map(|l| l.align) {
+        Some(Align::Center) => left - lab.width / 2.0,
+        Some(Align::Right) => left - lab.width,
+        _ => left,
+    };
+    let end = lx + lab.width;
+    let text_start = match level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
+        // An empty label (a "none" level with no text) that ends right at the left indent takes
+        // no tab: the text starts there, as in Word (#4985), and not at the next stop.
+        LevelSuffix::Tab if lab.width <= 0.01 && (end - rp.indent_left).abs() <= 0.01 => end,
+        LevelSuffix::Tab => {
+            let t = next_tab(end, &rp.tabs, default_tab, hanging_at, tab_origin).pos;
+            // The level's own tab stop after the number, when it comes first.
+            match level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
+                Some(p) if p < t => p,
+                _ => t,
+            }
+        }
+        LevelSuffix::Space => end + styles.get(lab.style as usize).map(|s| s.size * 0.25).unwrap_or(3.0),
+        LevelSuffix::Nothing => end,
+    };
+    (lx, text_start)
 }
 
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
@@ -171,6 +206,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
+    /// Create a line breaker for laying out `pl` within the given environment and exclusions.
     fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
@@ -206,7 +242,7 @@ impl<'e> Breaker<'e> {
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
-            bidi: rp.bidi || !pl.bidi_levels.is_empty(),
+            bidi: rp.bidi || !pl.bidi_levels.is_empty() || pl.clusters.iter().any(|c| c.level.is_some_and(|l| l > 0)),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
             // Keep the existing estimate for shapes and for non-exact spacing.
@@ -302,29 +338,12 @@ impl<'e> Breaker<'e> {
     /// Place the label on the first line, `left` being the first-line indent. Returns where the
     /// text starts.
     fn place_label(&self, pl: &mut ParaLayout, left: f32) -> f32 {
-        let Some(lab) = pl.label.as_mut() else { return left };
-        // The number is aligned at the first-line indent: its left edge, centre or right edge.
-        lab.x = match self.level.map(|l| l.align) {
-            Some(Align::Center) => left - lab.width / 2.0,
-            Some(Align::Right) => left - lab.width,
-            _ => left,
-        };
-        let end = lab.x + lab.width;
-        match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
-            // An empty label (a "none" level with no text) that ends right at the left indent takes
-            // no tab: the text starts there, as in Word (#4985), and not at the next stop.
-            LevelSuffix::Tab if lab.width <= 0.01 && (end - self.rp.indent_left).abs() <= 0.01 => end,
-            LevelSuffix::Tab => {
-                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at, self.tab_origin).pos;
-                // The level's own tab stop after the number, when it comes first.
-                match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
-                    Some(p) if p < t => p,
-                    _ => t,
-                }
-            }
-            LevelSuffix::Space => end + pl.styles.get(lab.style as usize).map(|s| s.size * 0.25).unwrap_or(3.0),
-            LevelSuffix::Nothing => end,
+        let Some(lab) = pl.label.as_ref() else { return left };
+        let (lx, text_start) = label_placement(&self.rp, (self.default_tab, self.hanging_at, self.tab_origin), self.level, lab, &pl.styles, left);
+        if let Some(lab) = pl.label.as_mut() {
+            lab.x = lx;
         }
+        text_start
     }
 
     /// The first word doesn't fit the span beside a floating object: try the row's next span,
@@ -1075,7 +1094,7 @@ impl Scan {
 
 /// Narrowest span text flows into beside a floating object, points. Word puts an empty
 /// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
-const MIN_SPAN: f32 = 20.0;
+pub(super) const MIN_SPAN: f32 = 20.0;
 
 /// Where a row starts under Word 2003's indent rules: right after the floating objects that end
 /// at or before the indent `lo` on this row and let text past their right side (their outline's
@@ -1112,7 +1131,7 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
 /// rules, `w:doNotSuppressIndentation`) a row starts right after a floating object that ends
 /// before `lo`, the indent ignored (ECMA-376 Part 4 §14.8.3.12: a paragraph indented 1" tightly
 /// wraps an object at 0.25").
-fn row_spans(
+pub(super) fn row_spans(
     exclusions: &[Exclusion],
     (top, h, table_h): (f32, f32, f32),
     (lo, hi): (f32, f32),

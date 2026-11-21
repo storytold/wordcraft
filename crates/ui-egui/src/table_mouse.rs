@@ -218,7 +218,7 @@ impl<'a> TableMouse<'a> {
         };
         let mut path = target.geom.table.0.clone();
         path.extend([u32::try_from(row).unwrap_or(u32::MAX), u32::try_from(last).unwrap_or(u32::MAX), 0]);
-        let pos = wordcraft_doc::Pos { story, path: wordcraft_doc::Path(path), off: 0 };
+        let pos = wordcraft_doc::Pos::new(story, wordcraft_doc::Path(path), 0);
         if let Ok(pos) = serde_json::to_value(&pos)
             && let Err(e) = self.app.run("caret.set", json!({"pos": pos, "extend": true}))
         {

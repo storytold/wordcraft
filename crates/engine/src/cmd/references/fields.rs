@@ -68,7 +68,7 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.insert_block(f.story, &at, Block::Para(para))?;
     update_seq(s)?;
     let off = s.doc.para(f.story, &at).map_or(0, |p| p.len());
-    s.sel = Selection::caret(Pos { story: f.story, path: at, off });
+    s.sel = Selection::caret(Pos::new(f.story, at, off));
     sel_result(s)
 }
 
@@ -246,7 +246,7 @@ fn part_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
             let Some(p) = doc.para(story, &path) else { continue };
             for (off, o) in p.objects_with_offsets() {
                 if let InlineObject::BookmarkStart { name } = o {
-                    out.push((name.clone(), Pos { story, path: path.clone(), off }));
+                    out.push((name.clone(), Pos::new(story, path.clone(), off)));
                 }
             }
         }
