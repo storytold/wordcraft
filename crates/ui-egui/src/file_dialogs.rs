@@ -51,7 +51,7 @@ fn with_open_filters(mut request: PickRequest, purpose: &str) -> PickRequest {
 }
 
 /// Apply the selected local folder to document Open and the save/export of an unsaved document.
-/// Explicit folders, including the saved document's own folder, take priority.
+/// The file service keeps explicit and previously used folders ahead of this fallback.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn with_default_folder(req: PickRequest, saved: Option<&str>, has_path: bool) -> PickRequest {
     let applies = match (req.kind, req.purpose.as_str()) {
@@ -61,9 +61,10 @@ pub(crate) fn with_default_folder(req: PickRequest, saved: Option<&str>, has_pat
     };
     if applies
         && req.directory.is_none()
+        && req.default_directory.is_none()
         && let Some(folder) = usable_default_location(saved)
     {
-        return req.directory(folder);
+        return req.default_directory(folder);
     }
     req
 }
