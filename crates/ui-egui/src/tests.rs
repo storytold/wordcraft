@@ -1911,6 +1911,7 @@ fn window_close_save_as_that_fails_says_so_and_keeps_the_document() {
 /// #1445: the prompt that comes back after a failed save shows the reason on screen.
 #[test]
 fn save_prompt_shows_why_the_save_failed() {
+    use egui_kittest::kittest::NodeT;
     let dir = scratch("prompt-reason");
     let blocker = dir.join("folder");
     std::fs::write(&blocker, b"not a folder").unwrap();
@@ -1923,7 +1924,13 @@ fn save_prompt_shows_why_the_save_failed() {
     h.run_steps(4);
     // The prompt shows it, and so does the status line the failed save wrote it to (`prompt_message` above is the prompt's own).
     assert!(h.query_all_by_label(reason.as_str()).next().is_some(), "the reason is in the prompt");
-    assert!(h.query_by_label("Save").is_some(), "Save again is offered");
+    // The accepting button: the platform's word for Save (the framework asks Yes, No, Cancel off macOS). macOS also
+    // keeps a hidden, greyed Save in the title bar, so ask for the one on screen.
+    let accept = if cfg!(target_os = "macos") { "Save" } else { "Yes" };
+    let offered = h
+        .query_all_by_role_and_label(egui::accesskit::Role::Button, accept)
+        .any(|n| !n.accesskit_node().is_hidden() && !n.accesskit_node().is_disabled());
+    assert!(offered, "{accept} again is offered");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2012,8 +2019,9 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
         );
         h.run_steps(4);
         assert!(h.query_by_label("Show the community button in the title bar").is_some(), "hook {hook}: the Options page rendered");
-        // The framework's button and the row that holds it can both carry the label.
-        assert_eq!(h.query_all_by_label(LABEL).next().is_some(), hook, "hook {hook}: the button");
+        // The row carries the label too (macOS shows it, with Finder's steps instead of a button): ask for the button.
+        let button = h.query_all_by_role_and_label(egui::accesskit::Role::Button, LABEL).next().is_some();
+        assert_eq!(button, hook, "hook {hook}: the button");
         if hook {
             // The button itself, not the row that carries its label.
             h.get_by_role_and_label(egui::accesskit::Role::Button, LABEL).click();
