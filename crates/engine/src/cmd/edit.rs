@@ -456,11 +456,17 @@ fn paste_clip_item(s: &mut Session, v: &Value) -> CmdResult {
 /// Every collected item, in the order they were copied (one undo step).
 fn paste_all_clips(s: &mut Session, _: &Value) -> CmdResult {
     let all: Vec<Fragment> = s.clip_history.items.iter().rev().map(|x| x.fragment.clone()).collect();
-    let mut r = sel_result(s)?;
+    let multiple = all.len() > 1;
     for f in all {
-        r = paste_clip(s, f)?;
+        if multiple {
+            // Insert each item at the end of the last one. Cell paste can overwrite a
+            // previous item or insert rows ahead of it.
+            super::paste::insert_as_is(s, f)?;
+        } else {
+            return paste_clip(s, f);
+        }
     }
-    Ok(r)
+    sel_result(s)
 }
 
 fn paste_text(s: &mut Session, v: &Value) -> CmdResult {

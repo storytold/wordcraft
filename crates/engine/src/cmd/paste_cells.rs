@@ -162,7 +162,11 @@ pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
     // Pasting ends Backspace's carried formatting, as in the ordinary paste path.
     s.forget_carried();
     // Protection: the edit rules may move the caret (to where typing goes) or refuse.
-    super::controls::prepare_edit(s)?;
+    if super::controls::prepare_edit(s)?.is_some() {
+        // Normalizing the caret can enter a control and select its placeholder.
+        // Let ordinary paste replace that selection.
+        return Ok(false);
+    }
     let at = s.sel.focus.clone();
     let Some((tp, row0, col0)) = at.path.cell() else { return Ok(false) };
     let story = at.story;

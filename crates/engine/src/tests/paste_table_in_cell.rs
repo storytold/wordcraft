@@ -59,6 +59,21 @@ fn nested(t: &Table) -> bool {
 }
 
 #[test]
+fn paste_all_keeps_tables_in_copy_order_inside_the_cell() {
+    for col in [0, 1] {
+        let mut s = dest(1, col);
+        for prefix in ["first", "second"] {
+            copy(&mut s, table(prefix, 1, 3));
+            let frag = s.clipboard.as_ref().unwrap();
+            s.clip_history.push(frag, &frag.clipboard_text());
+        }
+        s.run("edit.pasteAllClipboard", &json!({})).unwrap();
+        let pasted: Vec<_> = t0(&s).rows[1].cells[col].blocks.iter().filter_map(|b| b.as_table()).map(|t| cell_text(&t.rows[0].cells[0])).collect();
+        assert_eq!(pasted, ["first11", "second11"]);
+    }
+}
+
+#[test]
 fn a_whole_table_with_the_caret_in_the_first_column_inserts_its_rows_above() {
     for (row, want) in [
         (1, rows(&["d11,d12,d13", "s11,s12,s13", "s21,s22,s23", "s31,s32,s33", "d21,d22,d23", "d31,d32,d33"])),
@@ -382,6 +397,25 @@ fn a_control_showing_its_placeholder_gets_the_ordinary_paste_not_inserted_rows()
     paste(&mut s);
     assert_eq!(t0(&s).rows.len(), before.unwrap_or(0), "no rows inserted above the caret's row");
     assert!(nested(t0(&s)), "the table nests in the cell");
+}
+
+#[test]
+fn paste_from_before_a_block_control_replaces_its_placeholder() {
+    let mut s = dest(1, 0);
+    let start = s.sel.focus.clone();
+    s.run("developer.plainText", &json!({})).unwrap();
+    let range = s.doc.control_at(&s.sel.focus).unwrap();
+    assert_eq!(range.start, start);
+    assert!(range.control.showing_placeholder);
+    let placeholder = s.doc.para_at(&start).unwrap().text[range.content_start().off..range.end.off].to_owned();
+    assert!(!placeholder.is_empty());
+    s.doc.control_mut(&start).unwrap().block = true;
+    s.sel = Selection::caret(start);
+    copy(&mut s, table("s", 1, 3));
+    paste(&mut s);
+    assert_eq!(t0(&s).rows.len(), 3);
+    assert!(nested(t0(&s)));
+    assert!(!cell_text(&t0(&s).rows[1].cells[0]).contains(&placeholder));
 }
 
 /// A locked control in a text box anchored in a cell the copy would overwrite is not lost: the
