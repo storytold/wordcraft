@@ -17,7 +17,7 @@ fn ctrl_shift_drag_copies_along_the_dominant_axis() {
         app.run("arrange.bounds", json!({"page": 0, "x": 200, "y": 300})).unwrap();
         app.session.clipboard_text = "untouched clipboard".into();
         let before = app.session.doc.clone();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -37,14 +37,12 @@ fn ctrl_shift_drag_copies_along_the_dominant_axis() {
             h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
             h.run_steps(1);
         }
-        let d = h.state().canvas.obj_drag.as_ref().expect("Ctrl+Shift starts a copy drag");
-        assert!(d.copy);
-        assert!((d.drag.rect.x - want_x).abs() < 0.01 && (d.drag.rect.y - want_y).abs() < 0.01, "aligned preview: {:?}", d.drag.rect);
+        assert!(h.state().canvas.object_gesture().is_some(), "Ctrl+Shift starts a copy drag");
         h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
         h.run_steps(3);
         h.event(Event::ModifiersChanged(Modifiers::NONE));
         h.run_steps(1);
-        assert!(h.state().canvas.obj_drag.is_none());
+        assert!(h.state().canvas.object_gesture().is_none());
         assert_eq!(h.state().session.clipboard_text, "untouched clipboard");
         let (pos, _) = selected(h.state()).expect("the duplicate is selected");
         let layout = h.state_mut().session.layout();
@@ -80,30 +78,66 @@ fn ctrl_shift_drag_keeps_its_axis_with_guides_and_live_modifiers() {
     let from = crate::canvas::page_to_screen(h.state_mut(), 0, 150.0, 280.0).unwrap();
     let to = crate::canvas::page_to_screen(h.state_mut(), 0, centre + 1.5, 315.0).unwrap();
     let mods = Modifiers { shift: true, ..Modifiers::COMMAND };
-    h.event(Event::ModifiersChanged(mods));
-    h.event(Event::PointerMoved(from));
-    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+    // One drag of the first object, released with `release` held, or cancelled with Escape first.
+    // The lines the gesture shows are the framework's (snapping and its axis lock are asserted
+    // on where the copy lands).
+    let drag = |h: &mut crate::table_resize::tests::H, release: Modifiers, cancel: bool, flicker: bool| {
+        h.state_mut().run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)})).unwrap();
+        h.event(Event::ModifiersChanged(mods));
+        h.event(Event::PointerMoved(from));
+        h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: mods });
         h.run_steps(1);
-    }
-    let d = h.state().canvas.obj_drag.as_ref().unwrap();
-    assert!((d.drag.rect.x + 50.0 - centre).abs() < 0.01, "the free axis still snaps");
-    assert!((d.drag.rect.y - 250.0).abs() < 0.01, "the nearby object's y guide must not move the copy");
-    assert!(d.guides.iter().all(|g| g.axis == guides::Axis::X));
-    assert!(!d.guides.is_empty());
-    h.event(Event::ModifiersChanged(Modifiers::COMMAND));
-    h.run_steps(1);
-    assert!((h.state().canvas.obj_drag.as_ref().unwrap().drag.rect.y - 250.0).abs() > 10.0, "Shift up releases the axis");
-    h.event(Event::ModifiersChanged(mods));
-    h.run_steps(1);
-    assert!((h.state().canvas.obj_drag.as_ref().unwrap().drag.rect.y - 250.0).abs() < 0.01, "Shift down restores the axis");
-    h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: mods });
-    h.run_steps(1);
-    assert!(h.state().canvas.obj_drag.is_none());
-    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
-    h.run_steps(2);
+        for k in 1..=4 {
+            h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+            h.run_steps(1);
+        }
+        assert!(h.state().canvas.object_gesture().is_some(), "Ctrl+Shift starts a copy drag");
+        if flicker {
+            // Shift up and down again before the release.
+            h.event(Event::ModifiersChanged(Modifiers::COMMAND));
+            h.run_steps(1);
+            h.event(Event::ModifiersChanged(mods));
+            h.run_steps(1);
+        }
+        if cancel {
+            // The framework reads Escape with Ctrl/Cmd held as a chord, not as Escape: the modifiers go up first
+            // (the pointer stays down), as a person lets go of them to reach for the key.
+            h.event(Event::ModifiersChanged(Modifiers::NONE));
+            h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            assert!(h.state().canvas.object_gesture().is_none(), "Escape ends the drag");
+        }
+        h.event(Event::ModifiersChanged(release));
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: release });
+        h.run_steps(3);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(1);
+    };
+    let copy_rect = |h: &mut crate::table_resize::tests::H| {
+        let (pos, _) = selected(h.state()).expect("the copy is selected");
+        h.state_mut().session.layout().object(&pos, 0).unwrap().rect
+    };
+    drag(&mut h, mods, false, false);
+    let r = copy_rect(&mut h);
+    assert!((r.x + 50.0 - centre).abs() < 0.01, "the free axis still snaps: {r:?}");
+    assert!((r.y - 250.0).abs() < 0.01, "the nearby object's y guide must not move the copy: {r:?}");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc, before);
+    // Shift up before the release frees the axis.
+    drag(&mut h, Modifiers::COMMAND, false, false);
+    let r = copy_rect(&mut h);
+    assert!((r.y - 250.0).abs() > 10.0, "Shift up releases the axis: {r:?}");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc, before);
+    // Shift up and down again restores the axis lock.
+    drag(&mut h, mods, false, true);
+    let r = copy_rect(&mut h);
+    assert!((r.y - 250.0).abs() < 0.01, "Shift down restores the axis: {r:?}");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc, before);
+    // Escape commits nothing.
+    drag(&mut h, mods, true, false);
     assert_eq!(h.state().session.doc, before);
     assert_eq!(h.state().session.undo_depth(), depth);
 }
@@ -131,7 +165,7 @@ fn copy_axis_modifiers_keep_additive_object_clicks() {
         h.run_steps(1);
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: mods });
         h.run_steps(2);
-        assert!(h.state().canvas.obj_drag.is_none());
+        assert!(h.state().canvas.object_gesture().is_none());
         assert_eq!(wordcraft_engine::cmd::objects::picked_objects(&h.state().session), vec![Pos::body(0, 0), Pos::body(0, 3)]);
         assert_eq!(h.state().session.doc, before);
         assert_eq!(h.state().session.undo_depth(), depth);
@@ -141,7 +175,7 @@ fn copy_axis_modifiers_keep_additive_object_clicks() {
             h.run_steps(1);
             h.event(Event::PointerMoved(at + egui::vec2(100.0, 20.0)));
             h.run_steps(1);
-            assert!(h.state().canvas.obj_drag.as_ref().is_some_and(|d| d.copy), "a secondary selected object starts an aligned copy");
+            assert!(h.state().canvas.object_gesture().is_some(), "a secondary selected object starts an aligned copy");
             h.event(Event::PointerButton { pos: at + egui::vec2(100.0, 20.0), button: PointerButton::Primary, pressed: false, modifiers: mods });
             h.run_steps(2);
             assert_eq!(h.state().session.doc.para_at(&Pos::body(0, 0)).unwrap().objects.len(), 3);
@@ -151,10 +185,11 @@ fn copy_axis_modifiers_keep_additive_object_clicks() {
     }
 }
 
-/// A middle-button scroll during an aligned copy must not move its locked document row
-/// onto another page when the original page scrolls off screen.
+/// A wheel scroll during an aligned copy must not move its locked document row
+/// onto another page when the original page scrolls off screen. The wheel scrolls on every
+/// platform; a middle press only autoscrolls off macOS, iOS and the web.
 #[test]
-fn ctrl_shift_drag_keeps_its_document_axis_after_middle_scroll() {
+fn ctrl_shift_drag_keeps_its_document_axis_after_a_scroll() {
     use egui::{Event, Modifiers, PointerButton};
     let text = vec!["Original long document for a scrolling copy."; 120].join("\n");
     let mut app = WordApp::new(wordcraft_engine::Session::new(Document::from_text(&text)), Default::default());
@@ -163,7 +198,6 @@ fn ctrl_shift_drag_keeps_its_document_axis_after_middle_scroll() {
     app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 60})).unwrap();
     app.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
     app.ui.alignment_guides = false;
-    app.canvas.auto_scroll.supported = true;
     let before = app.session.doc.clone();
     let mut h = rotation_window(app);
     assert!(h.state_mut().session.layout().pages.len() > 2);
@@ -176,19 +210,23 @@ fn ctrl_shift_drag_keeps_its_document_axis_after_middle_scroll() {
     h.run_steps(1);
     h.event(Event::PointerMoved(to));
     h.run_steps(1);
-    let offset = h.state().canvas.scroll_offset.y;
-    h.event(Event::PointerButton { pos: to, button: PointerButton::Middle, pressed: true, modifiers: mods });
-    h.run_steps(1);
-    let below = to + egui::vec2(0.0, 150.0);
-    h.event(Event::PointerMoved(below));
-    h.run_steps(16);
-    assert!(h.state().canvas.scroll_offset.y > offset + 500.0, "the real middle-button gesture scrolls the canvas");
-    h.event(Event::PointerButton { pos: below, button: PointerButton::Middle, pressed: false, modifiers: mods });
-    h.run_steps(3);
-    let d = h.state().canvas.obj_drag.as_ref().unwrap();
-    assert_eq!(d.drag.to_page, 0, "the copy stays on the original horizontal row");
-    assert!((d.drag.rect.y - 250.0).abs() < 0.01, "the document y stays locked after scrolling");
-    h.event(Event::PointerButton { pos: below, button: PointerButton::Primary, pressed: false, modifiers: mods });
+    let offset = h.state().canvas.view.offset.1;
+    // A wheel scroll with the primary button held, in points so the distance does not depend on the platform's line size.
+    // The canvas's wheel is the document scheme (the framework's): Ctrl/Cmd + wheel steps the zoom and Shift + wheel
+    // scrolls sideways, so the wheel event itself carries no modifier (the held keys stay down through `mods`).
+    for _ in 0..16 {
+        h.event(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -60.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(1);
+    }
+    assert!(h.state().canvas.view.offset.1 > offset + 500.0, "the wheel scrolls the canvas under the held button");
+    assert!(h.state().canvas.object_gesture().is_some(), "the copy drag survives the scroll");
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
     h.run_steps(3);
     let (pos, _) = selected(h.state()).unwrap();
     let hit = h.state_mut().session.layout().object(&pos, 0).unwrap();
@@ -234,10 +272,7 @@ fn ctrl_shift_drag_copies_an_inline_picture_at_the_text_cursor() {
         h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 5.0)));
         h.run_steps(1);
     }
-    let d = h.state().canvas.obj_drag.as_ref().unwrap();
-    assert!(d.copy);
-    assert_eq!(d.drop_at.as_ref().map(|(p, _)| p), Some(&target));
-    assert!(d.guides.is_empty());
+    assert!(h.state().canvas.object_gesture().is_some(), "a copy drag runs");
     h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods });
     h.run_steps(3);
     let (pos, image) = selected(h.state()).unwrap();
@@ -286,15 +321,70 @@ fn editable_smart_art_takes_resize_handles_but_not_a_move() {
     let hit = app.session.layout().object(&Pos::body(0, 0), 0).expect("laid out");
     assert!(!fixed(&app, &hit));
     assert!(size_only(&app, &hit));
-    // Its body shows no move cursor; its handles show theirs.
-    assert_eq!(hover_cursor(&app, &hit, Grab::Move), egui::CursorIcon::Default);
-    assert_ne!(hover_cursor(&app, &hit, Grab::Resize(frame::Handle { x: 1, y: 0 })), egui::CursorIcon::Default);
+    // Its body takes no move and its box has no rotate handle, while a handle still resizes.
+    use crate::table_resize::tests::{H, button, steps};
+    app.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h: H = rotation_window(app);
+    let at = |h: &mut H, x: f32, y: f32| crate::canvas::page_to_screen(h.state_mut(), hit.page, x, y).unwrap();
+    let drag = |h: &mut H, from: Pos2, by: egui::Vec2| {
+        h.event(egui::Event::PointerMoved(from));
+        button(h, from, true);
+        h.step();
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(from + by * (k as f32 / 4.0)));
+            h.step();
+        }
+        button(h, from + by, false);
+        steps(h, 3);
+    };
+    let (cx, cy) = (hit.rect.x + hit.rect.w / 2.0, hit.rect.y + hit.rect.h / 2.0);
+    let centre = at(&mut h, cx, cy);
+    drag(&mut h, centre, egui::vec2(40.0, 30.0));
+    let r = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap();
+    assert!((r.rect.x - hit.rect.x).abs() < 0.01 && (r.rect.y - hit.rect.y).abs() < 0.01, "a body drag moves nothing: {:?}", r.rect);
+    // Where the rotate handle of a box sits: nothing turns here, while the same drag turns a plain shape.
+    assert_eq!(rotate_probe(&mut h), 0.0, "no rotate handle");
+    let mut control: H = {
+        let (mut app, hit) = app_with(floating_rect(100.0, 60.0));
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        app.run("select.range", json!({"anchor": hit.pos(), "focus": Pos { off: hit.off + OBJ.len_utf8(), ..hit.pos() }})).unwrap();
+        rotation_window(app)
+    };
+    assert!(rotate_probe(&mut control).abs() > 1.0, "the same drag turns a shape that has the handle");
+    // The right edge's handle resizes.
+    let edge = at(&mut h, hit.rect.right(), cy);
+    drag(&mut h, edge, egui::vec2(40.0, 0.0));
+    let r = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap();
+    assert!(r.rect.w > hit.rect.w + 1.0, "a handle resizes it: {:?} -> {:?}", hit.rect, r.rect);
+    let app = h.state_mut();
     let (w0, h0) = (hit.rect.w, hit.rect.h);
     assert!(app.run("arrange.bounds", json!({"width": w0 / 2.0, "height": h0 / 2.0})).is_err());
     app.run("picture.size", json!({"width": w0 / 2.0, "height": h0 / 2.0, "lockAspect": false})).unwrap();
     let hit = app.session.layout().object(&Pos::body(0, 0), 0).expect("laid out");
     assert!((hit.rect.w - w0 / 2.0).abs() < 1.0);
 }
+/// Drags from where a box's rotate handle sits (as the rotation tests place it) a quarter turn
+/// round the object at the start of the body, and returns the angle it ends at.
+fn rotate_probe(h: &mut crate::table_resize::tests::H) -> f32 {
+    use crate::table_resize::tests::{button, steps};
+    let o = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap();
+    let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
+    let center = crate::canvas::page_to_screen(h.state_mut(), o.page, cx, cy).unwrap();
+    let top = crate::canvas::page_to_screen(h.state_mut(), o.page, cx, o.rect.y).unwrap();
+    let radius = center.distance(top) + 22.0;
+    let (start, end) = (center - egui::vec2(0.0, radius), center + egui::vec2(radius, 0.0));
+    h.event(egui::Event::PointerMoved(start));
+    button(h, start, true);
+    h.step();
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 4.0)));
+        h.step();
+    }
+    button(h, end, false);
+    steps(h, 3);
+    h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().spin.deg
+}
+
 /// Alignment guides: dragging a floating shape to within a few points of the page's centre
 /// snaps its centre exactly onto it and shows the guide while dragging; the drop lands there,
 /// and the guides go. Holding Alt drags freely.
@@ -305,7 +395,7 @@ fn dragging_a_shape_snaps_to_the_page_centre_unless_alt() {
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -335,28 +425,24 @@ fn dragging_a_shape_snaps_to_the_page_centre_unless_alt() {
             h.event(Event::PointerMoved(at));
             h.step();
         }
-        let d = h.state().canvas.obj_drag.as_ref().expect("dragging");
-        let mid = (d.drag.rect, d.guides.clone());
+        assert!(h.state().canvas.object_gesture().is_some(), "dragging");
         h.event(button(to, false));
         for _ in 0..3 {
             h.step();
         }
         h.event(Event::ModifiersChanged(Modifiers::default()));
         h.step();
-        mid
     };
-    let (rect, guides) = drag(&mut h, false);
-    assert!((rect.x + rect.w / 2.0 - centre).abs() < 1e-3, "snapped onto the page's centre while dragging: {rect:?}");
-    assert!(guides.contains(&crate::guides::Guide::x(centre)), "the centre guide shows: {guides:?}");
-    assert!(h.state().canvas.obj_drag.is_none(), "dropped: no guides any more");
+    // The lines shown are the framework's (`SnapSuspend::Alt` and the smart-guide painting); the
+    // app's part is where the drop lands.
+    drag(&mut h, false);
+    assert!(h.state().canvas.object_gesture().is_none(), "dropped");
     let r = shape(&mut h);
-    assert!((r.x + r.w / 2.0 - centre).abs() < 0.01, "dropped on the centre: {r:?}");
-    // Alt: no snapping, no guides; it lands where the pointer put it.
-    let (rect, guides) = drag(&mut h, true);
-    assert!((rect.x + rect.w / 2.0 - centre - 1.5).abs() < 0.01, "free with Alt: {rect:?}");
-    assert!(guides.is_empty(), "{guides:?}");
+    assert!((r.x + r.w / 2.0 - centre).abs() < 0.01, "snapped onto the page's centre: {r:?}");
+    // Alt: no snapping; it lands where the pointer put it.
+    drag(&mut h, true);
     let r = shape(&mut h);
-    assert!((r.x + r.w / 2.0 - centre - 1.5).abs() < 0.01, "{r:?}");
+    assert!((r.x + r.w / 2.0 - centre - 1.5).abs() < 0.01, "free with Alt: {r:?}");
 }
 /// #1738: a floating shape dragged from page 1 onto page 2 leaves the view where it is, even
 /// though the command that drops it (`arrange.bounds`) is not a view command.
@@ -375,7 +461,7 @@ fn dropping_a_shape_on_another_page_keeps_the_view_where_it_is() {
     a.run("text.insert", json!({"text": "two"})).unwrap();
     a.run("view.zoom", json!({"value": 30})).unwrap();
     a.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -423,6 +509,23 @@ fn floating_rect(w: f32, h: f32) -> InlineObject {
     }
 }
 
+/// The bars in `shape`, as (top end, bottom end, width): a line segment, a stroked path from its
+/// first to its last point, and a filled rectangle from the middle of its top to the middle of its
+/// bottom. The framework draws a caret as a path and the app draws the insertion cursor as a
+/// rectangle, so a test of either looks at all three.
+fn vertical_bars(shape: &egui::Shape) -> Vec<(egui::Pos2, egui::Pos2, f32)> {
+    match shape {
+        egui::Shape::LineSegment { points: [a, b], stroke } => vec![(*a, *b, stroke.width)],
+        egui::Shape::Path(path) => match (path.points.first(), path.points.last()) {
+            (Some(a), Some(b)) if path.points.len() >= 2 => vec![(*a, *b, path.stroke.width)],
+            _ => Vec::new(),
+        },
+        egui::Shape::Rect(rect) => vec![(rect.rect.center_top(), rect.rect.center_bottom(), rect.rect.width())],
+        egui::Shape::Vec(shapes) => shapes.iter().flat_map(vertical_bars).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// A floating line `w` wide and `h` tall (0: level, as Word files often store a rule).
 fn floating_line(w: f32, h: f32, flip_v: bool) -> InlineObject {
     InlineObject::Shape {
@@ -463,7 +566,7 @@ fn a_level_line_dragged_by_its_middle_moves_and_stays_level() {
             h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 4.0)));
             h.step();
         }
-        assert_eq!(h.state().canvas.obj_drag.as_ref().map(|d| d.drag.grab), Some(Grab::Move), "flip_v {flip_v}: the middle moves it");
+        assert!(h.state().canvas.object_gesture().is_some(), "flip_v {flip_v}: the middle moves it");
         // While it moves, it shows where the pointer has it (the page leaves it out
         // meanwhile), not only as its end handles back where it was: something is drawn along
         // the line's new place, between its ends.
@@ -543,11 +646,19 @@ fn a_text_box_does_not_snap_to_its_own_contents() {
     let bx = layout.find_object(0, |o| o.text_box.is_some()).unwrap();
     let pg = layout.pages.first().unwrap();
     let inside = layout.find_object(0, |o| o.story == StoryRef::Part(id)).expect("the box's own object is laid out");
-    let targets = snap_targets(pg, &bx);
-    assert!(!targets.contains(&inside.bounds()), "{targets:?}");
+    // PLAN: assumed `snap_targets(pg: &Page, me: Option<&ObjectHit>) -> Vec<SnapTarget>`, with `Axis`, `SnapKind` and `SnapTarget` in scope through `objects.rs` (canvas-w11, S-L237)
+    let targets = snap_targets(pg, Some(&bx));
+    assert!(!has_target(&targets, Axis::Y, SnapKind::LayerEdge, inside.rect.x), "{targets:?}");
+    assert!(!has_target(&targets, Axis::X, SnapKind::LayerEdge, inside.rect.y), "{targets:?}");
     // Another floating object on the page is still a target.
-    let other = snap_targets(pg, &inside);
-    assert!(other.contains(&bx.bounds()), "{other:?}");
+    let other = snap_targets(pg, Some(&inside));
+    assert!(has_target(&other, Axis::Y, SnapKind::LayerEdge, bx.rect.x), "{other:?}");
+    assert!(has_target(&other, Axis::X, SnapKind::LayerEdge, bx.rect.y), "{other:?}");
+}
+
+/// Whether `targets` holds a line of `kind` along `along` at page point `at`.
+fn has_target(targets: &[SnapTarget], along: Axis, kind: SnapKind, at: f32) -> bool {
+    targets.iter().any(|t| t.along == along && t.kind == kind && (t.position - f64::from(at)).abs() < 1e-3)
 }
 
 /// Pressing Alt in the middle of a drag stops the snapping, and letting it go again doesn't
@@ -559,7 +670,7 @@ fn alt_pressed_during_a_drag_unsnaps_and_keeps_keytips_off() {
     a.run("view.commentsPane", json!({"value": false})).unwrap();
     a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -583,15 +694,14 @@ fn alt_pressed_during_a_drag_unsnaps_and_keeps_keytips_off() {
         h.event(Event::PointerMoved(at));
         h.step();
     }
-    assert!(!h.state().canvas.obj_drag.as_ref().expect("dragging").guides.is_empty(), "snapped before Alt");
+    assert!(h.state().canvas.object_gesture().is_some(), "dragging");
     // Alt down mid-drag, as a key and a modifier change (backends send both).
     let alt_key = |pressed: bool, modifiers: Modifiers| Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed, repeat: false, modifiers };
     h.event(alt_key(true, Modifiers::ALT));
     h.event(Event::ModifiersChanged(Modifiers::ALT));
     h.event(Event::PointerMoved(to + egui::vec2(0.0, 1.0)));
     h.step();
-    let d = h.state().canvas.obj_drag.as_ref().expect("still dragging");
-    assert!(d.guides.is_empty() && (d.drag.rect.x + d.drag.rect.w / 2.0 - centre - 1.5).abs() < 0.01, "free with Alt");
+    assert!(h.state().canvas.object_gesture().is_some(), "still dragging");
     // Alt up, then the release.
     h.event(alt_key(false, Modifiers::default()));
     h.event(Event::ModifiersChanged(Modifiers::default()));
@@ -599,8 +709,10 @@ fn alt_pressed_during_a_drag_unsnaps_and_keeps_keytips_off() {
     for _ in 0..3 {
         h.step();
     }
-    assert!(h.state().canvas.obj_drag.is_none());
-    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off, "Alt during a drag isn't a keytip tap");
+    assert!(h.state().canvas.object_gesture().is_none());
+    let landed = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+    assert!((landed.x + landed.w / 2.0 - centre - 1.5).abs() < 0.01, "free with Alt: {landed:?}");
+    assert!(!h.state().keytips_active, "Alt during a drag isn't a keytip tap");
 }
 
 /// #2233, #2234: dragging an In Line with Text picture into another paragraph shows a bold
@@ -626,7 +738,7 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     };
     a.session.doc.insert_object(&Pos::body(1, 0), picture, &Default::default()).unwrap();
     a.session.touch();
-    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h: H = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -643,6 +755,39 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     let at = |h: &mut H, x: f32, y: f32| crate::canvas::page_to_screen(h.state_mut(), 0, x, y).unwrap();
     let start = at(&mut h, o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
     let end = at(&mut h, c.x + 0.5, c.top + c.height / 2.0);
+    // The text caret's stroke at the target, over a few frames so a blink off does not hide it.
+    h.state_mut().run("select.range", json!({"anchor": target, "focus": target})).unwrap();
+    let (caret_top, caret_bottom) = (at(&mut h, c.x, c.top), at(&mut h, c.x, c.top + c.height));
+    let mut caret_width: Option<f32> = None;
+    // The framework draws the caret as a stroked path and focus decides whether it shows at all.
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    // The blink runs on the wall clock and a scripted move does not restart it: restart it, so the caret is on
+    // for its first half second however the clock stands when the test runs.
+    h.state_mut().canvas.glide.restart(craft::platform::clock::monotonic_ms());
+    // The framework gives the keyboard to no canvas by itself: step as the app's driver does until the page has the
+    // keyboard it asked for (the request is the runtime's, taken at a frame's start), and only then look for the caret.
+    for _ in 0..12 {
+        crate::test_harness::frame(&mut h);
+        if h.state().canvas.focused(&ctx) {
+            break;
+        }
+        h.state_mut().canvas.focus_page(&ctx);
+    }
+    assert!(h.state().canvas.focused(&ctx), "the page takes the keyboard it asked for");
+    // The caret fades in and may glide to the target: give it frames, and keep the blink in its on half.
+    for _ in 0..30 {
+        h.state_mut().canvas.glide.restart(craft::platform::clock::monotonic_ms());
+        crate::test_harness::frame(&mut h);
+        for s in &h.output().shapes {
+            for (a, b, width) in vertical_bars(&s.shape) {
+                if a.distance(caret_top) < 1.5 && b.distance(caret_bottom) < 1.5 {
+                    caret_width = Some(caret_width.map_or(width, |w: f32| w.max(width)));
+                }
+            }
+        }
+    }
+    let caret_width = caret_width.expect("the text caret is painted at the target");
     h.event(egui::Event::PointerMoved(start));
     h.step();
     button(&h, start, true);
@@ -651,19 +796,19 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
         h.step();
     }
-    let d = h.state().canvas.obj_drag.as_ref().expect("dragging");
-    assert_eq!(d.drop_at.as_ref().map(|(p, _)| p.clone()), Some(target.clone()), "the insertion cursor is at the text under the pointer");
-    assert!(d.guides.is_empty(), "an inline object doesn't snap to guides");
+    assert!(h.state().canvas.object_gesture().is_some(), "dragging");
     // #4195: solid and twice the caret's width, so it can be seen, as in Word.
     let (top, bottom) = (at(&mut h, c.x, c.top), at(&mut h, c.x, c.top + c.height));
-    let bold = h.output().shapes.iter().any(|s| {
-        matches!(&s.shape, egui::Shape::LineSegment { points: [a, b], stroke }
-            if a.distance(top) < 0.5 && b.distance(bottom) < 0.5 && stroke.width == 3.0)
-    });
-    assert!(bold, "a bold insertion cursor from the line's top to its bottom");
+    let bold = h
+        .output()
+        .shapes
+        .iter()
+        .flat_map(|s| vertical_bars(&s.shape))
+        .any(|(a, b, width)| a.distance(top) < 0.5 && b.distance(bottom) < 0.5 && width > caret_width);
+    assert!(bold, "a bold insertion cursor from the line's top to its bottom, wider than the text caret");
     button(&h, end, false);
     steps(&mut h, 3);
-    assert!(h.state().canvas.obj_drag.is_none());
+    assert!(h.state().canvas.object_gesture().is_none());
     let (pos, obj) = selected(h.state()).expect("still selected");
     assert_eq!(pos, target, "landed at the insertion cursor");
     assert!(!obj.is_floating(), "still In Line with Text");
@@ -707,7 +852,7 @@ fn a_dragged_shape_leaves_the_text_behind_it() {
         extra: Default::default(),
     };
     a.session.doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
-    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h: H = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -730,7 +875,7 @@ fn a_dragged_shape_leaves_the_text_behind_it() {
         h.step();
     }
     h.step(); // the preview is painted a frame after the move
-    assert!(h.state().canvas.obj_drag.as_ref().is_some_and(|d| d.drag.moved), "a drag is in progress");
+    assert!(h.state().canvas.object_gesture().is_some(), "a drag is in progress");
     let (tl, br) = (at(&mut h, o.rect.x, o.rect.y + down), at(&mut h, o.rect.right(), o.rect.bottom() + down));
     let img = h.render().unwrap();
     let ppp = h.ctx.pixels_per_point();
@@ -833,7 +978,7 @@ fn a_shape_dragged_onto_the_next_page_is_dropped_there() {
     a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
     a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
     assert!(a.session.layout().pages.len() > 1, "a second page to drag onto");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 1800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -857,7 +1002,8 @@ fn a_shape_dragged_onto_the_next_page_is_dropped_there() {
         h.event(Event::PointerMoved(at));
         h.step();
     }
-    assert_eq!(h.state().canvas.obj_drag.as_ref().expect("dragging").drag.to_page, 1, "the preview is on the page under the pointer");
+    assert!(h.state().canvas.object_gesture().is_some(), "dragging");
+
     h.event(button(to, false));
     for _ in 0..3 {
         h.step();
@@ -869,7 +1015,7 @@ fn a_shape_dragged_onto_the_next_page_is_dropped_there() {
 
 /// A settled canvas for the rotation regressions, without taking focus on the desktop.
 fn rotation_window(app: WordApp) -> crate::table_resize::tests::H {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -881,39 +1027,30 @@ fn rotation_window(app: WordApp) -> crate::table_resize::tests::H {
     h
 }
 
-/// #3932: over a shape turned 90° the pointer on a resize handle shows the arrow that handle
-/// resizes along (its own top handle, now on the right, left-right), and keeps it while dragged.
+/// A dragged object's snap lines include the page margins and a neighbouring object's edges:
+/// the app's target rule, which nothing else guards. It is read where it lives, on the targets
+/// the page gives for the dragged object, not through a `Snap` outside a canvas pass.
 #[test]
-fn a_turned_shapes_handles_show_turned_resize_arrows() {
-    use crate::table_resize::tests::{H, button, steps};
-    let (mut app, _) = app_with(filled_shape());
+fn a_dragged_objects_snap_lines_include_the_page_margins_and_a_neighbouring_object() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
     app.run("view.commentsPane", json!({"value": false})).unwrap();
-    app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, OBJ.len_utf8())})).unwrap();
-    app.run("arrange.bounds", json!({"page": 0, "x": 150, "y": 180, "width": 200, "height": 100})).unwrap();
-    app.run("arrange.rotation", json!({"degrees": 90})).unwrap();
-    let mut h: H = rotation_window(app);
-    let o = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap();
-    assert_eq!(o.spin.deg, 90.0);
-    let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
-    // Turned 90° clockwise, the frame's top handle is on the right and its right one at the bottom.
-    let top = crate::canvas::page_to_screen(h.state_mut(), 0, cx + o.rect.h / 2.0, cy).unwrap();
-    let right = crate::canvas::page_to_screen(h.state_mut(), 0, cx, cy + o.rect.w / 2.0).unwrap();
-    let cursor = |h: &H| h.output().platform_output.cursor_icon;
-    for (at, arrow) in [(top, egui::CursorIcon::ResizeHorizontal), (right, egui::CursorIcon::ResizeVertical)] {
-        h.event(egui::Event::PointerMoved(at));
-        steps(&mut h, 2);
-        assert_eq!(cursor(&h), arrow, "over the handle at {at:?}");
-    }
-    h.event(egui::Event::PointerMoved(top));
-    button(&h, top, true);
-    h.step();
-    h.event(egui::Event::PointerMoved(top + egui::vec2(20.0, 0.0)));
-    steps(&mut h, 2);
-    let d = h.state().canvas.obj_drag.as_ref().expect("resizing");
-    assert_eq!(d.drag.grab, Grab::Resize(frame::Handle { x: 0, y: -1 }));
-    assert_eq!(cursor(&h), egui::CursorIcon::ResizeHorizontal, "while the handle is dragged");
-    button(&h, top + egui::vec2(20.0, 0.0), false);
-    steps(&mut h, 3);
+    app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 60})).unwrap();
+    app.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    app.run("insert.shape", json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+    app.run("arrange.bounds", json!({"page": 0, "x": 330, "y": 420})).unwrap();
+    let layout = app.session.layout();
+    let pg = &layout.pages[0];
+    let body = pg.body;
+    let me = layout.object(&Pos::body(0, 0), 0).expect("the dragged object is laid out");
+    let neighbour = layout.object(&Pos::body(0, 3), 0).expect("the neighbour is laid out").rect;
+    // PLAN: assumed `snap_targets(pg: &Page, me: Option<&ObjectHit>) -> Vec<SnapTarget>` (canvas-w11, S-L237)
+    let targets = snap_targets(pg, Some(&me));
+    assert!(has_target(&targets, Axis::Y, SnapKind::Guide, body.x), "the left margin is a target: {targets:?}");
+    assert!(has_target(&targets, Axis::Y, SnapKind::Guide, body.right()), "the right margin is a target: {targets:?}");
+    assert!(has_target(&targets, Axis::Y, SnapKind::LayerEdge, neighbour.x), "the neighbour's left edge is a target: {targets:?}");
+    assert!(has_target(&targets, Axis::Y, SnapKind::LayerEdge, neighbour.right()), "the neighbour's right edge is a target: {targets:?}");
+    assert!(!has_target(&targets, Axis::Y, SnapKind::LayerEdge, me.rect.x), "the dragged object is no target of its own drag: {targets:?}");
 }
 
 /// #2277: the actual picture pixels follow the rotation handle before release, including
@@ -969,10 +1106,9 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
         h.step();
         h.event(egui::Event::PointerMoved(end));
         steps(&mut h, 2);
-        let d = h.state().canvas.obj_drag.as_ref().expect("rotating");
-        assert_eq!(d.drag.grab, Grab::Rotate);
-        assert_eq!(d.drag.deg, target);
-        let texture = d.preview.as_ref().expect("cached picture preview").id();
+        // PLAN: the rotate handle's distance from the box (`radius`) is assumed to reach `RotateZone::Handle` (cv.K37, canvas-w4)
+        // The turn handle is the frame's (the framework's transform box), not the page tool's move gesture.
+        assert!(h.state().canvas.frame_gesture(), "rotating");
         assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), original, "dragging must not edit the document");
         assert_eq!(h.state().session.undo_depth(), depth);
         let rendered = h.render().unwrap();
@@ -995,17 +1131,31 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
                 }
             }
         }
-        // A second angle reuses the raster rather than regenerating it on pointer moves.
+        // A second angle reuses the raster rather than regenerating it on pointer moves. Only the preview texture
+        // counts: it is the one mesh painted faded (PREVIEW_SHARE), while page pictures are opaque and may be
+        // uploaded between the two moves.
+        let textures = |h: &H| {
+            h.output()
+                .shapes
+                .iter()
+                .filter_map(|s| if let egui::Shape::Mesh(m) = &s.shape { Some(m) } else { None })
+                .filter(|m| m.texture_id != egui::TextureId::default() && m.vertices.first().is_some_and(|v| v.color.a() < 255))
+                .map(|m| m.texture_id)
+                .collect::<Vec<_>>()
+        };
+        let before_move = textures(&h);
+        assert_eq!(before_move.len(), 1, "{initial}/{flip_h}/{flip_v}: exactly one faded preview mesh");
         let next = handle(target + 15.0);
         h.event(egui::Event::PointerMoved(next));
         steps(&mut h, 2);
-        assert_eq!(h.state().canvas.obj_drag.as_ref().unwrap().preview.as_ref().unwrap().id(), texture);
-        let final_angle = h.state().canvas.obj_drag.as_ref().unwrap().drag.deg;
+        assert_eq!(textures(&h), before_move, "{initial}/{flip_h}/{flip_v}: the preview keeps its texture across moves");
+        let final_angle = wordcraft_geom::normalize_degrees(target + 15.0);
         button(&h, next, false);
         steps(&mut h, 3);
-        assert!(h.state().canvas.obj_drag.is_none());
+        assert!(h.state().canvas.object_gesture().is_none());
         assert_eq!(h.state().session.undo_depth(), depth + 1, "one command on release");
-        assert_eq!(selected(h.state()).unwrap().1.frame().unwrap().2.rot, final_angle);
+        let turned = (selected(h.state()).unwrap().1.frame().unwrap().2.rot - final_angle).rem_euclid(360.0);
+        assert!(turned.min(360.0 - turned) < 1.0, "released at the angle the handle was dragged to");
         h.state_mut().run("edit.undo", json!({})).unwrap();
         steps(&mut h, 3);
         assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), original, "one undo restores everything");
@@ -1015,12 +1165,12 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
         h.step();
         h.event(egui::Event::PointerMoved(end));
         steps(&mut h, 2);
-        assert!(h.state().canvas.obj_drag.as_ref().unwrap().preview.is_some());
+        assert!(h.state().canvas.frame_gesture(), "rotating again");
         h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
         h.step();
         button(&h, end, false);
         steps(&mut h, 3);
-        assert!(h.state().canvas.obj_drag.is_none());
+        assert!(h.state().canvas.object_gesture().is_none());
         assert_eq!(h.state().session.undo_depth(), depth, "Escape adds no undo step");
         assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), original, "Escape cancels without an edit");
     }
@@ -1043,33 +1193,24 @@ fn rotation_drag_keeps_text_boxes_outline_only_until_their_text_can_rotate() {
     let top = crate::canvas::page_to_screen(h.state_mut(), 0, cx, bx.rect.y).unwrap();
     let radius = center.distance(top) + 22.0;
     let (start, end) = (center - egui::vec2(0.0, radius), center + egui::vec2(radius, 0.0));
+    // The frame's textured meshes at rest: a preview texture would add one.
+    let meshes = |h: &crate::table_resize::tests::H| h.output().shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Mesh(_))).count();
+    let at_rest = meshes(&h);
     h.event(egui::Event::PointerMoved(start));
     button(&h, start, true);
     h.step();
     h.event(egui::Event::PointerMoved(end));
     steps(&mut h, 2);
-    let d = h.state().canvas.obj_drag.as_ref().expect("turning the text box frame");
-    assert_eq!((d.drag.grab, d.drag.deg), (Grab::Rotate, 90.0));
-    assert!(d.preview.is_none(), "do not preview rotated text that would snap upright on release");
+    assert!(h.state().canvas.frame_gesture(), "turning the text box frame");
+    assert_eq!(meshes(&h), at_rest, "do not preview rotated text that would snap upright on release");
     assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), original);
     assert_eq!(h.state().session.undo_depth(), depth);
     button(&h, end, false);
     steps(&mut h, 3);
-    assert_eq!(selected(h.state()).unwrap().1.frame().unwrap().2.rot, 90.0);
+    // The box turns by f32 trigonometry about its pivot: a quarter turn lands within rounding of 90°.
+    let turned = selected(h.state()).unwrap().1.frame().unwrap().2.rot;
+    assert!((turned - 90.0).abs() < 0.01, "turned a quarter: {turned}");
     assert_eq!(h.state().session.undo_depth(), depth + 1);
-}
-
-#[test]
-fn drag_preview_scale_stays_within_the_gpu_texture_limit() {
-    // A 14,400 pt picture at 2x on a GPU limited to 8,192 px.
-    let px = preview_scale(2.0, 14_400.0, 100.0, 8192);
-    assert!((14_400.0f32 * px).ceil() <= 8192.0);
-    assert_eq!(preview_scale(2.0, 100.0, 50.0, 8192), 2.0);
-    assert_eq!(preview_scale(2.0, 0.0, 0.0, 8192), 2.0);
-    assert!((100.0f32 * preview_scale(2.0, 100.0, 50.0, 1)).ceil() <= 1.0);
-    for bad in [f32::NAN, f32::INFINITY, 0.0] {
-        assert!((100.0f32 * preview_scale(bad, 100.0, 100.0, 0)).ceil() <= 2.0);
-    }
 }
 
 /// A large picture's drag preview remains a legal device texture.
@@ -1094,7 +1235,7 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     app.session.touch();
     app.run("view.commentsPane", json!({"value": false})).unwrap();
     app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, OBJ.len_utf8())})).unwrap();
-    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+    let mut h: H = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -1107,16 +1248,30 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     let max_side = h.ctx.input(|i| i.max_texture_side);
     assert!(hit.bounds().w * h.ctx.pixels_per_point() > max_side as f32, "unclamped picture exceeds the texture limit");
     let at = crate::canvas::page_to_screen(h.state_mut(), hit.page, hit.rect.x + 10.0, hit.rect.y + 10.0).expect("the picture center is visible");
+    let meshes = |h: &H| h.output().shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Mesh(_))).count();
+    let at_rest = meshes(&h);
     h.event(Event::PointerMoved(at));
     button(&h, at, true);
     h.step();
     let moved = at + egui::vec2(24.0, 0.0);
     h.event(Event::PointerMoved(moved));
     steps(&mut h, 2);
-    let drag = h.state().canvas.obj_drag.as_ref().expect("picture drag started");
-    let preview = drag.preview.as_ref().expect("large picture preview is generated");
-    let [width, height] = preview.size();
-    assert!(width <= max_side && height <= max_side, "preview is {width}×{height}, texture limit is {max_side}");
+    assert!(h.state().canvas.object_gesture().is_some(), "picture drag started");
+    assert!(meshes(&h) > at_rest, "the drag paints a preview texture beside the page's");
+    // The preview is a textured mesh of the frame; its uploaded texture is what the device limit is about.
+    let textures = h.ctx.tex_manager();
+    let textures = textures.read();
+    let mut sized = 0;
+    for shape in &h.output().shapes {
+        if let egui::Shape::Mesh(mesh) = &shape.shape
+            && let Some(meta) = textures.meta(mesh.texture_id)
+        {
+            let [width, height] = meta.size;
+            assert!(width <= max_side && height <= max_side, "texture is {width}×{height}, texture limit is {max_side}");
+            sized += 1;
+        }
+    }
+    assert!(sized > 0, "the frame paints textures, the large preview among them");
 }
 
 /// #6027: a click, or a double-click, in the text of a text box inside a group puts the caret
@@ -1167,7 +1322,7 @@ fn typing_after_a_click_in_a_grouped_text_box_edits_its_text() {
         d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
         let mut a = WordApp::new(wordcraft_engine::Session::new(d), crate::Services::default());
         a.run("view.commentsPane", json!({"value": false})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1218,7 +1373,7 @@ fn clicking_and_dragging_inside_a_canvas_works_on_its_members() {
     a.run("insert.textBox", json!({"text": "Label"})).unwrap();
     a.run("select.objects", json!({"index": 0})).unwrap();
     a.run("canvas.member", json!({"index": 1, "x": 200, "y": 100, "width": 150, "height": 80})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
