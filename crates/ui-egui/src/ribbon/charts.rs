@@ -111,11 +111,14 @@ pub(super) fn chart_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let Some(chart) = wordcraft_engine::cmd::chart::selected_chart(&app.session) else { return };
     row.group(RibbonGroup::new("currentSelection", tl!("Current Selection").to_string(), IconId::new("chart").into()), |ui| {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            Button::command(CommandRef::with_params("ui.dialog", json!({"name": "formatAxis"})))
-                .label(tl!("Format Axis").to_string())
-                .icon(IconId::new("chart"))
-                .enabled(!chart.kind.is_round())
-                .show(ui);
+            let face = Button::new(tl!("Format Axis").to_string()).icon(IconId::new("chart"));
+            menu_button(ui, face, tl!("Format Axis"), Some("chart.axis"), |ui, _| {
+                for (label, side) in [("Value Axis", "value"), ("Category Axis", "category")] {
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "formatAxis", "side": side})))
+                        .label(tl!(label).to_string())
+                        .show(ui);
+                }
+            });
             Button::command(CommandRef::with_params("ui.dialog", json!({"name": "formatSeries"})))
                 .label(tl!("Format Series").to_string())
                 .icon(IconId::new("chartData"))

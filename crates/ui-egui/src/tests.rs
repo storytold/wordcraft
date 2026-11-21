@@ -4091,7 +4091,7 @@ fn chart_format_dialogs_clear_and_leave_alone() {
     f.min.clear();
     a.run("chart.axis", f.params().unwrap()).unwrap();
     assert_eq!((chart(&a).val_axis.min, chart(&a).val_axis.max), (None, Some(9.0)));
-    assert_eq!(ChartAxisForm::new(&a).unwrap().min, "", "the reopened dialog shows Auto");
+    assert_eq!(ChartAxisForm::new(&a, false).unwrap().min, "", "the reopened dialog shows Auto");
 
     // An untouched Format Series dialog changes no label or marker override.
     let before = chart(&a).series[0].clone();

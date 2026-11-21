@@ -65,6 +65,44 @@ fn click_row(h: &mut Harness, name: &str) {
     crate::test_harness::frames(h, 3);
 }
 
+#[test]
+fn chart_format_axis_menu_edits_the_category_axis_and_keeps_the_value_axis() {
+    use egui::accesskit::Role;
+    use wordcraft_engine::cmd::chart::selected_chart;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.chart", json!({"type": "column"})).unwrap();
+    app.run("chart.axis", json!({"side": "value", "title": "Revenue", "min": 2, "max": 9})).unwrap();
+    let value_axis = selected_chart(&app.session).unwrap().val_axis.clone();
+    let mut h = tab_harness(app, "Chart Design");
+
+    click_button(&mut h, "Format Axis");
+    click_row(&mut h, "Category Axis");
+    assert!(h.query_by_role_and_label(Role::TextInput, "Minimum:").is_none());
+    assert!(h.query_by_role_and_label(Role::TextInput, "Number format:").is_none());
+    h.get_by_role_and_label(Role::TextInput, "Title:").focus();
+    crate::test_harness::frames(&mut h, 2);
+    h.get_by_role_and_label(Role::TextInput, "Title:").type_text("Quarter");
+    crate::test_harness::frames(&mut h, 2);
+    click_button(&mut h, "OK");
+
+    let chart = selected_chart(&h.state().session).unwrap();
+    assert_eq!(chart.cat_axis.title.as_deref(), Some("Quarter"));
+    assert_eq!(chart.val_axis, value_axis);
+
+    click_button(&mut h, "Format Axis");
+    click_row(&mut h, "Value Axis");
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Minimum:").value().as_deref(), Some("2"));
+    click_button(&mut h, "Cancel");
+
+    h.state_mut().run("chart.type", json!({"type": "scatter"})).unwrap();
+    crate::test_harness::frames(&mut h, 3);
+    click_button(&mut h, "Format Axis");
+    click_row(&mut h, "Category Axis");
+    assert!(h.query_by_role_and_label(Role::TextInput, "Minimum:").is_some());
+    assert!(h.query_by_role_and_label(Role::TextInput, "Number format:").is_some());
+}
+
 /// The names of the checked rows and buttons now shown.
 fn checked(h: &Harness) -> Vec<String> {
     h.query_all(By::new().predicate(|n| n.toggled() == Some(egui::accesskit::Toggled::True))).filter_map(|n| n.accesskit_node().label()).collect()

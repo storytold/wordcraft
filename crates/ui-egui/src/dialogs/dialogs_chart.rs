@@ -176,7 +176,7 @@ impl ChartDataForm {
     }
 }
 
-/// Chart Design ▸ Current Selection ▸ Format Axis (the selected chart's value axis): bounds,
+/// Chart Design ▸ Current Selection ▸ Format Axis (the selected chart's category or value axis): bounds,
 /// tick-label format, gridlines, tick labels and the axis line. Running `chart.axis` with the
 /// same params does the same without the dialog.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -189,15 +189,19 @@ pub struct ChartAxisForm {
     pub gridlines: bool,
     pub labels: bool,
     pub line: bool,
+    #[serde(default)]
+    category: bool,
+    #[serde(default)]
+    categorical: bool,
 }
 
 impl ChartAxisForm {
-    pub fn new(app: &WordApp) -> Option<ChartAxisForm> {
+    pub fn new(app: &WordApp, category: bool) -> Option<ChartAxisForm> {
         let c = wordcraft_engine::cmd::chart::selected_chart(&app.session)?;
         if c.kind.is_round() {
             return None;
         }
-        let a = &c.val_axis;
+        let a = if category { &c.cat_axis } else { &c.val_axis };
         Some(ChartAxisForm {
             title: a.title.clone().unwrap_or_default(),
             min: a.min.map(number_text).unwrap_or_default(),
@@ -206,6 +210,9 @@ impl ChartAxisForm {
             gridlines: a.gridlines,
             labels: a.labels,
             line: a.line,
+            category,
+            // A scatter chart's category axis represents its numeric x values.
+            categorical: category && c.kind != ChartType::Scatter,
         })
     }
 
@@ -221,10 +228,14 @@ impl ChartAxisForm {
                 _ => Err(crate::i18n::fmt(tl!("“{text}” isn't a number."), &[("text", t)])),
             }
         };
-        let (min, max) = (bound(&self.min)?, bound(&self.max)?);
-        Ok(
-            json!({"side": "value", "title": self.title.trim(), "min": min, "max": max, "format": self.fmt.trim(), "gridlines": self.gridlines, "labels": self.labels, "line": self.line}),
-        )
+        let side = if self.category { "category" } else { "value" };
+        let mut params = json!({"side": side, "title": self.title.trim(), "gridlines": self.gridlines, "labels": self.labels, "line": self.line});
+        if !self.categorical {
+            params["min"] = bound(&self.min)?.unwrap_or(Value::Null);
+            params["max"] = bound(&self.max)?.unwrap_or(Value::Null);
+            params["format"] = json!(self.fmt.trim());
+        }
+        Ok(params)
     }
 }
 
@@ -239,14 +250,16 @@ impl WordForm for ChartAxisForm {
     }
 
     fn title(&self) -> Label {
-        word("Format Axis")
+        if self.category { word("Format Category Axis") } else { word("Format Axis") }
     }
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         text_field(ui, "title", &word("Title:"), &mut self.title);
-        text_field(ui, "minimum", &word("Minimum:"), &mut self.min);
-        text_field(ui, "maximum", &word("Maximum:"), &mut self.max);
-        text_field(ui, "format", &word("Number format:"), &mut self.fmt);
+        if !self.categorical {
+            text_field(ui, "minimum", &word("Minimum:"), &mut self.min);
+            text_field(ui, "maximum", &word("Maximum:"), &mut self.max);
+            text_field(ui, "format", &word("Number format:"), &mut self.fmt);
+        }
         Checkbox::new(Bind::bound(&mut self.gridlines)).label(word("Major gridlines")).show(ui);
         Checkbox::new(Bind::bound(&mut self.labels)).label(word("Tick labels")).show(ui);
         Checkbox::new(Bind::bound(&mut self.line)).label(word("Axis line")).show(ui);
@@ -674,7 +687,7 @@ fn data_body(ui: &mut Ui, f: &mut ChartDataForm) {
 
 /// Opens the dialog `name` names: `insertChart`, `changeChartType` (the selected chart) or `chartData` (the selected
 /// chart); `None` for another name or without a chart to change.
-pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     match name {
         "insertChart" | "changeChartType" => {
             let form = ChartTypeForm::new(app, name == "changeChartType")?;
@@ -685,7 +698,12 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
             Some(open_form(app, parent, form))
         }
         "formatAxis" => {
-            let form = ChartAxisForm::new(app)?;
+            let category = match params.get("side").and_then(Value::as_str) {
+                Some("category") => true,
+                None | Some("value") => false,
+                _ => return None,
+            };
+            let form = ChartAxisForm::new(app, category)?;
             Some(open_form(app, parent, form))
         }
         "formatSeries" => {
