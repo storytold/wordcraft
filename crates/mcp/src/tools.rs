@@ -68,136 +68,142 @@ fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
 /// Every MCP tool with its title, description, input schema and annotations (`tools/list`).
 pub fn tool_definitions() -> Value {
     json!([
-        tool(
-            "list_commands",
-            "List commands",
-            "Every WordCraft command: id, label, ribbon location, shortcut and params. Filter with `query`.",
-            obj(json!({"query": s("Case-insensitive filter on id/label/location")}), &[]),
-            true
-        ),
-        tool(
-            "execute",
-            "Run a command",
-            "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}. To insert a table that is already filled, use `insert_table`. Commands work on the active document, or on the open document `doc` names. file.new and file.open open another document beside the open ones and make it active; view.switchWindows {id} makes another one active and file.closeDocument {id, force?} closes one.",
-            with_doc(obj(json!({"command": s("Command id"), "params": {"type": "object", "description": "Command parameters"}}), &["command"])),
-            false
-        ),
-        tool(
-            "insert_table",
-            "Insert filled table",
-            "Insert a table at the caret, filled from `values` in one call (an array of rows, each an array of cells; all rows the same length, up to 1000 rows and 63 columns). Set `header` to make the first row a repeating header row.",
-            with_doc(obj(
-                json!({
-                    "values": {"type": "array", "description": "Rows of cells (text, numbers or booleans)", "items": {"type": "array", "items": {"type": ["string", "number", "boolean", "null"]}}},
-                    "header": {"type": "boolean", "description": "First row is a header row that repeats on each page"},
-                    "style": s("Table style name (default GridTable1Light)")
-                }),
-                &["values"]
-            )),
-            false
-        ),
-        tool(
-            "batch",
-            "Run several commands",
-            "Run commands in order; stops at the first error unless keepGoing. `doc` sends every command to that open document.",
-            with_doc(obj(
-                json!({"commands": {"type": "array", "items": {"type": "object", "properties": {"command": {"type": "string"}, "params": {"type": "object"}}, "required": ["command"]}}, "keepGoing": {"type": "boolean"}}),
-                &["commands"]
-            )),
-            false
-        ),
-        tool(
-            "new_document",
-            "New document",
-            "Start a document: blank, sample, letter, resume or report. It opens beside the documents already open and becomes the active one; the reply's `id` addresses it (`doc`).",
-            obj(json!({"template": s("blank|sample|letter|resume|report")}), &[]),
-            false
-        ),
-        tool(
-            "open_document",
-            "Open",
-            "Open a .docx, .doc, .odt, .rtf, .md, .tex, .html, .txt or .json file, or any other text file (.m3u, .log, .ini…) as plain text. Give `password` for a protected file; without it the call fails asking for one. The file opens beside the documents already open (it replaces a blank one nobody has used) and becomes the active one; a file that is already open becomes active again (`alreadyOpen`). The reply's `id` addresses it (`doc`).",
-            obj(json!({"path": s("File path"), "password": s("Password, if the file is protected")}), &["path"]),
-            false
-        ),
-        tool(
-            "save_document",
-            "Save",
-            "Save (format from the extension: docx, pdf, odt, rtf, html, md, tex, txt, png).",
-            with_doc(obj(json!({"path": s("File path; omit to save in place")}), &[])),
-            false
-        ),
-        tool(
-            "type_text",
-            "Type text",
-            &format!(
-                "Type at the caret (replacing the selection). Use \\n... for line breaks inside text; use execute text.newParagraph for new paragraphs, or `paragraphs: true` to split lines into paragraphs (one undo step, at most {} lines).",
-                wordcraft_engine::cmd::text::MAX_TYPED_PARAGRAPHS
+            tool(
+                "list_commands",
+                "List commands",
+                "Every WordCraft command: id, label, ribbon location, shortcut and params. Filter with `query`.",
+                obj(json!({"query": s("Case-insensitive filter on id/label/location")}), &[]),
+                true
             ),
-            with_doc(obj(json!({"text": s("Text"), "paragraphs": {"type": "boolean"}}), &["text"])),
-            false
-        ),
-        tool(
-            "select_text",
-            "Select text",
-            "Select the n-th occurrence of some text.",
-            with_doc(obj(json!({"text": s("Text to find"), "occurrence": n("1-based")}), &["text"])),
-            false
-        ),
-        tool("get_text", "Document text", "Body text with tracked deletions omitted.", with_doc(obj(json!({}), &[])), true),
-        tool(
-            "inspect_document",
-            "Inspect document",
-            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts, selection, pages. With `remove`, cleans the document instead (the Document Inspector's Remove All): \"comments\", \"revisions\", \"properties\", \"hidden\" (hidden text: whole hidden paragraphs with their marks, notes whose hidden references were removed go too) or \"headers\". Removals are refused while the document tracks changes. `file.open` warns about hidden text.",
-            with_doc(obj(
-                json!({"remove": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["comments", "revisions", "properties", "hidden", "headers"]},
-                    "minItems": 1,
-                    "description": "Remove the listed content"
-                }}),
-                &[]
-            )),
-            false
-        ),
-        tool(
-            "render_page",
-            "Render page",
-            "Render a page to PNG to look at the result.",
-            with_doc(obj(json!({"page": n("1-based page"), "scale": n("Pixels per point (default 1)")}), &[])),
-            true
-        ),
-        tool(
-            "list_documents",
-            "Open documents",
-            "The open documents in the order they were opened: id, title, path, dirty (unsaved changes) and active (the one commands work on by default). new_document and open_document open another document beside these. Give a document's id as `doc` to execute, batch, type_text, select_text, get_text, inspect_document, render_page or save_document to work on it while it stays in the background; execute view.switchWindows {id} makes it the active one, file.closeDocument {id, force?} closes it.",
-            obj(json!({}), &[]),
-            true
-        ),
-        tool("parity", "Feature parity", "WordCraft's command coverage of the word-processor feature catalog.", obj(json!({}), &[]), true),
-        tool("screenshot", "Screenshot app", "Screenshot of the whole WordCraft window (desktop app only).", obj(json!({}), &[]), true),
-        tool(
-            "click",
-            "Click",
-            "Click at window coordinates (desktop app only).",
-            obj(json!({"x": n("x"), "y": n("y"), "count": n("1-3 clicks"), "shift": {"type": "boolean"}, "cmd": {"type": "boolean"}}), &["x", "y"]),
-            false
-        ),
-        tool(
-            "key",
-            "Press key",
-            "Press a key with modifiers (desktop app only), e.g. {key:\"B\", cmd:true}.",
-            obj(json!({"key": s("Key name"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}}), &["key"]),
-            false
-        ),
-        tool(
-            "ui_inspect",
-            "Inspect UI",
-            "UI state: tab, panes, dialog, page rectangles on screen, caret (desktop app only).",
-            obj(json!({}), &[]),
-            true
-        ),
-    ])
+            tool(
+                "execute",
+                "Run a command",
+                "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}. To insert a table that is already filled, use `insert_table`. Commands work on the active document, or on the open document `doc` names. file.new and file.open open another document beside the open ones and make it active; view.switchWindows {id} makes another one active and file.closeDocument {id, force?} closes one.",
+                with_doc(obj(json!({"command": s("Command id"), "params": {"type": "object", "description": "Command parameters"}}), &["command"])),
+                false
+            ),
+            tool(
+                "insert_table",
+                "Insert filled table",
+                "Insert a table at the caret, filled from `values` in one call (an array of rows, each an array of cells; all rows the same length, up to 1000 rows and 63 columns). Set `header` to make the first row a repeating header row.",
+                with_doc(obj(
+                    json!({
+                        "values": {"type": "array", "description": "Rows of cells (text, numbers or booleans)", "items": {"type": "array", "items": {"type": ["string", "number", "boolean", "null"]}}},
+                        "header": {"type": "boolean", "description": "First row is a header row that repeats on each page"},
+                        "style": s("Table style name (default GridTable1Light)")
+                    }),
+                    &["values"]
+                )),
+                false
+            ),
+            tool(
+                "batch",
+                "Run several commands",
+                "Run commands in order; stops at the first error unless keepGoing. `doc` sends every command to that open document.",
+                with_doc(obj(
+                    json!({"commands": {"type": "array", "items": {"type": "object", "properties": {"command": {"type": "string"}, "params": {"type": "object"}}, "required": ["command"]}}, "keepGoing": {"type": "boolean"}}),
+                    &["commands"]
+                )),
+                false
+            ),
+            tool(
+                "new_document",
+                "New document",
+                "Start a document: blank, sample, letter, resume or report. It opens beside the documents already open and becomes the active one; the reply's `id` addresses it (`doc`).",
+                obj(json!({"template": s("blank|sample|letter|resume|report")}), &[]),
+                false
+            ),
+            tool(
+                "open_document",
+                "Open",
+                "Open a .docx, .doc, .odt, .rtf, .md, .tex, .html, .txt or .json file, or any other text file (.m3u, .log, .ini…) as plain text. Give `password` for a protected file; without it the call fails asking for one. The file opens beside the documents already open (it replaces a blank one nobody has used) and becomes the active one; a file that is already open becomes active again (`alreadyOpen`). The reply's `id` addresses it (`doc`).",
+                obj(json!({"path": s("File path"), "password": s("Password, if the file is protected")}), &["path"]),
+                false
+            ),
+            tool(
+                "save_document",
+                "Save",
+                "Save (format from the extension: docx, pdf, odt, rtf, html, md, tex, txt, png).",
+                with_doc(obj(json!({"path": s("File path; omit to save in place")}), &[])),
+                false
+            ),
+            tool(
+                "type_text",
+                "Type text",
+                &format!(
+                    "Type at the caret (replacing the selection). Use \\n... for line breaks inside text; use execute text.newParagraph for new paragraphs, or `paragraphs: true` to split lines into paragraphs (one undo step, at most {} lines).",
+                    wordcraft_engine::cmd::text::MAX_TYPED_PARAGRAPHS
+                ),
+                with_doc(obj(json!({"text": s("Text"), "paragraphs": {"type": "boolean"}}), &["text"])),
+                false
+            ),
+            tool(
+                "select_text",
+                "Select text",
+                "Select the n-th occurrence of some text.",
+                with_doc(obj(json!({"text": s("Text to find"), "occurrence": n("1-based")}), &["text"])),
+                false
+            ),
+            tool("get_text", "Document text", "Body text with tracked deletions omitted.", with_doc(obj(json!({}), &[])), true),
+            tool(
+                "inspect_document",
+                "Inspect document",
+                "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts (headers, footers, notes: their text and fields; a field with perPage true, such as PAGE, NUMPAGES or STYLEREF, shows its own value on each page, so its stored result is not what every page shows: render_page shows it; fieldsTruncated means a part has more than the 200 fields listed; a range field's result, such as a TOC's, is cut at 2000 characters, with resultTruncated), selection, pages. With `remove`, cleans the document instead (the Document Inspector's Remove All): \"comments\", \"revisions\", \"properties\", \"hidden\" (hidden text: whole hidden paragraphs with their marks, notes whose hidden references were removed go too) or \"headers\". Removals are refused while the document tracks changes. `file.open` warns about hidden text.",
+                with_doc(obj(
+                    json!({"remove": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["comments", "revisions", "properties", "hidden", "headers"]},
+                        "minItems": 1,
+                        "description": "Remove the listed content"
+                    }}),
+                    &[]
+                )),
+                false
+            ),
+            tool(
+                "render_page",
+                "Render page",
+                "Render a page to PNG to look at the result.",
+                with_doc(obj(json!({"page": n("1-based page"), "scale": n("Pixels per point (default 1)")}), &[])),
+                true
+            ),
+            tool(
+                "list_documents",
+                "Open documents",
+                "The open documents in the order they were opened: id, title, path, dirty (unsaved changes) and active (the one commands work on by default). new_document and open_document open another document beside these. Give a document's id as `doc` to execute, batch, type_text, select_text, get_text, inspect_document, render_page or save_document to work on it while it stays in the background; execute view.switchWindows {id} makes it the active one, file.closeDocument {id, force?} closes it.",
+                obj(json!({}), &[]),
+                true
+            ),
+            tool("parity", "Feature parity", "WordCraft's command coverage of the word-processor feature catalog.", obj(json!({}), &[]), true),
+            tool("screenshot", "Screenshot app", "Screenshot of the whole WordCraft window (desktop app only).", obj(json!({}), &[]), true),
+            tool(
+                "click",
+                "Click",
+                "Click at window coordinates (desktop app only).",
+                obj(
+                    json!({"x": n("x"), "y": n("y"), "count": n("1-3 clicks"), "button": s("left (default) or right"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}, "ctrl": {"type": "boolean"}, "command": {"type": "boolean"}}),
+                    &["x", "y"]
+                ),
+                false
+            ),
+            tool(
+                "key",
+                "Press key",
+                "Press a key with modifiers (desktop app only), e.g. {key:\"B\", cmd:true}.",
+                obj(
+                    json!({"key": s("Key name"), "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "cmd": {"type": "boolean"}, "ctrl": {"type": "boolean"}, "command": {"type": "boolean"}}),
+                    &["key"]
+                ),
+                false
+            ),
+            tool(
+                "ui_inspect",
+                "Inspect UI",
+                "UI state: tab, panes, dialog, page rectangles on screen, caret (desktop app only).",
+                obj(json!({}), &[]),
+                true
+            ),
+        ])
 }
 
 fn exec(b: &mut dyn Backend, id: &str, params: Value, doc: Option<&Value>) -> Result<Value, String> {

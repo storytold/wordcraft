@@ -116,8 +116,9 @@ fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, f: impl FnOnce(&
 /// drawn by its first and last paragraph.
 #[derive(Clone, Copy)]
 struct Rooms {
-    /// Joined to the paragraph above.
+    /// Joined to the paragraph above, and to the one below.
     above: bool,
+    below: bool,
     top: f32,
     bottom: f32,
 }
@@ -127,7 +128,7 @@ impl Rooms {
         let above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
         let below = joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None);
         let own = Edges::own(pl, 0, pl.lines.len());
-        Rooms { above, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
+        Rooms { above, below, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
     }
 }
 
@@ -345,7 +346,15 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        // A paragraph closing a section that the next one starts on a new page keeps with
+        // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
+        let closes_page = pb.next_starts_page && self.p.section.is_some();
+        let need = height
+            + if rp.keep_next && !closes_page {
+                next_first_line(ctx, self.block, self.width, 0, pb.next_starts_page, &mut ctx.counters.clone())
+            } else {
+                0.0
+            };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
         if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
@@ -446,14 +455,19 @@ impl<'a> Flow<'a> {
         fit
     }
 
-    /// Whether the line may overflow the page: one holding nothing but a page or column break stays
-    /// at the bottom of the page even when it doesn't fit (it only ends the page, and moving it
-    /// would leave a blank page behind it, as in Word), and so does an empty paragraph closing a
-    /// section before a new page (measured in Word: it stays on a full page instead of starting
-    /// one of its own).
+    /// Whether the line (the paragraph's line `l0`) may overflow the page: one holding nothing but
+    /// a page or column break, with text after it in the paragraph, stays at the bottom of the
+    /// page even when it doesn't fit (it only ends the page, and moving it would leave a blank
+    /// page behind it, as in Word), and so does an empty paragraph closing a section before a new
+    /// page (measured in Word: it stays on a full page instead of starting one of its own).
+    /// Measured in Word: a paragraph of only a page break is an ordinary line, and when its mark's
+    /// text doesn't fit it goes to the next page, blank page and all.
     fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
         let p = self.p;
+        let mark_only_after =
+            l.end == LineEnd::PageBreak && self.pl.lines.get(self.l0 + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
         let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
+            && !mark_only_after
             && p.text
                 .get(l.start..l.stop)
                 .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
@@ -528,7 +542,12 @@ impl<'a> Flow<'a> {
             pb.bottom = pb.body_floor().max(placed_bottom).min(pb.orig_bottom);
         }
         let mut items = Vec::new();
-        let mut edges = Edges { top: if l0 == 0 { rooms.top } else { 0.0 }, bottom: if l1 >= n { rooms.bottom } else { 0.0 }, up: 0.0 };
+        let mut edges = Edges {
+            top: if l0 == 0 { rooms.top } else { 0.0 },
+            bottom: if l1 >= n { rooms.bottom } else { 0.0 },
+            up: 0.0,
+            joined: [l0 == 0 && rooms.above, l1 >= n && rooms.below],
+        };
         if l0 == 0
             && rooms.above
             && let Some((page, col, end)) = pb.para_end
@@ -999,8 +1018,9 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of a three-line one under that control (two would leave a widow), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
-/// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
+/// when the paragraph after it cannot start on the page (#966). `new_page`: the next section starts
+/// on a new page, so the chain ends at the paragraph closing this one.
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_page: bool, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
@@ -1035,9 +1055,16 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
-            if pl.rp.keep_next && depth < 8 {
+            // The paragraph closing the section, when the next section starts a new page, keeps
+            // with nothing on this page (Word ignores its Keep with next).
+            if pl.rp.keep_next && depth < 8 && !(new_page && p.section.is_some()) {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+                pl.rp.space_before
+                    + top
+                    + pl.height
+                    + bottom
+                    + pl.rp.space_after
+                    + next_first_line(ctx, block + 1, width, depth + 1, new_page, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).

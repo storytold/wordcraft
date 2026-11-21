@@ -3,7 +3,9 @@
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
-use super::{ControlRequest, Outcome, handle};
+use craft::automation::control::{ControlRequest, Reply};
+
+use super::handle;
 use crate::{Services, WordApp};
 
 fn app() -> WordApp {
@@ -12,11 +14,11 @@ fn app() -> WordApp {
 
 /// Send one request the way the control channel does and return the reply.
 fn send(a: &mut WordApp, method: &str, params: Value) -> Value {
-    let ctx = egui::Context::default();
+    let ctx = crate::test_harness::context();
     let (req, _reply) = ControlRequest::new(method, params);
     match handle(a, &ctx, &req) {
-        Outcome::Done(v) => v,
-        Outcome::Screenshot { .. } => json!({"ok": false, "error": "not a reply"}),
+        Reply::Done(v) => v,
+        _ => json!({"ok": false, "error": "not a reply"}),
     }
 }
 

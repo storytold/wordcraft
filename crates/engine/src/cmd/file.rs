@@ -90,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word or OpenDocument text file)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
@@ -100,7 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
-            .params(r#"{"password": string (Word documents are saved encrypted with it) | null or "" (saved unencrypted)}"#)
+            .params(r#"{"password": string (Word packages and OpenDocument text files (.odt, .ott) are saved encrypted with it) | null or "" (saved unencrypted)}"#)
             .pure(),
         CommandSpec::new("file.exportPdf", "Export PDF", "File › Export", |s, v| {
             // No path (the command search, say): the app asks where to save, as File › Export
@@ -131,7 +131,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.printPdf", "Print to PDF", "File › Print", crate::print::print_pdf_to_file)
             .params(
-                r#"{"path": string, "pagesPerSheet"?: 1 | 2 | 4 | 6 | 9 | 16 | "booklet" | "bookletReverse", "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
+                r#"{"path": string, "pagesPerSheet"?: 1 | 2 | 4 | 6 | 9 | 16 | "booklet" | "bookletReverse", "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size), "compress"?: bool (default true: compress the PDF's content streams; false writes the same pages uncompressed, which is larger)"#,
             )
             .pure(),
         CommandSpec::new("file.print", "Print", "File", |s, _| {
@@ -407,8 +407,8 @@ fn close_document(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"closed": id, "active": s.document_id(), "documents": s.documents()}))
 }
 
-/// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
-/// with from now on, or none.
+/// File › Info › Protect Document › Encrypt with Password: the password Word packages and
+/// OpenDocument text files (.odt, .ott) are saved with from now on, or none.
 fn encrypt(s: &mut Session, v: &Value) -> CmdResult {
     let password = match v.get("password") {
         Some(Value::Null) => None,
@@ -524,8 +524,8 @@ fn save_as(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// How a copy is written: Print Markup from the command's `markup`, else the File › Print
-/// setting (`file.printMarkup`); comments as Track Changes Options show them; digits as the
-/// Numeral setting shows them on screen.
+/// setting (`file.printMarkup`); comments and revision marks/colours as Track Changes Options show them;
+/// digits as the Numeral setting shows them on screen.
 pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
     let markup = p::bool(v, "markup").unwrap_or(s.prefs.print_markup);
     crate::io::ExportOptions {
@@ -533,6 +533,7 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
         comments: markup && s.prefs.markup.comments,
         word2003: p::str(v, "format") == Some(FORMAT_WORD_2003),
         numeral: s.view.numeral.resolve(crate::session::system_locale()),
+        revisions: s.prefs.markup.clone(),
         strict: p::bool(v, "strict").unwrap_or(false),
     }
 }
@@ -556,7 +557,10 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
             if l.pages.get(page).is_none() {
                 return Err(CmdError::Params(format!("no page {}", page + 1)));
             }
-            crate::strict::strict_report(&s.doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png)
+            // The page image `file.exportPng` writes: the printed page, tracked changes marked as
+            // Track Changes Options mark them.
+            let display = crate::io_ext::page_image_options(&opts).display;
+            crate::strict::strict_report(&s.doc, &l, &display, Some(page..=page), wordcraft_layout::StrictOutput::Png)
         }
         None => {
             let out = super::references::output_fields(&s.doc);
@@ -566,6 +570,7 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
     Ok(report.to_json())
 }
 
+/// Exports a page of the current document as a PNG image at the requested scale.
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     // No path: the app asks where to save, as file.exportPdf does (#2313).
     let Some(path) = p::str(v, "path") else {
@@ -575,11 +580,13 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
     let strict = p::bool(v, "strict").unwrap_or(false);
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
-    let l = s.export_layout_with(export_options(s, v).markup);
+    let export = export_options(s, v);
+    let l = s.export_layout_with(export.markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
-    // the on-screen cue while editing the body, not part of the page.
-    let opts = wordcraft_render::RenderOptions { display: crate::strict::png_display(), ..Default::default() };
+    // the on-screen cue while editing the body, not part of the page. Tracked changes are marked
+    // as Track Changes Options mark them on screen.
+    let opts = crate::io_ext::page_image_options(&export);
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
     }
@@ -692,6 +699,77 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
     }))
 }
 
+/// Most fields [`story_fields`] lists for one story, and how deep it goes into nested tables.
+const MAX_STORY_FIELDS: usize = 200;
+const MAX_STORY_DEPTH: usize = 8;
+
+/// The fields of a story's paragraphs, tables included: the code, the result stored with it, and
+/// whether the page shows a value of its own (#4467). A header or footer's text carries the
+/// stored result of a page field (`1` for a PAGE, the page count when it was inserted for a
+/// NUMPAGES); each page shows its own, as the layout draws it. A STYLEREF counts too: the layout
+/// looks its text up from the page it lands on. False when a limit cut the list short.
+fn story_fields(blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Value>) -> bool {
+    if depth > MAX_STORY_DEPTH {
+        return false;
+    }
+    for b in blocks {
+        match &**b {
+            Block::Para(p) => {
+                for o in &p.objects {
+                    if let wordcraft_doc::para::InlineObject::Field { instr, result, .. } = o {
+                        if out.len() >= MAX_STORY_FIELDS {
+                            return false;
+                        }
+                        out.push(field_json(instr, result));
+                    }
+                }
+            }
+            Block::Table(t) => {
+                for cell in t.rows.iter().flat_map(|r| &r.cells) {
+                    if !story_fields(&cell.blocks, depth + 1, out) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// The range fields of `story` (a `FieldStart` … `FieldEnd` pair: what the DOCX reader makes of a
+/// field whose result has tracked changes of its own or spans paragraphs, and of every TOC),
+/// listed as [`story_fields`] lists inline ones, after them; the result is the text between the
+/// markers as it is, at most [`MAX_RANGE_RESULT`] characters of it (`resultTruncated` when it is
+/// cut: a bibliography or a long TOC). False when a limit cut the list short.
+fn range_fields(doc: &Document, story: StoryRef, out: &mut Vec<Value>) -> bool {
+    for r in doc.field_ranges(story) {
+        if out.len() >= MAX_STORY_FIELDS {
+            return false;
+        }
+        let from = wordcraft_doc::Pos { off: r.start.off.saturating_add(wordcraft_doc::para::OBJ.len_utf8()), ..r.start.clone() };
+        let text = doc.copy_range(&from, &r.end).plain_text();
+        let mut chars = text.chars().filter(|c| *c != wordcraft_doc::para::OBJ);
+        let result: String = chars.by_ref().take(MAX_RANGE_RESULT).collect();
+        let mut field = field_json(&r.instr, &result);
+        if chars.next().is_some() {
+            field["resultTruncated"] = json!(true);
+        }
+        out.push(field);
+    }
+    true
+}
+
+/// Longest result `document.inspect` gives a range field, in characters.
+const MAX_RANGE_RESULT: usize = 2000;
+
+/// A field as `document.inspect` lists it: its code, its stored result, and whether each page
+/// shows a value of its own.
+fn field_json(instr: &str, result: &str) -> Value {
+    let name = wordcraft_layout::fields::field_name(instr);
+    let per_page = matches!(name.as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "PAGEREF" | "STYLEREF");
+    json!({"code": instr.trim(), "result": result, "perPage": per_page})
+}
+
 /// Structure for agents: blocks with text and formatting summary, selection, stats.
 fn inspect(s: &mut Session, v: &Value) -> CmdResult {
     let with_text = p::bool(v, "text").unwrap_or(true);
@@ -743,8 +821,23 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     let l = s.layout();
-    let parts: Vec<Value> =
-        s.doc.parts.iter().map(|(id, p)| json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))})).collect();
+    let parts: Vec<Value> = s
+        .doc
+        .parts
+        .iter()
+        .map(|(id, p)| {
+            let mut o = json!({"id": id, "kind": p.kind, "text": s.doc.plain_text(StoryRef::Part(*id))});
+            let mut fields = Vec::new();
+            let complete = story_fields(&p.blocks, 0, &mut fields) && range_fields(&s.doc, StoryRef::Part(*id), &mut fields);
+            if !fields.is_empty() {
+                o["fields"] = json!(fields);
+            }
+            if !complete {
+                o["fieldsTruncated"] = json!(true);
+            }
+            o
+        })
+        .collect();
     Ok(json!({
         "blocks": blocks,
         "parts": parts,
