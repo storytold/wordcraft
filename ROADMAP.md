@@ -152,6 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 - 2026-11-20: `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root` (shared rule 18, #7124); without them it stops with an error naming the two flags, where it used to serve with access to every file the user can reach. `mcp --connect` is refused until the desktop app confines its control channel to the same roots (#3695, #5819). The help, `docs/mcp.md`, the README and `AGENTS.md` pass both roots in every example.
+- 2026-11-15: Find and Replace by formatting (#6147, #6385): the find and replace commands take a `format` filter (bold, italic, underline, strike, small caps, all caps, hidden, super/subscript, font, size, colour, highlight, paragraph or character style) and Replace takes `withFormat`. With empty text a search finds the stretches of text that have the formatting, partial words included; with text, every character of a match must have it; the formatting is what the text shows, so a style's bold counts. Replace All with only formats changes the formatting and is one undo step. Not yet: the dialog's Format button, paragraph formatting and language as search criteria. Readiness estimates unchanged.
 - 2026-11-15: Native, built-in and web Insert/Change Picture choosers offer both TIFF extensions (`.tif`, `.tiff`) alongside other supported pictures; native drops, picked-file inbox dispatch and pasted picture paths recognize the same suffixes (#6704). TIFF decoding remains limited to supported compression.
 - 2026-10-31: Screen readers hear what the dialogs and their drawn controls are: a dialog is a dialog, where it was only a window, so NVDA says so and reads the text in it (Word Count's figures); a dialog's tabs (Paragraph, Find and Replace, About) are tabs, the one shown selected, as in Word, where they were buttons read as pressed toggles; a colour field says its label and colour ("Font color: #104861"), where its text alone was the colour's hex digits; and each swatch of the colour grid says its colour, where it had no name. Readiness estimates unchanged.
 
@@ -922,6 +923,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
+> 2026-11-15 · Progress log: Find and Replace by formatting through the commands (#6147).
+>
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
 > 2026-11-08 · Progress log: turned inline pictures without a recorded effect extent keep their line to the frame, as in Word.
