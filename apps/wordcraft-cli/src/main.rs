@@ -42,9 +42,11 @@ USAGE:
                                               PNG saves use --page (1-based, default 1) and --scale (default 2).
                                               --script runs a JSON file (- is stdin) first:
                                               {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
-                                              \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
-                                              formats follow the extension (docx and pdf in one run);
-                                              relative paths resolve against the script's folder.
+                                              \"params\"?: {…}} | id, …], \"save\"?: OUT | [OUT, …]}.
+                                              Save formats follow the extension (docx and pdf in one run).
+                                              Relative top-level file and save paths resolve against the
+                                              script's folder (the working directory for stdin). Command
+                                              parameters are passed unchanged.
                                               file.new and file.open open another document and
                                               make it active; later commands and the saves work on
                                               the active one; view.switchWindows lists the open
