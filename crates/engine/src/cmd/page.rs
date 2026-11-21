@@ -500,20 +500,22 @@ fn margins(s: &mut Session, v: &Value) -> CmdResult {
             None => return Err(CmdError::Params(format!("unknown preset `{x}`"))),
         },
         None => {
+            // A negative margin given counts as zero; one left out keeps its value, so an exact
+            // (negative) top or bottom from the file stays exact when another side changes, as
+            // in Word.
             let c = sect(s);
+            let given = |k: &str| p::f32(v, k).map(|m| m.max(0.0));
             (
-                p::f32(v, "top").unwrap_or(c.margin_top),
-                p::f32(v, "bottom").unwrap_or(c.margin_bottom),
-                p::f32(v, "left").unwrap_or(c.margin_left),
-                p::f32(v, "right").unwrap_or(c.margin_right),
+                given("top").unwrap_or(c.margin_top),
+                given("bottom").unwrap_or(c.margin_bottom),
+                given("left").unwrap_or(c.margin_left.max(0.0)),
+                given("right").unwrap_or(c.margin_right.max(0.0)),
             )
         }
     };
-    // Negative margins count as zero before the fit check, so one can't offset another.
-    let (t, b, l, r) = (t.max(0.0), b.max(0.0), l.max(0.0), r.max(0.0));
     let gutter = p::f32(v, "gutter").map(|g| g.max(0.0));
     let cur = sect(s);
-    if !margins_fit((cur.page_w, cur.page_h), (t, b, l, r), gutter.unwrap_or(cur.gutter)) {
+    if !margins_fit((cur.page_w, cur.page_h), (t.abs(), b.abs(), l, r), gutter.unwrap_or(cur.gutter)) {
         return Err(CmdError::Params("margins leave no room for text".into()));
     }
     // A preset picks mirrored or not, as does `mirror` (Page Setup's Multiple pages); plain numbers
@@ -568,7 +570,7 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
         sections
             .iter()
             .find(|(e, _)| *e == block)
-            .is_none_or(|(_, x)| margins_fit(oriented(x), (x.margin_top, x.margin_bottom, x.margin_left, x.margin_right), x.gutter))
+            .is_none_or(|(_, x)| margins_fit(oriented(x), (x.margin_top.abs(), x.margin_bottom.abs(), x.margin_left, x.margin_right), x.gutter))
     };
     if !selected_section_ends(s).into_iter().all(fits) {
         return Err(CmdError::Params(MARGINS_DONT_FIT.into()));

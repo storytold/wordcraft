@@ -433,3 +433,27 @@ fn page_number_format_keeps_or_clears_the_start() {
     assert_eq!(back["pageNumFormat"], "decimal");
     assert_eq!(back["pageNumStart"], 1);
 }
+
+/// An exact (negative) top or bottom margin read from a Word file survives Margins and
+/// Orientation as in Word: changing another margin keeps it, and turning the page puts its size on
+/// the side it moves to (measured in Word: T -60 B -60 L 72 R 72, Left 80 keeps T -60 B -60;
+/// landscape gives the sides 60 and 60).
+#[test]
+fn exact_margins_survive_margins_and_orientation() {
+    let mut s = doc();
+    s.doc.last_section.margin_top = -60.0;
+    s.doc.last_section.margin_bottom = -40.0;
+    s.run("layout.margins", &json!({"left": 80.0})).unwrap();
+    let x = &s.doc.last_section;
+    assert_eq!((x.margin_top, x.margin_bottom, x.margin_left), (-60.0, -40.0, 80.0));
+    // A negative margin given still counts as zero.
+    s.run("layout.margins", &json!({"top": -30.0})).unwrap();
+    assert_eq!((s.doc.last_section.margin_top, s.doc.last_section.margin_bottom), (0.0, -40.0));
+    s.doc.last_section.margin_top = -60.0;
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let x = &s.doc.last_section;
+    assert!(x.margin_left >= 0.0 && x.margin_right >= 0.0, "{x:?}");
+    let mut sides = [x.margin_left, x.margin_right];
+    sides.sort_by(f32::total_cmp);
+    assert_eq!(sides, [40.0, 60.0], "the exact margins' sizes go to the sides");
+}

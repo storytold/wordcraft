@@ -401,8 +401,12 @@ impl PageBuilder<'_> {
         }
     }
     /// The bottom of the body on a page started with its body at `body_top`: a footer taller than
-    /// the bottom margin pushes it up (Word: no gap), leaving it at least a little room.
+    /// the bottom margin pushes it up (Word: no gap), leaving it at least a little room. A
+    /// negative bottom margin is exact: the body ends at its size and the footer overlaps it.
     fn body_bottom(&self, body_top: f32) -> f32 {
+        if self.sect.margin_bottom < 0.0 {
+            return self.sect.page_h + self.sect.margin_bottom;
+        }
         // ODF keeps the footer's spacing above a footer too tall for the bottom margin.
         let gap = if self.sect.footer_gap.is_finite() { self.sect.footer_gap.clamp(0.0, 1584.0) } else { 0.0 };
         (self.sect.page_h - self.sect.margin_bottom).min((self.foot_top - gap).max(body_top + 36.0))
@@ -484,8 +488,12 @@ pub(crate) fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Op
     Some(y + l.top + l.height - f.top)
 }
 
-/// Where body text starts: the top margin, or below the header if it's taller.
+/// Where body text starts: the top margin, or below the header if it's taller. A negative top
+/// margin is exact (ECMA-376 §17.6.11): the text starts at its size and the header overlaps it.
 pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
+    if sect.margin_top < 0.0 {
+        return -sect.margin_top;
+    }
     let Some(id) = header else { return sect.margin_top };
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();

@@ -21,7 +21,7 @@ pub(crate) fn unturned_sect(s: &SectionProps, body_top: f32) -> SectionProps {
     v.page_w = s.page_h;
     v.page_h = s.page_w;
     v.gutter = 0.0;
-    let (top, right, bottom, left) = (body_top, s.margin_right, s.margin_bottom, s.margin_left + s.gutter);
+    let (top, right, bottom, left) = (body_top, s.margin_right, s.margin_bottom.abs(), s.margin_left + s.gutter);
     // The unturned frame's (u, v) lands at (W - v, u) for `Down` and (v, H - u) for `Up`: its
     // top edge is the real right edge (left for `Up`), its left edge the real top (bottom).
     match s.text_direction {

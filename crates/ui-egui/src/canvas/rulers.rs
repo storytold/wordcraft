@@ -77,12 +77,7 @@ pub(crate) fn page_rulers(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui
     // A section whose columns `column_drag` refuses shows its gaps without grips.
     let gaps_draggable = cg.as_ref().is_none_or(|cg| super::column_ruler::draggable(&cg.sect));
 
-    let mut margins = Margins::uniform(0.0);
-    margins.top = f64::from(sect.margin_top);
-    margins.bottom = f64::from(sect.margin_bottom);
-    margins.left = f64::from(sect.margin_left);
-    margins.right = f64::from(sect.margin_right);
-    let edges = PageEdges::new(margins);
+    let edges = page_edges(&sect);
     let mirrored = app.session.doc.settings.mirror_margins && page.number.is_multiple_of(2);
     let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
     let kind = ruler_align(app.canvas.tab_kind).unwrap_or_default();
@@ -253,8 +248,21 @@ fn indent_params(shown: &RulerValues, v: &RulerValues, col_x: f32, w: f32) -> Op
     (!p.is_empty()).then_some(Value::Object(p))
 }
 
+/// The page's margins as the ruler shows and clamps them. An exact (negative) top or bottom margin (#7107) counts at
+/// its size, where the layout puts the body's edge: it is shown there, and a drag of the opposite edge keeps an inch
+/// of text beside it, as `layout.margins` checks it. Only a moved edge is sent back ([`margin_params`]), so the exact
+/// margin stays exact unless it is the one dragged.
+pub(super) fn page_edges(sect: &wordcraft_doc::section::SectionProps) -> PageEdges {
+    let mut margins = Margins::uniform(0.0);
+    margins.top = f64::from(sect.margin_top.abs());
+    margins.bottom = f64::from(sect.margin_bottom.abs());
+    margins.left = f64::from(sect.margin_left);
+    margins.right = f64::from(sect.margin_right);
+    PageEdges::new(margins)
+}
+
 /// `layout.margins` params for the margins `v` moved from `shown`.
-fn margin_params(shown: &PageEdges, v: &PageEdges) -> Option<Value> {
+pub(super) fn margin_params(shown: &PageEdges, v: &PageEdges) -> Option<Value> {
     let (a, b) = (&shown.margins, &v.margins);
     let mut p = Map::new();
     for (key, was, now) in [("left", a.left, b.left), ("right", a.right, b.right), ("top", a.top, b.top), ("bottom", a.bottom, b.bottom)] {
