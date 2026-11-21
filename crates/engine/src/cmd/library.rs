@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("library.search", "Search Library", "Insert › Library", search)
             .params(
-                "{query, limit?: 1..=500 (default 100), folder?, file?} → [{file, picture, title, hidden, match: title|text|file}]: pictures whose file name or format (PNG, JPEG…) holds `query`, any case; with `file`, only that Library file (the pane searches a few files a frame)",
+                "{query: at most 256 characters, limit?: 1..=500 (default 100), folder?, file?} → [{file, picture, title, hidden, match: title|text|file}]: pictures whose file name or format (PNG, JPEG…) holds `query`, any case; with `file`, only that Library file (the pane searches a few files a frame)",
             )
             .when(native)
             .pure(),
