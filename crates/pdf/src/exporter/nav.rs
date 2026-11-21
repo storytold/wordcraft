@@ -53,24 +53,22 @@ impl Exporter<'_> {
         None
     }
 
-    pub(crate) fn annotations(&self, fit: Fit) -> Vec<Annotation> {
+    pub(super) fn link_target(&self, target: &str) -> Option<Target> {
+        if let Some(name) = target.strip_prefix('#') {
+            self.bookmark(name).map(|(page, x, y)| Target::Destination(XyzDestination::new(page, Point::from_xy(x, y)).into()))
+        } else {
+            // Unsafe targets (javascript:, file:, shares, other schemes) get no link; the text stays.
+            write::uri_target(target)
+        }
+    }
+
+    pub(crate) fn annotations(&self, fit: Fit) -> Vec<(Annotation, Option<(usize, usize)>)> {
         let mut v = Vec::new();
-        for (x0, y0, x1, y1, target) in &self.links {
-            let ((x0, y0), (x1, y1)) = (fit.point(*x0, *y0), fit.point(*x1, *y1));
+        for link in &self.links {
+            let ((x0, y0), (x1, y1)) = (fit.point(link.x0, link.y0), fit.point(link.x1, link.y1));
             let Some(rect) = krilla::geom::Rect::from_ltrb(x0, y0, x1, y1) else { continue };
-            let t = if let Some(name) = target.strip_prefix('#') {
-                match self.bookmark(name) {
-                    Some((page, x, y)) => Target::Destination(XyzDestination::new(page, Point::from_xy(x, y)).into()),
-                    None => continue,
-                }
-            } else {
-                // Unsafe targets (javascript:, file:, shares, other schemes) get no link; the text stays.
-                match write::uri_target(target) {
-                    Some(t) => t,
-                    None => continue,
-                }
-            };
-            v.push(Annotation::new_link(LinkAnnotation::new(rect, t), Some(target.clone())));
+            let Some(t) = self.link_target(&link.target) else { continue };
+            v.push((Annotation::new_link(LinkAnnotation::new(rect, t), Some(link.target.clone())), link.tag));
         }
         v
     }

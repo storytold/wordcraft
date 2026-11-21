@@ -158,25 +158,41 @@ impl Exporter<'_> {
         }
     }
 
+    /// Whether a link's `Link` group is still the last content of its paragraph, so more linked text
+    /// can join it without being read ahead of unlinked text drawn since. Untagged links always continue.
+    fn link_run_continues(&self, tag: Option<(usize, usize)>) -> bool {
+        match tag {
+            None => true,
+            Some((p, c)) => self.tags.get(p).is_some_and(|e| e.children.len() == c + 1),
+        }
+    }
+
     pub(super) fn link_rect(&mut self, face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)], link: &str) {
         let (Some(first), Some(last)) = (glyphs.first(), glyphs.last()) else { return };
         let adv = face.advance(last.0) as f32 * size / face.upem.max(1.0) as f32;
         let (x0, x1) = (first.1.min(last.1), first.1.max(last.1) + adv);
         let (y0, y1) = (first.2 - size * 0.85, first.2 + size * 0.25);
-        if ![x0, x1, y0, y1].iter().all(|v| ok(*v)) {
+        if ![x0, x1, y0, y1].iter().all(|v| ok(*v)) || x0 >= x1 || y0 >= y1 {
             return;
         }
+        if self.link_target(link).is_none() {
+            return;
+        }
+        let continues = self.links.last().is_some_and(|prev| self.link_run_continues(prev.tag));
         if let Some(prev) = self.links.last_mut()
-            && prev.4 == link
-            && (prev.1 - y0).abs() < 0.5
-            && x0 - prev.2 < size
+            && prev.target == link
+            && (prev.y0 - y0).abs() < 0.5
+            && x0 - prev.x1 < size
+            && continues
         {
-            prev.0 = prev.0.min(x0);
-            prev.2 = prev.2.max(x1);
+            prev.x0 = prev.x0.min(x0);
+            prev.x1 = prev.x1.max(x1);
+            self.last_link = Some(self.links.len() - 1);
             return;
         }
         if self.links.len() < 10_000 {
-            self.links.push((x0, y0, x1, y1, link.to_string()));
+            self.links.push(super::LinkRect { x0, y0, x1, y1, target: link.to_string(), tag: None });
+            self.last_link = Some(self.links.len() - 1);
         }
     }
 
