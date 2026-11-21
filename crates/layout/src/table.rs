@@ -423,6 +423,15 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
             grid.iter_mut().for_each(|w| *w *= k);
         }
         total = tw;
+        // Cells that give percentages share out the table's own width, whatever the grid's was,
+        // in whole twentieths of a point.
+        if let Some(pcts) = pct_columns(t, &grid) {
+            let sum: f32 = pcts.iter().sum();
+            if sum.is_finite() && sum > 0.0 && sum <= 100.0 + MORE_THAN_THE_TABLE {
+                grid.copy_from_slice(&whole_twentieths(&pcts, sum, tw));
+                total = grid.iter().sum();
+            }
+        }
     }
     // A table with its own width keeps it, however far it runs past the margins (as in Word).
     if target.is_none() && total > avail * 1.5 && !t.props.fixed {
@@ -1521,8 +1530,13 @@ fn is_automatic(t: &Table) -> bool {
         && t.rows.iter().all(|r| r.cells.iter().all(|c| c.props.width.is_none() && c.props.width_pct.is_none()))
 }
 
+/// How far past 100% cell percentages add up before they are more than the table: a fiftieth of
+/// a percent is the least a file can say, and sums of rounded shares fall short of that.
+const MORE_THAN_THE_TABLE: f32 = 0.005;
+
 /// Consistent cell widths replace a stale grid without changing the table's total width.
-/// Conflicting widths, spans and percentages need the full shared-grid algorithm.
+/// Conflicting widths, spans and mixed points and percentages need the full shared-grid
+/// algorithm.
 fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
     let Some(first) = t.rows.first() else { return };
     if first.cells.len() != grid.len() {
@@ -1552,22 +1566,47 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
 /// different percentages of a column it takes the largest. A merged cell's percentage is shared
 /// by the columns under it that ask none of their own, in their grid proportions (Word shares it
 /// by their content), and makes no column narrower than it asks. Measured in Word. Columns no cell
-/// sizes and absolute widths keep the grid.
+/// sizes and absolute widths keep the grid. Shares of no more than the table are whole twentieths
+/// of a point (`whole_twentieths`), whatever the grid says; `table_frame` shares a table's own
+/// width out again once the grid has it.
 fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
+    let Some(pcts) = pct_columns(t, grid) else { return };
+    let sum: f32 = pcts.iter().sum();
+    let own_width = t.props.width_pct.is_some_and(|p| p > 0.0) || t.props.width.is_some_and(|w| w > 0.0);
+    // A table with its own width is scaled to it afterwards and `table_frame` shares that out
+    // again; any positive total will do here. A fixed table without one keeps its grid's width.
+    let total = if own_width || t.props.fixed { grid.iter().sum() } else { avail };
+    if !sum.is_finite() || sum <= 0.0 || !total.is_finite() || total <= 0.0 {
+        return;
+    }
+    if sum <= 100.0 + MORE_THAN_THE_TABLE {
+        grid.copy_from_slice(&whole_twentieths(&pcts, sum, total));
+        return;
+    }
+    // A grid too narrow for the floor in every column shares its width out instead, so the table
+    // keeps it.
+    let floor = if t.props.fixed { FIXED_PCT_MIN_COLUMN.min(total / pcts.len() as f32) } else { 0.0 };
+    grid.copy_from_slice(&overfull_shares(&pcts, total, floor));
+}
+
+/// The percentage each column of `t` asks for (see [`apply_pct_widths`]): the largest its cells
+/// give, a merged cell's shared out by `grid`'s proportions. `None` where a cell gives a width in
+/// points or a share that is no positive number, or a column is left without one.
+fn pct_columns(t: &Table, grid: &[f32]) -> Option<Vec<f32>> {
     let mut pcts: Vec<Option<f32>> = vec![None; grid.len()];
     let mut merged: Vec<(usize, usize, f32)> = Vec::new();
     for row in &t.rows {
         let mut g = row.first_grid();
         for cell in &row.cells {
             if cell.props.width.is_some() {
-                return;
+                return None;
             }
             if let Some(p) = cell.props.width_pct {
                 if !p.is_finite() || p <= 0.0 {
-                    return;
+                    return None;
                 }
                 if cell.span() == 1 {
-                    let Some(slot) = pcts.get_mut(g) else { return };
+                    let slot = pcts.get_mut(g)?;
                     *slot = Some(slot.map_or(p, |q| q.max(p)));
                 } else {
                     merged.push((g, cell.span(), p));
@@ -1577,8 +1616,8 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
         }
     }
     for (g, span, p) in merged {
-        let Some(cols) = pcts.get_mut(g..g.saturating_add(span)) else { return };
-        let Some(weights) = grid.get(g..g.saturating_add(span)) else { return };
+        let cols = pcts.get_mut(g..g.saturating_add(span))?;
+        let weights = grid.get(g..g.saturating_add(span))?;
         let own: f32 = cols.iter().flatten().sum();
         let free: f32 = cols.iter().zip(weights).filter(|(c, _)| c.is_none()).map(|(_, w)| *w).sum();
         let rest = (p - own).max(0.0);
@@ -1593,34 +1632,35 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
             cols.iter_mut().flatten().for_each(|c| *c *= p / own);
         }
     }
-    let Some(pcts) = pcts.into_iter().collect::<Option<Vec<f32>>>() else { return };
-    if pcts.iter().any(|p| *p <= 0.0) {
-        return;
+    let pcts = pcts.into_iter().collect::<Option<Vec<f32>>>()?;
+    pcts.iter().all(|p| *p > 0.0).then_some(pcts)
+}
+
+/// Columns of `total` points sharing it by `pcts` (of `sum` together, 100 or less), in whole
+/// twentieths of a point as Word keeps them: every column but the first is its share to the
+/// nearest twentieth, halves up, and the first takes what the others leave. The grid in the file
+/// plays no part, however near the shares it is.
+///
+/// Measured in Word for Windows 16.0.20625 by which of two lines of text 0.05 of a twentieth of a
+/// point apart still fits a cell, in tables 9905 twentieths wide: under cells of 48 and 52% the
+/// second cell is 5151 whether the grid says 5150, 5151, 5152, 5153 or 5154 for it or halves the
+/// table, with fixed layout too (5150.6 exactly); 30.40, 30.42 and 39.18% give 3011, 3013 and
+/// 3881; 33.34, 33.34 and 33.32% give 3303, 3302 and 3300; 25, 25 and 25% give 3301, 3302 and
+/// 3302. With the columns of an eight-column form it gives the grid Word wrote for them to the
+/// twentieth.
+fn whole_twentieths(pcts: &[f32], sum: f32, total: f32) -> Vec<f32> {
+    // Whole twentieths, halves up (the sliver keeps a half that arithmetic left just short of one).
+    let twips = |w: f64| (w + 0.5 + 1e-6).floor();
+    let table = twips(f64::from(total) * 20.0);
+    // The shares in fiftieths of a percent, whole numbers as a file has them, so that a column of
+    // exactly half a twentieth more is told from one just short of it.
+    let fiftieths: Vec<f64> = pcts.iter().map(|p| f64::from(*p) * 50.0).map(|f| if (f - f.round()).abs() < 1e-3 { f.round() } else { f }).collect();
+    let whole = if sum > 0.0 { fiftieths.iter().sum::<f64>() } else { 1.0 };
+    let mut widths: Vec<f64> = fiftieths.iter().map(|f| twips(table * f / whole)).collect();
+    if let Some((first, others)) = widths.split_first_mut() {
+        *first = (table - others.iter().sum::<f64>()).max(0.0);
     }
-    let sum: f32 = pcts.iter().sum();
-    let own_width = t.props.width_pct.is_some_and(|p| p > 0.0) || t.props.width.is_some_and(|w| w > 0.0);
-    // A table with its own width is scaled to it afterwards; any positive total will do. A fixed
-    // table without one keeps its grid's width.
-    let total = if own_width || t.props.fixed { grid.iter().sum() } else { avail };
-    if !sum.is_finite() || sum <= 0.0 || !total.is_finite() || total <= 0.0 {
-        return;
-    }
-    if sum <= 100.0 {
-        let shares: Vec<f32> = pcts.iter().map(|p| total * (p / sum)).collect();
-        // A grid Word wrote from these same percentages is within its rounding of them (whole
-        // twips, and percentages in fiftieths): it is kept exactly. Rebuilt, a column could come
-        // out a few hundredths of a point narrower and wrap its text differently (#6575).
-        let rounding = 0.05 + total * 0.0002;
-        if grid.iter().zip(&shares).all(|(g, s)| (g - s).abs() <= rounding) {
-            return;
-        }
-        grid.copy_from_slice(&shares);
-        return;
-    }
-    // A grid too narrow for the floor in every column shares its width out instead, so the table
-    // keeps it.
-    let floor = if t.props.fixed { FIXED_PCT_MIN_COLUMN.min(total / pcts.len() as f32) } else { 0.0 };
-    grid.copy_from_slice(&overfull_shares(&pcts, total, floor));
+    widths.iter().map(|w| (w / 20.0) as f32).collect()
 }
 
 /// Over 100%, as Word lays it out: the columns take their shares left to right until the table's
@@ -1717,22 +1757,34 @@ mod width_tests {
         assert_eq!(grid, [28.0, 111.0, 40.0, 81.0]);
     }
 
-    /// #5074 review (and #6575): a grid Word wrote from the cells' percentages is kept exactly,
-    /// while one that is off by more than Word's rounding is rebuilt from them.
+    /// #5074 review and #6575: the cells' percentages give the columns in whole twentieths of a
+    /// point, every column but the first rounded and the first taking the rest, whatever the grid
+    /// says, near the shares or not. Word for Windows, by which of two lines of text 0.05 of a
+    /// twentieth apart still fits: under cells of 48 and 52% of a table 9905 twentieths wide the
+    /// second cell is 5151 whether the grid says 5150, 5151, 5152, 5153 or 5154 for it.
     #[test]
-    fn a_grid_matching_its_percentages_is_kept() {
-        let mut t = Table::new(1, 3, 300.0);
-        t.props.width = Some(300.0);
-        for (cell, p) in t.rows[0].cells.iter_mut().zip([33.32, 33.34, 33.34]) {
-            cell.props.width = None;
-            cell.props.width_pct = Some(p);
+    fn percentages_give_whole_twentieths_whatever_the_grid() {
+        let shares = |width: f32, pcts: &[f32]| {
+            let mut t = Table::new(1, pcts.len(), width);
+            t.props.width = Some(width);
+            for (cell, p) in t.rows[0].cells.iter_mut().zip(pcts) {
+                cell.props.width = None;
+                cell.props.width_pct = Some(*p);
+            }
+            t
+        };
+        let t = shares(300.0, &[33.32, 33.34, 33.34]);
+        for grid in [[99.95, 100.05, 100.0], [90.0, 110.0, 100.0]] {
+            let mut got = grid;
+            apply_pct_widths(&t, &mut got, 468.0);
+            assert_eq!(got, [100.0, 100.0, 100.0], "under a grid of {grid:?}");
         }
-        let mut grid = [99.95, 100.05, 100.0];
-        apply_pct_widths(&t, &mut grid, 468.0);
-        assert_eq!(grid, [99.95, 100.05, 100.0], "kept");
-        let mut stale = [90.0, 110.0, 100.0];
-        apply_pct_widths(&t, &mut stale, 468.0);
-        assert!(stale.iter().zip([99.96, 100.02, 100.02]).all(|(g, w)| (g - w).abs() < 0.01), "rebuilt: {stale:?}");
+        let t = shares(495.25, &[48.0, 52.0]);
+        for twips in [5150.0, 5151.0, 5152.0, 5153.0, 5154.0] {
+            let mut got = [495.25 - twips / 20.0, twips / 20.0];
+            apply_pct_widths(&t, &mut got, 468.0);
+            assert!((got[1] - 257.55).abs() < 1e-3 && (got[0] + got[1] - 495.25).abs() < 1e-3, "under {twips} twentieths: {got:?}");
+        }
     }
 
     #[test]
