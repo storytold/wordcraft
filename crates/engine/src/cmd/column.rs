@@ -232,9 +232,10 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
         blocks.push(Block::Para(para));
     }
     s.clipboard_text = rows.join("\n");
+    let bare = vec![true; blocks.len()];
     let media = s.doc.media_of_blocks(&blocks);
     s.clipboard = Some(Fragment { blocks, parts, media });
-    Ok(super::edit::copy_result(s))
+    Ok(super::edit::copy_result(s, &bare))
 }
 
 /// Delete each row's piece (bottom up, so earlier positions stay valid) and leave the caret at
