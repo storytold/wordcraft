@@ -13580,6 +13580,18 @@ fn style_set_keeps_imported_styles_latent_styles_and_defaults() {
     assert!(s.doc.styles.resolve_char(Some("Heading2"), &cs).italic_cs, "casual");
 }
 
+#[test]
+fn unknown_style_set_preserves_the_document() {
+    let mut s = s();
+    run(&mut s, "design.styleSet", json!({"name": "casual"}));
+    let doc = s.doc.clone();
+    let undo = s.undo_labels();
+    let r = s.run("design.styleSet", &json!({"name": "causal"}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "{r:?}");
+    assert_eq!(s.doc, doc);
+    assert_eq!(s.undo_labels(), undo);
+}
+
 fn style_size(s: &Session, id: &str) -> f32 {
     s.doc.styles.resolve_char(Some(id), &Default::default()).size
 }
