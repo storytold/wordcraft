@@ -840,6 +840,14 @@ impl Scan {
                 bk.wrapped_tab = Some(j);
                 return true;
             }
+            if bk.wrapped_tab == Some(j) && self.narrowed && stop.pos > bk.base_right + 0.01 && bk.skipped < 50 {
+                // A left tab past the right indent that wrapped into a span narrowed by a
+                // floating object (the far side of it, say): like Word, it goes on to the
+                // first line clear of the object (#6577). A stop inside the right indent
+                // keeps the zero-width path below.
+                self.skip = true;
+                return true;
+            }
             if bk.wrapped_tab == Some(j) {
                 // Still past the right indent on the line it wrapped to: it takes no
                 // room, and its text starts at the indent rather than on a line of its own.
