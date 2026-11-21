@@ -123,6 +123,38 @@ fn headers_stay_horizontal_and_a_vertical_section_starts_a_page() {
     assert!(l.caret(&Pos::body(1, 0)).unwrap().width > 0.0);
 }
 
+#[test]
+fn vertical_section_reserves_space_for_inherited_header() {
+    use wordcraft_doc::section::SectionStart;
+    let mut d = Document::from_text("Sec1\nSec2 vertical");
+    let tall: Vec<_> =
+        (0..5).map(|i| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Header line {i}"), Default::default()))).collect();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, tall);
+
+    // Section 1 defines a tall default header
+    let first = SectionProps {
+        start: SectionStart::NextPage,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(id), ..Default::default() },
+        ..Default::default()
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(first));
+
+    // Section 2 is vertical, but has NO headers of its own (inherits section 1's tall header)
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet::default();
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    // Page 1 (Section 2) has inherited the header, and its body top must account for it
+    assert!(
+        l.pages[1].body.y > d.last_section.margin_top + 10.0,
+        "body.y {} should exceed margin_top {}",
+        l.pages[1].body.y,
+        d.last_section.margin_top
+    );
+}
+
 /// #2038 in a vertical section, where every line is turned: a click outside a floating table
 /// goes to the text beside or after it, not to a cell of the table nearer the click.
 #[test]
@@ -170,4 +202,260 @@ fn a_click_outside_a_floating_table_in_a_vertical_section_skips_its_cells() {
     }
     // Inside the table a click still lands in a cell.
     assert!(l.hit(0, cx, cy, StoryRef::Body).unwrap().path.0.len() > 1);
+}
+
+#[test]
+fn vertical_section_inherits_percentage_width_header_table_using_defining_width() {
+    use wordcraft_doc::section::SectionStart;
+    let mut d = Document::from_text("Section 1 text\nSection 2 vertical text");
+
+    let mut table = wordcraft_doc::Table::new(1, 1, 0.0);
+    table.props.width_pct = Some(100.0);
+    let p = wordcraft_doc::Paragraph::with_text(
+        "A somewhat long line of text inside the percentage header table cell that wraps differently depending on width",
+        Default::default(),
+    );
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    let h_id = d.add_part(wordcraft_doc::PartKind::Header, vec![Block::Table(table).into()]);
+
+    let s1 = SectionProps {
+        start: SectionStart::NextPage,
+        page_w: 600.0,
+        page_h: 800.0,
+        margin_left: 50.0,
+        margin_right: 50.0,
+        margin_top: 50.0,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_id), ..Default::default() },
+        ..Default::default()
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(s1));
+
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.page_w = 300.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_right = 50.0;
+    d.last_section.margin_top = 50.0;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet::default();
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    assert_eq!(l.pages[1].body.y, l.pages[0].body.y, "inheriting turned section uses defining section's header height");
+    assert!(l.pages[1].body.y > d.last_section.margin_top, "header table reserves room on vertical page");
+
+    // Control: if the header table were measured at the inheriting section's 200 pt width,
+    // the text wraps across more lines and yields a strictly greater body top boundary.
+    let mut d_control = d.clone();
+    if let Some(s) = d_control.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section.as_mut() {
+        s.page_w = 300.0;
+    }
+    let l_control = lay(&d_control);
+    assert!(l.pages[1].body.y < l_control.pages[0].body.y, "defining width (500 pt) header height is shorter than wrapped narrow width (200 pt)");
+}
+
+/// #4847: A vertical section with title_page=true and no first header does not reserve space for
+/// an inherited tall default header on its first page.
+#[test]
+fn vertical_section_inheriting_default_header_with_blank_first_header_reserves_no_room_on_first_page() {
+    let mut d = Document::from_text("Section 1 text\nSection 2 vertical text");
+
+    let p = wordcraft_doc::Paragraph::with_text(
+        "A multi-line tall header paragraph that pushes the body top boundary downward by many points.",
+        Default::default(),
+    );
+    let h_id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+
+    let s1 = SectionProps {
+        start: SectionStart::NextPage,
+        page_w: 600.0,
+        page_h: 800.0,
+        margin_left: 50.0,
+        margin_right: 50.0,
+        margin_top: 50.0,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_id), ..Default::default() },
+        ..Default::default()
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(s1));
+
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.page_w = 300.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_right = 50.0;
+    d.last_section.margin_top = 50.0;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.title_page = true;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet::default(); // default: None (inherits h_id), first: None
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    // Page 1 is the first page of the turned section with title_page=true and no first header:
+    assert_eq!(
+        l.pages[1].body.y, d.last_section.margin_top,
+        "first page with blank first header does not reserve space for inherited default header"
+    );
+}
+
+/// #4847: Measuring headers for turned sections preserves list numbering so body items do not advance.
+#[test]
+fn vertical_section_with_numbered_header_does_not_advance_body_numbering() {
+    let mut d = Document::from_text("First section\nNumbered item in body");
+
+    let num = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+
+    // Give the second paragraph list numbering (num: num, level: 0)
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(1).map(std::sync::Arc::make_mut) {
+        p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+
+    // Numbered header paragraph using the same num, level: 0
+    let mut hp = wordcraft_doc::Paragraph::with_text("Header item", Default::default());
+    hp.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    let h_id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+
+    let s1 = SectionProps {
+        start: SectionStart::NextPage,
+        page_w: 600.0,
+        page_h: 800.0,
+        margin_top: 50.0,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_id), ..Default::default() },
+        ..Default::default()
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(s1));
+
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.page_w = 400.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_top = 50.0;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet::default(); // inherits numbered header
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    // The body paragraph on page 2 should have list item marker starting with 1 (not 2 from header advance):
+    let body_label_text = l.pages[1].items.iter().find_map(|item| {
+        if let crate::Placed::Lines { para, .. } = item { para.label.as_ref().and_then(|lab| lab.runs.first().map(|r| r.text.clone())) } else { None }
+    });
+    assert_eq!(body_label_text.as_deref(), Some("1."), "body paragraph numbering starts at 1, not advanced by header measurement");
+}
+
+/// #4847: A vertical section starting on an even page (via page_num_start) selects the even header
+/// when even/odd headers are enabled, reserving room for it.
+#[test]
+fn vertical_section_with_even_page_start_selects_even_header() {
+    crate::test_fonts();
+    let mut d = Document::from_text("Vertical section starting on even page");
+    d.settings.even_odd_headers = true;
+
+    let p = wordcraft_doc::Paragraph::with_text(
+        "A multi-line tall even header paragraph that pushes the body top boundary downward by many points.",
+        Default::default(),
+    );
+    let even_id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+
+    d.last_section.page_w = 400.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_right = 50.0;
+    d.last_section.margin_top = 50.0;
+    d.last_section.page_num_start = Some(2); // starts on even page (page 2)
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet { even: Some(even_id), ..Default::default() };
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    assert_eq!(l.pages[0].number, 2);
+    assert!(l.pages[0].body.y > d.last_section.margin_top, "first page (page 2) selects and reserves space for the even header");
+}
+
+/// #4847: When a manual page break leaves an empty page at the end of the preceding section,
+/// `start_section_page` retracts it; `turned_section` must see the retracted page number so the
+/// header slot measured for vertical body clearance matches the rendered page parity.
+#[test]
+fn vertical_section_after_page_break_retracts_empty_page_before_selecting_even_header() {
+    crate::test_fonts();
+    use wordcraft_doc::para::PAGE_BREAK;
+    use wordcraft_doc::section::HeaderSet;
+
+    let mut d = Document::from_text(&format!("Page 1{PAGE_BREAK}\nSection 2 vertical"));
+    d.settings.even_odd_headers = true;
+
+    // Short odd/default header fits inside margin_top; tall even header pushes body down.
+    let short =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Odd", Default::default()))]);
+    let tall_paras: Vec<_> = (0..5)
+        .map(|i| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Even header line {i}"), Default::default())))
+        .collect();
+    let even_id = d.add_part(wordcraft_doc::PartKind::Header, tall_paras);
+
+    let s1 = SectionProps { start: SectionStart::NextPage, margin_top: 50.0, ..Default::default() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(s1));
+
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.margin_top = 50.0;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = HeaderSet { default: Some(short), even: Some(even_id), ..Default::default() };
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2, "empty break page retracted");
+    assert_eq!(l.pages[1].number, 2);
+    assert_eq!(l.pages[1].hf_slot, HfSlot::Even);
+    assert!(
+        l.pages[1].body.y > d.last_section.margin_top + 10.0,
+        "vertical page 2 reserves space for even header instead of default header: body.y={}",
+        l.pages[1].body.y
+    );
+}
+
+/// #4847: Measuring a turned section's header passes the actual page number to `body_top_for`
+/// so an inside/outside-aligned object with one-sided wrapping on an even page gives the same
+/// header height during measurement as when rendered.
+#[test]
+fn vertical_section_header_measurement_uses_actual_page_number_for_inside_outside_float() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap, WrapText};
+
+    let mut d = Document::from_text("Vertical section with inside float in header");
+    let mut hp = wordcraft_doc::Paragraph::with_text("Header text wrapped around inside float", Default::default());
+    let float = Float {
+        wrap: Wrap::Square,
+        wrap_text: WrapText::Right,
+        h_rel: Anchor::Margin,
+        h_align: Some(FloatAlign::Inside),
+        v_rel: Anchor::Paragraph,
+        ..Default::default()
+    };
+    hp.insert_object(0, super::rect_shape(100.0, 120.0, float), &Default::default()).unwrap();
+    let hid = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+
+    d.last_section.page_w = 400.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_right = 50.0;
+    d.last_section.margin_top = 80.0;
+    d.last_section.header = 20.0;
+    d.last_section.page_num_start = Some(2); // even page: Inside is right edge, so WrapText::Right wraps below the 120pt shape
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet { default: Some(hid), ..Default::default() };
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    assert_eq!(l.pages[0].number, 2);
+    let header_bottom = l.pages[0]
+        .header
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { y, para, l0, l1, .. } => crate::page::item_bottom(*y, para, *l0, *l1),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max);
+    assert!(header_bottom > d.last_section.margin_top + 40.0, "header text wraps below 120pt float on even page: bottom={header_bottom}");
+    assert!(l.pages[0].body.y >= header_bottom - 0.5, "vertical body.y ({}) clears wrapped even-page header ({header_bottom})", l.pages[0].body.y);
+
+    // Control: on an odd page (page 1), Inside is left edge so WrapText::Right fits beside the float inside margin_top.
+    let mut d_odd = d.clone();
+    d_odd.last_section.page_num_start = Some(1);
+    let l_odd = lay(&d_odd);
+    assert!((l_odd.pages[0].body.y - d_odd.last_section.margin_top).abs() < 0.01);
 }

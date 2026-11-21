@@ -4,7 +4,7 @@ use craft::behavior::{DisplayOrder, IconId, ItemSource, SizeHint};
 use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::pages::ui::TableSizePicker;
-use craft::ui::buttons::{Arrangement, Button, IconButton};
+use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
@@ -215,6 +215,12 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     .show(ui);
             },
         );
+        ToggleButton::command(CommandRef::new("layout.linkToPrevious"))
+            .label(crate::tl!("Link to\nPrevious"))
+            .icon(crate::icons::id("link"))
+            .arrangement(Arrangement::Stacked)
+            .selected(wordcraft_engine::cmd::page::is_hf_linked(&app.session))
+            .show(ui);
     });
     row.group(RibbonGroup::new("Text", crate::tl!("Text"), IconId::new("textBox").into()), |ui| {
         Button::command(CommandRef::with_params("insert.textBox", json!({})))

@@ -728,3 +728,32 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(first_cell_shading(h.state()), Some(red), "No Color is undone in one step");
 }
+
+/// #4847: Link to Previous button is disabled in Section 1, and enabled & active when in Section 2.
+#[test]
+fn link_to_previous_button_states_follow_section_and_link() {
+    let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Section 1"})).unwrap();
+    assert!(!crate::app::command_board::command_enabled(&a, "layout.linkToPrevious"), "Section 1 cannot link to previous");
+
+    a.run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    a.run("text.insert", json!({"text": "Section 2"})).unwrap();
+    assert!(crate::app::command_board::command_enabled(&a, "layout.linkToPrevious"), "Section 2 can link to previous");
+    assert!(wordcraft_engine::cmd::page::is_hf_linked(&a.session), "Section 2 starts linked");
+
+    // Unlinking toggles the linked state
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(!wordcraft_engine::cmd::page::is_hf_linked(&a.session), "Section 2 unlinked");
+
+    // Re-linking toggles back
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(wordcraft_engine::cmd::page::is_hf_linked(&a.session), "Section 2 linked again");
+
+    // Inside Section 2 header, button is enabled and reflects unlinked/relinked state
+    a.run("insert.editHeader", json!({"page": 1})).unwrap();
+    assert!(crate::app::command_board::command_enabled(&a, "layout.linkToPrevious"));
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(!wordcraft_engine::cmd::page::is_hf_linked(&a.session));
+    a.run("layout.linkToPrevious", json!({})).unwrap();
+    assert!(wordcraft_engine::cmd::page::is_hf_linked(&a.session));
+}
