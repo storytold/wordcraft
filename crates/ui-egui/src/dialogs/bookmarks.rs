@@ -236,6 +236,9 @@ fn translated_groups() -> std::rc::Rc<Vec<IconPickerGroup<String>>> {
     })
 }
 
+/// How many icons a row of the Icons dialog holds: the dialog is as wide as they are.
+pub(super) const ICONS_COLUMNS: usize = 12;
+
 /// Insert › Icons: the library as a searchable grid with a filter row; Insert runs `insert.icon`.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct IconsForm {
@@ -263,8 +266,11 @@ impl WordForm for IconsForm {
 
     fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
         let groups = translated_groups();
+        // Large previews, and a picker that keeps its height across categories (#7167).
         let out = IconPicker::new(Label::from(tl!("Icons")), Bind::bound(&mut self.picked), groups.as_slice())
             .group_display(IconPickerGroups::Filter)
+            .large_previews()
+            .columns(ICONS_COLUMNS)
             .empty(Label::from(tl!("No icons match your search.")))
             .show(ui);
         if out.picked.is_some() && out.response.double_clicked() {
