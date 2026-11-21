@@ -10,7 +10,7 @@ pub fn set_system_locale(tag: &str) {
 }
 
 /// The system locale [`set_system_locale`] recorded, if the shell set one.
-pub(crate) fn system_locale() -> Option<&'static str> {
+pub fn system_locale() -> Option<&'static str> {
     SYSTEM_LOCALE.get().map(String::as_str)
 }
 
