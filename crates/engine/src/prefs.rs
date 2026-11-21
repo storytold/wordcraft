@@ -65,6 +65,11 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// The folders of pictures Insert ▸ Library browses (`library.addFolder`, #2868): absolute,
+    /// links followed, at most [`crate::library::MAX_FOLDERS`]. A hand-edited list is brought
+    /// back within those bounds; anything but a list of paths reads as none.
+    #[serde(deserialize_with = "lenient_library_folders")]
+    pub library_folders: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -93,6 +98,7 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            library_folders: Vec::new(),
         }
     }
 }
@@ -119,6 +125,14 @@ fn lenient_paper_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
+/// The saved Library folders: the paths in a list, without empty, over-long or repeated ones,
+/// and no more than the Library browses. Anything else reads as no folders, not as a broken file.
+fn lenient_library_folders<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let paths = value.as_array().map(|a| a.iter().filter_map(serde_json::Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+    Ok(crate::library::sanitized_folders(paths))
+}
+
 /// Ignore an invalid saved Page Color without discarding other preferences.
 fn lenient_read_page_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::cmd::view::ReadPageColor, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
@@ -143,5 +157,23 @@ mod tests {
         let saved: Prefs = serde_json::from_str(r#"{"readPageColor":"sepia"}"#).unwrap();
         assert_eq!(saved.read_page_color, ReadPageColor::Sepia);
         assert_eq!(serde_json::to_value(saved).unwrap()["readPageColor"], "sepia");
+    }
+
+    /// #2868: the Library folders are kept under `libraryFolders`; a hand-edited list comes back
+    /// within bounds, and a damaged one reads as none without losing the other preferences.
+    #[test]
+    fn library_folders_load_within_bounds() {
+        let saved: Prefs = serde_json::from_str(r#"{"libraryFolders":["/a","","/a","/b"]}"#).unwrap();
+        assert_eq!(saved.library_folders, ["/a", "/b"]);
+        assert_eq!(serde_json::to_value(&saved).unwrap()["libraryFolders"], serde_json::json!(["/a", "/b"]));
+        let many: Vec<String> = (0..500).map(|i| format!("/library/{i}")).collect();
+        let saved: Prefs = serde_json::from_value(serde_json::json!({"libraryFolders": many})).unwrap();
+        assert_eq!(saved.library_folders.len(), crate::library::MAX_FOLDERS);
+        let long = "x".repeat(craft_library::MAX_PATH + 1);
+        for bad in [serde_json::json!(5), serde_json::json!({"a": 1}), serde_json::json!([5, null, long])] {
+            let saved: Prefs = serde_json::from_value(serde_json::json!({"libraryFolders": bad, "checkSpelling": false})).unwrap();
+            assert!(saved.library_folders.is_empty(), "{bad}");
+            assert!(!saved.check_spelling);
+        }
     }
 }

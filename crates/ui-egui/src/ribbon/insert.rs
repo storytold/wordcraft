@@ -4,7 +4,7 @@ use craft::behavior::{DisplayOrder, IconId, ItemSource, SizeHint};
 use craft::keymap::CommandRef;
 use craft::menu::{RibbonGroup, RibbonRow};
 use craft::pages::ui::TableSizePicker;
-use craft::ui::buttons::{Arrangement, Button, IconButton};
+use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Stack;
@@ -96,11 +96,20 @@ pub(super) fn insert(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             app.canvas.table_preview = None;
         }
     });
+    // The Library pane (#2868): pictures from the user's own folders, kept open beside the document
+    // while editing.
+    let library_open = app.session.view.library_pane;
     row.group(RibbonGroup::new("Illustrations", crate::tl!("Illustrations"), IconId::new("picture").into()), |ui| {
         Button::command(CommandRef::with_params("insert.picture", json!({})))
             .label(crate::tl!("Pictures"))
             .icon(IconId::new("picture"))
             .arrangement(Arrangement::Stacked)
+            .show(ui);
+        ToggleButton::command(CommandRef::with_params("view.libraryPane", json!({})))
+            .label(crate::tl!("Library"))
+            .icon(IconId::new("library"))
+            .arrangement(Arrangement::Stacked)
+            .selected(library_open)
             .show(ui);
         menu_button(
             ui,

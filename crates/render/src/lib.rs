@@ -19,8 +19,10 @@ use wordcraft_layout::display::{DisplayOptions, Draw, Stroke, page_layers};
 mod media;
 
 #[cfg(test)]
-use media::{CACHE_BYTES, MediaCache, OVERSIZED_GLYPHS_NOTED, cacheable, decode_pixmap_within, note_oversized_glyphs, shrink};
-pub use media::{decode_pixmap, decode_pixmap_fx, image_size, metafile_size};
+use media::{
+    CACHE_BYTES, MediaCache, OVERSIZED_GLYPHS_NOTED, cacheable, decode_pixmap_within, note_oversized_glyphs, render_metafile_within, shrink,
+};
+pub use media::{MAX_METAFILE_PIXELS, decode_pixmap, decode_pixmap_fx, image_size, metafile_size, render_metafile};
 use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
 
 mod color_glyph;

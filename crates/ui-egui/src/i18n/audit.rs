@@ -487,6 +487,9 @@ fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
     keys.extend(tabs.map(|t| t.to_string()));
     keys.extend(["Good morning", "Good afternoon", "Good evening"].map(String::from));
     keys.extend(disabled_reasons());
+    // The Library pane's words (#2868), the shared pane's own included: most show only with
+    // folders of pictures, which the audit's fresh app has none of.
+    keys.extend(crate::library_pane::words().map(String::from));
     // Reasons the UI itself gives (`widgets.rs::tooltip`), which the engine's checks never reach.
     keys.insert("Open a document first".to_string());
     for doc in [wordcraft_doc::Document::new(), wordcraft_engine::sample::sample_document()] {
