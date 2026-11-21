@@ -1028,6 +1028,35 @@ impl Document {
         Fragment { blocks, parts, media }
     }
 
+    /// For `a` and `b` in one block list (as a range field's markers are), the first `max_chars`
+    /// characters of the plain text of [`Self::copy_range`]`(a, b)`, U+FFFC left out, read in
+    /// place: nothing past them is copied or walked. True when more text follows them. `None` when
+    /// the two are in different stories or block lists.
+    pub fn range_text(&self, a: &Pos, b: &Pos, max_chars: usize) -> Option<(String, bool)> {
+        let (a, b) = order(a, b);
+        if a.story != b.story || a.path.parent() != b.path.parent() {
+            return None;
+        }
+        let mut t = crate::text_walk::CappedText::new(max_chars);
+        if let Some(bl) = self.container(a.story, &a.path) {
+            for i in a.path.last()..=b.path.last() {
+                let Some(blk) = bl.get(i) else { break };
+                if t.cut {
+                    break;
+                }
+                match &**blk {
+                    Block::Para(p) => {
+                        let to = if i == b.path.last() { b.off } else { p.len() };
+                        let from = if i == a.path.last() { a.off } else { 0 };
+                        t.para(p, from, to);
+                    }
+                    Block::Table(_) => t.block(blk, 0),
+                }
+            }
+        }
+        Some(t.finish())
+    }
+
     /// A copy of the block at `path` (a whole table, say) as a fragment, with its text boxes.
     pub fn copy_block(&self, story: crate::StoryRef, path: &Path) -> Option<Fragment> {
         Some(self.fragment_of(vec![self.block(story, path)?.clone()]))

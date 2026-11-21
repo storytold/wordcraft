@@ -118,6 +118,63 @@ fn copy_paste_round_trip() {
     assert!(d.plain_text(StoryRef::Body).starts_with("XYalpha"));
 }
 
+/// `range_text` gives the first characters of a copied range's plain text, U+FFFC left out, and
+/// says when there is more: multibyte text, an object's text, a table with empty paragraphs at
+/// the end of a cell and a table nested in a cell, for every pair of positions in one block list
+/// and several limits. Positions in different block lists give `None`.
+#[test]
+fn range_text_is_the_start_of_the_copied_text() {
+    let mut d = doc(&["añ😀b", "", "zé"]);
+    let field = InlineObject::Field { instr: "AUTHOR".into(), result: "Ünï".into(), locked: false, dirty: false, code: false, form: String::new() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(1, field, &CharProps::default()).unwrap();
+    let mut inner = Table::new(1, 2, 100.0);
+    inner.rows[0].cells[1].blocks = vec![crate::para_block(Paragraph::with_text("in", CharProps::default()))];
+    let mut t = Table::new(2, 2, 200.0);
+    t.rows[0].cells[0].blocks = vec![
+        crate::para_block(Paragraph::with_text("c😀", CharProps::default())),
+        crate::para_block(Paragraph::new()),
+        crate::para_block(Paragraph::new()),
+    ];
+    t.rows[1].cells[1].blocks.insert(0, Arc::new(Block::Table(inner)));
+    t.rows[1].cells[1].blocks.push(crate::para_block(Paragraph::with_text("d", CharProps::default())));
+    d.insert_block(StoryRef::Body, &Path::top(2), Block::Table(t)).unwrap();
+    let mut at = Vec::new();
+    for path in d.para_paths(StoryRef::Body) {
+        let text = d.para(StoryRef::Body, &path).unwrap().text.clone();
+        for (off, _) in text.char_indices().chain([(text.len(), ' ')]) {
+            at.push(Pos { story: StoryRef::Body, path: path.clone(), off });
+        }
+    }
+    for a in &at {
+        for b in &at {
+            if a.path.parent() != b.path.parent() {
+                assert_eq!(d.range_text(a, b, 5), None, "{a:?} {b:?}");
+                continue;
+            }
+            let full: String = d.copy_range(a, b).plain_text().chars().filter(|c| *c != crate::para::OBJ).collect();
+            let n = full.chars().count();
+            for max in [0, 1, 2, 5, n.saturating_sub(1), n, n + 1] {
+                let want: String = full.chars().take(max).collect();
+                assert_eq!(d.range_text(a, b, max), Some((want, n > max)), "{a:?} {b:?} {max}");
+            }
+        }
+    }
+}
+
+/// `range_text` stops reading at its limit: a range 8x as long costs no more.
+#[test]
+fn range_text_reads_no_further_than_its_limit() {
+    let cost = |n: usize| {
+        let d = doc(&[&"é".repeat(n), "tail"]);
+        let (a, b) = (Pos::body(0, 0), Pos::body(1, 4));
+        let mut got = (String::new(), false);
+        let steps = crate::work::count(|| got = d.range_text(&a, &b, 2000).unwrap_or_default());
+        assert_eq!((got.0.chars().count(), got.0.len(), got.1), (2000, 4000, true));
+        steps
+    };
+    assert_eq!(cost(80_000), cost(10_000));
+}
+
 /// The first paragraph of the deepest cell, following the first table at each level.
 fn deepest(d: &Document) -> Path {
     let (mut path, mut blocks) = (Vec::new(), &d.body);
