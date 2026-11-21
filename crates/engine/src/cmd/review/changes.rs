@@ -35,10 +35,47 @@ fn resolve_para(
     (mark, props): (bool, bool),
     accept: bool,
 ) -> Result<(), CmdError> {
+    // An inserted paragraph mark that is rejected, or a deleted one that is accepted, goes away:
+    // the next paragraph joins this one (the split is undone). A paragraph left empty goes away
+    // whole, so the next one keeps its own style and numbering, as in Word. The mark at the end
+    // of a story or cell can't go, so it just stops being a revision. Neither removal reads this
+    // mark's revisions (joining takes the next mark's), so clearing them first changes nothing.
+    if resolve_para_in_place(s, story, path, (from, to), (mark, props), accept)? {
+        drop_empty_section_break(s, story, path);
+        if !crate::cmd::remove_empty_para(s, story, path)? {
+            crate::cmd::join_next_para(s, story, path)?;
+        }
+    }
+    Ok(())
+}
+
+/// An empty paragraph whose mark carries a section break goes whole too: its section joins the
+/// following one, as when the break is deleted (#5667). Joining instead gave the next paragraph
+/// its properties.
+fn drop_empty_section_break(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path) {
+    let sectioned = story == StoryRef::Body
+        && path.0.len() == 1
+        && s.doc.para(story, path).is_some_and(|p| p.is_empty() && p.section.is_some())
+        && crate::cmd::has_next_para(s, story, path);
+    if sectioned {
+        s.doc.remove_section_break(path.last());
+    }
+}
+
+/// [`resolve_para`] without removing the paragraph mark: returns whether it goes away (it stops
+/// being a revision either way).
+fn resolve_para_in_place(
+    s: &mut Session,
+    story: StoryRef,
+    path: &wordcraft_doc::Path,
+    (from, to): (usize, usize),
+    (mark, props): (bool, bool),
+    accept: bool,
+) -> Result<bool, CmdError> {
     let para = s.doc.para_mut(story, path)?;
     resolve_runs(para, from, to, props, accept)?;
     if !mark {
-        return Ok(());
+        return Ok(false);
     }
     if para.mark.fmt_change.is_some() || para.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
         fmt_revisions::resolve_char(&mut para.mark, accept);
@@ -49,31 +86,12 @@ fn resolve_para(
     }
     let (ins, del) = (para.mark.ins, para.mark.del);
     if ins.is_none() && del.is_none() {
-        return Ok(());
+        return Ok(false);
     }
-    // An inserted paragraph mark that is rejected, or a deleted one that is accepted, goes away:
-    // the next paragraph joins this one (the split is undone). A paragraph left empty goes away
-    // whole, so the next one keeps its own style and numbering, as in Word. The mark at the end
-    // of a story or cell can't go, so it just stops being a revision. An empty paragraph whose
-    // mark carries a section break goes whole too: its section joins the following one, as when
-    // the break is deleted (#5667). Joining instead gave the next paragraph its properties.
-    if (del.is_some() && accept) || (ins.is_some() && !accept) {
-        let sectioned = story == StoryRef::Body
-            && path.0.len() == 1
-            && s.doc.para(story, path).is_some_and(|p| p.is_empty() && p.section.is_some())
-            && crate::cmd::has_next_para(s, story, path);
-        if sectioned {
-            s.doc.remove_section_break(path.last());
-        }
-        if crate::cmd::remove_empty_para(s, story, path)? || crate::cmd::join_next_para(s, story, path)? {
-            return Ok(());
-        }
-    }
-    let para = s.doc.para_mut(story, path)?;
     para.mark.ins = None;
     para.mark.del = None;
     para.touch();
-    Ok(())
+    Ok((del.is_some() && accept) || (ins.is_some() && !accept))
 }
 
 /// Accept or reject the changes of the table cell `path` is in: the table's, its row's and the
@@ -244,10 +262,16 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
-        for path in s.doc.para_paths(st).into_iter().rev() {
+        // Resolve every paragraph first, then remove the marks that go in one pass (#3658).
+        let mut gone = Vec::new();
+        for path in s.doc.para_paths(st) {
             let len = s.doc.para(st, &path).map(|p| p.len()).unwrap_or(0);
-            resolve_para(s, st, &path, (0, len), (true, true), accept)?;
+            if resolve_para_in_place(s, st, &path, (0, len), (true, true), accept)? {
+                drop_empty_section_break(s, st, &path);
+                gone.push(path);
+            }
         }
+        crate::cmd::join_paras(s, st, &gone, true)?;
     }
     // Tables, rows, cells, sections and style definitions.
     fmt_revisions::resolve_containers(&mut s.doc.body, accept, 0);
