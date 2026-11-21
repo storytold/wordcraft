@@ -575,6 +575,7 @@ impl WordApp {
     /// and interface.
     fn draw_entry(&mut self, ui: &mut egui::Ui, key: u64) {
         if !self.enter_window(key) {
+            self.run_parked_panels(ui.ctx(), key);
             return;
         }
         let ctx = ui.ctx().clone();
@@ -588,6 +589,19 @@ impl WordApp {
         }
         self.window_ui(ui);
         arrange::forward_scroll(self, &ctx);
+        // Drawing ends early when another window takes over mid-pass, and its state is parked.
+        if self.windows.shown() != key {
+            self.run_parked_panels(&ctx, key);
+        }
+    }
+
+    /// The panels (dialogs in windows of their own) of window `key`, whose state is parked, in
+    /// this pass of its window: egui closes a child window its parent's pass doesn't show, which
+    /// made a panel flash, and lost the textures queued for it.
+    fn run_parked_panels(&mut self, ctx: &egui::Context, key: u64) {
+        if let Some(ui) = self.windows.get_mut(key).and_then(|w| w.ui.as_mut()) {
+            ui.dialog_host.run_windowed(ctx);
+        }
     }
 
     /// The close requests of the windows' close buttons from this frame: File › Close in that

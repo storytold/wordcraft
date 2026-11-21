@@ -2,7 +2,8 @@
 //! in a window of its own, and this ties that window to the document window it was opened from,
 //! as a child window. It moves with that window, stays just above it, goes behind another
 //! document's window with it, and hides while WordCraft is in the background. It is not listed
-//! in the Window menu.
+//! in the Window menu. Each document window may have its own panels open, but only the frontmost
+//! document's show: the others are hidden until their document comes to the front.
 //!
 //! The one exception to the workspace's no-`unsafe` rule (AGENTS.md names this module): AppKit
 //! marks `addChildWindow:ordered:` unsafe, and nothing else in these bindings ties two windows.
@@ -16,26 +17,36 @@ fn panel_titles() -> [&'static str; 2] {
     [t("Paragraph"), t("Tabs")]
 }
 
-/// Ties every panel that has no parent yet to the window just below it, the one it was opened
-/// from. Call every frame; it does nothing once they are tied.
+/// Ties every new panel to the frontmost document window, the one it was opened from, and shows
+/// only that document's panels. Call every frame.
 pub fn tie(mtm: MainThreadMarker) {
     let titles = panel_titles();
     // The match is exact: a document window's title always ends in " - WordCraft"
     // (`windows::title`), so a document named "Paragraph" ("Paragraph - WordCraft") never matches
     // the panel's bare translated title.
     let is_panel = |w: &NSWindow| titles.iter().any(|title| w.title().to_string() == *title);
-    let ordered = NSApplication::sharedApplication(mtm).orderedWindows();
-    let ordered: Vec<_> = ordered.iter().filter(|w| w.isVisible()).collect();
-    for (i, panel) in ordered.iter().enumerate() {
-        if !is_panel(panel) || panel.parentWindow().is_some() {
-            continue;
-        }
-        let Some(parent) = ordered[i + 1..].iter().find(|w| !is_panel(w)) else {
-            continue;
+    let app = NSApplication::sharedApplication(mtm);
+    // AppKit leaves panels out of `orderedWindows`, which lists the documents front to back: the
+    // first visible one is the frontmost document. The panels are found among all the windows.
+    let front = app.orderedWindows().iter().find(|w| w.isVisible() && !is_panel(w));
+    for panel in app.windows().iter().filter(|w| is_panel(w) && w.isVisible()) {
+        // A new panel was opened from the frontmost document.
+        let parent = match (panel.parentWindow(), &front) {
+            (Some(parent), _) => parent,
+            (None, Some(front)) => {
+                panel.setHidesOnDeactivate(true);
+                panel.setExcludedFromWindowsMenu(true);
+                add_child(front, &panel);
+                front.clone()
+            }
+            (None, None) => continue,
         };
-        panel.setHidesOnDeactivate(true);
-        panel.setExcludedFromWindowsMenu(true);
-        add_child(parent, panel);
+        // Only the frontmost document's panels show.
+        let shown = front.as_ref().is_some_and(|front| front.windowNumber() == parent.windowNumber());
+        if (panel.alphaValue() > 0.0) != shown {
+            panel.setAlphaValue(if shown { 1.0 } else { 0.0 });
+            panel.setIgnoresMouseEvents(!shown);
+        }
     }
 }
 
