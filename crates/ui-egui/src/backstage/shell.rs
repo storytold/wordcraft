@@ -57,24 +57,41 @@ pub(crate) fn paint(painter: &Painter, first: usize, file: bool, animate: bool, 
     if t >= 1.0 {
         screen.leaving = None;
     }
-    // Reserve the outgoing composition first: dense live paint must not erase the screen
-    // at t == 0. Both portions of the cached frame still share one recursive shape cap.
+    // Capture the whole live screen first. A partial composition cannot be a reversal's
+    // source: once the outgoing paint fades it would expose holes in the incoming screen.
     let mut budget = MAX_SHAPES;
+    let mut live = Vec::new();
+    let mut complete = true;
+    let mut index = 0;
+    painter.for_each_shape(|s| {
+        if index >= first {
+            if fits_budget(&s.shape, &mut budget, 0) {
+                live.push(s.clone());
+            } else {
+                complete = false;
+            }
+        }
+        index += 1;
+    });
+    if !complete {
+        ctx.data_mut(|d| d.remove::<Screen>(id));
+        return;
+    }
+    let mut outgoing_complete = true;
     let leaving: Vec<_> = screen
         .leaving
         .iter()
         .flat_map(|shapes| shapes.iter())
-        .filter(|s| replayable(ctx, &s.shape, 0) && fits_budget(&s.shape, &mut budget, 0))
+        .filter(|s| {
+            if !replayable(ctx, &s.shape, 0) {
+                return false;
+            }
+            let fits = fits_budget(&s.shape, &mut budget, 0);
+            outgoing_complete &= fits;
+            fits
+        })
         .collect();
-    let mut live = Vec::new();
-    let mut index = 0;
-    painter.for_each_shape(|s| {
-        if index >= first && fits_budget(&s.shape, &mut budget, 0) {
-            live.push(s.clone());
-        }
-        index += 1;
-    });
-    if screen.leaving.is_some() {
+    if outgoing_complete && screen.leaving.is_some() {
         let eased = 1.0 - (1.0 - t).powi(3);
         let distance = if file { 8.0 } else { 24.0 };
         let offset = vec2(if rtl { distance } else { -distance } * eased, 0.0);
@@ -91,6 +108,9 @@ pub(crate) fn paint(painter: &Painter, first: usize, file: bool, animate: bool, 
             live.push(faded);
         }
         ctx.request_repaint();
+    }
+    if !outgoing_complete {
+        screen.leaving = None;
     }
     // Keep the composed frame so reversing the transition starts from what was actually visible.
     screen.presented = Arc::new(live);
@@ -138,8 +158,7 @@ mod tests {
             let first = shape_count(ui.painter());
             ui.painter().add(Shape::Vec(vec![Shape::Noop; MAX_SHAPES + 1]));
             paint(ui.painter(), first, false, true, false);
-            let screen = ctx.data(|d| d.get_temp::<Screen>(id(&ctx))).unwrap();
-            assert!(screen.presented.is_empty(), "oversized nested paint is never cached");
+            assert!(ctx.data(|d| d.get_temp::<Screen>(id(&ctx))).is_none(), "oversized nested paint is never cached");
         });
         output.textures_delta.clear();
         let nested = Shape::Vec(vec![Shape::Vec(vec![Shape::Noop; 3])]);
@@ -149,11 +168,12 @@ mod tests {
         assert!(!fits_budget(&nested, &mut 4, 0));
     }
 
-    /// Dense incoming paint must not evict any outgoing shapes, even on rapid reversal.
+    /// When the composition exceeds the cap, settle on a complete live screen. Reversing
+    /// after time has elapsed must retain the incoming background, not a truncated prefix.
     #[test]
-    fn dense_live_capture_reserves_the_outgoing_screen_within_the_shared_budget() {
+    fn dense_live_capture_keeps_the_complete_screen_on_reversal() {
         let ctx = egui::Context::default();
-        for (file, now, count) in [(false, 0.0, 3000), (true, 1.0, MAX_SHAPES), (false, 1.0, MAX_SHAPES)] {
+        for (file, now, count) in [(false, 0.0, 3000), (true, 1.0, MAX_SHAPES), (true, 1.08, MAX_SHAPES), (false, 1.09, 1)] {
             let mut output = ctx.run_ui(RawInput { time: Some(now), ..Default::default() }, |ui| {
                 let first = shape_count(ui.painter());
                 for _ in 0..count {
@@ -161,18 +181,12 @@ mod tests {
                 }
                 paint(ui.painter(), first, file, true, false);
             });
-            if now > 0.0 {
-                let outgoing = &output.shapes[count..];
-                let expected = if file { 3000 } else { MAX_SHAPES };
-                assert_eq!(outgoing.len(), expected, "the entire outgoing composition is replayed");
-                assert!(outgoing.iter().all(|s| matches!(&s.shape, Shape::Rect(r) if r.fill.a() == 255)), "the outgoing screen starts fully opaque");
-            }
             let screen = ctx.data(|d| d.get_temp::<Screen>(id(&ctx))).unwrap();
             let mut remaining = MAX_SHAPES;
-            assert!(
-                screen.presented.iter().all(|s| fits_budget(&s.shape, &mut remaining, 0)),
-                "live and outgoing paint share one recursive shape cap"
-            );
+            assert!(screen.presented.iter().all(|s| fits_budget(&s.shape, &mut remaining, 0)));
+            assert_eq!(screen.presented.len(), count, "dense transitions settle instead of retaining a partial screen");
+            assert!(screen.presented.iter().all(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == if file { FILE } else { EDITOR })));
+            assert_eq!(output.shapes.len(), count, "no partial outgoing screen is replayed");
             output.textures_delta.clear();
         }
     }

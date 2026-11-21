@@ -305,12 +305,16 @@ fn share_out(w: &mut [f32], i: usize, dx: f32, share: Share) -> Option<f32> {
         Share::Proportional if rest > 0.0 && narrowest > 0.0 => Share::Proportional,
         _ => Share::LeftOnly,
     };
-    let least = MIN_COL - left;
+    // A column already narrower than `MIN_COL` (a file can give one) is not narrowed further,
+    // nor widened by a drag that has no room for it: forcing it to `MIN_COL` would take its
+    // neighbour below a point, which import reads as no width and gives the whole table equal
+    // columns.
+    let least = (MIN_COL - left).min(0.0);
     let d = match share {
-        Share::Neighbour => dx.clamp(least, (w.get(i + 1).copied().unwrap_or(0.0) - MIN_COL).max(least)),
+        Share::Neighbour => dx.clamp(least, (w.get(i + 1).copied().unwrap_or(0.0) - MIN_COL).max(0.0)),
         // As far as the narrowest column on the right, shrunk in proportion, stays `MIN_COL`.
-        Share::Proportional => dx.clamp(least, (rest * (1.0 - (MIN_COL / narrowest).min(1.0))).max(least)),
-        Share::LeftOnly => (left + dx).clamp(MIN_COL, MAX_LEN) - left,
+        Share::Proportional => dx.clamp(least, (rest * (1.0 - (MIN_COL / narrowest).min(1.0))).max(0.0)),
+        Share::LeftOnly => (left + dx).clamp(MIN_COL.min(left), MAX_LEN.max(left)) - left,
     };
     if let Some(x) = w.get_mut(i) {
         *x = left + d;
@@ -477,51 +481,83 @@ pub fn table_under(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, r
         .max_by_key(|t| t.table.0.len())
 }
 
+/// A page-point rectangle from its corners, never inverted.
+pub(crate) fn span(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
+    Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+/// A reach as every table query takes it: finite, and neither a hair nor a page.
+pub(crate) fn clean_reach(reach: f32) -> f32 {
+    if reach.is_finite() { reach.clamp(0.5, 24.0) } else { REACH }
+}
+
+/// Every grabbable border on `page`: one strip per border (a column border's strip runs along the rows that have
+/// it, the left edge's lies outside the table), each with the table's geometry and the border as its `edge`. The one
+/// rule [`resize_target`] answers from, so the app can declare a part per strip.
+pub fn borders(l: &DocLayout, doc: &Document, page: usize, reach: f32) -> Vec<(Rect, ResizeTarget)> {
+    let reach = clean_reach(reach);
+    let mut out = Vec::new();
+    for target in tables_on(l, doc, page) {
+        let mut add = |area: Rect, edge: Edge| {
+            let mut t = target.clone();
+            t.edge = edge;
+            out.push((area, t));
+        };
+        let (left, right) = (target.left(), target.right());
+        if target.ends_here && target.resizable_columns() {
+            let h = target.handle();
+            add(span(h.x - reach / 2.0, h.y - reach / 2.0, h.right() + reach / 2.0, h.bottom() + reach / 2.0), Edge::Corner);
+        }
+        // Column borders: only along the rows where the line is a cell border (none of a right-to-left table's yet,
+        // `resizable_columns`). The table's left edge is grabbed from outside it, a point in at most.
+        if target.resizable_columns() {
+            for (line, cx) in target.cols.iter().copied().enumerate() {
+                let x1 = if line == 0 { cx + reach.min(1.0) } else { cx + reach };
+                let mut run: Option<(f32, f32)> = None;
+                for r in &target.rows {
+                    if r.edges.contains(&line) {
+                        run = Some(run.map_or((r.top, r.bottom), |(a, _)| (a, r.bottom)));
+                    } else if let Some((a, b)) = run.take() {
+                        add(span(cx - reach, a, x1, b), Edge::Column(line));
+                    }
+                }
+                if let Some((a, b)) = run {
+                    add(span(cx - reach, a, x1, b), Edge::Column(line));
+                }
+            }
+        }
+        // Row borders: the bottom of each drawn row.
+        for r in &target.rows {
+            add(span(left, r.bottom - reach, right, r.bottom + reach), Edge::Row(r.row));
+        }
+    }
+    out
+}
+
+/// How far page point (`x`, `y`) is from the border `t` names.
+fn border_distance(t: &ResizeTarget, x: f32, y: f32) -> f32 {
+    match t.edge {
+        Edge::Column(line) => t.cols.get(line).map_or(f32::INFINITY, |c| (x - c).abs()),
+        Edge::Row(row) => t.rows.iter().find(|r| r.row == row).map_or(f32::INFINITY, |r| (y - r.bottom).abs()),
+        Edge::Corner => 0.0,
+    }
+}
+
 /// The table border or resize handle within `reach` points of page point (`x`, `y`): the
 /// nearest, and of nested tables the innermost.
 pub fn resize_target(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, reach: f32) -> Option<ResizeTarget> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
-    let reach = if reach.is_finite() { reach.clamp(0.5, 24.0) } else { REACH };
+    let reach = clean_reach(reach);
     let mut best: Option<(f32, usize, ResizeTarget)> = None;
-    for mut target in tables_on(l, doc, page) {
-        let depth = target.table.0.len();
-        let mut offer = |d: f32, edge: Edge, target: &mut ResizeTarget| {
-            if d <= reach && best.as_ref().is_none_or(|(bd, bdepth, _)| d < *bd - 0.01 || (d <= *bd + 0.01 && depth > *bdepth)) {
-                target.edge = edge;
-                best = Some((d, depth, target.clone()));
-            }
-        };
-        if on_handle(&target, x, y, reach) {
-            offer(0.0, Edge::Corner, &mut target);
-        }
-        let (left, right, top, bottom) = (target.left(), target.right(), target.top(), target.bottom());
-        if x < left - reach || x > right + reach || y < top - reach || y > bottom + reach {
+    for (area, target) in borders(l, doc, page, reach) {
+        if x < area.x || x > area.right() || y < area.y || y > area.bottom() {
             continue;
         }
-        // Column borders: in the row under the pointer, only lines that are cell borders there
-        // (none of a right-to-left table's yet, `resizable_columns`).
-        let row_here = target.rows.iter().find(|r| y >= r.top && y <= r.bottom).cloned();
-        if let Some(r) = &row_here
-            && target.resizable_columns()
-        {
-            for line in 0..target.cols.len() {
-                // The table's left edge is grabbed from outside it (a point in, for the border's
-                // width): inside starts the first cell.
-                if r.edges.contains(&line)
-                    && (line > 0 || x <= left + 1.0)
-                    && let Some(cx) = target.cols.get(line).copied()
-                {
-                    offer((x - cx).abs(), Edge::Column(line), &mut target);
-                }
-            }
-        }
-        // Row borders: the bottom of each drawn row.
-        if x >= left && x <= right {
-            for r in target.rows.clone() {
-                offer((y - r.bottom).abs(), Edge::Row(r.row), &mut target);
-            }
+        let (d, depth) = (border_distance(&target, x, y), target.table.0.len());
+        if d <= reach && best.as_ref().is_none_or(|(bd, bdepth, _)| d < *bd - 0.01 || (d <= *bd + 0.01 && depth > *bdepth)) {
+            best = Some((d, depth, target));
         }
     }
     best.map(|b| b.2)
