@@ -1512,6 +1512,7 @@ impl Document {
         let Some(dest_para) = self.para_at(pos) else {
             return Err(DocError::BadPath(pos.path.to_string()));
         };
+        let is_dest_empty = dest_para.is_empty();
         let table_para = table_style_para(self, pos);
         let destination_shading = self.styles.resolve_para_in(&dest_para.props, table_para.as_ref()).shading;
         let mut parts = frag.parts.clone();
@@ -1552,9 +1553,10 @@ impl Document {
             target.append(tail);
             target.props = keep;
             // Paragraph shading is the pasted text's background (HTML container backgrounds
-            // become paragraph shading), so an unshaded destination takes the source's. The
-            // destination's style shading counts as shaded, so it is not overridden.
-            if destination_shading.is_none() {
+            // become paragraph shading), so an empty unshaded destination takes the source's.
+            // A paste without a paragraph mark into an existing paragraph leaves the
+            // destination paragraph's formatting unchanged (#6157).
+            if is_dest_empty && destination_shading.is_none() {
                 target.props.shading = src_shading;
             }
             target.section = sect;
@@ -1587,7 +1589,7 @@ impl Document {
                     } else {
                         l.props.shading = keep_shading;
                     }
-                } else if !keep_empty && l.props.shading.is_none() {
+                } else if is_dest_empty && !keep_empty && l.props.shading.is_none() {
                     l.props.shading = src_shading;
                 }
             }

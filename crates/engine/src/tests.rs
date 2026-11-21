@@ -2002,6 +2002,53 @@ fn pasting_inline_highlighted_word_mid_paragraph_keeps_run_shading_only() {
     }
 }
 
+/// Pasting a container-wrapped one-line snippet (no paragraph break) into the middle of a
+/// paragraph leaves the destination paragraph unshaded (#6157).
+#[test]
+fn container_wrapped_one_line_paste_mid_paragraph_leaves_paragraph_unshaded() {
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "Call  now."}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}}));
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;"><span style="color: #569cd6;">foo</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s), "Call foo now.");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None, "destination paragraph stays unshaded");
+    assert_eq!(p.props_of_char(0).shading, None);
+    assert_eq!(p.props_of_char(5).shading, None);
+}
+
+/// Under Track Changes, rejecting a paste restores the destination paragraph formatting (#6157).
+#[test]
+fn tracked_paste_reject_restores_destination_paragraph_shading() {
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "Call  now."}));
+    run(&mut s, "review.trackChanges", json!({"enabled": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}}));
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;"><span style="color: #569cd6;">foo</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s), "Call foo now.");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(text(&s), "Call  now.");
+    let p_after = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p_after.props.shading, None, "rejecting paste leaves paragraph unshaded");
+
+    // Also verify that pasting into an empty paragraph under Track Changes restores the empty
+    // paragraph's unshaded state on Reject All.
+    let mut s2 = self::s();
+    run(&mut s2, "review.trackChanges", json!({"enabled": true}));
+    run(&mut s2, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s2), "foo");
+    let p2 = s2.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p2.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    run(&mut s2, "review.rejectAll", json!({}));
+    assert_eq!(text(&s2), "");
+    let p2_after = s2.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p2_after.props.shading, None, "rejecting paste into empty paragraph clears paragraph shading");
+}
+
 /// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
 fn cf_html(html: &str) -> String {
     let n = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n".len();

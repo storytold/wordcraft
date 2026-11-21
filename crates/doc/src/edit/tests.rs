@@ -118,9 +118,29 @@ fn copy_paste_round_trip() {
     assert!(d.plain_text(StoryRef::Body).starts_with("XYalpha"));
 }
 
-/// Shading a pasted paragraph gets from its style is kept as direct shading on an unshaded destination (#6157).
+/// Shading a pasted paragraph gets from its style is kept as direct shading on an empty unshaded destination (#6157).
 #[test]
 fn paste_keeps_source_style_shading() {
+    let mut d = doc(&[""]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut src = Paragraph::with_text("X", CharProps::default());
+    src.props.style = Some("SourceShaded".into());
+    let one = Fragment { blocks: vec![Block::Para(src)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 0), &one).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.shading, Some(crate::Rgb(0x33, 0x33, 0x33)), "source style shading is kept on empty destination");
+}
+
+/// A one-line paste without a paragraph mark into a non-empty paragraph leaves destination shading unshaded (#6157).
+#[test]
+fn single_block_paste_into_non_empty_paragraph_leaves_destination_unshaded() {
     let mut d = doc(&["plain"]);
     Arc::make_mut(&mut d.styles).upsert(crate::Style {
         id: "SourceShaded".into(),
@@ -135,13 +155,13 @@ fn paste_keeps_source_style_shading() {
     let one = Fragment { blocks: vec![Block::Para(src)], ..Default::default() };
     d.insert_fragment(&Pos::body(0, 5), &one).unwrap();
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
-    assert_eq!(p.props.shading, Some(crate::Rgb(0x33, 0x33, 0x33)), "source style shading is kept");
+    assert_eq!(p.props.shading, None, "one-line paste without a paragraph mark must not shade destination paragraph");
 }
 
-/// A multi-block paste keeps the first paragraph's style shading when the destination has direct properties (#6157).
+/// An empty destination with direct properties keeps the first pasted paragraph's style shading (#6157).
 #[test]
 fn multi_block_paste_keeps_source_style_shading() {
-    let mut d = doc(&["plain"]);
+    let mut d = doc(&[""]);
     Arc::make_mut(&mut d.styles).upsert(crate::Style {
         id: "SourceShaded".into(),
         name: "Source Shaded".into(),
@@ -155,7 +175,7 @@ fn multi_block_paste_keeps_source_style_shading() {
     let b = Paragraph::with_text("B", CharProps::default());
     let frag = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
     d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.align = Some(crate::props::Align::Center);
-    d.insert_fragment(&Pos::body(0, 5), &frag).unwrap();
+    d.insert_fragment(&Pos::body(0, 0), &frag).unwrap();
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
     assert_eq!(p.props.shading, Some(crate::Rgb(0x33, 0x33, 0x33)), "first pasted paragraph keeps its style shading");
 }
