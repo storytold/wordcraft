@@ -167,8 +167,8 @@ impl Region {
 
 /// A locale variable that names a locale (not empty, `C` or `POSIX`).
 fn usable_locale(v: &str) -> bool {
-    let v = v.trim();
-    !v.is_empty() && !v.eq_ignore_ascii_case("c") && !v.eq_ignore_ascii_case("posix") && !v.starts_with("C.")
+    let tag = v.split(['.', '@']).next().unwrap_or_default().trim();
+    !tag.is_empty() && !tag.eq_ignore_ascii_case("c") && !tag.eq_ignore_ascii_case("posix")
 }
 
 #[cfg(test)]
@@ -214,6 +214,26 @@ mod tests {
         assert_eq!((mixed.paper().0, mixed.units(), mixed.decimal()), ("A4", Unit::Centimeters, '.'));
         assert_eq!(Region::from_tag("pl-PL").with_paper_and_measurement(Some(""), Some("junk")).paper().0, "Letter", "junk is en-US");
         assert_eq!(us.format(Unit::Inches, 90.0), "1.25\"");
+    }
+
+    #[test]
+    fn suffixed_pseudo_locales_are_treated_as_unset() {
+        let expected = Region::from_tag("de_AT.UTF-8");
+        for value in ["c.UTF-8", "C@modifier", "POSIX.UTF-8"] {
+            for key in ["WORDCRAFT_REGION", "LC_ALL", "LC_NUMERIC", "LC_PAPER", "LC_MEASUREMENT"] {
+                let region = Region::from_locale_vars(
+                    |name| match name {
+                        name if name == key => Some(value.into()),
+                        "LANG" => Some("de_AT.UTF-8".into()),
+                        _ => None,
+                    },
+                    || None,
+                );
+                assert_eq!(region, expected, "{key}={value}");
+            }
+            let region = Region::from_locale_vars(|name| (name == "LANG").then(|| value.into()), || Some("de_AT.UTF-8".into()));
+            assert_eq!(region, expected, "LANG={value}");
+        }
     }
 
     #[test]
