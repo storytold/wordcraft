@@ -475,6 +475,33 @@ impl<'a> Flow<'a> {
         true
     }
 
+    /// Keep with next for the end of a paragraph begun in an earlier column (#6829): in columns
+    /// being balanced, the piece holding its last line must leave room below for the next
+    /// paragraph to start (as [`Self::keep_together`] asks of a paragraph's start), or its last
+    /// lines (two under widow/orphan control) go over with that paragraph, as in Word. All of
+    /// them going over returns `l0`, and the caller moves on even from a column's top: the
+    /// balancing pass then runs onto another page and the columns are tried taller.
+    fn kept_tail_end(&self, ctx: &mut Ctx, pb: &PageBuilder, rooms: Rooms, fit: &Fit) -> usize {
+        let (rp, n, l0) = (&self.pl.rp, self.n(), self.l0);
+        let balancing = pb.balance.is_some_and(|(page, _)| page + 1 == pb.pages.len());
+        if l0 == 0 || fit.l1 < n || fit.forced.is_some() || !rp.keep_next || !balancing || pb.web {
+            return fit.l1;
+        }
+        let (Some(first), Some(last)) = (self.pl.lines.get(l0), self.pl.lines.last()) else { return fit.l1 };
+        let tail = last.top + last.height - first.top + rooms.bottom;
+        let need =
+            tail + gap_after(ctx, self.block, rp, self.label.is_some()) + next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone());
+        if pb.y + need <= pb.bottom + 0.01 {
+            return fit.l1;
+        }
+        let mut l1 = n.saturating_sub(if rp.widow_control { 2 } else { 1 }).max(l0);
+        // A row (text both sides of a floating object) stays together (`settled_end`).
+        while l1 > l0 && self.pl.lines.get(l1).is_some_and(|l| l.beside) {
+            l1 -= 1;
+        }
+        l1
+    }
+
     /// The end of the lines on this page after widow/orphan control, and keeping the rows beside
     /// floating objects together.
     fn settled_end(&self, pb: &PageBuilder, fit: &Fit) -> usize {
@@ -861,11 +888,14 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
         fit.l1 = f.settled_end(pb, &fit);
+        let settled = fit.l1;
+        fit.l1 = f.kept_tail_end(ctx, pb, rooms, &fit);
+        let kept_over = fit.l1 < settled;
         if f.settle_late(pb, fit.l1) {
             continue;
         }
         if fit.l1 == f.l0 {
-            if !pb.fresh() {
+            if !pb.fresh() || kept_over {
                 f.move_on(ctx, pb);
                 continue;
             }
@@ -997,6 +1027,24 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
         }
     }
     after
+}
+
+/// The room the space after body paragraph `block` adds between it and the paragraph after it,
+/// beyond that paragraph's own space before (which [`next_first_line`] counts): the merged gap
+/// (the larger of the two, ISO/IEC 29500-1 §17.3.1.9), or both when they are summed. Nothing when
+/// contextual spacing or automatic spacing between list items drops it.
+fn gap_after(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool) -> f32 {
+    let after = space_after_kept(ctx, block, rp, listed);
+    if after <= 0.0 {
+        return 0.0;
+    }
+    let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) else { return after };
+    let nrp = ctx.doc.styles.resolve_para(&next.props);
+    // The next paragraph's contextual spacing, and automatic spacing between two list items,
+    // drop its own space before.
+    let dropped = (nrp.style == rp.style && nrp.contextual_spacing) || (listed && nrp.before_auto && ctx.has_label(next));
+    let before = if dropped { 0.0 } else { nrp.space_before.max(0.0) };
+    if ctx.doc.settings.sum_paragraph_spacing { after } else { (after - before).max(0.0) }
 }
 
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the

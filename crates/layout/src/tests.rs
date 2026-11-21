@@ -10383,6 +10383,146 @@ fn columns_before_a_continuous_break_are_balanced() {
     }
 }
 
+/// #6829's case: Letter page, three columns, exact 14 pt lines. 135 one-line filler paragraphs,
+/// then P (5 lines, kept with the next) with `space_after` after it, then Q, then a section after
+/// Q starting continuously, so the columns of the section ending at Q are balanced.
+fn continued_tail_doc(space_after: f32) -> (Document, usize) {
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let lb = wordcraft_doc::para::LINE_BREAK;
+    let filler = 135;
+    let mut text: Vec<String> = (0..filler).map(|i| format!("F{i}")).collect();
+    text.push("P1".into());
+    text.push("Q".into());
+    text.push("After".into());
+    let mut d = Document::from_text(&text.join("\n"));
+    for block in &mut d.body {
+        if let Block::Para(para) = Arc::make_mut(block) {
+            para.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+            para.props.space_before = Some(0.0);
+            para.props.space_after = Some(0.0);
+        }
+    }
+    let p = d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap();
+    p.insert_text(2, &format!("{lb}P2{lb}P3{lb}P4{lb}P5"), &Default::default()).unwrap();
+    p.props.keep_next = Some(true);
+    p.props.space_after = Some(space_after);
+    let mut s = SectionProps::default();
+    s.columns.count = 3;
+    d.para_mut(StoryRef::Body, &Path::top(filler + 1)).unwrap().section = Some(Box::new(s));
+    d.last_section.start = SectionStart::Continuous;
+    (d, filler)
+}
+
+/// Body paragraph `block`'s pieces in `l`: (page, x, top, line count).
+fn pieces_of(l: &DocLayout, block: usize) -> Vec<(usize, f32, f32, usize)> {
+    l.pages
+        .iter()
+        .enumerate()
+        .flat_map(|(pi, pg)| {
+            pg.items.iter().filter_map(move |it| match it {
+                Placed::Lines { story: StoryRef::Body, path, l0, l1, x, y, .. } if path.0[..] == [block as u32] => Some((pi, *x, *y, l1 - l0)),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// #6829: in balanced columns, the last lines of a paragraph begun on the page before stay with
+/// the paragraph after it when the paragraph is kept with the next (Word 16.0, compatibility
+/// mode 15: three columns, exact 14 pt lines, the tail P4–P5 and Q all in column 1).
+#[test]
+fn balanced_columns_keep_a_continued_tail_with_the_next_paragraph() {
+    crate::test_fonts();
+    let (d, filler) = continued_tail_doc(0.0);
+    let l = lay(&d);
+    let pieces = pieces_of(&l, filler);
+    assert_eq!(pieces.len(), 2, "P begins on page 1 and ends on page 2: {pieces:?}");
+    let (tail_page, tail_x, tail_top, tail_lines) = pieces[1];
+    assert_eq!((pieces[0].0, tail_page, tail_lines), (0, 1, 2), "P4 and P5 on page 2: {pieces:?}");
+    let q = para_boxes(&l)[filler + 1];
+    assert_eq!(q.0, 1, "Q on page 2: {q:?}");
+    assert!((q.1 - tail_x).abs() < 0.5, "Q in the column of P4 and P5: Q {q:?}, P {pieces:?}");
+    assert!((q.2 - (tail_top + 28.0)).abs() < 0.5, "Q right under P5: Q {q:?}, P {pieces:?}");
+}
+
+/// #6829: the space after the continued paragraph counts too. With 28 pt after P, leaving room
+/// for P4–P5 and Q's first line alone takes Q past the end of the column, and the tail stays
+/// behind while Q moves on. The tail must go over with Q, and the columns grow to hold both.
+#[test]
+fn balanced_columns_keep_a_continued_tail_with_the_space_after_it() {
+    crate::test_fonts();
+    let (d, filler) = continued_tail_doc(28.0);
+    let l = lay(&d);
+    let pieces = pieces_of(&l, filler);
+    assert_eq!(pieces.len(), 2, "P begins on page 1 and ends on page 2: {pieces:?}");
+    let (tail_page, tail_x, tail_top, tail_lines) = pieces[1];
+    assert_eq!((pieces[0].0, tail_page, tail_lines), (0, 1, 2), "P4 and P5 on page 2: {pieces:?}");
+    let q = para_boxes(&l)[filler + 1];
+    assert_eq!(q.0, 1, "Q on page 2: {q:?}");
+    assert!((q.1 - tail_x).abs() < 0.5, "Q in the column of P4 and P5: Q {q:?}, P {pieces:?}");
+    assert!((q.2 - (tail_top + 28.0 + 28.0)).abs() < 0.5, "Q under P5's space after: Q {q:?}, P {pieces:?}");
+}
+
+/// #6829: the lines going over with the next paragraph keep their row together. Text on the far
+/// side of a floating object is part of the same row (`settled_end`), and the end
+/// `kept_tail_end` picks must not split it: the whole row goes over with the next paragraph.
+#[test]
+fn balanced_columns_keep_a_continued_tail_row_together() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let lb = wordcraft_doc::para::LINE_BREAK;
+    let filler = 135;
+    let mut text: Vec<String> = (0..filler).map(|i| format!("F{i}")).collect();
+    text.push("P1".into());
+    text.push("Q1".into());
+    text.push("After".into());
+    let mut d = Document::from_text(&text.join("\n"));
+    for block in &mut d.body {
+        if let Block::Para(para) = Arc::make_mut(block) {
+            para.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+            para.props.space_before = Some(0.0);
+            para.props.space_after = Some(0.0);
+        }
+    }
+    let p = d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap();
+    p.insert_text(2, &format!("{lb}P2{lb}P3{lb}word word word word word"), &Default::default()).unwrap();
+    p.props.keep_next = Some(true);
+    let q = d.para_mut(StoryRef::Body, &Path::top(filler + 1)).unwrap();
+    q.insert_text(2, &format!("{lb}Q2{lb}Q3{lb}Q4{lb}Q5"), &Default::default()).unwrap();
+    let mut s = SectionProps::default();
+    s.columns.count = 3;
+    d.para_mut(StoryRef::Body, &Path::top(filler + 1)).unwrap().section = Some(Box::new(s));
+    d.last_section.start = SectionStart::Continuous;
+    // A float in the middle of the column, anchored at P's tail: each of its first rows holds a
+    // word on each side of it.
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 36.0, ..Default::default() };
+    d.insert_object(&Pos::body(filler, 9), rect_shape(60.0, 42.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    let mut continued = false;
+    let mut row = false;
+    for (pi, pg) in l.pages.iter().enumerate() {
+        for it in &pg.items {
+            let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, .. } = it else { continue };
+            if path.0[..] != [filler as u32] || *l0 == 0 {
+                continue;
+            }
+            continued = true;
+            if pi == 1 {
+                row |= para.lines[*l0..].iter().any(|l| l.beside);
+            }
+            if *l1 < para.lines.len() {
+                assert!(!para.lines[*l1].beside, "a piece ends in the middle of a row: l0 {l0}, l1 {l1} of {}", para.lines.len());
+            }
+        }
+    }
+    assert!(continued, "P continues on page 2");
+    assert!(row, "the float splits a row beside the tail on page 2");
+    assert_eq!(para_boxes(&l)[filler + 1].0, 1, "Q on page 2");
+}
+
 #[test]
 fn columns_before_a_page_break_or_a_column_break_are_not_balanced() {
     crate::test_fonts();
