@@ -80,6 +80,11 @@ pub(crate) fn style_tile_image(doc: &Document, id: &str, ppp: f32, dark_page: bo
     let mut p = Paragraph::with_text(tl!("AaBbCcDd"), CharProps::default()).styled(id);
     p.props.space_before = Some(0.0);
     p.props.align = Some(wordcraft_doc::Align::Left);
+    // The sample letters are a left-to-right script, in the Arabic interface too (its
+    // catalog keeps `AaBbCcDd`), so a right-to-left style's tile keeps them at the left
+    // edge, where they start (#4944). A sample translated into a right-to-left script
+    // would be cut at its start here and need a solution of its own.
+    p.props.bidi = Some(false);
     // Keep hanging indents (bullets) but start the first line at the tile's left edge.
     let first = doc.styles.resolve_para(&p.props).indent_first;
     p.props.indent_left = Some(if first.is_finite() { (-first).max(0.0) } else { 0.0 });
@@ -374,5 +379,95 @@ mod tests {
         // "AaBbCcDd" begins at the left margin (1 point) and is whole: it is about 60 points wide.
         assert!(first < 6, "the first line starts off the tile's left edge (ink from column {first})");
         assert!(last - first > 40, "the first line is cut off by the tile's left edge (ink {first}..{last})");
+    }
+
+    /// Builds a quick paragraph style with `name` as both id and display name.
+    fn gallery_style(name: &str) -> wordcraft_doc::styles::Style {
+        wordcraft_doc::styles::Style { id: name.into(), name: name.into(), quick: true, priority: Some(0), ..Default::default() }
+    }
+
+    /// Returns whether column `x` of `img` contains any dark ink pixel.
+    fn column_has_ink(img: &ColorImage, x: usize) -> bool {
+        let [w, h] = img.size;
+        (0..h).any(|y| img.pixels.get(y * w + x).is_some_and(|p| p.a() > 0 && p.r() < 160))
+    }
+
+    /// Asserts that two rendered style tiles have identical dimensions and pixels.
+    fn assert_same_tile(rtl: &ColorImage, ltr: &ColorImage) {
+        assert_eq!(rtl.size, ltr.size, "right-to-left tile dimensions differ from its left-to-right twin");
+        let differ = rtl.pixels.iter().zip(&ltr.pixels).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "{differ} pixels differ from the left-to-right twin");
+    }
+
+    /// #4944: a right-to-left style's sample was laid out at the right end of its picture, and the
+    /// tile crops the left end, so the tile was blank. The sample now stands at the left edge.
+    #[test]
+    fn a_right_to_left_style_previews_its_sample_text() {
+        let mut doc = Document::new();
+        let mut style = gallery_style("Right to left");
+        style.para.bidi = Some(true);
+        Arc::make_mut(&mut doc.styles).upsert(style);
+        let preview = style_tile_image(&doc, "Right to left", 1.0, false, false);
+        let [w, _] = preview.size;
+        let inked: Vec<bool> = (0..w).map(|x| column_has_ink(&preview, x)).collect();
+        let first = inked.iter().position(|&i| i).expect("the preview has text");
+        let last = inked.iter().rposition(|&i| i).unwrap_or(first);
+        assert!(first < 6, "the sample starts off the tile's left edge (ink from column {first})");
+        assert!(last - first > 40, "the sample is cut off in the tile (ink {first}..{last})");
+    }
+
+    /// #4944: the sample reads left to right whatever the style's direction, so with large type,
+    /// where it is wider than its tile, a right-to-left tile must be the same picture as its
+    /// left-to-right twin. Ink alone would not do: a sample cut at its start has ink too.
+    #[test]
+    fn a_large_right_to_left_style_previews_like_its_left_to_right_twin() {
+        let mut ltr_doc = Document::new();
+        let mut ltr_style = gallery_style("Large");
+        ltr_style.chr.size = Some(28.0);
+        Arc::make_mut(&mut ltr_doc.styles).upsert(ltr_style);
+
+        let mut rtl_doc = Document::new();
+        let mut rtl_style = gallery_style("Large");
+        rtl_style.chr.size = Some(28.0);
+        rtl_style.para.bidi = Some(true);
+        Arc::make_mut(&mut rtl_doc.styles).upsert(rtl_style);
+
+        // The uncropped sample must run past the tile width, or this says nothing about which end is kept.
+        let mut p = Paragraph::with_text(tl!("AaBbCcDd"), CharProps::default()).styled("Large");
+        p.props.space_before = Some(0.0);
+        p.props.align = Some(wordcraft_doc::Align::Left);
+        let full = style_snippet(&ltr_doc, p, 220.0, 30.0, 1.0, 1.0, false).expect("the uncropped preview renders");
+        let cut = STYLE_TILE_W.round() as usize;
+        let past_tile = (cut..full.size[0]).any(|x| column_has_ink(&full, x));
+        assert!(past_tile, "the sample ends inside the tile width ({cut} px)");
+
+        let ltr = style_tile_image(&ltr_doc, "Large", 1.0, false, false);
+        let rtl = style_tile_image(&rtl_doc, "Large", 1.0, false, false);
+        assert_same_tile(&rtl, &ltr);
+    }
+
+    /// #4944, the issue's steps: Normal updated to match a right-to-left paragraph. A large style
+    /// that only inherits the direction from Normal must show the same tile as in a document
+    /// without any right-to-left.
+    #[test]
+    fn a_style_inheriting_right_to_left_from_normal_previews_like_its_left_to_right_twin() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+        for (command, params) in [("text.insert", json!({"text": "Some text"})), ("para.rtl", json!({})), ("styles.updateToMatch", json!({}))] {
+            let _ = app.run(command, params);
+        }
+        let mut right_to_left = app.session.doc.clone();
+        let normal = wordcraft_doc::props::ParaProps { style: Some("Normal".into()), ..Default::default() };
+        assert!(right_to_left.styles.resolve_para(&normal).bidi, "Update to Match made Normal right to left");
+
+        let mut ltr_doc = Document::new();
+        for doc in [&mut right_to_left, &mut ltr_doc] {
+            let mut style = gallery_style("Large");
+            style.based_on = Some("Normal".into());
+            style.chr.size = Some(28.0);
+            Arc::make_mut(&mut doc.styles).upsert(style);
+        }
+        let rtl = style_tile_image(&right_to_left, "Large", 1.0, false, false);
+        let ltr = style_tile_image(&ltr_doc, "Large", 1.0, false, false);
+        assert_same_tile(&rtl, &ltr);
     }
 }
