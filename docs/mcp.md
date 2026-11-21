@@ -127,8 +127,11 @@ config works across the suite) keep the agent to the folders you give it:
   its nearest existing folder's links are followed and the rest must be plain names, so `..` below a
   folder that doesn't exist is refused, as is a link that leads nowhere (writing through it would
   create its target). The result is compared with the root by whole folder names: `/work2/x` is not
-  inside `/work`. On Windows case is ignored, UNC paths (`\\server\share\...`) are resolved like
-  drive-letter ones, and device names (`CON`, `NUL`, `COM1`...) are refused.
+  inside `/work`. On Windows case is ignored, and device names (`CON`, `NUL`, `COM1`...) are refused.
+  A network path (`\\server\share\...`, `\\?\UNC\...`, WebDAV's `\\host@SSL\share\...`), a device path (`\\.\...`) or a
+  verbatim path that isn't a disk (a volume by its `\\?\Volume{…}` name is local) is refused by its name before anything looks it up, since looking it up would
+  contact that host, unless the root is on the same server and share (or the same verbatim prefix). A link whose
+  target is one of those is refused from the link's text, before it is followed. On Windows a name that ends in a period or a space, in a path or as a link's target, is refused too, since Windows trims it where it looks a name up. The check and the open are two steps on a name, so a link put in place between them is not seen: this is a known residual risk of path-based confinement, and closing it means opening every folder by a handle and working relative to it. Until then, keep a host from being contacted at all: block outbound SMB (TCP 445) and WebDAV from the machine or account that runs the server, and set the Windows policy "Restrict NTLM: Outgoing NTLM traffic to remote servers" to deny, so no credentials leave even if a link is swapped in time.
 - A refused path is an ordinary tool error the agent can read and correct, for example
   `automation path rejected: outside the write root /work/project/out: /etc/x.docx` or
   `automation filesystem access is not granted: write authority is absent: /work/project/out/x.docx`.
