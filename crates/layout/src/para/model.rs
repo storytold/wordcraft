@@ -49,17 +49,16 @@ impl<'a> SymbolRun<'a> {
 }
 
 /// Whether a bullet level's `text` has a private-use character that no installed font draws:
-/// its font isn't installed (or lacks it) and it isn't a symbol-font code with a Unicode
-/// equivalent. Private-use codes mean something different in every font, so another face's
-/// glyph there is an unrelated icon, not a bullet.
+/// its font isn't installed and it isn't a symbol-font code with a Unicode equivalent.
+/// Private-use codes mean something different in every font, so another face's glyph there is
+/// an unrelated icon, not a bullet. An installed font that lacks the code keeps it: Word draws
+/// that font's missing glyph (a box, which authors use as a check box).
 pub(super) fn undrawable_bullet(text: &str, lvl: &Level, rc: &ResolvedChar) -> bool {
-    let private = |c: char| matches!(u32::from(c), 0xE000..=0xF8FF | 0xF0000..=0x10FFFF);
     lvl.format == NumFormat::Bullet
         && text.chars().any(|c| {
-            private(c) && wordcraft_doc::symbol_fonts::symbol_char(&rc.font, c).is_none() && {
-                let r = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
-                r.substituted || !r.face.covers(c)
-            }
+            super::chars::is_private_use(c)
+                && wordcraft_doc::symbol_fonts::symbol_char(&rc.font, c).is_none()
+                && wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic).substituted
         })
 }
 
