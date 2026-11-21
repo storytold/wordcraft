@@ -55,6 +55,17 @@ winresource = "0.1"
 # Finder double-click, Open With, Dock drops and `open -a WordCraft letter.docx` arrive as a
 # kAEOpenDocuments Apple event, which winit doesn't handle (#27).
 craft = { workspace = true, features = ["platform-apple-events"] }
+# The Save Changes sheet (NSAlert as a sheet on the document's window, src/save_sheet.rs) and the
+# app's utility-panel windows (Find and Replace in its own window, src/panels.rs) tied to the
+# document windows they were opened from: AppKit's addChildWindow:ordered: is the only way to,
+# and it is unsafe — AGENTS.md names those two modules as the workspace's exceptions. Already in
+# the build through eframe, at these versions.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSWindow", "NSAlert", "NSApplicationScripting"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+# The Save Changes sheet's completion handler (src/save_sheet.rs). Already in the build through
+# objc2-app-kit, at this version.
+block2 = "0.6"
+objc2 = "0.6"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }

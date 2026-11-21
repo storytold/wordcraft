@@ -499,6 +499,9 @@ pub struct WordApp {
     saves_in_flight: Vec<SaveInFlight>,
     /// The Save Changes prompt this window is running and the command it holds back.
     pub(crate) closing: Option<app::Closing>,
+    /// A Save Changes prompt the host shows natively ([`Services::save_prompt`], a sheet on the
+    /// document's window on macOS): the document it asked about and where the answer arrives.
+    pub(crate) native_prompt: Option<(u64, Option<std::sync::mpsc::Receiver<String>>)>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// Whether the in-app file chooser is forced in place of the system one.

@@ -13,6 +13,9 @@ use crate::WordApp;
 /// The key the dialog is known by.
 const KEY: &str = "find";
 
+/// The Find and Replace dialog as the dialog host holds it, under its dialog name.
+pub(crate) type FindHost = Keyed<FindReplaceDialog>;
+
 /// Opens the named tab (`find`, `replace`, `goto`); an open dialog switches tab and query and keeps
 /// everything else the user typed.
 pub(super) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
@@ -25,12 +28,16 @@ pub(super) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
     let query = query(app);
     let id = dialog_id(KEY);
     // PLAN: assumed `Keyed::inner_mut` (dialogs-w13) and `FindReplaceDialog::show_tab` (dialogs-w4, S-L312).
-    if let Some(open) = app.dialog_host.get_mut_by_id::<Keyed<FindReplaceDialog>>(id) {
+    if let Some(open) = app.dialog_host.get_mut_by_id::<FindHost>(id) {
         open.inner_mut().show_tab(tab, Some(query));
         return Some(id);
     }
     let dialog = build(app, tab, query);
-    Some(open_with(app, parent, Keyed::new(KEY, dialog), DialogHooks { prepare: Some(prepare), settle }))
+    let keyed = FindHost::new(KEY, dialog);
+    // On macOS Find and Replace opens as a utility panel in a window of its own
+    // (Services::find_window), titled as in the document window.
+    let keyed = if app.services.find_window { keyed.in_own_window(crate::i18n::t("Find and Replace")) } else { keyed };
+    Some(open_with(app, parent, keyed, DialogHooks { prepare: Some(prepare), settle }))
 }
 
 /// The selection's text when there is one, else the last Find what.
@@ -68,13 +75,13 @@ fn build(app: &WordApp, tab: FindTab, query: String) -> FindReplaceDialog {
 fn prepare(app: &mut WordApp, id: DialogId) {
     let kinds = kinds(app);
     // PLAN: assumed `FindReplaceDialog::set_go_to_kinds` (dialogs-w4, S-L312).
-    if let Some(d) = app.dialog_host.get_mut_by_id::<Keyed<FindReplaceDialog>>(id) {
+    if let Some(d) = app.dialog_host.get_mut_by_id::<FindHost>(id) {
         d.inner_mut().set_go_to_kinds(kinds);
     }
 }
 
 fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
-    let request = match app.dialog_host.get_mut_by_id::<Keyed<FindReplaceDialog>>(id) {
+    let request = match app.dialog_host.get_mut_by_id::<FindHost>(id) {
         Some(d) => d.inner_mut().take_request(),
         None => {
             let _ = app.dialog_host.take_by_id::<Keyed<FindReplaceDialog>>(id);
@@ -83,7 +90,7 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     };
     if let Some(request) = request {
         let message = run_request(app, request);
-        if let Some(d) = app.dialog_host.get_mut_by_id::<Keyed<FindReplaceDialog>>(id) {
+        if let Some(d) = app.dialog_host.get_mut_by_id::<FindHost>(id) {
             d.inner_mut().set_message(message);
         }
     }

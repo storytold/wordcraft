@@ -28,4 +28,13 @@ pub struct Services {
     pub templates_dir: Option<std::path::PathBuf>,
     /// Files the system asked the app to open, and files dropped on a window, read once per frame.
     pub intake: Option<craft::platform::open::FileIntake>,
+    /// Desktop: ask "Save changes?" with the system's own prompt (a sheet on the document's
+    /// window on macOS), given that window's title, the question and the detail, instead of the
+    /// built-in one. The host sends `save`, `dontSave` or `cancel` through the returned channel;
+    /// a dropped sender is `cancel`. `None`: the host can't tell which window is the document's,
+    /// so the built-in prompt asks there instead.
+    pub save_prompt: Option<Box<dyn Fn(String, String, String) -> Option<std::sync::mpsc::Receiver<String>>>>,
+    /// Desktop (macOS): show Find and Replace in a window of its own, which the app keeps above
+    /// the document's window as a utility panel, instead of in the document window.
+    pub find_window: bool,
 }

@@ -127,6 +127,25 @@ impl WordApp {
         let Some((scope, remaining)) = self.closing.as_ref().map(|c| (c.guard.scope(), c.guard.remaining())) else {
             return Ok(json!({"done": false}));
         };
+        // With a native prompt hook (a sheet on the document's window on macOS) the host asks
+        // instead of the built-in dialog, when it can place one on this window.
+        let native_answer = self.services.save_prompt.as_ref().and_then(|hook| {
+            let name = self.prompt_name();
+            let question = i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", &name)]);
+            let mut detail = tl!("Your changes will be lost if you don't save them.").to_string();
+            // Why the last Save failed (#1445), as the built-in prompt shows it.
+            if let Some(reason) = reason.as_ref().filter(|r| !r.is_empty()) {
+                detail = format!("{reason}\n\n{detail}");
+            }
+            hook(self.window_title(), question, detail)
+        });
+        if let Some(answer) = native_answer {
+            self.native_prompt = Some((doc, Some(answer)));
+            if let Some(closing) = self.closing.as_mut() {
+                closing.prompt = None;
+            }
+            return Ok(json!({"pending": "saveChanges"}));
+        }
         let mut dialog = UnsavedChangesDialog::new(scope, self.prompt_name()).remaining(remaining);
         if let Some(reason) = reason {
             dialog = dialog.reason(reason);
@@ -189,6 +208,35 @@ impl WordApp {
     /// Take the answer of the open Save Changes prompt, if the user gave one. Called every frame
     /// from `logic`.
     pub(crate) fn pump_close_prompt(&mut self) {
+        // A native Save Changes prompt (a sheet on macOS) answers through its channel.
+        if self.native_prompt.is_some() {
+            let taken = self.native_prompt.take();
+            match taken.as_ref().and_then(|(_, rx)| rx.as_ref().map(|rx| rx.try_recv())) {
+                Some(Ok(answer)) => {
+                    let answer = match answer.as_str() {
+                        "save" => CloseAnswer::Save,
+                        "dontSave" => CloseAnswer::DontSave,
+                        _ => CloseAnswer::Cancel,
+                    };
+                    if let Err(e) = self.apply_close_answer(answer, false) {
+                        self.status(e);
+                    }
+                }
+                // A dropped sender answers Cancel.
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                    if let Err(e) = self.apply_close_answer(CloseAnswer::Cancel, false) {
+                        self.status(e);
+                    }
+                }
+                // Still asking: the prompt stays up.
+                Some(Err(std::sync::mpsc::TryRecvError::Empty)) => self.native_prompt = taken,
+                // The host gave no channel: the built-in prompt takes over below.
+                None => {}
+            }
+            if self.native_prompt.is_none() {
+                return;
+            }
+        }
         let Some(id) = self.closing.as_ref().and_then(|c| c.prompt) else { return };
         let Some(result) = self.dialog_host.take_by_id::<UnsavedChangesDialog>(id) else { return };
         if let Some(closing) = self.closing.as_mut() {
