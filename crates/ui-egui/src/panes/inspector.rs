@@ -1,12 +1,22 @@
-use super::{Stroke, Tokens, Ui, Value, WordApp, json, regular, semibold, vec2};
+use craft::behavior::IconId;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::{Props, Show, ShowContainer};
+use craft::ui::display::{Shade, Text};
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::primitives::IconSpec;
+use craft::ui::sections::GroupBox;
+use egui::Ui;
+use serde_json::{Value, json};
+
+use super::WordApp;
 
 /// Style Inspector: the paragraph and character levels at the caret, each with its style and the
 /// direct formatting on top, and a button to clear each level.
 pub(super) fn inspector(app: &mut WordApp, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
     // Read-only, so call it directly: running the command every frame would pay for the command
     // machinery and consume per-command state (a pending `join_next_undo`) just to draw the pane.
     let r = wordcraft_engine::cmd::inspector::inspect(&app.session);
-    let t = Tokens::get(ui.ctx());
     let none = tl!("None").to_string();
     let para = &r["paragraph"];
     let chr = &r["character"];
@@ -21,88 +31,58 @@ pub(super) fn inspector(app: &mut WordApp, ui: &mut Ui) {
     let pdirect = direct_list(&para["direct"]);
     let cdirect = direct_list(&chr["direct"]);
     let mut clear: Option<&str> = None;
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        section(ui, &t, "Paragraph", |ui| {
-            if level_row(ui, &t, "Style", &pstyle_shown, false, "Reset to Normal", pstyle == "Normal" && para["style"] == "Normal") {
+    Stack::new().fill_width().show(ui, |ui, _| {
+        GroupBox::new(tl!("Paragraph").to_owned(), None).show(ui, |ui, _| {
+            if level_row(ui, "Style", &pstyle_shown, false, "Reset to Normal", pstyle == "Normal" && para["style"] == "Normal") {
                 clear = Some("paragraphStyle");
             }
             let (txt, empty) = if pdirect.is_empty() { (none.clone(), true) } else { (pdirect.join(", "), false) };
-            if level_row(ui, &t, "Direct formatting", &txt, empty, "Clear Paragraph Formatting", empty) {
+            if level_row(ui, "Direct formatting", &txt, empty, "Clear Paragraph Formatting", empty) {
                 clear = Some("paragraphFormatting");
             }
         });
-        ui.add_space(8.0);
-        section(ui, &t, "Characters", |ui| {
+        GroupBox::new(tl!("Characters").to_owned(), None).show(ui, |ui, _| {
             let (txt, empty) = match &cstyle_shown {
                 Some(n) => (n.clone(), false),
                 None => (none.clone(), true),
             };
-            if level_row(ui, &t, "Style", &txt, empty, "Clear Character Style", empty) {
+            if level_row(ui, "Style", &txt, empty, "Clear Character Style", empty) {
                 clear = Some("characterStyle");
             }
             let (txt, empty) = if cdirect.is_empty() { (none.clone(), true) } else { (cdirect.join(", "), false) };
-            if level_row(ui, &t, "Direct formatting", &txt, empty, "Clear Character Formatting", empty) {
+            if level_row(ui, "Direct formatting", &txt, empty, "Clear Character Formatting", empty) {
                 clear = Some("characterFormatting");
             }
         });
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            if ui.button(tl!("Clear All")).on_hover_text(tl!("Clear All Formatting")).clicked() {
+        Row::new().wrap(true).show(ui, |ui, _| {
+            // PLAN: assumed `Props::tooltip(impl Into<Label>)` on the common props.
+            if Button::new(tl!("Clear All").to_owned()).tooltip(tl!("Clear All Formatting").to_owned()).show(ui).clicked() {
                 let _ = app.run("format.clear", json!({}));
-                app.canvas.want_focus = true;
+                app.canvas.focus_page(&ctx);
             }
-            if ui.button(tl!("Styles Pane")).clicked() {
+            if Button::new(tl!("Styles Pane").to_owned()).show(ui).clicked() {
                 let _ = app.run("view.stylesPane", json!({"value": true}));
             }
         });
     });
     if let Some(level) = clear {
         let _ = app.run("styles.inspectorClear", json!({"level": level}));
-        app.canvas.want_focus = true;
+        app.canvas.focus_page(&ctx);
     }
 }
 
-/// A titled, bordered group in the inspector.
-fn section(ui: &mut Ui, t: &Tokens, title: &str, body: impl FnOnce(&mut Ui)) {
-    ui.label(egui::RichText::new(tl!(title)).font(semibold(12.5)).color(t.text));
-    ui.add_space(2.0);
-    egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(8).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        body(ui);
-    });
-}
-
-/// One level: a caption, its value, and a clear button (disabled when there's nothing to clear).
-/// Returns true when the button was clicked.
-fn level_row(ui: &mut Ui, t: &Tokens, caption: &str, value: &str, dim: bool, tip: &str, disabled: bool) -> bool {
-    ui.label(egui::RichText::new(tl!(caption)).font(regular(11.0)).color(t.text_dim));
+/// One level: a muted caption, its value (faint when `none`, which stands for no value), and a clear button
+/// (disabled when there's nothing to clear). Returns true when the button was clicked.
+fn level_row(ui: &mut Ui, caption: &str, value: &str, none: bool, tip: &str, nothing_to_clear: bool) -> bool {
     let mut clicked = false;
-    ui.horizontal(|ui| {
-        let w = (ui.available_width() - 26.0).max(40.0);
-        ui.allocate_ui(vec2(w, 18.0), |ui| {
-            ui.set_width(w);
-            let text = egui::RichText::new(value).font(regular(12.5)).color(if dim { t.text_disabled } else { t.text });
-            ui.add(egui::Label::new(text).wrap());
-        });
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Min), |ui| {
-            let (r, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), egui::Sense::click());
-            let enabled = !disabled;
-            if enabled && resp.hovered() {
-                ui.painter().rect_filled(r, 3.0, t.hover);
-            }
-            let c = if enabled { t.icon } else { t.text_disabled };
-            crate::icons::paint(
-                ui.painter(),
-                egui::Rect::from_center_size(r.center(), vec2(16.0, 16.0)),
-                "clear",
-                c,
-                if enabled { t.accent } else { c },
-            );
-            let resp = resp.on_hover_text(tl!(tip));
-            clicked = enabled && resp.clicked();
+    Stack::new().fill_width().show(ui, |ui, _| {
+        Text::new(tl!(caption).to_owned()).shade(Shade::Muted).show(ui);
+        Row::new().show(ui, |ui, _| {
+            Text::new(value.to_owned()).shade(if none { Shade::Faint } else { Shade::Normal }).show(ui);
+            let clear = IconButton::new(IconSpec::svg(IconId::new("clear"))).label(tl!(tip).to_owned()).enabled(!nothing_to_clear).show(ui);
+            clicked = clear.clicked();
         });
     });
-    ui.add_space(4.0);
     clicked
 }
 
