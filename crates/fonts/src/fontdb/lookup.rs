@@ -7,12 +7,25 @@ use super::names::{base_style, last_resort_face, make_face, norm, style_italic, 
 use super::{Arc, BezPath, FontDb, MetadataProvider};
 
 impl FontDb {
-    /// Resolve a family + style to a face, falling back to the closest style of the family, then to
-    /// Source Sans 3 Regular. `family` is a typographic family ("Roboto") or a face's legacy family
+    /// Resolve a family + style to a face, falling back to the closest style of the family (once
+    /// its installed files are loaded, when the loaded ones lack the style), then to Source Sans 3
+    /// Regular. `family` is a typographic family ("Roboto") or a face's legacy family
     /// name ("Roboto Light", whose styles are Light and Light Italic). Installed system fonts are
     /// found by name whatever ran before. An exact full or PostScript name selects its face.
     pub fn face(&self, family: &str, style: &str) -> Arc<FontFace> {
         if let Some(f) = self.find(family, style) {
+            // A loaded family without the style asked for may be loaded only in part: the style
+            // may be among its installed files (bold Hebrew drew as an emboldened Regular beside
+            // an installed Noto Sans Hebrew Bold, because craft-fonts carries only the Regular).
+            #[cfg(not(target_arch = "wasm32"))]
+            if !style.contains('{') && norm(&f.style) != norm(style) {
+                self.load_rest_of(family);
+                // Look again even when this load added nothing: another thread may have just
+                // loaded the rest.
+                if let Some(whole) = self.find(family, style) {
+                    return whole;
+                }
+            }
             return f;
         }
         // Look again even when this load added nothing: another thread may have just loaded it.

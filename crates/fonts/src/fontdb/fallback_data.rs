@@ -20,7 +20,8 @@ pub(super) struct SysFallback {
 pub(super) const SYS_MISSES_MAX: usize = 65_536;
 
 /// Installed font files larger than this are not loaded for a fallback character the coverage
-/// index finds in them (a preferred fallback family loads whatever its size).
+/// index finds in them, nor for a style the loaded part of a family lacks (a preferred fallback
+/// family, or a family asked for by name, loads whatever its size).
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const SYS_FALLBACK_MAX_FILE: u64 = 40 << 20;
 
