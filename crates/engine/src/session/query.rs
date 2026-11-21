@@ -225,7 +225,7 @@ impl Session {
     pub fn typing_props(&self) -> CharProps {
         let (a, _) = self.sel.ordered();
         let first = match self.doc.para_at(&a) {
-            Some(p) if self.pending.is_none() && !self.sel.is_collapsed() && a.off < p.len() => Some(p.props_of_char(a.off)),
+            Some(p) if self.waiting().is_none() && !self.sel.is_collapsed() && a.off < p.len() => Some(p.props_of_char(a.off)),
             _ => None,
         };
         let mut c = match first {
@@ -243,9 +243,49 @@ impl Session {
         c
     }
 
+    /// The formatting waiting for the next typed text ([`Self::pending`]), unless Backspace
+    /// carried it over at a place the caret has since left, or a selection now stands there:
+    /// that formatting is for typing where the character was deleted only (#6518).
+    pub fn waiting(&self) -> Option<&CharProps> {
+        let p = self.pending.as_ref()?;
+        match &self.pending_at {
+            Some(at) if !self.sel.is_collapsed() || self.sel.focus != *at => None,
+            _ => Some(p),
+        }
+    }
+
+    /// Forget formatting Backspace carried over once it no longer applies ([`Self::waiting`]):
+    /// whatever moved the caret or selected text — a paste, Find, Go To, a click — leaves the
+    /// next typed text the formatting of where it lands, as in Word (#6518).
+    pub(crate) fn drop_stale_carried(&mut self) {
+        if self.pending.is_none() {
+            self.pending_at = None;
+        } else if self.pending_at.is_some() && self.waiting().is_none() {
+            self.pending = None;
+            self.pending_at = None;
+        }
+    }
+
+    /// Move the caret or select text without a command, as a front end does for a right-click,
+    /// a click into a header or a balloon. Formatting Backspace carried over stays only if the
+    /// caret is still where the character was deleted: once it has been anywhere else, coming
+    /// back does not bring it back (#6518). Assigning [`Self::sel`] directly skips this.
+    pub fn set_selection(&mut self, sel: Selection) {
+        self.sel = sel;
+        self.drop_stale_carried();
+    }
+
+    /// Drop formatting Backspace carried over, wherever the caret is: it is for typing, and a
+    /// paste is not typing, so pasted text takes the formatting where it lands (#6518).
+    pub(crate) fn forget_carried(&mut self) {
+        if self.pending_at.take().is_some() {
+            self.pending = None;
+        }
+    }
+
     /// The caret's formatting, as Reveal Formatting shows it.
     pub fn caret_props(&self) -> CharProps {
-        if let Some(p) = &self.pending {
+        if let Some(p) = self.waiting() {
             return p.clone();
         }
         let f = &self.sel.focus;

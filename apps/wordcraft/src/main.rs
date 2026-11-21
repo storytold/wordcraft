@@ -1,273 +1,139 @@
 //! WordCraft desktop app.
 //!
-//! Usage: `wordcraft [--control <port>] [--sample] [files…]`; `--help` prints `USAGE`.
+//! Usage: `wordcraft [--control <port>] [--control-token <hex>] [--control-token-file <path>]
+//! [--sample] [files…]`; `--help` prints `USAGE`.
 //!
-//! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
-//! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
-//! Every request needs the key the app writes to `<settings>/control-key.<instance>` (mode 0600,
-//! removed on exit). See `docs/control-protocol.md`.
+//! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
+//! A client authenticates once, with its first line, using the control token: the one given by
+//! `--control-token` / `--control-token-file` (or `WORDCRAFT_CONTROL_TOKEN` /
+//! `WORDCRAFT_CONTROL_TOKEN_FILE`), else one the app generates and writes to the token file
+//! (`docs/control-protocol.md`, Token).
+//! Requests after that carry no key. See `docs/control-protocol.md`.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod animations;
 #[cfg(target_os = "linux")]
 mod appimage_env;
-#[cfg(target_os = "macos")]
-mod apple_events;
-mod clipboard;
 mod control_server;
 mod default_apps;
-mod file_dialogs;
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
-mod graphics;
-mod logging;
-mod print;
+mod prefs;
 mod region;
-#[cfg(target_os = "macos")]
-mod traffic_lights;
 
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use craft::automation::args::{ControlOptions, EnvNames, FlagNames, Source, control_port};
+use craft::automation::control::ControlChannel;
+use craft::dialogs::service::{FilePanels, FileService};
+use craft::host::target::{Backend, ShellInfo};
+use craft::host::{Host, Wake};
+use craft::platform::appearance::SystemReader;
+use craft::platform::clipboard::{Clipboard, ClipboardImage, SystemClipboard};
+use craft::platform::default_app::{DefaultApp, DefaultAppError};
+use craft::platform::logs::{self, LogNames, crash};
+use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
+use craft::print::spool::Spool;
+use craft::settings::SharedSettings;
+use craft::ui::InstallSpec;
+use craft::ui::runtime::windows::{WindowAction, WindowHost};
+use craft::ui::shell::embed;
+use craft::window::restore::{self, Store};
+use craft::window::system::SystemWindows;
 use wordcraft_engine::Session;
-use wordcraft_ui_egui::{
-    Services, UiState, WordApp,
-    window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue},
-};
+// PLAN: assumed `wordcraft_ui_egui::prefs` is `pub mod prefs` (sh.A12, shell-w13); app-hub's list names the module without its visibility.
+use wordcraft_ui_egui::{Services, WordApp, prefs::Prefs};
 
-/// The app, the restored window geometry (or, with none, the default: no position) until the
-/// first frame that knows the monitor has checked it, the control server's key file (removed on
-/// exit), the file dialogs the app asked for, this frame's raw host window state and, on macOS,
-/// the documents opened from Finder.
-struct App(
-    WordApp,
-    Option<WindowGeometry>,
-    Option<control_server::KeyFile>,
-    file_dialogs::Launcher,
-    // The host's answer for this frame. `InputState` still describes the last painted frame on
-    // a hidden logic tick.
-    RawWindowState,
-    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
-);
+/// The app, the file dialogs it asked for, what the OS asked of it, the settings it flushes at
+/// exit, the print spool it waits for at exit and the control server it stops at exit.
+struct App {
+    app: WordApp,
+    /// The native panels behind the file service the app reaches through `Host::files`.
+    panels: FilePanels,
+    /// Feeds the files dropped on the window into the app's intake (`Services::intake`), the one
+    /// queue the OS's requests are read from.
+    drops: IntakeSender,
+    /// The settings store the app saves through; flushed once the app is done.
+    settings: SharedSettings<Prefs>,
+    /// The print spool, a handle on the one in the app's services: jobs being sent finish first.
+    spool: Spool,
+    /// The control server, when `--control` started one; it removes the token file it made.
+    control: Option<control_server::Control>,
+}
+
+impl App {
+    /// One frame's logic: what the OS asked, the app, its file dialogs, then the root window's close
+    /// path. Without `frame` (a test over no window) the dialogs have no parent window.
+    fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
+        self.app.logic(ctx);
+        self.panels.pump_with(self.app.dialog_host_mut(), frame);
+        // A quit that waits for nothing (the documents are answered for) closes the root window.
+        if self.app.quit_requested && !self.app.printing.busy() {
+            WindowHost::of(ctx).act(egui::ViewportId::ROOT, WindowAction::Close);
+        }
+        // The decision holds the close while a Save Changes prompt is open; a closure over
+        // `close_requested` would ask again on every frame of the prompt.
+        embed::logic(ctx, || self.app.close_decision());
+    }
+
+    /// One pass of the root window's UI.
+    fn ui_pass(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        if let Some(frame) = frame {
+            embed::before_ui(ui.ctx(), frame);
+        }
+        self.app.ui(ui);
+        self.panels.pump_with(self.app.dialog_host_mut(), frame);
+    }
+
+    /// Everything that must happen before the process ends, whichever way the window closes.
+    fn finish(&mut self) {
+        // Jobs being sent finish first, so the spooler has them before the process exits.
+        self.spool.shutdown();
+        self.app.session.finish_recovery();
+        if let Err(e) = self.settings.lock().flush() {
+            log::warn!("preferences: {e}");
+        }
+        if let Some(control) = self.control.take() {
+            control.shut_down();
+        }
+        self.app.start_pending_update();
+    }
+}
 
 impl eframe::App for App {
-    /// Advances one desktop frame: polls Finder events on macOS, runs the app and its file dialogs,
-    /// fits or rescues the window and maximizes it after opening, then gates a close or quit request
-    /// on unsaved changes and active printing.
-    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        #[cfg(target_os = "macos")]
-        apple_events::poll(&self.5, &mut self.0, ctx);
-        self.0.logic(ctx);
-        self.3.show(frame);
-        let mut window = self.4;
-        // Only until the off-screen check below has run: it is the one reader.
-        if self.1.is_some() {
-            let (on_a_monitor, primary_monitor_rect) = monitor_geometry(frame, ctx.pixels_per_point());
-            window.on_a_monitor = on_a_monitor;
-            window.primary_monitor_rect = primary_monitor_rect;
-        }
-        // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
-        // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
-        // knows the monitor: the off-screen check below takes the pending geometry then.
-        if let Some((pos, size)) = self.1.and_then(|g| g.fit_on_monitor(&window)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
-            let b = self.0.window_builder().clone().with_inner_size(size);
-            self.0.set_window_builder(b);
-        }
-        // The geometry saved for the next start is the active window's.
-        let prev = self.0.ui.window;
-        // Another document window's state is the one it last painted with: the host reports only
-        // the root window's for this frame.
-        let active = self.0.active_viewport();
-        let tracked = if active == egui::ViewportId::ROOT {
-            window
-        } else {
-            ctx.input_for(active, |i| RawWindowState::from_viewport(Some(i.viewport()), Some(i.viewport_rect())))
-        };
-        self.0.ui.window = WindowGeometry::track(prev, &tracked);
-        // The first frame, once the monitor is known (as `take_rescue` waits for): maximize a
-        // window that opened at its normal size so it never flashed on screen half-opened.
-        let maximize = self.1.and_then(|g| g.maximize_after_open()).filter(|_| window.monitor_size.is_some());
-        if let Some(pos) = take_rescue(&mut self.1, &window) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
-        }
-        if let Some(command) = maximize {
-            ctx.send_viewport_cmd(command);
-        }
-        // The window's close button: with other windows open only this window closes (the app
-        // handles that while drawing it); the last one quits, asking first about unsaved changes
-        // (`WordApp::close_requested`).
-        let closing = ctx.input(|i| i.viewport().close_requested());
-        if closing && (self.0.closes_a_window() || !self.0.close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        } else if (closing || self.0.quit_requested) && !self.0.printing.busy() {
-            // On macOS, letting eframe drop the window inside `-[NSApplication run]` aborts in
-            // `-[_NSTouchBarFinderObservation invalidate]`. Command-Q calls `terminate:`. Once
-            // the close is allowed, take that path instead of dropping the window on this turn.
-            #[cfg(target_os = "macos")]
-            {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.0.quit_requested = false;
-                schedule_macos_terminate(&mut self.0, self.2.as_ref());
-            }
-            #[cfg(not(target_os = "macos"))]
-            if self.0.quit_requested {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-    }
-    /// Records this frame's native window state before forwarding the hook, so logic never reads a
-    /// stale inner rectangle from a hidden tick.
+    /// Hands the app what the runtime gathered since the last frame (fired commands) and the
+    /// runtime the input the app gives back, before any pass of the frame runs.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        // Keep this frame's native window state. `logic` must not read the last painted
-        // `InputState` when a hidden Wayland tick reports no fresh inner rect.
-        self.4 = RawWindowState::from_raw(raw);
-        self.0.raw_input_hook(ctx, raw);
+        // Once per frame, before any pass; the files stay in `raw` for the runtime's own reading.
+        let files = dropped_files(raw);
+        if !files.is_empty() {
+            self.drops.dropped(files, DropTarget::Elsewhere);
+        }
+        embed::before_input(ctx, |out| self.app.frame_input(out));
+    }
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.logic_pass(ctx, Some(frame));
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        self.0.ui(ui);
-        self.3.show(frame);
+        self.ui_pass(ui, Some(frame));
     }
     fn on_exit(&mut self) {
-        print::finish_pending_jobs();
-        self.0.session.finish_recovery();
-        save_prefs(&self.0);
-        if let Some(key_file) = &self.2 {
-            key_file.remove();
-        }
-        self.0.start_pending_update();
+        self.finish();
     }
 }
 
-/// Whether a grippable part of the window is on a monitor, and the primary monitor bounds.
-/// Winit reports physical pixels; egui positions use points. `None` where the platform cannot
-/// report the window or primary monitor (Wayland, headless).
-fn monitor_geometry(frame: &eframe::Frame, pixels_per_point: f32) -> (Option<bool>, Option<egui::Rect>) {
-    let Some(w) = frame.winit_window() else {
-        return (None, None);
-    };
-    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
-        return (None, None);
-    }
-    let Some(pos) = w.outer_position().ok() else {
-        return (None, None);
-    };
-    let size = w.outer_size();
-    let physical_rect = |(x, y): (i32, i32), (width, height): (u32, u32)| {
-        egui::Rect::from_min_size(egui::pos2(x as f32, y as f32), egui::vec2(width as f32, height as f32))
-    };
-    let monitors: Vec<egui::Rect> =
-        w.available_monitors().map(|m| physical_rect((m.position().x, m.position().y), (m.size().width, m.size().height))).collect();
-    let on_a_monitor = (!monitors.is_empty()).then(|| reachable(physical_rect((pos.x, pos.y), (size.width, size.height)), &monitors));
-    let primary_monitor_rect = w.primary_monitor().map(|m| {
-        let pos = m.position();
-        let size = m.size();
-        egui::Rect::from_min_size(
-            egui::pos2(pos.x as f32, pos.y as f32) / pixels_per_point,
-            egui::vec2(size.width as f32, size.height as f32) / pixels_per_point,
-        )
-    });
-    (on_a_monitor, primary_monitor_rect)
-}
-
-/// Quit the way Command-Q does, on the next turn of the main queue.
-///
-/// Called when the window is closing. Doing it on the next turn lets the close
-/// button's display cycle finish while the window still exists; `terminate:`
-/// then ends the process. Preferences are written and the control key file is
-/// removed first, as `on_exit` does, because a fallback [`std::process::exit`]
-/// skips `on_exit`. A second close while a quit is already scheduled is ignored.
-#[cfg(target_os = "macos")]
-fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server::KeyFile>) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    if app.printing.busy() {
-        return;
-    }
-    static QUIT: AtomicBool = AtomicBool::new(false);
-    if QUIT.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    log::info!("window close: quitting");
-    // This path can bypass on_exit. Join the owned workers before termination and cleanup.
-    print::finish_pending_jobs();
-    app.session.finish_recovery();
-    save_prefs(app);
-    if let Some(key_file) = key_file {
-        key_file.remove();
-    }
-    // `terminate:` ends the process without dropping the app, so a ready update's helper starts here.
-    app.start_pending_update();
-    dispatch2::DispatchQueue::main().exec_async(|| {
-        if let Some(mtm) = objc2::MainThreadMarker::new() {
-            objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
-        }
-        // `terminate:` does not return when it succeeds. If it did, leave anyway:
-        // staying up after the close was cancelled would trap the user in the window.
-        std::process::exit(0);
-    });
-}
-
-/// `ui.json` in the settings folder, which the MCP bridge also uses to find the control key.
-fn prefs_path() -> Option<std::path::PathBuf> {
-    wordcraft_control_key::settings_dir().map(|b| b.join("ui.json"))
-}
-
-/// Where the log files live: `logs` in the preferences folder (see `logging`).
-fn log_dir() -> Option<std::path::PathBuf> {
-    Some(prefs_path()?.parent()?.join("logs"))
-}
-
-/// `custom-dictionary.txt` in the settings folder: the words Add to Dictionary kept (#40).
-fn user_dict_path() -> Option<std::path::PathBuf> {
-    wordcraft_control_key::settings_dir().map(|b| b.join(wordcraft_engine::Session::USER_DICT_FILE))
-}
-
-fn load_user_dictionary(app: &mut WordApp) {
-    if !prefs_enabled() {
-        return;
-    }
-    if let Some(p) = user_dict_path() {
-        wordcraft_proof::load_user_dictionary(&p);
-        app.session.user_dict_path = Some(p);
-    }
-}
-
-/// Runs without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) neither read nor write them.
-fn prefs_enabled() -> bool {
-    std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
-}
-
-fn load_prefs(app: &mut WordApp) {
-    if !prefs_enabled() {
-        return;
-    }
-    if let Some(p) = prefs_path()
-        && let Ok(bytes) = std::fs::read(&p)
-        && let Some(ui) = UiState::from_json(&bytes)
-    {
-        app.apply_prefs(ui);
-    }
-}
-
-/// Fonts the user added (#582) live in `fonts` in the settings folder: load them, and store fonts
-/// added later there. Runs without preferences neither read nor keep them.
-fn load_user_fonts() {
-    if !prefs_enabled() {
-        return;
-    }
-    let Some(dir) = wordcraft_control_key::settings_dir().map(|d| d.join("fonts")) else { return };
-    let (loaded, skipped) = wordcraft_fonts::FontDb::global().load_user_fonts(&dir);
-    if !loaded.is_empty() || !skipped.is_empty() {
-        log::info!("user fonts: {} loaded, {} skipped from {}", loaded.len(), skipped.len(), dir.display());
-    }
-}
-
-/// The saved preferences, read before the window opens for its geometry and, on Linux and the
-/// BSDs, the display server (`load_prefs` runs after).
-fn saved_ui() -> Option<UiState> {
-    if !prefs_enabled() {
-        return None;
-    }
-    let bytes = std::fs::read(prefs_path()?).ok()?;
-    UiState::from_json(&bytes)
+/// The files dropped in this frame's input, as the intake carries them: a file with a path by its
+/// path, a file without one by its bytes.
+fn dropped_files(raw: &egui::RawInput) -> Vec<DroppedFile> {
+    raw.dropped_files
+        .iter()
+        .map(|file| {
+            let path = Some(file.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty());
+            let name = path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // A file without a path (the web) carries its bytes; one that cannot be read is dropped as empty.
+            let bytes = if path.is_none() { file.bytes().ok().map(std::sync::Arc::from) } else { None };
+            DroppedFile { path, name, bytes }
+        })
+        .collect()
 }
 
 /// Whether the window runs through XWayland (X11) rather than native Wayland, and the log line
@@ -330,62 +196,32 @@ fn x11_libraries() -> Result<(), String> {
     if missing.is_empty() { Ok(()) } else { Err(missing.join("; ")) }
 }
 
-fn save_prefs(app: &WordApp) {
-    if let Err(e) = try_save_prefs(app) {
-        log::warn!("preferences: {e}");
-    }
-}
+/// The type of the "make WordCraft the default app" button's action.
+type MakeDefault = Box<dyn Fn() -> Result<DefaultApp, DefaultAppError>>;
 
-/// Saves the preferences and says why when it could not. `Ok(false)`: nothing was written
-/// because preferences are switched off or there is no settings folder.
-fn try_save_prefs(app: &WordApp) -> Result<bool, String> {
-    if !prefs_enabled() {
-        return Ok(false);
-    }
-    let Some(p) = prefs_path() else { return Ok(false) };
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    }
-    let bytes = serde_json::to_vec_pretty(&app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
-    write_prefs(&p, &bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))?;
-    Ok(true)
-}
-
-/// Writes `bytes` to a sibling temporary file and renames it over `path`, so a failed or
-/// interrupted write leaves the previous preferences in place.
-fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "ui.json".into());
-    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    written
-}
-
-/// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
-/// through the system spooler (`print`), the system clipboard's text, formatted copies,
-/// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
-/// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
-fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
+/// What the app takes from its host beyond the runtime: File › Print through the system spooler,
+/// personal templates (#2852, made on first save in `Templates` in the settings folder), and making
+/// WordCraft the default app for Word documents (#295; macOS has no way to, so no button there).
+fn services(spool: Spool, intake: FileIntake) -> Services {
+    #[cfg(any(unix, windows))]
+    let make_default_app =
+        (!cfg!(target_os = "macos")).then(|| -> MakeDefault { Box::new(|| craft::platform::default_app::make_default(&default_apps::identity())) });
+    #[cfg(not(any(unix, windows)))]
+    let make_default_app: Option<MakeDefault> = None;
     Services {
-        file_dialog: Some(file_dialog),
-        printers: Some(print::discover()),
-        print_native: Some(print::submit()),
-        cancel_print: Some(print::cancel()),
-        clipboard_picture: Some(Box::new(clipboard::picture)),
-        make_default_app: default_apps::hook(),
-        // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
+        print: Some(spool),
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
-        animations_enabled: Some(animations::hook(ctx)),
-        clipboard_text: Some(Box::new(clipboard::text)),
-        clipboard_html: Some(Box::new(clipboard::html)),
-        set_clipboard_rich: Some(Box::new(clipboard::set_rich)),
-        clipboard_rtf: Some(Box::new(clipboard::rtf)),
-        clipboard_formats: Some(Box::new(clipboard::formats)),
-        save_prefs: Some(Box::new(try_save_prefs)),
+        make_default_app,
+        intake: Some(intake),
         ..Default::default()
     }
+}
+
+/// A PNG as the pixels the system clipboard takes, `None` for anything that doesn't decode within
+/// the picture decoder's limits.
+fn decode_png(bytes: &[u8]) -> Option<ClipboardImage> {
+    let rgba = wordcraft_geom::picture::decode_memory(bytes).ok()?.to_rgba8();
+    Some(ClipboardImage { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
 }
 
 /// Window, Dock and taskbar icon.
@@ -401,14 +237,18 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--control PORT] [--control-token TOKEN | --control-token-file PATH] [FILE…]
 
 OPTIONS:
-  --sample            open the sample document
-  --control PORT      start the localhost control server on PORT, for agents and scripts
-                      (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
-  --version           print the version
-  -h, --help          print this help
+  --sample                     open the sample document
+  --control PORT               start the localhost control server on PORT, for agents and scripts
+                               (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
+  --control-token TOKEN        the 64 hex digits clients authenticate with
+                               (or set WORDCRAFT_CONTROL_TOKEN); without one a token is generated
+  --control-token-file PATH    read the token from a file instead
+                               (or set WORDCRAFT_CONTROL_TOKEN_FILE)
+  --version                    print the version
+  -h, --help                   print this help
 ";
 
 /// The commit the build came from (short), or `dev`.
@@ -417,13 +257,13 @@ fn build_sha() -> &'static str {
 }
 
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
-/// one (#1440). A `--control` port that isn't is an error.
+/// one (#1440). A `--control` port, a token or a token file that isn't is an error.
 fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     let (mut args, mut files) = (Vec::new(), Vec::new());
     for (i, a) in std::env::args_os().skip(1).enumerate() {
         match a.into_string() {
             Ok(a) => args.push(a),
-            Err(a) if args.last().is_some_and(|p| p == "--control") => {
+            Err(a) if args.last().is_some_and(|p| matches!(p.as_str(), "--control" | "--control-token" | "--control-token-file")) => {
                 // Unlike `eprintln!`, never panics.
                 let (n, lossy) = (i + 1, a.to_string_lossy());
                 let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: argument {n} is not valid Unicode: {lossy}\n"));
@@ -473,17 +313,23 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     }
 }
 
+/// Writes `message` and a newline to standard error. Unlike `eprintln!`, never panics.
+fn complain(message: std::fmt::Arguments<'_>) {
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: {message}\n"));
+}
+
 /// Parses the command line, installs logging and the panic hook, restores preferences and window
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
+    // Windows: the print helper is a copy of this program that runs one job in its own process.
     #[cfg(windows)]
-    if let Some(code) = print::isolated::helper_mode() {
+    if let Some(code) = craft::print::spool::isolated::helper_main() {
         std::process::exit(code);
     }
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(result) = craft::update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
     // Linux: before anything reads another program's AppImage variables, or a thread starts (#5653).
@@ -495,31 +341,51 @@ fn main() -> eframe::Result {
     let updates_unsafe = start_over_failed.is_some();
     #[cfg(not(target_os = "linux"))]
     let updates_unsafe = false;
-    // First, so the panic hook and every start-up warning are recorded (`logging`).
-    let logger = logging::install();
-    logging::install_panic_hook();
+    // First, so the panic hook (set once, by this call; the later one only gives it the crash-log
+    // folder) and every start-up warning are recorded.
+    let logger = logs::install(LogNames::new("wordcraft"));
+    crash::install("WordCraft", env!("CARGO_PKG_VERSION"), None);
     #[cfg(target_os = "linux")]
     if let Some(e) = start_over_failed {
         log::error!("couldn't start again without another program's AppImage variables, so the self-update is off in this window: {e}");
     }
-    let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
+    let mut flags = ControlOptions::default();
     let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args();
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
+    let mut missing_value: Option<&'static str> = None;
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
             // A flag after `--control` stays a flag; a bad or missing port is an error (#1426).
+            // Port 0 is refused after the variables are read: the port names the control server's files.
             "--control" => {
                 let port = args.next_if(|p| p.strip_prefix('-').is_none_or(|n| n.starts_with(|c: char| c.is_ascii_digit())));
-                match port.as_deref().and_then(|p| p.parse::<std::num::NonZeroU16>().ok()) {
-                    Some(p) => control_port = Some(p.get()),
+                match port.as_deref().and_then(|p| control_port(p).ok()) {
+                    Some(p) => {
+                        flags.port = Some(p);
+                        flags.sources.port = Some(Source::Flag);
+                    }
                     None => bad_control = Some(port),
                 }
             }
+            "--control-token" => match args.next() {
+                Some(token) => {
+                    flags.token = Some(token);
+                    flags.sources.token = Some(Source::Flag);
+                }
+                None => missing_value = Some("--control-token"),
+            },
+            "--control-token-file" => match args.next() {
+                Some(path) => {
+                    flags.token_file = Some(PathBuf::from(path));
+                    flags.sources.token_file = Some(Source::Flag);
+                }
+                None => missing_value = Some("--control-token-file"),
+            },
             "--sample" => sample = true,
             "--version" => {
                 println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
@@ -533,24 +399,45 @@ fn main() -> eframe::Result {
             _ => files.push(a),
         }
     }
-    // After the loop, so `--version` later on the line still wins. Unlike `eprintln!`, never panics.
+    // After the loop, so `--version` later on the line still wins.
     if let Some(port) = bad_control {
         let got = port.map(|p| format!(", got {p:?}")).unwrap_or_default();
-        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: --control needs a port number from 1 to 65535{got}\n"));
+        complain(format_args!("--control needs a port number from 1 to 65535{got}"));
         std::process::exit(2);
     }
+    if let Some(flag) = missing_value {
+        complain(format_args!("{flag} needs a value"));
+        std::process::exit(2);
+    }
+    // The flags over the variables; a bad variable names itself, never the token.
+    let names = EnvNames::for_app("WORDCRAFT");
+    let control = match ControlOptions::resolve(flags, &names).and_then(|o| o.check(&FlagNames::default(), &names).map(|()| o)) {
+        Ok(options) => options,
+        Err(e) => {
+            complain(format_args!("error: {e}"));
+            std::process::exit(2);
+        }
+    };
+    if control.port == Some(0) {
+        complain(format_args!("--control needs a port number from 1 to 65535, got \"0\""));
+        std::process::exit(2);
+    }
+    let settings_dir = wordcraft_control_key::settings_dir();
     // The log file lives in the settings directory, next to the preferences; opened after the
     // arguments, so `--version` leaves no file behind. Records logged until now are written to it
     // first. Runs without preferences (agents' test runs) log to standard error only, so they
     // don't rotate away the user's own logs.
     if let Some(logger) = logger {
-        match log_dir().filter(|_| prefs_enabled()) {
+        match settings_dir.as_ref().filter(|_| prefs::enabled()).map(|d| d.join("logs")) {
             Some(dir) => match logger.attach_dir(&dir) {
-                Ok(path) => log::info!("WordCraft {} ({}), log file {}", env!("CARGO_PKG_VERSION"), build_sha(), path.display()),
-                // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
+                Ok(path) => {
+                    crash::install("WordCraft", env!("CARGO_PKG_VERSION"), Some(dir));
+                    log::info!("WordCraft {} ({}), log file {}", env!("CARGO_PKG_VERSION"), build_sha(), path.display());
+                }
+                // Standard error only by now (`attach_dir` gave up on the file).
                 Err(e) => log::warn!("no log file: {e}"),
             },
-            None => logger.no_file(),
+            None => logger.stderr_only(),
         }
     }
     let mut options = eframe::NativeOptions {
@@ -558,7 +445,7 @@ fn main() -> eframe::Result {
             .with_title("WordCraft")
             .with_app_id("ai.storyteller.wordcraft")
             .with_inner_size([1440.0, 920.0])
-            .with_min_inner_size([760.0, 480.0])
+            .with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE)
             .with_drag_and_drop(true)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
@@ -568,26 +455,27 @@ fn main() -> eframe::Result {
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
-    // Before eframe creates the wgpu instance: default Windows to DirectX 12 only, or OpenGL when
-    // DirectX 12 has no GPU driver or this is a 32-bit build, and compile DirectX 12 shaders with
-    // FXC, which needs no DLL of ours (#603; see graphics.rs).
-    #[cfg(target_os = "windows")]
-    graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
-    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652). An x86_64
-    // build under Rosetta on Apple silicon keeps them (#5199).
-    #[cfg(target_os = "macos")]
-    graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
-    load_user_fonts();
-    // Windows opened for further documents start like the first one, before its saved place.
-    let window_builder = options.viewport.clone();
-    let saved = saved_ui();
-    let restored = saved.as_ref().and_then(|ui| ui.window?.sanitized());
-    if let Some(window) = restored {
-        options.viewport = window.apply(options.viewport);
+    // Before eframe creates the wgpu instance: the backends, power preference, shader compiler and
+    // the GPU that drives the screen (#603, #2652, #5199).
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        craft::gpu::configure(setup);
     }
+    prefs::load_user_fonts();
+    // Where the root window was last, kept beside the settings; in memory when preferences are off.
+    // The settings open with it: a first run imports the old `ui.json`'s window place into it.
+    let mut placement = match settings_dir.as_ref().filter(|_| prefs::enabled()) {
+        Some(dir) => Store::at(&dir.join(restore::FILE_NAME)),
+        None => Store::in_memory(),
+    };
+    let (settings, report) = prefs::open(prefs::enabled(), &mut placement);
+    if report.has_problems() {
+        log::warn!("preferences: {report:?}");
+    }
+    let placement = Arc::new(Mutex::new(placement));
     #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name), x11_libraries);
+    let x11 = {
+        let display_server = settings.lock().get().display_server;
+        let (x11, why) = uses_x11(display_server, |name| std::env::var_os(name), x11_libraries);
         log::info!("{why}");
         if x11 {
             options.event_loop_builder = Some(Box::new(|b| {
@@ -595,32 +483,81 @@ fn main() -> eframe::Result {
                 b.with_x11();
             }));
         }
-    }
+        x11
+    };
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let x11 = false;
+    // What the OS asks of a running app arrives here; its wake repaints once the window exists.
+    let repaint: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
+    let (intake, sender) = FileIntake::new(Wake::new({
+        let repaint = repaint.clone();
+        move || {
+            if let Some(ctx) = repaint.get() {
+                ctx.request_repaint();
+            }
+        }
+    }));
     // Registered before the event loop starts, so it catches the Finder event that launched us as
-    // well as later ones. Lives until the event loop returns; the app creator only borrows it.
+    // well as later ones. Lives until the event loop returns.
+    let drops = intake.sender();
     #[cfg(target_os = "macos")]
-    let apple_events = apple_events::AppleEvents::install();
-    #[cfg(target_os = "macos")]
-    let apple_events = &apple_events;
-    eframe::run_native(
+    let _apple_events = craft::platform::open::apple_events::install(sender);
+    #[cfg(not(target_os = "macos"))]
+    drop(sender);
+    let exit_settings = settings.clone();
+    let result = eframe::run_native(
         "WordCraft",
         options,
         Box::new(move |cc| {
+            let ctx = cc.egui_ctx.clone();
+            let _ = repaint.set(ctx.clone());
+            let wake = {
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            };
+            // The interface language: the saved choice, else the system's.
+            let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
+            let (file_service, panels) = FileService::new(Wake::new(wake.clone()));
+            let host = Arc::new(
+                Host::builder(wordcraft_ui_egui::APP)
+                    .i18n(wordcraft_ui_egui::i18n::catalogs())
+                    .files(Arc::new(file_service))
+                    .settings(Arc::new(settings.clone()))
+                    .lang(lang.craft_lang())
+                    .build(),
+            );
+            let shell = ShellInfo::current().backend(if x11 { Backend::X11 } else { Backend::from_env() });
+            let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
+                .app_id("ai.storyteller.wordcraft")
+                .system(SystemReader::start(wake))
+                .clipboard(Clipboard::new(SystemClipboard::new().decoder(decode_png)))
+                .placement(placement);
+            // PLAN: assumed `wordcraft_ui_egui::ui_fonts` re-exports sh.A10's `app::fonts::ui_fonts` (`mod app` is private; app-hub/shell-w11).
+            embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang)).map_err(|e| format!("the runtime could not be installed: {e}"))?;
             // The system region picks the new document's paper, the units and the decimal
             // separator (#838).
             let region = region::system();
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
-            let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            // The custom dictionary's words (#40) count as loaded settings.
+            if prefs::enabled()
+                && let Some(path) = prefs::user_dict_path()
+            {
+                prefs::load_user_dictionary(&mut session, &settings, path);
+            }
+            let spool = Spool::new(host.jobs_shared().clone());
+            let mut app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
+            // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
+            // the region check below reads the saved region the settings apply.
+            if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
+                app = app.with_fallback_chooser(true);
+            }
             app.set_startup_update_check(true);
-            load_prefs(&mut app);
             // After the preferences, so the reason it gives is in the interface language.
             if updates_unsafe {
                 app.disable_self_update();
             }
-            load_user_dictionary(&mut app);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
@@ -629,34 +566,27 @@ fn main() -> eframe::Result {
                 let doc = app.session.blank_document();
                 app.replace_startup_document(doc);
             }
-            app.watch_desktop_theme(&cc.egui_ctx);
-            if prefs_enabled()
+            app.tell_about_font_downloads();
+            if prefs::enabled()
                 && let Some(dir) = wordcraft_control_key::settings_dir()
             {
-                let ctx = cc.egui_ctx.clone();
-                if let Err(e) = app.session.enable_recovery(dir.join("recovery"), std::sync::Arc::new(move || ctx.request_repaint())) {
+                let ctx = ctx.clone();
+                if let Err(e) = app.session.enable_recovery(dir.join("recovery"), Arc::new(move || ctx.request_repaint())) {
                     log::warn!("local recovery unavailable: {e}");
                 }
             }
-            app.ui.window = restored;
-            app.set_window_builder(window_builder);
-            app.integrated_titlebar = cfg!(target_os = "macos");
-            #[cfg(target_os = "macos")]
-            if let Some(bar) = traffic_lights::title_bar() {
-                log::info!("title bar: {bar:?}");
-                app.mac_titlebar = bar;
-            }
-            let mut key_file = None;
-            if let Some(port) = control_port
-                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
+            let mut control_server = None;
+            if let Some(port) = control.port
+                && let Some((rx, started)) =
+                    control_server::start(&control, port, WindowHost::of(&ctx), wordcraft_control_key::settings_dir().as_deref())
             {
-                app = app.with_control(rx);
-                key_file = file;
+                app = app.with_control(ControlChannel::new(rx));
+                control_server = Some(started);
             }
             // Nothing to open (no files, no sample, no control channel driving the editor): start
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files
-            // macOS hands over later open on top of it and close it (`apple_events`).
-            if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
+            // the OS hands over later open on top of it and close it.
+            if files.is_empty() && other_files.is_empty() && !sample && control.port.is_none() {
                 app.start_screen();
             }
             // A Word template named here starts a new document based on it (#3433).
@@ -668,18 +598,14 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
-            Ok(Box::new(App(
-                app,
-                // With nothing restored, the window the system placed is checked all the same.
-                Some(restored.unwrap_or_default()),
-                key_file,
-                dialogs,
-                RawWindowState::default(),
-                #[cfg(target_os = "macos")]
-                apple_events.connect(&cc.egui_ctx),
-            )))
+            Ok(Box::new(App { app, panels, drops, settings, spool, control: control_server }))
         }),
-    )
+    );
+    // The app is dropped by now: whatever it saved on the way out is in the store.
+    if let Err(e) = exit_settings.lock().flush() {
+        log::warn!("preferences: {e}");
+    }
+    result
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
@@ -831,22 +757,154 @@ mod launch_arg_tests {
     }
 }
 
+/// The app over the framework's frame driver, installed as `main` installs it, with in-memory
+/// settings, at a desktop size.
 #[cfg(test)]
-mod prefs_tests {
-    use super::write_prefs;
+mod smoke {
+    use super::*;
+    use craft::ui::testing::Frames;
+    use serde_json::json;
 
+    /// The app, its frame driver and the sender of its intake.
+    struct Run {
+        app: App,
+        frames: Frames,
+        ctx: egui::Context,
+        sender: IntakeSender,
+    }
+
+    impl Run {
+        /// The app as `main` builds it, minus the window: the runtime installed before the first
+        /// frame, a desktop host with a file service and a print spool, one blank document.
+        fn new() -> Run {
+            let ctx = egui::Context::default();
+            // The test finds the prompt's button in the AccessKit tree, which egui builds only once AccessKit is on
+            // (a screen reader turns it on in the app; `Frames::over` keeps the context's own options).
+            ctx.enable_accesskit();
+            let (files, panels) = FileService::new(Wake::new(|| {}));
+            let (settings, _) = prefs::open(false, &mut Store::in_memory());
+            let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&settings.lock().get().language);
+            let host = Arc::new(
+                Host::builder(wordcraft_ui_egui::APP)
+                    .i18n(wordcraft_ui_egui::i18n::catalogs())
+                    .files(Arc::new(files))
+                    .settings(Arc::new(settings.clone()))
+                    .lang(lang.craft_lang())
+                    .build(),
+            );
+            let spec = InstallSpec::new(ShellInfo::current(), Arc::new(SystemWindows))
+                .app_id("ai.storyteller.wordcraft")
+                .placement(Arc::new(Mutex::new(Store::in_memory())));
+            embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang)).map_err(|e| e.to_string()).unwrap();
+            let mut frames = Frames::over(ctx.clone());
+            frames.screen(egui::vec2(1440.0, 920.0));
+            let spool = Spool::new(host.jobs_shared().clone());
+            let (intake, sender) = FileIntake::new(Wake::new(|| {}));
+            let drops = intake.sender();
+            let session = Session::new(wordcraft_doc::Document::new());
+            let app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
+            Run { app: App { app, panels, drops, settings, spool, control: None }, frames, ctx, sender }
+        }
+
+        /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.
+        /// Returns whether the frame sent a close command.
+        fn step(&mut self, events: Vec<egui::Event>) -> bool {
+            let Run { app, frames, ctx, .. } = self;
+            embed::before_input(ctx, |out| app.app.frame_input(out));
+            let mut first = true;
+            frames.frame_without_input(events, |ui| {
+                if std::mem::take(&mut first) {
+                    app.logic_pass(ctx, None);
+                }
+                app.ui_pass(ui, None);
+            })
+        }
+
+        /// Frames with no input.
+        fn settle(&mut self) {
+            for _ in 0..3 {
+                self.step(vec![]);
+            }
+        }
+
+        /// One frame in which the OS asks the root window to close (its close button: a `Close` event in the
+        /// root's window facts, which the app's close decision answers; `WindowAction::Close` is the app's own
+        /// close command and asks nobody). Returns whether the app let the close through: it holds it by
+        /// cancelling the close.
+        fn close_request_is_let_through(&mut self) -> bool {
+            let Run { app, ctx, .. } = self;
+            embed::before_input(ctx, |out| app.app.frame_input(out));
+            let mut input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0))), ..Default::default() };
+            input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
+            let mut first = true;
+            let mut output = ctx.run_ui(input, |ui| {
+                if std::mem::take(&mut first) {
+                    app.logic_pass(ui.ctx(), None);
+                }
+                app.ui_pass(ui, None);
+            });
+            // Nothing paints this frame, so its texture uploads are dropped on purpose (egui panics on an unhandled drop).
+            output.textures_delta.clear();
+            let held = output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::CancelClose));
+            !held
+        }
+    }
+
+    /// A file dropped on the window opens through the intake; a close of the root window with a
+    /// modified document is held and the Save Changes prompt shows; Don't Save, pressed by its
+    /// name, lets the next close request through. Guards the install order, the input hook and
+    /// the close closure, which a debug assert on the first frame would otherwise hide.
     #[test]
-    fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-prefs-test-{}", std::process::id()));
+    fn smoke() {
+        let mut run = Run::new();
+        run.settle();
+
+        let dir = std::env::temp_dir().join(format!("wc-smoke-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("ui.json");
-        std::fs::write(&path, b"old").unwrap();
-        write_prefs(&path, b"new").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"new");
-        // A directory squatting on the temporary name makes the preparation step fail.
-        std::fs::create_dir(dir.join(format!(".ui.json.{}.tmp", std::process::id()))).unwrap();
-        assert!(write_prefs(&path, b"newer").is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), b"new");
-        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("dropped.txt");
+        std::fs::write(&path, "Dropped words").unwrap();
+        run.sender.dropped(vec![DroppedFile { path: Some(path), name: "dropped.txt".into(), bytes: None }], DropTarget::Elsewhere);
+        run.settle();
+        assert!(run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Dropped words"), "the dropped file opened");
+        let _ = std::fs::remove_dir_all(dir);
+
+        run.app.app.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        run.settle();
+        assert!(!run.close_request_is_let_through(), "a modified document holds the close");
+        run.settle();
+        assert!(run.app.app.dialog_host_mut().shows_modal(), "the Save Changes prompt shows");
+
+        let tree = run.frames.tree();
+        // The framework words the answer as the platform does: "Don't Save" on macOS, "No" elsewhere.
+        let dont_save = if cfg!(target_os = "macos") { "Don't Save" } else { "No" };
+        // A button is named by the label inside it (`labelled_by`) as often as by its own name, and the label's own
+        // node is no button: the testing module's `name` and `is_interactive` read it as the fixture's `by_label` does.
+        let button = tree
+            .keys()
+            .into_iter()
+            .find(|key| craft::ui::testing::access::name(&tree, *key) == Some(dont_save) && craft::ui::testing::access::is_interactive(&tree, *key))
+            .expect("the prompt has a button for Don't Save");
+        let press = egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            action: egui::accesskit::Action::Click,
+            target_tree: egui::accesskit::TreeId::ROOT,
+            target_node: egui::accesskit::NodeId::from(button),
+            data: None,
+        });
+        run.step(vec![press]);
+        run.settle();
+        assert!(!run.app.app.dialog_host_mut().shows_modal(), "the prompt is answered");
+        let closed = (0..3).any(|_| run.close_request_is_let_through());
+        if cfg!(target_os = "macos") {
+            // On macOS the root close goes to the platform quit (`craft_quit`), which keeps the window open for the quit
+            // to close, so the request always comes back held: what shows is that no prompt asks again.
+            run.settle();
+            assert!(!run.app.app.dialog_host_mut().shows_modal(), "Don't Save lets the close through to the quit");
+        } else {
+            assert!(closed, "Don't Save lets the close through");
+        }
     }
 }
