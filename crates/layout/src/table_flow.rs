@@ -452,7 +452,12 @@ fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32) {
 /// starts there.
 pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
     for _ in 0..64 {
-        let in_the_way = excl.iter().filter(|(r, ..)| r.y <= y + 0.01 && r.bottom() > y && r.x < x1 && r.right() > x0);
+        let in_the_way = excl.iter().filter(|(r, _, _, _, table)| {
+            // A text-anchored table at tblpY="1" starts one twip below the flow cursor.
+            // Check contact at the start, not the height of a possibly multi-page table.
+            let contact = if *table { wordcraft_geom::twips(1) } else { 0.01 };
+            r.y <= y + contact && r.bottom() > y && r.x < x1 && r.right() > x0
+        });
         let Some(bottom) = in_the_way.map(|(r, ..)| r.bottom()).reduce(f32::max) else { break };
         y = bottom;
     }
