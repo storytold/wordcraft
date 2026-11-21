@@ -25,7 +25,12 @@ impl FontDb {
             (true, false) => "Bold",
             _ => "Italic",
         };
-        let styled = self.face(&base.family, style);
+        // Shared faces only: the choice is cached for every document, and a document's embedded
+        // bold or italic is its own.
+        let styled = {
+            let _shared = crate::DocumentFonts::enter(0);
+            self.face(&base.family, style)
+        };
         Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
     }
 
@@ -72,8 +77,11 @@ impl FontDb {
         if c != '\u{25CF}' {
             return None;
         }
-        // Word uses this text face for an uncovered black circle, before a UI sans.
+        // Word uses this text face for an uncovered black circle, before a UI sans. Shared faces
+        // only: the choice is cached for every document, so a document's embedded Times New Roman
+        // must not answer.
         const FAMILY: &str = "Times New Roman";
+        let _shared = crate::DocumentFonts::enter(0);
         let find = || self.find(FAMILY, "Regular").filter(|f| f.id != exclude && f.covers(c));
         if let Some(face) = find() {
             return Some(face);
@@ -110,7 +118,7 @@ impl FontDb {
     /// The best loaded face covering `c`, and the number of loaded faces it was chosen from.
     fn loaded_fallback(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
         let faces = self.read_faces();
-        let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
+        let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude && f.owner == 0).collect();
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
         // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font.
         let rank = |f: &FontFace| {
@@ -184,7 +192,7 @@ impl FontDb {
             // A character no loaded face covers: load a system font for it, then retry (the run's
             // other characters may already be covered by loaded faces).
             for c in chars {
-                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c)) {
+                if self.read_faces().iter().any(|f| f.id != exclude && f.owner == 0 && f.covers(*c)) {
                     continue;
                 }
                 if self.system_fallback(*c) {
@@ -213,7 +221,11 @@ impl FontDb {
             (true, false) => "Bold",
             _ => "Italic",
         };
-        let styled = self.face(&base.family, style);
+        // Shared faces only, as for the base: the run's choice is cached for every document.
+        let styled = {
+            let _shared = crate::DocumentFonts::enter(0);
+            self.face(&base.family, style)
+        };
         let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
             styled
         } else {
@@ -230,7 +242,7 @@ impl FontDb {
         // A complex-script character picks the families its script prefers (the lowest one: the
         // run's characters come sorted).
         let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
-        let found = fallback_order(&faces, exclude, rtl, complex).into_iter().find(|f| chars.iter().all(|c| f.covers(*c))).cloned();
+        let found = fallback_order(&faces, exclude, rtl, complex).into_iter().find(|f| f.owner == 0 && chars.iter().all(|c| f.covers(*c))).cloned();
         (found, faces.len())
     }
 
@@ -248,13 +260,13 @@ impl FontDb {
                 return false;
             }
         }
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
+        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.owner == 0 && f.covers(c));
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
         let rtl = crate::is_rtl(c) || arabic_block(c);
         let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
         for fam in crate::script_fallbacks(c).iter().chain(preferred).chain(SYSTEM_FALLBACKS.iter()) {
             // Each family is tried once: one that fails to load isn't read again per character.
-            if self.is_loaded(fam) || !cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
+            if self.read_faces().iter().any(|f| f.owner == 0 && f.named(fam)) || !cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
                 continue;
             }
             // A family none of whose files maps `c` is not loaded for it: it would stay loaded
@@ -345,7 +357,7 @@ impl FontDb {
     /// goes on. Returns whether a loaded face now covers them all.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_indexed(&self, chars: &[char], whole_family: bool) -> bool {
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| chars.iter().all(|c| f.covers(*c)));
+        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.owner == 0 && chars.iter().all(|c| f.covers(*c)));
         let cps: Vec<u32> = chars.iter().map(|c| u32::from(*c)).collect();
         let maps_all = |ranges: &[(u32, u32)]| cps.iter().all(|cp| ranges_hold(ranges, *cp));
         let mut index = self.coverage_index();

@@ -417,7 +417,7 @@ struct ListClass {
 /// [`ListClass`] of the semicolon-separated `family`, memoised by its text.
 fn list_class(family: &str) -> ListClass {
     let key = family_list_key(family);
-    let generation = FontDb::global().generation();
+    let generation = memo_scope(FontDb::global());
     {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if c.generation != generation {
@@ -501,7 +501,8 @@ fn style_name(bold: bool, italic: bool) -> &'static str {
     }
 }
 
-type Memo = (u64, HashMap<(String, bool, bool), Resolved>);
+/// Resolutions by (family, bold, italic, document owner) for one [`FontDb::generation`].
+type Memo = (u64, HashMap<(String, bool, bool, u64), Resolved>);
 
 fn resolve_cache() -> &'static Mutex<Memo> {
     static CACHE: OnceLock<Mutex<Memo>> = OnceLock::new();
@@ -515,10 +516,11 @@ const FAMILY_KEY_MAX: usize = 256;
 /// for candidate names not present in [`FontDb::families`].
 const MAX_DIRECT_CANDIDATE_PROBES: usize = 32;
 
-/// Memoised fallback-list resolutions and installed-family lookups for the current [`FontDb::generation`].
+/// Memoised fallback-list resolutions and installed-family lookups for the current
+/// [`FontDb::generation`] and document ([`memo_scope`]).
 #[derive(Default)]
 struct FallbackListMemo {
-    generation: u64,
+    generation: (u64, u64),
     families: std::collections::HashSet<String>,
     probed: HashMap<String, bool>,
     lists: HashMap<(u64, usize), (String, (String, bool))>,
@@ -530,6 +532,12 @@ struct FallbackListMemo {
 fn fallback_list_cache() -> &'static Mutex<FallbackListMemo> {
     static CACHE: OnceLock<Mutex<FallbackListMemo>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(FallbackListMemo::default()))
+}
+
+/// What the memoised lookups depend on: the database's generation and the document whose embedded
+/// fonts this thread sees ([`crate::DocumentFonts`]; another document's are invisible to it).
+pub(crate) fn memo_scope(db: &FontDb) -> (u64, u64) {
+    (db.generation(), crate::DocumentFonts::current())
 }
 
 /// Hash and byte length of `family`, used as a compact cache key for fallback lists.
@@ -547,7 +555,7 @@ fn candidate_has_family(db: &FontDb, cand: &str, direct_probes: &mut usize) -> b
     if cand.is_empty() || cand.len() > FAMILY_KEY_MAX {
         return false;
     }
-    let generation = db.generation();
+    let generation = memo_scope(db);
     let lower = cand.to_ascii_lowercase();
     {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -580,7 +588,7 @@ fn candidate_has_family(db: &FontDb, cand: &str, direct_probes: &mut usize) -> b
 }
 
 /// Record a resolved `(family, substituted)` pair for a semicolon-separated fallback list.
-fn remember_list_resolution(generation: u64, key: (u64, usize), family: &str, result: (String, bool)) -> (String, bool) {
+fn remember_list_resolution(generation: (u64, u64), key: (u64, usize), family: &str, result: (String, bool)) -> (String, bool) {
     let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if c.generation == generation {
         if c.lists.len() >= FAMILY_CACHE_MAX {
@@ -604,7 +612,7 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         };
     }
 
-    let generation = db.generation();
+    let generation = memo_scope(db);
     let list_key = family_list_key(family);
     {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -678,8 +686,10 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     let cache = resolve_cache();
     let db = FontDb::global();
     let generation = db.generation();
+    let scope = memo_scope(db);
     let cacheable = family.len() <= FAMILY_KEY_MAX;
-    let key = (if cacheable { family.to_string() } else { String::new() }, bold, italic);
+    // A document's embedded fonts answer to their names only for it: the owner is part of the key.
+    let key = (if cacheable { family.to_string() } else { String::new() }, bold, italic, scope.1);
     let long_key = (!cacheable && family.contains(';')).then(|| {
         let (h, len) = family_list_key(family);
         (h, len, bold, italic)
@@ -695,8 +705,8 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     }
     if let Some(lk) = long_key {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.generation != generation {
-            *c = FallbackListMemo { generation, ..Default::default() };
+        if c.generation != scope {
+            *c = FallbackListMemo { generation: scope, ..Default::default() };
         } else if let Some((cached_family, r)) = c.long_resolved.get(&lk)
             && cached_family == family
         {
@@ -716,7 +726,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
         }
     } else if let Some(lk) = long_key {
         let mut c = fallback_list_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if c.generation == generation {
+        if c.generation == scope {
             if c.long_resolved.len() >= FAMILY_CACHE_MAX {
                 c.long_resolved.clear();
             }

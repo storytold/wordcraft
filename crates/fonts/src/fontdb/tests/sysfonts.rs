@@ -794,8 +794,12 @@ fn catalog_full_names() {
 
 /// Give an OFL test face a complete synthetic name table without adding a font asset.
 fn named_face(file: &str, family: &str) -> Vec<u8> {
+    named_face_styled(file, family, if file.contains("Bold") { "Bold" } else { "Regular" })
+}
+
+/// [`named_face`] with the style named `style`.
+fn named_face_styled(file: &str, family: &str, style: &str) -> Vec<u8> {
     let mut data = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts").join(file)).unwrap();
-    let style = if file.contains("Bold") { "Bold" } else { "Regular" };
     let names =
         [(1, family.to_string()), (2, style.to_string()), (4, format!("{family} {style}")), (6, format!("{}-{style}", family.replace(' ', "")))];
     let mut table = Vec::new();
@@ -859,7 +863,7 @@ fn circle_without_text_face() {
 fn circle_checks_face_coverage() {
     let db = FontDb::with_font_dirs(Vec::new());
     db.set_system_fallback(false);
-    db.add_document_fonts(vec![(named_face("SourceSerif4-Regular.ttf", "Times New Roman"), "Times New Roman".to_string())]);
+    db.add_document_fonts(vec![(named_face("SourceSerif4-Regular.ttf", "Times New Roman"), "Times New Roman".to_string())], 0);
     let preferred = db.face("Times New Roman", "Regular");
     assert!(!preferred.covers('●'));
     let primary = db.face("Source Serif 4", "Regular");
@@ -892,4 +896,77 @@ fn catalog_postscript_names() {
     assert_eq!(db.face(FAMILY, "Regular").style, "Regular");
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A document's embedded copy of an installed font under another table name (WPS embeds SimSun
+/// as 黑体 or 等线, keeping SimSun's own names) belongs to that document: it doesn't stand in for
+/// the installed font elsewhere, and the installed font still loads when asked for by name.
+#[test]
+fn a_documents_copy_of_an_installed_font_does_not_stop_it_loading() {
+    let dir = font_dir("doc-copy");
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let owner = crate::DocumentFonts::new_owner();
+    db.add_document_fonts(vec![(renamed("SourceSans3-Regular.ttf"), FAMILY.to_string())], owner);
+    let shared_loaded = |db: &FontDb| db.read_faces().iter().any(|f| f.owner == 0 && f.family == FAMILY);
+    {
+        let _doc = crate::DocumentFonts::enter(owner);
+        assert!(db.is_loaded(FAMILY), "the document sees its copy");
+        db.load_cataloged(FAMILY);
+        assert!(shared_loaded(&db), "the installed family loads beside the document's copy");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A document's embedded font that has a localized name (an embedded 仿宋_GB2312) names that
+/// family only for its own document: to another, the localized name stays unknown, so the
+/// family is substituted as if nothing were embedded (it resolved to the generic fallback, and
+/// 仿宋_GB2312 text in a document opened next drew in a sans).
+#[test]
+fn an_embedded_fonts_localized_name_is_its_documents_only() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let song = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Songti Test"), (0x0804, "测试宋体")]);
+    let owner = crate::DocumentFonts::new_owner();
+    db.add_document_fonts(vec![(song, "测试宋体".to_string())], owner);
+    assert_eq!(db.english_family("测试宋体"), None, "another document doesn't see the embedded font's names");
+    assert!(!db.has_family("测试宋体"));
+    let _doc = crate::DocumentFonts::enter(owner);
+    assert!(db.has_family("测试宋体"), "its own document does");
+}
+
+/// Fallback choices are cached for every document, so a document's embedded faces never make
+/// them: not its Times New Roman for an uncovered black circle, nor its Bold Italic of the family
+/// the fallback chose when that family has none of its own.
+#[test]
+fn fallbacks_never_pick_a_documents_embedded_face() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let owner = crate::DocumentFonts::new_owner();
+    // A Times New Roman that covers ●, and a Source Sans 3 Bold Italic (bundled without one).
+    db.add_document_fonts(
+        vec![
+            (named_face("SourceSans3-Regular.ttf", "Times New Roman"), "Times New Roman".to_string()),
+            (named_face_styled("SourceSans3-Bold.ttf", FALLBACK_FAMILY, "Bold Italic"), FALLBACK_FAMILY.to_string()),
+        ],
+        owner,
+    );
+    let primary = db.face("Source Serif 4", "Regular");
+    {
+        let _doc = crate::DocumentFonts::enter(owner);
+        assert_eq!(db.face("Times New Roman", "Regular").owner, owner, "the document sees its Times New Roman");
+        assert_eq!(db.face(FALLBACK_FAMILY, "Bold Italic").owner, owner, "and its Bold Italic");
+        assert_eq!(db.fallback_for('●', primary.id()).unwrap().owner, 0, "the circle fallback stays shared");
+    }
+    assert_eq!(db.fallback_for('●', primary.id()).unwrap().owner, 0);
+    // A letter Source Serif 4 lacks falls back to Source Sans 3; bold italic keeps a shared face.
+    let c = ('\u{100}'..='\u{2BFF}')
+        .find(|&c| !primary.covers(c) && db.fallback_for(c, primary.id()).is_some_and(|f| f.family == FALLBACK_FAMILY))
+        .expect("a character Source Sans 3 has and Source Serif 4 lacks");
+    for scope in [owner, 0] {
+        let _doc = crate::DocumentFonts::enter(scope);
+        let styled = db.fallback_styled(c, primary.id(), true, true).unwrap();
+        assert_eq!(styled.owner, 0, "{c:?} in scope {scope}: bold italic fallback stays shared");
+        let run = db.fallback_for_run(&[c], primary.id(), true, true).unwrap();
+        assert_eq!(run.owner, 0, "{c:?} in scope {scope}: run fallback stays shared");
+    }
 }

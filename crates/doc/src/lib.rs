@@ -85,6 +85,7 @@ mod text_walk;
 
 pub use block::{Block, Blocks, BoxBudget, MAX_TEXT_BOX_DEPTH};
 pub use compare::para_block;
+pub use document::EmbeddedFontsOwner;
 use document::MediaIndex;
 pub use error::{DocError, Result};
 pub use missing::{MAX_MISSING_PICTURES, MissingPicture, MissingPictureReason, MissingPictures, picture_hash};
@@ -138,6 +139,11 @@ pub struct Document {
     /// by `==`).
     #[serde(skip)]
     media_index: MediaIndex,
+    /// The owner of the fonts this document embeds in the process-wide font database (0: none
+    /// loaded), so layout sees them and other documents don't; not part of the document (never
+    /// saved, ignored by `==`, kept by copies).
+    #[serde(skip)]
+    pub embedded_fonts: EmbeddedFontsOwner,
     /// Markup kept from the file it was opened from, for writing back what isn't edited (see
     /// [`kept`]); never saved, ignored by `==`.
     #[serde(skip)]
