@@ -1103,3 +1103,49 @@ fn a_page_reference_into_nested_text_boxes_stops_where_layout_does() {
     let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
     assert_eq!(shown_in(&output, 0, StoryRef::Body), ["2", "2", "9"]);
 }
+
+#[test]
+fn a_page_keeps_a_multiple_spaced_picture_line_while_the_picture_fits() {
+    // A paragraph holding only a picture, at 1.15 spacing, as the page's last line: Word keeps it
+    // on the page while the picture itself ends above the bottom margin; the font's descent and
+    // the spacing's leading below it may run into the margin (measured in Word, compatibility
+    // modes 11 and 15, Calibri 11 pt, A4: after one text line, a 698 pt picture stays on page
+    // one of a 714.35 pt body and a 699 pt one moves on). Only the picture's own extent counts.
+    // Word stops 0.4 pt (mode 11) to 0.7 pt (mode 15) short of the margin, a remainder not
+    // modelled here: the picture ending 1 pt above the margin stays in both.
+    crate::test_fonts();
+    use wordcraft_doc::props::LineSpacing;
+    let make = |h: f32| {
+        let mut d = Document::from_text("A line of text\n");
+        for b in &mut d.body {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(b) {
+                p.props.line_spacing = Some(LineSpacing::Multiple(1.15));
+                p.props.space_after = Some(0.0);
+                p.props.space_before = Some(0.0);
+            }
+        }
+        d.insert_object(&Pos::body(1, 0), super::rect_shape(200.0, h, Default::default()), &Default::default()).unwrap();
+        lay(&d)
+    };
+    let bottom = {
+        let s = &Document::from_text("").last_section;
+        s.page_h - s.margin_bottom
+    };
+    // Where the picture's line starts: below the text line, whatever the test font's height.
+    let control = make(10.0);
+    assert_eq!(control.pages.len(), 1);
+    let pic_top = control.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, y, para, l0, .. } if para.lines.get(*l0).is_some() => Some(*y),
+            _ => None,
+        })
+        .fold(f32::MIN, f32::max);
+    let room = bottom - pic_top;
+    assert!(room > 500.0, "{room}");
+    let fits = make(room - 1.0);
+    assert_eq!(fits.pages.len(), 1, "a picture ending 1 pt above the margin stays on the page ({room})");
+    let too_tall = make(room + 0.5);
+    assert_eq!(too_tall.pages.len(), 2, "a picture reaching past the margin moves on ({room})");
+}
