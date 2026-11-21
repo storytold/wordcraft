@@ -1,0 +1,18 @@
+[package]
+name = "wordcraft-validate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Structural integrity validation for WordCraft OOXML (.docx) packages"
+
+[lints]
+workspace = true
+
+[dependencies]
+zip = { workspace = true }
+quick-xml = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+zip = { workspace = true }
