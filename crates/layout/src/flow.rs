@@ -297,35 +297,17 @@ impl<'a> Flow<'a> {
     }
 
     /// `before`, the space before the paragraph, with the previous paragraph (`prev`) taken into account.
-    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
-        let (style, ctxl, mut after, after_auto, listed) = prev;
-        let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
-        if style == rp.style {
-            if ctxl {
-                pb.y -= after;
-                before = (before - after).max(0.0);
-                after = 0.0;
-            }
-            if rp.contextual_spacing {
-                before = 0.0;
-            }
-        }
-        // Automatic spacing: none between two list items (as in an HTML list; measured in Word:
-        // any two items, of one list or two, at any level).
-        if listed && self.label.is_some() {
-            if after_auto {
-                pb.y -= after;
-                after = 0.0;
-            }
-            if rp.before_auto {
-                before = 0.0;
-            }
-        }
-        // The space between two paragraphs is the larger of the first's space after and the
-        // second's space before, not their sum.
-        if before > 0.0 && after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
-            before = (before - after).max(0.0);
+    fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
+        let (style, contextual, after, after_auto, listed) = prev;
+        let (after_kept, before) = settle_gap(
+            &PrevGap { style, contextual, after, after_auto, listed },
+            before,
+            &self.pl.rp,
+            self.label.is_some(),
+            ctx.doc.settings.sum_paragraph_spacing,
+        );
+        if after_kept == 0.0 && after != 0.0 {
+            pb.y -= after;
         }
         before
     }
@@ -346,10 +328,35 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
+        let room = pb.next_room(self.body_top);
+        let mut need = height
+            + if rp.keep_next {
+                let prev = PrevGap {
+                    style: rp.style.clone(),
+                    contextual: rp.contextual_spacing,
+                    after: if break_mark { 0.0 } else { rp.space_after },
+                    after_auto: rp.after_auto,
+                    listed: self.label.is_some(),
+                };
+                // The whole chain, not just its next eight paragraphs: one that fits on a page
+                // moves over whole rather than leaving its first paragraph at the bottom (#6593
+                // review).
+                next_first_line(ctx, self.block, self.width, prev, &mut ctx.counters.clone(), room)
+            } else {
+                0.0
+            };
+        // A chain too long for any page is not carried over: it breaks at the page bottom, and
+        // only keep lines together still moves the paragraph (#6593). One that needs more than a
+        // whole page from here is that long, without walking back to where it starts.
+        if rp.keep_next && pb.y + need > pb.bottom + 0.01 && !pb.fresh() && (need > room || chain_overflows(ctx, self.block, self.width, room)) {
+            if !rp.keep_lines {
+                return before;
+            }
+            need = height;
+        }
         // With the 0.01 pt of slack the other fit checks take.
-        if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
+        if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= room {
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);
@@ -999,71 +1006,201 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     after
 }
 
+/// A paragraph's spacing state carried into the gap before the next paragraph (same fields as
+/// `PageBuilder::prev`).
+struct PrevGap {
+    style: String,
+    contextual: bool,
+    after: f32,
+    after_auto: bool,
+    listed: bool,
+}
+
+/// Settle the vertical spacing between `prev` and a following paragraph (`rp`, `listed`): returns
+/// `(after_kept, before_kept)` — how much of `prev.after` stays below the previous paragraph and
+/// how much of `before` is added before the next one.
+fn settle_gap(prev: &PrevGap, mut before: f32, rp: &wordcraft_doc::resolve::ResolvedPara, listed: bool, sum_spacing: bool) -> (f32, f32) {
+    let mut after = prev.after;
+    // Contextual spacing suppresses each paragraph's own side of the gap.
+    if prev.style == rp.style {
+        if prev.contextual {
+            before = (before - after).max(0.0);
+            after = 0.0;
+        }
+        if rp.contextual_spacing {
+            before = 0.0;
+        }
+    }
+    // Automatic spacing: none between two list items (as in an HTML list; measured in Word:
+    // any two items, of one list or two, at any level).
+    if prev.listed && listed {
+        if prev.after_auto {
+            after = 0.0;
+        }
+        if rp.before_auto {
+            before = 0.0;
+        }
+    }
+    // The space between two paragraphs is the larger of the first's space after and the
+    // second's space before, not their sum.
+    if before > 0.0 && after > 0.0 && !sum_spacing {
+        before = (before - after).max(0.0);
+    }
+    (after, before)
+}
+
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
 /// next one to start there — its first line, two of its lines with widow/orphan control (it
 /// doesn't leave a single line at the bottom of a page; it moves over whole instead), all three
 /// of a three-line one under that control (two would leave a widow), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
-/// kept with the next too (a chain moves together in Word). Word carries a kept heading over
-/// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
+/// kept with the next too (a chain moves together in Word), to the end of the chain or `room`,
+/// whichever comes first: a chain taller than a page is not carried over (#6593). Word carries a
+/// kept heading over when the paragraph after it cannot start on the page (#966).
+/// The chain stops at a paragraph that starts a new page anyway: nothing after it needs room
+/// here (#6593).
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, prev: PrevGap, counters: &mut Counters, room: f32) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
-        Some(Block::Para(p)) => {
-            // Keep list indents and label metrics without consuming the document counters.
-            let rp = ctx.doc.styles.resolve_para(&p.props);
-            let label =
-                p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
-            let pl = match ctx.para_ahead(p, width, label.clone()) {
-                Some(pl) => pl,
-                None => {
-                    let env = para::ParaEnv {
-                        doc: ctx.doc,
-                        width,
-                        label,
-                        fields: &ctx.fields,
-                        show_hidden: ctx.opts.show_hidden,
-                        field_codes: ctx.opts.field_codes,
-                        hide_deleted: ctx.opts.hides_deleted(StoryRef::Body),
-                        table: None,
-                        proofing: None,
-                        typing_word: None,
-                        numeral: ctx.opts.numeral,
-                        exclusions: &[],
-                        eq_number: ctx.eq_count,
-                        read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
-                        grid: ctx.grid,
-                        fit_objects: false,
-                        fitted: &[],
-                    };
-                    Arc::new(para::layout_para(p, &env))
+        Some(Block::Para(p)) if ctx.doc.styles.resolve_para(&p.props).page_break_before => 0.0,
+        _ => chain_room(ctx, block + 1, width, Some(prev), counters, (MAX_CHAIN, room)).unwrap_or(room),
+    }
+}
+
+/// Most paragraphs of a keep-with-next chain measured to tell whether it fits on a page; a longer
+/// chain is taken not to fit.
+const MAX_CHAIN: usize = 512;
+
+/// The room the paragraphs from `first` on need on the page: each kept with the next in full
+/// (the first `full` of them; after that one counts as not kept), then enough of the paragraph
+/// ending the chain to start there (see [`next_first_line`]). Uses placement-equivalent spacing:
+/// `prev` settles the gap into `first`, or `None` measures `first` at the top of a fresh page
+/// (dropping positive `space_before`, matching [`Flow::keep_together`]). The chain ends early at a
+/// paragraph that starts a new page. Stops adding once past `limit`. `None` when `full` kept
+/// paragraphs were not enough to reach the chain's end and `full` is [`MAX_CHAIN`].
+fn chain_room(
+    ctx: &mut Ctx,
+    first: usize,
+    width: f32,
+    mut prev: Option<PrevGap>,
+    counters: &mut Counters,
+    (full, limit): (usize, f32),
+) -> Option<f32> {
+    let mut total = 0.0;
+    let mut block = first;
+    for n in 0..=full {
+        match ctx.doc.body.get(block).map(|b| &**b) {
+            Some(Block::Para(p)) => {
+                // Keep list indents and label metrics without consuming the document counters.
+                let rp = ctx.doc.styles.resolve_para(&p.props);
+                if block > first && rp.page_break_before {
+                    return Some(total);
                 }
-            };
-            // Its border room, unless it joins the paragraph before (or after) in one box.
-            let own = Edges::own(&pl, 0, pl.lines.len());
-            let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
-            if pl.rp.keep_next && depth < 8 {
-                let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
-            } else {
+                let label =
+                    p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+                let listed = label.is_some();
+                let pl = para_ahead_or_lay(ctx, p, width, label);
+                let gap = match &prev {
+                    Some(prev) => {
+                        let (after, before) = settle_gap(prev, pl.rp.space_before, &pl.rp, listed, ctx.doc.settings.sum_paragraph_spacing);
+                        after + before
+                    }
+                    None => pl.rp.space_before.min(0.0),
+                };
+                // Its border room, unless it joins the paragraph before (or after) in one box.
+                let own = Edges::own(&pl, 0, pl.lines.len());
+                let top = if joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None) { 0.0 } else { own.top };
+                if pl.rp.keep_next && n < full {
+                    let bottom = if joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None) { 0.0 } else { own.bottom };
+                    total += gap + top + pl.height + bottom;
+                    if total > limit {
+                        return Some(total);
+                    }
+                    prev = Some(PrevGap {
+                        style: pl.rp.style.clone(),
+                        contextual: pl.rp.contextual_spacing,
+                        after: pl.rp.space_after,
+                        after_auto: pl.rp.after_auto,
+                        listed,
+                    });
+                    block += 1;
+                    continue;
+                }
+                if pl.rp.keep_next && full == MAX_CHAIN {
+                    return None;
+                }
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
                 let to = |k: usize| match (pl.lines.first(), pl.lines.get(k)) {
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
-                    + top
-                    + if pl.rp.keep_lines {
-                        pl.height
-                    } else if pl.rp.widow_control && pl.lines.len() >= 2 {
-                        // Neither split of three lines is allowed (`settled_end`).
-                        to(if pl.lines.len() == 3 { 2 } else { 1 })
-                    } else {
-                        to(0)
-                    }
+                return Some(
+                    total
+                        + gap
+                        + top
+                        + if pl.rp.keep_lines {
+                            pl.height
+                        } else if pl.rp.widow_control && pl.lines.len() >= 2 {
+                            // Neither split of three lines is allowed (`settled_end`).
+                            to(if pl.lines.len() == 3 { 2 } else { 1 })
+                        } else {
+                            to(0)
+                        },
+                );
             }
+            Some(Block::Table(_)) => return Some(total + prev.map_or(0.0, |p| p.after) + 24.0),
+            None => return Some(total),
         }
-        Some(Block::Table(_)) => 24.0,
-        None => 0.0,
+    }
+    Some(total)
+}
+
+/// Whether the whole keep-with-next chain `block` is in, from the paragraph that starts it, needs
+/// more than `room`: then it cannot be kept on one page, and Word lays it out from where it is
+/// and breaks it at the page bottom rather than carrying its tail over (#6593).
+fn chain_overflows(ctx: &mut Ctx, block: usize, width: f32, room: f32) -> bool {
+    let mut start = block;
+    for _ in 0..MAX_CHAIN {
+        let starts_page = ctx.doc.body.get(start).and_then(|b| b.as_para()).is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before);
+        let kept_before = start
+            .checked_sub(1)
+            .and_then(|i| ctx.doc.body.get(i))
+            .and_then(|b| b.as_para())
+            .is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).keep_next);
+        if starts_page || !kept_before {
+            let mut counters = ctx.counters.clone();
+            return chain_room(ctx, start, width, None, &mut counters, (MAX_CHAIN, room + 0.01)).is_none_or(|h| h > room + 0.01);
+        }
+        start -= 1;
+    }
+    true
+}
+
+/// `p` laid out at `width` ahead of placing it, from the cache when it can be.
+fn para_ahead_or_lay(ctx: &mut Ctx, p: &Paragraph, width: f32, label: Option<(String, Level)>) -> Arc<para::ParaLayout> {
+    match ctx.para_ahead(p, width, label.clone()) {
+        Some(pl) => pl,
+        None => {
+            let env = para::ParaEnv {
+                doc: ctx.doc,
+                width,
+                label,
+                fields: &ctx.fields,
+                show_hidden: ctx.opts.show_hidden,
+                field_codes: ctx.opts.field_codes,
+                hide_deleted: ctx.opts.hides_deleted(StoryRef::Body),
+                table: None,
+                proofing: None,
+                typing_word: None,
+                numeral: ctx.opts.numeral,
+                exclusions: &[],
+                eq_number: ctx.eq_count,
+                read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
+                grid: ctx.grid,
+                fit_objects: false,
+                fitted: &[],
+            };
+            Arc::new(para::layout_para(p, &env))
+        }
     }
 }

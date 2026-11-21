@@ -16205,6 +16205,170 @@ fn turned_cell_float_keeps_its_along_text_offset() {
     }
 }
 
+/// A keep-with-next chain longer than a page fills the page from the top and breaks at its
+/// bottom, as an unkept run of the same lines would (#6593). WordCraft broke it well short of
+/// the bottom and carried the tail to the next page.
+#[test]
+fn keep_with_next_chain_longer_than_the_page_breaks_at_the_bottom() {
+    crate::test_fonts();
+    let pages = |keep: bool| -> Vec<usize> {
+        let mut d = Document::new();
+        let plain = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+            ..Default::default()
+        };
+        let para = |text: &str, p: &ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = p.clone();
+            wordcraft_doc::para_block(x)
+        };
+        let kept = ParaProps { keep_next: Some(keep), ..plain.clone() };
+        d.body.push(para("Text on page 1.", &plain));
+        d.body.push(para("Heading on page 2", &ParaProps { page_break_before: Some(true), ..kept.clone() }));
+        d.body.extend((0..69).map(|i| para(&format!("Line {i}"), &kept)));
+        d.body.push(para("Last line", &plain));
+        let l = lay(&d);
+        (0..d.body.len()).map(|k| l.caret(&Pos::body(k, 0)).unwrap().page).collect()
+    };
+    let plain = pages(false);
+    assert!(plain.contains(&2), "the run is longer than a page: {plain:?}");
+    assert_eq!(pages(true), plain, "a chain too long for a page breaks where unkept lines do");
+}
+
+/// The second case of #6593: a kept heading starting a page, a kept list that fits below it,
+/// then a picture too tall to share the page. The chain does not fit on one page, so Word keeps
+/// the whole list below the heading and moves only the picture over; WordCraft carried the last
+/// items over with the picture. And a kept empty paragraph before the heading stays at the bottom
+/// of its page: the heading starts a new page anyway, so nothing after it needs room there.
+/// WordCraft moved it, leaving it alone on a blank page.
+#[test]
+fn keep_with_next_chain_before_a_tall_picture_keeps_its_list_on_the_page() {
+    crate::test_fonts();
+    // Pages of the body lines, the empty kept paragraph, the heading, each item and the picture.
+    let pages = |body: usize| -> Vec<usize> {
+        let mut d = Document::new();
+        let plain = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+            ..Default::default()
+        };
+        let kept = ParaProps { keep_next: Some(true), keep_lines: Some(true), ..plain.clone() };
+        let para = |text: &str, p: &ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = p.clone();
+            x
+        };
+        d.body = (0..body).map(|i| wordcraft_doc::para_block(para(&format!("Body {i}"), &plain))).collect();
+        d.body.push(wordcraft_doc::para_block(para("", &kept)));
+        d.body.push(wordcraft_doc::para_block(para("Heading", &ParaProps { page_break_before: Some(true), ..kept.clone() })));
+        d.body.extend((1..=30).map(|i| wordcraft_doc::para_block(para(&format!("Item {i}"), &kept))));
+        let mut pic = para("", &kept);
+        pic.insert_object(0, picture(400.0, 500.0, Default::default()), &Default::default()).unwrap();
+        d.body.push(wordcraft_doc::para_block(pic));
+        let l = lay(&d);
+        (0..d.body.len()).map(|k| l.caret(&Pos::body(k, 0)).unwrap().page).collect()
+    };
+    let expect = |body: usize| -> Vec<usize> { [vec![0; body + 1], vec![1; 31], vec![2]].concat() };
+    assert_eq!(pages(36), expect(36), "the empty kept paragraph stays on the first page");
+    assert_eq!(pages(5), expect(5), "the list stays below its heading; the picture goes over");
+}
+
+/// A keep-with-next chain that fits on a fresh page once paragraph spacing collapses (merged
+/// before/after gaps, contextual spacing, and dropped fresh-page space before) moves together
+/// instead of being misclassified as overflowing (#6593). When spacing is additive and the chain
+/// genuinely exceeds a page, it still breaks at the page bottom.
+#[test]
+fn keep_with_next_chain_that_fits_with_collapsed_spacing_moves_together() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    let pages = |room: f32, filler_h: f32, contextual: bool, sum_spacing: bool| -> Vec<usize> {
+        let mut d = Document::new();
+        d.last_section.margin_top = 50.0;
+        d.last_section.margin_bottom = 50.0;
+        d.last_section.page_h = room + 100.0;
+        d.settings.sum_paragraph_spacing = sum_spacing;
+        let para = |text: &str, props: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = props;
+            wordcraft_doc::para_block(x)
+        };
+        let filler = ParaProps {
+            style: Some("Heading 1".into()),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(LineSpacing::Exactly(filler_h)),
+            ..Default::default()
+        };
+        let item = ParaProps {
+            style: Some("Normal".into()),
+            space_before: Some(10.0),
+            space_after: Some(10.0),
+            contextual_spacing: Some(contextual),
+            line_spacing: Some(LineSpacing::Exactly(20.0)),
+            ..Default::default()
+        };
+        let kept = ParaProps { keep_next: Some(true), ..item.clone() };
+        d.body = vec![para("Filler", filler), para("A", kept.clone()), para("B", kept), para("C", item)];
+        let l = lay(&d);
+        (0..d.body.len()).map(|k| l.caret(&Pos::body(k, 0)).unwrap().page).collect()
+    };
+    // Merged spacing: A/B/C need 20 + 10 + 20 + 10 + 20 = 80 pt on a fresh page (110 pt if both
+    // sides of each gap and A's space before were summed).
+    assert_eq!(pages(100.0, 30.0, false, false), vec![0, 1, 1, 1], "merged gaps fit in 100 pt");
+    // Fresh-page spacing drops A's 10 pt space before, so 80 pt fits in 85 pt (90 pt would not).
+    assert_eq!(pages(85.0, 30.0, false, false), vec![0, 1, 1, 1], "fresh-page spacing drops leading space before");
+    // Contextual spacing drops both sides of A-B and B-C, so A/B/C need 60 pt and fit in 70 pt.
+    assert_eq!(pages(70.0, 20.0, true, false), vec![0, 1, 1, 1], "contextual spacing collapses same-style gaps");
+    // Additive spacing: 20 + 20 + 20 + 20 + 20 = 100 pt genuinely overflows 95 pt, so A and B stay
+    // on page 1 and only C goes over.
+    assert_eq!(pages(95.0, 20.0, false, true), vec![0, 0, 0, 1], "additive spacing still breaks an overlong chain");
+}
+
+/// A keep-with-next chain of more than eight paragraphs that fits on a fresh page but not in what
+/// is left of this one moves over whole: its first paragraph is not left alone at the bottom
+/// (#6593 review). The look-ahead stopped after eight kept paragraphs, so with paragraph spacing merged
+/// rather than summed it undercounted the chain, and the first paragraph stayed while the rest
+/// moved.
+#[test]
+fn keep_with_next_chain_longer_than_the_look_ahead_moves_whole() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    // Pages of the filler and of the twelve chain paragraphs, kept with next but for the last.
+    let pages = |fill: f32, keep: bool| -> Vec<usize> {
+        let mut d = Document::new();
+        d.last_section.margin_top = 50.0;
+        d.last_section.margin_bottom = 50.0;
+        d.last_section.page_h = 280.0; // 180 pt of room below the top margin
+        let para = |text: &str, props: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = props;
+            wordcraft_doc::para_block(x)
+        };
+        let filler =
+            ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(fill)), ..Default::default() };
+        let item =
+            ParaProps { space_before: Some(2.0), space_after: Some(2.0), line_spacing: Some(LineSpacing::Exactly(10.0)), ..Default::default() };
+        let kept = ParaProps { keep_next: Some(keep), ..item.clone() };
+        d.body = vec![para("Filler", filler)];
+        d.body.extend((0..11).map(|i| para(&format!("P{i}"), kept.clone())));
+        d.body.push(para("Last", item));
+        let l = lay(&d);
+        (0..d.body.len()).map(|k| l.caret(&Pos::body(k, 0)).unwrap().page).collect()
+    };
+    // The chain fits on a fresh page, so it stays there.
+    assert!(pages(1.0, true)[1..].iter().all(|&page| page == 0), "the chain fits on a fresh page");
+    // A filler that leaves less room than the whole chain needs takes the whole chain over: no
+    // filler height may leave the first paragraph behind.
+    for fill in 1..=60 {
+        let found = pages(fill as f32, true);
+        assert!(found[1..].windows(2).all(|pair| pair[0] == pair[1]), "a filler of {fill} pt splits the chain: {found:?}");
+    }
+    assert!(pages(60.0, true)[1..].iter().all(|&page| page == 1), "a tall filler takes the whole chain over");
+}
+
 /// A header paragraph beside a Square float on its last lines only: those lines are shorter than
 /// the first. A click on the first line past the short last line's end is still on the header's
 /// text, so a Behind Text picture under it is not grabbed there (#5601 review).
