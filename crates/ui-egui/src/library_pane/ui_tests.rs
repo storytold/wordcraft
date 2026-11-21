@@ -27,8 +27,11 @@ fn app() -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::from_text("Field notes")), Services::default())
 }
 
-fn harness(app: WordApp) -> Harness<'static, WordApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+/// The app in a harness with the craft runtime installed, stepped as the app's driver runs a frame
+/// ([`crate::test_harness::frame`]), so a click on a command-bound control runs its command.
+fn harness(mut app: WordApp) -> Harness<'static, WordApp> {
+    app.ui.language = "en".into();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -36,8 +39,12 @@ fn harness(app: WordApp) -> Harness<'static, WordApp> {
         },
         app,
     );
-    h.run_steps(3);
+    steps(&mut h, 3);
     h
+}
+
+fn steps(h: &mut Harness<'_, WordApp>, n: usize) {
+    crate::test_harness::frames(h, n);
 }
 
 /// The pane open on `dir`, every file read.
@@ -50,47 +57,45 @@ fn open_on(dir: &Path) -> Harness<'static, WordApp> {
         if h.state().library.ready() {
             break;
         }
-        h.step();
+        steps(&mut h, 1);
     }
     assert!(h.state().library.ready());
-    h.run_steps(4);
+    steps(&mut h, 4);
     h
 }
 
 /// Move there, press, release: one frame each, as a real click arrives.
 fn click(h: &mut Harness<'_, WordApp>, pos: egui::Pos2) {
     h.event(egui::Event::PointerMoved(pos));
-    h.step();
+    steps(h, 1);
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-        h.step();
+        steps(h, 1);
     }
-    h.run_steps(2);
+    steps(h, 2);
 }
 
 #[test]
 fn insert_library_opens_the_pane_on_its_pictures_tab() {
     let mut app = app();
-    app.ui.tab = "Insert".into();
+    app.run("ui.tab", json!({"tab": "Insert"})).unwrap();
     let mut h = harness(app);
     h.get_by_label("Library").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     assert!(h.state().session.view.library_pane, "the ribbon button opens the pane");
     assert_eq!(h.state().library.tab, super::ITEMS);
-    assert!(h.query_by_label("Pictures").is_some(), "the tab strip");
+    assert_eq!(h.query_all_by_label("Pictures").count(), 2, "the tab strip's Pictures, beside the ribbon's Insert › Pictures");
     // No folders yet: the pane says what to do, and Add Folder… (no picker here) takes a path.
     assert!(h.query_by_label_contains("Add a folder of pictures").is_some());
     let dir = folder("add");
     std::fs::write(dir.join("kiln.png"), png(40, 30, [180, 90, 40])).unwrap();
     h.get_by_label("Add Folder…").click();
-    h.run_steps(2);
+    steps(&mut h, 2);
     assert!(h.state().library.adding);
     h.state_mut().library.new_folder = dir.to_string_lossy().into_owned();
-    h.run_steps(1);
+    steps(&mut h, 1);
     h.get_by_label("Add").click();
-    for _ in 0..60 {
-        h.step();
-    }
+    steps(&mut h, 60);
     assert_eq!(h.state().session.prefs.library_folders.len(), 1, "kept with the preferences");
     assert!(h.query_by_label("Picture: kiln.png").is_some());
     // The same button closes it again (the topmost "Library": the pane's title is below the ribbon).
@@ -109,13 +114,14 @@ fn clicking_a_picture_inserts_it_selected_in_one_undo_step() {
     let mut h = open_on(&dir);
     let depth = h.state().session.undo_depth();
     h.get_by_label("Picture: red.png").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     let s = &h.state().session;
     assert_eq!(s.undo_depth(), depth + 1, "one undo step");
     let media: Vec<Vec<u8>> = s.doc.media.values().map(|m| m.to_vec()).collect();
     assert_eq!(media, vec![red], "the file's own picture");
     assert!(!s.sel.is_collapsed(), "the new picture is selected, as Insert › Pictures leaves it");
-    assert!(h.state().canvas.want_focus || h.state().canvas.focused, "typing carries on in the document");
+    let ctx = h.ctx.clone();
+    assert!(h.state().canvas.focused(&ctx), "typing carries on in the document");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -127,9 +133,7 @@ fn search_shows_only_the_pictures_that_match() {
     let mut h = open_on(&dir);
     assert!(h.query_by_label("Picture: harbour.png").is_some() && h.query_by_label("Picture: orchard.png").is_some());
     h.state_mut().library.query = "HARB".into();
-    for _ in 0..40 {
-        h.step();
-    }
+    steps(&mut h, 40);
     assert_eq!(h.state().library.hits(), Some(1));
     assert!(h.query_by_label("Picture: harbour.png").is_some());
     assert!(h.query_by_label("Picture: orchard.png").is_none());
@@ -147,11 +151,11 @@ fn a_damaged_picture_is_listed_but_not_inserted() {
     let mut h = open_on(&dir);
     assert_eq!(h.state().library.files.len(), 2);
     h.get_by_label("Picture: bad.png").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     assert!(h.state().session.doc.media.is_empty(), "nothing went in");
-    assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| !m.is_empty()), "the status line says why");
+    assert!(h.state().status_message().is_some_and(|m| !m.text.as_str().is_empty()), "the status line says why");
     h.get_by_label("Picture: good.png").click();
-    h.run_steps(3);
+    steps(&mut h, 3);
     let media: Vec<Vec<u8>> = h.state().session.doc.media.values().map(|m| m.to_vec()).collect();
     assert_eq!(media, vec![good]);
     let _ = std::fs::remove_dir_all(dir);
@@ -163,9 +167,9 @@ fn a_damaged_picture_is_listed_but_not_inserted() {
 fn the_pane_speaks_the_interface_language() {
     let mut app = app();
     let host = super::WordHost(&mut app);
-    crate::i18n::pseudo::set(true);
+    crate::i18n::apply_language(crate::i18n::Lang::PSEUDO);
     let shown: Vec<String> = super::words().map(|w| craft_library_egui::Host::text(&host, w).into_owned()).collect();
-    crate::i18n::pseudo::set(false);
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
     for (english, w) in super::words().zip(&shown) {
         assert!(w.contains('⟦'), "{english} goes through tl!: {w}");
     }
@@ -223,7 +227,7 @@ fn step_until(h: &mut Harness<'_, WordApp>, done: impl Fn(&Harness<'_, WordApp>)
     while !done(h) {
         assert!(std::time::Instant::now() < until, "not within a minute");
         let t = std::time::Instant::now();
-        h.step();
+        crate::test_harness::frame(h);
         slowest = slowest.max(t.elapsed());
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -322,22 +326,29 @@ fn another_folder_or_closing_the_pane_drops_the_photos_waiting() {
         std::fs::write(photos.join(name), &jpeg).unwrap();
     }
     let empty = folder("waiting-empty");
-    let mut h = open_on(&photos);
-    h.state_mut().run("library.addFolder", json!({"path": empty.to_string_lossy()})).unwrap();
-    h.state_mut().library.folder = None;
-    step_until(&mut h, |h| h.state().library_thumbs.waiting().0 >= 2);
+    // The pane on both folders, stepped only until a photo waits: the worker draws one every half
+    // second or more, so a few frames more (slower on a busy machine) could see them all drawn.
+    let mut app = app();
+    for dir in [&photos, &empty] {
+        app.run("library.addFolder", json!({"path": dir.to_string_lossy()})).unwrap();
+    }
+    app.run("view.libraryPane", json!({"value": true})).unwrap();
+    app.library.folder = None;
+    let mut h = harness(app);
+    step_until(&mut h, |h| h.state().library_thumbs.waiting().0 >= 1);
     // Another folder: what waits is dropped (the photo being drawn finishes), and the pane reads
     // its folders again, so none of its placeholders is left blank.
     let shown = h.state().session.prefs.library_folders.iter().find(|f| f.contains("waiting-empty")).cloned();
     h.state_mut().library.folder = shown;
-    h.step();
+    crate::test_harness::frame(&mut h);
     assert_eq!(h.state().library_thumbs.waiting(), (0, 0));
-    // All folders again: the photos are asked for again.
+    // All folders again: a photo that was dropped is asked for again, and the pane holds a
+    // placeholder for it until it is drawn.
     h.state_mut().library.folder = None;
-    step_until(&mut h, |h| h.state().library_thumbs.waiting().0 >= 1);
+    step_until(&mut h, |h| h.state().library_thumbs.waiting().1 >= 1);
     // The pane closed: dropped in the same frame.
     h.state_mut().run("view.libraryPane", json!({"value": false})).unwrap();
-    h.step();
+    crate::test_harness::frame(&mut h);
     assert_eq!(h.state().library_thumbs.waiting(), (0, 0));
     assert!(!h.state().library.ready(), "the pane reads its folders again when it opens");
     let _ = std::fs::remove_dir_all(photos);

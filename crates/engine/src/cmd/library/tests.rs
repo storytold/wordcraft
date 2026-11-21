@@ -173,7 +173,13 @@ fn files_over_256_mb_are_listed_with_an_error_and_never_read() {
         assert_eq!(files.len(), 1);
         assert!(files[0]["error"].as_str().is_some_and(|e| e.contains("256 MB")), "{}", files[0]);
     }
+    // Refresh looks at the failed file again: still too large, still not read.
+    let files = list(&mut ss, json!({"refresh": true}));
+    assert!(files[0]["error"].as_str().is_some_and(|e| e.contains("256 MB")), "{}", files[0]);
     let path = s(&dir.join("huge.png"));
+    // The pane searches files that failed too: this one is still not read.
+    assert!(ss.run("library.search", &json!({"query": "huge", "file": path})).is_ok());
+    assert_eq!(ss.library.sizes().3, 0, "no picture was opened");
     assert!(ss.run("library.thumbnail", &json!({"file": path, "picture": 0})).is_err());
     assert!(ss.run("library.insert", &json!({"file": path})).is_err());
     assert!(inserted(&ss).is_empty());
@@ -317,10 +323,18 @@ fn search_finds_file_names_and_formats_in_any_case() {
     ss.run("library.addFolder", &json!({"path": trips})).unwrap();
     let one = ss.run("library.search", &json!({"query": "harbour", "folder": trips})).unwrap();
     assert_eq!(one.as_array().map(Vec::len), Some(1), "{one}");
+    // In one file only, as the pane searches a few files a frame.
+    let dawn = s(&dir.join("Harbour at dawn.png"));
+    let one = ss.run("library.search", &json!({"query": "harbour", "file": dawn})).unwrap();
+    assert_eq!(names(one.as_array().unwrap()), ["Harbour at dawn.png"], "{one}");
+    assert_eq!((&one[0]["picture"], &one[0]["hidden"], &one[0]["match"]), (&json!(0), &json!(false), &json!("title")), "{one}");
+    assert_eq!(ss.run("library.search", &json!({"query": "kiln", "file": dawn})).unwrap(), json!([]));
     let limited = ss.run("library.search", &json!({"query": "a", "limit": 1})).unwrap();
     assert_eq!(limited.as_array().map(Vec::len), Some(1));
     assert_eq!(ss.run("library.search", &json!({"query": "nothing like it"})).unwrap(), json!([]));
-    for bad in [json!({}), json!({"query": "  "}), json!({"query": "x".repeat(300)}), json!({"query": "a", "limit": 0})] {
+    // A query is at most 256 characters, as the pane's search field takes.
+    assert_eq!(ss.run("library.search", &json!({"query": "x".repeat(256)})).unwrap(), json!([]));
+    for bad in [json!({}), json!({"query": "  "}), json!({"query": "x".repeat(257)}), json!({"query": "a", "limit": 0})] {
         assert!(ss.run("library.search", &bad).is_err(), "{bad}");
     }
     let _ = std::fs::remove_dir_all(dir);
@@ -456,6 +470,7 @@ fn a_read_root_confines_every_library_command() {
             ("library.thumbnail", json!({"file": secret, "picture": 0})),
             ("library.insert", json!({"file": secret})),
             ("library.list", json!({"file": secret})),
+            ("library.search", json!({"query": "secret", "file": secret})),
         ] {
             let e = ss.run(id, &p).unwrap_err();
             assert!(e.to_string().contains("outside the read root"), "{id}: {e}");

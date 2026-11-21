@@ -40,13 +40,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("library.list", "List Library", "Insert › Library", list)
             .params(
-                "{folder?, file?} → [{file, folder, title, pictures: [{index, title, hidden}], pictureCount, error?}]: the picture files in the Library folders (or one folder, or one file), one picture each, listed from their names without reading them; a file over 256 MB carries its `error`, and one that isn't a picture says so when library.thumbnail or library.insert reads it",
+                "{folder?, file?, refresh?: bool} → [{file, folder, title, pictures: [{index, title, hidden}], pictureCount, error?}]: the picture files in the Library folders (or one folder, or one file), one picture each, listed from their names without reading them; a file over 256 MB carries its `error`, and one that isn't a picture says so when library.thumbnail or library.insert reads it; `refresh` looks again at the files that failed (the pane's Refresh)",
             )
             .when(native)
             .pure(),
         CommandSpec::new("library.search", "Search Library", "Insert › Library", search)
             .params(
-                "{query, limit?: 1..=500 (default 100), folder?} → [{file, picture, title, match: title|text|file}]: pictures whose file name or format (PNG, JPEG…) holds `query`, any case",
+                "{query: at most 256 characters, limit?: 1..=500 (default 100), folder?, file?} → [{file, picture, title, hidden, match: title|text|file}]: pictures whose file name or format (PNG, JPEG…) holds `query`, any case; with `file`, only that Library file (the pane searches a few files a frame)",
             )
             .when(native)
             .pure(),
