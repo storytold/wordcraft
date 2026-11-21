@@ -13,7 +13,7 @@ pub(super) enum Dir<'l> {
 }
 
 /// The direction of `c` if it is a strong letter (UAX #9 P2): `Some(true)` right to left.
-pub(super) fn strong_rtl(c: char) -> Option<bool> {
+pub(crate) fn strong_rtl(c: char) -> Option<bool> {
     use unicode_bidi::BidiClass::{AL, L, R};
     // In ASCII only the letters are strong (L).
     if c.is_ascii() {
