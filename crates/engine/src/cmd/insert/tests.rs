@@ -415,3 +415,22 @@ fn local_civil_date_follows_the_utc_offset() {
         assert!(crate::cmd::local_offset_secs(unix).abs() <= 26 * 3600);
     }
 }
+
+#[test]
+fn shared_base64_preserves_command_payload_bytes() {
+    for (plain, encoded) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foobar", "Zm9vYmFy")] {
+        assert_eq!(super::objects::base64_encode(plain.as_bytes()), encoded);
+    }
+    let bytes: Vec<u8> = (0..513).map(|i| (i % 256) as u8).collect();
+    for len in 0..=bytes.len() {
+        let encoded = super::objects::base64_encode(&bytes[..len]);
+        assert_eq!(encoded.len(), len.div_ceil(3) * 4);
+        assert!(!encoded.contains(['\r', '\n']));
+        assert_eq!(super::objects::base64_decode(&encoded), Some(bytes[..len].to_vec()));
+    }
+    assert_eq!(super::objects::base64_encode(&[251, 255, 255]), "+///");
+    // The existing decoder intentionally accepts URL-safe symbols, whitespace and optional padding.
+    assert_eq!(super::objects::base64_decode("-___"), Some(vec![251, 255, 255]));
+    assert_eq!(super::objects::base64_decode("Z g\n"), Some(b"f".to_vec()));
+    assert_eq!(super::objects::base64_decode("!!!!"), None);
+}
