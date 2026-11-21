@@ -289,6 +289,8 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 > 2026-11-15 · Arabic text in a font that isn't installed takes Times New Roman's line height (paragraphs 1.240 em apart at 12 pt, single spacing), as Word does, instead of the tall Naskh substitute's; Traditional Arabic, Simplified Arabic, Arabic Typesetting, Sakkal Majalla, Andalus, Aldhabi, Urdu Typesetting, Dubai and Arial Unicode MS have the heights measured in Word (#6803). Hebrew, Syriac, Thaana, and an empty paragraph's mark in a missing font, are not covered.
 
+> 2026-11-15 · Keep with next on the paragraph closing a section whose next section starts on a new page (next page, odd or even) no longer moves it to the next page for want of room for the following line, which left an empty page; Word ignores it there (measured for a next-page break; odd-page and even-page breaks follow by analogy, not measured). Before a continuous section it still keeps with the next section's first line (not measured in Word). `layout::tests::keep_next_section` (#6834).
+
 > 2026-11-05 · Arabic letters join across a change of formatting and past hidden or deleted text (#4093): each run is shaped with the text shown on either side of it.
 
 > 2026-11-01 · Text in a turned text box is drawn turned with it, about its centre, on screen and in PNG and PDF export; flipped across, upside down; flipped side to side, still readable (as Word draws it). Clicks and the caret inside a turned box still go by its upright text (`layout::tests::a_turned_text_box_turns_its_text_with_it`).
