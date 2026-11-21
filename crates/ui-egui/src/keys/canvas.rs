@@ -270,7 +270,7 @@ fn equation_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &E
             true
         }
         EditorInput::Edit(EditCommand::Paste) => {
-            if let Ok(Some(t)) = ClipboardHandle::of(ctx).read_text()
+            if let Some(t) = pasted_text(ctx, pass)
                 && app.run("equation.type", json!({"text": t})).is_err()
             {
                 app.canvas.ime_interrupt_now = true;
@@ -534,7 +534,7 @@ fn handle_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &Edi
             }
         }
         EditorInput::Cancel => cancel(app, ctx),
-        EditorInput::Edit(cmd) => edit_command(app, ctx, *cmd),
+        EditorInput::Edit(cmd) => edit_command(app, ctx, pass, *cmd),
         _ => {}
     }
 }
@@ -551,7 +551,7 @@ fn move_input(app: &mut WordApp, mv: NavMove, m: MoveMods) {
     }
 }
 
-fn edit_command(app: &mut WordApp, ctx: &egui::Context, cmd: EditCommand) {
+fn edit_command(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, cmd: EditCommand) {
     match cmd {
         EditCommand::Cut => {
             if let Ok(r) = app.run("edit.cut", json!({})) {
@@ -561,7 +561,7 @@ fn edit_command(app: &mut WordApp, ctx: &egui::Context, cmd: EditCommand) {
         EditCommand::Copy => {
             let _ = app.run("edit.copy", json!({}));
         }
-        EditCommand::Paste => paste(app, ctx),
+        EditCommand::Paste => paste(app, ctx, pass),
         EditCommand::SelectAll => {
             let _ = app.run("select.all", json!({}));
         }
@@ -578,11 +578,17 @@ fn edit_command(app: &mut WordApp, ctx: &egui::Context, cmd: EditCommand) {
     }
 }
 
+/// The text a paste of this pass takes: the text the platform's paste event carried
+/// ([`ToolPass::pasted`]), else the installed clipboard's (#6635, [`crate::system_clipboard`]).
+fn pasted_text(ctx: &egui::Context, pass: &ToolPass) -> Option<String> {
+    pass.pasted.as_deref().filter(|t| !t.is_empty()).map(str::to_owned).or_else(|| ClipboardHandle::of(ctx).read_text().ok().flatten())
+}
+
 /// Paste from the clipboard: copied picture files insert as pictures (#45), text and a clipboard
 /// picture go through `edit.paste`.
-fn paste(app: &mut WordApp, ctx: &egui::Context) {
+fn paste(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass) {
     let clip = ClipboardHandle::of(ctx);
-    let text = clip.read_text().ok().flatten();
+    let text = pasted_text(ctx, pass);
     if text.is_none() && !clip.has(&[RGBA8, URI_LIST]) {
         return;
     }
