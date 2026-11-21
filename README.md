@@ -274,11 +274,10 @@ closer pagination fidelity, a stability sweep and native printing. Details and e
 |---|---|---|
 | x64 (64-bit Intel/AMD) | `wordcraft-<ver>-windows-x64.msi` | `wordcraft-<ver>-windows-x64-portable.zip` |
 | arm64 (Snapdragon and other ARM PCs) | `wordcraft-<ver>-windows-arm64.msi` | `wordcraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `wordcraft-<ver>-windows-x86.msi` | `wordcraft-<ver>-windows-x86-portable.zip` |
 
 The installer is one dual-scope package. By default it installs for your account only,
 into `%LOCALAPPDATA%\Programs\ArtCraft\WordCraft`, and needs no administrator rights; choosing
-"Everyone on this computer" on the first page installs into `C:\Program Files\ArtCraft\WordCraft` (`Program Files (x86)` for the 32-bit build)
+"Everyone on this computer" on the first page installs into `C:\Program Files\ArtCraft\WordCraft`
 and asks for an administrator. Install only one copy: a copy for another scope is refused, so
 uninstall first to change who WordCraft is installed for. Installers and executables are code-signed.
 
@@ -297,9 +296,10 @@ Remove-Item Env:WGPU_BACKEND                     # restore the default for later
 An explicit `gl` override can bring the driver crash back on affected systems. The macOS, Linux
 and web backend defaults are unchanged.
 
-The **32-bit** build uses OpenGL even when a DirectX 12 graphics card is present. On 32-bit
-Windows, creating a DirectX 12 graphics pipeline fails immediately and the app exits before the
-window appears. `WGPU_BACKEND=vulkan` (or `dx12`) still overrides that.
+The [older **32-bit** builds](https://github.com/storytold/wordcraft/releases/tag/v0.15.2) use
+OpenGL even when a DirectX 12 graphics card is present. On 32-bit Windows, creating a DirectX 12
+graphics pipeline fails before the window opens. `WGPU_BACKEND=vulkan` (or `dx12`) still
+overrides that. A system-wide install of those builds uses `Program Files (x86)`.
 
 **If the app quits right after its window appears with "Parent device is lost" in the log:**
 WordCraft compiles DirectX 12 shaders with FXC, the compiler built into Windows, so it needs no
@@ -330,10 +330,12 @@ adapter. The log file records the choice (lines starting with
 | Flatpak | `wordcraft-<ver>-linux-x86_64.flatpak` | `wordcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
 | Debian/Ubuntu | `wordcraft-<ver>-linux-x86_64.deb` | `wordcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `wordcraft-<ver>-linux-x86_64.rpm` | `wordcraft-<ver>-linux-aarch64.rpm` | |
+| Arch Linux | `wordcraft-<ver>-linux-x86_64.pkg.tar.zst` | `wordcraft-<ver>-linux-aarch64.pkg.tar.zst` | |
 | Tarball | `wordcraft-<ver>-linux-x86_64.tar.gz` | `wordcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 
-RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
-(Ubuntu 24.04, Debian 13 and newer).
+RISC-V (riscv64) builds are available as `wordcraft-<ver>-linux-riscv64.deb`,
+`wordcraft-<ver>-linux-riscv64.rpm`, and `wordcraft-<ver>-linux-riscv64.tar.gz`. They are
+cross-compiled for glibc 2.39+ (Ubuntu 24.04, Debian 13 and newer).
 
 **Read Aloud** (Review › Read Aloud) speaks through a speech program installed on the system: it
 tries `espeak-ng`, then `espeak`, and when neither is installed it talks to Speech Dispatcher.
@@ -388,6 +390,7 @@ emerge --ask app-office/wordcraft-bin
 | Build | File |
 |---|---|
 | x86_64 | `wordcraft-<ver>-freebsd-x86_64.tar.gz` |
+| aarch64 (ARM64) | `wordcraft-<ver>-freebsd-aarch64.tar.gz` |
 
 ### Web (WebAssembly)
 
