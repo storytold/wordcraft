@@ -14294,6 +14294,61 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
 
+/// A run whose fonts came from theme slots (`w:asciiTheme`, `w:hAnsiTheme`, `w:eastAsiaTheme`,
+/// `w:cstheme`), as the DOCX reader keeps them.
+fn themed_session(styles: &str) -> Session {
+    use wordcraft_doc::props::ThemeFont;
+    let run =
+        r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:eastAsia="SimSun" w:cs="Arial"/></w:rPr><w:t>Themed text</w:t></w:r></w:p>"#;
+    let mut doc = wordcraft_docx::read(&docx_with_styles(run, styles)).unwrap();
+    let Some(wordcraft_doc::Block::Para(p)) = doc.body.get_mut(0).map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    let c = &mut p.runs[0].props;
+    (c.font_ascii_theme, c.font_hansi_theme) = (Some(ThemeFont::MinorHAnsi), Some(ThemeFont::MinorHAnsi));
+    (c.font_ea_theme, c.font_cs_theme) = (Some(ThemeFont::MinorEastAsia), Some(ThemeFont::MinorBidi));
+    Session::new(doc)
+}
+
+/// The theme slots set on any run of the first paragraph: (ascii, hAnsi, eastAsia, cs).
+fn theme_slots(s: &Session) -> [bool; 4] {
+    let runs = &s.doc.body[0].as_para().unwrap().runs;
+    let any = |f: &dyn Fn(&wordcraft_doc::props::CharProps) -> bool| runs.iter().any(|r| f(&r.props));
+    [
+        any(&|c| c.font_ascii_theme.is_some()),
+        any(&|c| c.font_hansi_theme.is_some()),
+        any(&|c| c.font_ea_theme.is_some()),
+        any(&|c| c.font_cs_theme.is_some()),
+    ]
+}
+
+/// Choosing a font drops the theme slot it replaces: Word reads the slot over the named font, so
+/// a slot saved beside the new font would show the theme's font instead of the one chosen. A font
+/// left alone keeps its slot.
+#[test]
+fn a_chosen_font_drops_its_theme_slot() {
+    assert_eq!(theme_slots(&themed_session("")), [true; 4]);
+    // (params, the slots left: ascii, hAnsi, eastAsia, cs)
+    let cases = [(json!({"name": "Georgia"}), [false, false, true, false]), (json!({"eastAsia": "MS Mincho"}), [true, true, false, true])];
+    for (params, left) in cases {
+        let mut s = themed_session("");
+        run(&mut s, "select.all", json!({}));
+        run(&mut s, "format.font", params.clone());
+        assert_eq!(theme_slots(&s), left, "{params}");
+    }
+}
+
+/// Applying a paragraph style clears the runs' direct fonts and their theme slots with them, so
+/// the style's own East Asian font shows in Word.
+#[test]
+fn applying_a_style_drops_the_runs_theme_slots() {
+    let styles = style_xml("Gothic", "Gothic", "", r#"<w:rFonts w:eastAsia="MS Gothic"/>"#);
+    let mut s = themed_session(&styles);
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.style", json!({"style": "Gothic"}));
+    assert_eq!(theme_slots(&s), [false; 4]);
+    let runs = &s.doc.body[0].as_para().unwrap().runs;
+    assert!(runs.iter().all(|r| r.props.font_ea.is_none()), "the run's direct East Asian font is cleared too");
+}
+
 /// A picture an OpenDocument file gives no size is shown at its own, fitted to the text as other
 /// formats' are; one with a stated size keeps it, in line too.
 #[test]

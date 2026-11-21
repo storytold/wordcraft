@@ -23,7 +23,8 @@ mod para_props;
 mod table_props;
 
 pub use char_props::{
-    CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, NumChange, PropChange, Underline, VertAlign,
+    CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, NumChange, PropChange, ThemeFont, Underline,
+    VertAlign,
 };
 pub use color::{Rgb, TextColor};
 pub use para_props::{
@@ -38,6 +39,78 @@ pub use table_props::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run's theme slot equal to its base's stays while the run's named font differs: overlaid
+    /// alone, that font would clear the base's slot, so the round trip would lose the slot.
+    #[test]
+    fn minus_keeps_a_theme_slot_whose_font_stays() {
+        let s = |v: &str| Some(v.to_string());
+        let base = CharProps {
+            font: s("Aptos"),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            font_ea: s("SimSun"),
+            font_ea_theme: Some(ThemeFont::MinorEastAsia),
+            font_cs: s("Arial"),
+            font_cs_theme: Some(ThemeFont::MinorBidi),
+            ..Default::default()
+        };
+        let run = CharProps { font: s("Georgia"), font_ea: s("MS Mincho"), font_cs: s("Times New Roman"), ..base.clone() };
+        let patch = run.clone().minus(&base);
+        assert_eq!((patch.font_ea_theme, patch.font_cs_theme), (Some(ThemeFont::MinorEastAsia), Some(ThemeFont::MinorBidi)));
+        assert_eq!(patch.font_ascii_theme, Some(ThemeFont::MinorHAnsi));
+        let mut back = base.clone();
+        back.overlay(&patch);
+        assert_eq!(back, run, "base plus the patch is the run again");
+        // A font equal to the base's goes, and its slot with it.
+        let same = base.clone().minus(&base);
+        assert_eq!((same.font_ea_theme, same.font_cs_theme, same.font_ascii_theme), (None, None, None));
+    }
+
+    /// A named East Asian font replaces the theme slot: in Word the slot wins over the font, so
+    /// keeping it would hide the font just chosen.
+    #[test]
+    fn a_named_east_asian_font_replaces_the_theme_slot() {
+        let mut base = CharProps { font_ea_theme: Some(ThemeFont::MinorEastAsia), ..Default::default() };
+        base.overlay(&CharProps { font_ea: Some("SimSun".into()), ..Default::default() });
+        assert_eq!(base.font_ea.as_deref(), Some("SimSun"));
+        assert_eq!(base.font_ea_theme, None);
+    }
+
+    /// A run that names its base's font but none of its slots (a font chosen in place of the
+    /// theme's) keeps that font in the patch, so overlaying it clears the slots again.
+    #[test]
+    fn minus_keeps_a_same_font_that_clears_its_slots() {
+        let s = |v: &str| Some(v.to_string());
+        let base = CharProps {
+            font: s("Aptos"),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            font_ea: s("SimSun"),
+            font_ea_theme: Some(ThemeFont::MinorEastAsia),
+            font_cs: s("Arial"),
+            font_cs_theme: Some(ThemeFont::MinorBidi),
+            ..Default::default()
+        };
+        let run = CharProps { font_ascii_theme: None, font_hansi_theme: None, font_ea_theme: None, font_cs_theme: None, ..base.clone() };
+        let mut back = base.clone();
+        back.overlay(&run.clone().minus(&base));
+        assert_eq!(back, run);
+    }
+
+    /// A named font with only one of its Latin slots replaces the other slot too: the base's
+    /// would name another font.
+    #[test]
+    fn a_font_with_one_latin_slot_replaces_both() {
+        let mut base = CharProps {
+            font: Some("Verdana".into()),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            ..Default::default()
+        };
+        base.overlay(&CharProps { font: Some("Georgia".into()), font_ascii_theme: Some(ThemeFont::MajorAscii), ..Default::default() });
+        assert_eq!((base.font_ascii_theme, base.font_hansi_theme), (Some(ThemeFont::MajorAscii), None));
+    }
 
     #[test]
     fn rgb_hex() {
