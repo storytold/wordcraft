@@ -499,6 +499,7 @@ impl Session {
         doc.ensure_nonempty();
         let mut view = self.view.clone();
         view.outline.collapsed.clear();
+        view.outline.text_hidden.clear();
         view.follow_prefs(&self.prefs);
         let mut d = DocState::new(doc, untitled, view);
         let id = d.document_id;
@@ -575,6 +576,7 @@ impl Session {
                 self.untitled_count = self.untitled_count.saturating_add(1);
                 let mut view = self.view.clone();
                 view.outline.collapsed.clear();
+                view.outline.text_hidden.clear();
                 let mut fresh = DocState::new(doc, self.untitled_count, view);
                 self.order = vec![fresh.document_id];
                 self.swap_doc(&mut fresh);

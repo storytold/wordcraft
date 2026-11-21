@@ -35,6 +35,7 @@ impl Session {
         self.hf_return = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
+        self.view.outline.text_hidden.clear();
         self.view.follow_prefs(&self.prefs);
         // A copy the replaced document kept stays in the recovery list.
         #[cfg(not(target_arch = "wasm32"))]
