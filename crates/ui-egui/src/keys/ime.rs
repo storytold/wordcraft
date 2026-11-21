@@ -45,11 +45,16 @@ pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Cont
     if app.session.take_pending_ime_application_change() {
         pass.ime_application_change(ctx);
     }
-    if !app.canvas.focused(ctx) {
+    let focused = app.canvas.focused(ctx);
+    if !std::mem::replace(&mut app.canvas.ime_was_focused, focused) && focused {
+        app.canvas.ime_spot.on_focus();
+    }
+    if !focused {
         app.canvas.ime_preedit.clear();
         app.canvas.ime_preedit_range = None;
         return;
     }
+    let spot = app.canvas.ime_spot.place_frame(ctx.cumulative_frame_nr(), caret, app.services.xim);
     let in_equation = app.session.math.is_some();
     let epoch = match &app.session.math {
         Some(math) => math.session,
@@ -65,7 +70,7 @@ pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Cont
     // The page reports no lines: the page view's describer carries the text and selection.
     // The page draws the marked text itself, so a pass that dropped it (a refused deletion) reports
     // that, and the framework interrupts the composition even in the pre-edit's own pass.
-    let state = EditorState::new(caret, &[], TextPos::new(0, 0)).surrounding(epoch, surrounding).marked(!app.canvas.ime_preedit.is_empty());
+    let state = EditorState::new(spot, &[], TextPos::new(0, 0)).surrounding(epoch, surrounding).marked(!app.canvas.ime_preedit.is_empty());
     handle.report(ctx, state);
 }
 

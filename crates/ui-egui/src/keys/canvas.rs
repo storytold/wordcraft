@@ -39,6 +39,7 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
     if app.keytips_active {
         return;
     }
+    app.canvas.ime_spot.note_editor_inputs(inputs);
     // A body or equation replacement interrupted the composition: the framework drops the old
     // composition's late events until the platform answers.
     if std::mem::take(&mut app.canvas.ime_interrupt_now) {

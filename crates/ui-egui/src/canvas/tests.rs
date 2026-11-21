@@ -1174,6 +1174,162 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
 }
 
+/// #2932: over XIM typing leaves the input method's spot where it was, and a press or the
+/// window's focus brings it to the caret; off XIM it follows the caret as it types.
+#[test]
+fn over_xim_typing_leaves_the_ime_spot_until_a_click() {
+    for xim in [true, false] {
+        let services = crate::Services { xim, ..Default::default() };
+        let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.app_frame();
+        }
+        let spot = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x).unwrap_or(f32::NAN);
+        let type_text = |h: &mut H, t: &str| {
+            h.event(egui::Event::Text(t.into()));
+            h.app_frame();
+            h.app_frame();
+        };
+        type_text(&mut h, "a");
+        let first = spot(&h);
+        assert!(first.is_finite(), "the canvas gives the input method a spot");
+        type_text(&mut h, "bcd");
+        let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(text.contains("abcd"), "the keys are typed: {text:?}");
+        if xim {
+            assert_eq!(spot(&h), first, "typing leaves the spot over XIM");
+        } else {
+            assert!(spot(&h) > first, "the spot follows the caret off XIM");
+        }
+        // A press right of the page's text: the caret stays at the end of it.
+        let page = h.state().canvas.laid_page_rects().first().copied().expect("a page");
+        let at = egui::pos2(page.max.x - 10.0, page.min.y + 140.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.app_frame();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.app_frame();
+        let clicked = spot(&h);
+        assert!(clicked > first, "a click brings the spot to the caret ({clicked} > {first})");
+        type_text(&mut h, "ef");
+        if xim {
+            assert_eq!(spot(&h), clicked, "typing after the click leaves it again");
+        }
+        h.event(egui::Event::WindowFocused(true));
+        h.app_frame();
+        assert!(spot(&h) > clicked, "the window's focus brings it to the caret");
+    }
+}
+
+/// #2932 review: a click on a canvas that isn't focused places nothing in its own frame; the
+/// first placement after it goes to the caret, and the first keys after that leave the spot.
+#[test]
+fn over_xim_a_click_that_focuses_the_canvas_then_typing_leaves_the_spot() {
+    let services = crate::Services { xim: true, ..Default::default() };
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.app_frame();
+    }
+    let spot = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min.x).unwrap_or(f32::NAN);
+    h.event(egui::Event::Text("abcd".into()));
+    h.app_frame();
+    h.app_frame();
+    // Another widget takes the keyboard.
+    h.state_mut().run("view.navigationPane", json!({"value": true})).unwrap();
+    h.state_mut().nav_search_focus = true;
+    h.app_frame();
+    h.app_frame();
+    assert!(!h.state().canvas.focused(&h.ctx.clone()), "the canvas lost the keyboard");
+    let page = h.state().canvas.laid_page_rects().first().copied().expect("a page");
+    let at = egui::pos2(page.max.x - 10.0, page.min.y + 140.0);
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.app_frame();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.app_frame();
+    let mut clicked = spot(&h);
+    for _ in 0..4 {
+        if h.state().canvas.focused(&h.ctx.clone()) && clicked.is_finite() {
+            break;
+        }
+        h.app_frame();
+        clicked = spot(&h);
+    }
+    assert!(h.state().canvas.focused(&h.ctx.clone()) && clicked.is_finite(), "the click focuses the canvas and places the spot");
+    // The first key comes in the next frame.
+    h.event(egui::Event::Text("e".into()));
+    h.app_frame();
+    assert_eq!(spot(&h), clicked, "the first key after the click leaves the spot");
+    h.event(egui::Event::Text("f".into()));
+    h.app_frame();
+    assert_eq!(spot(&h), clicked, "typing leaves it");
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("abcdef"), "the keys are typed: {text:?}");
+}
+
+/// #2932 review: over XIM, pressing Enter moves the spot to the new line so CJK composition
+/// starts there, and starting a pre-edit after typing plain words catches the spot up to the caret.
+#[test]
+fn over_xim_enter_and_preedit_start_update_the_spot() {
+    let services = crate::Services { xim: true, ..Default::default() };
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.app_frame();
+    }
+    let spot = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.cursor_rect.min).unwrap_or(egui::Pos2::NAN);
+    let press_enter = |h: &mut H| {
+        h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.app_frame();
+        h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.app_frame();
+    };
+    let line1 = spot(&h);
+    assert!(line1.x.is_finite() && line1.y.is_finite());
+    press_enter(&mut h);
+    press_enter(&mut h);
+    let line3 = spot(&h);
+    assert!(line3.y > line1.y + 10.0, "Enter moves the spot down from {line1:?} to {line3:?}");
+    // Typing plain words on line 3 holds the spot at line3.x.
+    h.event(egui::Event::Text("hello world ".into()));
+    h.app_frame();
+    h.app_frame();
+    assert_eq!(spot(&h), line3, "plain typing holds the spot at the start of line 3");
+    // Starting a pre-edit composition catches up to the caret after "hello world ".
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "n".into(), active_range_chars: None }));
+    h.app_frame();
+    let composed = spot(&h);
+    assert!(composed.x > line3.x + 20.0, "starting pre-edit catches the spot up from {line3:?} to {composed:?}");
+    assert!((composed.y - line3.y).abs() < 1.0, "still on line 3: {composed:?}");
+    // Continuing pre-edit holds the spot steady.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "ni".into(), active_range_chars: None }));
+    h.app_frame();
+    assert_eq!(spot(&h), composed, "continuing pre-edit holds the spot");
+}
+
 /// A harness of `app` for the composition tests, past the frames the canvas needs to take focus.
 fn composing_harness(app: WordApp) -> H {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
