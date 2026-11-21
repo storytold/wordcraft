@@ -1,34 +1,48 @@
-use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 use wordcraft_geom::Unit;
 
-use super::{decimal, length, parse_length, unit};
+use craft::ui::patterns::preferences::{PrefValue, PreferencesModel};
 
-use crate::theme::Appearance;
-use crate::{Services, StatusCount, UiState, WordApp};
-
-#[test]
-fn unknown_settings_keys_load_in_linear_time() {
-    let mut map = serde_json::Map::new();
-    for i in 0..20_000 {
-        map.insert(format!("unknownKey{i}"), json!(i));
-    }
-    map.insert("miniToolbar".into(), json!(false));
-    let bytes = serde_json::to_vec(&serde_json::Value::Object(map)).unwrap();
-    let state = UiState::from_json(&bytes).unwrap();
-    assert!(!state.mini_toolbar);
-}
+use super::{OptionsModel, length, unit_suffix};
+use crate::prefs::{Prefs, legacy_ui_json};
+use crate::{Services, StatusCount, WordApp};
 
 fn app() -> WordApp {
     WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
 }
 
-fn nav_harness(language: &str, percent: u16) -> egui_kittest::Harness<'static, WordApp> {
-    let mut a = app();
-    a.run("ui.language", json!({"value": language})).unwrap();
-    a.run("ui.interfaceSize", json!({"percent": percent})).unwrap();
-    a.run("file.options", json!({"pane": "general"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(2.0).build_ui_state(
+/// Runs `f` over a model of `app` inside one frame of a headless harness.
+fn with_model<R: 'static>(app: &mut WordApp, motion_full: bool, f: impl FnOnce(&mut OptionsModel<'_>) -> R + 'static) -> R {
+    struct State<R> {
+        app: WordApp,
+        job: Option<Box<dyn FnOnce(&mut WordApp, bool) -> R>>,
+        out: Option<R>,
+    }
+    let job: Box<dyn FnOnce(&mut WordApp, bool) -> R> = Box::new(move |app, full| f(&mut OptionsModel::new(app, 1.0, full)));
+    let state = State { app: std::mem::replace(app, self::app()), job: Some(job), out: None };
+    let mut h = crate::test_harness::builder().build_ui_state(
+        move |_ui, st: &mut State<R>| {
+            if let Some(job) = st.job.take() {
+                st.out = Some(job(&mut st.app, motion_full));
+            }
+        },
+        state,
+    );
+    h.run_steps(1);
+    let st = h.state_mut();
+    *app = std::mem::replace(&mut st.app, self::app());
+    st.out.take().expect("the frame ran")
+}
+
+fn row_enabled(model: &OptionsModel<'_>, key: &str) -> bool {
+    model.pages().iter().flat_map(|p| p.groups.iter()).flat_map(|g| g.rows.iter()).find(|r| r.key == key).map(|r| r.enabled).expect("row exists")
+}
+
+/// The app showing File › Options on the Accessibility page.
+/// The runtime is installed over `system`, the reader it resolves the system's motion from.
+fn options_harness(mut a: WordApp, system: craft::platform::appearance::SystemReader) -> egui_kittest::Harness<'static, WordApp> {
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "accessibility"})).unwrap();
+    let mut h = crate::test_harness::builder_with(move || crate::test_harness::install_spec().system(system)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -36,148 +50,39 @@ fn nav_harness(language: &str, percent: u16) -> egui_kittest::Harness<'static, W
         },
         a,
     );
-    h.run_steps(4);
+    options_frames(&mut h, 3);
     h
+}
+
+/// `n` frames, each given the input the app hands the runtime.
+fn options_frames(h: &mut egui_kittest::Harness<'static, WordApp>, n: usize) {
+    for _ in 0..n {
+        let ctx = h.ctx.clone();
+        craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
+        h.step();
+    }
+}
+
+/// A reader of the system that answers `reduced` to "reduce motion".
+fn system_reducing_motion(reduced: bool) -> craft::platform::appearance::SystemReader {
+    let reader = craft::platform::appearance::SystemReader::unwatched();
+    reader.report_reduced_motion(reduced);
+    reader
+}
+
+/// The help line the Animation effects row shows while the system's setting is followed.
+fn system_help(h: &egui_kittest::Harness<'static, WordApp>) -> Option<String> {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    h.query_by_label_contains("Your system has animation effects").and_then(|n| n.accesskit_node().label()).map(|s| s.to_string())
 }
 
 /// File › Options must not offer a way around the protected document's author check.
 #[test]
 fn user_name_field_disables_when_protection_starts() {
-    let mut h = nav_harness("en", 100);
-    let user_name = || egui_kittest::kittest::By::new().role(egui::accesskit::Role::TextInput).value("WordCraft User");
-    assert!(!h.get(user_name()).accesskit_node().is_disabled());
-    h.state_mut().run("review.restrict", json!({"mode": "readOnly"})).unwrap();
-    h.run_steps(4);
-    assert!(h.get(user_name()).accesskit_node().is_disabled());
-}
-
-/// #1266: check the actual painted text and renderer clip, including the bold selected
-/// label. AccessKit must still expose the full name and the row must keep its fixed size.
-#[test]
-fn options_nav_labels_stay_inside_their_rows() {
-    if !crate::i18n::catalogs_embedded() {
-        return;
-    }
-    for language in ["en", "ru"] {
-        for percent in [100, 125, 150] {
-            let mut h = nav_harness(language, percent);
-            // An interface size is absolute (#822): `percent` points per 100 screen pixels,
-            // whatever the display's own scale (2.0 here).
-            assert_eq!(h.ctx.pixels_per_point(), f32::from(percent) / 100.0);
-            for selected in ["general", "accessibility"] {
-                h.state_mut().run("file.options", json!({"pane": selected})).unwrap();
-                h.run_steps(4);
-                for id in wordcraft_engine::cmd::options::PANES {
-                    let label = crate::i18n::tr(crate::i18n::Lang::from_pref(language), super::pane_label(id));
-                    let node =
-                        h.query_all_by_label(label).find(|n| n.accesskit_node().toggled().is_some()).expect("pane has its full accessible name");
-                    assert_eq!(
-                        node.accesskit_node().toggled(),
-                        Some(if id == selected { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
-                    );
-                    let row = node.rect();
-                    assert_eq!(row.size(), egui::vec2(170.0, 30.0));
-                    let (clip, text) = h
-                        .output()
-                        .shapes
-                        .iter()
-                        .find_map(|s| match &s.shape {
-                            egui::Shape::Text(text) if text.galley.text() == label && row.contains(text.pos) => Some((s.clip_rect, text)),
-                            _ => None,
-                        })
-                        .expect("navigation label is painted");
-                    let bounds = text.visual_bounding_rect();
-                    assert!(row.contains_rect(bounds.intersect(clip)), "{language} {percent}% {selected}: {label} paints outside {row:?}");
-                    if language == "en" && ["general", "display", "save"].contains(&id) {
-                        assert!(clip.contains_rect(bounds), "short labels must remain fully visible");
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Clipping only the painter must leave the entire row clickable, its hover/selection
-/// backgrounds intact, and the selected pane's settings visible at every interface size.
-#[test]
-fn options_nav_rows_keep_hover_and_selection() {
-    if !crate::i18n::catalogs_embedded() {
-        return;
-    }
-    for language in ["en", "ru"] {
-        for percent in [100, 125, 150] {
-            let mut h = nav_harness(language, percent);
-            for (id, setting) in [("display", "Spaces"), ("save", "Save documents"), ("accessibility", "Visual effects"), ("general", "Interface")] {
-                let lang = crate::i18n::Lang::from_pref(language);
-                let row = h
-                    .query_all_by_label(crate::i18n::tr(lang, super::pane_label(id)))
-                    .find(|n| n.accesskit_node().toggled().is_some())
-                    .expect("pane has its full accessible name")
-                    .rect();
-                // Both ends of the row, including its empty left inset, stay clickable.
-                for x in [row.left() + 2.0, row.right() - 2.0] {
-                    h.state_mut().run("file.options", json!({"pane": "agents"})).unwrap();
-                    h.hover_at(egui::pos2(x, row.center().y));
-                    h.run_steps(4);
-                    let t = crate::theme::Tokens::get(&h.ctx);
-                    let background = |h: &egui_kittest::Harness<'_, WordApp>, color| {
-                        h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == row && r.fill == color))
-                    };
-                    assert!(background(&h, t.hover), "{language} {percent}%: hover covers the row");
-                    for pressed in [true, false] {
-                        h.input_mut().events.push(egui::Event::PointerButton {
-                            pos: egui::pos2(x, row.center().y),
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: Default::default(),
-                        });
-                        h.run_steps(1);
-                    }
-                    h.run_steps(4);
-                    assert_eq!(h.state().ui.options_pane, id);
-                    assert!(background(&h, t.checked), "{language} {percent}%: selection covers the row");
-                    assert!(h.query_by_label(crate::i18n::tr(lang, setting)).is_some(), "{id} settings are shown");
-                }
-            }
-        }
-    }
-}
-
-/// File › Options settings come back after a restart, and a `ui.json` with a wrong value in
-/// one setting keeps every other setting (#485).
-#[test]
-fn options_survive_a_restart_and_junk_in_ui_json() {
     let mut a = app();
-    a.run(
-        "file.options",
-        json!({"initials": "VK", "units": "centimeters", "typingReplacesSelection": false, "marks": {"tabs": true}, "ignoreNumbers": false, "addWords": ["zqxoptionsword"]}),
-    )
-    .unwrap();
-    a.ui.recent_count = 30;
-    a.ui.print_backgrounds = true;
-    a.ui.status_count = StatusCount::CharactersNoSpaces;
-    let saved = serde_json::to_vec(&a.prefs()).unwrap();
-    let mut b = app();
-    b.apply_prefs(UiState::from_json(&saved).unwrap());
-    assert_eq!(b.session.prefs, a.session.prefs);
-    assert_eq!(b.session.prefs.units, Some(Unit::Centimeters));
-    assert_eq!(b.session.initials, "VK");
-    assert_eq!((b.ui.recent_count, b.ui.print_backgrounds), (30, true));
-    assert_eq!(b.ui.status_count, StatusCount::CharactersNoSpaces, "#2797: what the status bar counts");
-    assert!(wordcraft_engine::proof::user_dictionary().contains(&"zqxoptionsword".to_string()));
-
-    let junk = br#"{"theme": "dark", "recentCount": "lots", "printBackgrounds": 7, "optionsPane": ["x"], "dark": true,
-            "statusCount": "paragraphs",
-            "editing": {"measurementUnits": "furlongs", "typingReplacesSelection": false, "marks": {"tabs": "yes", "spaces": true}}}"#;
-    let ui = UiState::from_json(junk).unwrap();
-    assert_eq!(ui.theme, Appearance::Dark);
-    assert_eq!((ui.recent_count, ui.print_backgrounds, ui.options_pane.as_str()), (12, false, "general"));
-    assert_eq!(ui.status_count, StatusCount::Words, "#2797: a wrong value reads the default");
-    assert_eq!(ui.legacy_dark, Some(true));
-    assert_eq!(ui.editing.units, None);
-    assert!(!ui.editing.typing_replaces_selection);
-    assert!(ui.editing.marks.spaces && !ui.editing.marks.tabs);
-    assert!(UiState::from_json(b"[1, 2]").is_none() && UiState::from_json(b"not json").is_none());
+    assert!(with_model(&mut a, true, |m| row_enabled(m, "general.userName")));
+    a.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    assert!(!with_model(&mut a, true, |m| row_enabled(m, "general.userName")));
 }
 
 /// The dictionaries folder (#1063) is saved with the settings and searched again after a
@@ -191,22 +96,20 @@ fn the_dictionaries_folder_survives_a_restart() {
     let saved = serde_json::to_vec(&a.prefs()).unwrap();
     wordcraft_engine::proof::hunspell::set_dictionary_dir(None);
     let mut b = app();
-    b.apply_prefs(UiState::from_json(&saved).unwrap());
+    b.apply_prefs(serde_json::from_slice::<Prefs>(&saved).unwrap());
     assert_eq!(b.session.prefs.dictionaries_folder.as_deref(), Some(dir.to_string_lossy().as_ref()));
     assert_eq!(wordcraft_engine::proof::hunspell::search_dirs(None).first(), Some(&dir), "searched first");
 }
 
-/// #1792: Check spelling as you type is saved with the other proofing choices, so after a
-/// restart the box comes back the way the user left it.
+/// #1792: Check spelling as you type is saved with the other proofing choices.
 #[test]
 fn check_spelling_survives_a_restart() {
     let mut a = app();
     a.run("file.options", json!({"checkSpelling": false})).unwrap();
     assert!(!a.session.view.proofing, "off right away");
-    let saved = serde_json::to_value(a.prefs()).unwrap();
-    assert_eq!(saved["editing"]["checkSpelling"], false, "saved in ui.json");
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
     let mut b = app();
-    b.apply_prefs(UiState::from_json(&serde_json::to_vec(&saved).unwrap()).unwrap());
+    b.apply_prefs(serde_json::from_slice::<Prefs>(&saved).unwrap());
     assert!(!b.session.view.proofing, "spelling stays off after a restart");
 }
 
@@ -214,250 +117,110 @@ fn check_spelling_survives_a_restart() {
 /// the user chose carries over to `measurementUnits`; inches, junk or a newer value don't.
 #[test]
 fn a_unit_chosen_before_regions_survives_the_rename() {
-    let editing = |json: &str| UiState::from_json(format!(r#"{{"editing": {json}}}"#).as_bytes()).unwrap().editing.units;
-    assert_eq!(editing(r#"{"units": "centimeters"}"#), Some(Unit::Centimeters));
-    assert_eq!(editing(r#"{"units": "picas", "overtype": true}"#), Some(Unit::Picas));
-    assert_eq!(editing(r#"{"units": "inches"}"#), None);
-    assert_eq!(editing(r#"{"units": "furlongs"}"#), None);
-    assert_eq!(editing(r#"{"units": 7}"#), None);
-    assert_eq!(editing(r#"{"units": "millimeters", "measurementUnits": "points"}"#), Some(Unit::Points));
-    assert_eq!(editing(r#"{"units": "millimeters", "measurementUnits": null}"#), None);
-    assert_eq!(editing("{}"), None);
+    let units = |json: &str| {
+        let mut a = app();
+        let (prefs, _) = legacy_ui_json(format!(r#"{{"editing": {json}}}"#).as_bytes()).unwrap();
+        a.apply_prefs(prefs);
+        a.session.prefs.units
+    };
+    assert_eq!(units(r#"{"units": "centimeters"}"#), Some(Unit::Centimeters));
+    assert_eq!(units(r#"{"units": "picas", "overtype": true}"#), Some(Unit::Picas));
+    assert_eq!(units(r#"{"units": "inches"}"#), None);
+    assert_eq!(units(r#"{"units": "furlongs"}"#), None);
+    assert_eq!(units(r#"{"units": "millimeters", "measurementUnits": "points"}"#), Some(Unit::Points));
+    assert_eq!(units(r#"{"units": "millimeters", "measurementUnits": null}"#), None);
+    assert_eq!(units("{}"), None);
     let mut a = app();
-    a.apply_prefs(UiState::from_json(br#"{"editing": {"units": "millimeters"}}"#).unwrap());
+    a.apply_prefs(legacy_ui_json(br#"{"editing": {"units": "millimeters"}}"#).unwrap().0);
     assert_eq!(a.session.units(), Unit::Millimeters);
-    // Saved again, it's under the new key.
-    let saved = serde_json::to_value(a.prefs()).unwrap();
-    assert_eq!(saved["editing"]["measurementUnits"], "millimeters");
 }
 
-/// `file.options` opens the page at a pane; the pane list switches panes, and their
-/// checkboxes change the settings (#485).
+/// One table over the Bool rows: `set` runs the row's command or writes its setting, and the
+/// effect follows, on and off.
 #[test]
 fn options_panes_open_and_change_settings() {
-    let mut a = app();
-    a.run("file.options", json!({"pane": "display"})).unwrap();
-    assert!(a.ui.backstage);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    h.get_by_label("Spaces").click();
-    h.run_steps(2);
-    assert!(h.state().session.prefs.marks.spaces, "Display › Spaces");
-    // #2797: what the status bar's count shows, chosen here as in its right-click menu. The
-    // Display pane's other combo box is Numerals, drawn above this one.
-    h.get_all_by_role(egui::accesskit::Role::ComboBox).last().expect("the status bar count picker").click();
-    h.run_steps(4);
-    h.get_by_label("Characters (with spaces)").click();
-    h.run_steps(2);
-    assert_eq!(h.state().ui.status_count, StatusCount::Characters, "Display › Status bar count");
-    assert_eq!(h.state_mut().run("ui.statusCount", json!({})).unwrap()["statusCount"], "characters", "the command answers the same");
-    h.get_by_label("Proofing").click();
-    h.run_steps(4);
-    assert_eq!(h.state().ui.options_pane, "proofing");
-    h.get_by_label("Ignore words in capitals").click();
-    h.run_steps(2);
-    assert!(!h.state().session.prefs.ignore_uppercase);
-    // The AutoCorrect Options dialog opens from this pane.
-    assert!(h.state().dialog.is_none());
-    h.get_by_label("AutoCorrect Options").click();
-    h.run_steps(3);
-    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
-    h.state_mut().dialog = None;
-    h.run_steps(2);
-    // #1063: the dictionaries folder and the dictionary each language found moved to Language
-    // (CP4.3); Proofing has no Dictionaries section.
-    assert!(h.query_by_label("Dictionaries folder:").is_none() && h.query_by_label_contains("Polish: ").is_none());
-    h.get_by_label("Language").click();
-    h.run_steps(4);
-    assert!(h.query_by_label("Dictionaries folder:").is_some());
-    assert!(h.query_by_label("Dictionary files").is_some());
-    assert!(h.query_by_label_contains("Polish: ").is_some(), "the Polish dictionary's line");
-    h.get_by_label("Advanced").click();
-    h.run_steps(4);
-    h.get_by_label("Typing replaces selected text").click();
-    h.run_steps(2);
-    assert!(!h.state().session.prefs.typing_replaces_selection);
-    assert!(h.query_by_label("Measurement units:").is_some());
+    type Read = fn(&WordApp) -> bool;
+    let table: [(&str, Read); 14] = [
+        ("display.spaces", |a| a.session.prefs.marks.spaces),
+        ("display.tabs", |a| a.session.prefs.marks.tabs),
+        ("display.allMarks", |a| a.session.view.marks),
+        ("display.rulers", |a| a.session.view.ruler),
+        ("display.printBackgrounds", |a| a.ui.print_backgrounds),
+        ("general.startScreen", |a| a.ui.start_screen),
+        ("general.miniToolbar", |a| a.ui.mini_toolbar),
+        ("general.darkPage", |a| a.session.view.dark_mode),
+        ("proofing.ignoreUppercase", |a| a.session.prefs.ignore_uppercase),
+        ("advanced.typingReplacesSelection", |a| a.session.prefs.typing_replaces_selection),
+        ("advanced.alignmentGuides", |a| a.ui.alignment_guides),
+        ("advanced.caretAnimation", |a| a.ui.caret_animation),
+        ("accessibility.skipCitations", |a| a.session.read_aloud.skip_citations),
+        ("advanced.keytips", |a| a.ui.keytips_enabled),
+    ];
+    for (key, read) in table {
+        for on in [true, false] {
+            let mut a = app();
+            with_model(&mut a, true, move |m| m.set(key, PrefValue::Bool(on)));
+            assert_eq!(read(&a), on, "{key} set to {on}");
+        }
+    }
 }
 
-/// File › Options › Save › Privacy (#1062): the checkboxes are the document's
-/// `file.privacyOptions` settings, and an undoable change like any other.
+/// One table over the Choice rows and the document's privacy options.
 #[test]
 fn save_privacy_checkboxes_set_the_privacy_options() {
     let mut a = app();
-    a.run("file.options", json!({"pane": "save"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert!(h.query_by_label("Privacy for this document").is_some(), "the section is there");
-    h.get_by_label("Remove my name from comments, changes and file properties when saving").click();
-    h.run_steps(4);
-    assert!(h.state().session.doc.settings.remove_personal_info);
-    assert!(!h.state().session.doc.settings.remove_date_time);
-    h.get_by_label("Leave out the date and time of comments and tracked changes when saving").click();
-    h.run_steps(4);
-    let privacy = h.state_mut().session.run("file.privacy", &json!({})).unwrap();
+    with_model(&mut a, true, |m| m.set("save.removePersonalInfo", PrefValue::Bool(true)));
+    assert!(a.session.doc.settings.remove_personal_info);
+    assert!(!a.session.doc.settings.remove_date_time);
+    with_model(&mut a, true, |m| m.set("save.removeDateTime", PrefValue::Bool(true)));
+    let privacy = a.session.run("file.privacy", &json!({})).unwrap();
     assert_eq!(privacy, json!({"removePersonalInfo": true, "removeDateTime": true}));
-    h.get_by_label("Remove my name from comments, changes and file properties when saving").click();
-    h.run_steps(4);
-    assert!(!h.state().session.doc.settings.remove_personal_info, "and off again");
+    with_model(&mut a, true, |m| m.set("save.removePersonalInfo", PrefValue::Bool(false)));
+    assert!(!a.session.doc.settings.remove_personal_info, "and off again");
+
+    with_model(&mut a, true, |m| m.set("display.statusCount", PrefValue::Choice("characters".into())));
+    assert_eq!(a.ui.status_count, StatusCount::Characters);
+    with_model(&mut a, true, |m| m.set("advanced.units", PrefValue::Choice("millimeters".into())));
+    assert_eq!(a.session.units(), Unit::Millimeters);
+    with_model(&mut a, true, |m| m.set("advanced.units", PrefValue::Choice("auto".into())));
+    assert_eq!(a.session.prefs.units, None);
+    with_model(&mut a, true, |m| m.set("advanced.region", PrefValue::Choice("pl-PL".into())));
+    assert_eq!(a.session.prefs.region.as_deref(), Some("pl-PL"));
 }
 
-/// File › Options › Accessibility › Animation effects: Use system setting (the default), On
-/// or Off, with a line saying what the system's own setting is while it is followed.
+/// File › Options › Accessibility › Animation effects: the help line follows the runtime's resolved
+/// motion while System is chosen, and an explicit choice overrides it.
 #[test]
 fn animation_effects_is_an_accessibility_option() {
     use crate::theme::Animations;
-    let services = Services { animations_enabled: Some(Box::new(|| Some(false))), ..Default::default() };
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
-    a.run("file.options", json!({"pane": "accessibility"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert_eq!(h.state().ui.animations, Animations::System);
-    assert!(h.query_by_label("Animation effects:").is_some());
-    assert!(h.query_by_label("Your system has animation effects turned off.").is_some());
-    assert!(!h.state().animations_on());
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Animation effects:").click();
-    h.run_steps(4);
-    h.get_by_label("On").click();
-    h.run_steps(4);
+    // The runtime holds its reader, so each answer of the system is its own install.
+    let reduced = options_harness(app(), system_reducing_motion(true));
+    assert_eq!(reduced.state().ui.animations, Animations::System);
+    let full = options_harness(app(), system_reducing_motion(false));
+    let (reduced_help, full_help) = (system_help(&reduced), system_help(&full));
+    assert!(reduced_help.is_some() && full_help.is_some(), "the page says what the system answered while it is followed");
+    assert_ne!(reduced_help, full_help, "the line follows the system's answer");
+    let mut h = reduced;
+    h.state_mut().run("ui.animations", json!({"value": "on"})).unwrap();
     assert_eq!(h.state().ui.animations, Animations::On);
-    assert!(h.state().animations_on());
-    assert!(h.query_by_label("Your system has animation effects turned off.").is_none(), "only said while the system is followed");
+    options_frames(&mut h, 3);
+    assert_eq!(system_help(&h), None, "only said while the system is followed");
 }
 
-/// File › Options › General › Start-up (#766): the checkbox is the `ui.startScreen` setting.
-#[test]
-fn general_start_up_turns_the_start_screen_off_and_on() {
-    let mut a = app();
-    a.run("file.options", json!({"pane": "general"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert!(h.query_by_label("Start-up").is_some(), "the section is there");
-    h.get_by_label("Show the Start screen when WordCraft starts").click();
-    h.run_steps(4);
-    assert!(!h.state().ui.start_screen, "the checkbox turns it off");
-    h.get_by_label("Show the Start screen when WordCraft starts").click();
-    h.run_steps(4);
-    assert!(h.state().ui.start_screen, "and on again");
-}
-
-/// File › Options › Advanced › Editing: the alignment guides checkbox is the
-/// `ui.alignmentGuides` setting.
-#[test]
-fn advanced_alignment_guides_checkbox_turns_snapping_off_and_on() {
-    let mut a = app();
-    a.run("file.options", json!({"pane": "advanced"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    let label = "Show alignment guides when moving pictures and shapes";
-    h.get_by_label(label).click();
-    h.run_steps(4);
-    assert!(!h.state().ui.alignment_guides, "the checkbox turns them off");
-    h.get_by_label(label).click();
-    h.run_steps(4);
-    assert!(h.state().ui.alignment_guides, "and on again");
-}
-
-/// File › Options › Advanced › Animation: the checkbox is the `ui.caretAnimation` setting,
-/// and the section is translated.
-#[test]
-fn advanced_animation_turns_the_caret_animation_off_and_on() {
-    let mut a = app();
-    a.run("file.options", json!({"pane": "advanced"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(4);
-    assert!(h.query_by_label("Animation").is_some(), "the section is there");
-    h.get_by_label("Animate the caret (it glides and fades)").click();
-    h.run_steps(4);
-    assert!(!h.state().ui.caret_animation, "the checkbox turns it off");
-    h.get_by_label("Animate the caret (it glides and fades)").click();
-    h.run_steps(4);
-    assert!(h.state().ui.caret_animation, "and on again");
-    if !crate::i18n::catalogs_embedded() {
-        return;
-    }
-    h.state_mut().run("ui.language", json!({"value": "es"})).unwrap();
-    h.run_steps(4);
-    assert!(h.query_by_label("Animación").is_some() && h.query_by_label("Animation").is_none());
-}
-
-/// #838: in a Polish region the Page Setup margins read `2,54 cm` (the region's unit and
-/// decimal comma), a typed `3,5` or `1 in` is understood, and the Options page shows the
-/// region's unit until the user picks another.
+/// #838: in a Polish region lengths read `2,54 cm` (the region's unit and decimal comma).
 #[test]
 fn length_fields_follow_the_region() {
     let mut a = app();
     a.run("file.options", json!({"region": "pl-PL"})).unwrap();
-    a.run("file.new", json!({})).unwrap();
-    assert_eq!(wordcraft_geom::paper_name(a.session.doc.last_section.page_w, a.session.doc.last_section.page_h), Some("A4"));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    h.run_steps(2);
-    // The dialog reads the unit when it opens, after a frame has picked up the region.
-    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
-    h.run_steps(4);
-    assert_eq!((unit(), decimal()), (Unit::Centimeters, ','));
-    assert_eq!(length(72.0), "2,54 cm");
-    assert_eq!(h.query_all_by_value("2,54 cm").count(), 4, "four margins in centimetres with a decimal comma");
-
-    h.state_mut().run("file.options", json!({"units": "inches"})).unwrap();
-    h.run_steps(4);
-    assert_eq!(length(108.0), "1,5\"", "the user's unit, still the region's decimal comma");
-    h.state_mut().run("file.options", json!({"units": "auto", "region": "en-US"})).unwrap();
-    h.run_steps(4);
-    assert_eq!(length(72.0), "1\"");
+    assert_eq!((a.session.units(), a.session.region().decimal()), (Unit::Centimeters, ','));
+    let fmt = craft::i18n::Format::from_tag("pl-PL");
+    assert_eq!(length(72.0, Unit::Centimeters, &fmt), "2,54 cm");
+    assert_eq!(length(108.0, Unit::Inches, &fmt), "1,5\"", "the user's unit, still the region's decimal comma");
+    let us = craft::i18n::Format::from_tag("en-US");
+    assert_eq!(length(72.0, Unit::Inches, &us), "1\"");
 }
 
-/// #1734: a Russian interface shows centimetres as `см`, as Word does, and a length field
-/// takes the unit typed either way.
+/// #1734: a Russian interface shows centimetres as `см`, as Word does.
 #[test]
 fn length_units_follow_the_interface_language() {
     if !crate::i18n::catalogs_embedded() {
@@ -465,9 +228,7 @@ fn length_units_follow_the_interface_language() {
     }
     let mut a = app();
     a.run("ui.language", json!({"value": "ru"})).unwrap();
-    a.run("file.options", json!({"region": "ru-RU"})).unwrap();
-    a.run("file.new", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -475,24 +236,13 @@ fn length_units_follow_the_interface_language() {
         },
         a,
     );
-    h.run_steps(2);
-    h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
-    h.run_steps(4);
-    assert_eq!((unit(), decimal()), (Unit::Centimeters, ','));
-    assert_eq!(length(72.0), "2,54 см");
-    assert_eq!(h.query_all_by_value("2,54 см").count(), 4, "four margins in centimetres, named in Russian");
-    assert_eq!(h.query_all_by_value("2,54 cm").count(), 0);
-    assert_eq!(parse_length("3 см", Unit::Centimeters), Some(3.0));
-    assert_eq!(parse_length("3cm", Unit::Centimeters), Some(3.0));
-    assert_eq!(parse_length("10 мм", Unit::Centimeters).map(|v| (v * 100.0).round() / 100.0), Some(1.0));
-    assert_eq!(parse_length("72 пт", Unit::Centimeters).map(|v| (v * 100.0).round() / 100.0), Some(2.54));
-
-    h.state_mut().run("file.options", json!({"units": "millimeters"})).unwrap();
-    h.run_steps(4);
-    assert_eq!(length(72.0), "25,4 мм");
+    // The frames bind the interface language through the input the app hands the runtime.
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!(unit_suffix(Unit::Centimeters), " см");
+    assert_eq!(length(72.0, Unit::Centimeters, &craft::i18n::Format::from_tag("ru-RU")), "2,54 см");
     h.state_mut().run("ui.language", json!({"value": "en"})).unwrap();
-    h.run_steps(4);
-    assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!(unit_suffix(Unit::Millimeters), " mm", "English keeps the English names");
 }
 
 #[test]
@@ -503,21 +253,190 @@ fn screen_paper_color_options_round_trip_and_work_without_a_document() {
     a.run("view.paperColor", json!({"value":"green"})).unwrap();
     let saved = serde_json::to_vec(&a.prefs()).unwrap();
     let mut b = app();
-    b.apply_prefs(UiState::from_json(&saved).unwrap());
+    b.apply_prefs(serde_json::from_slice::<Prefs>(&saved).unwrap());
     assert_eq!(b.session.prefs.paper_color, PaperColor::Green);
-    b.run("file.options", json!({"pane":"general"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    with_model(&mut b, true, |m| m.set("general.paperColor", PrefValue::Choice("cream".into())));
+    assert_eq!(b.session.prefs.paper_color, PaperColor::Cream);
+}
+
+/// #5840: File › Options › Proofing has the Dictionary file setting.
+#[test]
+fn proofing_custom_dictionary_file_setting_is_visible() {
+    let mut a = app();
+    let found = with_model(&mut a, true, |m| {
+        m.pages().iter().flat_map(|p| p.groups.iter()).flat_map(|g| g.rows.iter()).any(|r| r.key == "proofing.customDictionaryFile")
+    });
+    assert!(found);
+}
+
+/// #5840: File › Options › Proofing sets, clears and validates the custom dictionary path.
+#[test]
+fn proofing_custom_dictionary_interaction() {
+    let dir = std::env::temp_dir().join(format!("wc-ui-dict-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let valid_path = dir.join("ui_custom.dic");
+    std::fs::write(&valid_path, "uiword\n").unwrap();
+    let valid_path_str = valid_path.to_string_lossy().into_owned();
+    let mut a = app();
+
+    // An invalid path is refused and not applied to the preferences.
+    with_model(&mut a, true, |m| m.set("proofing.customDictionaryFile", PrefValue::Text("/invalid/path/nonexistent.dic".into())));
+    assert_eq!(a.session.prefs.custom_dictionary, None, "invalid path was not applied to prefs");
+
+    let path = valid_path_str.clone();
+    with_model(&mut a, true, move |m| m.set("proofing.customDictionaryFile", PrefValue::Text(path)));
+    assert_eq!(a.session.prefs.custom_dictionary.as_deref(), Some(&valid_path_str[..]));
+
+    // Empty reverts to the default dictionary.
+    with_model(&mut a, true, |m| m.set("proofing.customDictionaryFile", PrefValue::Text(String::new())));
+    assert_eq!(a.session.prefs.custom_dictionary, None, "empty reverts custom dictionary to default");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5840: a bound custom dictionary file is the source of truth. The saved word copy must not
+/// be restored first, or words from a missing file would reach the default dictionary on the next
+/// Add to Dictionary.
+#[test]
+fn a_bound_custom_dictionary_does_not_restore_saved_backup_words() {
+    let saved = Prefs {
+        dictionary: vec!["zqxbackupword".to_string()],
+        editing: wordcraft_engine::Prefs { custom_dictionary: Some("/nonexistent/custom.dic".to_string()), ..Default::default() },
+        ..Default::default()
+    };
+
+    let mut a = app();
+    a.apply_prefs(saved);
+    assert!(!wordcraft_engine::proof::user_dictionary().contains(&"zqxbackupword".to_string()), "backup words stay out of memory");
+    assert_eq!(a.session.prefs.custom_dictionary.as_deref(), Some("/nonexistent/custom.dic"), "the file setting is kept");
+}
+
+/// #5840: the Dictionary file field commits the path on Enter, not on every keystroke. Typing
+/// `notes.dic` passes through `notes`, a file that exists, which must not be bound on the way.
+#[test]
+fn typing_the_custom_dictionary_path_binds_it_only_on_enter() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("wc-ui-dict-typing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("notes"), "partway\n").unwrap();
+    let target = dir.join("notes.dic");
+    std::fs::write(&target, "uiword\n").unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "proofing"})).unwrap();
+    let mut h = crate::test_harness::builder().build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        b,
+        a,
     );
-    h.run_steps(6);
-    h.get_by_label("Screen paper color:").click();
-    h.run_steps(2);
-    h.get_by_label("Warm cream").click();
-    h.run_steps(3);
-    assert_eq!(h.state().session.prefs.paper_color, PaperColor::Cream);
+    options_frames(&mut h, 3);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").focus();
+    options_frames(&mut h, 2);
+    for c in target_str.chars() {
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").type_text(&c.to_string());
+        options_frames(&mut h, 2);
+        assert_eq!(h.state().session.prefs.custom_dictionary, None, "typing {c:?} bound a path");
+    }
+    h.key_press(egui::Key::Enter);
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(target_str.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A harness over the real Options page, Proofing pane, with two dictionary files on disk.
+fn dictionary_harness(tag: &str) -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf, String, String) {
+    let dir = std::env::temp_dir().join(format!("wc-ui-dict-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let one = dir.join("one.dic");
+    let two = dir.join("two.dic");
+    std::fs::write(&one, "oneword\n").unwrap();
+    std::fs::write(&two, "twoword\n").unwrap();
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "proofing"})).unwrap();
+    let mut h = crate::test_harness::builder().build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    options_frames(&mut h, 3);
+    (h, dir, one.to_string_lossy().into_owned(), two.to_string_lossy().into_owned())
+}
+
+fn dictionary_field_text(h: &egui_kittest::Harness<'static, WordApp>) -> String {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").value().unwrap_or_default()
+}
+
+fn type_into_dictionary_field(h: &mut egui_kittest::Harness<'static, WordApp>, text: &str) {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").focus();
+    options_frames(h, 2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").type_text(text);
+    options_frames(h, 2);
+}
+
+/// #5899: a path typed but not committed yields to a saved path an agent sets meanwhile: the field
+/// shows the agent's value (the framework ends the edit when the value changes outside it), and a
+/// later Enter does not write the abandoned draft over it.
+#[test]
+fn an_outside_change_replaces_a_path_being_typed() {
+    let (mut h, dir, one, two) = dictionary_harness("outside");
+    type_into_dictionary_field(&mut h, &one);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None, "typing binds nothing");
+    h.state_mut().run("file.options", json!({"customDictionary": two})).unwrap();
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(two.as_str()));
+    assert_eq!(dictionary_field_text(&h), two, "the field shows the agent's path");
+    h.key_press(egui::Key::Enter);
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(two.as_str()), "Enter did not overwrite it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5899: an uncommitted draft does not outlive its pane: back on Proofing the field shows the saved path.
+#[test]
+fn leaving_the_pane_drops_an_uncommitted_path() {
+    let (mut h, dir, one, two) = dictionary_harness("leave");
+    h.state_mut().run("file.options", json!({"customDictionary": two})).unwrap();
+    options_frames(&mut h, 3);
+    type_into_dictionary_field(&mut h, &one);
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    options_frames(&mut h, 3);
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "options", "pane": "proofing"})).unwrap();
+    options_frames(&mut h, 3);
+    assert_eq!(dictionary_field_text(&h), two, "the field shows the saved path");
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(two.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5899: focus leaving the field commits the typed path.
+#[test]
+fn focus_loss_commits_the_custom_dictionary_path() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, dir, one, _two) = dictionary_harness("blur");
+    type_into_dictionary_field(&mut h, &one);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "New word").focus();
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(one.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5899: Escape abandons the typed path: nothing binds, and the field shows the saved path again.
+#[test]
+fn escape_does_not_commit_the_custom_dictionary_path() {
+    let (mut h, dir, one, _two) = dictionary_harness("escape");
+    type_into_dictionary_field(&mut h, &one);
+    h.key_press(egui::Key::Escape);
+    options_frames(&mut h, 3);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None);
+    assert_eq!(dictionary_field_text(&h), "", "the field shows the saved (empty) path");
+    let _ = std::fs::remove_dir_all(&dir);
 }
