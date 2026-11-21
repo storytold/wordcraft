@@ -150,6 +150,7 @@ const LOCALES: &[(&str, &[&str], Option<&str>)] = &[
     ("sl", &["sl", "sl-SI", "SL-si"], Some("Slovenščina")),
     ("bs", &["bs", "bs-BA", "bs-Latn-BA"], Some("Bosanski")),
     ("ar", &["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar-Arab-AE"], None),
+    ("he", &["he", "he-IL", "he_IL.UTF-8", "HE-il", "he-Hebr-IL", "iw", "iw-IL", "iw_IL.UTF-8"], Some("עברית")),
 ];
 
 /// A system locale and a saved preference pick each language, and choosing one leaves the open
@@ -193,9 +194,11 @@ fn a_system_locale_and_a_saved_preference_pick_the_language_and_leave_the_docume
     assert_eq!(app.ui.language, AUTO);
     assert_eq!(lang_from_tag("bs-Cyrl-BA"), None, "Cyrillic Bosnian has no catalog: a script is never crossed");
     assert_eq!(lang_from_tag("sr-Latn-RS"), Some(lang("sr-latn")));
-    if let Some(ar) = Lang::from_code("ar") {
-        assert!(ar.rtl());
-        assert!(Lang::all().filter(|l| l.rtl()).eq([ar]), "Arabic is the only right-to-left language");
+    let expected_rtl: Vec<Lang> = [Lang::from_code("ar"), Lang::from_code("he")].into_iter().flatten().collect();
+    assert!(Lang::all().filter(|l| l.rtl()).eq(expected_rtl), "Arabic and Hebrew are the right-to-left languages");
+    if let Some(he) = Lang::from_code("he") {
+        assert!(he.rtl());
+        assert!(!he.uses_cjk());
     }
 }
 
