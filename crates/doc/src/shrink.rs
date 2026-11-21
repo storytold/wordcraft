@@ -237,7 +237,7 @@ fn freeze_blocks_formatting(
     delta_pt: f32,
     space_factor: f32,
 ) {
-    use crate::styles::PartSet;
+    use crate::styles::{PartSet, TableBands};
 
     for b in blocks {
         let b = Arc::make_mut(b);
@@ -248,6 +248,7 @@ fn freeze_blocks_formatting(
             Block::Table(tbl) => {
                 let style = tbl.props.style.as_deref().and_then(|id| styles.table_style(id));
                 let cell_para = style.as_ref().map(|st| &st.para);
+                let bands = style.as_ref().map(|st| TableBands::new(&tbl.props.look, Some(&st.parts), tbl.rows.iter().map(|r| r.props.header)));
                 let nrows = tbl.rows.len();
                 let ncols = tbl.cols();
                 let cell_grids: Vec<Vec<usize>> =
@@ -255,11 +256,10 @@ fn freeze_blocks_formatting(
                 for (ri, row) in tbl.rows.iter_mut().enumerate() {
                     for (ci, cell) in row.cells.iter_mut().enumerate() {
                         let mut cell_chr = CharProps::default();
-                        if let Some(st) = &style {
-                            let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+                        if let (Some(st), Some(bands)) = (&style, &bands) {
                             let g = cell_grids.get(ri).and_then(|r| r.get(ci)).copied().unwrap_or(0);
                             let span = cell.span();
-                            let region = PartSet::of_cell(&tbl.props.look, sizes, (ri, nrows), (g, span, ncols));
+                            let region = PartSet::of_cell(bands, (ri, nrows), (g, span, ncols));
                             cell_chr.overlay(&st.chr);
                             for part in region.iter() {
                                 let f = st.part(part);
