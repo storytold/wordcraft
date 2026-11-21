@@ -12258,6 +12258,54 @@ fn rename_unsaved_document_names_the_file_not_the_document() {
     assert!(s.file_name.is_none() && s.path.is_none());
 }
 
+#[test]
+fn rename_data_open_changes_only_the_document_path() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-data-rename-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("original.txt");
+    let renamed = dir.join("renamed.txt");
+    std::fs::write(&original, b"disk contents").unwrap();
+    let roots = crate::file_access::AutomationRoots::new(Some(&dir), Some(&dir)).unwrap();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    crate::file_access::confine(roots.as_ref(), || {
+        s.run("file.open", &json!({"path": original.to_string_lossy(), "data": "aGk="})).unwrap();
+        assert!(s.path_names_only);
+        s.run("file.rename", &json!({"name": "renamed"})).unwrap();
+        assert_eq!(s.path.as_ref(), Some(&renamed));
+        assert!(s.path_names_only);
+    });
+    assert_eq!(std::fs::read(&original).unwrap(), b"disk contents");
+    assert!(!renamed.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Renaming a document opened from bytes moves no file, but a later save writes to the new path,
+/// so a name that an existing file already has is refused, as it is for a document opened from
+/// its file. A name that only changes the case of the current one is still allowed.
+#[test]
+fn rename_data_open_refuses_a_name_another_file_has() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-data-rename-taken-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("original.txt");
+    let taken = dir.join("taken.txt");
+    std::fs::write(&original, b"disk contents").unwrap();
+    std::fs::write(&taken, b"other file").unwrap();
+    let roots = crate::file_access::AutomationRoots::new(Some(&dir), Some(&dir)).unwrap();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    crate::file_access::confine(roots.as_ref(), || {
+        s.run("file.open", &json!({"path": original.to_string_lossy(), "data": "aGk="})).unwrap();
+        assert!(s.path_names_only);
+        let err = s.run("file.rename", &json!({"name": "taken"})).unwrap_err();
+        assert!(err.to_string().contains("taken.txt already exists"), "{err}");
+        assert_eq!(s.path.as_ref(), Some(&original));
+        s.run("file.rename", &json!({"name": "Original"})).unwrap();
+        assert_eq!(s.path.as_ref(), Some(&dir.join("Original.txt")));
+    });
+    assert_eq!(std::fs::read(&taken).unwrap(), b"other file");
+    assert_eq!(std::fs::read(&original).unwrap(), b"disk contents");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A version snapshot belongs to the document it was taken from: opening another document (or
 /// starting a new one) starts a new version history, so a restore can't put the previous
 /// document's content into the open one (#1327 follow-up).

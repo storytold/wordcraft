@@ -286,6 +286,27 @@ fn field_dialog_reads_a_typed_merge_field_with_no_space_before_its_quote() {
     assert_eq!(f.text_format, "");
 }
 
+/// The Field dialog lists Word's document information fields, and the counts take a number
+/// format.
+#[test]
+fn field_dialog_lists_the_document_information_fields() {
+    let listed: Vec<&str> = FIELDS.iter().filter(|(_, cat, _)| *cat == "Document Information").map(|(n, _, _)| *n).collect();
+    for name in ["COMMENTS", "FILESIZE", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT", "TEMPLATE"] {
+        assert!(listed.contains(&name), "{name} in {listed:?}");
+    }
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("REVNUM");
+    f.number_format = "ROMAN".into();
+    f.preserve = false;
+    assert_eq!(f.instruction(), r"REVNUM \* ROMAN");
+    f.select("SUBJECT");
+    assert_eq!(f.instruction(), "SUBJECT");
+    f.select("FILESIZE");
+    f.number_format = "CardText".into();
+    assert_eq!(f.instruction(), r"FILESIZE \* CardText");
+}
+
 /// The Date & Time dialog uses the saved pt-BR editing language when present in UI preferences.
 #[test]
 fn date_time_dialog_uses_saved_pt_br_language() {
