@@ -58,6 +58,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
         // The caret this pass began with, for the refusal below.
         let caret_before = src.caret;
+        // The field takes the room left under the notice. Shown in the flow, a filling field is offered no height
+        // and grows to the whole text, which the window then cuts off with no scroll (#7180); given the room, its
+        // text scrolls inside it.
+        let room = ui.available_rect_before_wrap();
         // A multi-line field: Enter breaks lines, and it holds no character limit. Tab types a tab, which
         // Markdown code blocks use.
         let out = TextField::new(tl!("Markdown Source"), Bind::bound(&mut src.text))
@@ -68,7 +72,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .caret(Bind::bound(&mut src.caret))
             .sizing(Sizing::Fill)
             .id_salt(("md-source", app.md_source_visit))
-            .show(ui);
+            .show_at(ui, room);
+        ui.advance_cursor_after_rect(room);
         // The field limits by characters and the engine's limit is in bytes, so the refusal is ours.
         if src.text.len() > max {
             match text_before_pass(&out.events) {
@@ -262,6 +267,21 @@ mod tests {
         // PLAN: assumed (app-hub sh.A3) `status: Option<Status>` with `text`
         let status = h.state().status.as_ref().map(|s| s.text.as_str());
         assert_eq!(status, Some("Markdown Source takes up to 2 MB of text"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// #7180: a text longer than the window keeps the field inside the window, so its text scrolls in it, rather than
+    /// the field growing to the whole text's height and the window cutting it off with no way to reach the rest.
+    #[test]
+    fn a_long_text_keeps_the_field_inside_the_window() {
+        let (mut a, dir) = opened("long");
+        a.run("view.markdownSource", json!({})).unwrap();
+        a.session.md_source.as_mut().unwrap().text = (1..=400).map(|n| format!("Line {n}\n")).collect();
+        let mut h = harness(a);
+        crate::test_harness::frames(&mut h, 2);
+        let window = h.ctx.content_rect();
+        let field = h.get_by_label("Markdown Source").rect();
+        assert!(window.contains_rect(field), "the field {field:?} is inside the window {window:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
