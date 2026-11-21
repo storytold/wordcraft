@@ -26,6 +26,39 @@ where
     serde_json::from_slice(&bytes).map_err(|error| DocxError::Xml(format!("shared model conversion: {error}")))
 }
 
+fn sync_change_slot<T: Clone>(
+    style_slot: &mut Option<Box<wordcraft_doc::props::PropChange<T>>>,
+    prop_slot: &mut Option<Box<wordcraft_doc::props::PropChange<T>>>,
+) {
+    if prop_slot.is_none() && style_slot.is_some() {
+        *prop_slot = style_slot.clone();
+    } else if style_slot.is_none() && prop_slot.is_some() {
+        *style_slot = prop_slot.clone();
+    }
+}
+
+fn styles_from_shared(styles: craft_wordmodel::styles::StyleSheet) -> Result<wordcraft_doc::styles::StyleSheet, DocxError> {
+    let mut sheet: wordcraft_doc::styles::StyleSheet = convert(styles)?;
+    for st in &mut sheet.styles {
+        sync_change_slot(&mut st.para_change, &mut st.para.fmt_change);
+        sync_change_slot(&mut st.chr_change, &mut st.chr.fmt_change);
+    }
+    Ok(sheet)
+}
+
+fn styles_to_shared(styles: &wordcraft_doc::styles::StyleSheet) -> Result<craft_wordmodel::styles::StyleSheet, DocxError> {
+    let mut sheet: craft_wordmodel::styles::StyleSheet = convert_ref(styles)?;
+    for st in &mut sheet.styles {
+        if st.para_change.is_none() && st.para.fmt_change.is_some() {
+            st.para_change = st.para.fmt_change.clone();
+        }
+        if st.chr_change.is_none() && st.chr.fmt_change.is_some() {
+            st.chr_change = st.chr.fmt_change.clone();
+        }
+    }
+    Ok(sheet)
+}
+
 // ---------------------------------------------------------------------------
 // From Shared Model -> WordCraft Document
 // ---------------------------------------------------------------------------
@@ -211,7 +244,7 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.body = blocks_from_shared(body, &mut graphics)?;
     document.last_section = convert(last_section)?;
     document.parts = parts.into_iter().map(|(id, part)| Ok((id, part_value_from_shared(part, &mut graphics)?))).collect::<Result<_, DocxError>>()?;
-    document.styles = Arc::new(convert((*styles).clone())?);
+    document.styles = Arc::new(styles_from_shared((*styles).clone())?);
     document.numbering = Arc::new(convert((*numbering).clone())?);
     document.comments = convert(comments)?;
     document.revisions = convert(revisions)?;
@@ -386,7 +419,7 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
     document.body = blocks_to_shared(&source.body)?;
     document.last_section = convert_ref(&source.last_section)?;
     document.parts = source.parts.iter().map(|(&id, part)| Ok((id, part_value_to_shared(part)?))).collect::<Result<_, DocxError>>()?;
-    document.styles = Arc::new(convert_ref(source.styles.as_ref())?);
+    document.styles = Arc::new(styles_to_shared(source.styles.as_ref())?);
     document.numbering = Arc::new(convert_ref(source.numbering.as_ref())?);
     document.comments = convert_ref(&source.comments)?;
     document.revisions = convert_ref(&source.revisions)?;

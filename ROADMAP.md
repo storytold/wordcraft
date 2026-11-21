@@ -417,6 +417,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-11-20 | trivial | Progress log: `wordcraft-cli mcp` needs both automation roots; `--connect` refused (#7124) |
 | 2026-11-17 | trivial | Progress log: file formats, codecs and protocols come from craft-libs (#778) |
 | 2026-11-15 | trivial | Progress log: Get the Missing Fonts (download pages for missing fonts their publisher gives away) |
+| 2026-11-12 | minor | Compare tracks style-definition paragraph and run property differences as `w:pPrChange`/`w:rPrChange` revisions; they round-trip in `styles.xml` and accept/reject plus the Reviewing Pane resolve them, keeping an author's earlier old values and a table style's `wholeTable` region on reject. Style name, `basedOn` and table-property differences stay untracked (#5841). |
 | 2026-11-07 | Narrow windows (#5886): the window can be made 600 pt wide (was 760 pt), enabling split-window layout and edge tiling on Wayland/GNOME and 1280 pt screens; the title bar's search box and Discord button condense, and status-bar texts (page, word count, language, Track Changes, Overtype) stop before the right controls or shorten ("…" for language) instead of overlapping Focus, views and zoom |
 | 2026-11-05 | trivial | Progress log: ODT documents keep their language (gap 19) |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
