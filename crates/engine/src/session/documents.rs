@@ -43,6 +43,7 @@ pub struct DocState {
     pub(super) sel: Selection,
     pub(super) view: ViewState,
     pub(super) pending: Option<CharProps>,
+    pub(super) pending_at: Option<Pos>,
     pub(super) path: Option<PathBuf>,
     pub(super) path_names_only: bool,
     pub(super) file_name: Option<String>,
@@ -100,6 +101,7 @@ impl DocState {
             sel: Selection::caret(start),
             view,
             pending: None,
+            pending_at: None,
             path: None,
             path_names_only: false,
             file_name: None,
@@ -204,6 +206,7 @@ impl Session {
             sel: _,
             view: _,
             pending: _,
+            pending_at: _,
             path: _,
             path_names_only: _,
             file_name: _,
@@ -253,6 +256,7 @@ impl Session {
             // Names the document it belongs to, so it never applies to another one.
             review_style: _,
             user_dict_path: _,
+            default_user_dict_path: _,
             clipboard: _,
             clipboard_text: _,
             clipboard_html: _,
@@ -275,6 +279,8 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            // Stamped with the document id and revision, so one cache serves every document.
+            findings: _,
             ribbon: _,
             editing_lang: _,
             math_latex: _,
@@ -304,6 +310,7 @@ impl Session {
             sel,
             view,
             pending,
+            pending_at,
             path,
             path_names_only,
             file_name,
@@ -354,6 +361,7 @@ impl Session {
         swap(&mut self.sel, sel);
         swap(&mut self.view, view);
         swap(&mut self.pending, pending);
+        swap(&mut self.pending_at, pending_at);
         swap(&mut self.path, path);
         swap(&mut self.path_names_only, path_names_only);
         swap(&mut self.file_name, file_name);
