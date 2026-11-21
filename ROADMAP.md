@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-18 · **Change:** trivial (progress log: TIFF picture chooser, drop and pasted-path routing, #6704); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-21 · **Change:** trivial (table rows split across pages: a cell's first paragraph on the page can split even when only one line fits, if the row starts at the top, with or without its own headers, or continues from the previous page (#6823)); previously trivial (progress log: TIFF picture chooser, drop and pasted-path routing, #6704); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -920,6 +920,8 @@ Quoted field escapes are interpreted like Word, and body `PAGE` fields use their
 
 Section page-numbering settings preserve `w:chapStyle` values across the full unsigned-byte range.
 MATH glyphs that reference the same construction now share its immutable variants and assembly data (#3630). Glyph mappings, values and the existing partial-record fallback stay unchanged. Repeated glyph IDs keep their last valid reference without retaining superseded constructions. Distinct overlapping constructions and assembly-only sharing remain separate.
+
+- 2026-11-15: Layout: the first paragraph of a table cell on a page can split even when only one line fits, if the row starts at the top (possibly below its own headers) or continues from the previous page, and a non-exact row marked Can't Split that is taller than a page splits at the page's end, as in Word, instead of the row running off the bottom of the page (#6823). Readiness estimates unchanged.
 
 ## Revision history
 
