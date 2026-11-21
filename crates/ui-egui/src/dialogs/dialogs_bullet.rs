@@ -244,13 +244,13 @@ impl WordForm for DefineBulletForm {
                 }
             }
             ChildAnswer::Font(font) => {
-                if let Some(name) = font.bullet_font() {
+                if let Some(name) = font.bullet_font {
                     self.font = name;
                 }
                 self.size = font.size.map(|s| s.to_string()).unwrap_or_default();
                 self.bold = font.bold;
                 self.italic = font.italic;
-                self.color = font.color.clone();
+                self.color = font.color;
             }
             _ => {}
         }

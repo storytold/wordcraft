@@ -59,8 +59,9 @@ pub(crate) struct FontForm {
     pub kern: Option<bool>,
     /// The Points-and-above size of kerning.
     pub kern_at: Option<f64>,
-    /// Formatting Define New Bullet's bullet: OK hands the form back and formats no text.
-    pub for_bullet: bool,
+    /// Formatting a list label (Define New Bullet #2786 or Define New Number Format #2787): OK
+    /// hands the formatting back to that dialog instead of formatting document text.
+    pub for_list_label: bool,
     /// The fonts as they stood when the dialog opened, to tell a changed font box.
     #[serde(skip)]
     font_was: String,
@@ -92,12 +93,51 @@ pub(crate) struct FontForm {
 /// What opens the Font dialog over another dialog.
 pub(crate) struct FontRequest {
     bullet: Option<DefineBulletForm>,
+    number: Option<super::dialogs_lists::NumberForm>,
+}
+
+/// What the Font dialog hands back on OK when opened from Define New Bullet or Define New Number
+/// Format (#2786, #2787).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FontAnswer {
+    pub bullet_font: Option<String>,
+    pub size: Option<f64>,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: String,
+    pub changed: serde_json::Map<String, Value>,
+    pub cleared: Vec<String>,
+}
+
+impl FontAnswer {
+    /// Applies changed and cleared font properties onto a number's `props` map (#2787).
+    pub(crate) fn apply_to_number_props(&self, props: &mut serde_json::Map<String, Value>) {
+        for (k, v) in &self.changed {
+            if v.is_null() {
+                props.remove(k);
+            } else {
+                props.insert(k.clone(), v.clone());
+            }
+        }
+        for k in &self.cleared {
+            props.remove(k);
+            if k == "font" {
+                props.remove("fontCs");
+            }
+        }
+    }
 }
 
 impl FontRequest {
     /// Font… of Define New Bullet: the dialog opens on the bullet's font, size, bold, italic and colour.
     pub(crate) fn bullet(form: DefineBulletForm) -> FontRequest {
-        FontRequest { bullet: Some(form) }
+        FontRequest { bullet: Some(form), number: None }
+    }
+
+    /// Font… of Define New Number Format (#2787): opens on `form.props`.
+    pub(crate) fn number(form: super::dialogs_lists::NumberForm) -> FontRequest {
+        FontRequest { bullet: None, number: Some(form) }
     }
 
     /// The form the request opens with.
@@ -113,7 +153,37 @@ impl FontRequest {
             form.bold = bullet.bold;
             form.italic = bullet.italic;
             form.color = bullet.color;
-            form.for_bullet = true;
+            form.for_list_label = true;
+            form.start = form.props();
+        } else if let Some(number) = self.number {
+            let props = &number.props;
+            let b = |k: &str| props.get(k).and_then(Value::as_bool).unwrap_or(false);
+            let shown = app.previews.font_shown(props.get("font").and_then(Value::as_str).unwrap_or(""));
+            form.font = shown.clone();
+            form.font_was = shown;
+            form.font_ea = String::new();
+            form.asian = false;
+            form.size = props.get("size").and_then(Value::as_f64);
+            form.bold = b("bold");
+            form.italic = b("italic");
+            form.strike = b("strike");
+            form.small_caps = b("smallCaps");
+            form.caps = b("caps");
+            form.hidden = b("hidden");
+            form.underline = props.get("underline").and_then(Value::as_str).is_some_and(|u| u != "none");
+            let vert = props.get("vertAlign").and_then(Value::as_str);
+            form.sup = vert == Some("superscript");
+            form.sub = vert == Some("subscript");
+            form.spacing = Some(props.get("spacing").and_then(Value::as_f64).unwrap_or(0.0));
+            // The number's kerning, not the selected text's: off unless the number kerns from a size.
+            let k = props.get("kern").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0);
+            form.kern = Some(k.is_some());
+            form.kern_at = Some(k.unwrap_or(12.0));
+            form.color = match props.get("color").and_then(|c| c.get("Rgb")).and_then(Value::as_array) {
+                Some(c) => c.iter().filter_map(Value::as_u64).map(|x| format!("{:02X}", x.min(255))).collect(),
+                None => "auto".into(),
+            };
+            form.for_list_label = true;
             form.start = form.props();
         }
         form
@@ -217,7 +287,7 @@ impl FontForm {
             spacing: Some(st.get("spacing").and_then(Value::as_f64).unwrap_or(0.0)),
             kern: kern.map(|k| k > 0.0),
             kern_at: Some(kern.filter(|k| *k > 0.0).unwrap_or(12.0)),
-            for_bullet: false,
+            for_list_label: false,
             start: serde_json::Map::new(),
             names,
             paper: Some(app.session.doc.settings.page_color.unwrap_or(Rgb(255, 255, 255))),
@@ -285,6 +355,15 @@ impl FontForm {
             props.insert("color".into(), json!("Auto"));
         }
         props
+    }
+    /// The properties changed since opening, with complex-script font paired with Latin font.
+    fn changed_props(&self) -> serde_json::Map<String, Value> {
+        let mut changed: serde_json::Map<String, Value> = self.props().into_iter().filter(|(k, v)| self.start.get(k) != Some(v)).collect();
+        // A changed Latin font also sets the complex-script one (Persian and Arabic text).
+        if let Some(f) = changed.get("font").cloned() {
+            changed.insert("fontCs".into(), f);
+        }
+        changed
     }
 }
 
@@ -453,15 +532,26 @@ impl WordForm for FontForm {
     }
 
     fn commands(&self) -> Vec<(String, Value)> {
-        if self.for_bullet {
+        if self.for_list_label {
             return Vec::new();
         }
-        let mut changed: serde_json::Map<String, Value> = self.props().into_iter().filter(|(k, v)| self.start.get(k) != Some(v)).collect();
-        // A changed Latin font also sets the complex-script one (Persian and Arabic text).
-        if let Some(f) = changed.get("font").cloned() {
-            changed.insert("fontCs".into(), f);
-        }
+        let changed = self.changed_props();
         if changed.is_empty() { Vec::new() } else { vec![("format.set".into(), json!({"props": changed}))] }
+    }
+
+    fn mail(&self) -> Option<Value> {
+        let now = self.props();
+        let cleared: Vec<String> = self.start.keys().filter(|k| !now.contains_key(*k)).cloned().collect();
+        serde_json::to_value(FontAnswer {
+            bullet_font: self.bullet_font(),
+            size: self.size,
+            bold: self.bold,
+            italic: self.italic,
+            color: self.color.clone(),
+            changed: self.changed_props(),
+            cleared,
+        })
+        .ok()
     }
 
     fn answer(&mut self, answer: ChildAnswer) {

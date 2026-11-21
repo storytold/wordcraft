@@ -180,6 +180,21 @@ fn bullet_level(i: usize, c: char) -> Level {
     }
 }
 
+/// The label of a "none" level whose template is `text`: the text with every level's number
+/// (`%1`…`%9`) left out, as Word draws it.
+pub fn none_label(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' && chars.peek().is_some_and(|d| ('1'..='9').contains(d)) {
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Nine levels for a list kind.
 pub fn levels_for(kind: ListKind) -> Vec<Level> {
     (0..9)
@@ -484,6 +499,25 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2787: the Define New Number Format preview's label for a "none" level ([`none_label`]) is
+    /// the one the list draws: its text with the numbers left out, the same on every paragraph.
+    #[test]
+    fn a_none_level_shows_its_text_without_the_number() {
+        for text in ["Note:", "%1.", "Part %1", "(%1)", ""] {
+            let mut n = Numbering::default();
+            let id = n.add_list(ListKind::Numbered);
+            if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+                num.level_overrides = vec![(0, Level { format: NumFormat::None, text: text.into(), ..Level::default() })];
+            }
+            let mut c = Counters::default();
+            for _ in 0..2 {
+                assert_eq!(c.next_label(&n, id, 0).map(|(l, _)| l), Some(none_label(text)), "{text:?}");
+            }
+        }
+        assert_eq!((none_label("%1."), none_label("(%1)")), (".".to_string(), "()".to_string()));
+        assert_eq!(none_label("%1.%2 – %10"), ". – 0");
+    }
 
     /// Read-only counter APIs retain the renderer's bounds and never advance a list.
     #[test]
