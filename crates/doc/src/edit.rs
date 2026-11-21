@@ -603,6 +603,48 @@ fn remap_media_block(b: &mut Block, map: &BTreeMap<String, String>) {
     });
 }
 
+/// Visit `(index, item)` in forward (`!last`) or reverse (`last`) order, returning the first `Some`.
+fn find_in_slice<T>(slice: &[T], last: bool, mut f: impl FnMut(usize, &T) -> Option<Path>) -> Option<Path> {
+    if last { slice.iter().enumerate().rev().find_map(|(i, x)| f(i, x)) } else { slice.iter().enumerate().find_map(|(i, x)| f(i, x)) }
+}
+
+/// First (`last == false`) or last (`last == true`) paragraph path inside `blk`,
+/// matching [`crate::text_walk::walk`] order and bounded by [`crate::PARA_WALK_DEPTH`].
+fn edge_para_in_block(blk: &Block, prefix: &mut Vec<u32>, depth: usize, last: bool) -> Option<Path> {
+    if depth > crate::PARA_WALK_DEPTH {
+        return None;
+    }
+    match blk {
+        Block::Para(_) => Some(Path(prefix.clone())),
+        Block::Table(t) => find_in_slice(&t.rows, last, |r, row| {
+            find_in_slice(&row.cells, last, |c, cell| {
+                prefix.push(r as u32);
+                prefix.push(c as u32);
+                let found = find_in_slice(&cell.blocks, last, |bi, b| {
+                    prefix.push(bi as u32);
+                    let res = edge_para_in_block(b, prefix, depth + 1, last);
+                    prefix.pop();
+                    res
+                });
+                prefix.pop();
+                prefix.pop();
+                found
+            })
+        }),
+    }
+}
+
+/// Trim a paragraph to the offset range `from..to`, optionally clearing section breaks.
+fn trim_para(para: &Paragraph, from: usize, to: usize, clear_section: bool) -> Paragraph {
+    let mut p = para.clone();
+    let _ = p.delete(to.min(p.len()), p.len());
+    let _ = p.delete(0, from.min(p.len()));
+    if clear_section {
+        p.section = None;
+    }
+    p
+}
+
 impl Document {
     /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
     /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
@@ -1340,6 +1382,22 @@ impl Document {
         out
     }
 
+    /// Copy paragraphs in linear document order between `a` and `b` inclusive (#5906).
+    fn copy_para_range(&self, a: &Pos, b: &Pos) -> Vec<Block> {
+        let (a, b) = order(a, b);
+        let mut out = Vec::new();
+        for p in self.paths_between(&a, &b) {
+            if let Some(para) = self.para(a.story, &p) {
+                let from = if p == a.path { a.off } else { 0 };
+                let to = if p == b.path { b.off } else { para.len() };
+                let clear = p == b.path && b.off < para.len();
+                out.push(Block::Para(trim_para(para, from, to, clear)));
+            }
+        }
+        out
+    }
+
+    /// Copy blocks spanning `a..b`, preserving whole tables when covered across containers (#5906).
     fn copy_blocks(&self, a: &Pos, b: &Pos) -> Vec<Block> {
         let (a, b) = order(a, b);
         let mut out = Vec::new();
@@ -1352,21 +1410,17 @@ impl Document {
                 let Some(blk) = bl.get(i) else { break };
                 match &**blk {
                     Block::Para(p) => {
-                        let mut p = p.clone();
                         let to = if i == b.path.last() { b.off } else { p.len() };
                         let from = if i == a.path.last() { a.off } else { 0 };
-                        let _ = p.delete(to.min(p.len()), p.len());
-                        let _ = p.delete(0, from.min(p.len()));
-                        if i == b.path.last() && to < self.para(a.story, &b.path).map(Paragraph::len).unwrap_or(0) {
-                            p.section = None;
-                        }
-                        out.push(Block::Para(p));
+                        let clear = i == b.path.last() && to < p.len();
+                        out.push(Block::Para(trim_para(p, from, to, clear)));
                     }
-                    Block::Table(t) => out.push(Block::Table(t.clone())),
+                    Block::Table(_) => out.push((**blk).clone()),
                 }
             }
             return out;
         }
+
         // Across the cells of a whole table: the table itself, not its cells' paragraphs (#1744).
         if let Some(tp) = self.whole_table(&a, &b)
             && let Some(blk) = self.block(a.story, &tp)
@@ -1374,17 +1428,92 @@ impl Document {
             out.push(blk.clone());
             return out;
         }
-        for p in self.paths_between(&a, &b) {
-            if let Some(para) = self.para(a.story, &p) {
-                let mut q = para.clone();
-                let to = if p == b.path { b.off } else { q.len() };
-                let from = if p == a.path { a.off } else { 0 };
-                let _ = q.delete(to.min(q.len()), q.len());
-                let _ = q.delete(0, from.min(q.len()));
-                q.section = None;
-                out.push(Block::Para(q));
+
+        // Find the lowest common ancestor container.
+        let common = a.path.0.iter().zip(&b.path.0).take_while(|(x, y)| x == y).count();
+        let level = common.saturating_sub(common % 3);
+        let prefix = a.path.0.get(..level).unwrap_or_default().to_vec();
+        let block_path = |i: usize| {
+            let mut v = prefix.clone();
+            v.push(i as u32);
+            Path(v)
+        };
+
+        let (Some(&ia), Some(&ib)) = (a.path.0.get(level), b.path.0.get(level)) else {
+            return self.copy_para_range(&a, &b);
+        };
+        let (ia, ib) = (ia as usize, ib as usize);
+        if ia >= ib {
+            return self.copy_para_range(&a, &b);
+        }
+
+        let Some(bl) = self.container(a.story, &block_path(ia)) else {
+            return self.copy_para_range(&a, &b);
+        };
+
+        let edge_para = |i: usize, last: bool| -> Option<Path> {
+            let blk = bl.get(i)?;
+            if matches!(&**blk, Block::Para(_)) {
+                return None;
+            }
+            let mut pre = block_path(i).0;
+            edge_para_in_block(blk, &mut pre, level / 3, last)
+        };
+        let walked = |i: usize| bl.get(i).is_some_and(|b| !deeper_than_walk(b, level / 3));
+
+        let a_covers = if a.path.0.len() == level + 1 {
+            a.off == 0
+        } else {
+            a.path.0.len() > level + 1 && a.off == 0 && walked(ia) && edge_para(ia, false).as_ref() == Some(&a.path)
+        };
+
+        let b_at_end = self.para(b.story, &b.path).is_some_and(|p| p.len() == b.off);
+        let b_covers = if b.path.0.len() == level + 1 {
+            b_at_end
+        } else {
+            b.path.0.len() > level + 1 && walked(ib) && edge_para(ib, true).as_ref() == Some(&b.path) && b_at_end
+        };
+
+        // Start block ia:
+        if a_covers {
+            if let Some(blk) = bl.get(ia) {
+                out.push((**blk).clone());
+            }
+        } else if a.path.0.len() == level + 1 {
+            if let Some(blk) = bl.get(ia)
+                && let Block::Para(p) = &**blk
+            {
+                out.push(Block::Para(trim_para(p, a.off, p.len(), false)));
+            }
+        } else if let Some(last_in_a) = edge_para(ia, true) {
+            let end_pos = Pos { story: a.story, path: last_in_a.clone(), off: self.para(a.story, &last_in_a).map_or(0, Paragraph::len) };
+            out.extend(self.copy_para_range(&a, &end_pos));
+        }
+
+        // Blocks strictly between ia and ib: whole blocks
+        for i in ia + 1..ib {
+            if let Some(blk) = bl.get(i) {
+                out.push((**blk).clone());
             }
         }
+
+        // End block ib:
+        if b_covers {
+            if let Some(blk) = bl.get(ib) {
+                out.push((**blk).clone());
+            }
+        } else if b.path.0.len() == level + 1 {
+            if let Some(blk) = bl.get(ib)
+                && let Block::Para(p) = &**blk
+            {
+                let clear = b.off < p.len();
+                out.push(Block::Para(trim_para(p, 0, b.off, clear)));
+            }
+        } else if let Some(first_in_b) = edge_para(ib, false) {
+            let start_pos = Pos { story: b.story, path: first_in_b, off: 0 };
+            out.extend(self.copy_para_range(&start_pos, &b));
+        }
+
         out
     }
 
