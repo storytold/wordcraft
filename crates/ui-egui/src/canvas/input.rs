@@ -145,13 +145,13 @@ impl<'a> PageTextTool<'a> {
                 app.session.page_hint = page;
                 app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
             }
-        } else if let Some(pos) = layout.hit(page, x, y, story)
+        } else if let Some((pos, upstream)) = layout.hit_affinity(page, x, y, story)
             && pos != app.session.sel_ends().focus
         {
             // Through the command, so from one table cell into another the drag takes whole cells
             // (Word); straight to the session, as the app's `run` would scroll on every frame.
             let pj = serde_json::to_value(&pos).unwrap_or_default();
-            let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true}));
+            let _ = app.session.run("caret.set", &json!({"pos": pj, "extend": true, "upstream": upstream}));
             app.session.page_hint = page;
             app.canvas.glide.restart(craft::platform::clock::monotonic_ms());
         }
@@ -303,8 +303,9 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>,
         if on_cells {
             return;
         }
-        if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
+        if let Some((pos, upstream)) = layout.hit_affinity(page, x, y, app.session.sel.focus.story) {
             app.session.set_selection(wordcraft_engine::Selection::caret(pos));
+            app.session.caret_upstream = upstream;
             app.session.page_hint = page;
         }
     }
@@ -333,8 +334,9 @@ pub(crate) fn handle_secondary_selection(app: &mut WordApp, body: &PageBody<'_>,
             return;
         }
     }
-    if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
+    if let Some((pos, upstream)) = layout.hit_affinity(page, x, y, app.session.sel.focus.story) {
         app.session.set_selection(wordcraft_engine::Selection::caret(pos));
+        app.session.caret_upstream = upstream;
         app.session.page_hint = page;
     }
 }
@@ -433,7 +435,7 @@ fn handle_primary_press(
         app.canvas.dragging = true;
         return true;
     }
-    let Some(pos) = layout.hit(page, x, y, story) else { return true };
+    let Some((pos, upstream)) = layout.hit_affinity(page, x, y, story) else { return true };
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
         && let Some(link) = link_under(app, layout, page, x, y, &pos)
@@ -451,7 +453,7 @@ fn handle_primary_press(
         return true;
     }
     app.canvas.column_drag = None;
-    let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+    let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift, "upstream": upstream}));
     // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
     // the button and dragging then extends by whole units (Word, #549).
     let unit = match clicks {

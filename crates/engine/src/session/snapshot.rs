@@ -22,6 +22,7 @@ impl Session {
         // The old document's equation is gone: its editing session cannot carry over.
         self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
+        self.caret_upstream = false;
         self.pending = None;
         self.pending_at = None;
         self.typing = None;
@@ -91,6 +92,7 @@ impl Session {
             find: _,
             goal_x: _,
             page_hint: _,
+            caret_upstream,
             registry: _,
             author: _,
             initials: _,
@@ -184,6 +186,7 @@ impl Session {
         EditSnapshot {
             doc: doc.clone(),
             sel: sel.clone(),
+            caret_upstream: *caret_upstream,
             pending: pending.clone(),
             pending_at: pending_at.clone(),
             history_len: history.len(),
@@ -207,6 +210,7 @@ impl Session {
         let EditSnapshot {
             doc,
             sel,
+            caret_upstream,
             pending,
             pending_at,
             history_len,
@@ -230,6 +234,7 @@ impl Session {
         self.autocap = None;
         self.doc = doc;
         self.sel = sel;
+        self.caret_upstream = caret_upstream;
         self.pending = pending;
         self.pending_at = pending_at;
         self.also_selected.clear();

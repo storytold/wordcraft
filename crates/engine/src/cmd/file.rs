@@ -830,6 +830,9 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
             json!({"number": p.number, "w": p.w, "h": p.h, "section": p.section, "lines": lines, "firstBlock": p.first_block, "header": p.header_story, "footer": p.footer_story})
         })
         .collect();
-    let caret = l.caret_on(&s.sel.focus, s.page_hint).map(|c| json!({"page": c.page, "x": c.x, "y": c.top, "h": c.height}));
+    let upstream = s.caret_upstream && s.sel.is_collapsed() && l.at_wrap_end(&s.sel.focus, s.page_hint);
+    let caret = l
+        .caret_on_affinity(&s.sel.focus, s.page_hint, upstream)
+        .map(|c| json!({"page": c.page, "x": c.x, "y": c.top, "h": c.height, "upstream": upstream}));
     Ok(json!({"pages": pages, "caret": caret, "ms": l.ms}))
 }

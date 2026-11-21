@@ -89,6 +89,9 @@ pub struct Session {
     pub goal_x: Option<f32>,
     /// Page the caret was last on (headers/footers repeat on many pages).
     pub page_hint: usize,
+    /// The caret is drawn at the end of a wrapped line (after its last character) rather than
+    /// at the start of the next line: the same offset, Word's two stops at a soft wrap.
+    pub caret_upstream: bool,
     pub registry: Arc<Registry>,
     /// Author name for comments and tracked changes.
     pub author: String,

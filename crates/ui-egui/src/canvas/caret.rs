@@ -79,7 +79,7 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
         });
     }
     let sel = preview_sel(app).unwrap_or(&app.session.sel);
-    let c = doc.caret_on(&sel.focus, app.session.page_hint)?;
+    let c = doc.caret_on_affinity(&sel.focus, app.session.page_hint, app.session.caret_upstream && sel.is_collapsed())?;
     // A caret whose page is scrolled out of view still has a place: the input method keeps its context and
     // surroundings there (production placed it from every laid page), from the page's rect in the whole layout.
     let unplaced;
