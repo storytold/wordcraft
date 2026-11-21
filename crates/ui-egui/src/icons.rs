@@ -552,13 +552,18 @@ mod tests {
         register();
         let mut files = Vec::new();
         rs_files(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
-        let (mut seen, mut missing) = (0, Vec::new());
+        let (mut seen, mut missing, mut svg_only) = (0, Vec::new(), Vec::new());
         for file in files.iter().filter(|f| !f.ends_with("icons.rs")) {
             let text = std::fs::read_to_string(file).unwrap_or_default();
             for call in ["IconId::new(\"", "icons::id(\"", "icons::spec(\""] {
                 for part in text.split(call).skip(1) {
                     let Some(name) = part.split('"').next() else { continue };
                     seen += 1;
+                    // A text glyph resolves only through `icons::spec`; the SVG-only calls draw its SVG instead.
+                    if call != "icons::spec(\"" && glyphs::ICONS.iter().any(|g| g.0 == name) {
+                        svg_only.push(format!("{name} ({}): use icons::spec", file.display()));
+                        continue;
+                    }
                     let known = match call {
                         "IconId::new(\"" => craft::ui::primitives::has_icon(&IconId::from(Cow::Owned(name.to_owned()))),
                         _ => {
@@ -577,5 +582,6 @@ mod tests {
         }
         assert!(seen > 200, "the scan found only {seen} names");
         assert!(missing.is_empty(), "icons used but not in the app set or the catalog: {missing:?}");
+        assert!(svg_only.is_empty(), "text glyphs passed through the SVG-only IconId::new / icons::id: {svg_only:?}");
     }
 }

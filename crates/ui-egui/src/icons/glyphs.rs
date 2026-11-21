@@ -83,7 +83,11 @@ pub(super) struct TextIcon(pub(super) &'static str);
 
 impl Glyph for TextIcon {
     fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
-        let pen = Pen { p: painter, r: rect, c: color, a: rgba_color(tokens.color.accent.solid), w: 1.25 };
+        // The framework passes `text.disabled` as `color` to a disabled button, and a glyph has no other way
+        // to learn that; then both inks go grey (the accent ink would stay bright on a disabled button).
+        let disabled = color == rgba_color(tokens.color.text.disabled);
+        let accent = if disabled { color } else { rgba_color(tokens.color.accent.solid) };
+        let pen = Pen { p: painter, r: rect, c: color, a: accent, w: 1.25 };
         paint(&pen, self.0);
     }
 }
@@ -149,7 +153,7 @@ impl Pen<'_> {
     }
 }
 
-/// Draws `name`; false when it is not one of [`NAMES`].
+/// Draws `name`; false when it is not one of [`ICONS`].
 fn paint(pen: &Pen, name: &str) -> bool {
     let (c, a) = (pen.c, pen.a);
     let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
@@ -407,5 +411,61 @@ mod tests {
         });
         out.textures_delta.clear();
         assert_eq!(ICONS.len(), 65);
+    }
+
+    /// Every colour the shapes of `shape` paint with.
+    fn ink_of(shape: &Shape, out: &mut Vec<Color32>) {
+        match shape {
+            Shape::Vec(v) => v.iter().for_each(|s| ink_of(s, out)),
+            Shape::LineSegment { stroke, .. } => out.push(stroke.color),
+            Shape::Path(p) => {
+                out.push(p.fill);
+                if let egui::epaint::ColorMode::Solid(c) = p.stroke.color {
+                    out.push(c);
+                }
+            }
+            Shape::Circle(c) => out.extend([c.stroke.color, c.fill]),
+            Shape::Rect(r) => out.extend([r.stroke.color, r.fill]),
+            Shape::Text(t) => {
+                out.push(t.fallback_color);
+                out.extend(t.galley.job.sections.iter().map(|s| s.format.color));
+            }
+            _ => {}
+        }
+    }
+
+    /// A disabled button hands its glyph `text.disabled` as the colour: no shape may then be in the accent
+    /// colour (production painted both inks grey). Enabled, the glyphs do use the accent.
+    #[test]
+    fn a_disabled_text_glyph_paints_no_accent_colour() {
+        use craft::theme::{Appearance, Contrast, Mode, Size, TextSize};
+        let themes = craft::theme::builtins();
+        let theme = themes.iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT).unwrap();
+        let appearance = Appearance {
+            mode: Mode::Light,
+            contrast: Contrast::Standard,
+            size: Size::Compact,
+            text_size: TextSize::default(),
+            reduced_motion: false,
+        };
+        let tokens = UiTokens::new(std::sync::Arc::new(craft::theme::resolve(theme, appearance, None).tokens), Contrast::Standard, Size::Compact);
+        let (accent, disabled, normal) =
+            (rgba_color(tokens.color.accent.solid), rgba_color(tokens.color.text.disabled), rgba_color(tokens.color.text.normal));
+        assert_ne!(accent, disabled);
+        let inks = |color: Color32| {
+            let mut out = Vec::new();
+            let ctx = egui::Context::default();
+            let mut run = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let painter = ui.painter().clone();
+                for icon in ICONS {
+                    icon.paint(&painter, &tokens, Rect::from_min_size(pos2(0.0, 0.0), vec2(20.0, 20.0)), color, false);
+                }
+            });
+            run.textures_delta.clear();
+            run.shapes.iter().for_each(|clipped| ink_of(&clipped.shape, &mut out));
+            out
+        };
+        assert!(inks(normal).contains(&accent), "an enabled glyph uses the accent ink");
+        assert!(!inks(disabled).contains(&accent), "a disabled glyph painted in the accent colour");
     }
 }

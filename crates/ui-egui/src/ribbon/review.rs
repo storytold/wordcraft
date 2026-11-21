@@ -199,7 +199,7 @@ pub(super) fn developer(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             for cells in rows {
                 Row::new().show(ui, |ui, _| {
                     for (icon_name, id) in cells {
-                        IconButton::command(crate::icons::id(icon_name), CommandRef::new(id)).show(ui);
+                        IconButton::command(crate::icons::spec(icon_name), CommandRef::new(id)).show(ui);
                     }
                 });
             }

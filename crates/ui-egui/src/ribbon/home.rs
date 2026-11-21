@@ -24,7 +24,7 @@ use crate::colors::{Remember, Target};
 
 /// A ribbon group titled `title`, with the Dialog Launcher `launcher` when it has one.
 fn ribbon_group(key: &'static str, title: &str, icon: &'static str, launcher: Option<&str>) -> RibbonGroup<'static> {
-    let group = RibbonGroup::new(key, tl!(title).to_string(), crate::icons::id(icon).into());
+    let group = RibbonGroup::new(key, tl!(title).to_string(), crate::icons::spec(icon));
     match launcher {
         Some(id) => group.launcher(CommandRef::new(id)),
         None => group,
@@ -193,7 +193,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     let _ = app.run("format.size", json!({"size": x}));
                 }
                 for (icon, tip, id) in [("grow", "Increase Font Size", "format.growFont"), ("shrink", "Decrease Font Size", "format.shrinkFont")] {
-                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                    IconButton::command(crate::icons::spec(icon), CommandRef::new(id))
                         .label(tl!(tip).to_string())
                         .tooltip(tl!(tip).to_string())
                         .show(ui);
@@ -211,7 +211,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     }
                 });
                 for (icon, tip, id) in [("clear", "Clear All Formatting", "format.clear"), ("phonetic", "Phonetic Guide", "format.phonetic")] {
-                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                    IconButton::command(crate::icons::spec(icon), CommandRef::new(id))
                         .label(tl!(tip).to_string())
                         .tooltip(tl!(tip).to_string())
                         .show(ui);
@@ -247,7 +247,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                         .tooltip(tl!(tip).to_string())
                         .show(ui);
                 }
-                IconButton::command(IconId::new("enclose"), CommandRef::new("format.enclose"))
+                IconButton::command(crate::icons::spec("enclose"), CommandRef::new("format.enclose"))
                     .label(tl!("Enclose Characters").to_string())
                     .tooltip(tl!("Enclose Characters").to_string())
                     .show(ui);
@@ -338,13 +338,13 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 for (icon, tip, id) in
                     [("outdent", "Decrease Indent", "para.outdent"), ("indent", "Increase Indent", "para.indent"), ("sort", "Sort", "para.sort")]
                 {
-                    IconButton::command(crate::icons::id(icon), CommandRef::new(id))
+                    IconButton::command(crate::icons::spec(icon), CommandRef::new(id))
                         .label(tl!(tip).to_string())
                         .tooltip(tl!(tip).to_string())
                         .show(ui);
                 }
                 ToggleButton::command(CommandRef::new("view.marks"))
-                    .icon(IconId::new("wordcraft.pilcrow"))
+                    .icon(crate::icons::spec("pilcrow"))
                     .icon_only()
                     .selected(marks)
                     .tooltip(tl!("Show/Hide ¶").to_string())
@@ -413,7 +413,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     // whole document with Ctrl+A first (the commands take `scope: "all"` for that as well).
     row.group(ribbon_group("paragraphTools", "Paragraph Tools", "pilcrow", None), |ui| {
         let face = Button::new(tl!("Paragraph\nTools").to_string())
-            .icon(IconId::new("wordcraft.pilcrow"))
+            .icon(crate::icons::spec("pilcrow"))
             .tooltip(tl!("Paragraph Tools").to_string())
             .arrangement(Arrangement::Stacked);
         menu_button(ui, face, tl!("Paragraph Tools").to_string(), None, |ui, _| {

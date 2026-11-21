@@ -75,7 +75,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     })),
                 )
                 .label(crate::tl!("Color"))
-                .icon(IconSpec::from(IconId::new("fontcolor")).with_mark(IconMark::bar(DataColor::new(ink))))
+                .icon(crate::icons::spec("fontcolor").with_mark(IconMark::bar(DataColor::new(ink))))
                 .show(ui);
                 menu_button(
                     ui,

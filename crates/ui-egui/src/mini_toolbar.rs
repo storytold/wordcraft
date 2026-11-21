@@ -173,7 +173,7 @@ pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
         }
 
         for (id, icon) in [("format.growFont", "grow"), ("format.shrinkFont", "shrink")] {
-            let b = IconButton::command(crate::icons::id(icon), CommandRef::new(id)).show(ui);
+            let b = IconButton::command(crate::icons::spec(icon), CommandRef::new(id)).show(ui);
             preview_on_hover(app, b.hover, b.response.enabled(), id, json!({}), preview);
         }
     });
