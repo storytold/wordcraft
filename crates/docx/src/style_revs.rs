@@ -4,6 +4,8 @@
 //! - Re-resolving pre-change level-only list references along the pre-change based-on chain.
 //! - Overlaying `w:tblStylePr[@w:type="wholeTable"]` paragraph/run properties onto `ch.old` so
 //!   rejecting a table style's tracked property change preserves `wholeTable` defaults.
+//! - Preserving style-level `w:numberingChange` (`para.num_change`) across `word/styles.xml`
+//!   read and write.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,6 +53,14 @@ impl NumPrScan {
     }
 }
 
+#[derive(Clone)]
+struct NumChangeScan {
+    id: Option<u32>,
+    author: Option<String>,
+    date: Option<String>,
+    original: String,
+}
+
 #[derive(Clone, Default)]
 struct StyleXmlInfo {
     style_id: String,
@@ -58,18 +68,22 @@ struct StyleXmlInfo {
     is_default: bool,
     name: Option<String>,
     live_num: Option<NumPrScan>,
+    live_num_change: Option<NumChangeScan>,
     old_num: Option<NumPrScan>,
     whole_ppr: Vec<u8>,
     whole_rpr: Vec<u8>,
 }
 
 /// Rewrites `word/styles.xml` inside serialized DOCX ZIP bytes when any style carries
-/// `numbering_from_base` or `old_numbering_from_base`, omitting `w:numId` so reload keeps
-/// the level-only inheritance provenance.
+/// `numbering_from_base` / `old_numbering_from_base` (omitting `w:numId` so reload keeps
+/// the level-only inheritance provenance) or style-level `para.num_change` (`w:numberingChange`).
 pub(crate) fn postprocess_written_docx(doc: &Document, zip_bytes: Vec<u8>) -> Result<Vec<u8>, DocxError> {
     let sheet = &doc.styles;
-    let needs_rewrite =
-        sheet.styles.iter().any(|s| s.numbering_from_base || (s.old_numbering_from_base && (s.para_change.is_some() || s.para.fmt_change.is_some())));
+    let needs_rewrite = sheet.styles.iter().any(|s| {
+        s.numbering_from_base
+            || (s.old_numbering_from_base && (s.para_change.is_some() || s.para.fmt_change.is_some()))
+            || (s.kind != StyleKind::Character && s.para.num_change.is_some())
+    });
     if !needs_rewrite || !zip_bytes.starts_with(b"PK") {
         return Ok(zip_bytes);
     }
@@ -85,7 +99,7 @@ pub(crate) fn postprocess_written_docx(doc: &Document, zip_bytes: Vec<u8>) -> Re
         return Ok(zip_bytes);
     };
 
-    let rewritten = strip_inherited_num_ids(&raw_styles, sheet)?;
+    let rewritten = strip_inherited_num_ids(&raw_styles, doc)?;
     let names: Vec<String> = archive.names().map(|n| n.into_owned()).collect();
     let mut writer = ZipWriter::new();
     for name in names {
@@ -100,8 +114,9 @@ pub(crate) fn postprocess_written_docx(doc: &Document, zip_bytes: Vec<u8>) -> Re
     writer.finish().map_err(|e| DocxError::Xml(format!("finish docx zip: {e}")))
 }
 
-/// Restores `numbering_from_base`, `old_numbering_from_base`, pre-change level-only numbering,
-/// and `wholeTable` overlays on style change snapshots from `word/styles.xml`.
+/// Restores `numbering_from_base`, `old_numbering_from_base`, style `para.num_change`,
+/// pre-change level-only numbering, and `wholeTable` overlays on style change snapshots from
+/// `word/styles.xml`.
 pub(crate) fn postprocess_read_docx(bytes: &[u8], opts: &ReadOptions<'_>, doc: &mut Document) -> Result<(), DocxError> {
     if doc.styles.styles.is_empty() {
         return Ok(());
@@ -136,6 +151,12 @@ pub(crate) fn postprocess_read_docx(bytes: &[u8], opts: &ReadOptions<'_>, doc: &
         if let Some(info) = by_id.get(&st.id) {
             st.numbering_from_base = info.live_num.is_some_and(NumPrScan::is_level_only);
             st.old_numbering_from_base = info.old_num.is_some_and(NumPrScan::is_level_only);
+            if st.kind != StyleKind::Character
+                && st.para.num_change.is_none()
+                && let Some(nc) = &info.live_num_change
+            {
+                restore_style_num_change(st, nc, &mut doc.revisions);
+            }
         }
     }
 
@@ -216,41 +237,160 @@ fn chain_list_before(sheet: &StyleSheet, style: &str) -> Option<u32> {
     None
 }
 
+fn restore_style_num_change(st: &mut wordcraft_doc::styles::Style, nc: &NumChangeScan, revisions: &mut Vec<wordcraft_doc::Revision>) {
+    let rev = if let Some(author) = &nc.author {
+        let date = nc.date.clone().unwrap_or_default();
+        if let Some(idx) = revisions
+            .iter()
+            .position(|r| r.kind == wordcraft_doc::RevisionKind::Format && r.author == *author && r.date == date && r.move_name.is_none())
+        {
+            u32::try_from(idx).unwrap_or(u32::MAX)
+        } else {
+            let idx = u32::try_from(revisions.len()).unwrap_or(u32::MAX);
+            revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Format, author.clone(), date));
+            idx
+        }
+    } else {
+        nc.id.unwrap_or(0)
+    };
+    st.para.num_change = Some(Box::new(wordcraft_doc::props::NumChange { rev, original: nc.original.clone() }));
+}
+
 fn strip_num_id(num_pr: &mut El) {
     num_pr.children.retain(|n| !matches!(n, Node::El(e) if e.local() == "numId"));
 }
 
-fn strip_inherited_num_ids(xml: &[u8], sheet: &StyleSheet) -> Result<Vec<u8>, DocxError> {
-    let mut root = XmlOptions::default().with_limits(xml_limits()).parse(xml).map_err(|e| DocxError::Xml(format!("styles.xml parse: {e}")))?;
-
-    for style_el in root.elements_mut().filter(|e| e.local() == "style") {
-        let Some(id) = style_el.attr_local("styleId") else { continue };
-        let Some(st) = sheet.get(id) else { continue };
-        let (strip_live, strip_old) = (st.numbering_from_base, st.old_numbering_from_base);
-        if !strip_live && !strip_old {
-            continue;
+fn max_rev_id(root: &El) -> u32 {
+    let mut max_id = 0u32;
+    let mut bump = |el: &El| {
+        if let Some(id) = el.attr_local("id").and_then(|s| s.trim().parse::<u32>().ok()) {
+            max_id = max_id.max(id);
         }
-        for ppr in style_el.elements_mut().filter(|e| e.local() == "pPr") {
-            if strip_live {
-                for num_pr in ppr.elements_mut().filter(|e| e.local() == "numPr") {
-                    strip_num_id(num_pr);
+    };
+    for style_el in root.elements().filter(|e| e.local() == "style").take(MAX_STYLES) {
+        for ppr in style_el.elements().filter(|e| e.local() == "pPr") {
+            for ch in ppr.elements().filter(|e| e.local() == "pPrChange") {
+                bump(ch);
+            }
+            for num_pr in ppr.elements().filter(|e| e.local() == "numPr") {
+                for nc in num_pr.elements().filter(|e| e.local() == "numberingChange") {
+                    bump(nc);
                 }
             }
-            if strip_old {
-                for ch in ppr.elements_mut().filter(|e| e.local() == "pPrChange") {
-                    for old_ppr in ch.elements_mut().filter(|e| e.local() == "pPr") {
-                        for num_pr in old_ppr.elements_mut().filter(|e| e.local() == "numPr") {
-                            strip_num_id(num_pr);
-                        }
+        }
+        for rpr in style_el.elements().filter(|e| e.local() == "rPr") {
+            for ch in rpr.elements().filter(|e| e.local() == "rPrChange") {
+                bump(ch);
+            }
+        }
+    }
+    max_id
+}
+
+fn ensure_child_el<'a>(parent: &'a mut El, name: &str, before: impl Fn(&El) -> bool) -> Option<&'a mut El> {
+    let local = name.rsplit_once(':').map_or(name, |(_, l)| l);
+    let idx = match parent.children.iter().position(|n| matches!(n, Node::El(e) if e.local() == local)) {
+        Some(i) => i,
+        None => {
+            let pos = parent.children.iter().position(|n| matches!(n, Node::El(e) if before(e))).unwrap_or(parent.children.len());
+            parent.children.insert(pos, Node::El(El::new(name)));
+            pos
+        }
+    };
+    match parent.children.get_mut(idx) {
+        Some(Node::El(e)) => Some(e),
+        _ => None,
+    }
+}
+
+fn strip_style_inherited_num_ids(style_el: &mut El, strip_live: bool, strip_old: bool) {
+    if !strip_live && !strip_old {
+        return;
+    }
+    for ppr in style_el.elements_mut().filter(|e| e.local() == "pPr") {
+        if strip_live {
+            for num_pr in ppr.elements_mut().filter(|e| e.local() == "numPr") {
+                strip_num_id(num_pr);
+            }
+        }
+        if strip_old {
+            for ch in ppr.elements_mut().filter(|e| e.local() == "pPrChange") {
+                for old_ppr in ch.elements_mut().filter(|e| e.local() == "pPr") {
+                    for num_pr in old_ppr.elements_mut().filter(|e| e.local() == "numPr") {
+                        strip_num_id(num_pr);
                     }
                 }
             }
+        }
+    }
+}
+
+fn insert_style_numbering_change(style_el: &mut El, doc: &Document, nc: &wordcraft_doc::props::NumChange, next_rev_id: &mut u32) {
+    let Some(ppr) = ensure_child_el(style_el, "w:pPr", |e| matches!(e.local(), "rPr" | "tblPr" | "tblStylePr")) else {
+        return;
+    };
+    let Some(num_pr) = ensure_child_el(ppr, "w:numPr", |e| {
+        !matches!(e.local(), "pStyle" | "keepNext" | "keepLines" | "pageBreakBefore" | "framePr" | "widowControl")
+    }) else {
+        return;
+    };
+    if num_pr.elements().any(|e| e.local() == "numberingChange") {
+        return;
+    }
+    let id = *next_rev_id;
+    *next_rev_id = next_rev_id.saturating_add(1);
+    let rev = doc.revisions.get(nc.rev as usize);
+    let author = if doc.settings.remove_personal_info {
+        "Author".to_string()
+    } else if let Some(a) = rev.map(|r| r.author.as_str()).filter(|a| !a.is_empty()) {
+        a.to_string()
+    } else {
+        "Unknown".to_string()
+    };
+    let mut attrs = vec![("w:id".to_string(), id.to_string()), ("w:author".to_string(), author)];
+    if !doc.settings.remove_date_time
+        && let Some(date) = rev.map(|r| r.date.as_str()).filter(|d| !d.is_empty())
+    {
+        attrs.push(("w:date".to_string(), date.to_string()));
+    }
+    if !nc.original.is_empty() {
+        attrs.push(("w:original".to_string(), nc.original.clone()));
+    }
+    num_pr.children.push(Node::El(El { name: "w:numberingChange".to_string(), attrs, children: Vec::new() }));
+}
+
+fn strip_inherited_num_ids(xml: &[u8], doc: &Document) -> Result<Vec<u8>, DocxError> {
+    let sheet = &doc.styles;
+    let mut root = XmlOptions::default().with_limits(xml_limits()).parse(xml).map_err(|e| DocxError::Xml(format!("styles.xml parse: {e}")))?;
+    let mut next_rev_id = max_rev_id(&root).saturating_add(1).max(u32::try_from(doc.revisions.len()).unwrap_or(u32::MAX).saturating_add(1));
+
+    for style_el in root.elements_mut().filter(|e| e.local() == "style").take(MAX_STYLES) {
+        let Some(st) = style_el.attr_local("styleId").and_then(|id| sheet.get(id)) else { continue };
+        let (strip_live, strip_old) = (st.numbering_from_base, st.old_numbering_from_base);
+        let num_change = st.para.num_change.as_deref().filter(|_| st.kind != StyleKind::Character);
+        if !strip_live && !strip_old && num_change.is_none() {
+            continue;
+        }
+        strip_style_inherited_num_ids(style_el, strip_live, strip_old);
+        if let Some(nc) = num_change {
+            insert_style_numbering_change(style_el, doc, nc, &mut next_rev_id);
         }
     }
 
     let mut out = String::from(DECL_STANDALONE);
     root.write_xml(&mut out);
     Ok(out.into_bytes())
+}
+
+fn scan_num_change(num_pr: &El) -> Option<NumChangeScan> {
+    let nc_el = num_pr.elements().find(|e| e.local() == "numberingChange")?;
+    let original = nc_el.attr_local("original").unwrap_or("");
+    Some(NumChangeScan {
+        id: nc_el.attr_local("id").and_then(|s| s.trim().parse::<u32>().ok()),
+        author: nc_el.attr_local("author").map(|s| s.chars().take(256).collect()),
+        date: nc_el.attr_local("date").map(|s| s.chars().take(64).collect()),
+        original: original.to_owned(),
+    })
 }
 
 fn scan_styles_xml(xml: &[u8]) -> Vec<StyleXmlInfo> {
@@ -272,10 +412,12 @@ fn scan_styles_xml(xml: &[u8]) -> Vec<StyleXmlInfo> {
         let name = style_el.elements().find(|e| e.local() == "name").and_then(|e| e.attr_local("val").map(str::to_owned));
 
         let mut live_num = None;
+        let mut live_num_change = None;
         let mut old_num = None;
         if let Some(ppr) = style_el.elements().find(|e| e.local() == "pPr") {
             if let Some(num_pr) = ppr.elements().find(|e| e.local() == "numPr") {
                 live_num = Some(scan_num_pr(num_pr));
+                live_num_change = scan_num_change(num_pr);
             }
             if let Some(ppr_ch) = ppr.elements().find(|e| e.local() == "pPrChange")
                 && let Some(old_ppr) = ppr_ch.elements().find(|e| e.local() == "pPr")
@@ -302,7 +444,7 @@ fn scan_styles_xml(xml: &[u8]) -> Vec<StyleXmlInfo> {
             }
         }
 
-        out.push(StyleXmlInfo { style_id: id.to_owned(), kind, is_default, name, live_num, old_num, whole_ppr, whole_rpr });
+        out.push(StyleXmlInfo { style_id: id.to_owned(), kind, is_default, name, live_num, live_num_change, old_num, whole_ppr, whole_rpr });
     }
     out
 }

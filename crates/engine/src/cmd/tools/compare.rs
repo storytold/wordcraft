@@ -142,7 +142,11 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 } else if let (Some(Block::Table(ta)), Some(Block::Table(tb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
                     let mut t = tb.clone();
                     if opts.formatting {
+                        let before = s.doc.revisions.len();
                         crate::cmd::fmt_revisions::compare_table_formatting(ta, &mut t, &mut s.doc.revisions, &author, &date);
+                        if s.doc.revisions.len() > before || t != *tb {
+                            changes += 1;
+                        }
                     }
                     out.push(Arc::new(Block::Table(t)));
                 } else if let Some(x) = b.or(a) {
@@ -260,7 +264,8 @@ fn sync_style_definitions(
                 if needs_remapping {
                     remap_style_numbering(&mut s.doc, &revised.numbering, &mut updated.para.numbering, maps);
                 }
-                let fmt_differs = (updated.kind != wordcraft_doc::StyleKind::Character && old_st.para.formatting() != updated.para.formatting())
+                let fmt_differs = (updated.kind != wordcraft_doc::StyleKind::Character
+                    && (old_st.para.formatting() != updated.para.formatting() || old_st.numbering_from_base != updated.numbering_from_base))
                     || (updated.kind != wordcraft_doc::StyleKind::Numbering && old_st.chr.formatting() != updated.chr.formatting());
                 let _ = crate::cmd::fmt_revisions::compare_style(&old_st, &mut updated, &revisions_before, &mut s.doc.revisions, author, date);
                 if fmt_differs {
@@ -337,7 +342,7 @@ fn register_shared_numbering(doc: &wordcraft_doc::numbering::Numbering, revised:
     }
 }
 
-const MAX_BLOCK_DEPTH: usize = 16;
+const MAX_BLOCK_DEPTH: usize = wordcraft_doc::table::MAX_TABLE_DEPTH;
 
 /// Import the revised body's direct numbering references into `doc` and remap them, so paragraphs
 /// and styles share one mapping instead of splitting one revised list into two definitions.
@@ -367,6 +372,60 @@ fn remap_blocks_numbering(
                 for r in &mut t.rows {
                     for c in &mut r.cells {
                         remap_blocks_numbering(doc, source, &mut c.blocks, maps, depth + 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Collect all list IDs defined or referenced in `doc` (numbering table, styles, and stories) so
+/// newly imported lists never collide with an undefined ID referenced by original content.
+fn referenced_num_ids(doc: &Document) -> std::collections::BTreeSet<u32> {
+    let mut ids = std::collections::BTreeSet::new();
+    for n in &doc.numbering.nums {
+        ids.insert(n.id);
+    }
+    for st in &doc.styles.styles {
+        for nr in
+            [st.para.numbering, st.para_change.as_ref().and_then(|c| c.old.numbering), st.para.fmt_change.as_ref().and_then(|c| c.old.numbering)]
+                .into_iter()
+                .flatten()
+        {
+            if nr.num != 0 {
+                ids.insert(nr.num);
+            }
+        }
+    }
+    collect_blocks_num_ids(&doc.body, &mut ids, 0);
+    for part in doc.parts.values() {
+        collect_blocks_num_ids(&part.blocks, &mut ids, 0);
+    }
+    ids
+}
+
+fn collect_blocks_num_ids(blocks: &[Arc<Block>], ids: &mut std::collections::BTreeSet<u32>, depth: usize) {
+    if depth > MAX_BLOCK_DEPTH {
+        return;
+    }
+    for b in blocks {
+        match &**b {
+            Block::Para(p) => {
+                if let Some(n) = p.props.numbering
+                    && n.num != 0
+                {
+                    ids.insert(n.num);
+                }
+                if let Some(n) = p.props.fmt_change.as_ref().and_then(|c| c.old.numbering)
+                    && n.num != 0
+                {
+                    ids.insert(n.num);
+                }
+            }
+            Block::Table(t) => {
+                for r in &t.rows {
+                    for c in &r.cells {
+                        collect_blocks_num_ids(&c.blocks, ids, depth + 1);
                     }
                 }
             }
@@ -416,7 +475,8 @@ fn remap_style_numbering(
             new_aid
         }
     };
-    let Some(new_nid) = wordcraft_doc::free_id(doc.numbering.nums.iter().map(|n| n.id).max(), doc.numbering.nums.iter().map(|n| n.id), 1) else {
+    let used_nums = referenced_num_ids(doc);
+    let Some(new_nid) = wordcraft_doc::free_id(used_nums.iter().copied().max(), used_nums.iter().copied(), 1) else {
         // Every list identifier is in use: the list cannot be imported safely.
         *num_ref = None;
         return;
