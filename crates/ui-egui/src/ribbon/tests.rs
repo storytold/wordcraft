@@ -492,6 +492,54 @@ fn every_proofing_language_is_picked_from_the_language_menu() {
     }
 }
 
+/// #1740: Table Design › Borders has Line Style, Line Weight and Pen Color menus whose
+/// choices set the pen (the current one reported as toggled), and the Borders menu's sides
+/// draw with it on the caret's cell. A recorded macro keeps the line it drew.
+#[test]
+fn border_pen_menus_set_the_pen_and_the_borders_menu_draws_with_it() {
+    use wordcraft_doc::props::{Border, BorderStyle};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("insert.table", json!({"rows": 3, "cols": 3})).unwrap();
+    a.run("table.borderColor", json!({"color": "C00000"})).unwrap();
+    let mut h = tab_harness(a, "Table Design");
+    let pick = |h: &mut Harness, menu: &str, item: &str| {
+        click_button(h, menu);
+        click_row(h, item);
+    };
+    pick(&mut h, "Line Style", "Triple");
+    assert_eq!(h.state().session.table_pen.style, BorderStyle::Triple);
+    click_button(&mut h, "Line Style");
+    let active = checked(&h);
+    assert!(active.iter().any(|label| label == "Triple") && !active.iter().any(|label| label == "Double"));
+    h.key_press(egui::Key::Escape);
+    crate::test_harness::frames(&mut h, 3);
+    pick(&mut h, "Line Weight", "1½ pt");
+    assert_eq!(h.state().session.table_pen.width, 1.5);
+    pick(&mut h, "Pen Color", "Automatic");
+    assert_eq!(h.state().session.table_pen.color, None);
+    h.state_mut().run("tools.recordMacro", json!({"name": "Rule"})).unwrap();
+    pick(&mut h, "Borders", "Bottom Border");
+    h.state_mut().run("tools.recordMacro", json!({})).unwrap();
+    let triple = Border { style: BorderStyle::Triple, width: 1.5, color: None, space: 0.0 };
+    let s = &h.state().session;
+    let (tp, r, c) = s.sel.focus.path.cell().unwrap();
+    let t = s.doc.table(s.sel.focus.story, &tp).unwrap();
+    assert_eq!((r, c), (0, 0));
+    assert_eq!(t.rows[0].cells[0].props.borders.and_then(|b| b.bottom), Some(triple));
+    assert_eq!(t.rows[1].cells[0].props.borders.and_then(|b| b.top), Some(triple), "the cell below shares the line");
+    assert!(t.rows[0].cells[1].props.borders.is_none() && t.props.borders.is_none(), "nothing else changes");
+    let steps = s.macros.get("Rule").cloned().unwrap_or_default();
+    assert_eq!(steps, [("table.borders".to_string(), json!({"kind": "bottom", "style": "triple", "width": 1.5, "color": null}))]);
+}
+
+/// #1740: the Line Weight menu writes Word's fractions.
+#[test]
+fn line_weights_are_written_as_fractions() {
+    use super::table::weight_label;
+    let labels: Vec<String> = wordcraft_engine::cmd::table::BORDER_WIDTHS.iter().map(|w| weight_label(*w)).collect();
+    assert_eq!(labels, ["¼ pt", "½ pt", "¾ pt", "1 pt", "1½ pt", "2¼ pt", "3 pt", "4½ pt", "6 pt"]);
+}
+
 /// #2573, #1901: Picture Format › Size's width shows the interface unit and takes a size typed
 /// in pixels, keeping the picture's proportions, as one undo step; Esc throws a typed size away
 /// with no undo step.

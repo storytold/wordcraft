@@ -3,10 +3,13 @@ use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::text::NumberField;
+use egui::{Rect, Stroke, pos2};
+use wordcraft_doc::props::BorderStyle;
 
 use super::common::menu_button;
 use super::{Ui, WordApp, json};
@@ -74,25 +77,131 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
     });
     row.group(RibbonGroup::new("borders", tl!("Borders").to_string(), IconId::new("borders").into()), |ui| {
-        let face = Button::new(tl!("Borders").to_string()).icon(IconId::new("borders")).arrangement(Arrangement::Stacked);
-        let _ = menu_button(ui, face, tl!("Borders").to_string(), None, |ui, _| {
-            for (label, kind) in [
-                ("All Borders", "all"),
-                ("Outside Borders", "outside"),
-                ("Inside Borders", "inside"),
-                ("No Border", "none"),
-                ("Top Border", "top"),
-                ("Bottom Border", "bottom"),
-            ] {
-                MenuItem::command(CommandRef::with_params("table.borders", json!({"kind": kind}))).label(tl!(label).to_string()).show(ui);
-            }
+        // Include the active pen in each border command so recorded macro steps keep it.
+        let pen = app.session.table_pen;
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            menu_button(ui, Button::new(tl!("Line Style")).icon(IconId::new("borders")), tl!("Line Style"), Some("table.borderStyle"), |ui, _| {
+                for (style, label) in std::iter::once((BorderStyle::None, "No Border")).chain(crate::dialogs::dialogs_table_style::LINE_STYLES) {
+                    MenuItem::command(CommandRef::with_params("table.borderStyle", json!({"value": style.name()})))
+                        .label(tl!(label))
+                        .check(pen.style == style)
+                        .sample(move |cx, rect| line_sample(&cx.painter, rect, style, 1.0, cx.ink()))
+                        .show(ui);
+                }
+            });
+            menu_button(ui, Button::new(tl!("Line Weight")).icon(IconId::new("borders")), tl!("Line Weight"), Some("table.borderWidth"), |ui, _| {
+                let pixel = 1.0 / ui.ctx().pixels_per_point();
+                for w in wordcraft_engine::cmd::table::BORDER_WIDTHS {
+                    MenuItem::command(CommandRef::with_params("table.borderWidth", json!({"value": w})))
+                        .label(weight_label(w))
+                        .check((pen.width - w).abs() < 0.01)
+                        .sample(move |cx, rect| line_sample(&cx.painter, rect, BorderStyle::Single, w.max(pixel), cx.ink()))
+                        .show(ui);
+                }
+            });
+            menu_button(ui, Button::new(tl!("Pen Color")).icon(IconId::new("pen")), tl!("Pen Color"), Some("table.borderColor"), |ui, cx| {
+                MenuItem::command(CommandRef::with_params("table.borderColor", json!({"color": null})))
+                    .label(tl!("Automatic"))
+                    .check(pen.color.is_none())
+                    .show(ui);
+                let pick = crate::colors::menu(ui, app, Target::cmd("table.borderColor"));
+                if pick.picked.is_some() || clicked(&pick.response) {
+                    cx.request_close();
+                }
+            });
         });
-        Button::command(CommandRef::new("table.borderPainter"))
+        let face = Button::new(tl!("Borders").to_string()).icon(IconId::new("borders")).arrangement(Arrangement::Stacked);
+        menu_button(ui, face, tl!("Borders"), None, |ui, _| {
+            for (label, kind) in BORDER_SIDES {
+                MenuItem::command(CommandRef::with_params("table.borders", pen.params(kind))).label(tl!(label)).show(ui);
+            }
+            Divider::horizontal().show(ui);
+            MenuItem::command(CommandRef::new("table.draw")).label(tl!("Draw Table")).check(app.canvas.table_tool == Some(TableTool::Draw)).show(ui);
+            MenuItem::command(CommandRef::new("table.viewGridlines")).label(tl!("View Gridlines")).check(app.session.view.table_gridlines).show(ui);
+        });
+        Button::command(CommandRef::with_params("table.borderPainter", pen.params("all")))
             .label(tl!("Border\nPainter").to_string())
             .icon(IconId::new("borderPainter"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
+}
+
+/// The Borders menu's sides in Word's order: label and the `table.borders` kind.
+const BORDER_SIDES: [(&str, &str); 10] = [
+    ("All Borders", "all"),
+    ("Outside Borders", "outside"),
+    ("Inside Borders", "inside"),
+    ("No Border", "none"),
+    ("Top Border", "top"),
+    ("Bottom Border", "bottom"),
+    ("Left Border", "left"),
+    ("Right Border", "right"),
+    ("Inside Horizontal Border", "insideH"),
+    ("Inside Vertical Border", "insideV"),
+];
+
+/// A line weight as Word's menu writes it: ¼ pt, 1½ pt, 6 pt.
+pub(super) fn weight_label(w: f32) -> String {
+    let w = if w.is_finite() { w.clamp(0.0, 100.0) } else { 0.0 };
+    let whole = w.trunc() as u32;
+    let frac = match ((w - w.trunc()) * 4.0).round() as u32 {
+        1 => "¼",
+        2 => "½",
+        3 => "¾",
+        _ => "",
+    };
+    let n = if whole == 0 && !frac.is_empty() { frac.to_string() } else { format!("{whole}{frac}") };
+    crate::i18n::fmt(tl!("{n} pt"), &[("n", &n)])
+}
+
+/// A short line in `style`, `width` pixels thick, as the Line Style and Line Weight menus show
+/// it (nothing for No Border).
+fn line_sample(p: &egui::Painter, r: Rect, style: BorderStyle, width: f32, c: egui::Color32) {
+    let y = r.center().y;
+    let (x0, x1) = (r.min.x, r.max.x);
+    let seg = |dy: f32, w: f32| {
+        p.line_segment([pos2(x0, y + dy), pos2(x1, y + dy)], Stroke::new(w, c));
+    };
+    let dashes = |dash: &[f32], gap: &[f32]| {
+        p.extend(egui::Shape::dashed_line_with_offset(&[pos2(x0, y), pos2(x1, y)], Stroke::new(width, c), dash, gap, 0.0));
+    };
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Single => seg(0.0, width),
+        BorderStyle::Thick => seg(0.0, width * 2.5),
+        BorderStyle::Double => {
+            seg(-1.5, width);
+            seg(1.5, width);
+        }
+        BorderStyle::Triple => {
+            seg(-2.5, width);
+            seg(0.0, width);
+            seg(2.5, width);
+        }
+        BorderStyle::Dotted => dashes(&[1.5], &[2.0]),
+        BorderStyle::Dashed => dashes(&[6.0], &[3.0]),
+        BorderStyle::DotDash => dashes(&[6.0, 1.5], &[3.0, 3.0]),
+        // The compound lines (thin and thick lines side by side, the gap as named).
+        BorderStyle::ThinThickSmallGap | BorderStyle::ThinThickMediumGap | BorderStyle::ThinThickLargeGap => {
+            seg(-1.5, width);
+            seg(1.5, width * 2.0);
+        }
+        BorderStyle::ThickThinSmallGap | BorderStyle::ThickThinMediumGap | BorderStyle::ThickThinLargeGap => {
+            seg(-1.5, width * 2.0);
+            seg(1.5, width);
+        }
+        BorderStyle::ThinThickThinSmallGap | BorderStyle::ThinThickThinMediumGap | BorderStyle::ThinThickThinLargeGap => {
+            seg(-3.0, width);
+            seg(0.0, width * 2.0);
+            seg(3.0, width);
+        }
+        BorderStyle::Wave => {
+            let n = ((x1 - x0) / 3.0).max(2.0) as usize;
+            let pts: Vec<egui::Pos2> = (0..=n).map(|i| pos2(x0 + (x1 - x0) * i as f32 / n as f32, y + if i % 2 == 0 { -1.5 } else { 1.5 })).collect();
+            p.add(egui::Shape::line(pts, Stroke::new(width, c)));
+        }
+    }
 }
 
 /// Table Layout › Cell Size: the caret cell's row height and column width. They show the size on the

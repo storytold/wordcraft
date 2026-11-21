@@ -96,6 +96,9 @@ pub struct Session {
     pub initials: String,
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
+    /// Table Design › Borders: the line style, weight and colour the Borders menu and the
+    /// Border Painter draw with (#1740). Per session, as in Word.
+    pub table_pen: crate::cmd::table::TablePen,
     /// Formatting picked up by Copy Formatting (Mod+Shift+C): Paste Formatting applies it as often
     /// as asked, as in Word, until the next Copy Formatting. A Format Painter pick is stored here
     /// as well.
