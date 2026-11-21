@@ -10877,6 +10877,7 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
     // A language without proofing tools: no marks. `zxx` (no linguistic content) never has
     // them; a real language such as fr-FR does wherever its system Hunspell dictionary is installed.
     run(&mut s, "review.language", json!({"lang": "zxx"}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "zxx");
     assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
 }
 
