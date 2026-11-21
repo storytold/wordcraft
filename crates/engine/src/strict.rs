@@ -197,6 +197,7 @@ pub(crate) fn pdf_options(opts: &ExportOptions) -> wordcraft_pdf::PdfOptions {
         include_markup: opts.markup,
         comments: opts.markup && opts.comments,
         numeral: opts.numeral,
+        revisions: opts.revisions.clone(),
         bookmark_error: crate::locale::bookmark_error(),
         ..Default::default()
     }

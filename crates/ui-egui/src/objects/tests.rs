@@ -1131,11 +1131,20 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
                 }
             }
         }
-        // A second angle reuses the raster rather than regenerating it on pointer moves.
+        // A second angle reuses the raster rather than regenerating it on pointer moves. Only the preview texture
+        // counts: it is the one mesh painted faded (PREVIEW_SHARE), while page pictures are opaque and may be
+        // uploaded between the two moves.
         let textures = |h: &H| {
-            h.output().shapes.iter().filter_map(|s| if let egui::Shape::Mesh(m) = &s.shape { Some(m.texture_id) } else { None }).collect::<Vec<_>>()
+            h.output()
+                .shapes
+                .iter()
+                .filter_map(|s| if let egui::Shape::Mesh(m) = &s.shape { Some(m) } else { None })
+                .filter(|m| m.texture_id != egui::TextureId::default() && m.vertices.first().is_some_and(|v| v.color.a() < 255))
+                .map(|m| m.texture_id)
+                .collect::<Vec<_>>()
         };
         let before_move = textures(&h);
+        assert_eq!(before_move.len(), 1, "{initial}/{flip_h}/{flip_v}: exactly one faded preview mesh");
         let next = handle(target + 15.0);
         h.event(egui::Event::PointerMoved(next));
         steps(&mut h, 2);
