@@ -47,6 +47,10 @@ use wordcraft_ui_egui::{Services, WordApp, prefs::Prefs};
 /// exit, the print spool it waits for at exit and the control server it stops at exit.
 struct App {
     app: WordApp,
+    /// Native macOS menu bar: the WordCraft app menu (About, Services, Hide, guarded Quit) and
+    /// AppKit's Window menu (registered as `windowsMenu` so Move & Resize window tiling works).
+    #[cfg(target_os = "macos")]
+    native_menu: Option<craft::menu::NativeMenu>,
     /// The native panels behind the file service the app reaches through `Host::files`.
     panels: FilePanels,
     /// Feeds the files dropped on the window into the app's intake (`Services::intake`), the one
@@ -61,10 +65,24 @@ struct App {
 }
 
 impl App {
+    /// Polls the native macOS menu (when installed) and hands the framework runtime its frame
+    /// input before any pass runs.
+    fn before_input(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = self.native_menu.as_mut() {
+            menu.poll(ctx);
+        }
+        embed::before_input(ctx, |out| self.app.frame_input(out));
+    }
+
     /// One frame's logic: what the OS asked, the app, its file dialogs, then the root window's close
     /// path. Without `frame` (a test over no window) the dialogs have no parent window.
     fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
         self.app.logic(ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = self.native_menu.as_mut() {
+            update_macos_menu(menu, &mut self.app, ctx);
+        }
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
         // A quit that waits for nothing (the documents are answered for) closes the root window.
         if self.app.quit_requested && !self.app.printing.busy() {
@@ -108,7 +126,7 @@ impl eframe::App for App {
         if !files.is_empty() {
             self.drops.dropped(files, DropTarget::Elsewhere);
         }
-        embed::before_input(ctx, |out| self.app.frame_input(out));
+        self.before_input(ctx);
     }
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.logic_pass(ctx, Some(frame));
@@ -598,7 +616,18 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
-            Ok(Box::new(App { app, panels, drops, settings, spool, control: control_server }))
+            #[cfg(target_os = "macos")]
+            let native_menu = install_macos_menu(&ctx, wordcraft_ui_egui::i18n::Lang::from_pref(&app.ui.language));
+            Ok(Box::new(App {
+                app,
+                #[cfg(target_os = "macos")]
+                native_menu,
+                panels,
+                drops,
+                settings,
+                spool,
+                control: control_server,
+            }))
         }),
     );
     // The app is dropped by now: whatever it saved on the way out is in the store.
@@ -606,6 +635,53 @@ fn main() -> eframe::Result {
         log::warn!("preferences: {e}");
     }
     result
+}
+
+/// Minimal native macOS menu bar: the WordCraft app menu (About, Services, Hide, guarded Quit)
+/// and AppKit's Window menu (Minimize, Zoom, Bring All to Front, plus OS-injected Move & Resize
+/// window tiling).
+#[cfg(target_os = "macos")]
+fn macos_menu_layout(lang: wordcraft_ui_egui::i18n::Lang) -> craft::menu::Layout {
+    use craft::menu::{CommandRef, Item, ItemRole, LayoutOptions, Menu, MenuBar, MenuRole, mac_layout};
+    use serde_json::json;
+    use wordcraft_ui_egui::i18n;
+
+    let about = Item::new(CommandRef::with_params("ui.dialog", json!({"name": "about"})), i18n::tr(lang, "About WordCraft")).role(ItemRole::About);
+    let bar = MenuBar::new(vec![Menu::new("WordCraft", vec![about.into()]).role(MenuRole::App)]);
+    let label = |s: &'static str| i18n::tr(lang, s).to_owned();
+    mac_layout(&bar, &LayoutOptions::new("WordCraft").label(&label))
+}
+
+/// Install the native macOS app + Window menu bar, falling back to the app-only menu on failure.
+#[cfg(target_os = "macos")]
+fn install_macos_menu(ctx: &egui::Context, lang: wordcraft_ui_egui::i18n::Lang) -> Option<craft::menu::NativeMenu> {
+    let layout = macos_menu_layout(lang);
+    if let Some(menu) = craft::menu::mac::install(ctx, &layout.bar) {
+        return Some(menu);
+    }
+    log::warn!("macOS menu bar: could not install Window menu; falling back to app menu only");
+    if let Err(e) = craft::menu::mac::install_app_menu(ctx, "WordCraft") {
+        log::warn!("app menu: kept winit's Quit, which ends the app without asking: {e}");
+    }
+    None
+}
+
+/// Dispatches native macOS menu clicks through `WordApp` and keeps modal gating and language in sync.
+#[cfg(target_os = "macos")]
+fn update_macos_menu(menu: &mut craft::menu::NativeMenu, app: &mut WordApp, ctx: &egui::Context) {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    menu.set_gate(craft::menu::Gate::default().modal(app.dialog_host_mut().shows_modal()));
+    for command in menu.take_clicks(ctx) {
+        if let Err(error) = app.run(&command.id, command.params) {
+            log::warn!("macOS menu: {error}");
+        }
+    }
+    menu.set_gate(craft::menu::Gate::default().modal(app.dialog_host_mut().shows_modal()));
+    let lang = wordcraft_ui_egui::i18n::Lang::from_pref(&app.ui.language);
+    let mut hasher = DefaultHasher::new();
+    lang.code().hash(&mut hasher);
+    menu.sync_with(hasher.finish(), || macos_menu_layout(lang));
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
@@ -803,14 +879,28 @@ mod smoke {
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
             let app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None }, frames, ctx, sender }
+            Run {
+                app: App {
+                    app,
+                    #[cfg(target_os = "macos")]
+                    native_menu: None,
+                    panels,
+                    drops,
+                    settings,
+                    spool,
+                    control: None,
+                },
+                frames,
+                ctx,
+                sender,
+            }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.
         /// Returns whether the frame sent a close command.
         fn step(&mut self, events: Vec<egui::Event>) -> bool {
             let Run { app, frames, ctx, .. } = self;
-            embed::before_input(ctx, |out| app.app.frame_input(out));
+            app.before_input(ctx);
             let mut first = true;
             frames.frame_without_input(events, |ui| {
                 if std::mem::take(&mut first) {
@@ -833,7 +923,7 @@ mod smoke {
         /// cancelling the close.
         fn close_request_is_let_through(&mut self) -> bool {
             let Run { app, ctx, .. } = self;
-            embed::before_input(ctx, |out| app.app.frame_input(out));
+            app.before_input(ctx);
             let mut input =
                 egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0))), ..Default::default() };
             input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() });
@@ -905,6 +995,84 @@ mod smoke {
             assert!(!run.app.app.dialog_host_mut().shows_modal(), "Don't Save lets the close through to the quit");
         } else {
             assert!(closed, "Don't Save lets the close through");
+        }
+    }
+
+    /// A native menu selection reaches the hosted About dialog, and Escape dismisses it without
+    /// changing the document. The fake backend supplies the OS selection.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_menu_about_opens_dialog_and_closes_with_escape() {
+        use craft::menu::{Backend, Dispatch, Event, ItemRole, MenuBar, NativeMenu};
+
+        struct Selection(Vec<Event>);
+        impl Backend for Selection {
+            fn sync(&mut self, _: &MenuBar) {}
+            fn attach(&mut self, _: Dispatch) {}
+            fn drain(&mut self) -> Vec<Event> {
+                std::mem::take(&mut self.0)
+            }
+        }
+
+        let mut run = Run::new();
+        run.app.app.start_screen();
+        run.settle();
+        let before = run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let layout = super::macos_menu_layout(wordcraft_ui_egui::i18n::Lang::from_pref("en"));
+        let about =
+            layout.bar.items().into_iter().find(|item| item.role == Some(ItemRole::About)).expect("macOS menu bar has an About item").command.clone();
+        run.app.native_menu = Some(NativeMenu::new(Box::new(Selection(vec![Event::Click(about)]))));
+        run.settle();
+        assert!(run.app.app.dialog_host_mut().shows_modal(), "About dialog opens as a modal");
+        let tree = run.frames.tree();
+        for label in ["WordCraft", "Contributors"] {
+            assert!(tree.keys().into_iter().any(|key| craft::ui::testing::access::name(&tree, key) == Some(label)), "About dialog exposes {label}");
+        }
+        run.step(vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        run.settle();
+        assert!(run.app.app.dialog_host_mut().is_empty(), "Escape dismisses About");
+        assert_eq!(run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_menu_tests {
+    use craft::menu::{Builtin, ItemRole, MenuRole, Node, Standard};
+    use serde_json::json;
+    use wordcraft_ui_egui::i18n;
+
+    #[test]
+    fn macos_menu_includes_app_menu_and_window_menu() {
+        let layout = super::macos_menu_layout(i18n::Lang::from_pref("en"));
+        assert!(layout.clashes.is_empty(), "unexpected shortcut clashes: {:?}", layout.clashes);
+
+        let app_menu = layout.bar.menu(MenuRole::App).expect("macOS menu bar has an App menu");
+        assert!(
+            app_menu.children.iter().any(|n| matches!(n, Node::Item(it) if Builtin::of(&it.command) == Some(Builtin::Quit))),
+            "App menu keeps craft-menu's guarded Quit item"
+        );
+        assert!(
+            app_menu.children.iter().any(|n| matches!(
+                n,
+                Node::Item(it) if it.role == Some(ItemRole::About)
+                    && it.command.id == "ui.dialog"
+                    && it.command.params == json!({"name": "about"})
+            )),
+            "App menu keeps About WordCraft"
+        );
+
+        let window_menu = layout.bar.menu(MenuRole::Window).expect("macOS menu bar registers a Window menu for OS tiling");
+        for kind in [Standard::Minimize, Standard::Zoom, Standard::BringAllToFront] {
+            assert!(
+                window_menu.children.iter().any(|n| matches!(n, Node::Standard { kind: k, .. } if *k == kind)),
+                "Window menu missing standard item {kind:?}"
+            );
         }
     }
 }
