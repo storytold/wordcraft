@@ -1,4 +1,5 @@
 use super::*;
+use wordcraft_doc::section::NumFormat;
 
 fn doc() -> Session {
     Session::new(wordcraft_doc::Document::from_text("one\ntwo\nthree"))
@@ -417,7 +418,6 @@ fn hyphenation_options_and_manual_hyphenation() {
 /// section" (#1113).
 #[test]
 fn page_number_format_keeps_or_clears_the_start() {
-    use wordcraft_doc::section::NumFormat;
     let mut s = doc();
     s.run("layout.pageNumberFormat", &json!({"format": "upperRoman", "start": 3})).unwrap();
     let x = sect(&s);
@@ -575,7 +575,6 @@ fn inherited_footer_preserves_content_when_numbering_from_inherited_header() {
 /// reverting to the preceding section.
 #[test]
 fn repagination_during_shared_footer_edit_preserves_active_section() {
-    use wordcraft_doc::section::NumFormat;
     // Determine the line count that exactly fills 1 page with a single-line footer.
     let mut n_lines: usize = 10;
     while n_lines < 100 {
