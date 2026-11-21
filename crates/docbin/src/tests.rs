@@ -170,7 +170,7 @@ fn reads_compressed_and_utf16_document_text() {
 }
 
 #[test]
-fn imports_cell_borders_and_row_specific_column_edges() {
+fn bridges_imported_cell_borders_widths_and_row_offsets() {
     use craft_wordmodel::props::{Border, Borders};
     use craft_wordmodel::table::{Cell, Row, Table};
 
@@ -178,20 +178,22 @@ fn imports_cell_borders_and_row_specific_column_edges() {
     bordered.props.borders = Some(Borders { top: Some(Border::single(2.0)), ..Default::default() });
     let mut wide = Cell::with_text("wide");
     wide.props.span = 2;
+    wide.props.width = Some(70.0);
     let table = Table {
         grid: vec![20.0, 30.0, 40.0],
         rows: vec![
             Row { cells: vec![bordered, wide.clone()], ..Default::default() },
-            Row { cells: vec![wide, Cell::with_text("last")], ..Default::default() },
+            Row { props: craft_wordmodel::props::RowProps { grid_before: 1, ..Default::default() }, cells: vec![wide], ..Default::default() },
         ],
         ..Default::default()
     };
     let mut source = craft_wordmodel::Document::new();
     source.body = vec![std::sync::Arc::new(craft_wordmodel::Block::Table(table))];
-    let bytes = craft_doc_binary::write(&source).expect("synthetic DOC");
-    let imported = read(&bytes).expect("DOC import");
+    let imported = super::from_shared_model(source).expect("convert DOC reader model");
     let table = imported.body[0].as_table().expect("table");
     assert_eq!(table.rows[0].cells[0].props.borders.and_then(|b| b.top).map(|b| b.width), Some(2.0));
     assert_eq!(table.grid, [20.0, 30.0, 40.0]);
+    assert_eq!(table.rows[1].props.grid_before, 1);
+    assert_eq!(table.rows[1].cells[0].props.width, Some(70.0));
     assert_eq!((table.rows[0].cells[1].span(), table.rows[1].cells[0].span()), (2, 2));
 }
