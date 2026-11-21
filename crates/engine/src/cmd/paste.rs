@@ -392,7 +392,11 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
+    let before_props = track.then(|| s.doc.para_at(&at).map(|p| p.props.clone())).flatten();
     let end = s.doc.insert_fragment(&at, &frag)?;
+    if track && let Some(before) = before_props {
+        crate::cmd::fmt_revisions::record_para_props(s, at.story, &at.path, &before)?;
+    }
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.
     if let Some(r) = rid
