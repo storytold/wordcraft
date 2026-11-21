@@ -5,8 +5,9 @@
 //! directory (output in `dist/web`).
 //!
 //! Differences from the desktop app: no TCP control channel; Open and Insert › Pictures use the
-//! browser file picker (bytes arrive through `Services::inbox`); Save and Export download.
-//! Preferences (theme, interface size, editing options…) are kept in `localStorage` (`prefs`).
+//! browser file picker (bytes arrive through the host's `Files`); Save and Export download.
+//! Preferences (theme, interface size, editing options…) are kept by the settings store in
+//! `localStorage` (`prefs`).
 //! URL flags: `?webgl` forces WebGL2; `?sample` opens the sample document.
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
 //! document to open and stores what WordCraft saves (`host`). A page can also host WordCraft in
@@ -17,8 +18,6 @@
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod prefs;
-#[cfg(any(target_arch = "wasm32", test))]
-mod save_fallback;
 
 #[cfg(target_arch = "wasm32")]
 mod api;

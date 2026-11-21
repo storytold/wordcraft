@@ -75,7 +75,7 @@ impl WordApp {
             .iter()
             .map(|doc| {
                 json!({"id":doc.id.to_string(), "title":doc.title,
-            "dirty":doc.dirty||self.has_comment_drafts_in(doc.id), "provider":host.bound(doc.id), "pending":host.pending_for(doc.id)})
+            "dirty":doc.dirty||self.document_has_comment_drafts(doc.id), "provider":host.bound(doc.id), "pending":host.pending_for(doc.id)})
             })
             .collect::<Vec<_>>();
         host.publish_documents(json!(snapshot), &ids);
@@ -91,7 +91,7 @@ impl WordApp {
                 self.status(error);
                 return;
             }
-        } else if self.has_comment_drafts_in(doc) {
+        } else if self.document_has_comment_drafts(doc) {
             let error = crate::tl!("Activate the document and finish its comment drafts before saving it");
             host.failed(&request, error);
             self.status(error);
@@ -167,7 +167,7 @@ impl WordApp {
                     session.touch();
                 });
             }
-            let drafts = self.has_comment_drafts_in(capture.doc);
+            let drafts = self.document_has_comment_drafts(capture.doc);
             let _ = self.session.with_document(capture.doc, |session| {
                 if session.rev() == capture.revision && !drafts {
                     session.dirty = false;
@@ -199,7 +199,7 @@ impl WordApp {
                 self.no_document = None;
                 self.autosave_path = None;
                 self.ui.backstage = false;
-                self.canvas.want_focus = true;
+                self.canvas.focus_page_after_pass();
                 let capture = Capture { doc: self.session.document_id(), revision: self.session.rev(), name, save_as: false };
                 host.opened(&request, Some(capture), "");
             }
@@ -224,6 +224,11 @@ fn provider_name_stem(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use craft::host::{PickId, Picked, ScriptedFiles};
+    use craft::quit::CloseAnswer;
+
     use crate::file_providers::Host;
     use crate::{Services, WordApp, json};
 
@@ -403,9 +408,10 @@ mod tests {
         host.take_events();
         let before = (app.session.document_id(), app.session.rev(), app.session.dirty);
         app.run("ui.backstage", json!({"value":true,"page":"home"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
-                app.logic(&ui.ctx().clone());
+                let ctx = ui.ctx().clone();
+                crate::test_harness::driver_logic(&ctx, app);
                 app.ui(ui);
             },
             app,
@@ -438,6 +444,10 @@ mod tests {
         (app, host)
     }
 
+    fn attach_files(app: WordApp, files: Arc<ScriptedFiles>) -> WordApp {
+        app.with_host(Arc::new(craft::host::Host::builder(crate::APP).files(files).build()))
+    }
+
     /// Capture real DOCX bytes through the application frame without acknowledging persistence.
     fn save(app: &mut WordApp, host: &Host) -> (String, Vec<u8>) {
         assert!(app.choose_provider_save(false));
@@ -457,8 +467,9 @@ mod tests {
             std::fs::create_dir_all(&directory).unwrap();
             let path = directory.join(format!("Local copy.{extension}"));
             let picked = path.to_string_lossy().into_owned();
-            let (mut app, host) = app();
-            app.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+            let (app, host) = app();
+            let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![picked.into()])]));
+            let mut app = attach_files(app, files);
             app.services.templates_dir = Some(directory.clone());
             if template {
                 let _ = app.save_as_template_dialog();
@@ -492,7 +503,8 @@ mod tests {
             assert!(host.bound(document));
             app.session.run("text.insert", &json!({"text":" New content only on this device"})).unwrap();
             assert!(app.session.dirty);
-            app.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+            let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![picked.into()])]));
+            app = attach_files(app, files);
             app.services.templates_dir = Some(directory.clone());
             if template {
                 let _ = app.save_as_template_dialog();
@@ -532,23 +544,20 @@ mod tests {
         app.provider_tick();
         assert!(!app.session.dirty);
         app.session.run("text.insert", &json!({"text":" Browser copy after cloud save"})).unwrap();
-        let copies = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let received = copies.clone();
-        app.services.download = Some(Box::new(move |name, bytes| {
-            received.borrow_mut().push((name.to_string(), bytes.to_vec()));
-            Ok(())
-        }));
-        app.run("file.saveAs", json!({"path":"Browser copy.docx"})).unwrap();
-        let copies = copies.borrow();
-        assert_eq!(copies.len(), 1);
-        let restored = wordcraft_engine::io::open_bytes(&copies[0].0, &copies[0].1).unwrap();
+        let name = "Browser copy.docx";
+        let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![name.into()])]).in_browser());
+        app = attach_files(app, files.clone());
+        app.run("file.saveAs", json!({"path":name})).unwrap();
+        app.settle_saves();
+        assert_eq!(files.requests().len(), 1);
+        let bytes = files.file(std::path::Path::new(name)).unwrap();
+        let restored = wordcraft_engine::io::open_bytes(name, &bytes).unwrap();
         assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Browser copy after cloud save"));
         assert!(host.bound(document));
         assert!(app.session.dirty);
         app.provider_tick();
         assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
         assert!(!host.busy());
-        drop(copies);
         let (request, _) = save(&mut app, &host);
         host.result(request, "saved".into(), "resource-one".into()).unwrap();
         app.provider_tick();
@@ -558,11 +567,16 @@ mod tests {
     /// Keep provider ownership across every simulated asynchronous device-save outcome while disabled.
     #[test]
     fn disabled_provider_owned_browser_copies_and_async_outcomes_keep_the_provider_checkpoint_dirty() {
-        use crate::async_saves::{AsyncSaves, SaveOutcome};
-
         for initially_bound in [false, true] {
             for command in ["file.save", "file.saveAs"] {
-                for outcome in [Some(SaveOutcome::Saved), Some(SaveOutcome::Cancelled), Some(SaveOutcome::Failed("write failed".into())), None] {
+                let name = "Device copy.docx";
+                for outcome in [
+                    Picked::Paths(vec![name.into()]),
+                    Picked::Downloaded(name.into()),
+                    Picked::Cancelled,
+                    Picked::Failed("write failed".into()),
+                    Picked::Unavailable("download refused".into()),
+                ] {
                     let (mut app, host) = app();
                     let document = app.session.document_id();
                     let (request, _) = save(&mut app, &host);
@@ -573,35 +587,23 @@ mod tests {
                     host.set_enabled(false).unwrap();
                     app.session.run("text.insert", &json!({"text":" Edited while provider choices are disabled"})).unwrap();
 
-                    let saves = AsyncSaves::default();
-                    let pending = saves.clone();
-                    let copies = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-                    let received = copies.clone();
-                    let accepted = outcome.is_some();
-                    app.services.async_saves = Some(saves.clone());
-                    app.services.download = Some(Box::new(move |name, bytes| {
-                        if !accepted {
-                            return Err("download refused".into());
-                        }
-                        received.borrow_mut().push((name.to_string(), bytes.to_vec()));
-                        pending.start();
-                        Ok(())
-                    }));
-                    let params = if command == "file.saveAs" { json!({"path":"Device copy.docx"}) } else { json!({}) };
-                    let result = app.run(command, params);
+                    let files = Arc::new(ScriptedFiles::held().in_browser());
+                    app = attach_files(app, files.clone());
+                    let params = if command == "file.saveAs" { json!({"path":name}) } else { json!({}) };
+                    let result = app.run(command, params).unwrap();
                     assert!(app.session.dirty, "a disabled provider still owns its unsaved checkpoint");
                     assert_eq!(host.bound(document), initially_bound);
                     assert_eq!(host.pending_for(document), !initially_bound);
-                    if let Some(outcome) = outcome {
-                        let ticket = result.unwrap()["pendingSave"].as_u64().unwrap();
-                        let copies = copies.borrow();
-                        let restored = wordcraft_engine::io::open_bytes(&copies[0].0, &copies[0].1).unwrap();
+                    let ticket = PickId(result["pendingSave"].as_u64().unwrap());
+                    let written = outcome.records_file();
+                    assert!(files.answer_to(ticket, outcome));
+                    app.settle_saves();
+                    let bytes = files.file(std::path::Path::new(name));
+                    if written {
+                        let restored = wordcraft_engine::io::open_bytes(name, &bytes.unwrap()).unwrap();
                         assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Edited while provider choices are disabled"));
-                        saves.finish(ticket, outcome);
-                        app.settle_async_saves();
                     } else {
-                        assert!(result.unwrap_err().contains("download refused"));
-                        assert!(copies.borrow().is_empty());
+                        assert!(bytes.is_none());
                     }
                     assert!(app.session.dirty, "a device outcome never acknowledges the provider revision");
                     host.set_enabled(true).unwrap();
@@ -805,25 +807,43 @@ mod tests {
         assert!(!app.session.dirty);
     }
 
+    #[test]
+    fn pending_provider_save_guards_a_clean_document_while_parked() {
+        let (mut app, host) = app();
+        let first = app.session.document_id();
+        app.session.dirty = false;
+        assert!(!app.document_unsaved_by_id(first));
+        assert!(app.choose_provider_save(true));
+        assert!(app.save_unconfirmed());
+        let dialog = host.take_events().into_iter().next().unwrap();
+        let request = dialog.metadata["requestId"].as_str().unwrap();
+        assert_eq!(dialog.metadata["type"], "saveDialog");
+
+        app.session.run("file.new", &json!({})).unwrap();
+        app.sync_document();
+        assert_ne!(app.session.document_id(), first);
+        assert!(app.document_unsaved_by_id(first), "switching documents cannot hide the pending save from Quit");
+
+        host.resolve_dialog(request, "cancel", "").unwrap();
+        app.provider_tick();
+        assert!(!app.document_unsaved_by_id(first), "cancelling releases the pending save on the parked document");
+    }
+
     /// The actual Save Changes answer explains why Close must be retried after provider persistence.
     #[test]
     fn provider_prompt_admission_explains_retry_without_running_the_held_command() {
         let (mut app, host) = app();
-        let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
-        let received = downloads.clone();
-        app.services.download = Some(Box::new(move |_, _| {
-            received.set(received.get() + 1);
-            Ok(())
-        }));
+        let files = Arc::new(ScriptedFiles::held().in_browser());
+        app = attach_files(app, files.clone());
         let document = app.session.document_id();
         let revision = app.session.rev();
         app.status("Earlier status");
         assert_eq!(app.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
-        assert_eq!(app.answer_save_changes(crate::SaveChoice::Save).unwrap()["done"], false);
-        assert_eq!(app.status_msg.as_ref().unwrap().0, crate::tl!("Complete the provider save, then try your action again."));
+        assert_eq!(app.answer_save_changes(CloseAnswer::Save).unwrap()["done"], false);
+        assert_eq!(app.status.as_ref().unwrap().text, crate::tl!("Complete the provider save, then try your action again."));
         assert_eq!((app.session.document_id(), app.session.rev(), app.session.dirty), (document, revision, true));
         assert!(app.has_document());
-        assert!(app.dialog.is_none() && app.awaiting_save.is_none());
+        assert!(app.closing.is_none() && app.saves_in_flight.is_empty());
         let dialogs = host.take_events();
         assert_eq!(dialogs.len(), 1);
         assert_eq!(dialogs[0].metadata["type"], "saveDialog");
@@ -840,22 +860,18 @@ mod tests {
         assert!(app.has_document(), "a durable reply must not resume the cancelled Close");
         assert_eq!(app.session.document_id(), document);
         assert!(!app.session.dirty);
-        assert!(app.awaiting_save.is_none());
+        assert!(app.saves_in_flight.is_empty());
         assert_eq!(app.run("file.close", json!({})).unwrap()["closed"], true);
         assert!(!app.has_document(), "the user's explicit retry closes the saved document");
-        assert_eq!(downloads.get(), 0);
+        assert!(files.requests().is_empty());
     }
 
     /// A real full event queue refuses the chooser without hiding its error or closing dirty work.
     #[test]
     fn provider_prompt_refusal_preserves_the_error_and_keeps_the_held_command_cancelled() {
         let (mut app, host) = app();
-        let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
-        let received = downloads.clone();
-        app.services.download = Some(Box::new(move |_, _| {
-            received.set(received.get() + 1);
-            Ok(())
-        }));
+        let files = Arc::new(ScriptedFiles::held().in_browser());
+        app = attach_files(app, files.clone());
         let document = app.session.document_id();
         let revision = app.session.rev();
         let connection = host.snapshot()["connectionId"].as_str().unwrap().to_string();
@@ -870,18 +886,18 @@ mod tests {
             host.cancel_open(request, "Queue pressure".into()).unwrap();
         }
         assert_eq!(app.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
-        assert_eq!(app.answer_save_changes(crate::SaveChoice::Save).unwrap()["done"], false);
-        assert_eq!(app.status_msg.as_ref().unwrap().0, "file provider event queue is full; consume events before retrying");
+        assert_eq!(app.answer_save_changes(CloseAnswer::Save).unwrap()["done"], false);
+        assert_eq!(app.status.as_ref().unwrap().text, "file provider event queue is full; consume events before retrying");
         assert_eq!((app.session.document_id(), app.session.rev(), app.session.dirty), (document, revision, true));
         assert!(app.has_document());
-        assert!(app.dialog.is_none() && app.awaiting_save.is_none());
+        assert!(app.closing.is_none() && app.saves_in_flight.is_empty());
         assert!(!host.pending_for(document), "a refused choice must not strand a document owner");
         let queued = host.take_events();
         assert_eq!(queued.len(), 64);
         assert!(queued.iter().all(|event| matches!(event.metadata["type"].as_str(), Some("openRequest" | "openFailed"))));
         assert_eq!(app.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
-        assert_eq!(app.answer_save_changes(crate::SaveChoice::Save).unwrap()["done"], false);
-        assert_eq!(app.status_msg.as_ref().unwrap().0, crate::tl!("Complete the provider save, then try your action again."));
+        assert_eq!(app.answer_save_changes(CloseAnswer::Save).unwrap()["done"], false);
+        assert_eq!(app.status.as_ref().unwrap().text, crate::tl!("Complete the provider save, then try your action again."));
         let dialogs = host.take_events();
         assert_eq!(dialogs.len(), 1);
         assert_eq!(dialogs[0].metadata["type"], "saveDialog");
@@ -890,6 +906,6 @@ mod tests {
         assert!(app.has_document() && app.session.dirty);
         assert_eq!(app.session.document_id(), document);
         assert!(!host.pending_for(document));
-        assert_eq!(downloads.get(), 0);
+        assert!(files.requests().is_empty());
     }
 }

@@ -523,10 +523,7 @@ fn recent_refusal(reason: &str) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-struct RecentFixtureLanguage {
-    previous_lang: crate::i18n::Lang,
-    previous_pseudo: bool,
-}
+struct RecentFixtureLanguage(crate::i18n::Lang);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl RecentFixtureLanguage {
@@ -539,9 +536,8 @@ impl RecentFixtureLanguage {
                 "\tfile provider event queue is full; consume events before retrying\tFIXTURE event queue limit\n",
             ),
         );
-        let previous = Self { previous_lang: crate::i18n::current(), previous_pseudo: crate::i18n::pseudo::on() };
-        crate::i18n::pseudo::set(false);
-        crate::i18n::set_current(language);
+        let previous = Self(crate::i18n::current());
+        crate::i18n::apply_language(language);
         previous
     }
 }
@@ -549,8 +545,7 @@ impl RecentFixtureLanguage {
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for RecentFixtureLanguage {
     fn drop(&mut self) {
-        crate::i18n::set_current(self.previous_lang);
-        crate::i18n::pseudo::set(self.previous_pseudo);
+        crate::i18n::apply_language(self.0);
     }
 }
 

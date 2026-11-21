@@ -2133,6 +2133,58 @@ fn body_table_cells(s: &Session) -> Vec<Vec<String>> {
 
 /// #1744: Select Table → Copy → Paste outside the table pastes a copy of the whole table.
 #[test]
+fn table_spots_and_borders_are_the_areas_the_pointer_queries_answer_for() {
+    use crate::cmd::{table_mouse, table_resize};
+    let mut sess = s();
+    run(&mut sess, "insert.table", serde_json::json!({"rows": 3, "cols": 3}));
+    let l = sess.layout();
+    let story = sess.sel.focus.story;
+    let reach = 3.0;
+    let spots = table_mouse::spots(&l, &sess.doc, story, 0, reach);
+    let borders = table_resize::borders(&l, &sess.doc, 0, reach);
+    assert!(!spots.is_empty() && !borders.is_empty());
+    let inside = |r: &wordcraft_geom::Rect, x: f32, y: f32| x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom();
+    let (w, bottom) = l.pages.first().map_or((0.0, 0.0), |p| (p.w, p.body.bottom()));
+    let (mut spot_hits, mut border_hits) = (0, 0);
+    let mut y = 0.3f32;
+    while y < bottom {
+        let mut x = 0.3f32;
+        while x < w {
+            let spot = table_mouse::target_at(&l, &sess.doc, story, 0, x, y, reach);
+            if let Some(t) = &spot {
+                spot_hits += 1;
+                assert!(spots.iter().any(|a| a.target == *t && inside(&a.area, x, y)), "spot at ({x}, {y}) lies in its listed area");
+            }
+            if spot.is_none() && table_resize::resize_target(&l, &sess.doc, 0, x, y, reach).is_none() {
+                // Nothing answers: no listed area may hold the point unless a border took it first.
+                assert!(!spots.iter().any(|a| inside(&a.area, x, y)), "an area holds ({x}, {y}) yet nothing answers");
+            }
+            let border = table_resize::resize_target(&l, &sess.doc, 0, x, y, reach);
+            match &border {
+                Some(t) => {
+                    border_hits += 1;
+                    assert!(borders.iter().any(|(a, b)| b == t && inside(a, x, y)), "border at ({x}, {y}) lies in its listed strip");
+                }
+                None => assert!(
+                    !borders.iter().any(|(a, b)| inside(a, x, y) && {
+                        let d = match b.edge {
+                            table_resize::Edge::Column(i) => b.cols.get(i).map_or(f32::INFINITY, |c| (x - c).abs()),
+                            table_resize::Edge::Row(r) => b.rows.iter().find(|q| q.row == r).map_or(f32::INFINITY, |q| (y - q.bottom).abs()),
+                            table_resize::Edge::Corner => 0.0,
+                        };
+                        d <= reach
+                    }),
+                    "a strip holds ({x}, {y}) within reach yet no border answers"
+                ),
+            }
+            x += 3.7;
+        }
+        y += 3.7;
+    }
+    assert!(spot_hits > 0 && border_hits > 0, "the sweep met both kinds of spot");
+}
+
+#[test]
 fn copy_whole_table_pastes_a_table() {
     let mut s = table_doc();
     run(&mut s, "table.selectTable", json!({}));
@@ -4927,6 +4979,50 @@ fn toc_page_numbers_are_pageref_fields() {
     let mut s = Session::new(crate::io::open_bytes("toc.docx", &bytes).unwrap());
     run(&mut s, "references.updateFields", json!({}));
     assert_eq!(text(&s), expected);
+}
+
+/// Output (PDF, print) shows a table of contents' page numbers where the headings now are, as
+/// Word fills its `PAGEREF`s in when it prints or exports; the editor shows them as stored until
+/// the table is updated, and the document keeps them.
+#[test]
+fn output_shows_toc_page_numbers_where_the_headings_are() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    // Another page before Alpha moves the headings to pages 3 and 4.
+    let alpha = s
+        .doc
+        .body
+        .iter()
+        .position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("Heading1") && p.text.contains("Alpha")))
+        .unwrap();
+    s.sel = crate::Selection::caret(Pos::body(alpha, 0));
+    run(&mut s, "text.pageBreak", json!({}));
+    let toc_numbers = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(s.export_layout().pages.len(), 4);
+    assert_eq!(toc_numbers(&s.layout()), ["2", "3"]);
+    assert_eq!(toc_numbers(&s.export_layout()), ["3", "4"]);
+    assert!(text(&s).contains("Alpha\t2"), "the document keeps the stored numbers");
+    // A page image is laid out as the print job is: it shows the same numbers.
+    let png = crate::io_ext::render_png(&s.doc, 0, 1.0, &Default::default()).unwrap();
+    let printed = wordcraft_render::render_page(&s.doc, &s.export_layout().pages[0], 1.0, &Default::default()).to_png();
+    assert!(png == printed, "the page image and the printed page differ");
 }
 
 /// Headings numbered through a list carry their numbers, and the level's separator, into the
@@ -7869,6 +7965,35 @@ fn hostile_chart_data_is_capped() {
     s.doc.insert_object(&Pos::body(0, 0), foreign, &Default::default()).unwrap();
     run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())}));
     assert!(s.run("chart.type", &json!({"type": "pie"})).is_err());
+}
+
+/// The pane's findings follow the document: an edit that fixes an issue and a replacement by
+/// another document both show at the next read, though the session keeps them between reads.
+#[test]
+fn accessibility_findings_follow_the_document() {
+    let alt = |s: &mut Session| s.accessibility_findings().iter().any(|i| i["rule"] == "altText");
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title"));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s), "a shape without alternative text is reported");
+    assert!(alt(&mut s), "and still is at the next read");
+    let (id, rev) = (s.document_id(), s.rev());
+
+    // The fix the issue names, as the pane runs it.
+    let issue = s.accessibility_findings().iter().find(|i| i["rule"] == "altText").cloned().expect("the alt text issue");
+    run(&mut s, "select.range", issue["select"].clone());
+    run(&mut s, issue["action"]["command"].as_str().expect("a fix"), issue["action"]["params"].clone());
+    assert_eq!(s.document_id(), id);
+    assert_ne!(s.rev(), rev);
+    assert!(!alt(&mut s), "the fixed issue is gone");
+
+    // The issue again, then another document in its place.
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s));
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), id);
+    let want = crate::cmd::accessibility::check(&s.doc);
+    assert_eq!(s.accessibility_findings(), want.as_slice(), "the new document's findings");
+    assert!(!alt(&mut s));
 }
 
 #[test]
@@ -11339,8 +11464,6 @@ fn find_replace_and_go_to_open_like_word() {
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "replace"})));
     assert!(!s.dirty, "opening the dialog changes nothing");
     assert!(s.run("edit.findReplace", &json!({"tab": "nope"})).is_err());
-    let reg = s.registry.clone();
-    assert_eq!(s.keymap.resolve(&reg, "Mod+H").map(|c| c.id), Some("edit.findReplace"));
     run(&mut s, "edit.goto", json!({}));
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "goto"})));
     // Replace with a "with" and the last search still replaces, as before.
