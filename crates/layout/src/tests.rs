@@ -10448,6 +10448,105 @@ fn columns_before_a_page_break_or_a_column_break_are_not_balanced() {
     assert!(br > bl + 50.0 && after >= br - 0.5, "columns end at {bl} and {br}, next section at {after}");
 }
 
+/// A paragraph that opens with a column break has its space before at the top of the next column,
+/// not at the bottom of the column the break ends; in Word 2013 layout (compatibility mode 15) a
+/// column starting at the top of the page drops it, as after a page break. In the column the break
+/// ends, the line holding the break keeps its height in mode 15 and takes no room in older layouts,
+/// so a continuous section after the columns starts that much lower or right below the text (all
+/// measured in Word). Leaving the space before (and, before mode 15, the line) in the first column
+/// started the next section too low and pushed text onto an extra page.
+#[test]
+fn a_paragraph_opening_with_a_column_break_has_its_space_before_in_the_next_column() {
+    crate::test_fonts();
+    use wordcraft_doc::para::COLUMN_BREAK;
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Four lines set 14 pt exactly in the left column, then the column break: opening the "Right"
+    // paragraph, or alone in a paragraph before it (`own`). The break's paragraph is set 30 pt
+    // exactly, with `before` of space before. Two columns, then a continuous break and "After".
+    // `above`: a one-column paragraph above the columns, which then start mid-page.
+    // Returns the tops of "Right" and "After" below the first line's, and how far right "Right" is.
+    let layout = |own: bool, above: bool, before: f32, compat: u32| {
+        let brk = COLUMN_BREAK;
+        let cols = if own { format!("L0\nL1\nL2\nL3\n{brk}\nRight\n\nAfter") } else { format!("L0\nL1\nL2\nL3\n{brk}Right\n\nAfter") };
+        let text = if above { format!("Above\n{cols}") } else { cols };
+        let mut d = Document::from_text(&text);
+        d.settings.compat_mode = compat;
+        let (n, l0) = (d.body.len(), usize::from(above));
+        for i in 0..n {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            p.props.line_spacing = Some(LineSpacing::Exactly(if i == l0 + 4 { 30.0 } else { 14.0 }));
+            p.props.space_before = Some(if i == l0 + 4 { before } else { 0.0 });
+            p.props.space_after = Some(0.0);
+        }
+        if above {
+            d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::default());
+        }
+        let mut s = SectionProps { start: SectionStart::Continuous, ..Default::default() };
+        s.columns.count = 2;
+        d.para_mut(StoryRef::Body, &Path::top(n - 2)).unwrap().section = Some(Box::new(s));
+        d.last_section.start = SectionStart::Continuous;
+        let l = lay(&d);
+        let right = if own { Pos::body(l0 + 5, 0) } else { Pos::body(l0 + 4, brk.len_utf8()) };
+        let [first, right, after] = [Pos::body(l0, 0), right, Pos::body(n - 1, 0)].map(|p| l.caret(&p).unwrap());
+        assert_eq!((right.page, after.page), (0, 0), "own {own}, above {above}, before {before}, mode {compat}");
+        (right.top - first.top, right.x - first.x, after.top - first.top)
+    };
+    for compat in [14, 15] {
+        for own in [false, true] {
+            for above in [true, false] {
+                let case = format!("own {own}, above {above}, mode {compat}");
+                let (right0, _, after0) = layout(own, above, 0.0, compat);
+                let (right, dx, after) = layout(own, above, 12.0, compat);
+                assert!(dx > 100.0, "{case}: Right in the second column, {dx} to the right");
+                let space = if compat >= 15 && !above { 0.0 } else { 12.0 };
+                assert!((right - right0 - space).abs() < 0.5, "{case}: {space} pt above Right: {right0} → {right}");
+                assert!((after - after0).abs() < 0.5, "{case}: no space before under the first column: After at {after0} → {after}");
+                // Four 14 pt lines, then the 30 pt break line in mode 15 only.
+                let below = if compat >= 15 { 4.0 * 14.0 + 30.0 } else { 4.0 * 14.0 };
+                assert!((after - below).abs() < 0.5, "{case}: After {after} below the first line, not {below}");
+            }
+        }
+    }
+}
+
+/// The space before moves past a column break only for a paragraph whose break ends the column it
+/// started in (#7053). One that keep lines together moves on to the next column had its space
+/// before dropped there; when its break ends that column, it keeps the plain column break's
+/// layout, with no space before added in the column after (not measured in Word).
+#[test]
+fn a_moved_paragraph_opening_with_a_column_break_takes_the_plain_break() {
+    crate::test_fonts();
+    use wordcraft_doc::para::COLUMN_BREAK;
+    use wordcraft_doc::props::LineSpacing;
+    // 46 lines set 14 pt exactly fill the left column but for 4 pt; the break's paragraph (two
+    // 30 pt lines, kept together) moves to the right column, and its break ends that column.
+    let layout = |before: f32, compat: u32| {
+        let lines: Vec<String> = (0..46).map(|i| format!("L{i}")).collect();
+        let mut d = Document::from_text(&format!("{}\n{COLUMN_BREAK}Right", lines.join("\n")));
+        d.settings.compat_mode = compat;
+        let n = d.body.len();
+        for i in 0..n {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            let last = i == n - 1;
+            p.props.line_spacing = Some(LineSpacing::Exactly(if last { 30.0 } else { 14.0 }));
+            p.props.space_before = Some(if last { before } else { 0.0 });
+            p.props.space_after = Some(0.0);
+            p.props.keep_lines = Some(last);
+        }
+        d.last_section.columns.count = 2;
+        let l = lay(&d);
+        let [brk, right] = [Pos::body(n - 1, 0), Pos::body(n - 1, COLUMN_BREAK.len_utf8())].map(|p| l.caret(&p).unwrap());
+        let first = l.caret(&Pos::body(0, 0)).unwrap();
+        assert!(brk.x > first.x + 100.0 && brk.page == 0, "mode {compat}: the break moved to the right column");
+        assert_eq!(right.page, 1, "mode {compat}: Right on the next page");
+        right.top
+    };
+    for compat in [14, 15] {
+        assert!((layout(12.0, compat) - layout(0.0, compat)).abs() < 0.5, "mode {compat}: no space before above Right");
+    }
+}
+
 #[test]
 fn an_odf_section_says_whether_its_columns_are_balanced() {
     use wordcraft_doc::section::SectionStart;
