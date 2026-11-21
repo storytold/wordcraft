@@ -19,7 +19,7 @@ use serde_json::Value;
 use wordcraft_doc::props::Rgb;
 
 use super::dialogs_insert::symbol::{SymbolDialog, SymbolPick, SymbolRequest};
-use super::font::{FontForm, FontRequest};
+use super::font::{FontAnswer, FontForm, FontRequest};
 use crate::WordApp;
 
 /// What a settle hook says about itself after a pass.
@@ -163,8 +163,8 @@ pub(crate) enum Asks {
 pub(crate) enum ChildAnswer {
     /// The character the Symbol dialog picked.
     Symbol(SymbolPick),
-    /// The Font form as it was confirmed.
-    Font(Box<FontForm>),
+    /// The Font form's confirmed answer for a list-label dialog.
+    Font(Box<FontAnswer>),
     /// The colour More Colors confirmed for `field`, as `RRGGBB`.
     Color {
         /// The form's colour field.
@@ -243,6 +243,10 @@ pub(crate) trait WordForm: Clone + Default + PartialEq + Serialize + Deserialize
     /// A child dialog answered.
     fn answer(&mut self, answer: ChildAnswer) {
         let _ = answer;
+    }
+    /// The payload mailed to `parent` when OK finishes this form; the default is [`serde_json::to_value`].
+    fn mail(&self) -> Option<Value> {
+        serde_json::to_value(self).ok()
     }
     /// Copies read-only app data (fonts, palette, unit, a preview) into the form's `#[serde(skip)]` fields; runs before
     /// every pass of the dialog.
@@ -489,7 +493,7 @@ fn form_settle<F: WordForm>(app: &mut WordApp, ctx: &Context, id: DialogId) -> S
                 done.form.applied(app, Filed::Extra(at), outcome(&ran));
                 ctx.request_repaint();
             } else if let Some(parent) = done.parent
-                && let Ok(value) = serde_json::to_value(&done.form)
+                && let Some(value) = done.form.mail()
             {
                 app.dialog_answers.push((parent, done.form.key().to_owned(), value));
                 ctx.request_repaint();
@@ -573,9 +577,9 @@ fn form_settle<F: WordForm>(app: &mut WordApp, ctx: &Context, id: DialogId) -> S
     let font_key = FontForm::default().key();
     for (_, key, value) in mailed {
         if key == font_key
-            && let Ok(form) = serde_json::from_value::<FontForm>(value.clone())
+            && let Ok(answer) = serde_json::from_value::<FontAnswer>(value.clone())
         {
-            answers.push(ChildAnswer::Font(Box::new(form)));
+            answers.push(ChildAnswer::Font(Box::new(answer)));
         } else {
             answers.push(ChildAnswer::Form { key, value });
         }
