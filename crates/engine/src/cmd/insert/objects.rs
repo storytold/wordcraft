@@ -114,7 +114,7 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
         Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => return Err(CmdError::Failed(why.into())),
         Err(_) => match wordcraft_render::metafile_size(&bytes) {
             Some(size) => size,
-            None => return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into())),
+            None => return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, TIFF, WMF, EMF)".into())),
         },
     };
     let key = s.doc.add_media(bytes, ext);
