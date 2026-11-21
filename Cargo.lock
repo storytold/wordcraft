@@ -9378,7 +9378,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-tiff",
  "craft-xml",
- "png",
+ "png 0.18.1",
  "quick-xml 0.41.0",
  "rayon",
  "serde",
