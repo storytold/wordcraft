@@ -64,6 +64,7 @@ impl WordApp {
             missing_fonts,
             export_error,
             last_autosave,
+            window_focused,
             equation_prev_tab,
             smart_art_item,
             outline_prev_tab,
@@ -125,6 +126,8 @@ impl WordApp {
             user_origin: false,
             read_aloud_error: None,
             autosave_path: None,
+            disk_check_at: 0.0,
+            disk_notices: Vec::new(),
             saves_in_flight: Vec::new(),
             fallback_chooser: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
@@ -149,6 +152,7 @@ impl WordApp {
             missing_fonts,
             export_error,
             last_autosave,
+            window_focused,
             equation_prev_tab,
             smart_art_item,
             outline_prev_tab,
@@ -391,6 +395,7 @@ impl WordApp {
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
+        self.disk_tick(ctx);
         self.autosave_tick(monotonic_ms());
         if self.autosaves() && self.session.dirty {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));

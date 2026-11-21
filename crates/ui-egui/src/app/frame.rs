@@ -105,6 +105,8 @@ impl WordApp {
             // As tall as the bar: a failure's line under the message puts Install below the first line, and a slot of
             // the default size (one options bar high) clips it, so a press on it reached nothing.
             .top(Slot::new("languagePack").size(SlotSize::Content).visible(language_packs::bar_offer(self)), language_packs::pack_bar)
+            // Reload or Keep mine, while the shown document's file changed on disk under unsaved work (#5623).
+            .top(Slot::new("diskChange").size(SlotSize::Content).visible(crate::disk_change::bar_offer(self)), crate::disk_change::bar)
             .status(true, chrome::status_bar::show)
             .body(|ui, _cx, app: &mut WordApp| {
                 if !app.has_document() || stale(app) {
