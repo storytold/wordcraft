@@ -434,6 +434,16 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
         } else {
             HfSlot::Default
         };
+        // The blank page putting the next section on its side shows no header or footer. It
+        // still uses its slot's parts, so editing its header or footer edits the section's
+        // existing part instead of putting a new empty one in its place.
+        if page.blank {
+            page.header.clear();
+            page.footer.clear();
+            let exists = |id: Option<u32>| id.filter(|id| ctx.doc.parts.contains_key(id));
+            (page.header_story, page.footer_story) = (exists(hid), exists(fid));
+            continue;
+        }
         ctx.fields.page = page.number;
         ctx.fields.page_format = sect.page_num_format;
         ctx.fields.pages = total;
