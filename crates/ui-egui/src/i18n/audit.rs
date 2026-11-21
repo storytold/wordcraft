@@ -239,8 +239,10 @@ impl<'a> Exempt<'a> {
     fn allows(&self, app: &WordApp, text: &str) -> bool {
         let plain = unmarked(text);
         let plain = plain.trim().trim_end_matches(" —").trim();
+        // A chord is `Ctrl+Shift+K` or, on macOS, the modifiers' symbols run into the key (`⌥⌘Space`, `⇧⌘K`).
         let chord = |s: &str| {
-            s.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter" | "Space") || k.chars().count() <= 3)
+            let key = |k: &str| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter" | "Space") || k.chars().count() <= 3;
+            s.split('+').all(|k| key(k) || key(k.trim_start_matches(['⌃', '⌥', '⇧', '⌘'])))
         };
         let is_shortcut = || chord(plain);
         // A command's hover hint, drawn as one text: its marked label, name and location, so what is left is the
