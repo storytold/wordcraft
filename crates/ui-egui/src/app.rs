@@ -1,35 +1,48 @@
-use super::clock::now_ms;
-#[cfg(not(target_arch = "wasm32"))]
-use super::file_browser;
 use super::services::Services;
-use super::state::{AutoSaveBlock, DefaultApp, PromptSave, SaveChoice, keeps_everything};
+use super::state::{AutoSaveBlock, PromptSave, keeps_everything};
 use super::{
-    AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, SaveInFlight, Session, UiState, Value, WordApp, applied_font,
-    async_saves, backstage, canvas, chrome, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style, documents, file_dialogs,
-    i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, scroll,
-    system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
+    DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, canvas, chrome, crop, dialogs, documents,
+    file_dialogs, i18n, json, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, system_clipboard, table_pen,
+    theme, updates_ui, window_ui, windows, zotero,
 };
+use craft::platform::clock::monotonic_ms;
+use craft::ui::runtime::commands::CommandInput;
+use craft::ui::runtime::env::{AltCodePages, ResolvedRoot, RootEnv, WheelSpeed};
+use craft::ui::runtime::frame::{FrameInput, FrameOutput};
+use craft::ui::runtime::windows::WindowHost;
 
+pub(crate) mod command_board;
 mod commands;
 mod control;
 mod files;
-#[cfg(test)]
-pub(crate) use files::suggested_stem;
-mod fonts;
+pub(crate) use files::Closing;
+pub(crate) mod fonts;
 mod frame;
 mod input;
 mod pictures;
 mod prefs;
 
+#[cfg(test)]
 pub(crate) use commands::works_without_document;
-pub(crate) use frame::STATUS_MS;
-pub(crate) use input::control_click_as_secondary;
+
+/// WordCraft's own sizes over the size set. The display role is the File pages' titles (Info, Open, Print,
+/// Options…), production's 26 pt semibold over its 15 pt section headings; the suite's display size (38 pt) is a
+/// start screen's brand title, which WordCraft does not show.
+static APP_SIZES: std::sync::LazyLock<std::sync::Arc<craft::theme::AppSizes>> = std::sync::LazyLock::new(|| {
+    use craft::theme::SizeValue;
+    let all = [("typography.display.size", 26.0), ("typography.display.line_height", 32.0)]
+        .into_iter()
+        .map(|(path, value)| (path.to_owned(), SizeValue::Number(value)))
+        .collect();
+    std::sync::Arc::new(craft::theme::AppSizes { all, ..Default::default() })
+});
 
 impl WordApp {
     /// Creates the app: adopts the system locale, then initializes the document session, UI state,
-    /// services, printing, canvas, dialogs, previews, control and screenshot state, font and theme
-    /// tracking.
+    /// services, printing, canvas, dialogs, previews and font tracking.
     pub fn new(session: Session, services: Services) -> Self {
+        // The app's own icons (ribbon, menus) sit beside the framework's catalog; registering twice is a no-op.
+        crate::icons::register();
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {
             wordcraft_engine::set_system_locale(&tag);
@@ -37,172 +50,220 @@ impl WordApp {
         // What the window shows starts as a new window's.
         let window_ui::WindowUi {
             canvas,
-            controls,
-            dialog,
-            colors,
             restrict,
             spelling_review,
-            status_msg,
+            status,
+            announcement,
             previews,
             change_picture_target,
             recipient_list_pending,
-            dialog_pick,
-            focus_ribbon,
-            control_click,
-            keytip_rects,
+            ribbon_dropped,
             nav_search_focus,
-            comment_fonts_for,
-            find_fonts_for,
-            sent_title,
-            sent_full_screen,
-            seen_full_screen,
             escape_free,
             status_counts,
-            print_memo,
             missing_fonts,
             export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
-            smart_art_row_focused,
-            smart_art_typing,
             outline_prev_tab,
             read_aloud_at,
-            awaiting_save,
             file_dialog,
             info_editing,
             shown_document,
-            #[cfg(not(target_arch = "wasm32"))]
-            file_browser,
+            backstage_state,
+            chrome,
+            dialog_host,
+            dialog_hooks,
+            dialog_answers,
+            edits,
+            keytips_active,
+            options_state,
+            print,
+            shape_variation,
+            equation_symbol_set,
+            md_source_visit,
+            more_colors,
             tab,
             backstage,
             backstage_page,
-            print,
             nav_collapsed,
-            keytip_prefix,
-            keytips,
-            alt_pressed,
-            alt_chord_used,
-            alt_key_down,
-            alt_modifier_seen,
         } = window_ui::WindowUi::new(session.document_id());
         WordApp {
             session,
-            ui: UiState {
-                tab,
-                backstage,
-                backstage_page,
-                print,
-                nav_collapsed,
-                keytip_prefix,
-                keytips,
-                alt_pressed,
-                alt_chord_used,
-                alt_key_down,
-                alt_modifier_seen,
-                ..UiState::default()
-            },
+            ui: super::prefs::Prefs { tab, backstage, backstage_page, nav_collapsed, ..super::prefs::Prefs::default() },
             services,
+            host: std::sync::Arc::new(craft::host::Host::builder(super::APP).i18n(i18n::catalogs()).lang(craft::i18n::Lang::EN).build()),
+            settings: None,
+            settings_notices: Default::default(),
+            command_catalog: None,
+            command_catalog_mac: cfg!(target_os = "macos"),
+            command_catalog_lang: "",
+            key_overrides: Default::default(),
+            command_states: Default::default(),
+            fonts_frames: 0,
             clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
             print_gen: 0,
-            integrated_titlebar: false,
-            mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
+            font_notice_seen: Vec::new(),
+            font_notices: false,
             packs_rt: Default::default(),
-            control_rx: None,
-            shots: crate::control::Shots::default(),
-            capture_epoch: 0,
-            surface_geometry: None,
-            capture_geometry: None,
-            synthetic: Vec::new(),
-            synthetic_pending: false,
-            synthetic_injected: 0,
-            raw_scroll_events_scaled: 0,
-            last_scaled_scroll_events: Vec::new(),
-            styled: false,
-            fonts_hans: false,
-            fonts_korean: false,
-            fonts_hant: false,
-            fonts_system_cjk: false,
-            fonts_system_arabic: false,
-            want_system_cjk: false,
-            want_system_arabic: false,
-            recover_fonts_for: None,
-            recent_fonts_for: Vec::new(),
-            fonts_frames: 0,
-            applied_theme: None,
+            control: None,
+            capture_token: 0,
             native_scale: 1.0,
             auto_scale_limit: f32::INFINITY,
-            monitor_zoom: 1.0,
             legacy_interface_size: None,
-            // Inert until the app binary calls `watch_desktop_theme`.
-            desktop_theme: desktop_theme::DesktopTheme::default(),
-            desktop_dark: None,
             applied_editing: None,
-            system_animations: None,
-            applied_animations: None,
             frame_ms: 0.0,
             quit_requested: false,
             autosave: true,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             ime_origin: false,
+            user_origin: false,
             read_aloud_error: None,
             autosave_path: None,
             saves_in_flight: Vec::new(),
+            fallback_chooser: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             recovery_seen: false,
             no_document: None,
-            comment_drafts: Default::default(),
             parked: Default::default(),
             windows: windows::Windows::new(shown_document),
+            closing: None,
             print_document: None,
             canvas,
-            controls,
-            dialog,
-            colors,
             restrict,
             spelling_review,
-            status_msg,
+            status,
+            announcement,
             previews,
             change_picture_target,
             recipient_list_pending,
-            dialog_pick,
-            focus_ribbon,
-            control_click,
-            keytip_rects,
+            ribbon_dropped,
             nav_search_focus,
-            comment_fonts_for,
-            find_fonts_for,
-            sent_title,
-            sent_full_screen,
-            seen_full_screen,
             escape_free,
             status_counts,
-            print_memo,
             missing_fonts,
             export_error,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
-            smart_art_row_focused,
-            smart_art_typing,
             outline_prev_tab,
             read_aloud_at,
-            awaiting_save,
             file_dialog,
             info_editing,
             shown_document,
-            #[cfg(not(target_arch = "wasm32"))]
-            file_browser,
+            backstage_state,
+            chrome,
+            dialog_host,
+            dialog_hooks,
+            dialog_answers,
+            edits,
+            keytips_active,
+            options_state,
+            print,
+            shape_variation,
+            equation_symbol_set,
+            md_source_visit,
+            more_colors,
         }
     }
 
-    pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
-        self.control_rx = Some(rx);
+    /// The app with `host` as its services: files, jobs, settings sections and the language.
+    pub fn with_host(mut self, host: std::sync::Arc<craft::host::Host>) -> Self {
+        self.host = host;
         self
+    }
+
+    /// Whether saving is a download: the browser keeps the files, so there is no path to write to.
+    pub(crate) fn browser_saves(&self) -> bool {
+        self.host.files().browser_saves()
+    }
+
+    /// This frame's root values: the wheel speed, the Alt-code pages, the interface mode,
+    /// motion, scale and direction. Built from the saved settings every frame, so a change
+    /// applies at once.
+    pub fn root_env(&self) -> RootEnv {
+        let lang = i18n::Lang::from_pref(&self.ui.language);
+        let direction = if lang.rtl() { craft::i18n::Direction::Rtl } else { craft::i18n::Direction::Ltr };
+        let locale = sys_locale::get_locale();
+        #[cfg(windows)]
+        let (ansi, oem) = craft::codepage::windows_code_pages(locale.as_deref());
+        #[cfg(not(windows))]
+        let (ansi, oem) = (1252, wordcraft_engine::cmd::text::oem_code_page(locale.as_deref()));
+        let line = self.ui.scroll_speed.wheel_factor();
+        #[cfg(not(target_arch = "wasm32"))]
+        let point = self.ui.touchpad_scroll_speed.touchpad_factor();
+        #[cfg(target_arch = "wasm32")]
+        let point = self.ui.scroll_speed.wheel_factor();
+        let mut env = RootEnv::new()
+            .scale(self.ui.interface_size.scale(self.native_scale, self.auto_scale_limit))
+            .direction(direction)
+            .mode(self.ui.theme.mode())
+            .wheel_speed(WheelSpeed::new(line, point))
+            .alt_code_pages(AltCodePages::new(ansi, oem));
+        env.motion = self.ui.animations.motion();
+        env.sizes = std::sync::Arc::clone(&APP_SIZES);
+        env
+    }
+
+    /// What this frame's mode and motion choices resolve to: the system's answer replaces `System`.
+    /// Before the first frame there is no context to ask, and the system reports nothing.
+    pub(crate) fn resolved_root(&self) -> ResolvedRoot {
+        let root = self.root_env();
+        match &self.ctx {
+            Some(ctx) => root.resolved(ctx),
+            None => root.resolved_for(craft::theme::SystemAppearance::default()),
+        }
+    }
+
+    /// Whether the interface draws in dark mode, `System` resolved.
+    pub(crate) fn ui_is_dark(&self) -> bool {
+        self.resolved_root().mode == craft::theme::Mode::Dark
+    }
+
+    /// Whether interface animations run now: the choice and the system's reduced-motion setting resolved.
+    pub(crate) fn animations_on(&self) -> bool {
+        self.resolved_root().motion != craft::behavior::MotionMode::Off
+    }
+
+    /// Whether the system allows animations (it does not ask for reduced motion, or reports nothing).
+    pub(crate) fn system_animations(&self) -> bool {
+        self.ctx.as_ref().is_none_or(|ctx| !craft::ui::runtime::env::system_appearance(ctx).appearance.reduced_motion.unwrap_or(false))
+    }
+
+    /// Before each frame's passes, from `embed::before_input`: runs the commands the runtime
+    /// collected, binds the interface language, and returns the frame's input (root values,
+    /// command states, host). It runs before `logic`, so what needs the frame's own flags
+    /// (a late paste, the control channel) is in `logic`.
+    pub fn frame_input(&mut self, out: FrameOutput) -> FrameInput {
+        if let Some(ctx) = self.ctx.clone() {
+            self.run_fired(&ctx, &out);
+            self.canvas.take_focus_after_pass(&ctx);
+            self.native_scale = theme::usable_scale(ctx.native_pixels_per_point().unwrap_or(1.0));
+            if let Some(native) = ctx.native_pixels_per_point()
+                && let Some(old) = self.legacy_interface_size.take()
+            {
+                self.ui.interface_size = theme::migrate_legacy_interface_size(old, native);
+            }
+            // Auto never draws larger than the smallest screen a window is on allows (#4030).
+            let host = WindowHost::of(&ctx);
+            self.auto_scale_limit = theme::auto_scale_limit_over(
+                self.windows.viewports(&ctx).into_iter().filter_map(|v| host.monitor_of(v)).map(|m| (m.size_px, m.scale)),
+                self.native_scale,
+            );
+        }
+        self.fonts_frames = self.fonts_frames.saturating_add(1).min(2);
+        let lang = i18n::Lang::from_pref(&self.ui.language);
+        i18n::apply_language(lang);
+        if self.host.lang() != lang.craft_lang() {
+            self.host = std::sync::Arc::new(self.host.with_lang(lang.craft_lang()));
+        }
+        let commands: CommandInput = self.command_input();
+        FrameInput::new(self.root_env()).commands(commands).host(self.host.clone())
     }
 
     /// Start-up with no document to open (#766): show File › Home (Blank document, the templates
@@ -228,10 +289,16 @@ impl WordApp {
         self.no_document != Some(self.session.document_id())
     }
 
-    /// Whether a modal dialog is open: the rest of the window takes no clicks, keys or
-    /// shortcuts until it closes (#3859).
+    /// Whether a modal dialog is open on the drawn window: the rest of the window takes no
+    /// clicks, keys or shortcuts until it closes (#3859). Another window's dialog does not block
+    /// this one.
     pub(crate) fn modal_open(&self) -> bool {
-        self.file_browser_open() || self.dialog.as_ref().is_some_and(crate::dialogs::Dialog::is_modal) || self.colors.is_some()
+        self.dialog_host.shows_modal()
+    }
+
+    /// The drawn window's dialog host.
+    pub fn dialog_host_mut(&mut self) -> &mut craft::ui::dialog::DialogHost {
+        &mut self.dialog_host
     }
 
     /// Terminal feedback also reaches the normal window when printing starts through control.
@@ -240,16 +307,18 @@ impl WordApp {
         self.print_feedback();
     }
 
-    /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
+    /// Per-frame logic before layout: background work, the control channel, file results.
     pub fn logic(&mut self, ctx: &egui::Context) {
-        // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
-        // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
-        ctx.add_plugin(super::a11y::FocusGuard);
+        let lang = i18n::Lang::from_pref(&self.ui.language);
+        if self.ctx.is_none() {
+            self.ctx = Some(ctx.clone());
+        }
         updates_ui::tick(self, ctx);
         crate::language_packs::tick(self);
-        let lang = i18n::Lang::from_pref(&self.ui.language);
-        i18n::set_current(lang);
-        crate::rtl::sync(ctx);
+        // PDFs and prints show a page reference or a REF to a missing bookmark in the
+        // interface's language, as Word prints them in its own.
+        wordcraft_engine::set_bookmark_error(i18n::tr(lang, "Error! Bookmark not defined."));
+        wordcraft_engine::set_reference_error(i18n::tr(lang, "Error! Reference source not found."));
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
         // An English interface writes the region's English (English (UK) on a British system,
@@ -265,103 +334,25 @@ impl WordApp {
             self.session.set_editing_language(editing.as_deref());
             self.applied_editing = Some((lang, editing));
         }
-        options::sync(self);
-        self.settle_async_saves();
-        // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
-        // An installed CJK font is read only once CJK text is shown (#241): a CJK interface, the
-        // language names in Options, or a file name the caption is drawing. A file opened later
-        // in this frame (dialog, drop, control channel) is picked up again at the end.
-        self.ensure_caption_fonts();
-        self.ensure_comment_fonts();
-        self.ensure_recover_fonts();
-        self.ensure_recent_fonts();
-        self.ensure_find_fonts();
-        self.install_ui_fonts(ctx, lang);
-        if let Some(answer) = self.desktop_theme.take_change() {
-            self.desktop_dark = Some(answer);
-        }
-        // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
-        // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
-        // desktop portal's answer fills in instead. The interface follows the Interface theme
-        // setting alone; Dark page only changes how pages are drawn (#312).
-        let effective = match self.ui.theme {
-            theme::Appearance::System if ctx.system_theme().is_none() => match self.desktop_dark {
-                Some(true) => theme::Appearance::Dark,
-                Some(false) => theme::Appearance::Light,
-                None => theme::Appearance::System,
-            },
-            other => other,
-        };
-        if self.applied_theme != Some(effective) {
-            theme::apply(ctx, effective);
-            self.applied_theme = Some(effective);
-        }
-        // Interface size (#475, #822): egui's zoom factor multiplies the display scale the system
-        // reports (native pixels per point). Auto keeps that scale; a chosen size divides it back
-        // out, so "100%" is one screen pixel per point even where the system's scale is a guess.
-        // Recomputed every frame, so a move to a monitor with another scale keeps a chosen size.
-        // Keyboard zoom is off (above), so nothing else changes the factor; `set_zoom_factor`
-        // repaints only on change.
-        self.native_scale = theme::usable_scale(ctx.native_pixels_per_point().unwrap_or(1.0));
-        if let Some(native) = ctx.native_pixels_per_point()
-            && let Some(old) = self.legacy_interface_size.take()
-        {
-            self.ui.interface_size = theme::migrate_legacy_interface_size(old, native);
-        }
-        // Auto never draws larger than the screen holds (#4030): a system that guesses 3× on a
-        // 1366x768 panel would put the window's controls off screen. The zoom is shared by every
-        // window, so the smallest screen of all the open windows sets the cap. A viewport's
-        // `monitor_size` is in points of the zoom in force before a pending change applied, so
-        // its pixels are that size times `monitor_zoom` and the window's own native scale; each window's allowed zoom is its own, the smallest is shared.
-        let monitors: Vec<_> = self
-            .windows
-            .viewport_ids()
-            .into_iter()
-            .filter_map(|v| {
-                ctx.input_for(v, |i| {
-                    let info = i.viewport();
-                    Some(((info.monitor_size?.x, info.monitor_size?.y), info.native_pixels_per_point?))
-                })
-            })
-            .collect();
-        self.auto_scale_limit = theme::auto_scale_limit_over(monitors, self.monitor_zoom, self.native_scale);
-        self.monitor_zoom = ctx.zoom_factor();
-        let zoom = self.ui.interface_size.zoom_factor_within(self.native_scale, self.auto_scale_limit);
-        if ctx.zoom_factor() != zoom {
-            ctx.set_zoom_factor(zoom);
-        }
-        // Mouse-wheel line scroll speed (#6146): scales egui's own scroll areas.
-        let base_line_speed = egui::InputOptions::default().line_scroll_speed;
-        let target_line_speed = base_line_speed * self.ui.scroll_speed.wheel_factor();
-        if (ctx.options(|o| o.input_options.line_scroll_speed) - target_line_speed).abs() > 1e-4 {
-            ctx.options_mut(|o| o.input_options.line_scroll_speed = target_line_speed);
-        }
-        // Animation effects: the host is asked every frame what the system says (it answers from
-        // memory), so a change made in the system's settings is followed without a restart.
-        self.read_system_animations();
-        let animate = self.animations_on();
-        if self.applied_animations != Some(animate) {
-            theme::apply_animations(ctx, animate);
-            self.applied_animations = Some(animate);
-        }
-        if self.ctx.is_none() {
-            self.ctx = Some(ctx.clone());
-        }
-        // Capture geometry/window/document identity is current before control admission and
-        // completion.
-        self.refresh_capture_geometry(ctx);
+        self.settle_saves();
         let native = self.windows.native();
         if native {
             self.printing.poll(ctx);
         } else {
             self.poll_printing(ctx);
         }
-        self.drain_control(ctx);
         // The active window's own work; with native windows each window does it again as it
         // draws, for itself.
         self.window_work(ctx);
         self.drain_inbox();
-        self.drain_pasted();
+        self.paste_arrived(ctx);
+        // Focus hides the title bar's search box: a search left open there has no box to show it, and would keep
+        // Escape from leaving Focus (#5398).
+        if self.chrome.search && matches!(crate::chrome::Screen::of(&self.session.view), crate::chrome::Screen::Focus) {
+            self.chrome.search = false;
+        }
+        self.pump_close_prompt();
+        self.control_logic(ctx);
         self.watch_fonts(ctx);
         // A script, an agent or a later result may have made another document the active one.
         self.sync_document();
@@ -381,32 +372,8 @@ impl WordApp {
         if let Some(wait) = self.session.recovery_wait() {
             ctx.request_repaint_after(wait);
         }
-        if !native {
-            self.window_input(ctx);
-        }
-        self.sync_viewport_input(ctx);
-        self.send_control_input(ctx);
-        // Screenshot deadlines, geometry and completions belong to `logic`; issuing the one
-        // callback command belongs to `ui` (`flush_shot_and_synthetic`). A queued/settling capture
-        // needs a real UI pass, and so does an injected synthetic step, even while the window is
-        // hidden.
-        crate::control::drain_screenshots(self, ctx);
-        if self.shots.in_flight() || self.synthetic_pending || !self.synthetic.is_empty() {
-            let viewport = self.active_viewport();
-            if ctx.input_for(viewport, |i| i.viewport().visible()) != Some(true) {
-                ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::RequestPaintWhileHidden);
-            }
-            ctx.request_repaint_of(viewport);
-            ctx.request_repaint();
-        }
-        // The open above may have changed the file name the caption draws.
-        self.ensure_caption_fonts();
-        self.ensure_comment_fonts();
-        self.ensure_recover_fonts();
-        self.ensure_recent_fonts();
-        self.ensure_find_fonts();
-        self.install_ui_fonts(ctx, lang);
         self.report_dirty();
+        self.save_prefs_step(ctx);
     }
 
     /// A window's own work, with its state in place: print feedback for its document, Zotero,
@@ -424,41 +391,15 @@ impl WordApp {
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
-        self.autosave_tick(now_ms());
+        self.autosave_tick(monotonic_ms());
         if self.autosaves() && self.session.dirty {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));
-        }
-    }
-
-    /// A window's own input before it draws: ⌘Q. Runs in [`WordApp::logic`] with one window,
-    /// else as each window draws (each native window has its own input). The SmartArt Text
-    /// Pane's Tab keys and dropped files are read in the first UI pass
-    /// ([`WordApp::handle_ui_input_events`]).
-    pub(crate) fn window_input(&mut self, ctx: &egui::Context) {
-        // The way back when a large interface size has pushed File › Options off screen (#4030).
-        // A modal dialog keeps the keys (Customize Keyboard records them), and a command the user
-        // bound to the chord runs instead.
-        if !self.modal_open()
-            && self.session.keymap.resolve(&self.session.registry, "Mod+Shift+0").is_none()
-            && ctx.input_mut(super::consume_reset_interface_size)
-        {
-            let _ = self.run("ui.interfaceSize", serde_json::json!({"value": "auto"}));
-        }
-        if self.windows.native() && ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
-            self.quit();
-        }
-        // The drawn window's caption, comments and Find results borrow faces it may not have.
-        if self.windows.native() {
-            self.ensure_caption_fonts();
-            self.ensure_comment_fonts();
-            self.ensure_find_fonts();
         }
     }
 
     /// Lay out the windows: on the desktop each open document's in its own native window
     /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        self.clear_raw_scroll_replay();
         if self.windows.native() {
             self.windows_ui(ui);
         } else {
@@ -472,46 +413,32 @@ impl WordApp {
     pub(crate) fn window_ui(&mut self, ui: &mut egui::Ui) {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
-        let t0 = now_ms();
+        let t0 = monotonic_ms();
         let ctx = ui.ctx().clone();
-        i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
-        // Animation effects off: egui's scroll areas get a wheel notch whole, not eased in.
-        if !self.animations_on() {
-            let opts = ctx.options(|o| o.input_options);
-            ctx.input_mut(|i| i.smooth_scroll_delta = scroll::unsmoothed_scroll(i, &opts));
-        }
-        self.handle_ui_input_events(&ctx);
-        // Fonts installed by `logic` take effect on the next frame.
-        if self.fonts_frames < 2 {
-            self.fonts_frames += 1;
-            ctx.request_repaint();
-            return;
-        }
-        let t = theme::Tokens::get(&ctx);
-        self.escape_free = self.dialog.is_none()
+        self.escape_free = self.dialog_host.is_empty()
             && !self.ui.backstage
-            && self.ui.keytips == keytips::Phase::Off
-            && !egui::Popup::is_any_open(&ctx)
-            && !crate::chrome::title_search_open(self, &ctx);
-        // Keytips are read before layout so the frame paints the new state; badges paint after
-        // the ribbon so they sit on top of it.
-        crate::keytips::logic(self, &ctx);
-        // Alt codes in a text box are read before the box is drawn, so it types the character.
-        crate::keys::field_alt_codes(self, &ctx);
+            && !self.keytips_active
+            && !craft::ui::runtime::overlay::any_open(&ctx, craft::ui::runtime::overlay::OpenFilter::Keys)
+            && !crate::chrome::search::is_open(self);
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
-            backstage::forget_open_error(&ctx);
-            backstage::forget_save_as_error(&ctx);
+            self.backstage_state.clear_errors();
             self.export_error.clear();
         }
-        self.paint_window(ui, &ctx, t);
+        let regions = self.paint_window(ui);
         if !moved(self) {
-            self.show_overlays(ui, &ctx);
+            self.show_overlays(ui, &ctx, &regions);
+        }
+        // Last in the pass: the Escape that nothing in the window took.
+        if !moved(self) {
+            crate::keys::window_cancel(self, &ctx);
         }
         if !moved(self) {
-            self.sync_title_and_frame(&ctx, t0);
+            self.frame_ms = monotonic_ms() - t0;
+            // Typing and formatting land here, after `logic` has reported.
+            self.report_dirty();
         }
         // The synthetic step this frame took is done even when drawing ended early.
-        self.flush_shot_and_synthetic(&ctx);
+        self.control_ui(&ctx);
     }
 }
