@@ -540,7 +540,7 @@ pub fn more_colors(current: Option<Rgb>, key: String, tab: ColorPickerTab) -> Co
 }
 
 /// Opens the Colors dialog for `target`, remembering where its answer goes.
-fn open_for(app: &mut WordApp, target: &Target, current: Option<Rgb>, tab: ColorPickerTab) -> DialogId {
+pub(crate) fn open_for(app: &mut WordApp, target: &Target, current: Option<Rgb>, tab: ColorPickerTab) -> DialogId {
     app.more_colors.insert(MORE_KEY.to_string(), target.clone());
     crate::dialogs::host::open_with(app, None, more_colors(current, MORE_KEY.to_string(), tab), DialogHooks { prepare: None, settle: settle_more })
 }
