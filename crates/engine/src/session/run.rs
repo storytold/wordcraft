@@ -70,7 +70,22 @@ impl Session {
         {
             crate::cmd::md_source::before_command(self, id, mutates)?;
         }
-        self.run_command(id, params)
+        // Formatting Backspace carried over is for typing where the character was deleted: a
+        // caret the front end moved itself (a click elsewhere) has left it behind (#6518).
+        self.drop_stale_carried();
+        let carried_before = self.pending_at.clone().map(|at| (self.pending.clone(), at));
+        // The formatting waiting at the caret is not part of the document snapshot a failed
+        // command is rolled back to: put it back here, so a refused edit (a Backspace into a
+        // locked content control) leaves it as it was.
+        let document_before = self.document_id;
+        let waiting_before = (self.pending.clone(), self.pending_at.clone());
+        let result = self.run_command(id, params);
+        if result.is_ok() {
+            self.settle_carried(carried_before);
+        } else if self.document_id == document_before {
+            (self.pending, self.pending_at) = waiting_before;
+        }
+        result
     }
 
     /// Dispatches `id` through the command registry with transactional rollback on failure,
@@ -300,6 +315,19 @@ impl Session {
             }
         }
         result
+    }
+
+    /// After a command, formatting Backspace carried over stays only where typing would use it
+    /// (#6518). One the command left alone is dropped if the caret is elsewhere now (a paste,
+    /// Find, Go To); one it changed (Bold, a hyperlink's end) is for the caret it left.
+    fn settle_carried(&mut self, before: Option<(Option<CharProps>, Pos)>) {
+        if let Some((pending, at)) = before
+            && self.pending_at.as_ref() == Some(&at)
+            && self.pending != pending
+        {
+            self.pending_at = Some(self.sel.focus.clone());
+        }
+        self.drop_stale_carried();
     }
 
     fn finish_success(&mut self, context: SuccessContext<'_>) {
