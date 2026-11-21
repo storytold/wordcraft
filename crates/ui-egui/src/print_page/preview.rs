@@ -13,7 +13,7 @@ use craft::ui::primitives::textures::{Priority, Revision, TextureState, ThumbRen
 use egui::{Color32, ColorImage, Ui};
 use wordcraft_layout::DocLayout;
 
-use super::{PrintPage, layout_key};
+use super::{PrintPage, layout_key, preview_options};
 use crate::WordApp;
 
 /// The salt of the preview's thumbnail store.
@@ -68,7 +68,7 @@ impl ThumbSource<usize> for SheetSource<'_> {
             }
             let x0 = ((slot.x + (slot.width - pg.w * k) / 2.0) * scale).round() as i64;
             let y0 = ((slot.y + (slot.height - pg.h * k) / 2.0) * scale).round() as i64;
-            let page = wordcraft_render::render_page(&self.app.session.doc, pg, page_scale, &Default::default());
+            let page = wordcraft_render::render_page(&self.app.session.doc, pg, page_scale, &preview_options(self.app));
             let straight = page.to_straight();
             let row_len = (page.width as usize).max(1) * 4;
             for (row, line) in straight.chunks_exact(row_len).enumerate() {

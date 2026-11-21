@@ -113,6 +113,16 @@ fn batch_frame(h: &mut H, events: Vec<egui::Event>) {
     crate::test_harness::frame(h);
 }
 
+/// The modifiers of the platform's Mod key as egui reports them: Cmd on macOS (`mac_cmd` with `command`, and no
+/// Control), Ctrl elsewhere.
+fn mod_held() -> Modifiers {
+    if cfg!(target_os = "macos") {
+        Modifiers { mac_cmd: true, command: true, ..Default::default() }
+    } else {
+        Modifiers { ctrl: true, command: true, ..Default::default() }
+    }
+}
+
 /// One frame with `modifiers` held, then `events`.
 fn mods_frame(h: &mut H, modifiers: Modifiers, events: Vec<egui::Event>) {
     let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
@@ -224,7 +234,7 @@ fn user_assignments_become_overrides() {
 /// bold HTML, whichever of Shift and V is released first.
 #[test]
 fn mod_shift_v_released_shift_first_pastes_once() {
-    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let chord = Modifiers { shift: true, ..mod_held() };
     let ctrl = Modifiers { shift: false, ..chord };
     let mut h = alt_frame_app();
     run(&mut h, "text.insert", json!({"text": "source target"}));
@@ -241,7 +251,7 @@ fn mod_shift_v_released_shift_first_pastes_once() {
 #[test]
 fn a_global_mod_shift_v_leaves_the_next_mod_v_picture_paste_alone() {
     let mut h = picture_app();
-    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let chord = Modifiers { shift: true, ..mod_held() };
     mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
     let ctrl = Modifiers { shift: false, ..chord };
     mods_frame(&mut h, ctrl, vec![key_event(Key::V, false, ctrl)]);
@@ -296,7 +306,7 @@ fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> egui::Event {
 /// whether V or Ctrl is released first, and a plain V is no paste.
 #[test]
 fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+    let ctrl = mod_held();
 
     let mut h = alt_frame_app();
     run(&mut h, "text.insert", json!({"text": "x"}));
@@ -886,6 +896,34 @@ fn tracked_own_insertion_then_a_refused_side_rolls_the_whole_request_back() {
     assert_eq!(h.state().session.sel.focus.off, 2, "the caret is back where the request found it");
     assert_eq!(h.state().session.pending, Some(pending), "pending formatting is restored");
     assert_eq!(h.state().session.goal_x, Some(123.0), "the Up/Down goal column is restored");
+}
+
+/// #6518 review: a refused `DeleteSurrounding` rolls back the formatting Backspace carried
+/// over together with where it applies: typing at the restored caret still takes it, and a
+/// caret moved away leaves it behind, as before the request.
+#[test]
+fn a_refused_delete_surrounding_keeps_formatting_backspace_carried() {
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "abc"}));
+    // Wrap `c` in a rich-text control that refuses edits, and make `b` bold.
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 2), focus: wordcraft_doc::Pos::body(0, 3) };
+    run(&mut h, "developer.richText", json!({"tag": "locked"}));
+    run(&mut h, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 2) };
+    run(&mut h, "format.bold", json!({"value": true}));
+    caret(&mut h, 2);
+    // Backspace the bold `b`: the caret, now after `a`, carries its bold.
+    run(&mut h, "text.backspace", json!({}));
+    assert_eq!(h.state().session.typing_props().bold, Some(true));
+    alt_frame(&mut h, vec![surround(1, 1)]);
+    assert_eq!(body(h.state()), "ac", "the request is refused and rolled back");
+    assert_eq!(h.state().session.sel, wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1)));
+    assert_eq!(h.state().session.typing_props().bold, Some(true), "the carried bold still applies at the restored caret");
+    // It is still carried over by Backspace, not picked at the caret: a caret moved elsewhere
+    // and back leaves it behind.
+    h.state_mut().session.set_selection(wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0)));
+    h.state_mut().session.set_selection(wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1)));
+    assert_ne!(h.state().session.typing_props().bold, Some(true), "the caret has been elsewhere");
 }
 
 /// Selects a body range, wraps it in a rich-text content control with `tag`, and sets its
