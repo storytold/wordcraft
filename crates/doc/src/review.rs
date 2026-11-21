@@ -57,7 +57,7 @@ impl Document {
     }
 }
 
-/// The header/footer selection flags Compare turned on for the First and Even stories it inserted,
+/// The header/footer selection flags Compare changed for the First and Even stories it diffed,
 /// with the values they had before, so `Reject All` can put them back (#5837).
 ///
 /// It belongs to the document, not the session: a comparison result that is saved, reopened and
@@ -65,10 +65,10 @@ impl Document {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CompareHfFlags {
-    /// Sections whose `title_page` compare turned on: the section's ordinal index in
+    /// Sections whose `title_page` compare changed: the section's ordinal index in
     /// `Document::sections()` (`None` = the last section) and the value it had.
     pub title_page: Vec<(Option<usize>, bool)>,
-    /// `even_odd_headers` before compare turned it on.
+    /// `even_odd_headers` before compare changed it.
     pub even_odd: Option<bool>,
 }
 

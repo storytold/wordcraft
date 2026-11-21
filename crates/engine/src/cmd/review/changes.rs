@@ -1,4 +1,5 @@
 use super::{CmdError, CmdResult, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, fmt_revisions, json, p, pos_json, sel_result};
+use wordcraft_doc::Document;
 
 /// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
 fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, props: bool, accept: bool) -> Result<(), CmdError> {
@@ -252,12 +253,33 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     if accept {
         s.doc.compare_hf = None;
     } else if let Some(flags) = s.doc.compare_hf.take() {
-        let ends: Vec<usize> = s.doc.sections().into_iter().map(|(e, _)| e).collect();
+        let sec_info: Vec<(usize, bool, bool)> =
+            s.doc.sections().into_iter().map(|(e, sec)| (e, sec.title_page, sec.headers.first.is_some() || sec.footers.first.is_some())).collect();
+        let num_sections = sec_info.len();
+        let mut seen_keys = std::collections::HashSet::new();
+        let mut restored_ends = std::collections::HashSet::new();
+
         for (sec_idx, title_page) in flags.title_page {
+            if seen_keys.len() >= num_sections {
+                break;
+            }
+            if !seen_keys.insert(sec_idx) {
+                continue;
+            }
             match sec_idx {
-                Some(si) if si + 1 < ends.len() => {
-                    if let Some(&e) = ends.get(si) {
-                        s.doc.section_mut(e).title_page = title_page;
+                Some(si) if si < sec_info.len().saturating_sub(1) => {
+                    let (e, cur_tp, cur_first) = sec_info[si];
+                    let target_end = if cur_tp == title_page && !cur_first {
+                        sec_info
+                            .iter()
+                            .find(|(cand_e, cand_tp, cand_first)| !restored_ends.contains(cand_e) && (*cand_tp != title_page || *cand_first))
+                            .map(|(cand_e, _, _)| *cand_e)
+                            .unwrap_or(e)
+                    } else {
+                        e
+                    };
+                    if restored_ends.insert(target_end) {
+                        s.doc.section_mut(target_end).title_page = title_page;
                     }
                 }
                 Some(_) => {}
@@ -350,6 +372,40 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
+fn story_has_revisions(doc: &Document, st: StoryRef) -> bool {
+    for path in doc.para_paths(st) {
+        if let Some(p) = doc.para(st, &path) {
+            if p.mark.ins.is_some() || p.mark.del.is_some() || p.mark.fmt_change.is_some() || p.props.fmt_change.is_some() {
+                return true;
+            }
+            for (_, c) in p.run_ranges() {
+                if c.ins.is_some() || c.del.is_some() || c.fmt_change.is_some() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn doc_has_revisions(doc: &Document) -> bool {
+    if story_has_revisions(doc, StoryRef::Body) {
+        return true;
+    }
+    for &k in doc.parts.keys() {
+        if story_has_revisions(doc, StoryRef::Part(k)) {
+            return true;
+        }
+    }
+    if doc.styles.styles.iter().any(|st| st.para_change.is_some() || st.chr_change.is_some()) {
+        return true;
+    }
+    if doc.last_section.fmt_change.is_some() {
+        return true;
+    }
+    false
+}
+
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // The style change Next / Previous Change selected: that one alone. A caret put at the
     // document start any other way resolves no style change.
@@ -402,7 +458,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let from = if path == a.path { a.off } else { 0 };
         let to = if path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
-        let mark = path != b.path || caret_mark.as_ref() == Some(&path);
+        let mark = path != b.path || caret_mark.as_ref() == Some(&path) || (to == len && matches!(a.story, StoryRef::Part(_)));
         let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {
@@ -411,6 +467,65 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
     resolve_styles_sel(s, whole_body, accept)?;
+    if let StoryRef::Part(part_id) = a.story
+        && !story_has_revisions(&s.doc, a.story)
+    {
+        let sec_parts: Vec<(usize, usize, Option<u32>, Option<u32>, Option<u32>, Option<u32>)> = s
+            .doc
+            .sections()
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (end, sec))| (idx, end, sec.headers.first, sec.footers.first, sec.headers.even, sec.footers.even))
+            .collect();
+        let num_sections = sec_parts.len();
+        let mut found = None;
+        for &(sec_idx, end, h_first, f_first, h_even, f_even) in &sec_parts {
+            let sec_key = (sec_idx + 1 < num_sections).then_some(sec_idx);
+            if h_first == Some(part_id) || f_first == Some(part_id) {
+                found = Some((sec_key, end, true));
+                break;
+            }
+            if h_even == Some(part_id) || f_even == Some(part_id) {
+                found = Some((sec_key, end, false));
+                break;
+            }
+        }
+        if let Some((sec_key, end, is_first)) = found {
+            if is_first {
+                if let Some(flags) = s.doc.compare_hf.as_mut() {
+                    let orig_tp = flags.title_page.iter().position(|(k, _)| *k == sec_key).map(|idx| flags.title_page.remove(idx).1);
+                    if !accept && let Some(orig) = orig_tp {
+                        if sec_key.is_some() {
+                            s.doc.section_mut(end).title_page = orig;
+                        } else {
+                            s.doc.last_section.title_page = orig;
+                        }
+                    }
+                }
+            } else {
+                let any_even_has_rev = !accept
+                    && sec_parts.iter().any(|&(_, _, _, _, h_even, f_even)| {
+                        [h_even, f_even].into_iter().flatten().any(|id| story_has_revisions(&s.doc, StoryRef::Part(id)))
+                    });
+                if let Some(flags) = s.doc.compare_hf.as_mut() {
+                    if accept {
+                        flags.even_odd = None;
+                    } else if !any_even_has_rev && let Some(orig) = flags.even_odd.take() {
+                        s.doc.settings.even_odd_headers = orig;
+                    }
+                }
+            }
+            if let Some(flags) = &s.doc.compare_hf
+                && flags.title_page.is_empty()
+                && flags.even_odd.is_none()
+            {
+                s.doc.compare_hf = None;
+            }
+        }
+    }
+    if !doc_has_revisions(&s.doc) {
+        s.doc.compare_hf = None;
+    }
     s.sel = Selection::caret(a);
     s.clamp_selection();
     if next { select_next_unresolved(s) } else { sel_result(s) }

@@ -318,43 +318,19 @@ fn map_result_sections_to_snapshots(
 struct SectionContext<'a> {
     res_ends: &'a [usize],
     res_si: usize,
-    orig_title_page: bool,
-    orig_even_odd: bool,
 }
 
-/// Assigns a header or footer part ID to a specific section index in the session's document,
-/// optionally enabling section or document flags (such as `title_page` or `even_odd_headers`)
-/// so inserted First or Even stories remain selectable under layout. Precomputed `res_ends`
-/// avoids rescanning document sections on every slot assignment.
-fn assign_section_slot(s: &mut Session, ctx: &SectionContext<'_>, footer: bool, slot: HfSlot, id: u32, enable_flag: bool) {
+/// Assigns a header or footer part ID to a specific section index in the session's document.
+/// Precomputed `res_ends` avoids rescanning document sections on every slot assignment.
+fn assign_section_slot(s: &mut Session, ctx: &SectionContext<'_>, footer: bool, slot: HfSlot, id: u32) {
     let sec_key = (ctx.res_si + 1 < ctx.res_ends.len()).then_some(ctx.res_si);
     let end_opt = sec_key.and_then(|si| ctx.res_ends.get(si).copied());
 
     if let Some(end) = end_opt {
         let sect = s.doc.section_mut(end);
         set_hf_slot(sect, footer, slot, Some(id));
-        if enable_flag && slot == HfSlot::First {
-            sect.title_page = true;
-        }
     } else {
         set_hf_slot(&mut s.doc.last_section, footer, slot, Some(id));
-        if enable_flag && slot == HfSlot::First {
-            s.doc.last_section.title_page = true;
-        }
-    }
-
-    if enable_flag && slot == HfSlot::First && !ctx.orig_title_page {
-        let flags = s.doc.compare_hf.get_or_insert_with(Default::default);
-        if !flags.title_page.iter().any(|(k, _)| *k == sec_key) {
-            flags.title_page.push((sec_key, false));
-        }
-    }
-
-    if enable_flag && slot == HfSlot::Even {
-        s.doc.settings.even_odd_headers = true;
-        if !ctx.orig_even_odd {
-            s.doc.compare_hf.get_or_insert_with(Default::default).even_odd.get_or_insert(false);
-        }
     }
 }
 
@@ -534,6 +510,11 @@ fn compare_headers_and_footers(
     let res_ends: Vec<usize> = res_sections.iter().map(|(e, _)| *e).collect();
     let mapping = map_result_sections_to_snapshots(&res_sections, snaps.orig_ends, snaps.rev_ends, sources);
     let orig_even_odd = s.doc.settings.even_odd_headers;
+    let rev_even_odd = revised.settings.even_odd_headers;
+    if orig_even_odd != rev_even_odd {
+        s.doc.settings.even_odd_headers = rev_even_odd;
+        s.doc.compare_hf.get_or_insert_with(Default::default).even_odd.get_or_insert(orig_even_odd);
+    }
 
     let mut mapped_orig = std::collections::HashSet::new();
 
@@ -545,7 +526,22 @@ fn compare_headers_and_footers(
         let orig_sec = orig_si.and_then(|si| snaps.orig_sections.get(si));
         let rev_sec = rev_si.and_then(|si| snaps.rev_sections.get(si));
         let orig_title_page = orig_sec.map(|sec| sec.title_page).unwrap_or(false);
-        let sec_ctx = SectionContext { res_ends: &res_ends, res_si, orig_title_page, orig_even_odd };
+        let rev_title_page = rev_sec.map(|sec| sec.title_page).unwrap_or(false);
+        let sec_key = (res_si + 1 < res_ends.len()).then_some(res_si);
+
+        if orig_title_page != rev_title_page {
+            if let Some(end) = sec_key.and_then(|si| res_ends.get(si).copied()) {
+                s.doc.section_mut(end).title_page = rev_title_page;
+            } else {
+                s.doc.last_section.title_page = rev_title_page;
+            }
+            let flags = s.doc.compare_hf.get_or_insert_with(Default::default);
+            if !flags.title_page.iter().any(|(k, _)| *k == sec_key) {
+                flags.title_page.push((sec_key, orig_title_page));
+            }
+        }
+
+        let sec_ctx = SectionContext { res_ends: &res_ends, res_si };
 
         for footer in [false, true] {
             for slot in [HfSlot::Default, HfSlot::First, HfSlot::Even] {
@@ -571,9 +567,6 @@ fn compare_headers_and_footers(
                         rev_eff_headers.get(si).and_then(|h| get_set_slot(h, slot))
                     }
                 });
-
-                let enable_flag = (slot == HfSlot::First && rev_sec.is_some_and(|sec| sec.title_page))
-                    || (slot == HfSlot::Even && revised.settings.even_odd_headers);
 
                 match (orig_id, rev_id) {
                     (Some(o), Some(r)) => {
@@ -603,7 +596,7 @@ fn compare_headers_and_footers(
                             }
                             target
                         };
-                        assign_section_slot(s, &sec_ctx, footer, slot, target, enable_flag);
+                        assign_section_slot(s, &sec_ctx, footer, slot, target);
                     }
                     (None, Some(r)) => {
                         let doc_id = if let Some(&existing_id) = inserted_clones.get(&r) {
@@ -614,7 +607,20 @@ fn compare_headers_and_footers(
                             let kind = if footer { wordcraft_doc::PartKind::Footer } else { wordcraft_doc::PartKind::Header };
                             let new_id = s.doc.add_part(kind, rev_blocks);
                             if let Some(part) = s.doc.parts.get_mut(&new_id) {
-                                part.blocks = part.blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.ins = Some(run.ins), 0))).collect();
+                                part.blocks = part
+                                    .blocks
+                                    .iter()
+                                    .map(|b| {
+                                        Arc::new(mark_block(
+                                            b,
+                                            &|c| {
+                                                c.del = None;
+                                                c.ins = Some(run.ins);
+                                            },
+                                            0,
+                                        ))
+                                    })
+                                    .collect();
                             }
                             inserted_clones.insert(r, new_id);
                             if seen_inserted.insert(r) {
@@ -622,11 +628,11 @@ fn compare_headers_and_footers(
                             }
                             new_id
                         };
-                        assign_section_slot(s, &sec_ctx, footer, slot, doc_id, enable_flag);
+                        assign_section_slot(s, &sec_ctx, footer, slot, doc_id);
                     }
                     (Some(o), None) => {
                         if seen_deleted.contains(&o) {
-                            assign_section_slot(s, &sec_ctx, footer, slot, o, false);
+                            assign_section_slot(s, &sec_ctx, footer, slot, o);
                         } else if matched_orig_parts.contains(&o) {
                             let target = if let Some(&existing) = deleted_clones.get(&o) {
                                 existing
@@ -640,14 +646,14 @@ fn compare_headers_and_footers(
                                 deleted_clones.insert(o, id);
                                 id
                             };
-                            assign_section_slot(s, &sec_ctx, footer, slot, target, false);
+                            assign_section_slot(s, &sec_ctx, footer, slot, target);
                         } else {
                             seen_deleted.insert(o);
                             if let Some(part) = s.doc.parts.get_mut(&o) {
                                 part.blocks = part.blocks.iter().map(|b| Arc::new(mark_block(b, &|c| c.del = Some(run.del), 0))).collect();
                             }
                             changes += s.doc.parts.get(&o).map(|p| p.blocks.len().max(1)).unwrap_or(1);
-                            assign_section_slot(s, &sec_ctx, footer, slot, o, false);
+                            assign_section_slot(s, &sec_ctx, footer, slot, o);
                         }
                     }
                     (None, None) => {}
@@ -710,7 +716,6 @@ fn sanitize_section_hf(
     } else if let Some(sa) = orig_sec {
         res_sec.headers = sa.headers;
         res_sec.footers = sa.footers;
-        res_sec.title_page = sa.title_page;
     }
 }
 

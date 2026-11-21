@@ -2752,6 +2752,212 @@ fn compare_rejecting_non_final_section_with_body_change_restores_title_page_flag
     );
 }
 
+/// #6122 review: accepting or rejecting by selection updates compare_hf so:
+/// 1. Accepting an inserted First header keeps title_page = true when Reject All rejects another author's body edit.
+/// 2. Rejecting the First header restores title_page = false immediately without leaving an empty First header.
+/// 3. compare_hf is cleared when no pending revisions remain.
+#[test]
+fn compare_accepting_or_rejecting_first_header_by_selection_updates_compare_hf() {
+    let mut orig = Session::new(Document::from_text("Section 1 body.\nSection 2 body."));
+    let h_def_sec1 = orig
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Sec 1 Default Header", CharProps::default()))]);
+    let sec1 = wordcraft_doc::section::SectionProps {
+        title_page: false,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_def_sec1), ..Default::default() },
+        ..Default::default()
+    };
+    orig.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(sec1));
+
+    let mut rev = Session::new(Document::from_text("Inserted body paragraph.\nSection 1 body.\nSection 2 body."));
+    let h_first_sec1 = rev
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Inserted Sec 1 First Header", CharProps::default()))]);
+    let h_def_sec1_rev = rev
+        .doc
+        .add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Sec 1 Default Header", CharProps::default()))]);
+    let rev_sec1 = wordcraft_doc::section::SectionProps {
+        title_page: true,
+        headers: wordcraft_doc::section::HeaderSet { first: Some(h_first_sec1), default: Some(h_def_sec1_rev), ..Default::default() },
+        ..Default::default()
+    };
+    rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().section = Some(Box::new(rev_sec1));
+
+    let rev_file = TempDocx::new("rev-sel-accept-reject");
+    rev_file.save(&rev.doc);
+
+    // Case A: Accept First header by selection, then Reject All on remaining body change.
+    {
+        let mut s = Session::new(orig.doc.clone());
+        let r = s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+        assert_eq!(r["changes"], 2);
+        assert!(s.doc.compare_hf.is_some());
+        let first_hdr = s.doc.sections()[0].1.headers.first.expect("First header present");
+
+        s.sel = Selection::caret(Pos { story: StoryRef::Part(first_hdr), path: wordcraft_doc::Path::top(0), off: 0 });
+        s.run("review.accept", &json!({})).unwrap();
+
+        // Section 1 still has title_page = true
+        assert!(s.doc.sections()[0].1.title_page, "First header was accepted");
+
+        // Reject All rejects the remaining body change
+        s.run("review.rejectAll", &json!({})).unwrap();
+
+        assert!(s.doc.sections()[0].1.title_page, "Reject All of body edit does not turn off Different First Page");
+        assert!(s.doc.compare_hf.is_none(), "compare_hf is cleared with nothing pending");
+    }
+
+    // Case B: Reject First header by selection leaves Different First Page off, not an empty header.
+    {
+        let mut s = Session::new(orig.doc.clone());
+        s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+        let first_hdr = s.doc.sections()[0].1.headers.first.expect("First header present");
+
+        s.sel = Selection::caret(Pos { story: StoryRef::Part(first_hdr), path: wordcraft_doc::Path::top(0), off: 0 });
+        s.run("review.reject", &json!({})).unwrap();
+
+        assert!(!s.doc.sections()[0].1.title_page, "Rejecting First header by selection restores title_page = false");
+    }
+}
+
+/// #6122 review: revised turning title_page and even_odd_headers off, and flag changes on
+/// inherited headers (slots with no own header).
+#[test]
+fn compare_revised_turning_flags_off_and_inherited_header() {
+    let mut orig = Session::new(Document::from_text("Sec 1.\nSec 2."));
+    let h_first_1 = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("H1 First", CharProps::default()))]);
+    let h_def_1 = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("H1 Default", CharProps::default()))]);
+    let h_even_1 = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("H1 Even", CharProps::default()))]);
+    let sec1 = wordcraft_doc::section::SectionProps {
+        title_page: true,
+        headers: wordcraft_doc::section::HeaderSet { first: Some(h_first_1), default: Some(h_def_1), even: Some(h_even_1) },
+        ..Default::default()
+    };
+    orig.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(sec1));
+    orig.doc.settings.even_odd_headers = true;
+    orig.doc.last_section.title_page = false;
+
+    let mut rev = Session::new(Document::from_text("Sec 1.\nSec 2."));
+    let h_def_1_rev = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("H1 Default", CharProps::default()))]);
+    let rev_sec1 = wordcraft_doc::section::SectionProps {
+        title_page: false,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_def_1_rev), ..Default::default() },
+        ..Default::default()
+    };
+    rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(rev_sec1));
+    rev.doc.settings.even_odd_headers = false;
+    rev.doc.last_section.title_page = true; // Section 2 inherits headers from section 1, turns title_page on
+
+    let rev_file = TempDocx::new("rev-flags-off");
+    rev_file.save(&rev.doc);
+
+    // Accept All keeps revised flags (false for sec 1 and even_odd; true for sec 2)
+    {
+        let mut s = Session::new(orig.doc.clone());
+        s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+        s.run("review.acceptAll", &json!({})).unwrap();
+        assert!(!s.doc.sections()[0].1.title_page, "Accept All leaves section 1 title_page = false");
+        assert!(!s.doc.settings.even_odd_headers, "Accept All leaves even_odd_headers = false");
+        assert!(s.doc.last_section.title_page, "Accept All leaves section 2 title_page = true");
+    }
+
+    // Reject All restores original flags (true for sec 1 and even_odd; false for sec 2)
+    {
+        let mut s = Session::new(orig.doc.clone());
+        s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+        s.run("review.rejectAll", &json!({})).unwrap();
+        assert!(s.doc.sections()[0].1.title_page, "Reject All restores section 1 title_page = true");
+        assert!(s.doc.settings.even_odd_headers, "Reject All restores even_odd_headers = true");
+        assert!(!s.doc.last_section.title_page, "Reject All restores section 2 title_page = false");
+    }
+}
+
+/// #6122 review: adding a section break after Compare ("A, B | C" with break after A) does not
+/// cause Reject All to shift the restored flag to section A instead of section B.
+#[test]
+fn compare_rejecting_after_adding_section_break_restores_correct_section() {
+    let mut orig = Session::new(Document::from_text("A\nB\nC"));
+    let h_def = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Default Header", CharProps::default()))]);
+    let sec1 = wordcraft_doc::section::SectionProps {
+        title_page: false,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_def), ..Default::default() },
+        ..Default::default()
+    };
+    orig.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().section = Some(Box::new(sec1));
+
+    let mut rev = Session::new(Document::from_text("A\nB\nC"));
+    let h_first = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("First Header", CharProps::default()))]);
+    let h_def_rev = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Default Header", CharProps::default()))]);
+    let rev_sec1 = wordcraft_doc::section::SectionProps {
+        title_page: true,
+        headers: wordcraft_doc::section::HeaderSet { first: Some(h_first), default: Some(h_def_rev), ..Default::default() },
+        ..Default::default()
+    };
+    rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().section = Some(Box::new(rev_sec1));
+
+    let rev_file = TempDocx::new("rev-shift-break");
+    rev_file.save(&rev.doc);
+
+    let mut s = orig;
+    s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+
+    // Now insert a section break after A (at block 0)
+    let new_sec = wordcraft_doc::section::SectionProps::default();
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(new_sec));
+
+    // Three sections now: A (sec 0), B (sec 1), C (sec 2 / last)
+    assert_eq!(s.doc.sections().len(), 3);
+    assert!(s.doc.sections()[1].1.title_page, "Section B has title_page = true");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+
+    assert!(!s.doc.sections()[1].1.title_page, "Reject All restores Section B title_page = false");
+    assert!(!s.doc.sections()[0].1.title_page, "Section A is untouched");
+}
+
+/// #6122 review: hostile/corrupted compare_hf records (usize::MAX index, length cap) are safe.
+#[test]
+fn compare_reject_all_with_hostile_compare_hf_flags_is_safe_and_bounded() {
+    let mut s = Session::new(Document::from_text("Para 1\nPara 2"));
+    let mut title_page = vec![(Some(usize::MAX), false), (Some(1000), false)];
+    for _ in 0..10_000 {
+        title_page.push((Some(0), false));
+    }
+    s.doc.compare_hf = Some(wordcraft_doc::CompareHfFlags { title_page, even_odd: Some(false) });
+
+    // Must not panic on usize::MAX and must finish instantly without scanning 10k times.
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert!(s.doc.compare_hf.is_none());
+}
+
+/// #6122 review: revised header with tracked deletion doesn't keep del revision ids pointing at Compare's ins.
+#[test]
+fn compare_revised_header_with_tracked_deletion_clears_stray_del_ids() {
+    let orig = Session::new(Document::from_text("Section 1 body."));
+
+    let mut rev = Session::new(Document::from_text("Section 1 body."));
+    let mut del_para = Paragraph::with_text("Deleted text in revised header", CharProps::default());
+    del_para.mark.del = Some(999);
+    for r in &mut del_para.runs {
+        r.props.del = Some(999);
+    }
+    let h_rev = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(del_para)]);
+    rev.doc.last_section.headers.default = Some(h_rev);
+
+    let rev_file = TempDocx::new("rev-header-tracked-del");
+    rev_file.save(&rev.doc);
+
+    let mut s = orig;
+    s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+
+    let def_hdr = s.doc.last_section.headers.default.expect("default header was added");
+    let part = s.doc.parts.get(&def_hdr).expect("header part exists");
+    let p = part.blocks[0].as_para().expect("header paragraph");
+    assert!(p.mark.del.is_none(), "mark del id is cleared");
+    assert!(p.runs.iter().all(|r| r.props.del.is_none()), "all run del ids are cleared");
+    assert!(p.mark.ins.is_some(), "marked as Compare insertion");
+}
+
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
 fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
     let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));
