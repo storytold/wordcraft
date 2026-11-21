@@ -338,10 +338,14 @@ fn expand(s: &mut Session, v: &Value, all: bool) -> CmdResult {
         let hidden = ol::hidden(&levels, &view);
         let open: Vec<usize> = (h + 1..end).filter(|j| set.contains(j) && !hidden.get(*j).copied().unwrap_or(true)).collect();
         if let Some(top) = open.iter().filter_map(|j| levels.get(*j)).min().copied() {
-            for j in open {
-                if levels.get(j) == Some(&top) {
-                    open_heading(&levels, &mut set, &mut text, j);
-                }
+            let opening = open.iter().copied().filter(|j| levels.get(*j) == Some(&top));
+            for j in opening.clone() {
+                open_heading(&levels, &mut set, &mut text, j);
+            }
+            // A child opened for its parent can show body text once all headings are visible.
+            // Until then, keep the body text of the opened children hidden.
+            if set.range(h + 1..end).any(|j| has_sub_headings(&levels, *j)) {
+                text.extend(opening.filter(|j| levels.get(j.saturating_add(1)) == Some(&BODY)));
             }
         } else {
             // Every heading under it shows: now its body text does.

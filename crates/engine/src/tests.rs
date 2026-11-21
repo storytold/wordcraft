@@ -11401,6 +11401,29 @@ fn outline_expand_after_show_level_two_opens_leaf_text() {
     assert_eq!(outline_shown(&mut s), vec![0, 2, 4, 6, 7, 8]);
 }
 
+/// #6200: A parent with more headings to reveal keeps the leaf's body hidden.
+#[test]
+fn outline_parent_expand_keeps_leaf_text_hidden_while_headings_remain() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "A\nB\nb\nC\nD\nE\ne"}));
+    for (i, style) in [(0, "Heading1"), (1, "Heading2"), (3, "Heading2"), (4, "Heading3"), (5, "Heading4")] {
+        s.sel = crate::Selection::caret(Pos::body(i, 0));
+        run(&mut s, "para.style", json!({"style": style}));
+    }
+    run(&mut s, "view.outline", json!({}));
+    run(&mut s, "outline.showLevel", json!({"level": 2}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 3]);
+    run(&mut s, "outline.expand", json!({"block": 0}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 3, 4]);
+    run(&mut s, "outline.expand", json!({"block": 0}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 3, 4, 5]);
+
+    run(&mut s, "outline.expand", json!({"block": 1}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5]);
+    run(&mut s, "outline.expand", json!({"block": 0}));
+    assert_eq!(outline_shown(&mut s), vec![0, 1, 2, 3, 4, 5, 6]);
+}
+
 /// #6200: Show Level and Show All Levels reset the hidden text; toggling an open heading whose text
 /// is hidden collapses it and a second toggle opens everything under it.
 #[test]
