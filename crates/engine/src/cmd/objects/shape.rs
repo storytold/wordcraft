@@ -169,3 +169,51 @@ pub(super) fn shape_effects(s: &mut Session, v: &Value) -> CmdResult {
     }
     Ok(json!({"shapes": targets.len(), "effects": serde_json::to_value(last).unwrap_or(Value::Null)}))
 }
+
+pub(super) const NO_SHAPE_TEXT: &str = "select a shape that can hold text first";
+
+/// The selected shape (or Drawing Canvas member) `shape.addText` works on: one that already has
+/// text, or a closed shape without any. Lines and connectors hold no text.
+fn text_shape(s: &Session) -> Option<(Pos, Option<u32>)> {
+    let (pos, obj) = match crate::cmd::canvas::selected_member(s) {
+        Some((pos, _, o)) => (pos, o),
+        None => super::select::object_selection(s)?,
+    };
+    match obj {
+        InlineObject::Shape { story: Some(id), .. } => is_text_box(s, *id).then_some((pos, Some(*id))),
+        InlineObject::Shape { kind, story: None, .. } if !kind.is_open() => Some((pos, None)),
+        _ => None,
+    }
+}
+
+pub(super) fn can_add_text(s: &Session) -> Option<&'static str> {
+    if text_shape(s).is_some() { None } else { Some(NO_SHAPE_TEXT) }
+}
+
+/// `shape.addText` (Word's Add Text / Edit Text): the caret goes to the end of the selected
+/// shape's text, where typing goes. A shape without text first gets an empty story, centred
+/// both ways like a Word shape's, so typing with a shape selected no longer replaces it (#5911).
+pub(super) fn add_text(s: &mut Session, _: &Value) -> CmdResult {
+    let (pos, story) = text_shape(s).ok_or_else(|| CmdError::Disabled(NO_SHAPE_TEXT.into()))?;
+    let id = match story {
+        Some(id) => id,
+        None => {
+            let mut para = wordcraft_doc::Paragraph::new();
+            para.props.align = Some(wordcraft_doc::Align::Center);
+            let id = s.doc.try_add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(para)])?;
+            if let Some(part) = s.doc.parts.get_mut(&id) {
+                part.body.anchor = wordcraft_doc::props::VAlign::Center;
+            }
+            edit_obj(s, &pos, |o| {
+                if let InlineObject::Shape { story, .. } = o {
+                    *story = Some(id);
+                }
+            })?;
+            id
+        }
+    };
+    // A box linked from another shows (and edits) the first box's story.
+    let id = s.doc.text_box_chain(id).and_then(|c| c.first().copied()).unwrap_or(id);
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Part(id)));
+    Ok(json!({"story": id}))
+}
