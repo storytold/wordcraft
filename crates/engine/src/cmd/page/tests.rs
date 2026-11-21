@@ -465,7 +465,9 @@ c1",
     assert!(s.doc.sections()[1].1.start == SectionStart::Continuous);
     // The whole second section, from its first line to its break.
     select(&mut s, (ends[0] + 1, 0), (ends[1], 0));
-    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
+    let result = s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
+    let props: wordcraft_doc::SectionProps = serde_json::from_value(result).unwrap();
+    assert_eq!(props.start, SectionStart::NextPage, "the returned section matches its final boundary");
     assert_eq!(s.doc.sections().len(), 3, "no breaks added");
     assert_eq!(landscape_flags(&s.doc), vec![false, true, false]);
     assert_eq!(s.doc.sections()[1].1.start, SectionStart::NextPage);

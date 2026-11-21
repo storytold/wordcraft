@@ -131,9 +131,9 @@ fn orientation(s: &mut Session, v: &Value) -> CmdResult {
                 }
             }
             selection_to_sections(s, SectionStart::NextPage)?;
-            let turned = with_sect(s, |x| x.set_landscape(land));
+            with_sect(s, |x| x.set_landscape(land))?;
             pages_start_where_orientation_changes(s, None);
-            turned
+            Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         }
         x => Err(CmdError::Params(format!("unknown apply `{x}` (section or selection)"))),
     }
