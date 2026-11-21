@@ -61,11 +61,49 @@ fn import_window(path: &Path, placement: &mut Store) {
     }
 }
 
-/// Loads the words of the custom dictionary file at `path` into the spell checker, and counts them
-/// as loaded settings: the words only the file has are in `Prefs::dictionary`, so the app's
-/// preferences list is the whole dictionary (#3773).
-pub fn load_user_dictionary(settings: &SharedSettings<Prefs>, path: &Path) {
-    let words = wordcraft_proof::load_user_dictionary(path);
+/// Loads the custom dictionary into the spell checker and counts its words as loaded settings:
+/// the words only the file has are in `Prefs::dictionary`, so the app's preferences list is the
+/// whole dictionary (#3773). `default_path` is `custom-dictionary.txt` in the settings folder.
+///
+/// A bound custom dictionary file (`editing.custom_dictionary`, #5840) that reads is the source of
+/// truth and the write target. If it is missing or unreadable, the default file is read for
+/// spelling only and `user_dict_path` stays unset, so later writes never go to the default file
+/// while the setting still names the custom one. With no custom file, the default is read and written.
+pub fn load_user_dictionary(session: &mut wordcraft_engine::Session, settings: &SharedSettings<Prefs>, default_path: PathBuf) {
+    session.default_user_dict_path = Some(default_path.clone());
+    let custom = settings.lock().get().editing.custom_dictionary.as_ref().map(PathBuf::from);
+    let mut words = Vec::new();
+    let mut loaded = false;
+    if let Some(p) = &custom {
+        if p.is_file() {
+            match wordcraft_engine::custom_dict::load_custom_dictionary_replacing(p) {
+                Ok(w) => {
+                    words = w;
+                    session.user_dict_path = Some(p.clone());
+                    loaded = true;
+                }
+                Err(e) => log::warn!("custom dictionary: failed to load '{}': {e}", p.display()),
+            }
+        } else {
+            log::warn!("custom dictionary: '{}' is not a regular file", p.display());
+        }
+    }
+    if !loaded {
+        if default_path.is_file() {
+            if custom.is_some() {
+                match wordcraft_engine::custom_dict::load_custom_dictionary_replacing(&default_path) {
+                    Ok(w) => words = w,
+                    Err(e) => log::warn!("default dictionary: failed to load '{}': {e}", default_path.display()),
+                }
+            } else {
+                words = wordcraft_proof::load_user_dictionary(&default_path);
+                session.user_dict_path = Some(default_path);
+            }
+        } else if custom.is_none() {
+            // A missing default file is not a replacement: keep any words restored from preferences.
+            session.user_dict_path = Some(default_path);
+        }
+    }
     settings.lock().update(|prefs| {
         for word in words {
             if !prefs.dictionary.contains(&word) {
@@ -112,7 +150,7 @@ mod tests {
         std::fs::write(&dict, "zqxinfile\n").unwrap();
         let (settings, report) = open_in(Some(dir.path().to_path_buf()), &mut Store::in_memory());
         assert!(matches!(report.source, Source::Legacy(_)), "ui.json is imported: {:?}", report.source);
-        load_user_dictionary(&settings, &dict);
+        load_user_dictionary(&mut wordcraft_engine::Session::new(wordcraft_doc::Document::new()), &settings, dict.clone());
         let words = settings.lock().get().dictionary.clone();
         for word in ["zqxinjson", "zqxinfile"] {
             assert!(words.iter().any(|w| w == word), "{word}: {words:?}");
@@ -165,5 +203,75 @@ mod tests {
         let now = reloaded(dir.path());
         assert_eq!(now.ribbon.qat, None, "A's old copy of the toolbar does not bring it back");
         assert!(now.dictionary.iter().any(|w| w == "zqxtoolbar"), "A's own change is kept");
+    }
+
+    /// The tests that bind a custom dictionary replace the spell checker's words, which every
+    /// test shares: one at a time.
+    static CUSTOM_DICT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// #5840: while the setting names a custom file that is missing, the default file is read
+    /// for spelling only. Nothing becomes the write target, so Add to Dictionary never moves the
+    /// person's words into `custom-dictionary.txt` behind the setting's back.
+    #[test]
+    fn a_missing_custom_dictionary_leaves_no_write_target() {
+        let _one = CUSTOM_DICT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("custom-dictionary.txt");
+        std::fs::write(&default, "zqxfallbackword\n").unwrap();
+        let (settings, _) = open_in(Some(dir.path().to_path_buf()), &mut Store::in_memory());
+        let missing = dir.path().join("gone").join("CUSTOM.DIC");
+        settings.lock().update(|p| p.editing.custom_dictionary = Some(missing.to_string_lossy().into_owned()));
+        let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        load_user_dictionary(&mut session, &settings, default.clone());
+        assert_eq!(session.user_dict_path, None, "no write target while the custom file is missing");
+        assert_eq!(session.default_user_dict_path.as_deref(), Some(default.as_path()));
+        assert!(wordcraft_engine::proof::user_dictionary().iter().any(|w| w == "zqxfallbackword"), "the default file still spells");
+        wordcraft_engine::proof::remove_word("zqxfallbackword");
+    }
+
+    /// #5840: a custom file that is set but missing, with no default file either: nothing is a
+    /// write target (the `custom.is_none()` arm does not claim the default), and nothing panics.
+    #[test]
+    fn a_missing_custom_and_default_dictionary_leave_no_write_target() {
+        let _one = CUSTOM_DICT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("custom-dictionary.txt");
+        let (settings, _) = open_in(Some(dir.path().to_path_buf()), &mut Store::in_memory());
+        let missing = dir.path().join("gone").join("CUSTOM.DIC");
+        settings.lock().update(|p| p.editing.custom_dictionary = Some(missing.to_string_lossy().into_owned()));
+        let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        load_user_dictionary(&mut session, &settings, default.clone());
+        assert_eq!(session.user_dict_path, None, "no write target while the custom file is missing");
+        assert_eq!(session.default_user_dict_path.as_deref(), Some(default.as_path()));
+        assert_eq!(settings.lock().get().editing.custom_dictionary.as_deref(), Some(&*missing.to_string_lossy()), "the setting is kept");
+    }
+
+    /// #5840: with no custom file set, the default file is the write target, whether or not it
+    /// exists yet; a readable custom file is the write target when it is set.
+    #[test]
+    fn the_write_target_is_the_default_file_unless_a_custom_one_reads() {
+        let _one = CUSTOM_DICT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let default = dir.path().join("custom-dictionary.txt");
+        let (settings, _) = open_in(Some(dir.path().to_path_buf()), &mut Store::in_memory());
+        let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        load_user_dictionary(&mut session, &settings, default.clone());
+        assert_eq!(session.user_dict_path.as_deref(), Some(default.as_path()), "a missing default file is still the target");
+
+        std::fs::write(&default, "zqxdefaultword\n").unwrap();
+        let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        load_user_dictionary(&mut session, &settings, default.clone());
+        assert_eq!(session.user_dict_path.as_deref(), Some(default.as_path()));
+
+        let custom = dir.path().join("CUSTOM.DIC");
+        std::fs::write(&custom, "zqxcustomword\r\n").unwrap();
+        settings.lock().update(|p| p.editing.custom_dictionary = Some(custom.to_string_lossy().into_owned()));
+        let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        load_user_dictionary(&mut session, &settings, default.clone());
+        assert_eq!(session.user_dict_path.as_deref(), Some(custom.as_path()), "a readable custom file is the target");
+        let words = wordcraft_engine::proof::user_dictionary();
+        assert!(words.iter().any(|w| w == "zqxcustomword") && !words.iter().any(|w| w == "zqxdefaultword"), "{words:?}");
+        wordcraft_engine::proof::remove_word("zqxcustomword");
+        wordcraft_engine::proof::remove_word("zqxdefaultword");
     }
 }

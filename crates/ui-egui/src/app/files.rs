@@ -674,7 +674,7 @@ impl WordApp {
         let name = file.path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| file.name.clone());
         let lower = name.to_ascii_lowercase();
         let data = file.bytes.as_ref().map(|b| wordcraft_engine::cmd::insert::base64_encode(b.as_ref()));
-        let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lower.ends_with(e));
+        let img = file_dialogs::is_picture_name(&name);
         // Any recipient file ends the pending picker request, so a later .txt drop opens normally.
         let asked = std::mem::take(&mut self.recipient_list_pending);
         let list = lower.ends_with(".csv") || lower.ends_with(".tsv") || (lower.ends_with(".txt") && asked);
