@@ -765,28 +765,38 @@ fn rtl_ribbon_edge_cue_shows_left_chevron_when_overflowing() {
 
     let clipboard_label = crate::i18n::tr(he, "Clipboard");
     let editor_label = crate::i18n::tr(he, "Editor");
+    let catalogs = crate::i18n::catalogs();
+    let scroll_left_label = catalogs.tid(he.craft_lang(), "ribbon.scrollLeft", "Scroll left");
+    let scroll_right_label = catalogs.tid(he.craft_lang(), "ribbon.scrollRight", "Scroll right");
     let button_rect = |h: &Harness, label: &str| h.get(By::new().role(egui::accesskit::Role::Button).label(label)).rect();
     let clipboard_before = button_rect(&h, clipboard_label);
     let editor_before = button_rect(&h, editor_label);
     assert!(clipboard_before.left() > width * 0.5 && clipboard_before.right() <= width, "RTL Home tab starts on the right: {clipboard_before:?}");
     assert!(editor_before.left() < 0.0, "trailing RTL groups overflow off the physical left edge initially: {editor_before:?}");
+    assert!(
+        h.query(By::new().role(egui::accesskit::Role::Button).label(scroll_left_label)).is_some(),
+        "left edge overflow chevron must show when RTL groups overflow off the physical left edge"
+    );
+    assert!(
+        h.query(By::new().role(egui::accesskit::Role::Button).label(scroll_right_label)).is_none(),
+        "right edge overflow chevron must not show at the RTL start edge"
+    );
 
-    // Scrolling horizontally toward the left overflow shifts trailing RTL groups into view.
-    h.event(egui::Event::PointerMoved(clipboard_before.center()));
-    crate::test_harness::frames(&mut h, 1);
-    for _ in 0..8 {
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(80.0, 0.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: Default::default(),
-            source: egui::MouseWheelSource::Unknown,
-        });
-        crate::test_harness::frames(&mut h, 2);
+    // Activating the left overflow chevron steps trailing RTL groups into the viewport.
+    for _ in 0..12 {
+        let current = button_rect(&h, editor_label);
+        if current.left() >= 0.0 {
+            break;
+        }
+        let Some(cue) = h.query(By::new().role(egui::accesskit::Role::Button).label(scroll_left_label)) else {
+            break;
+        };
+        cue.click();
+        crate::test_harness::frames(&mut h, 4);
     }
     let editor_after = button_rect(&h, editor_label);
     assert!(
-        editor_after.left() > editor_before.left(),
-        "horizontal scroll toward the left overflow must shift RTL groups rightward: {editor_before:?} -> {editor_after:?}"
+        editor_after.left() > editor_before.left() && editor_after.left() >= 0.0 && editor_after.right() <= width,
+        "activating the left overflow chevron must bring the trailing RTL Editor group into view ({width}px): {editor_before:?} -> {editor_after:?}"
     );
 }
