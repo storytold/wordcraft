@@ -368,15 +368,24 @@ fn landscape_flags(d: &wordcraft_doc::Document) -> Vec<bool> {
     d.sections().iter().map(|(_, x)| x.landscape).collect()
 }
 
-/// #6421: Orientation with text selected turns only that text, as in Word: next-page section
-/// breaks go before and after it. It used to turn the whole one-section document.
+#[test]
+fn orientation_defaults_to_existing_sections_with_body_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("First\nMiddle paragraph\nLast"));
+    select(&mut s, (1, 0), (1, 6));
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    assert_eq!(s.selected_text(), "Middle");
+    assert_eq!(landscape_flags(&s.doc), vec![true]);
+    assert_eq!(s.layout().pages.iter().map(|p| p.w > p.h).collect::<Vec<_>>(), vec![true]);
+}
+
+/// #6421: Explicit selected-text orientation puts next-page section breaks around the text.
 #[test]
 fn orientation_applies_to_the_selected_text() {
     let five = || Session::new(wordcraft_doc::Document::from_text("p1\np2\nalpha beta gamma\np4\np5"));
     let mut s = five();
     select(&mut s, (2, 0), (3, 0));
     let whole = s.selected_text();
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", ""]), false), (strs(&["alpha beta gamma", ""]), true), (strs(&["p4", "p5"]), false)]);
     assert!(s.doc.sections().iter().skip(1).all(|(_, x)| x.start == SectionStart::NextPage));
     assert_eq!(s.selected_text(), whole, "the paragraph stays selected");
@@ -386,36 +395,36 @@ fn orientation_applies_to_the_selected_text() {
     assert!(back.sections().iter().skip(1).all(|(_, x)| x.start == SectionStart::NextPage));
     // The same text again: nothing changes, no more breaks, no undo step.
     let depth = s.undo_depth();
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     assert_eq!((s.doc.sections().len(), s.undo_depth()), (3, depth));
     // And back to portrait: the section stays, turned.
-    s.run("layout.orientation", &json!({"value": "portrait"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "portrait", "apply": "selection"})).unwrap();
     assert_eq!(landscape_flags(&s.doc), vec![false, false, false]);
 
     // One undo step takes the breaks and the orientation away.
     let mut s = five();
     select(&mut s, (2, 0), (3, 0));
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", "alpha beta gamma", "p4", "p5"]), false)]);
 
     // Words inside a paragraph: the breaks split it there.
     let mut s = five();
     select(&mut s, (2, 10), (2, 6));
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", "alpha "]), false), (strs(&["beta"]), true), (strs(&[" gamma", "p4", "p5"]), false)]);
     assert_eq!(s.selected_text(), "beta");
 
     // Without a value the selected text's own orientation flips.
     let mut s = five();
     select(&mut s, (2, 0), (3, 0));
-    s.run("layout.orientation", &json!({})).unwrap();
+    s.run("layout.orientation", &json!({"apply": "selection"})).unwrap();
     assert_eq!(landscape_flags(&s.doc), vec![false, true, false]);
 
     // Select All: the whole document, no breaks.
     let mut s = five();
     s.run("select.all", &json!({})).unwrap();
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     assert_eq!(orientations_of(&s), vec![(strs(&["p1", "p2", "alpha beta gamma", "p4", "p5"]), true)]);
 }
 
@@ -430,7 +439,7 @@ p4
 p5",
     ));
     select(&mut s, (2, 0), (3, 0));
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     let l = s.layout();
     let shape: Vec<bool> = l.pages.iter().map(|pg| pg.w > pg.h).collect();
     assert_eq!(shape, vec![false, true, false]);
@@ -456,12 +465,12 @@ c1",
     assert!(s.doc.sections()[1].1.start == SectionStart::Continuous);
     // The whole second section, from its first line to its break.
     select(&mut s, (ends[0] + 1, 0), (ends[1], 0));
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     assert_eq!(s.doc.sections().len(), 3, "no breaks added");
     assert_eq!(landscape_flags(&s.doc), vec![false, true, false]);
     assert_eq!(s.doc.sections()[1].1.start, SectionStart::NextPage);
     // Back to portrait: the break stays, the section stays on its own page.
-    s.run("layout.orientation", &json!({"value": "portrait"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "portrait", "apply": "selection"})).unwrap();
     assert_eq!(landscape_flags(&s.doc), vec![false, false, false]);
 }
 
@@ -520,7 +529,7 @@ b2",
     let next = s.doc.sections().first().map_or(0, |(e, _)| e + 1);
     select(&mut s, (0, 1), (next, 0));
     let (sections, depth) = (s.doc.sections().len(), s.undo_depth());
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     assert_eq!((s.doc.sections().len(), s.undo_depth()), (sections, depth), "already landscape: nothing changes");
     assert_eq!(landscape_flags(&s.doc), vec![true, false]);
 
@@ -528,7 +537,7 @@ b2",
     // section alone.
     let mut s = two();
     select(&mut s, (0, 1), (next, 0));
-    s.run("layout.orientation", &json!({})).unwrap();
+    s.run("layout.orientation", &json!({"apply": "selection"})).unwrap();
     assert_eq!(landscape_flags(&s.doc), vec![true, false, false]);
     assert_eq!(s.doc.sections().len(), 3, "the text from the selection start turned portrait");
 }
@@ -538,7 +547,9 @@ b2",
 /// turned text.
 #[test]
 fn orientation_and_columns_for_selected_text_do_not_restart_page_numbers() {
-    for (command, params) in [("layout.orientation", json!({"value": "landscape"})), ("layout.columns", json!({"count": 2, "apply": "selection"}))] {
+    for (command, params) in
+        [("layout.orientation", json!({"value": "landscape", "apply": "selection"})), ("layout.columns", json!({"count": 2, "apply": "selection"}))]
+    {
         let mut s = Session::new(wordcraft_doc::Document::from_text("p1\np2\nalpha beta gamma\np4\np5"));
         s.run("layout.pageNumberFormat", &json!({"start": 5})).unwrap();
         select(&mut s, (2, 0), (3, 0));
@@ -556,7 +567,7 @@ p5",
     ));
     s.run("layout.pageNumberFormat", &json!({"start": 5})).unwrap();
     select(&mut s, (0, 0), (1, 2));
-    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape", "apply": "selection"})).unwrap();
     let starts: Vec<Option<u32>> = s.doc.sections().iter().map(|(_, x)| x.page_num_start).collect();
     assert_eq!(starts, vec![Some(5), None]);
 }

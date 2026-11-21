@@ -17,7 +17,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool}"#,
         ),
         CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", orientation)
-            .params(r#"{"value"?: "portrait|landscape" (toggles when left out), "apply"?: "section|selection"} (default: selection when text is selected in the main text, outside tables: next-page section breaks go before and after it and only that text turns, as in Word (#6421); else the section(s) of the selection)"#),
+            .params(r#"{"value"?: "portrait|landscape" (toggles when left out), "apply"?: "section|selection"} (default: section, which turns existing sections. Selection turns eligible main text between next-page section breaks (#6421))"#),
         CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
@@ -93,13 +93,11 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Orientation: with text selected in the main text only that text turns (next-page section
-/// breaks around it), otherwise the section(s) of the selection (#6421). `apply: "section"`
-/// turns existing sections without splitting them, as Page Setup's OK does.
+/// Orientation turns existing sections by default. Use `apply: "selection"` to turn
+/// only eligible body text between next-page section breaks (#6421).
 fn orientation(s: &mut Session, v: &Value) -> CmdResult {
     let sectionable = selection_sectionable(s);
-    let default = if sectionable { "selection" } else { "section" };
-    let apply = p::str(v, "apply").unwrap_or(default);
+    let apply = p::str(v, "apply").unwrap_or("section");
     let land = match p::str(v, "value") {
         Some("landscape") => true,
         Some("portrait") => false,
