@@ -342,6 +342,47 @@ fn odt_round_trip() {
     assert_eq!(back.core.creator, "Ada Writer");
 }
 
+/// A flat ODT on A4 with a header and a footer, their bands' minimum heights (`fo:min-height`)
+/// stated, and two body paragraphs.
+fn flat_odt_with_bands(header: &str, footer: &str) -> Vec<u8> {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.text">
+ <office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="1.5cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="{header}" fo:margin-bottom="0.25cm"/></style:header-style><style:footer-style><style:header-footer-properties fo:min-height="{footer}" fo:margin-top="0.5cm"/></style:footer-style></style:page-layout></office:automatic-styles>
+ <office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer></style:master-page></office:master-styles>
+ <office:body><office:text><text:p>a</text:p><text:p>b</text:p></office:text></office:body>
+</office:document>"#
+    )
+    .into_bytes()
+}
+
+#[test]
+fn a_header_band_as_tall_as_the_page_leaves_the_text_room() {
+    // #5806: a header's min-height raised to the page height (to fit a full-page picture) made the
+    // text's top margin the page's bottom edge, so each page drew one line off the paper and the
+    // rest of the text was lost. The bands grow the margins only while the text keeps half an
+    // inch, as Page Setup's margins must.
+    let cm = |v: f32| v * 72.0 / 2.54;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let room = |header: &str, footer: &str| {
+        let doc = import("fodt", &flat_odt_with_bands(header, footer)).unwrap().unwrap();
+        let s = doc.last_section.clone();
+        (s.page_h - s.margin_top - s.margin_bottom, s)
+    };
+    let (left, s) = room("29.7cm", "1cm");
+    assert!(left >= 36.0 - 0.05, "text room {left}: {s:?}");
+    // The header still starts at the page margin; the text right after as much band as fits.
+    assert!(near(s.header, cm(2.0)) && near(s.margin_top, s.page_h - cm(3.0) - 36.0), "{s:?}");
+    // A footer as tall as the page leaves it too, and so do both at once.
+    let (left, s) = room("0.5cm", "29.7cm");
+    assert!(left >= 36.0 - 0.05 && near(s.margin_top, cm(2.75)), "text room {left}: {s:?}");
+    let (left, s) = room("29.7cm", "29.7cm");
+    assert!(left >= 36.0 - 0.05, "text room {left}: {s:?}");
+    // Bands that fit are as stated.
+    let (_, s) = room("0.5cm", "1cm");
+    assert!(near(s.margin_top, cm(2.75)) && near(s.margin_bottom, cm(3.0)), "{s:?}");
+}
+
 #[test]
 fn latex_round_trip() {
     check_round_trip("tex", true);
