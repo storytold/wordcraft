@@ -24,7 +24,7 @@ pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
 use lists::{list, restart_numbering};
 pub(crate) use outline::{ensure_heading_style, set_heading};
 use outline::{move_paras, outline_step, sort};
-use styles::{apply_style, apply_styles, create_style, delete_style, modify_style, set_visibility, style_id, update_to_match};
+use styles::{apply_paragraph_style, apply_style, apply_styles, create_style, delete_style, modify_style, set_visibility, style_id, update_to_match};
 pub use tabs_borders::border_sides;
 use tabs_borders::{borders, tabs};
 use tools::{
@@ -160,10 +160,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key(super::mac_or("Ctrl+Q", "Mod+Q")),
         CommandSpec::new("para.style", "Apply Style", "Home › Styles", apply_style).params(r#"{"style": string (name or id)}"#),
-        CommandSpec::new("para.normal", "Normal Style", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Normal"}))).key("Mod+Shift+N"),
-        CommandSpec::new("para.heading1", "Heading 1", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading1"}))).key("Mod+Alt+1"),
-        CommandSpec::new("para.heading2", "Heading 2", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading2"}))).key("Mod+Alt+2"),
-        CommandSpec::new("para.heading3", "Heading 3", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading3"}))).key("Mod+Alt+3"),
+        CommandSpec::new("para.normal", "Normal Style", "Home › Styles", |s, _| apply_paragraph_style(s, "Normal")).key("Mod+Shift+N"),
+        CommandSpec::new("para.heading1", "Heading 1", "Home › Styles", |s, _| apply_paragraph_style(s, "Heading1")).key("Mod+Alt+1"),
+        CommandSpec::new("para.heading2", "Heading 2", "Home › Styles", |s, _| apply_paragraph_style(s, "Heading2")).key("Mod+Alt+2"),
+        CommandSpec::new("para.heading3", "Heading 3", "Home › Styles", |s, _| apply_paragraph_style(s, "Heading3")).key("Mod+Alt+3"),
         CommandSpec::new("para.bullets", "Bullets", "Home › Paragraph", |s, v| list(s, v, ListKind::Bullet)).params(r#"{"kind"?: "bullet" | single char, "off"?: bool}"#).key("Mod+Shift+L"),
         CommandSpec::new("para.numbering", "Numbering", "Home › Paragraph", |s, v| list(s, v, ListKind::Numbered))
             .params(r#"{"kind"?: "numbered|numberedParen|upperLetter|lowerLetter|lowerRoman|outline", "off"?: bool}"#),

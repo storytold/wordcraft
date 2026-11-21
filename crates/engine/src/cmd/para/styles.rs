@@ -1,6 +1,6 @@
 use super::format::fmt;
 use super::lists::touch_all;
-use super::{CharProps, CmdError, CmdResult, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
+use super::{CharProps, CmdError, CmdResult, ParaProps, Pos, Session, Style, StyleKind, Value, json, p, sel_result};
 use std::sync::Arc;
 
 pub(super) fn style_id(s: &Session, name: &str) -> Result<String, CmdError> {
@@ -23,13 +23,33 @@ pub(super) fn apply_styles(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
-    let name = p::req_str(v, "style")?;
+    apply_named_style(s, p::req_str(v, "style")?, true)
+}
+
+/// The dedicated paragraph style shortcuts always target paragraphs.
+pub(super) fn apply_paragraph_style(s: &mut Session, name: &str) -> CmdResult {
+    apply_named_style(s, name, false)
+}
+
+fn apply_named_style(s: &mut Session, name: &str, use_linked_char: bool) -> CmdResult {
     let id = style_id(s, name)?;
-    let kind = s.doc.styles.get(&id).map(|x| x.kind).unwrap_or_default();
+    let style = s.doc.styles.get(&id);
+    let kind = style.map(|x| x.kind).unwrap_or_default();
     if kind == StyleKind::Character {
         return crate::cmd::format::apply(s, &|c| c.style = Some(id.clone()));
     }
     let (a, b) = s.sel.ordered();
+    if use_linked_char
+        && kind == StyleKind::Paragraph
+        && let Some(linked) = style.and_then(|st| st.linked.as_deref()).and_then(|id| s.doc.styles.get(id))
+        && linked.kind == StyleKind::Character
+        && partial_text_selection(s, &a, &b)
+    {
+        let id = linked.id.clone();
+        // The outer command checks the requested style. Check the character style it will apply as well.
+        crate::cmd::protect::check_before(s, "format.charStyle", &json!({"style": id}))?;
+        return crate::cmd::format::apply(s, &|c| c.style = Some(id.clone()));
+    }
     // A style linked to a list level (a heading in a numbered-headings list) brings its number.
     let numbered = s.doc.styles.resolve_para(&ParaProps { style: Some(id.clone()), ..Default::default() }).numbering.is_some();
     fmt(s, &|p| {
@@ -65,6 +85,17 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.pending = None;
     sel_result(s)
+}
+
+/// A nonempty stream of text within one paragraph, short of selecting all its text.
+fn partial_text_selection(s: &Session, a: &Pos, b: &Pos) -> bool {
+    a.story == b.story
+        && a.path == b.path
+        && a.off < b.off
+        && s.column_segments().is_none()
+        && s.cell_range().is_none()
+        && crate::cmd::objects::object_selection(s).is_none()
+        && s.doc.para_at(a).is_some_and(|p| b.off <= p.len() && (a.off > 0 || b.off < p.len()))
 }
 
 pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
