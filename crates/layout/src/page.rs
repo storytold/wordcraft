@@ -19,6 +19,10 @@ pub(crate) struct PageBuilder<'a> {
     /// The body's top on this page: `top` moves down below the text when a continuous section
     /// starts mid-page.
     pub(crate) page_top: f32,
+    /// The body paragraphs (top-level blocks) placed in text frames (#2406): their lines sit where
+    /// their frame puts them, out of the flow, so the text's floor ([`Self::body_floor`]) leaves
+    /// them out; they still make a page hold body content.
+    pub(crate) framed: std::collections::BTreeSet<u32>,
     pub(crate) bottom: f32,
     pub(crate) number: u32,
     pub(crate) web: bool,
@@ -129,13 +133,30 @@ impl PageBuilder<'_> {
             Some(first) => self.seps.sep_h(first.cont) + notes.iter().map(|n| n.h).sum::<f32>(),
         }
     }
-    /// The lowest bottom of the body text and tables on the current page.
+    /// Whether body text or a table is on the current page already (a text frame's lines are,
+    /// though they leave `y` at the top).
+    pub(crate) fn has_body_content(&self) -> bool {
+        self.pages.last().is_some_and(|pg| {
+            pg.items
+                .iter()
+                .skip(self.page_items_start)
+                .any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, .. } | Placed::Cell { story: StoryRef::Body, .. }))
+        })
+    }
+    /// The lowest bottom of the body text and tables on the current page. A text frame's lines
+    /// aren't in the flow (a frame at the foot of the page doesn't push the footnotes down, #2406
+    /// review).
     pub(crate) fn body_floor(&self) -> f32 {
         let Some(pg) = self.pages.last() else { return self.top };
+        let framed = |path: &wordcraft_doc::Path| matches!(path.0.as_slice(), [b] if self.framed.contains(b));
         pg.items
             .iter()
             .skip(self.page_items_start)
-            .filter(|it| matches!(it, Placed::Lines { story: StoryRef::Body, .. } | Placed::Cell { story: StoryRef::Body, .. }))
+            .filter(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, .. } => !framed(path),
+                Placed::Cell { story: StoryRef::Body, .. } => true,
+                _ => false,
+            })
             .map(|it| v_span(it).1)
             .fold(self.top, f32::max)
     }

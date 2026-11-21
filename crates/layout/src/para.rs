@@ -39,6 +39,7 @@ pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
 pub(crate) use lines::takes_room;
+pub(crate) use lines::{FRAME_MIN_SPAN, MIN_SPAN};
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
 #[cfg(test)]
