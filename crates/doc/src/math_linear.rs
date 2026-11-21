@@ -760,3 +760,6 @@ pub fn map_args(n: MNode, f: &dyn Fn(Arg) -> Arg) -> MNode {
         MNode::Phant { show, zero_wid, zero_asc, zero_desc, e } => MNode::Phant { show, zero_wid, zero_asc, zero_desc, e: f(e) },
     }
 }
+
+#[cfg(test)]
+mod tests;
