@@ -275,7 +275,10 @@ fn hovering_a_bar_member_previews_its_command() {
         assert_eq!((&h.state().session.doc, &h.state().session.sel, h.state().session.rev()), (&doc, &sel, rev), "{member_kind:?}");
         assert_eq!(format_state(&mut h).get("size").cloned(), size);
 
-        hover_at(&mut h, pos2(5.0, 5.0));
+        {
+            let near = just_above_the_bar(&h);
+            hover_at(&mut h, near);
+        }
         assert_eq!(h.state().canvas.command_previewed, None, "{member_kind:?}: moving off the bar clears the preview");
     }
 }
@@ -308,7 +311,10 @@ fn the_page_holds_its_place_while_a_preview_is_shown() {
         crate::test_harness::frame(&mut h);
     }
     assert_eq!(h.state().canvas.view.offset, held, "the preview does not move the page");
-    hover_at(&mut h, pos2(5.0, 5.0));
+    {
+        let near = just_above_the_bar(&h);
+        hover_at(&mut h, near);
+    }
     assert_eq!(h.state().canvas.preview_scroll, None, "the hold ends with the preview");
 }
 
@@ -612,7 +618,10 @@ fn a_clicked_member_holds_its_preview_until_the_pointer_leaves() {
         assert!(h.state().canvas.command_previewed.is_some(), "{label}: hovering previews");
         click_at(&mut h, at);
         assert_eq!(h.state().canvas.command_previewed, None, "{label}: no preview after the click while the pointer stays");
-        hover_at(&mut h, pos2(5.0, 5.0));
+        {
+            let near = just_above_the_bar(&h);
+            hover_at(&mut h, near);
+        }
         hover_at(&mut h, at);
         let previewed = h.state().canvas.command_previewed.clone();
         assert!(previewed.is_some(), "{label}: coming back previews again");
@@ -621,4 +630,35 @@ fn a_clicked_member_holds_its_preview_until_the_pointer_leaves() {
             assert_ne!(crate::canvas::page_doc(h.state()), &h.state().session.doc, "{label}: the page shows the toggled-back state");
         }
     }
+}
+
+/// Off every button but near enough that the bar stays (moving far away puts it away).
+fn just_above_the_bar(h: &H) -> egui::Pos2 {
+    let anchor = h.state().canvas.mini_anchor.expect("the bar is anchored");
+    pos2(anchor.center().x, anchor.top() - 8.0)
+}
+
+/// The selection bar's group node, while it is up.
+fn bar_group(h: &H) -> Option<egui::Rect> {
+    h.query_all_by_role(Role::Group).filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting")).map(|n| n.rect()).next()
+}
+
+/// The bar fades as the pointer moves away from where it came closest, and at full distance it
+/// is put away for this selection, as in Word; a new selection brings it back.
+#[test]
+fn the_bar_fades_as_the_pointer_moves_away_and_goes_for_this_selection() {
+    let mut h = bar_over("quick");
+    let Some(bar) = bar_group(&h) else { panic!("the bar is up") };
+    // Near the bar it stays; the pointer came closest here.
+    hover_at(&mut h, bar.center_bottom() + Vec2::new(0.0, 10.0));
+    assert!(bar_group(&h).is_some(), "the bar stays while the pointer is near");
+    // Far away it is put away for this selection, and coming back doesn't bring it back.
+    hover_at(&mut h, bar.center_bottom() + Vec2::new(0.0, 400.0));
+    assert!(bar_group(&h).is_none(), "the bar goes once the pointer has moved away");
+    hover_at(&mut h, bar.center());
+    assert!(bar_group(&h).is_none(), "it stays away for this selection");
+    // A new selection gets it again.
+    h.state_mut().run("select.text", json!({"text": "brown"})).unwrap();
+    steps(&mut h);
+    assert!(bar_group(&h).is_some(), "a new selection shows the bar");
 }

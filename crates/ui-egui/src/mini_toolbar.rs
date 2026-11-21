@@ -45,6 +45,37 @@ pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rec
     first
 }
 
+/// Past this distance from where the pointer came closest to the bar, it starts to fade…
+const FADE_FROM: f32 = 24.0;
+/// …and here it is gone, put away for this selection, as in Word.
+const FADE_TO: f32 = 144.0;
+
+/// The bar's opacity with the pointer at `pointer` (None: outside the window or in one of the
+/// bar's lists). Measured from the bar's rect `bar` — wider than its anchor — from where the
+/// pointer came closest since the selection was made, so a drag-select that ends far from the bar
+/// doesn't put it away before the pointer moves. Zero puts the bar away until the selection
+/// changes, as in Word.
+fn fade(app: &mut WordApp, anchor: Rect, bar: Rect, pointer: Option<egui::Pos2>) -> f32 {
+    let Some(p) = pointer else {
+        // Back from outside the window or from one of the bar's lists, it measures afresh.
+        app.canvas.mini_closest = None;
+        return 1.0;
+    };
+    let sel = &app.session.sel;
+    let d = bar.distance_to_pos(p);
+    // A bar that moved (the document scrolled) measures afresh, so only the pointer fades it.
+    let closest = match &app.canvas.mini_closest {
+        Some((s, at, _, c)) if s == sel && *at == anchor => c.min(d),
+        _ => d,
+    };
+    app.canvas.mini_closest = Some((sel.clone(), anchor, bar, closest));
+    let opacity = (1.0 - (d - closest - FADE_FROM) / (FADE_TO - FADE_FROM)).clamp(0.0, 1.0);
+    if opacity == 0.0 {
+        app.canvas.mini_dismissed = Some(sel.clone());
+    }
+    opacity
+}
+
 /// Whether the bar may be shown for the current app state.
 pub fn visible(app: &WordApp) -> bool {
     // Reading Mode permits text selection and copying, but never formatting controls.
@@ -91,6 +122,8 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, body: &PageBody<'_>) {
         app.canvas.mini_dismissed = None;
     }
     if !app.ui.mini_toolbar || !visible(app) {
+        // A hidden frame ends the measurement: the bar coming back measures from where the pointer is then.
+        app.canvas.mini_closest = None;
         app.canvas.list_preview = None;
         if app.canvas.command_previewed.is_some() {
             ui.ctx().request_repaint();
@@ -98,11 +131,33 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, body: &PageBody<'_>) {
         return;
     }
     let Some(anchor) = app.canvas.mini_anchor else { return };
+    // In one of the bar's lists (a popup, above the bar's layer) the pointer is away from the bar.
+    let in_popup = |p: egui::Pos2| ui.ctx().layer_id_at(p).is_some_and(|l| l.order > egui::Order::Middle);
+    let pointer = ui.ctx().pointer_hover_pos().filter(|p| !in_popup(*p));
+    // The fade measures from the bar itself, not its anchor: the bar is wider than the selection.
+    // The rect the bar showed last frame stands in until this frame's bar is shown.
+    let bar = match &app.canvas.mini_closest {
+        Some((s, at, b, _)) if *s == app.session.sel && *at == anchor => *b,
+        _ => anchor,
+    };
+    let opacity = fade(app, anchor, bar, pointer);
+    if opacity == 0.0 {
+        return;
+    }
     let points: Vec<_> = [anchor.left_top(), anchor.right_top(), anchor.right_bottom(), anchor.left_bottom()]
         .into_iter()
         .map(|corner| body.view.to_doc(corner))
         .collect();
-    let shown = TaskBar::selection(tl!("Formatting").to_string(), &points).show(ui, body.view.rect, |ui, _cx| members(app, ui, true));
+    let shown = TaskBar::selection(tl!("Formatting").to_string(), &points).show(ui, body.view.rect, |ui, _cx| {
+        ui.multiply_opacity(opacity);
+        members(app, ui, true);
+    });
+    // Next frame measures from where this frame's bar actually showed.
+    if let Some((s, _, b, _)) = &mut app.canvas.mini_closest
+        && *s == app.session.sel
+    {
+        *b = shown.output.rect;
+    }
     if shown.output.closed {
         app.canvas.mini_dismissed = Some(app.session.sel.clone());
     }

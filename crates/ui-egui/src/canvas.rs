@@ -191,6 +191,10 @@ pub struct CanvasState {
     /// The selection the mini toolbar was put away for by a click outside the document (the
     /// ribbon, a pane, the status bar); it comes back when the selection changes.
     pub mini_dismissed: Option<wordcraft_engine::Selection>,
+    /// Where the pointer came closest to the mini toolbar since the selection was made, with the
+    /// selection and the bar's rect then: the fade measures from there (mini_toolbar::fade).
+    pub mini_closest: Option<(wordcraft_engine::Selection, Rect, Rect, f32)>,
+    // (selection, its anchor, the bar's rect as last shown, how close the pointer came)
     /// Crop mode (Picture Format › Crop) is on for the picture here (`crop`).
     pub(crate) crop: Option<wordcraft_doc::Pos>,
     /// An ink stroke being drawn with a pen (Draw tab).
@@ -423,6 +427,7 @@ impl Default for CanvasState {
             context_menu_at: None,
             mini_anchor: None,
             mini_dismissed: None,
+            mini_closest: None,
             crop: None,
             ink: None,
             erasing: None,
@@ -970,6 +975,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         && start.button == craft::behavior::PointerButton::Primary
     {
         app.canvas.mini_dismissed = None;
+        app.canvas.mini_closest = None;
     }
     balloons::balloons(app, ui, &out, layout);
     rulers::page_rulers(app, ui, &out, layout);
