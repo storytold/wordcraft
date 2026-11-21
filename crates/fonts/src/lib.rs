@@ -25,10 +25,7 @@ pub use kurbo::BezPath;
 pub use script::{fallback_rank, is_emoji, joins_cursively, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-pub use ui_fallback::{
-    SystemUiFont, is_cjk, system_arabic_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk,
-    ui_uncovered_cjk,
-};
+pub use ui_fallback::is_cjk;
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).
@@ -53,65 +50,6 @@ pub fn japanese_document_fonts() -> Vec<&'static CraftFont> {
     let mut v: Vec<_> = japanese_fonts().collect();
     v.sort_by_key(|f| (!f.family.contains("Mincho"), f.style != "Regular"));
     v
-}
-
-/// Japanese faces in UI order: BIZ UDPGothic first (the UI face), then the others; `bold` puts
-/// bold styles before regular ones.
-pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
-    let mut v: Vec<_> = japanese_fonts().collect();
-    v.sort_by_key(|f| (f.family != "BIZ UDPGothic", (f.style == "Bold") != bold));
-    v
-}
-
-/// The craft-fonts faces for Simplified Chinese (`"Hans"`), in manifest order. Empty without
-/// craft-fonts.
-pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
-}
-
-/// The craft-fonts faces for Korean (`"Kore"`), in manifest order. Empty without craft-fonts.
-pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
-}
-
-/// The craft-fonts Georgian (`"Geor"`) Regular face for the interface. Empty without craft-fonts.
-pub fn georgian_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Geor") && f.style == "Regular")
-}
-
-/// The CJK interface faces, Regular styles only (the UI fakes no bold), with the Japanese UI,
-/// Chinese, and Korean faces ordered for the selected interface language. Mixing the faces within
-/// a line would mix glyph styles, so the first face should cover the interface language. Empty
-/// without craft-fonts.
-pub fn ui_cjk_fonts(prefer_hans: bool) -> Vec<&'static CraftFont> {
-    ui_cjk_fonts_for(prefer_hans, false)
-}
-
-/// The CJK interface faces in the preferred writing system's order.
-pub fn ui_cjk_fonts_for(prefer_hans: bool, prefer_korean: bool) -> Vec<&'static CraftFont> {
-    let regular = |f: &&CraftFont| f.style == "Regular";
-    let ja = japanese_ui_fonts(false).into_iter().filter(regular).take(1);
-    let zh = chinese_fonts().filter(regular).take(1);
-    let ko = korean_fonts().filter(regular).take(1);
-    if prefer_korean {
-        ko.chain(ja).chain(zh).collect()
-    } else if prefer_hans {
-        zh.chain(ja).chain(ko).collect()
-    } else {
-        ja.chain(zh).chain(ko).collect()
-    }
-}
-
-/// The craft-fonts faces for Arabic script (`"Arab"`), in manifest order: the document fallback
-/// for Arabic text. Empty without craft-fonts.
-pub fn arabic_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Arab"))
-}
-
-/// The craft-fonts faces for Arabic script (`"Arab"`), Regular styles only: the interface's
-/// fallback for an Arabic interface and for Arabic file names. Empty without craft-fonts.
-pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
-    arabic_fonts().filter(|f| f.style == "Regular").collect()
 }
 
 /// The bundled serif used when a document asks for nothing better.
@@ -555,8 +493,7 @@ mod tests {
         let fonts = japanese_document_fonts();
         assert!(!fonts.is_empty(), "craft-fonts has Japanese fonts");
         assert!(fonts[0].family.contains("Mincho"), "documents fall back to a Mincho first");
-        assert_eq!(japanese_ui_fonts(false)[0].family, "BIZ UDPGothic");
-        assert_eq!(japanese_ui_fonts(true)[0].style, "Bold");
+
         let db = FontDb::with_font_dirs(Vec::new());
         db.set_system_fallback(false);
         for cf in fonts {
@@ -582,7 +519,7 @@ mod tests {
     /// fallback (the browser build has no other), and its letters join when shaped.
     #[test]
     fn craft_fonts_arabic_face_is_the_document_fallback_for_arabic() {
-        if arabic_fonts().next().is_none() {
+        if !CRAFT_FONTS.iter().any(|f| f.scripts.contains(&"Arab")) {
             eprintln!("skipped: built without a craft-fonts Arabic face (set CRAFT_FONTS_DIR to a checkout)");
             return;
         }
