@@ -109,15 +109,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
     {
         app.ui.tab = prev;
     }
-    // The tabs shown: File, the user's tabs in their order (Customize Ribbon, #379), then the
-    // contextual ones (the Outlining tab right after File). A contextual tab (Table, Picture
-    // Format) may be stored while the selection moved away, and a tab may have been hidden.
+    // The tabs shown: File (unless the host turned it off, `Chrome`), the user's tabs in their
+    // order (Customize Ribbon, #379), then the contextual ones (the Outlining tab right after
+    // File). A contextual tab (Table, Picture Format) may be stored while the selection moved
+    // away, and a tab may have been hidden.
     let user_tabs = app.session.ribbon.tabs().into_owned();
-    let mut names: Vec<(String, bool)> = vec![("File".to_string(), false)];
+    let mut names: Vec<(String, bool)> = if app.chrome.file_tab { vec![("File".to_string(), false)] } else { Vec::new() };
+    let first_user_tab = names.len();
     names.extend(user_tabs.iter().filter(|e| !e.hidden).map(|e| (e.name.clone(), e.custom)));
     for ct in contextual_tabs(&app.session) {
         if ct == "Outlining" {
-            names.insert(1.min(names.len()), (ct.to_string(), false));
+            names.insert(first_user_tab, (ct.to_string(), false));
         } else if !names.iter().any(|(n, _)| n == ct) {
             names.push((ct.to_string(), false));
         }
@@ -149,19 +151,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
         Entry::new(CommandRef::with_params("review.trackChanges", json!({"value": true})), tl!("Reviewing — edits become suggestions").to_string())
             .checked(track),
     ];
-    let ends = [
+    let mut ends = vec![
         // The strip lays these out start to end, so Share, the old strip's outermost button, comes last. As the old
         // strip drew them: Comments and Editing outlined, Share a filled accent button.
         StripEnd::command(tl!("Comments").to_string(), IconSpec::svg(IconId::new("comment")), CommandRef::new("view.commentsPane"))
             .variant(Variant::SECONDARY),
         StripEnd::menu(editing_label.to_string(), IconSpec::svg(IconId::new("wordcraft.pencil")), &modes).variant(Variant::SECONDARY),
-        StripEnd::command(
-            tl!("Share").to_string(),
-            IconSpec::svg(IconId::new("share")),
-            CommandRef::with_params("ui.backstage", json!({"value": true, "page": "export"})),
-        )
-        .variant(Variant::PRIMARY),
     ];
+    // Share opens File › Export, so it goes with the File tab (`Chrome`).
+    if app.chrome.file_tab {
+        ends.push(
+            StripEnd::command(
+                tl!("Share").to_string(),
+                IconSpec::svg(IconId::new("share")),
+                CommandRef::with_params("ui.backstage", json!({"value": true, "page": "export"})),
+            )
+            .variant(Variant::PRIMARY),
+        );
+    }
     // The context menu's body captures these, never `app`, which the row body borrows.
     let qat: Vec<String> = app.session.ribbon.qat().into_iter().map(str::to_string).collect();
     let qat_shown = app.ui.quick_access_toolbar;

@@ -44,7 +44,7 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     };
     // The controls at the end give way in a narrow window (#5886): the step that fits the room the leading controls
     // left in the last pass.
-    let step = app.chrome.title_fit.step();
+    let step = app.chrome_open.title_fit.step();
     // The bar runs the leading closure and then the trailing one, never one inside the other
     // (`TitleBar::show_titled`), so each borrow below succeeds.
     let app = RefCell::new(app);
@@ -69,7 +69,7 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
         // is the room it has, less a gap on either side of the title's place between them.
         let span = if super::interface_direction().is_rtl() { l.min.x - t.min.x } else { t.max.x - l.max.x };
         let room = span - TITLE_FIT_GAP;
-        if a.chrome.title_fit.note(step, t.width(), room) {
+        if a.chrome_open.title_fit.note(step, t.width(), room) {
             ui.ctx().request_repaint();
         }
     }
@@ -161,11 +161,11 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
     // The small filled triangle of the old toolbar.
     let out = IconButton::new(IconSpec::glyph(&crate::ribbon::common::MENU_ARROW)).label(tl!("Undo History").to_string()).enabled(enabled).show(ui);
     let labels = undo_list_rows(app);
-    let mut open = app.chrome.undo;
+    let mut open = app.chrome_open.undo;
     if out.response.clicked() {
         open = !open;
     }
-    let mut mark = app.chrome.undo_mark;
+    let mut mark = app.chrome_open.undo_mark;
     let mut picked = None;
     Popover::new(tl!("Undo History").to_string(), Bind::bound(&mut open)).opened_by(&out.response).show(ui, |ui, cx| {
         let rows = UndoRows::new(&labels);
@@ -193,8 +193,8 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
             }
         }
     });
-    app.chrome.undo = open;
-    app.chrome.undo_mark = if open { mark } else { UndoMark::default() };
+    app.chrome_open.undo = open;
+    app.chrome_open.undo_mark = if open { mark } else { UndoMark::default() };
     if let Some(count) = picked {
         let _ = app.run("edit.undoTo", json!({"count": count}));
     }
@@ -252,15 +252,18 @@ fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
             let _ = app.run("ui.discord", json!({}));
         }
     }
-    let initials: String = app.session.user_initials().chars().take(2).collect();
-    let out = Avatar::new(app.session.author.clone())
-        .initials(initials)
-        .pressable(true)
-        .tooltip(TooltipSpec::new(format!("{} — {}", app.session.author, tl!("set your name in File › Options"))))
-        .show(ui);
-    if out.clicked {
-        let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
+    // The account opens File › Options, so it goes with the File tab (`Chrome`).
+    if app.chrome.file_tab {
+        let initials: String = app.session.user_initials().chars().take(2).collect();
+        let out = Avatar::new(app.session.author.clone())
+            .initials(initials)
+            .pressable(true)
+            .tooltip(TooltipSpec::new(format!("{} — {}", app.session.author, tl!("set your name in File › Options"))))
+            .show(ui);
+        if out.clicked {
+            let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
+        }
+        rects.push(out.response.rect);
     }
-    rects.push(out.response.rect);
     super::union(rects)
 }

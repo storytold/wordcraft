@@ -30,7 +30,7 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
     }
     // The controls give way in a narrow window (#5886): the step that fits the room the page left them in the last
     // pass.
-    let step = app.chrome.status_fit.step();
+    let step = app.chrome_open.status_fit.step();
     // The bar runs its body and its trailing region one after the other, never one inside the other, so each
     // borrow below succeeds.
     let app = RefCell::new(app);
@@ -50,7 +50,7 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
         // The texts scroll under the controls, and one shown only in part isn't drawn; the page is always shown, so
         // the controls have the bar less the page and the bar's pads and gaps.
         let room = bar.output.response.rect.width() - page.width() - STATUS_FIT_GAP;
-        if a.chrome.status_fit.note(step, group.width(), room) {
+        if a.chrome_open.status_fit.note(step, group.width(), room) {
             ui.ctx().request_repaint();
         }
     }

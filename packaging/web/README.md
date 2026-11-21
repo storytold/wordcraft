@@ -72,6 +72,14 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   `allow-same-origin` there's no storage. Without `allow-downloads`, Save and Export (browser
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
+- **Window chrome:** `?chrome=none` on the iframe `src` leaves out the title bar and the File tab
+  (the Backstage view then never opens, and Share and the account button, which open File pages,
+  are left out too); `?chrome=notitlebar` or `?chrome=nofiletab` leave out just one. Use them when
+  the host window already shows the file name and owns the files. With `none` or `nofiletab`,
+  File's Open and New pages are out of reach (Ctrl+O and a file dropped on the frame still open
+  one). Save and Save As (Ctrl+S, F12) still work: they go to the host through a host bridge
+  (`?host=parent` or `data-host="page"`) and download the file otherwise. Everything stays on by
+  default, and GridCraft takes the same values.
 
 ## The parent bridge (`?host=parent`)
 
@@ -145,7 +153,8 @@ await init({ module_or_path: "./wordcraft-web-<hash>_bg.wasm" });
 
 - Saves are not downloads in this mode: the `bytes` in `wordcraft:save` hold the saved document,
   and the host decides where the file goes.
-- `?author=` on the page's URL still names the user for new comments and tracked changes.
+- `?author=` on the page's URL still names the user for new comments and tracked changes, and
+  `?chrome=` leaves out the title bar or the File tab as in an iframe.
 - An unframed page that uses `?host=parent` keeps the normal app with downloads.
   `data-host="page"` turns this mode on only when `?host=parent` is absent: if `?host=parent` is
   present it takes precedence, so a same-origin framed page uses the parent bridge, while an

@@ -87,7 +87,7 @@ impl WordApp {
             .dropped(Bind::given(dropped))
             .window_title(self.window_title())
             .page(self.ui.backstage, crate::backstage::scope(), crate::backstage::show)
-            .title_bar(chrome::title_bar::show)
+            .title_bar_if(self.chrome.title_bar, chrome::title_bar::show)
             .top(Slot::new("screenBar").screen_bar(), chrome::screen_bar::show)
             // The ribbon is a tab strip over a group row: its slots are as tall as it is and stack it. A slot of the
             // default size is one options bar high and lays its content in one line, which put the groups beside the

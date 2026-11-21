@@ -1,4 +1,4 @@
-use super::services::Services;
+use super::services::{Chrome, Services};
 use super::state::{AutoSaveBlock, PromptSave, keeps_everything};
 use super::{
     DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, canvas, chrome, crop, dialogs, documents,
@@ -72,7 +72,7 @@ impl WordApp {
             info_editing,
             shown_document,
             backstage_state,
-            chrome,
+            chrome_open,
             dialog_host,
             dialog_hooks,
             dialog_answers,
@@ -93,6 +93,7 @@ impl WordApp {
             session,
             ui: super::prefs::Prefs { tab, backstage, backstage_page, nav_collapsed, ..super::prefs::Prefs::default() },
             services,
+            chrome: Chrome::default(),
             host: std::sync::Arc::new(craft::host::Host::builder(super::APP).i18n(i18n::catalogs()).lang(craft::i18n::Lang::EN).build()),
             settings: None,
             settings_notices: Default::default(),
@@ -157,7 +158,7 @@ impl WordApp {
             info_editing,
             shown_document,
             backstage_state,
-            chrome,
+            chrome_open,
             dialog_host,
             dialog_hooks,
             dialog_answers,
@@ -272,15 +273,29 @@ impl WordApp {
     /// the back arrow shows an empty window with the ribbon greyed out, as Word does. Hosts call
     /// this after [`WordApp::apply_prefs`] when they have nothing to open; [`WordApp::new`] never
     /// does, so tests, `ui_shot` and windows opened for a document start in the editor. Returns
-    /// whether the Start screen shows.
+    /// whether the Start screen shows: not while the host has turned the File tab off, which
+    /// leaves the blank document the app was made with.
     pub fn start_screen(&mut self) -> bool {
-        if self.ui.start_screen {
-            self.ui.backstage = true;
-            self.ui.backstage_page = "home".into();
+        let shown = self.ui.start_screen && self.open_backstage(Some("home"));
+        if shown {
             self.no_document = Some(self.session.document_id());
             self.session.release_untitled_name();
         }
-        self.ui.start_screen
+        shown
+    }
+
+    /// Opens File (the Backstage view), on `page` when one is given. While the host has turned
+    /// the File tab off ([`Chrome::file_tab`]) nothing opens, whatever asked: a shortcut, a
+    /// command, the Start screen or recovery. Returns whether File is open.
+    pub(crate) fn open_backstage(&mut self, page: Option<&str>) -> bool {
+        if !self.chrome.file_tab {
+            return false;
+        }
+        self.ui.backstage = true;
+        if let Some(page) = page {
+            self.ui.backstage_page = page.into();
+        }
+        true
     }
 
     /// Whether a document is open: false from a Start screen launch until the user creates or
@@ -346,10 +361,14 @@ impl WordApp {
         self.window_work(ctx);
         self.drain_inbox();
         self.paste_arrived(ctx);
-        // Focus hides the title bar's search box: a search left open there has no box to show it, and would keep
-        // Escape from leaving Focus (#5398).
-        if self.chrome.search && matches!(crate::chrome::Screen::of(&self.session.view), crate::chrome::Screen::Focus) {
-            self.chrome.search = false;
+        // A search left open in a window that shows no box for it (Focus, or no title bar) would keep Escape from
+        // leaving Focus or Full Screen (#5398).
+        if self.chrome_open.search && !crate::chrome::search::has_field(self) {
+            self.chrome_open.search = false;
+        }
+        // A host can turn the File tab off while File is already open: close it.
+        if !self.chrome.file_tab {
+            self.ui.backstage = false;
         }
         self.pump_close_prompt();
         self.control_logic(ctx);
@@ -365,8 +384,7 @@ impl WordApp {
         if !self.recovery_seen && self.session.recovery_ready() {
             self.recovery_seen = true;
             if !self.session.recovery_documents().is_empty() && !self.session.dirty {
-                self.ui.backstage = true;
-                self.ui.backstage_page = "recover".into();
+                self.open_backstage(Some("recover"));
             }
         }
         if let Some(wait) = self.session.recovery_wait() {

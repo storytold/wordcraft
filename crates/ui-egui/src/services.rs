@@ -29,3 +29,24 @@ pub struct Services {
     /// Files the system asked the app to open, and files dropped on a window, read once per frame.
     pub intake: Option<craft::platform::open::FileIntake>,
 }
+
+/// Which parts of the app's own window chrome are drawn. Everything is on by default; a host
+/// that embeds the document in its own window (and owns files itself) can turn off the title bar
+/// and the File tab, whose Backstage view then never opens. Not persisted: it describes the
+/// host, not a user preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chrome {
+    /// The title bar: AutoSave, the Quick Access Toolbar, the document name, the community link,
+    /// Search and the account button.
+    pub title_bar: bool,
+    /// The ribbon's File tab and the Backstage view it opens (also reached by keyboard, by
+    /// commands such as `ui.backstage` and `file.print`, and at start-up as the Start screen),
+    /// with Share beside the tabs and the account button, which open File pages.
+    pub file_tab: bool,
+}
+
+impl Default for Chrome {
+    fn default() -> Self {
+        Chrome { title_bar: true, file_tab: true }
+    }
+}

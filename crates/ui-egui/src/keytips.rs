@@ -439,8 +439,8 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
         rows.iter().map(|r| KeytipControl::new(r.control.command.clone(), r.control.tip, r.letters.as_deref())).collect();
 
     let sequences = if cfg!(target_os = "macos") { Vec::new() } else { legacy() };
-    // A hidden toolbar has no badges, and a disabled command's button has none to press.
-    let digits: Vec<CommandRef> = if app.ui.quick_access_toolbar {
+    // A hidden toolbar (or title bar) has no badges, and a disabled command's button has none to press.
+    let digits: Vec<CommandRef> = if app.ui.quick_access_toolbar && app.chrome.title_bar {
         app.session
             .ribbon
             .qat()

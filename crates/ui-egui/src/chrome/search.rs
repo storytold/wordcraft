@@ -30,19 +30,28 @@ pub(crate) fn help_entries(app: &WordApp) -> Vec<HelpEntry> {
         .collect()
 }
 
-/// Opens the search where this window shows its field (the title bar, or Immersive's screen bar). `false`
-/// when it shows none: Focus hides it, so the Search dialog takes over.
+/// Whether this window shows the search field: in the title bar, unless the host left it out ([`crate::Chrome`]),
+/// or in Immersive's screen bar. Focus shows neither.
+pub(crate) fn has_field(app: &WordApp) -> bool {
+    match crate::chrome::Screen::of(&app.session.view) {
+        crate::chrome::Screen::Normal => app.chrome.title_bar,
+        crate::chrome::Screen::FullScreen => true,
+        crate::chrome::Screen::Focus => false,
+    }
+}
+
+/// Opens the search in this window's field. `false` when it shows none, so the Search dialog takes over.
 pub(crate) fn open(app: &mut WordApp) -> bool {
-    if matches!(crate::chrome::Screen::of(&app.session.view), crate::chrome::Screen::Focus) {
+    if !has_field(app) {
         return false;
     }
-    app.chrome.search = true;
+    app.chrome_open.search = true;
     true
 }
 
 /// Whether the search is being typed in: Escape closes it, not Full Screen.
 pub(crate) fn is_open(app: &WordApp) -> bool {
-    app.chrome.search
+    app.chrome_open.search
 }
 
 /// Shows the search field, and its results while it is open, as the inspected region the keytips badge; returns the
@@ -53,7 +62,7 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect 
     // it knows. The list lives for the pass only.
     let entries = help_entries(app);
     let suggested: Vec<CommandRef> = crate::dialogs::SEARCH_SUGGESTIONS.iter().map(|id| CommandRef::new(*id)).collect();
-    let mut open = app.chrome.search;
+    let mut open = app.chrome_open.search;
     let name = tl!("Search commands and help").to_string();
     let ((rect, out), _) = inspect::record(ui, crate::keytips::search_region(), |ui| {
         let mut rect = None;
@@ -72,7 +81,7 @@ pub(super) fn show(app: &mut WordApp, ui: &mut Ui, compact: bool) -> egui::Rect 
             .show(ui);
         (rect.unwrap_or(out.response.rect), out)
     });
-    app.chrome.search = open;
+    app.chrome_open.search = open;
     if let Some(text) = out.fallback {
         crate::dialogs::find_in_navigation_pane(app, ui.ctx(), &text);
     }
