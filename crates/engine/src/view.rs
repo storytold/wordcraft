@@ -17,6 +17,9 @@ pub struct ViewState {
     pub ruler: bool,
     /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
+    /// View › Show › Text Boundaries: a screen-only outline of each page's text area.
+    #[serde(default)]
+    pub text_boundaries: bool,
     /// Table Layout › View Gridlines: outlines of table cells (on screen only); on by default, as in Word.
     #[serde(default = "on")]
     pub table_gridlines: bool,
@@ -183,6 +186,7 @@ impl Default for ViewState {
             marks: false,
             ruler: true,
             gridlines: false,
+            text_boundaries: false,
             table_gridlines: true,
             nav_pane: false,
             styles_pane: false,

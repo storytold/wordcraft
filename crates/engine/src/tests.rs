@@ -7609,6 +7609,41 @@ fn table_style_parts_format_every_table_using_the_style() {
 }
 
 #[test]
+fn text_boundaries_toggle_without_changing_the_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Text boundaries are display guides."}));
+    let before = serde_json::to_value(&s.doc).unwrap();
+    let undo = s.undo_labels();
+    assert_eq!(run(&mut s, "view.state", json!({}))["textBoundaries"], false);
+    assert_eq!(run(&mut s, "view.textBoundaries", json!({}))["value"], true);
+    assert_eq!(run(&mut s, "view.state", json!({}))["textBoundaries"], true);
+    assert_eq!(run(&mut s, "view.textBoundaries", json!({"value": true}))["value"], true);
+    assert_eq!(run(&mut s, "view.state", json!({}))["gridlines"], false);
+    assert_eq!(run(&mut s, "view.textBoundaries", json!({"value": false}))["value"], false);
+    assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+    assert_eq!(s.undo_labels(), undo);
+    let mut old_view = serde_json::to_value(&s.view).unwrap();
+    old_view.as_object_mut().unwrap().remove("textBoundaries");
+    let restored: crate::ViewState = serde_json::from_value(old_view).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap()["textBoundaries"], false, "old preferences default to off");
+}
+
+/// #6202: guides never leak into the shared renderer used for exports and printing.
+#[test]
+fn text_boundaries_do_not_change_exported_pages() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A page without printed guides."}));
+    let path = std::env::temp_dir().join(format!("wordcraft-text-boundaries-{}.png", std::process::id()));
+    let export = json!({"path": path.to_string_lossy(), "scale": 1.0});
+    run(&mut s, "file.exportPng", export.clone());
+    let before = std::fs::read(&path).unwrap();
+    run(&mut s, "view.textBoundaries", json!({"value": true}));
+    run(&mut s, "file.exportPng", export);
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the exported page has no screen guides");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn page_and_table_gridlines_toggle_independently() {
     // #69: View › Gridlines (the page drawing grid) and Table Layout › View Gridlines (table cell
     // outlines) are separate view switches; neither touches the document or the undo stack.

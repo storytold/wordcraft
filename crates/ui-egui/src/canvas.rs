@@ -46,6 +46,7 @@ mod reading_metrics;
 pub(crate) mod rulers;
 mod source;
 mod story;
+mod text_boundaries;
 
 pub use balloons::{deselect_balloon, select_balloon};
 use context_menu::ContextAsk;
@@ -813,6 +814,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             // Canvas controls take their presses first, then the tool host runs, then the caret shows over them.
             TextMarks::over(body.pages).areas(&areas).show_at(ui, body.rect);
             gridlines::show(app, ui, layout, body);
+            text_boundaries::show(app, ui, layout, body);
             crate::content_controls::show(app, ui, layout, body);
             strip_click = equation_frame::show(app, ui, layout, body);
             crate::crop::show(app, ui, layout, body);

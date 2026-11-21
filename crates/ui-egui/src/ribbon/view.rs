@@ -76,6 +76,7 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         });
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             show_check(ui, app, "Hide White Space", "view.hideWhiteSpace", v.hide_white_space);
+            show_check(ui, app, "Text Boundaries", "view.textBoundaries", v.text_boundaries);
         });
     });
     row.group(RibbonGroup::new("view.zoom", tl!("Zoom").to_string(), IconId::new("zoom").into()), |ui| {

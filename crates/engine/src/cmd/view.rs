@@ -77,6 +77,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.gridlines", "Gridlines", "View › Show", |s, v| toggle(s, v, |x| &mut x.gridlines))
             .params(r#"{"value"?: bool}"#)
             .pure(),
+        CommandSpec::new("view.textBoundaries", "Text Boundaries", "View › Show", |s, v| toggle(s, v, |x| &mut x.text_boundaries))
+            .params(r#"{"value"?: bool}"#)
+            .pure(),
         // Outlines of table cells (screen only; never printed or exported).
         CommandSpec::new("table.viewGridlines", "View Gridlines", "Table Layout › Table", |s, v| toggle(s, v, |x| &mut x.table_gridlines))
             .params(r#"{"value"?: bool}"#)
