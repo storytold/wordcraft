@@ -4071,3 +4071,67 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     assert_eq!(restored.ui.touchpad_scroll_speed, ScrollSpeed::Fast);
     assert_eq!(restored.ui.scroll_speed, ScrollSpeed::Fast);
 }
+
+/// A file moved outside WordCraft and opened from its new place is the same file: Recent
+/// replaces its old, now missing, path instead of keeping both (#5434).
+#[test]
+fn opening_a_moved_file_by_browse_replaces_its_recent_entry() {
+    let dir = scratch("moved-recent");
+    let (old_dir, new_dir, other_dir) = (dir.join("A"), dir.join("B"), dir.join("C"));
+    for d in [&old_dir, &new_dir, &other_dir] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let (old, moved, other) = (old_dir.join("notes.docx"), new_dir.join("notes.docx"), other_dir.join("notes.docx"));
+    let s = |p: &std::path::Path| p.to_string_lossy().to_string();
+    let mut a = typed();
+    a.run("file.save", json!({"path": s(&other)})).unwrap();
+    a.run("file.save", json!({"path": s(&old)})).unwrap();
+    let recent = a.ui.recent.clone();
+    assert_eq!(recent.first(), Some(&s(&old)));
+    std::fs::rename(&old, &moved).unwrap();
+
+    // Open › Browse.
+    let mut b = app();
+    b.ui.recent = recent.clone();
+    let document = b.session.document_id();
+    b.finish_pick(crate::file_dialogs::AfterPick::OpenDocument { document }, Some(s(&moved))).unwrap();
+    assert_eq!(b.ui.recent.first(), Some(&s(&moved)));
+    assert!(!b.ui.recent.contains(&s(&old)), "stale entry kept: {:?}", b.ui.recent);
+    assert!(b.ui.recent.contains(&s(&other)), "a different file with the same name stays: {:?}", b.ui.recent);
+
+    // Open with (the OS hands the path over).
+    let mut c = app();
+    c.ui.recent = recent;
+    c.open_file(&s(&moved), None).unwrap();
+    assert_eq!(c.ui.recent.first(), Some(&s(&moved)));
+    assert!(!c.ui.recent.contains(&s(&old)), "stale entry kept: {:?}", c.ui.recent);
+    assert!(c.ui.recent.contains(&s(&other)), "{:?}", c.ui.recent);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn same_name_recent_entry_with_missing_folder_is_kept() {
+    let dir = scratch("unavailable-recent");
+    let (new_dir, gone_dir) = (dir.join("B"), dir.join("unplugged"));
+    std::fs::create_dir_all(&new_dir).unwrap();
+    let s = |p: &std::path::Path| p.to_string_lossy().to_string();
+    let unavailable = gone_dir.join("notes.docx");
+    let created = new_dir.join("notes.docx");
+
+    // Open a different same-name file.
+    let mut a = typed();
+    a.run("file.save", json!({"path": s(&created)})).unwrap();
+    let mut b = app();
+    b.ui.recent = vec![s(&unavailable)];
+    let document = b.session.document_id();
+    b.finish_pick(crate::file_dialogs::AfterPick::OpenDocument { document }, Some(s(&created))).unwrap();
+    assert_eq!(b.ui.recent, vec![s(&created), s(&unavailable)]);
+
+    // Save As to a new folder.
+    let mut c = typed();
+    c.ui.recent = vec![s(&unavailable)];
+    c.run("file.save", json!({"path": s(&created)})).unwrap();
+    assert_eq!(c.ui.recent, vec![s(&created), s(&unavailable)]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
