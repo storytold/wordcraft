@@ -905,18 +905,25 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         // This pass's sideways shift, across the screen whichever way the text is turned.
         fr.pass.drew_text.set(true);
         ctx.set_transform(Affine::translate((fr.pass.shift, 0.0)) * at);
-        if darken_px > 0.0 {
-            // The widening in the outline's own units: device pixels for a hinted outline,
-            // font units (before any `w:w` stretch) for the font's.
-            let unit = if hinted_now { 1.0 } else { k * px_per_pt * sx };
-            ctx.fill_path(&widened(&o, darken_px / unit));
-        } else {
-            ctx.fill_path(&o);
-        }
+        // The darkened outline is the glyph: synthetic bold strokes it too. Stroking the font's own
+        // outline there would cover the widening (the stroke reaches further than it does) and
+        // leave such text as light as without darkening.
+        let wide = (darken_px > 0.0).then(|| widened(&o, darken_px / widen_unit(hinted_now, k * px_per_pt, sx)));
+        let shape = wide.as_ref().unwrap_or(&o);
+        ctx.fill_path(shape);
         if outline_stroke > 0.0 {
-            ctx.stroke_path(&o);
+            ctx.stroke_path(shape);
         }
     }
+}
+
+/// How many device pixels one unit of a glyph outline is across the screen, for turning a
+/// widening in device pixels into the outline's own units: a hinted outline is in device pixels
+/// already and the font's own in font units (`font_px` device pixels each), and both are then
+/// stretched `stretch` times across by scaled letters (`w:w`). Without the stretch for hinted
+/// outlines, text scaled to 400 % was widened four times too far.
+fn widen_unit(hinted: bool, font_px: f64, stretch: f64) -> f64 {
+    if hinted { stretch } else { font_px * stretch }
 }
 
 /// `path` with every edge moved `d` sideways, away from the ink: the shape a glyph makes when it

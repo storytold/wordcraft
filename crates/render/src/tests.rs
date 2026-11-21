@@ -520,6 +520,79 @@ fn lcd_channels_never_exceed_the_alpha() {
     assert_eq!(px, [1, 2, 3, 255, 4, 5, 6, 255, 9]);
 }
 
+/// The glyph runs of `text` in a bundled face at 12 pt, as the page draws them, each changed by
+/// `change`; and the area they are in.
+fn glyph_runs(text: &str, change: impl Fn(&mut Draw)) -> (Document, Vec<Draw>, wordcraft_geom::Rect) {
+    let mut d = Document::from_text(text);
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &l.pages[0];
+    let mut runs: Vec<Draw> = page_layers(&d, page, &DisplayOptions::default())
+        .into_iter()
+        .flat_map(|(_, items)| items)
+        .filter(|it| matches!(it, Draw::Glyphs { .. }))
+        .collect();
+    assert!(!runs.is_empty());
+    runs.iter_mut().for_each(change);
+    (d, runs, wordcraft_geom::Rect::new(0.0, 0.0, page.w, 200.0))
+}
+
+/// How much is drawn on nothing: the sum of the pixels' opacity.
+fn opacity(img: &Rendered) -> u64 {
+    img.pixels.as_chunks::<4>().0.iter().map(|p| p[3] as u64).sum()
+}
+
+#[test]
+fn synthetic_bold_is_darkened_too() {
+    // A face with no bold of its own is made bold by stroking its outlines. The stroke reaches
+    // further than the darkening does, so it has to stroke the darkened outline: the darkening
+    // then moves the bold text's edges as far as the regular text's, and adds about as much ink.
+    let added = |bold: bool, scale: f32| {
+        let (d, runs, area) = glyph_runs("Bold made by stroking the outline", |run| {
+            if let Draw::Glyphs { synth_bold, .. } = run {
+                *synth_bold = bold;
+            }
+        });
+        let dark = RenderOptions { text_darkening: 1.0, ..Default::default() };
+        let (plain, darkened) =
+            (opacity(&render_items(&d, &runs, area, scale, &RenderOptions::default())), opacity(&render_items(&d, &runs, area, scale, &dark)));
+        assert!(plain > 0 && darkened > plain, "bold {bold}: plain {plain}, darkened {darkened}");
+        (darkened - plain) as f64
+    };
+    for scale in [1.0, 2.0] {
+        let (regular, bold) = (added(false, scale), added(true, scale));
+        assert!(bold > regular * 0.75, "scale {scale}: ink added: {regular} regular, {bold} bold");
+    }
+}
+
+#[test]
+fn stretched_hinted_text_is_darkened_as_far_as_unstretched() {
+    // One letter, hinted, at its own width and scaled to 400 % (`w:w`): the darkening moves each
+    // edge the same distance on screen, so it adds about the same ink to both.
+    let added = |stretch: f32| {
+        let (d, runs, area) = glyph_runs("H", |run| {
+            if let Draw::Glyphs { x_scale, .. } = run {
+                *x_scale = stretch;
+            }
+        });
+        let hint = RenderOptions { hinting: true, ..Default::default() };
+        let dark = RenderOptions { text_darkening: 1.0, ..hint.clone() };
+        let (plain, darkened) = (opacity(&render_items(&d, &runs, area, 2.0, &hint)), opacity(&render_items(&d, &runs, area, 2.0, &dark)));
+        assert!(darkened > plain, "stretch {stretch}: plain {plain}, darkened {darkened}");
+        (darkened - plain) as f64
+    };
+    let (own, stretched) = (added(1.0), added(4.0));
+    assert!(stretched < own * 1.5 && stretched > own * 0.6, "ink added: {own} unstretched, {stretched} stretched");
+    // The conversion itself: a widening of `px` device pixels, in outline units, is `px` again
+    // once the outline is on screen.
+    for (hinted, font_px, stretch) in [(true, 0.02, 1.0), (true, 0.02, 4.0), (false, 0.02, 1.0), (false, 0.02, 4.0)] {
+        let on_screen = if hinted { stretch } else { font_px * stretch };
+        assert!((0.25 / widen_unit(hinted, font_px, stretch) * on_screen - 0.25).abs() < 1e-12, "{hinted} {stretch}");
+    }
+}
+
 #[test]
 fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
     let mut d =
