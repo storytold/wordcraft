@@ -60,10 +60,10 @@ impl Host for WordHost<'_> {
         if r.is_ok() {
             match id {
                 "library.addFolder" | "library.removeFolder" => {
-                    let _ = self.0.save_prefs_now();
+                    let _ = self.0.flush_prefs();
                 }
                 // Typing carries on in the document after a picture goes in.
-                "library.insert" => self.0.canvas.want_focus = true,
+                "library.insert" => self.0.canvas.focus_page_after_pass(),
                 _ => {}
             }
         }
@@ -92,6 +92,16 @@ impl Host for WordHost<'_> {
 
 /// Draw the pane's body.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
+    // The pane area runs a body once to measure it, then again to draw it, in the same pass. The
+    // shared pane is plain egui: run twice, its controls would take the same ids in two places, and
+    // a click could be taken by both runs (one picture inserted twice). It fills the room it can be
+    // seen in, so a measuring run only takes that room and reads, asks and draws nothing.
+    if craft::ui::runtime::measure::active(ui.ctx()) {
+        let finite = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        let height = ui.available_height().min(ui.clip_rect().bottom() - ui.cursor().top());
+        ui.allocate_space(egui::vec2(finite(ui.available_width()), finite(height)));
+        return;
+    }
     let pal = palette(&Tokens::get(ui.ctx()));
     // The pane's state is the app's; it is lent to the pane while the app is the pane's host. The
     // pane scrolls its own grid, so its folder and search controls stay in view.
