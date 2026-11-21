@@ -345,6 +345,11 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   Croatian, Bosnian and Serbian `i` is kept only when the text is tagged with that language: those
   interfaces don't set an editing language yet. Per-language lists for other languages aren't
   there yet (#735).
+- In an equation, a number is one item: `10^3` + Space builds `10` with the superscript `3`, not
+  `1` and `0³`, and so do decimals and grouped numbers (`2.5^2`, `1,000^2`; a `.` or `,` belongs to
+  the number only when a digit follows, so `2.^2` puts the script on the point). Letters stay
+  separate (`2x^2` is `2`, `x²`). Observed in Word for Windows (Microsoft 365, build 16.0.20527) on
+  #6229 (`equation::tests::a_typed_number_is_a_whole_script_base`).
 - In an equation, `\int` + Space (or `\sum`, `\prod`… + Space) gives the operator and waits for
   its limits: `_x^y` then Space builds it with them, Space alone builds it without, and what is
   typed next goes into its operand. `\name` is also corrected by any character that can't
@@ -626,6 +631,7 @@ DOCX and Undo/Redo (Leaf #152). No new Word or native UI comparison was run.
 | 2026-11-15 | trivial | Enter in a paragraph with a drop cap: the new paragraph gets no drop cap (#6788); synthetic coverage, offset 0 unchanged and not compared with Word |
 | 2026-11-15 | trivial | Paste Formatting row: Ctrl/Cmd+Shift+V pastes the picked-up formatting, else text only; Ctrl/Cmd+Shift+C no longer arms the Format Painter (#1537, #4943); the chord's V release never pastes again (Shift up first); web text paste relies on the browser sending its paired Paste event, and the formatting paste drops that event only within about a second |
 | 2026-11-13 | trivial | Backspace, then type: the new text takes the deleted character's formatting (the Bold button shows it) until the caret moves; Delete, deleted selections and tracked Backspace carry nothing; a Backspace or Ctrl+Backspace that deletes nothing at the start of the document keeps it; observed in Word for Windows (#6518) |
+| 2026-11-10 | trivial | Equation build-up: a number is a whole script base (`10^3` is 10³, also decimals and `1,000`), as observed in Word for Windows (#6229) |
 | 2026-11-04 | trivial | Ctrl+K on a selection: a changed Text to display replaces the selected text before it is linked |
 | 2026-11-07 | trivial | Removing an already-empty paragraph preserves the following paragraph properties, mark and inline formatting. Delete, Backspace, selected marks, outline/TOC, DOCX and Undo/Redo have synthetic coverage (Leaf #152); no new Word or native acceptance run. |
 | 2026-10-30 | trivial | Equations: `\int` + Space waits for its limits; `_x^y` then Space builds them, Space alone builds the operator without, typing goes into its operand, and Enter or an arrow key builds it without going into the operand (#4917). Review: any character that can't continue `\name` corrects it (`\int_0^1`, `\alpha+`), and `∫∫` takes the operand into the inner operator; the Word rows are now observed in Word for Windows on #4938, Enter, arrows and `∫∫` are not |
