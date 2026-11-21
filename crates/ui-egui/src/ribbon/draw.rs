@@ -33,7 +33,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         ] {
             ToggleButton::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
-                .icon(crate::icons::id(key))
+                .icon(crate::icons::spec(key))
                 .arrangement(Arrangement::Stacked)
                 .selected(on)
                 .show(ui);
@@ -75,7 +75,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     })),
                 )
                 .label(crate::tl!("Color"))
-                .icon(IconSpec::from(IconId::new("fontcolor")).with_mark(IconMark::bar(DataColor::new(ink))))
+                .icon(crate::icons::spec("fontcolor").with_mark(IconMark::bar(DataColor::new(ink))))
                 .show(ui);
                 menu_button(
                     ui,
@@ -111,7 +111,7 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .show(ui);
         Button::command(CommandRef::with_params("draw.inkToMath", json!({})))
             .label(crate::tl!("Ink to\nMath"))
-            .icon(IconId::new("inkToMath"))
+            .icon(crate::icons::spec("inkToMath"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });

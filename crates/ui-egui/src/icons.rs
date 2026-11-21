@@ -4,6 +4,8 @@
 use std::borrow::Cow;
 
 use craft::behavior::IconId;
+mod glyphs;
+
 use craft::ui::primitives::{AppIcons, Glyph, IconSpec, register_app_icons};
 use craft::ui::style::UiTokens;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
@@ -285,6 +287,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("size", include_bytes!("../icons/size.svg")),
     ("smartArt", include_bytes!("../icons/smartArt.svg")),
     ("smartArtColors", include_bytes!("../icons/smartArtColors.svg")),
+    ("smartArtLayouts", include_bytes!("../icons/smartArtLayouts.svg")),
     ("sort", include_bytes!("../icons/sort.svg")),
     ("sources", include_bytes!("../icons/sources.svg")),
     ("spaceAfter", include_bytes!("../icons/spaceAfter.svg")),
@@ -304,6 +307,8 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("table", include_bytes!("../icons/table.svg")),
     ("tableOfAuthorities", include_bytes!("../icons/tableOfAuthorities.svg")),
     ("tableOfFigures", include_bytes!("../icons/tableOfFigures.svg")),
+    ("tableStyleOptions", include_bytes!("../icons/tableStyleOptions.svg")),
+    ("tableStyles", include_bytes!("../icons/tableStyles.svg")),
     ("textBox", include_bytes!("../icons/textBox.svg")),
     ("textBoxLink", include_bytes!("../icons/textBoxLink.svg")),
     ("textBoxUnlink", include_bytes!("../icons/textBoxUnlink.svg")),
@@ -387,6 +392,15 @@ pub fn id(name: &'static str) -> IconId {
     }
 }
 
+/// The icon `name` shows in a ribbon button or group: the icon is drawn as text in the interface font
+/// when it shows a letter or a symbol (see `glyphs`), else it is the SVG document of [`id`].
+pub fn spec(name: &'static str) -> IconSpec<'static> {
+    match glyphs::ICONS.iter().find(|icon| icon.0 == name) {
+        Some(icon) => IconSpec::glyph(icon),
+        None => IconSpec::svg(id(name)),
+    }
+}
+
 /// The icon a command's button shows outside its own ribbon group (custom groups, the Quick
 /// Access Toolbar): the one its ribbon button uses, which is usually named after the id's last
 /// part. A name the set doesn't have draws the framework's fallback tile.
@@ -418,11 +432,15 @@ pub fn for_command(id: &str) -> IconSpec<'static> {
         Some((_, icon)) => Cow::Borrowed(icon),
         None => Cow::Owned(id.rsplit('.').next().unwrap_or(id).to_owned()),
     };
-    let name = match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
-        Some((_, own)) => Cow::Borrowed(*own),
-        None => name,
-    };
-    IconSpec::svg(IconId::from(name))
+    // A text glyph is found by the plain name (`pilcrow`); the app's own SVG of a catalog name
+    // (`wordcraft.pilcrow`) applies only to the SVG fallback.
+    if let Some(icon) = glyphs::ICONS.iter().find(|icon| icon.0 == name) {
+        return IconSpec::glyph(icon);
+    }
+    match OWN_OVER_CATALOG.iter().find(|(plain, _)| *plain == name) {
+        Some((_, own)) => IconSpec::svg(IconId::new(own)),
+        None => IconSpec::svg(IconId::from(name)),
+    }
 }
 
 /// An Insert › Icons library icon as a value glyph, drawn from the same path data the inserted
@@ -495,6 +513,13 @@ mod tests {
         assert_eq!(undo, "wordcraft.undo");
     }
 
+    /// QAT and custom-group buttons draw `view.marks` as the pilcrow text glyph, as the ribbon does, not the
+    /// app's SVG of the same name.
+    #[test]
+    fn for_command_picks_the_text_glyph_before_the_own_svg() {
+        assert!(matches!(for_command("view.marks").source, craft::ui::primitives::IconSource::Glyph(_)));
+    }
+
     /// #6768: the Insert › Shapes Arrow tile is the block arrow that tile inserts, outlined as the
     /// document draws it, not a thin line with a head.
     #[test]
@@ -508,5 +533,55 @@ mod tests {
             let (ex, ey) = (3.0 + u * 14.0, 5.0 + v * 10.0);
             assert!((x - ex).abs() < 0.05 && (y - ey).abs() < 0.05, "({x}, {y}) vs ({ex}, {ey})");
         }
+    }
+
+    /// #7149 item 8: every icon name the UI source gives a button, group or menu exists in the app set or the
+    /// catalog; a name that does not paints nothing. Names built at run time are not found here.
+    #[test]
+    fn every_icon_name_the_ui_uses_resolves() {
+        fn rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    rs_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        register();
+        let mut files = Vec::new();
+        rs_files(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        let (mut seen, mut missing, mut svg_only) = (0, Vec::new(), Vec::new());
+        for file in files.iter().filter(|f| !f.ends_with("icons.rs")) {
+            let text = std::fs::read_to_string(file).unwrap_or_default();
+            for call in ["IconId::new(\"", "icons::id(\"", "icons::spec(\""] {
+                for part in text.split(call).skip(1) {
+                    let Some(name) = part.split('"').next() else { continue };
+                    seen += 1;
+                    // A text glyph resolves only through `icons::spec`; the SVG-only calls draw its SVG instead.
+                    if call != "icons::spec(\"" && glyphs::ICONS.iter().any(|g| g.0 == name) {
+                        svg_only.push(format!("{name} ({}): use icons::spec", file.display()));
+                        continue;
+                    }
+                    let known = match call {
+                        "IconId::new(\"" => craft::ui::primitives::has_icon(&IconId::from(Cow::Owned(name.to_owned()))),
+                        _ => {
+                            glyphs::ICONS.iter().any(|g| g.0 == name)
+                                || craft::ui::primitives::has_icon(&match OWN_OVER_CATALOG.iter().find(|(p, _)| *p == name) {
+                                    Some((_, own)) => IconId::new(own),
+                                    None => IconId::from(Cow::Owned(name.to_owned())),
+                                })
+                        }
+                    };
+                    if !known {
+                        missing.push(format!("{name} ({})", file.display()));
+                    }
+                }
+            }
+        }
+        assert!(seen > 200, "the scan found only {seen} names");
+        assert!(missing.is_empty(), "icons used but not in the app set or the catalog: {missing:?}");
+        assert!(svg_only.is_empty(), "text glyphs passed through the SVG-only IconId::new / icons::id: {svg_only:?}");
     }
 }

@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use craft::behavior::{IconId, keyed};
+use craft::behavior::keyed;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::contract::{
@@ -12,7 +12,6 @@ use craft::ui::contract::{
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
 use craft::ui::notices::Notice;
-use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
 use craft::ui::shell::{Template, ThumbKey};
 use craft::ui::text::TextField;
@@ -133,7 +132,7 @@ pub(super) fn show(ui: &mut Ui, app: &mut WordApp) {
             let name = if category.is_empty() { label("Personal templates") } else { Label::from(category.to_owned()) };
             let out = grid(name).id_salt(("personal-templates", category.to_owned())).show_items(ui, &items, &mut |path, _| {
                 let Some(p) = tiles.iter().find(|p| &p.path == path) else { return Tile::new(Label::Empty) };
-                Tile::new(Label::from(p.label.clone())).icon(IconSpec::svg(IconId::new("documentTemplate"))).tooltip(p.path.clone())
+                Tile::new(Label::from(p.label.clone())).icon(crate::icons::spec("documentTemplate")).tooltip(p.path.clone())
             });
             for path in activated(out.response.events) {
                 let failed = open_personal(app, &path, &ctx).err();
