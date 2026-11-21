@@ -62,6 +62,10 @@ pub(crate) struct WindowUi {
     pub(crate) backstage: bool,
     pub(crate) backstage_page: String,
     pub(crate) nav_collapsed: std::collections::HashSet<wordcraft_doc::Path>,
+    /// This window's ribbon is hidden. Per window; the saved preference restores it at launch,
+    /// and a new window takes it from the window it came from, as in Word. The tab is not
+    /// inherited: every document window opens on Home.
+    pub(crate) ribbon_collapsed: bool,
 }
 
 /// Status-bar counts that match no document revision, so the next frame counts.
@@ -70,7 +74,7 @@ pub(crate) const NOT_COUNTED: (u64, crate::StatusCounts) = (u64::MAX, crate::Sta
 impl WindowUi {
     /// A new window showing open document `document`: nothing open over the page, Home tab.
     pub(crate) fn new(document: u64) -> WindowUi {
-        let Prefs { tab, backstage, backstage_page, nav_collapsed, .. } = Prefs::default();
+        let Prefs { tab, backstage, backstage_page, nav_collapsed, ribbon_collapsed, .. } = Prefs::default();
         WindowUi {
             canvas: Default::default(),
             restrict: Default::default(),
@@ -111,6 +115,7 @@ impl WindowUi {
             backstage,
             backstage_page,
             nav_collapsed,
+            ribbon_collapsed,
         }
     }
 }
@@ -222,7 +227,6 @@ impl WordApp {
         let Prefs {
             // App-wide: preferences, recent lists, and the settings the session owns while
             // running.
-            ribbon_collapsed: _,
             quick_access_toolbar: _,
             recent: _,
             recent_symbols: _,
@@ -279,6 +283,7 @@ impl WordApp {
             backstage,
             backstage_page,
             nav_collapsed,
+            ribbon_collapsed,
         } = ui;
         swap_fields!(w:
             canvas,
@@ -320,6 +325,7 @@ impl WordApp {
             backstage,
             backstage_page,
             nav_collapsed,
+            ribbon_collapsed,
         );
         // The comment panel's state (the selected card and the comment and reply drafts) is the shown document's, not the
         // window's: it stays through the swap, and `carry_document_state` parks it with its document and brings back the

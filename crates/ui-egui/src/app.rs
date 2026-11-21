@@ -88,6 +88,7 @@ impl WordApp {
             backstage,
             backstage_page,
             nav_collapsed,
+            ribbon_collapsed: _,
         } = window_ui::WindowUi::new(session.document_id());
         WordApp {
             session,

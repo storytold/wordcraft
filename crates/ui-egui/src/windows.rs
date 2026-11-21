@@ -265,7 +265,10 @@ impl WordApp {
     /// shows yet. Its OS window shows from the next pass.
     fn open_window(&mut self, doc: u64, view: Option<WindowView>) {
         self.ui.backstage = false;
-        let id = self.windows.list.open(Window::new(doc, Some(Box::new(WindowUi::new(doc))), view, true));
+        let mut state = Box::new(WindowUi::new(doc));
+        // A hidden ribbon stays hidden in the new window, as in Word; the tab still opens on Home.
+        state.ribbon_collapsed = self.ui.ribbon_collapsed;
+        let id = self.windows.list.open(Window::new(doc, Some(state), view, true));
         self.enter_window(id.get());
         self.focus_window(id.get());
         if let Some(ctx) = &self.ctx {
