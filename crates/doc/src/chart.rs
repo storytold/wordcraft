@@ -230,10 +230,26 @@ impl ChartAxis {
 pub const MAX_FMT: usize = 128;
 
 /// A number format code: control characters as spaces, ends trimmed, at most [`MAX_FMT`]
-/// characters.
+/// characters. A trailing space stays when it is part of the code: the character after `_`,
+/// `*` or `\`, or text inside quotes.
 pub fn clean_fmt(s: &str) -> String {
-    let s: String = s.chars().take(MAX_FMT * 4).map(|c| if c.is_control() { ' ' } else { c }).collect();
-    s.trim().chars().take(MAX_FMT).collect::<String>().trim_end().to_string()
+    let chars: Vec<char> = s.chars().take(MAX_FMT * 4).skip_while(|c| c.is_whitespace() || c.is_control()).take(MAX_FMT).collect();
+    let mut keep = 0;
+    let mut quoted = false;
+    let mut operand = false;
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_control() && (!c.is_whitespace() || operand || quoted) {
+            keep = i + 1;
+        }
+        if operand {
+            operand = false;
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if !quoted && matches!(c, '_' | '*' | '\\') {
+            operand = true;
+        }
+    }
+    chars[..keep].iter().map(|&c| if c.is_control() { ' ' } else { c }).collect()
 }
 
 /// A chart WordCraft can edit.
@@ -511,5 +527,38 @@ mod tests {
         };
         spec.sanitize();
         assert_eq!(spec.series[0].line_w, Some(20.0), "a wild width clamps to 20 pt");
+    }
+
+    #[test]
+    fn format_keeps_a_trailing_space_that_is_an_operand() {
+        // `_`, `*` and `\` take the next character, so a final space after one is part of the code.
+        assert_eq!(clean_fmt("0_ "), "0_ ");
+        assert_eq!(clean_fmt("#,##0_ "), "#,##0_ ");
+        assert_eq!(clean_fmt("0* "), "0* ");
+        assert_eq!(clean_fmt("0\\ "), "0\\ ");
+        assert_eq!(clean_fmt("0_ \n "), "0_ ");
+        assert_eq!(clean_fmt("0\"a "), "0\"a ", "a space inside quotes is text");
+        // Other spaces at the ends, and control characters, still go.
+        assert_eq!(clean_fmt(" 0.00 \t"), "0.00");
+        assert_eq!(clean_fmt("0_\n"), "0_");
+        assert_eq!(clean_fmt("0\"a\" "), "0\"a\"");
+        assert_eq!(clean_fmt("\\_ "), "\\_", "an escaped `_` takes no operand");
+        assert_eq!(clean_fmt("0\u{1}0"), "0 0");
+        assert_eq!(clean_fmt("_\u{1}"), "_");
+        assert_eq!(clean_fmt(" \n "), "");
+        let long = format!("{}_ ", "0".repeat(MAX_FMT - 2));
+        assert_eq!(clean_fmt(&long), long, "a code of exactly MAX_FMT characters keeps its operand");
+
+        // Axis and series formats both go through the cleaner.
+        let mut a = ChartAxis { fmt: Some("0_ ".into()), ..Default::default() };
+        a.sanitize();
+        assert_eq!(a.fmt.as_deref(), Some("0_ "));
+        let mut spec = ChartSpec {
+            series: vec![ChartSeries { name: "s".into(), values: vec![Some(1.0)], fmt: Some("#,##0_ ".into()), ..Default::default() }],
+            categories: vec!["a".into()],
+            ..Default::default()
+        };
+        spec.sanitize();
+        assert_eq!(spec.series[0].fmt.as_deref(), Some("#,##0_ "));
     }
 }
