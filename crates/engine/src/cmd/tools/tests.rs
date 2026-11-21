@@ -1775,6 +1775,12 @@ fn compare_revised_only_inheriting_style_resolves_against_merged_base_without_or
 #[test]
 fn compare_style_strips_source_num_change_revisions() {
     let mut original = Document::from_text("Original text.");
+    original.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "OriginalAuthor", "2026-11-01T00:00:00Z"));
+    if let Some(Block::Para(p)) = original.body.first_mut().map(Arc::make_mut)
+        && let Some(r) = p.runs.first_mut()
+    {
+        r.props.ins = Some(0);
+    }
     Arc::make_mut(&mut original.styles).styles.push(wordcraft_doc::Style {
         id: "Matched".into(),
         name: "Matched".into(),
@@ -1782,17 +1788,50 @@ fn compare_style_strips_source_num_change_revisions() {
         para: wordcraft_doc::props::ParaProps { space_after: Some(12.0), ..Default::default() },
         ..Default::default()
     });
+    Arc::make_mut(&mut original.styles).styles.push(wordcraft_doc::Style {
+        id: "UnchangedOrigNumChange".into(),
+        name: "UnchangedOrigNumChange".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps {
+            space_after: Some(6.0),
+            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 0, original: "A.".into() })),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let orig_bytes = wordcraft_docx::write(&original).unwrap();
+    let orig_roundtripped = wordcraft_docx::read(&orig_bytes).unwrap();
+    assert_eq!(orig_roundtripped.revisions.first().map(|r| r.author.as_str()), Some("OriginalAuthor"));
+    assert_eq!(
+        orig_roundtripped.styles.get("UnchangedOrigNumChange").and_then(|st| st.para.num_change.as_deref()).map(|nc| nc.original.as_str()),
+        Some("A."),
+        "original pending num_change must survive DOCX round-trip before compare"
+    );
     let orig_path = std::env::temp_dir().join(format!("wc-compare-strip-num-orig-{}.docx", std::process::id()));
-    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+    std::fs::write(&orig_path, &orig_bytes).unwrap();
 
     let mut revised = Document::from_text("Original text.");
+    revised.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Format, "SourceAuthor", "2026-11-02T00:00:00Z"));
+    revised.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Format, "ExtraAuthor1", "2026-11-03T00:00:00Z"));
+    revised.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Format, "ExtraAuthor2", "2026-11-04T00:00:00Z"));
     Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
         id: "Matched".into(),
         name: "Matched".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
         para: wordcraft_doc::props::ParaProps {
             space_after: Some(24.0),
-            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 42, original: "1.".into() })),
+            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 0, original: "1.".into() })),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "UnchangedOrigNumChange".into(),
+        name: "UnchangedOrigNumChange".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps {
+            space_after: Some(6.0),
+            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 0, original: "X.".into() })),
             ..Default::default()
         },
         ..Default::default()
@@ -1802,33 +1841,152 @@ fn compare_style_strips_source_num_change_revisions() {
         name: "RevisedOnly".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
         para: wordcraft_doc::props::ParaProps {
-            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 99, original: "a)".into() })),
+            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 0, original: "a)".into() })),
             ..Default::default()
         },
         ..Default::default()
     });
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "RevisedOnlyExtraRev".into(),
+        name: "RevisedOnlyExtraRev".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps {
+            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 1, original: "b)".into() })),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "RevisedOnlyOutOfRange".into(),
+        name: "RevisedOnlyOutOfRange".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps {
+            num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 2, original: "i.".into() })),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let rev_bytes = wordcraft_docx::write(&revised).unwrap();
+    let rev_roundtripped = wordcraft_docx::read(&rev_bytes).unwrap();
+    assert_eq!(
+        rev_roundtripped.styles.get("Matched").and_then(|st| st.para.num_change.as_deref()).map(|nc| nc.original.as_str()),
+        Some("1."),
+        "Matched num_change must survive DOCX round-trip before compare"
+    );
+    assert_eq!(
+        rev_roundtripped.styles.get("RevisedOnly").and_then(|st| st.para.num_change.as_deref()).map(|nc| nc.original.as_str()),
+        Some("a)"),
+        "RevisedOnly conflicting num_change must survive DOCX round-trip before compare"
+    );
+    let out_of_range_rev = rev_roundtripped
+        .styles
+        .get("RevisedOnlyOutOfRange")
+        .and_then(|st| st.para.num_change.as_deref())
+        .expect("RevisedOnlyOutOfRange num_change must survive DOCX round-trip before compare");
+    assert_eq!(out_of_range_rev.original, "i.");
+    assert!(
+        (out_of_range_rev.rev as usize) >= orig_roundtripped.revisions.len(),
+        "RevisedOnlyOutOfRange rev {} must exceed original revisions len {}",
+        out_of_range_rev.rev,
+        orig_roundtripped.revisions.len()
+    );
     let rev_path = std::env::temp_dir().join(format!("wc-compare-strip-num-rev-{}.docx", std::process::id()));
-    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+    std::fs::write(&rev_path, &rev_bytes).unwrap();
 
     let mut s = Session::new(Document::new());
-    s.run(
+    let compare_res = s.run(
         "review.compare",
         &json!({
             "original": orig_path.to_string_lossy(),
             "path": rev_path.to_string_lossy(),
             "author": "Reviewer"
         }),
-    )
-    .unwrap();
+    );
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+    compare_res.unwrap();
 
     let matched = s.doc.styles.get("Matched").expect("Matched style");
     assert!(matched.para.num_change.is_none(), "matched style must strip foreign num_change");
+    let matched_fmt = matched.para_change.as_deref().or(matched.para.fmt_change.as_deref()).expect("Matched fmt_change");
+    let rev_entry = s.doc.revisions.get(matched_fmt.rev as usize).expect("Matched fmt_change revision");
+    assert_eq!(rev_entry.kind, RevisionKind::Format);
+    assert_eq!(rev_entry.author, "Reviewer");
 
-    let rev_only = s.doc.styles.get("RevisedOnly").expect("RevisedOnly style");
-    assert!(rev_only.para.num_change.is_none(), "revised-only style must strip foreign num_change");
+    let unchanged_orig = s.doc.styles.get("UnchangedOrigNumChange").expect("UnchangedOrigNumChange style");
+    assert_eq!(
+        unchanged_orig.para.num_change.as_deref().map(|nc| nc.original.as_str()),
+        Some("A."),
+        "unchanged match must preserve the original style's pending num_change instead of dropping or replacing it"
+    );
 
-    let _ = std::fs::remove_file(orig_path);
-    let _ = std::fs::remove_file(rev_path);
+    for id in ["RevisedOnly", "RevisedOnlyExtraRev", "RevisedOnlyOutOfRange"] {
+        let rev_only = s.doc.styles.get(id).expect("revised-only style");
+        assert!(rev_only.para.num_change.is_none(), "{id} must strip foreign num_change");
+        assert!(rev_only.para.fmt_change.is_none(), "{id} must strip foreign para fmt_change");
+        assert!(rev_only.para_change.is_none(), "{id} must strip foreign para_change");
+    }
+
+    let mut accepted = Session::new(s.doc.clone());
+    accepted.run("review.acceptAll", &json!({})).unwrap();
+    let acc_matched = accepted.doc.styles.get("Matched").expect("Matched after acceptAll");
+    assert_eq!(acc_matched.para.space_after, Some(24.0));
+    for id in ["Matched", "UnchangedOrigNumChange", "RevisedOnly", "RevisedOnlyExtraRev", "RevisedOnlyOutOfRange"] {
+        let st = accepted.doc.styles.get(id).expect("style after acceptAll");
+        assert!(st.para.num_change.is_none(), "{id} num_change after acceptAll");
+        assert!(st.para.fmt_change.is_none(), "{id} fmt_change after acceptAll");
+        assert!(st.para_change.is_none(), "{id} para_change after acceptAll");
+    }
+    assert!(accepted.doc.revisions.is_empty(), "acceptAll must clear document revisions");
+
+    let mut rejected = Session::new(s.doc.clone());
+    rejected.run("review.rejectAll", &json!({})).unwrap();
+    let rej_matched = rejected.doc.styles.get("Matched").expect("Matched after rejectAll");
+    assert_eq!(rej_matched.para.space_after, Some(12.0));
+    for id in ["Matched", "UnchangedOrigNumChange", "RevisedOnly", "RevisedOnlyExtraRev", "RevisedOnlyOutOfRange"] {
+        let st = rejected.doc.styles.get(id).expect("style after rejectAll");
+        assert!(st.para.num_change.is_none(), "{id} num_change after rejectAll");
+        assert!(st.para.fmt_change.is_none(), "{id} fmt_change after rejectAll");
+        assert!(st.para_change.is_none(), "{id} para_change after rejectAll");
+    }
+    assert!(rejected.doc.revisions.is_empty(), "rejectAll must clear document revisions");
+}
+
+#[test]
+fn resolve_style_and_style_diffs_handle_num_change() {
+    for accept in [true, false] {
+        let mut st = wordcraft_doc::Style {
+            id: "Direct".into(),
+            name: "Direct".into(),
+            kind: wordcraft_doc::StyleKind::Paragraph,
+            para: wordcraft_doc::props::ParaProps {
+                num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 3, original: "1.".into() })),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(crate::cmd::fmt_revisions::style_diffs(&st).len(), 1, "style_diffs must expose standalone num_change");
+        crate::cmd::fmt_revisions::resolve_style(&mut st, accept);
+        assert!(st.para.num_change.is_none(), "resolve_style(accept={accept}) must clear num_change");
+
+        let mut st_rev = wordcraft_doc::Style {
+            id: "DirectRev".into(),
+            name: "DirectRev".into(),
+            kind: wordcraft_doc::StyleKind::Paragraph,
+            para_change: wordcraft_doc::props::PropChange::boxed(4, wordcraft_doc::props::ParaProps { space_after: Some(8.0), ..Default::default() }),
+            para: wordcraft_doc::props::ParaProps {
+                space_after: Some(16.0),
+                num_change: Some(Box::new(wordcraft_doc::props::NumChange { rev: 9, original: "1.".into() })),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(crate::cmd::fmt_revisions::style_diffs(&st_rev).len(), 2, "distinct para_change and num_change revs are separate diffs");
+        crate::cmd::fmt_revisions::resolve_style_rev(&mut st_rev, 4, accept);
+        assert_eq!(st_rev.para.num_change.as_deref().map(|nc| nc.rev), Some(9), "resolving rev 4 must keep distinct num_change rev 9");
+        crate::cmd::fmt_revisions::resolve_style_rev(&mut st_rev, 9, accept);
+        assert!(st_rev.para.num_change.is_none(), "resolve_style_rev(accept={accept}) must clear matching rev");
+    }
 }
 
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.

@@ -32,8 +32,6 @@ fn records(id: &str) -> bool {
 
 /// Tables nested deeper than this aren't compared (hostile documents).
 const MAX_DEPTH: usize = 16;
-/// A `numPr` that names only a level; the list comes from the based-on style.
-const LEVEL_ONLY: u32 = u32::MAX;
 
 /// A paragraph's, table's or cell's tracked formatting change, if it carries one.
 type Slot<T> = Option<Box<PropChange<T>>>;
@@ -171,7 +169,9 @@ impl Recorder<'_> {
                         }
                     }
                 }
-                (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() && tb.grid == ta.grid => {
+                (Block::Table(tb), Block::Table(ta))
+                    if tb.rows.len() == ta.rows.len() && (tb.grid == ta.grid || (compare_table && tb.grid.len() == ta.grid.len())) =>
+                {
                     let Block::Table(ta) = Arc::make_mut(a) else { continue };
                     self.table_with(tb, ta, depth, compare_table);
                 }
@@ -182,7 +182,7 @@ impl Recorder<'_> {
 
     /// Record formatting changes between matching table rows, cells, and nested blocks.
     fn table_with(&mut self, tb: &Table, ta: &mut Table, depth: usize, compare_table: bool) {
-        if tb.rows.len() != ta.rows.len() || tb.grid != ta.grid || depth > MAX_DEPTH {
+        if tb.rows.len() != ta.rows.len() || (tb.grid != ta.grid && !(compare_table && tb.grid.len() == ta.grid.len())) || depth > MAX_DEPTH {
             return;
         }
         if let Some(Replacement(w)) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
@@ -356,19 +356,37 @@ pub(crate) fn compare_style(
     let mut changed = false;
     let old_para_ch = old.para_change.clone().or_else(|| old.para.fmt_change.clone());
     let new_para_ch = new.para_change.clone().or_else(|| new.para.fmt_change.clone());
-    if new.kind != wordcraft_doc::StyleKind::Character
-        && let Some(Replacement(want)) = r.change_values(old.para.formatting(), new.para.formatting(), &old_para_ch, &new_para_ch)
-    {
-        // The recorded old side is either the original style's earlier change (kept when the
-        // formatting matches or belongs to this author) or its current properties. Carry the
-        // matching provenance so rejecting writes the right list.
-        let same_formatting = old.para.formatting() == new.para.formatting();
-        let own = old_para_ch.as_ref().is_some_and(|c| before.get(c.rev as usize).is_some_and(|r| r.author == author));
-        let from_old_change = old_para_ch.is_some() && (same_formatting || own);
-        new.old_numbering_from_base = if from_old_change { old.old_numbering_from_base } else { old.numbering_from_base };
-        new.para_change = want.clone();
-        new.para.fmt_change = want;
-        changed = true;
+    if new.kind != wordcraft_doc::StyleKind::Character {
+        let fb = old.para.formatting();
+        let fa = new.para.formatting();
+        let same_para = fb == fa && old.numbering_from_base == new.numbering_from_base;
+        let own = old_para_ch.as_ref().filter(|c| r.own(c.rev));
+        let want = if same_para {
+            (new_para_ch.is_none() && old_para_ch.is_some()).then(|| old_para_ch.clone())
+        } else {
+            let old_val = own.map(|c| c.old.clone()).unwrap_or(fb);
+            let old_prov = if own.is_some() { old.old_numbering_from_base } else { old.numbering_from_base };
+            let next = if old_val == fa && old_prov == new.numbering_from_base {
+                None
+            } else {
+                let rev = own.map(|c| c.rev).unwrap_or_else(|| r.rid());
+                PropChange::boxed(rev, old_val)
+            };
+            (next != new_para_ch).then_some(next)
+        };
+        if let Some(want) = want {
+            // The recorded old side is either the original style's earlier change (kept when the
+            // formatting matches or belongs to this author) or its current properties. Carry the
+            // matching provenance so rejecting writes the right list.
+            let from_old_change = old_para_ch.is_some() && (same_para || own.is_some());
+            new.old_numbering_from_base = if from_old_change { old.old_numbering_from_base } else { old.numbering_from_base };
+            new.para_change = want.clone();
+            new.para.fmt_change = want;
+            changed = true;
+        }
+        if same_para && new.para.num_change.is_none() && old.para.num_change.is_some() {
+            new.para.num_change = old.para.num_change.clone();
+        }
     }
     let old_chr_ch = old.chr_change.clone().or_else(|| old.chr.fmt_change.clone());
     let new_chr_ch = new.chr_change.clone().or_else(|| new.chr.fmt_change.clone());
@@ -415,8 +433,9 @@ pub fn para_diff(p: &ParaProps) -> Vec<Value> {
 pub fn style_diffs(st: &Style) -> Vec<(u32, Vec<Value>)> {
     let mut out: Vec<(u32, Vec<Value>)> = Vec::new();
     for (rev, prop, value) in [
-        st.para_change.as_ref().map(|ch| (ch.rev, "para", diff(&ch.old.formatting(), &st.para.formatting()))),
-        st.chr_change.as_ref().map(|ch| (ch.rev, "chr", diff(&ch.old.formatting(), &st.chr.formatting()))),
+        st.para_change.as_ref().map(|ch| (ch.rev, "para", json!(diff(&ch.old.formatting(), &st.para.formatting())))),
+        st.para.num_change.as_ref().map(|nc| (nc.rev, "numbering", json!(nc.original))),
+        st.chr_change.as_ref().map(|ch| (ch.rev, "chr", json!(diff(&ch.old.formatting(), &st.chr.formatting())))),
     ]
     .into_iter()
     .flatten()
@@ -535,37 +554,17 @@ pub(crate) fn recompute_inherited_numbering(sheet: &mut StyleSheet) {
 
 /// How many `based_on` hops `id` is from its root; a cycle or an over-deep chain sorts last.
 fn style_depth(sheet: &wordcraft_doc::styles::StyleSheet, id: &str) -> Option<usize> {
-    let mut id = Some(id);
-    let mut depth = 0;
-    while let Some(style_id) = id {
-        if depth > MAX_DEPTH {
-            return None;
-        }
-        depth += 1;
-        let st = sheet.styles.iter().find(|s| s.id == style_id)?;
-        id = st.based_on.as_deref();
+    let chain = sheet.chain(id);
+    let root = chain.first()?;
+    if root.based_on.as_deref().is_some_and(|b| sheet.get(b).is_some()) {
+        return None;
     }
-    Some(depth)
+    Some(chain.len())
 }
 
-/// The nearest list a based-on chain names, in the sheet's current (possibly restored) state.
+/// The nearest explicit list a based-on chain names, in the sheet's current (possibly restored) state.
 fn inherited_list(sheet: &wordcraft_doc::styles::StyleSheet, base: &str) -> Option<u32> {
-    let mut id = Some(base);
-    let mut depth = 0;
-    while let Some(style_id) = id {
-        if depth > MAX_DEPTH {
-            return None;
-        }
-        depth += 1;
-        let st = sheet.styles.iter().find(|s| s.id == style_id)?;
-        if let Some(n) = st.para.numbering
-            && n.num != LEVEL_ONLY
-        {
-            return Some(n.num);
-        }
-        id = st.based_on.as_deref();
-    }
-    None
+    sheet.chain(base).into_iter().rev().find_map(|st| (!st.numbering_from_base).then_some(st.para.numbering).flatten().map(|n| n.num))
 }
 
 /// Accept or reject every table, row, cell and section change in `blocks` (paragraph changes
@@ -631,6 +630,7 @@ pub fn resolve_style(st: &mut Style, accept: bool) {
         st.numbering_from_base = st.old_numbering_from_base;
     }
     st.para.fmt_change = None;
+    st.para.num_change = None;
     if let Some(ch) = st.chr_change.take().or_else(|| st.chr.fmt_change.take()).filter(|_| !accept) {
         st.chr = ch.old;
     }
@@ -641,11 +641,16 @@ pub fn resolve_style(st: &mut Style, accept: bool) {
 /// and run properties can carry different revisions).
 pub fn resolve_style_rev(st: &mut Style, rev: u32, accept: bool) {
     if let Some(ch) = st.para_change.take_if(|ch| ch.rev == rev).or_else(|| st.para.fmt_change.take_if(|ch| ch.rev == rev)).filter(|_| !accept) {
+        let keep_num_change = st.para.num_change.take().filter(|nc| nc.rev != rev);
         st.para = ch.old;
+        st.para.num_change = keep_num_change;
         st.numbering_from_base = st.old_numbering_from_base;
     }
     if st.para.fmt_change.as_ref().is_some_and(|ch| ch.rev == rev) {
         st.para.fmt_change = None;
+    }
+    if st.para.num_change.as_ref().is_some_and(|ch| ch.rev == rev) {
+        st.para.num_change = None;
     }
     if let Some(ch) = st.chr_change.take_if(|ch| ch.rev == rev).or_else(|| st.chr.fmt_change.take_if(|ch| ch.rev == rev)).filter(|_| !accept) {
         st.chr = ch.old;

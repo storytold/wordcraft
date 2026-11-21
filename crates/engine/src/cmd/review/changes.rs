@@ -106,13 +106,13 @@ fn resolve_styles_sel(s: &mut Session, whole_body: bool, accept: bool) -> Result
     if !whole_body {
         return Ok(false);
     }
-    if !s
-        .doc
-        .styles
-        .styles
-        .iter()
-        .any(|st| st.para_change.is_some() || st.chr_change.is_some() || st.para.fmt_change.is_some() || st.chr.fmt_change.is_some())
-    {
+    if !s.doc.styles.styles.iter().any(|st| {
+        st.para_change.is_some()
+            || st.chr_change.is_some()
+            || st.para.fmt_change.is_some()
+            || st.chr.fmt_change.is_some()
+            || st.para.num_change.is_some()
+    }) {
         return Ok(false);
     }
     fmt_revisions::resolve_styles(std::sync::Arc::make_mut(&mut s.doc.styles), accept);
@@ -140,7 +140,11 @@ fn navigated_style(s: &Session) -> Option<StyleTarget> {
 /// it was still there.
 fn resolve_style_change(s: &mut Session, t: &StyleTarget, accept: bool) -> bool {
     let revs = |st: &wordcraft_doc::styles::Style| {
-        [st.para_change.as_ref().or(st.para.fmt_change.as_ref()).map(|c| c.rev), st.chr_change.as_ref().or(st.chr.fmt_change.as_ref()).map(|c| c.rev)]
+        [
+            st.para_change.as_ref().or(st.para.fmt_change.as_ref()).map(|c| c.rev),
+            st.para.num_change.as_ref().map(|c| c.rev),
+            st.chr_change.as_ref().or(st.chr.fmt_change.as_ref()).map(|c| c.rev),
+        ]
     };
     if !s.doc.styles.styles.iter().any(|st| st.id == t.style && revs(st).contains(&Some(t.rev))) {
         return false;

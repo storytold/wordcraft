@@ -1006,6 +1006,8 @@ fn adopted_style_rejection_baseline_gets_source_defaults() {
             fmt_change: PropChange::boxed(0, CharProps { italic: Some(true), ..Default::default() }),
             ..Default::default()
         },
+        para_change: PropChange::boxed(0, ParaProps { align: Some(Align::Center), ..Default::default() }),
+        chr_change: PropChange::boxed(0, CharProps { underline: Some(crate::props::Underline::Single), ..Default::default() }),
         ..Default::default()
     });
 
@@ -1019,6 +1021,13 @@ fn adopted_style_rejection_baseline_gets_source_defaults() {
     let para = st.para.fmt_change.as_ref().expect("para change kept").old.clone();
     assert_eq!(para.space_after, Some(11.0), "old paragraph properties keep the source defaults");
     assert_eq!(para.align, Some(Align::Left));
+    let top_chr = st.chr_change.as_ref().expect("top-level chr_change kept").old.clone();
+    assert_eq!(top_chr.font.as_deref(), Some("Source Serif"), "top-level chr_change baseline keeps source defaults");
+    assert_eq!(top_chr.size, Some(15.0));
+    assert_eq!(top_chr.underline, Some(crate::props::Underline::Single));
+    let top_para = st.para_change.as_ref().expect("top-level para_change kept").old.clone();
+    assert_eq!(top_para.space_after, Some(11.0), "top-level para_change baseline keeps source defaults");
+    assert_eq!(top_para.align, Some(Align::Center));
 }
 
 #[test]

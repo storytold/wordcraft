@@ -1193,26 +1193,7 @@ impl Document {
                 restyle(&mut st.linked);
                 // A character style's runs get the defaults through their paragraph's style.
                 if st.based_on.is_none() && st.kind != crate::styles::StyleKind::Character {
-                    let mut chr = src.styles.default_chr.clone();
-                    chr.overlay(&st.chr);
-                    // Rejecting a tracked change restores the old values under this document's
-                    // defaults; give them the source defaults too, as the live values have.
-                    if let Some(c) = chr.fmt_change.as_mut() {
-                        let mut old = src.styles.default_chr.clone();
-                        old.overlay(&c.old);
-                        c.old = old;
-                    }
-                    st.chr = chr;
-                    let mut para = para_defaults.clone();
-                    para.overlay(&st.para);
-                    para.fmt_change = st.para.fmt_change;
-                    para.num_change = st.para.num_change;
-                    if let Some(c) = para.fmt_change.as_mut() {
-                        let mut old = para_defaults.clone();
-                        old.overlay(&c.old);
-                        c.old = old;
-                    }
-                    st.para = para;
+                    overlay_adopted_style_defaults(&mut st, &src.styles.default_chr, &para_defaults);
                 }
             }
             if self.styles.get(&st.id).is_none() {
@@ -1654,6 +1635,29 @@ impl Document {
         }
         Ok(())
     }
+}
+
+/// Overlay the source document's default run and paragraph properties onto an adopted style's
+/// live properties and tracked-change baselines so rejecting restores the source defaults.
+fn overlay_adopted_style_defaults(st: &mut crate::styles::Style, default_chr: &CharProps, para_defaults: &ParaProps) {
+    let mut chr = default_chr.clone();
+    chr.overlay(&st.chr);
+    for slot in [chr.fmt_change.as_mut(), st.chr_change.as_mut()].into_iter().flatten() {
+        let mut old = default_chr.clone();
+        old.overlay(&slot.old);
+        slot.old = old;
+    }
+    st.chr = chr;
+    let mut para = para_defaults.clone();
+    para.overlay(&st.para);
+    para.fmt_change = st.para.fmt_change.take();
+    para.num_change = st.para.num_change.take();
+    for slot in [para.fmt_change.as_mut(), st.para_change.as_mut()].into_iter().flatten() {
+        let mut old = para_defaults.clone();
+        old.overlay(&slot.old);
+        slot.old = old;
+    }
+    st.para = para;
 }
 
 /// Take the drop cap (and its options) off a paragraph's properties.
