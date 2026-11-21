@@ -867,6 +867,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                 app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, body.view.rect);
                 // The bar is its own floating layer: shown after the host, it keeps its buttons' presses (S-L410).
                 crate::mini_toolbar::show(app, ui, body);
+                crate::picture_layout::show(app, ui, layout, body);
             }
         });
     let caret = caret_after.or(caret);

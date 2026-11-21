@@ -124,6 +124,9 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
     let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
     a.run("arrange.bounds", json!({"x": 120, "y": 80})).unwrap();
     a.run("arrange.wrap", json!({"wrap": wrap})).unwrap();
+    // Cover the active story's actual first line, including the header's higher baseline.
+    let text = a.session.layout().caret(&Pos { off: 0, ..pos.clone() }).unwrap();
+    a.run("arrange.bounds", json!({"x":120,"y":text.top})).unwrap();
     let before = a.session.layout().object(&pos, 0).unwrap().rect;
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -142,6 +145,11 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
     let to = from + vec2(50.0, 40.0);
     let button = |at, pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
     if wrap == "behindText" {
+        assert!(
+            h.state_mut().session.layout().object_at_in(0, before.x + before.w * 0.25, before.y + 5.0, 0.0, pos.story).is_none(),
+            "the test click overlaps text"
+        );
+        let text_hit = h.state_mut().session.layout().hit(0, before.x + before.w * 0.25, before.y + 5.0, pos.story).unwrap();
         // A click without drag threshold still reaches the text above the picture.
         h.event(Event::PointerMoved(from));
         h.event(button(from, true));
@@ -150,10 +158,8 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
         for _ in 0..3 {
             h.app_frame();
         }
-        // In the header the picture lies over the body area, clear of the header's own text, so a
-        // click on it selects it (Word); in the body a click still reaches the text behind it.
-        let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_some();
-        assert_eq!(picked, header, "a click selects the header's picture, but only edits the body's text");
+        assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_none(), "a click over text still edits text");
+        assert_eq!(h.state().session.sel, wordcraft_engine::Selection::caret(text_hit));
         if preselect {
             let end = Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
             h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();

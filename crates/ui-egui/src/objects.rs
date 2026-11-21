@@ -563,14 +563,11 @@ impl ObjectGesture {
             let _ = app.run("select.addObject", json!({"pos": object.pos()}));
             return Some(Self::inert());
         }
-        // While editing a header/footer, a click on its Behind Text picture where no header/footer
-        // text covers it (the plain hit test picked it: down over the body, or clear of the text in
-        // the band) selects it, as in Word; only over text does the click defer to that text.
-        // ponytail: headers/footers only; body Behind Text pictures clear of text could do the same.
-        let clear_of_text = matches!(object.story, StoryRef::Part(_))
-            && page_at(body, layout, at)
-                .and_then(|(pp, x, y)| layout.object_at_in(pp.page, x, y, edge_of(pp), object.story))
-                .is_some_and(|o| o.pos() == object.pos());
+        // A click over text edits it; an uncovered part selects the Behind Text picture
+        // immediately, keeping its frame and layout options reachable in every story.
+        let clear_of_text = page_at(body, layout, at)
+            .and_then(|(pp, x, y)| layout.object_at_in(pp.page, x, y, edge_of(pp), object.story))
+            .is_some_and(|o| o.pos() == object.pos());
         if object.behind() && !clear_of_text && behind_draggable(app, &object) {
             let mut g = Self::start(body, object, at)?;
             g.pending_behind = true;

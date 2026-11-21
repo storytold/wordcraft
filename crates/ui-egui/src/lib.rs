@@ -57,6 +57,7 @@ pub mod objects;
 pub mod options;
 pub mod panes;
 pub mod paste_picture;
+mod picture_layout;
 pub mod prefs;
 pub mod previews;
 pub mod print_page;

@@ -1239,8 +1239,16 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     let max_side = h.ctx.input(|i| i.max_texture_side);
     assert!(hit.bounds().w * h.ctx.pixels_per_point() > max_side as f32, "unclamped picture exceeds the texture limit");
     let at = crate::canvas::page_to_screen(h.state_mut(), hit.page, hit.rect.x + 10.0, hit.rect.y + 10.0).expect("the picture center is visible");
-    let meshes = |h: &H| h.output().shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Mesh(_))).count();
-    let at_rest = meshes(&h);
+    let at_rest: std::collections::HashSet<_> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
+            _ => None,
+        })
+        .collect();
+    let aspect = hit.bounds().w / hit.bounds().h;
     h.event(Event::PointerMoved(at));
     button(&h, at, true);
     h.step();
@@ -1248,21 +1256,27 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     h.event(Event::PointerMoved(moved));
     steps(&mut h, 2);
     assert!(h.state().canvas.object_gesture().is_some(), "picture drag started");
-    assert!(meshes(&h) > at_rest, "the drag paints a preview texture beside the page's");
-    // The preview is a textured mesh of the frame; its uploaded texture is what the device limit is about.
+    // UI icons can disappear during a drag. Identify the new, wide preview texture itself rather than counting
+    // all meshes: a page texture or an icon must not satisfy the device-limit check for this picture.
     let textures = h.ctx.tex_manager();
     let textures = textures.read();
     let mut sized = 0;
+    let mut preview_seen = false;
     for shape in &h.output().shapes {
         if let egui::Shape::Mesh(mesh) = &shape.shape
             && let Some(meta) = textures.meta(mesh.texture_id)
         {
             let [width, height] = meta.size;
             assert!(width <= max_side && height <= max_side, "texture is {width}×{height}, texture limit is {max_side}");
+            if !at_rest.contains(&mesh.texture_id) && height > 0 {
+                let ratio = width as f32 / height as f32;
+                preview_seen |= (ratio - aspect).abs() < aspect * 0.05;
+            }
             sized += 1;
         }
     }
-    assert!(sized > 0, "the frame paints textures, the large preview among them");
+    assert!(sized > 0, "the frame paints textures");
+    assert!(preview_seen, "the drag paints its own wide preview texture beside the page's");
 }
 
 /// #6027: a click, or a double-click, in the text of a text box inside a group puts the caret
