@@ -1,5 +1,5 @@
 //! File › Options (#485): a page list on the left (General, Display, Proofing, Save, Language,
-//! Accessibility, Advanced, Agents), the chosen page's settings on the right, shown through the
+//! Accessibility, Advanced, Accounts, Agents), the chosen page's settings on the right, shown through the
 //! framework's `PreferencesPage`. Only settings WordCraft carries out are shown. Every row applies
 //! at once through the command agents use (`file.options` and the `ui.*`/`view.*` commands), so a
 //! setting an agent changes and the same setting changed here take one path. Settings the app keeps
@@ -623,8 +623,10 @@ impl PreferencesModel for OptionsModel<'_> {
         ));
         let advanced = page_of("advanced", tl!("Advanced"), groups);
 
+        // Google Drive's switch, the app registration and the sign-in (`gdrive::accounts`).
+        let accounts = PageSpec::custom("accounts", tl!("Accounts"));
         let agents = PageSpec::custom("agents", tl!("Agents"));
-        vec![general, display, proofing, save, language, accessibility, advanced, agents]
+        vec![general, display, proofing, save, language, accessibility, advanced, accounts, agents]
     }
 
     fn set(&mut self, key: &str, value: PrefValue) {
@@ -734,6 +736,9 @@ impl PreferencesModel for OptionsModel<'_> {
     }
 
     fn custom_page(&mut self, ui: &mut Ui, page: &str) {
+        if page == "accounts" {
+            crate::gdrive::accounts(self.app, ui);
+        }
         if page == "agents" {
             Text::new(tl!("Agents")).role(TypeRole::Heading).show(ui);
             Text::new(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."))

@@ -447,9 +447,20 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         Text::new(app.export_error.clone()).show(ui);
     }
     // Each format is a button across the column, its name at the reading start, as production's 320 pt rows.
+    // To Google Drive (File › Options › Accounts): only the formats written from bytes.
+    let to_drive = crate::gdrive::exports_to_drive(app);
     for &(label, ext) in EXPORT_FORMATS {
+        if to_drive && !crate::gdrive::EXPORT_FORMATS.contains(&ext) {
+            continue;
+        }
         if clicked(&Button::new(tl!(label)).id_salt(ext).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
-            app.export_dialog(ext);
+            if to_drive {
+                if let Err(e) = app.run("ui.drive.export", json!({"format": ext})) {
+                    crate::gdrive::export_failed(app, e);
+                }
+            } else {
+                app.export_dialog(ext);
+            }
         }
     }
     // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.

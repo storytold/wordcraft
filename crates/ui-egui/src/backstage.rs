@@ -30,7 +30,7 @@ use crate::WordApp;
 pub(crate) use thumbs::TemplateThumbs;
 
 /// The side menu: page id, label and icon (#1714).
-const PAGES: [(&str, &str, &str); 11] = [
+const PAGES: [(&str, &str, &str); 12] = [
     ("home", "Home", "homeFolder"),
     ("new", "New", "blankPage"),
     ("open", "Open", "open"),
@@ -38,6 +38,7 @@ const PAGES: [(&str, &str, &str); 11] = [
     ("recover", "Recover", "recover"),
     ("save", "Save", "save"),
     ("saveAs", "Save As", "saveAs"),
+    ("drive", "Google Drive", "cloudDrive"),
     ("print", "Print", "print"),
     ("export", "Export", "export"),
     ("close", "Close", "close"),
@@ -191,9 +192,10 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let choice = MenuChoice::default();
     let current = app.ui.backstage_page.clone();
     let show_discord = app.ui.show_discord;
+    let google_drive = app.ui.google_drive;
     // The row starts at the reading start, so the side menu is at the right in a mirrored interface.
     let _ = Row::new().fill().show(ui, |ui, _| {
-        side_menu(ui, band, &current, has_document, show_discord, &choice);
+        side_menu(ui, band, &current, (has_document, google_drive), show_discord, &choice);
         let print = current == "print";
         // Stacked rows' spacing between a page's controls, as production's (Browse… over Browse in WordCraft…).
         // The page stands on the window's background (production's `t.ribbon`, #f9f9f9 light), not the white panel,
@@ -234,6 +236,7 @@ fn page_body(ui: &mut Ui, app: &mut WordApp, page: &str) {
         "info" => pages::info(ui, app),
         "recover" => pages::recovery(ui, app),
         "print" | "export" => pages::export(ui, app),
+        "drive" => crate::gdrive::page(app, ui),
         "options" => crate::options::page(app, ui),
         _ => home::home(ui, app),
     }
@@ -242,7 +245,8 @@ fn page_body(ui: &mut Ui, app: &mut WordApp, page: &str) {
 /// The side menu: Back, one button per page (the page buttons are one inspected region, from which
 /// the keytips take their rects), then About and the community link unless the user turned the
 /// community button off, as the title bar's pill does.
-fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_discord: bool, choice: &MenuChoice) {
+/// `shown` is (a document is open, File › Google Drive is turned on).
+fn side_menu(ui: &mut Ui, band: f32, current: &str, shown: (bool, bool), show_discord: bool, choice: &MenuChoice) {
     // At least the side menu's width and as tall as the window, About at its foot (production's 200 pt full-height
     // rail); its rows are the side menu place's (production's 38 pt rows of 14 pt names).
     let _ = Stack::new()
@@ -275,7 +279,7 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
                     |overrides| {
                         overrides.values.set(ControlPlace::SideMenu);
                     },
-                    |ui| page_rows(ui, current, has_document, choice),
+                    |ui| page_rows(ui, current, shown, choice),
                 );
             });
         });
@@ -303,8 +307,12 @@ fn footer_links(ui: &mut Ui, show_discord: bool, choice: &MenuChoice) {
 }
 
 /// The side menu's page rows, one full-width button per page.
-fn page_rows(ui: &mut Ui, current: &str, has_document: bool, choice: &MenuChoice) {
+fn page_rows(ui: &mut Ui, current: &str, (has_document, google_drive): (bool, bool), choice: &MenuChoice) {
     for (id, name, icon) in PAGES {
+        // File › Google Drive only once it is turned on (File › Options › Accounts).
+        if id == "drive" && !google_drive {
+            continue;
+        }
         // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
         let on = has_document || works_without_document(id);
         let row = Button::new(label(name))
@@ -333,12 +341,16 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str, ctx: &egui::Context) {
         // A document without a file goes to the Save As page (as in Word) instead
         // of `file.save`, which would also open the native Save As dialog.
         // In the browser a save is a download, so it saves right away.
-        "save" if app.session.path.is_none() && !app.browser_saves() => {
+        // A document from Google Drive saves back to Drive.
+        "save" if app.session.path.is_none() && !app.browser_saves() && !crate::gdrive::saves_to_drive(app) => {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
             let r = app.run("file.save", json!({}));
-            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
+            // A Drive save runs in the background (`started`) and reports in the status bar.
+            if r.is_ok_and(|v| {
+                v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some() || v.get("started").is_some()
+            }) {
                 app.ui.backstage = false;
                 app.canvas.focus_page(ctx);
             } else {
@@ -359,7 +371,7 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str, ctx: &egui::Context) {
 
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
-    matches!(page, "home" | "new" | "open" | "options")
+    matches!(page, "home" | "new" | "open" | "drive" | "options")
 }
 
 /// The built-in templates in gallery order: display label and the `file.new` template id.

@@ -33,6 +33,8 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
             tl!("Edited")
         } else if app.session.path.is_some() {
             tl!("Saved")
+        } else if crate::gdrive::saved_in_drive(app) {
+            tl!("Saved to Google Drive")
         } else {
             tl!("Not saved")
         };

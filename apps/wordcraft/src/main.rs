@@ -213,6 +213,8 @@ fn services(spool: Spool, intake: FileIntake) -> Services {
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
         make_default_app,
         intake: Some(intake),
+        // File › Google Drive reads its OAuth client from `google-drive.json` here (docs/google-drive.md).
+        drive_profile: wordcraft_control_key::settings_dir(),
         ..Default::default()
     }
 }

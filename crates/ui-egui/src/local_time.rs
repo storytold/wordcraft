@@ -29,6 +29,12 @@ pub(crate) fn comment_time(c: &wordcraft_doc::Comment) -> String {
     stamp(&c.date, c.date_utc.as_deref(), offset_minutes)
 }
 
+/// A UTC timestamp such as Google Drive's `modifiedTime` (`2026-11-09T10:00:00.000Z`) as
+/// `YYYY-MM-DD HH:MM` in local time; empty when it isn't a date.
+pub(crate) fn utc_time(rfc3339: &str) -> String {
+    stamp(rfc3339, Some(rfc3339), offset_minutes)
+}
+
 fn stamp(date: &str, date_utc: Option<&str>, offset: impl Fn(i64) -> i32) -> String {
     let utc = date_utc.and_then(parse).filter(|t| t.timed).map(|t| Time { zone: Some(t.zone.unwrap_or(0)), ..t });
     let local_date = || parse(date).map(|t| if date.trim_end().ends_with(['Z', 'z']) { Time { zone: None, ..t } } else { t });

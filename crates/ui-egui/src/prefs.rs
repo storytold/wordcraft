@@ -167,6 +167,9 @@ pub struct Prefs {
     /// How far a touchpad swipe the system reports in points (Wayland, macOS) scrolls (#6146).
     #[serde(default, alias = "touchpadScrollSpeed")]
     pub touchpad_scroll_speed: ScrollSpeed,
+    /// File › Options › Accounts › Google Drive: off until turned on, so File › Google Drive
+    /// appears only for people who set up a Google client.
+    pub google_drive: bool,
 }
 
 impl Default for Prefs {
@@ -228,6 +231,7 @@ impl Default for Prefs {
             font_download_notice: true,
             scroll_speed: ScrollSpeed::default(),
             touchpad_scroll_speed: ScrollSpeed::default(),
+            google_drive: false,
         }
     }
 }

@@ -68,6 +68,8 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("clear", include_bytes!("../icons/clear.svg")),
     ("wordcraft.close", include_bytes!("../icons/close.svg")),
     ("closeOutline", include_bytes!("../icons/closeOutline.svg")),
+    // Google Drive's File page: a plain cloud with an arrow up into it (generic; no service's logo).
+    ("cloudDrive", include_bytes!("../icons/cloudDrive.svg")),
     ("colWidth", include_bytes!("../icons/colWidth.svg")),
     ("colors", include_bytes!("../icons/colors.svg")),
     ("columns", include_bytes!("../icons/columns.svg")),
