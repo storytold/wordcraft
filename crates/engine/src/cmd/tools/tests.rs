@@ -2915,19 +2915,135 @@ fn compare_rejecting_after_adding_section_break_restores_correct_section() {
     assert!(!s.doc.sections()[0].1.title_page, "Section A is untouched");
 }
 
-/// #6122 review: hostile/corrupted compare_hf records (usize::MAX index, length cap) are safe.
+/// #6122 review: adding a section break in a multi-section document where an earlier section
+/// already had `title_page = true` and its own First header restores only the section that
+/// originally owned the Compare change (both in-memory and across DOCX save/reopen).
+#[test]
+fn compare_rejecting_after_adding_section_break_in_multi_section_doc_restores_owning_section() {
+    let mut orig = Session::new(Document::from_text("Sec 0 A.\nSec 0 B.\nSec 1 A.\nSec 1 B.\nSec 2."));
+    let h0_first = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 0 First", CharProps::default()))]);
+    let h0_def = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 0 Default", CharProps::default()))]);
+    let h1_def = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 1 Default", CharProps::default()))]);
+    let h2_def = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 2 Default", CharProps::default()))]);
+
+    let sec0 = wordcraft_doc::section::SectionProps {
+        title_page: true,
+        headers: wordcraft_doc::section::HeaderSet { first: Some(h0_first), default: Some(h0_def), ..Default::default() },
+        ..Default::default()
+    };
+    let sec1 = wordcraft_doc::section::SectionProps {
+        title_page: false,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h1_def), ..Default::default() },
+        ..Default::default()
+    };
+    orig.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().section = Some(Box::new(sec0));
+    orig.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(3)).unwrap().section = Some(Box::new(sec1));
+    orig.doc.last_section.title_page = false;
+    orig.doc.last_section.headers.default = Some(h2_def);
+
+    let mut rev = Session::new(Document::from_text("Sec 0 A.\nSec 0 B.\nSec 1 A.\nSec 1 B.\nSec 2."));
+    let h0_first_rev = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 0 First", CharProps::default()))]);
+    let h0_def_rev = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 0 Default", CharProps::default()))]);
+    let h1_first_rev =
+        rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 1 Inserted First", CharProps::default()))]);
+    let h1_def_rev = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 1 Default", CharProps::default()))]);
+    let h2_def_rev = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Sec 2 Default", CharProps::default()))]);
+
+    let rev_sec0 = wordcraft_doc::section::SectionProps {
+        title_page: true,
+        headers: wordcraft_doc::section::HeaderSet { first: Some(h0_first_rev), default: Some(h0_def_rev), ..Default::default() },
+        ..Default::default()
+    };
+    let rev_sec1 = wordcraft_doc::section::SectionProps {
+        title_page: true,
+        headers: wordcraft_doc::section::HeaderSet { first: Some(h1_first_rev), default: Some(h1_def_rev), ..Default::default() },
+        ..Default::default()
+    };
+    rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().section = Some(Box::new(rev_sec0));
+    rev.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(3)).unwrap().section = Some(Box::new(rev_sec1));
+    rev.doc.last_section.title_page = false;
+    rev.doc.last_section.headers.default = Some(h2_def_rev);
+
+    let rev_file = TempDocx::new("rev-multi-sec-shift");
+    rev_file.save(&rev.doc);
+
+    // Case 1: Insert a section break inside Section 1 (after "Sec 1 A.") so Section 0 (unchanged,
+    // title_page = true + First header) and shifted Section 2 (original Section 1) are both eligible.
+    {
+        let mut s = Session::new(orig.doc.clone());
+        s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().section =
+            Some(Box::new(wordcraft_doc::section::SectionProps::default()));
+        assert_eq!(s.doc.sections().len(), 4);
+        assert!(s.doc.sections()[0].1.title_page, "Section 0 starts with title_page = true");
+        assert!(s.doc.sections()[2].1.title_page, "Shifted original Section 1 has title_page = true");
+
+        s.run("review.rejectAll", &json!({})).unwrap();
+        assert!(s.doc.sections()[0].1.title_page, "Reject All leaves Section 0's own title_page = true intact");
+        assert!(!s.doc.sections()[1].1.title_page, "New break section remains title_page = false");
+        assert!(!s.doc.sections()[2].1.title_page, "Reject All restores title_page = false on the shifted owning section");
+        assert!(!s.doc.last_section.title_page, "Last section remains title_page = false");
+    }
+
+    // Case 2: Insert a section break inside Section 0 (before original Section 1), shifting both
+    // original Section 0 (to index 1) and original Section 1 (to index 2).
+    {
+        let mut s = Session::new(orig.doc.clone());
+        s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section =
+            Some(Box::new(wordcraft_doc::section::SectionProps::default()));
+        assert_eq!(s.doc.sections().len(), 4);
+
+        s.run("review.rejectAll", &json!({})).unwrap();
+        assert!(!s.doc.sections()[0].1.title_page, "New break section remains title_page = false");
+        assert!(s.doc.sections()[1].1.title_page, "Shifted original Section 0 keeps its own title_page = true");
+        assert!(!s.doc.sections()[2].1.title_page, "Shifted original Section 1 restores title_page = false");
+        assert!(!s.doc.last_section.title_page, "Last section remains title_page = false");
+    }
+
+    // Case 3: Save to DOCX, reopen, then insert a section break inside Section 1 and Reject All.
+    {
+        let mut s = orig;
+        s.run("review.compare", &json!({"path": rev_file.path_str(), "headersFooters": true, "formatting": false})).unwrap();
+        let saved = TempDocx::new("saved-multi-sec-shift");
+        saved.save(&s.doc);
+
+        let reopened = crate::io::open_path(std::path::Path::new(&saved.path_str())).expect("reopen saved comparison");
+        let mut s = Session::new(reopened);
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().section =
+            Some(Box::new(wordcraft_doc::section::SectionProps::default()));
+        assert_eq!(s.doc.sections().len(), 4);
+
+        s.run("review.rejectAll", &json!({})).unwrap();
+        assert!(s.doc.sections()[0].1.title_page, "After reopen, Reject All leaves Section 0's own title_page = true intact");
+        assert!(!s.doc.sections()[2].1.title_page, "After reopen, Reject All restores title_page = false on the shifted owning section");
+    }
+}
+
+/// #6122 review: hostile/corrupted compare_hf records (usize::MAX index, stale keys, duplicates)
+/// are safe, bounded, and still restore valid saved flags when stale entries precede them.
 #[test]
 fn compare_reject_all_with_hostile_compare_hf_flags_is_safe_and_bounded() {
     let mut s = Session::new(Document::from_text("Para 1\nPara 2"));
-    let mut title_page = vec![(Some(usize::MAX), false), (Some(1000), false)];
+    let sec0 = wordcraft_doc::section::SectionProps { title_page: true, ..Default::default() };
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(sec0));
+    s.doc.last_section.title_page = true;
+    s.doc.settings.even_odd_headers = true;
+    assert_eq!(s.doc.sections().len(), 2);
+
+    // More stale keys than sections precede the valid keys; stale entries must not consume the cap.
+    let mut title_page = vec![(Some(usize::MAX), false), (Some(1000), false), (Some(2), false), (Some(0), false), (None, false)];
     for _ in 0..10_000 {
-        title_page.push((Some(0), false));
+        title_page.push((Some(0), true));
     }
     s.doc.compare_hf = Some(wordcraft_doc::CompareHfFlags { title_page, even_odd: Some(false) });
 
-    // Must not panic on usize::MAX and must finish instantly without scanning 10k times.
+    // Must not panic on usize::MAX, must finish without scanning 10k duplicates, and must restore valid targets.
     s.run("review.rejectAll", &json!({})).unwrap();
     assert!(s.doc.compare_hf.is_none());
+    assert!(!s.doc.sections()[0].1.title_page, "valid non-final title_page flag is restored despite preceding stale entries");
+    assert!(!s.doc.last_section.title_page, "valid last_section title_page flag is restored despite preceding stale entries");
+    assert!(!s.doc.settings.even_odd_headers, "even_odd_headers is restored");
 }
 
 /// #6122 review: revised header with tracked deletion doesn't keep del revision ids pointing at Compare's ins.

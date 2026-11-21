@@ -437,6 +437,9 @@ impl Document {
         let Some(Block::Para(p)) = self.body.get_mut(block).map(Arc::make_mut) else { return false };
         let Some(before) = p.section.take() else { return false };
         self.section_mut(block).absorb(&before);
+        if before.compare_title_page.0.is_some() || self.has_live_compare_title_page() {
+            self.sync_compare_hf_title_page();
+        }
         true
     }
 

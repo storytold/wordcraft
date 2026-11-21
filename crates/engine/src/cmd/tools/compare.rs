@@ -71,6 +71,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         s.note_body_replaced();
         s.math = None;
     }
+    s.doc.clear_compare_hf();
     let level = p::str(v, "level").unwrap_or("word");
     let opts = CompareOptions {
         case: p::bool(v, "caseChanges").unwrap_or(true),
@@ -531,9 +532,12 @@ fn compare_headers_and_footers(
 
         if orig_title_page != rev_title_page {
             if let Some(end) = sec_key.and_then(|si| res_ends.get(si).copied()) {
-                s.doc.section_mut(end).title_page = rev_title_page;
+                let sec = s.doc.section_mut(end);
+                sec.title_page = rev_title_page;
+                sec.compare_title_page = wordcraft_doc::section::CompareTitlePage(Some(orig_title_page));
             } else {
                 s.doc.last_section.title_page = rev_title_page;
+                s.doc.last_section.compare_title_page = wordcraft_doc::section::CompareTitlePage(Some(orig_title_page));
             }
             let flags = s.doc.compare_hf.get_or_insert_with(Default::default);
             if !flags.title_page.iter().any(|(k, _)| *k == sec_key) {

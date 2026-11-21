@@ -245,7 +245,9 @@ pub fn from_shared_model(mut source: craft_wordmodel::Document) -> Result<wordcr
     document.glossary = glossary.into_iter().map(|g| glossary_value_from_shared(g, &mut graphics)).collect::<Result<_, _>>()?;
     document.missing_pictures = missing_pictures_from_shared(missing_pictures)?;
     document.fit_state = fit_state;
-    document.compare_hf = compare_hf;
+    if let Some(flags) = compare_hf {
+        document.hydrate_compare_hf(flags);
+    }
     Ok(document)
 }
 
@@ -426,8 +428,8 @@ pub fn to_shared_model(source: &wordcraft_doc::Document) -> Result<craft_wordmod
         keep_store(&mut document, crate::fit::PART, crate::fit::write(fit)?);
     }
     // The Compare flag record travels the same way (`CompareHfFlags`).
-    if let Some(flags) = &source.compare_hf {
-        keep_store(&mut document, crate::compare_hf::PART, crate::compare_hf::write(flags)?);
+    if let Some(flags) = source.compare_hf_for_save() {
+        keep_store(&mut document, crate::compare_hf::PART, crate::compare_hf::write(&flags)?);
     }
 
     Ok(document)
