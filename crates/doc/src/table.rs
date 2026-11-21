@@ -219,6 +219,18 @@ impl Table {
             if nc.props.vmerge == VMerge::Restart {
                 nc.props.vmerge = VMerge::None;
             }
+            // #6325: the new cell's paragraph is a fresh `Paragraph::new()` with default
+            // props, so the source cell's paragraph margin settings (indents / spacing)
+            // would be lost. Copy the source cell's first paragraph's props; the new
+            // paragraph keeps its empty text. `formatting()` drops the tracked-change
+            // records (`fmt_change` / `num_change`): a new paragraph must not inherit a
+            // revision claiming its formatting changed. (Its paragraph mark is not
+            // copied: font formatting is #6326, a separate issue.)
+            if let Some(src_para) = c.blocks.iter().find_map(|b| b.as_para()) {
+                let mut new_para = Paragraph::new();
+                new_para.props = src_para.props.formatting();
+                nc.blocks = vec![para_block(new_para)];
+            }
             row.cells.push(nc);
         }
         self.rows.insert(at.min(self.rows.len()), row);
@@ -726,6 +738,49 @@ mod tests {
         let huge = Table::new(1_000_000, 1000, 100.0);
         assert_eq!(huge.rows.len(), MAX_ROWS);
         assert_eq!(huge.cols(), MAX_COLS);
+    }
+
+    /// #6325: a row inserted from a source row keeps the source cells' margins, and the new
+    /// cells' paragraphs keep the source paragraphs' margin settings (indents / spacing).
+    /// Cell margins are already cloned by `insert_row`; the paragraph props are the layer
+    /// this test pins down.
+    #[test]
+    fn insert_row_inherits_cell_and_paragraph_margins() {
+        let mut t = Table::new(2, 2, 200.0);
+        t.rows[0].cells[0].props.margins = Some([10.0, 11.0, 12.0, 13.0]);
+        t.rows[0].cells[1].props.partial_margins = Some([None, Some(20.0), None, None]);
+        let mut p = Paragraph::new();
+        p.props.indent_left = Some(14.0);
+        p.props.indent_right = Some(15.0);
+        p.props.indent_first = Some(3.0);
+        p.props.space_before = Some(6.0);
+        p.props.space_after = Some(7.0);
+        // A non-default mark pins the #6325/#6326 boundary: font formatting is a
+        // separate issue (#6326) and must NOT be inherited by the new row.
+        p.mark.bold = Some(true);
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        let mut q = Paragraph::new();
+        q.props.indent_left = Some(8.0);
+        t.rows[0].cells[1].blocks = vec![para_block(q)];
+
+        t.insert_row(1, 0);
+        assert_eq!(t.rows.len(), 3);
+        let row = &t.rows[1];
+        // Control: cell-level margins are already cloned by `insert_row`.
+        assert_eq!(row.cells[0].props.margins, Some([10.0, 11.0, 12.0, 13.0]));
+        assert_eq!(row.cells[1].props.partial_margins, Some([None, Some(20.0), None, None]));
+        // The defect (#6325): the new cells' paragraphs reset to defaults.
+        let para = row.cells[0].blocks[0].as_para().expect("new cell holds a paragraph");
+        assert!(para.text.is_empty(), "new cell stays empty");
+        assert_eq!(para.props.indent_left, Some(14.0));
+        assert_eq!(para.props.indent_right, Some(15.0));
+        assert_eq!(para.props.indent_first, Some(3.0));
+        assert_eq!(para.props.space_before, Some(6.0));
+        assert_eq!(para.props.space_after, Some(7.0));
+        assert_eq!(para.mark, crate::CharProps::default(), "font formatting is #6326, not inherited");
+        let para1 = row.cells[1].blocks[0].as_para().expect("new cell holds a paragraph");
+        assert!(para1.text.is_empty(), "new cell stays empty");
+        assert_eq!(para1.props.indent_left, Some(8.0));
     }
 
     #[test]
