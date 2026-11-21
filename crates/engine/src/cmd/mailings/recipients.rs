@@ -176,7 +176,7 @@ pub(super) fn recipients(s: &mut Session, v: &Value) -> CmdResult {
                         }
                         Pick::Index(0)
                     }
-                    Some(_) => return Err(CmdError::Params("`sheet` must be a sheet name or number".into())),
+                    Some(_) => return Err(CmdError::Params("`sheet` must be a sheet name or positive integer (1 = the first sheet)".into())),
                 };
                 let (names, rows) = read_rows(&bytes, pick).map_err(CmdError::Failed)?;
                 let chosen = match pick {

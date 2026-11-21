@@ -242,7 +242,10 @@ fn recipients_from_a_workbook_ask_for_the_sheet_when_there_are_several() {
     assert_eq!(r["fields"], json!(["Column 1", "Column 2", "Column 3"]));
     assert_eq!(r["records"], 3);
     assert!(s.run("mailings.recipients", &json!({"data": data, "sheet": 3})).is_err());
-    assert!(s.run("mailings.recipients", &json!({"data": data, "sheet": 0})).is_err());
+    assert!(matches!(
+        s.run("mailings.recipients", &json!({"data": data, "sheet": 0})),
+        Err(CmdError::Params(message)) if message == "`sheet` must be a sheet name or positive integer (1 = the first sheet)"
+    ));
     assert!(s.run("mailings.recipients", &json!({"data": "%%%"})).is_err());
 }
 
