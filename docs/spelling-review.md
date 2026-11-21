@@ -8,7 +8,7 @@ Observed the actual Word for Windows interface on the preparation PC on 2026-10-
 
 At a 1920 × 1152 window, the pane occupied approximately 400 logical pixels on the right. Its body had a category heading and dictionary explanation, a framed sentence context approximately 48 px high, a Suggestions heading, and three bordered suggestion rows approximately 68 px high. Ignore Once, Ignore All and Add to Dictionary were text actions below the list. A suggestion's chevron opened Read Aloud, Spell Out, Change All and AutoCorrect actions. These are observations, not a copied screenshot or asset.
 
-WordCraft uses this arrangement and its shared pane host, icons, typography and theme palette. Clicking a suggestion applies the correction directly and advances; the central modal proposal is superseded. The pane supports sentence context, Read Aloud through the existing command, manual replacement and AutoCorrect actions. Word's dictionary definitions/synonyms, Spell Out and Change All are not implemented here. Visual similarity must be assessed from the generated light/dark previews; implementation alone is not evidence of pixel identity.
+WordCraft uses this arrangement and its shared pane host, icons, typography and theme palette. Clicking a suggestion applies the correction directly and advances; the central modal proposal is superseded. The pane supports sentence context, Read Aloud through the existing command, manual replacement, Change All and AutoCorrect actions. Word's dictionary definitions/synonyms and Spell Out are not implemented here. Visual similarity must be assessed from the generated light/dark previews; implementation alone is not evidence of pixel identity.
 
 ## Scope and behavior
 

@@ -22,7 +22,7 @@ use comments::{
     comment_at_caret, comments_change, delete_comment, edit_comment, list_comments, nav_comment, new_comment, reply, validate_comment_id,
 };
 pub use comments::{comment_list, comment_range_at_caret};
-use proofing::{all_issues, issue_at, next_issue, suggestions, thesaurus, word_count};
+use proofing::{all_issues, change_all, issue_at, needs_a_misspelling, next_issue, suggestions, thesaurus, word_count};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -132,6 +132,11 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"text": string}"#),
+        CommandSpec::new("review.changeAll", "Change All", "Review › Proofing", change_all)
+            .params(
+                r#"{"text": string} → {"word", "changed"}: every flagged occurrence of the misspelled word at the caret, in its story, in one undo step. Whole words only, case included"#,
+            )
+            .when(needs_a_misspelling),
         CommandSpec::new("review.proofing", "Check Spelling as You Type", "File › Options › Proofing", |s, v| {
             s.view.proofing = p::bool(v, "value").unwrap_or(!s.view.proofing);
             s.prefs.check_spelling = s.view.proofing;

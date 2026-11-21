@@ -1121,4 +1121,105 @@ mod spelling_navigation_tests {
             assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentense.");
         }
     }
+
+    /// #6510: Word's spelling pane offers Change All on a suggestion (observed for Word for
+    /// Windows, recorded in `docs/spelling-review.md`), while WordCraft only had Change. One run
+    /// replaces every flagged occurrence of the word in the caret's story, in one undo step.
+    /// Whole words only, case included: `brwnish` and `Brwn` are their own misspellings with
+    /// their own suggestions (`Brawn`, `Brown`…), so `brwn` → `brown` leaves them alone.
+    #[test]
+    fn change_all_replaces_every_occurrence_of_the_word_at_the_caret_in_one_undo_step() {
+        let text = "The brwn fox.\nA brwn dog, a brwnish cat and Brwn.";
+        let mut s = Session::new(Document::from_text(text));
+        // As in Word, Change All is offered only on a flagged word.
+        assert!(matches!(s.run("review.changeAll", &json!({"text": "brown"})), Err(crate::CmdError::Disabled(_))));
+        assert_eq!(s.run("review.spelling", &json!({})).unwrap()["text"], "brwn");
+        let done = s.run("review.changeAll", &json!({"text": "brown"})).unwrap();
+        assert_eq!(done["word"], "brwn");
+        assert_eq!(done["changed"], 2);
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "The brown fox.\nA brown dog, a brwnish cat and Brwn.");
+        assert_eq!(s.sel.focus.path, s.doc.para_paths(StoryRef::Body)[0], "the caret stays at the first occurrence, so the pass skips nothing");
+        assert_eq!(s.sel.focus.off, 9);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text, "one undo step restores every occurrence");
+
+        // Without a replacement there is nothing to change to, and junk never panics.
+        s.run("review.spelling", &json!({})).unwrap();
+        assert!(s.run("review.changeAll", &json!({})).is_err());
+        assert!(s.run("review.changeAll", &json!({"text": 7})).is_err());
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text);
+    }
+
+    /// Pending formatting waiting at the caret before `review.spelling` / `review.changeAll` must
+    /// not leak onto replaced words; each occurrence keeps its own run's formatting.
+    #[test]
+    fn change_all_does_not_apply_pending_caret_formatting_to_occurrences() {
+        let mut s = Session::new(Document::from_text("The brwn fox.\nA brwn dog.\nEnd "));
+        // Format the second occurrence as italic so we also verify each run keeps its own props.
+        s.sel = Selection { anchor: Pos::body(1, 2), focus: Pos::body(1, 6) };
+        s.run("format.italic", &json!({})).unwrap();
+        // Put the caret at the end of the third paragraph and toggle bold (pending formatting).
+        s.sel = Selection::caret(Pos::body(2, 4));
+        s.run("format.bold", &json!({})).unwrap();
+        assert!(s.pending.is_some());
+
+        // Jump via `review.spelling` from the end with wrapping to the first occurrence and Change All.
+        s.run("review.spelling", &json!({})).unwrap();
+        assert!(s.pending.is_none(), "next_issue clears waiting formatting");
+        s.run("review.changeAll", &json!({"text": "brown"})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "The brown fox.\nA brown dog.\nEnd ");
+        assert_ne!(s.doc.para_at(&Pos::body(0, 4)).unwrap().props_of_char(4).bold, Some(true));
+        assert_ne!(s.doc.para_at(&Pos::body(1, 2)).unwrap().props_of_char(2).bold, Some(true));
+        assert_eq!(s.doc.para_at(&Pos::body(1, 2)).unwrap().props_of_char(2).italic, Some(true));
+
+        // Also test calling `review.changeAll` directly with pending formatting still set.
+        s.run("edit.undo", &json!({})).unwrap();
+        s.sel = Selection::caret(Pos::body(2, 4));
+        s.run("format.bold", &json!({})).unwrap();
+        assert!(s.pending.is_some());
+        s.sel = Selection::caret(Pos::body(0, 5));
+        s.run("review.changeAll", &json!({"text": "brown"})).unwrap();
+        assert_ne!(s.doc.para_at(&Pos::body(0, 4)).unwrap().props_of_char(4).bold, Some(true));
+        assert_ne!(s.doc.para_at(&Pos::body(1, 2)).unwrap().props_of_char(2).bold, Some(true));
+        assert_eq!(s.doc.para_at(&Pos::body(1, 2)).unwrap().props_of_char(2).italic, Some(true));
+    }
+
+    /// Starting mid-document (after ignoring an earlier issue between the first and current
+    /// occurrences), Change All leaves the caret after the occurrence the user was on so a
+    /// forward non-wrapping pass does not revisit the ignored issue.
+    #[test]
+    fn change_all_keeps_caret_after_current_occurrence_for_forward_pass() {
+        let mut s = Session::new(Document::from_text("A brwn cat, a qwick fox, and a brwn dog."));
+        // Ignore `brwn` #1 once, ignore `qwick` once, and stop on `brwn` #2.
+        assert_eq!(s.run("review.spelling", &json!({"wrap": false})).unwrap()["text"], "brwn");
+        assert_eq!(s.run("review.spelling", &json!({"wrap": false})).unwrap()["text"], "qwick");
+        assert_eq!(s.run("review.spelling", &json!({"wrap": false})).unwrap()["text"], "brwn");
+        assert!(s.sel.focus.off > 20);
+
+        s.run("review.changeAll", &json!({"text": "brown"})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "A brown cat, a qwick fox, and a brown dog.");
+        assert_eq!(s.run("review.spelling", &json!({"wrap": false})).unwrap()["done"], true);
+    }
+
+    /// With Track Changes enabled, two occurrences in the same paragraph (one of them another
+    /// author's tracked insertion) are both replaced as tracked revisions with valid offsets.
+    #[test]
+    fn change_all_with_track_changes_replaces_own_and_other_authors_insertions() {
+        let mut s = Session::new(Document::from_text("First brwn and "));
+        s.doc.settings.track_changes = true;
+        s.run("file.setAuthor", &json!({"name": "Bob"})).unwrap();
+        s.sel = Selection::caret(Pos::body(0, 15));
+        s.run("text.insert", &json!({"text": "brwn end."})).unwrap();
+        // Switch author to Alice and run Change All on the first occurrence.
+        s.run("file.setAuthor", &json!({"name": "Alice"})).unwrap();
+        s.sel = Selection::caret(Pos::body(0, 7));
+        let done = s.run("review.changeAll", &json!({"text": "brown"})).unwrap();
+        assert_eq!(done["changed"], 2);
+        assert_eq!(s.doc.final_text(StoryRef::Body), "First brown and brown end.");
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        assert!(p.runs.iter().any(|r| r.props.del.is_some_and(|id| s.doc.revisions[id as usize].author == "Alice")));
+        assert!(p.runs.iter().any(|r| r.props.ins.is_some_and(|id| s.doc.revisions[id as usize].author == "Alice")));
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.final_text(StoryRef::Body), "First brwn and brwn end.");
+    }
 }
