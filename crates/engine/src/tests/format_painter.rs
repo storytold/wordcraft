@@ -87,3 +87,23 @@ fn paste_format_paragraph_carets_and_cross_paragraph_targets() {
         }
     }
 }
+
+#[test]
+fn a_used_up_brush_keeps_its_pick_but_partial_paste_keeps_the_target_alignment() {
+    use wordcraft_doc::props::Align;
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Source paragraph.\nPaint one.\nPaste two."}));
+    run(&mut s, "select.text", json!({"text": "Source paragraph."}));
+    run(&mut s, "para.alignCenter", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.formatPainter", json!({}));
+
+    run(&mut s, "select.text", json!({"text": "Paint"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props.align, Some(Align::Center));
+
+    run(&mut s, "select.text", json!({"text": "Paste"}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    assert_ne!(s.doc.para_at(&s.sel.focus).unwrap().props.align, Some(Align::Center));
+}
