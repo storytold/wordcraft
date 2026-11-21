@@ -35,9 +35,12 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
     let format = read(app)?;
     // Only pixel units read the resolution, and WordCraft never shows pixels.
     let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
-    // On macOS (Services::paragraph_window) the dialog opens in a window of its own, sized to the page shown.
-    let dialog = ParagraphDialog::new(format).word(true).tab(tab).unit(unit).held_ok().own_window(app.services.paragraph_window);
-    Some(open_with(app, parent, Keyed::new(key, dialog), DialogHooks { prepare: None, settle }))
+    let dialog = ParagraphDialog::new(format).word(true).tab(tab).unit(unit).held_ok();
+    let keyed = Keyed::new(key, dialog);
+    // On macOS the Paragraph dialog opens as a utility panel in a window of its own
+    // (Services::paragraph_window), titled as in the document window.
+    let keyed = if app.services.paragraph_window { keyed.in_own_window(crate::i18n::t("Paragraph")) } else { keyed };
+    Some(open_with(app, parent, keyed, DialogHooks { prepare: None, settle }))
 }
 
 /// The settle hook: runs a filed OK as `para.set`. The dialog closes when the command ran and stays, showing the
