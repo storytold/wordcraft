@@ -728,3 +728,46 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(first_cell_shading(h.state()), Some(red), "No Color is undone in one step");
 }
+
+/// #7308: the compact menu and split buttons of Home › Font and Home › Paragraph show their icons
+/// alone (keeping their names for access and tooltips) even in a wide window, leaving room for all
+/// six tiles of the Styles gallery at 1920 pt.
+#[test]
+fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
+    use egui::accesskit::Role;
+
+    let button_width = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name)).next().unwrap_or_else(|| panic!("a button named {name}")).rect().width()
+    };
+
+    // Wide enough that the ribbon keeps every group at GroupLevel::Full: without `icon_only`, both
+    // Font and Paragraph render their full text labels, making longer names much wider than shorter
+    // ones and wider than text-labelled buttons like Replace.
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let wide = tab_harness(app, "Home");
+    let replace_w = button_width(&wide, "Replace");
+
+    let menu_buttons = ["Change Case", "Text Effects and Typography", "Line and Paragraph Spacing"];
+    let menu_widths: Vec<(&str, f32)> = menu_buttons.iter().map(|&n| (n, button_width(&wide, n))).collect();
+    let base_menu_w = menu_widths[0].1;
+    for &(name, w) in &menu_widths {
+        assert!((w - base_menu_w).abs() < 1.0, "{name} ({w:.1} pt) differs from icon-only menu width ({base_menu_w:.1} pt): {menu_widths:?}");
+        assert!(w < replace_w, "{name} ({w:.1} pt) should be narrower than a labelled button like Replace ({replace_w:.1} pt)");
+    }
+
+    let split_buttons = ["Underline", "Text Highlight Color", "Font Color", "Bullets", "Numbering", "Multilevel List", "Shading", "Borders"];
+    let split_widths: Vec<(&str, f32)> = split_buttons.iter().map(|&n| (n, button_width(&wide, n))).collect();
+    let base_split_w = split_widths[0].1;
+    for &(name, w) in &split_widths {
+        assert!((w - base_split_w).abs() < 1.0, "{name} ({w:.1} pt) differs from icon-only split width ({base_split_w:.1} pt): {split_widths:?}");
+        assert!(w < replace_w, "{name} ({w:.1} pt) should be narrower than a labelled button like Replace ({replace_w:.1} pt)");
+    }
+
+    // At 1920 pt, Font no longer starves the Styles gallery: all six default quick styles show.
+    let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let full_hd = app_harness(app, vec2(1920.0, 900.0));
+    let shown = |name: &str| full_hd.query_all(By::new().label(name)).next().is_some();
+    for style in ["Normal", "No Spacing", "Heading 1", "Title", "Heading 2", "Subtitle"] {
+        assert!(shown(style), "Home › Styles should show {style} at 1920 pt");
+    }
+}
