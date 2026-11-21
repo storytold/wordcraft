@@ -1748,7 +1748,8 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     close_all(h.state_mut(), &ctx);
     h.state_mut().run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     open_named(&mut h, "newTableStyle", json!({}));
-    for name in ["Font color: No Color", "Fill color: No Color"] {
+    // A part with no fill of its own reads as Inherit: No Color is a fill that covers the parts below.
+    for name in ["Font color: No Color", "Fill color: Inherit"] {
         assert!(h.query_all_by_role_and_label(Role::Button, name).next().is_some(), "newTableStyle: {name}");
     }
 

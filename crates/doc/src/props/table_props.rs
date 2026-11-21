@@ -277,6 +277,10 @@ pub struct CellProps {
     pub span: u32,
     pub vmerge: VMerge,
     pub shading: Option<Rgb>,
+    /// "No Color" (`w:fill="auto"`): without `shading`, the cell has no colour even where its table
+    /// style gives one. A `w:val="nil"` states nothing, so the style's colour shows.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shading_auto: bool,
     pub borders: Option<Borders>,
     /// Vertical alignment (`w:vAlign`); `None` follows the table style, else top. An explicit
     /// `Top` beats the style.

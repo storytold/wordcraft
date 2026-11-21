@@ -24,7 +24,7 @@ use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, TableLook, Underline, VAlign};
-use wordcraft_doc::styles::{PartFormat, PartSet, TablePart, TableStyleProps};
+use wordcraft_doc::styles::{FillOff, PartFormat, PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{CharProps, Rgb, TextColor};
 use wordcraft_engine::cmd::table_style::{self, CELL_ALIGNS};
 
@@ -33,7 +33,23 @@ use crate::colors::{ColorFieldEmpty, Palette, color_field};
 use crate::dialogs::host::{Asks, ChildAnswer, WordForm, open_form};
 use crate::widgets::font_box::{CatalogRef, font_picker}; // PLAN: assumed CatalogRef / WordApp::font_* (ribbon-w11, S-L284)
 
+/// A part's fill in the dialog when No Color was chosen. Unlike an unset fill (empty), which lets
+/// the parts below show, this covers them.
+const NO_FILL: &str = "none";
+
+/// A part's fill in the dialog when Inherit was chosen: the part gives up its own colour or No
+/// Color, and takes what the based-on style gives it.
+const INHERIT_FILL: &str = "inherit";
+
+/// The fill menu's choices that aren't colours. Inherit comes first because it also names a part
+/// that sets no fill: nothing of its own covers what's below it, unlike No Color.
+const FILL_CHOICES: [(&str, &str); 2] = [("Inherit", INHERIT_FILL), ("No Color", NO_FILL)];
+
 /// One table style part in the dialog, as it resolves through the based-on chain: colours are
+/// hex, empty for none. A fill read from the style is a colour, [`NO_FILL`] for its `auto`, or
+/// empty when it sets none or says `nil` (both shown as Inherit, as both let the parts below
+/// show). [`INHERIT_FILL`] is never read from a style: only Inherit picked in the open dialog
+/// sets it, so that OK sends it.
 /// hex, empty for none.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,7 +174,11 @@ fn region_of(st: &TableStyleProps, part: TablePart) -> TableRegion {
             Some(TextColor::Rgb(c)) => c.hex(),
             _ => String::new(),
         },
-        fill: f.fill.map(Rgb::hex).unwrap_or_default(),
+        fill: match (f.fill, st.parts.fills_off.get(&part)) {
+            (Some(c), _) => c.hex(),
+            (None, Some(FillOff::Auto)) => NO_FILL.to_string(),
+            (None, _) => String::new(),
+        },
         borders: f.borders.unwrap_or_default(),
         align: align_name(f.align, f.v_align),
     }
@@ -204,7 +224,11 @@ pub fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
         v["color"] = color(&r.color);
     }
     if r.fill != basis.fill {
-        v["fill"] = color(&r.fill);
+        v["fill"] = match r.fill.as_str() {
+            NO_FILL => Value::Null,
+            INHERIT_FILL => json!(INHERIT_FILL),
+            c => color(c),
+        };
     }
     if r.align != basis.align {
         v["cellAlign"] = if r.align.is_empty() { Value::Null } else { json!(r.align) };
@@ -382,7 +406,7 @@ fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyl
             // Parts from lowest to highest precedence, as layout applies them.
             for part in PartSet::of_cell(look, band, (ri, ROWS), (ci, 1, COLS)).iter() {
                 let Some(f) = TablePart::ALL.iter().position(|p| *p == part).and_then(|i| formats.get(i)) else { continue };
-                fill = f.fill.or(fill);
+                fill = st.parts.fill_over(part, fill);
                 chr.overlay(&f.chr);
                 h = f.align.or(h);
                 v = f.v_align.or(v);
@@ -595,7 +619,7 @@ impl TableStyleForm {
                         pick_edges(&mut r.borders, edges, pen);
                     }
                 });
-                if color_field(ui, &lab("Fill color:"), &mut r.fill, &ColorFieldEmpty::NoColor, palette).more_colors {
+                if color_field(ui, &lab("Fill color:"), &mut r.fill, &ColorFieldEmpty::Choices(&FILL_CHOICES), palette).more_colors {
                     asks.push(Asks::Color { field: "fill", current: Rgb::parse(&r.fill), tab: ColorPickerTab::Standard });
                 }
                 // The grid is row by row from the top left, as `CELL_ALIGNS` is.
@@ -815,6 +839,84 @@ mod tests {
             assert_ne!(chr.italic, Some(true), "{}", other.ooxml());
             assert!(!chr.underline.is_some_and(|u| u != Underline::None), "{}", other.ooxml());
         }
+    }
+
+    /// No Color on a part with no colour of its own covers the whole table's, and reopening the
+    /// dialog shows it and sends nothing; a part left alone stays unset.
+    #[test]
+    fn no_color_on_a_part_without_a_colour_covers_the_whole_table() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("table.newStyle", json!({"name": "Parts", "apply": false, "wholeTable": {"fill": "FF0000"}})).unwrap();
+        let red = Some(Rgb(0xFF, 0, 0));
+        let colours = |app: &WordApp, p: TablePart| {
+            let st = app.session.doc.styles.table_style("Parts").unwrap();
+            st.parts.fill_over(p, st.parts.fill_over(TablePart::WholeTable, None))
+        };
+        let basis = table_regions(&app, "Parts");
+        let mut regions = basis.clone();
+        regions[part_index(TablePart::FirstRow)].fill = NO_FILL.to_string();
+        let params = table_style_params(Some("Parts"), "Parts", "Table Grid", &regions, &basis);
+        assert!(params["firstRow"]["fill"].is_null() && params["firstRow"].get("fill").is_some(), "{params}");
+        assert!(params.get("lastRow").is_none(), "{params}");
+        app.run("table.modifyStyle", params).unwrap();
+        assert_eq!(colours(&app, TablePart::FirstRow), None);
+        assert_eq!(colours(&app, TablePart::LastRow), red);
+        let again = table_regions(&app, "Parts");
+        assert_eq!(again[part_index(TablePart::FirstRow)].fill, NO_FILL);
+        assert!(table_style_params(Some("Parts"), "Parts", "Table Grid", &again, &again).get("firstRow").is_none());
+    }
+
+    /// A part that sets no fill doesn't read as No Color, which is a different choice.
+    #[test]
+    fn a_part_without_a_fill_reads_as_inherit() {
+        use crate::colors::shown_choice;
+        assert_eq!(shown_choice("", &FILL_CHOICES), "Inherit");
+        assert_eq!(shown_choice(INHERIT_FILL, &FILL_CHOICES), "Inherit");
+        assert_eq!(shown_choice(NO_FILL, &FILL_CHOICES), "No Color");
+    }
+
+    /// A part's `nil` lets the whole table's colour show, so it reads as Inherit (empty), not as
+    /// No Color, and reopening the dialog sends nothing for it; its `auto` reads as No Color.
+    #[test]
+    fn a_parts_nil_reads_as_inherit_and_its_auto_as_no_color() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("table.newStyle", json!({"name": "Parts", "apply": false, "wholeTable": {"fill": "FF0000"}})).unwrap();
+        let set = |app: &mut WordApp, p: TablePart, off: FillOff| {
+            let st = std::sync::Arc::make_mut(&mut app.session.doc.styles).get_mut("Parts").unwrap();
+            st.table.get_or_insert_default().fills_off.insert(p, off);
+        };
+        set(&mut app, TablePart::FirstRow, FillOff::Nil);
+        set(&mut app, TablePart::LastRow, FillOff::Auto);
+        let regions = table_regions(&app, "Parts");
+        assert_eq!(regions[part_index(TablePart::FirstRow)].fill, "");
+        assert_eq!(regions[part_index(TablePart::LastRow)].fill, NO_FILL);
+        assert_eq!(regions[part_index(TablePart::WholeTable)].fill, "FF0000");
+        let params = table_style_params(Some("Parts"), "Parts", "Table Grid", &regions, &regions);
+        assert!(params.get("firstRow").is_none() && params.get("lastRow").is_none(), "{params}");
+    }
+
+    /// Inherit gives up a derived style's own colour, or its No Color, for the based-on style's.
+    #[test]
+    fn inherit_takes_the_based_on_styles_colour_again() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("table.newStyle", json!({"name": "Base", "apply": false, "firstRow": {"fill": "FF0000"}})).unwrap();
+        app.run("table.newStyle", json!({"name": "Child", "apply": false, "basedOn": "Base", "firstRow": {"fill": "00AA00"}})).unwrap();
+        let header = |app: &WordApp| app.session.doc.styles.table_style("Child").unwrap().parts.fill_over(TablePart::FirstRow, None);
+        let pick = |app: &mut WordApp, fill: &str| {
+            let basis = table_regions(app, "Child");
+            let mut regions = basis.clone();
+            regions[part_index(TablePart::FirstRow)].fill = fill.to_string();
+            app.run("table.modifyStyle", table_style_params(Some("Child"), "Child", "Base", &regions, &basis)).unwrap();
+        };
+        let (red, green) = (Some(Rgb(0xFF, 0, 0)), Some(Rgb(0, 0xAA, 0)));
+        assert_eq!(header(&app), green);
+        pick(&mut app, INHERIT_FILL);
+        assert_eq!(header(&app), red, "its own colour given up");
+        pick(&mut app, NO_FILL);
+        assert_eq!(header(&app), None, "No Color covers the based-on style's");
+        pick(&mut app, INHERIT_FILL);
+        assert_eq!(header(&app), red, "its No Color given up");
+        assert!(!app.session.doc.styles.get("Child").unwrap().table.as_ref().is_some_and(|t| t.fills_off.contains_key(&TablePart::FirstRow)));
     }
 
     /// The border picker sets and toggles edges with the pen, and only changed edges are sent.
