@@ -9,8 +9,8 @@ use super::proof::{ProofRun, is_list_item, proof_issues};
 use wordcraft_fonts::ShapeContext;
 
 use super::{
-    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
-    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
+    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, Level, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase,
+    ParaLayout, Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
 
 /// A run's formatting resolved in the paragraph's style and table.
@@ -97,18 +97,41 @@ fn is_special(c: char) -> bool {
     matches!(c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r')
 }
 
-/// The paragraph's formatting: its style's, the table's and the list level's indents.
+/// The paragraph's formatting: its style's, the table's and the list level's indents. A paragraph
+/// whose mark is hidden has the alignment, indents (its list level's too) and tab stops of the
+/// one that ends its group instead ([`ParaEnv::format_from`]); its space before and line spacing
+/// stay its own, and so does its list number, which is drawn only where that paragraph is in a
+/// list too.
+/// shortcut: a group that ends centred or right-aligned keeps the alignment of each of its
+/// paragraphs. Word sets the line two of them share as one line, which takes laying the next
+/// paragraph's first line out before this one's last is placed; upgrade with the shared line
+/// placed as a whole in `Joint::fit`.
 fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
     let doc = env.doc;
-    let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
+    // A paragraph's formatting by itself, its indents in characters measured in its mark's font size.
+    let own = |p: &Paragraph| {
+        let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
+        if rp.indent_chars.iter().any(|c| *c != 0.0) {
+            rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
+        }
+        rp
+    };
+    let mut rp = own(p);
+    match env.format_from {
+        Some(last) => {
+            let mut end = own(last);
+            list_indents(&mut end, last, list_level(doc, last), doc);
+            if matches!(end.align, wordcraft_doc::props::Align::Left | wordcraft_doc::props::Align::Justify) {
+                rp.align = end.align;
+            }
+            (rp.indent_left, rp.indent_right, rp.indent_first) = (end.indent_left, end.indent_right, end.indent_first);
+            (rp.indent_chars, rp.tabs) = (end.indent_chars, end.tabs);
+        }
+        None => list_indents(&mut rp, p, env.label.as_ref().map(|(_, level)| level), doc),
+    }
     if let Some(spacing) = env.read_line_spacing.filter(|s| s.is_finite() && (1.0..=2.0).contains(s)) {
         rp.line_spacing = wordcraft_doc::props::LineSpacing::Multiple(spacing);
     }
-    // Indents in characters are measured in the paragraph mark's font size.
-    if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
-    }
-    list_indents(&mut rp, p, env);
     // ODF (XSL's box model): padding takes room whether or not a side has a border.
     if doc.settings.odf.is_some() {
         odf_padding(&mut rp);
@@ -129,15 +152,21 @@ fn odf_padding(rp: &mut ResolvedPara) {
     rp.indent_right += end;
 }
 
+/// The list level `p` is in, by itself or by its paragraph style, where that gives it a label.
+fn list_level<'d>(doc: &'d Document, p: &Paragraph) -> Option<&'d Level> {
+    let n = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
+    doc.numbering.level(n.num, n.level.min(8)).filter(|_| doc.numbering.shows_label(n.num, n.level))
+}
+
 /// List level indents apply unless the paragraph sets its own, or, for a list from the style,
 /// the style giving the list (or one based on it) does (`indents_over_list`). A paragraph
 /// that switches its style's list off (`num: 0`) drops the styles' indents, as Word does.
-fn list_indents(rp: &mut ResolvedPara, p: &Paragraph, env: &ParaEnv) {
+fn list_indents(rp: &mut ResolvedPara, p: &Paragraph, level: Option<&Level>, doc: &Document) {
     let own_left = p.props.indent_left.is_some() || p.props.indent_left_chars.is_some_and(|c| c != 0.0);
     let own_first = p.props.indent_first.is_some() || p.props.indent_first_chars.is_some_and(|c| c != 0.0);
-    if let Some((_, lvl)) = &env.label {
+    if let Some(lvl) = level {
         let (style_left, style_first) =
-            if p.props.numbering.is_some() { (false, false) } else { env.doc.styles.indents_over_list(p.props.style.as_deref().unwrap_or("Normal")) };
+            if p.props.numbering.is_some() { (false, false) } else { doc.styles.indents_over_list(p.props.style.as_deref().unwrap_or("Normal")) };
         if !own_left && !style_left {
             rp.indent_left = lvl.indent;
         }
@@ -533,13 +562,14 @@ fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &Resol
     }
 }
 
-/// The list label, shaped; none on a paragraph containing only a page break: Word hides it there.
-/// The list counter has already advanced, so the following item keeps its number.
+/// The list label, shaped; none on a paragraph containing only a page break, nor on one that goes
+/// on from the line of the paragraph before (#3986): Word hides it there. The list counter has
+/// already advanced, so the following item keeps its number.
 fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
     let (p, rp) = (cx.p, cx.rp);
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
-    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only)?;
+    let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only && !cx.env.joined)?;
     let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
@@ -713,6 +743,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        joined: env.joined,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);

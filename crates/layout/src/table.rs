@@ -233,6 +233,8 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 grid: crate::para::Grid::default(),
                 fit_objects: false,
                 fitted: &[],
+                joined: false,
+                format_from: None,
             };
             let (mut min, mut max) = (EMPTY_TEXT, EMPTY_TEXT);
             if cell.props.vmerge != VMerge::Continue && !cell.props.text_direction.is_turned() {
