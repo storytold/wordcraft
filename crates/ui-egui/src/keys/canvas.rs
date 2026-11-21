@@ -655,6 +655,10 @@ pub(crate) fn window_cancel(app: &mut WordApp, ctx: &egui::Context) {
         return;
     }
     if app.ui.backstage {
+        let confirm_open = ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("recent_clear_confirm"))).unwrap_or(false);
+        if confirm_open {
+            return;
+        }
         // A dialog, menu or popup over the page took its own Escape before this read.
         if app.dialog_host.is_empty() {
             let _ = app.run("ui.backstage", json!({"value": false}));

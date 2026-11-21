@@ -10,6 +10,11 @@ impl WordApp {
     /// preferences.
     pub fn prefs(&self) -> Prefs {
         let mut ui = self.ui.clone();
+        ui.recent_metadata = ui
+            .recent
+            .iter()
+            .map(|entry| (entry.path.clone(), crate::RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() }))
+            .collect();
         ui.author = Some(self.session.author.clone());
         ui.initials = self.session.initials.clone();
         ui.dictionary = wordcraft_engine::proof::user_dictionary();
@@ -29,6 +34,12 @@ impl WordApp {
     /// Restore preferences saved by [`WordApp::prefs`].
     pub fn apply_prefs(&mut self, ui: Prefs) {
         self.ui = ui;
+        for entry in &mut self.ui.recent {
+            if let Some(metadata) = self.ui.recent_metadata.get(&entry.path) {
+                entry.last_opened = metadata.last_opened.clone();
+                entry.modified = metadata.modified.clone();
+            }
+        }
         self.ui.backstage = false;
         // Word opens on Home every launch, so the tab the settings hold is not restored. Going File
         // and back to the editor within the run still returns to the tab that was showing.

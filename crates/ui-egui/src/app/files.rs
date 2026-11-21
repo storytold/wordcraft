@@ -352,6 +352,9 @@ impl WordApp {
                         let _ = self.session.with_document(save.document, |s| s.path = Some(path));
                     }
                 }
+                if save.marked_saved && picked.records_file() {
+                    self.refresh_recent_saved_path(&save.name);
+                }
             } else if save.marked_saved && save.document == current {
                 // The undone stamp already put `dirty` back as it was before the save (a clean document stays clean).
                 if !undone {

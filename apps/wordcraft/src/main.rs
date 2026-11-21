@@ -213,8 +213,42 @@ fn services(spool: Spool, intake: FileIntake) -> Services {
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
         make_default_app,
         intake: Some(intake),
+        show_in_folder: Some(Box::new(show_in_folder)),
         ..Default::default()
     }
+}
+
+/// Ask the platform's file manager to reveal a document without reading its contents.
+fn show_in_folder(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.args(["-R", &path.to_string_lossy()]);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer.exe");
+        use std::os::windows::process::CommandExt;
+        command.raw_arg(format!("/select,\"{}\"", path.display()));
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let folder = path.parent().filter(|folder| !folder.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(folder);
+        command
+    };
+    // Start and reap the file manager on a worker: even launch/mount resolution can block.
+    std::thread::Builder::new()
+        .name("recent-folder".into())
+        .spawn(move || match command.status() {
+            Ok(status) => log::debug!("show in folder exited: {status}"),
+            Err(error) => log::warn!("couldn't show the file in its folder: {error}"),
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// A PNG as the pixels the system clipboard takes, `None` for anything that doesn't decode within

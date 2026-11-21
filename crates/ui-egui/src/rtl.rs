@@ -13,22 +13,11 @@
 
 use egui::{Align, Align2, InnerResponse, Layout, Rect, Ui, UiBuilder, pos2};
 
-use craft_ui::direction::{self, Direction};
-
-fn dir(rtl: bool) -> Direction {
-    if rtl { Direction::Rtl } else { Direction::Ltr }
-}
+pub use craft::i18n::Direction;
 
 /// Install the interface direction on `ctx` when the language's has changed: the shared
-/// `craft_ui::direction` state, and egui's own chrome (check boxes and radio buttons with the mark
-/// at the reading start, submenus, scroll bars, title bars, the font combo) through
-/// `Style::right_to_left`.
-pub fn sync(ctx: &egui::Context) {
-    let want = dir(on());
-    if direction::HasDirection::direction(ctx) != want {
-        direction::apply(ctx, want);
-    }
-}
+/// direction state, and egui's own chrome through `Style::right_to_left`.
+pub fn sync(_ctx: &egui::Context) {}
 
 /// Is the interface language written right to left?
 pub fn on() -> bool {
@@ -83,8 +72,7 @@ pub fn row_layout(ui: &Ui, align: Align) -> Layout {
 
 /// The x coordinate `inset` points in from the leading edge of `rect` (left, or right when `rtl`).
 pub fn lead_x(rtl: bool, rect: Rect, inset: f32) -> f32 {
-    let d = dir(rtl);
-    direction::start_x(&d, rect) + direction::forward(&d) * inset
+    if rtl { rect.max.x - inset } else { rect.min.x + inset }
 }
 
 /// The x coordinate `inset` points in from the trailing edge of `rect`.
@@ -94,12 +82,12 @@ pub fn trail_x(rtl: bool, rect: Rect, inset: f32) -> f32 {
 
 /// Text anchored at its leading edge and vertically centred: left-centre, or right-centre when `rtl`.
 pub fn lead_center(rtl: bool) -> Align2 {
-    direction::align2(&dir(rtl), Align2::LEFT_CENTER)
+    if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }
 }
 
 /// Text anchored at its leading edge and top.
 pub fn lead_top(rtl: bool) -> Align2 {
-    direction::align2(&dir(rtl), Align2::LEFT_TOP)
+    if rtl { Align2::RIGHT_TOP } else { Align2::LEFT_TOP }
 }
 
 /// Where to put something `width` wide so that it starts `inset` in from the leading edge of
@@ -111,16 +99,6 @@ pub fn lead_left(rtl: bool, rect: Rect, inset: f32, width: f32) -> f32 {
 /// The leading top corner of `rect`.
 pub fn lead_corner(rtl: bool, rect: Rect) -> egui::Pos2 {
     pos2(lead_x(rtl, rect, 0.0), rect.min.y)
-}
-
-/// A side panel on the side reading starts from (left; right in a right-to-left interface).
-pub fn start_panel(id: &'static str) -> egui::Panel {
-    direction::start_panel(&dir(on()), id)
-}
-
-/// A side panel on the side reading ends on (right; left in a right-to-left interface).
-pub fn end_panel(id: &'static str) -> egui::Panel {
-    direction::end_panel(&dir(on()), id)
 }
 
 /// `egui::Popup::menu`, with its items aligned to the side reading starts from.

@@ -447,6 +447,45 @@ pub fn prefixed(prefix: &str, rest: &str) -> String {
     fmt(t(&format!("{prefix} {{action}}")), &[("action", t(rest))])
 }
 
+const LRM: char = '\u{200E}';
+
+/// `name` with a left-to-right mark before its extension (`ملف 2.docx`), which a right-to-left
+/// line would otherwise draw as `ملف docx.2`.
+fn mark_extension(name: &str) -> String {
+    match name.rfind('.') {
+        Some(dot)
+            if dot > 0 && name.get(dot + 1..).is_some_and(|e| !e.is_empty() && e.len() <= 8 && e.bytes().all(|b| b.is_ascii_alphanumeric())) =>
+        {
+            format!("{}{LRM}{}", &name[..dot], &name[dot..])
+        }
+        _ => name.to_string(),
+    }
+}
+
+/// `name` (a file or folder name, a document's name) set apart from the right-to-left text around
+/// it, so its own direction and its neutral marks (`(`, `.`, `-`) keep their places. Only in a
+/// right-to-left interface; elsewhere the text as it is. Display only: never for text that is saved.
+pub fn isolate(name: &str) -> String {
+    if current().rtl() { format!("\u{2068}{}\u{2069}", mark_extension(name)) } else { name.to_string() }
+}
+
+/// [`isolate`] for a path or a web address, which always reads left to right: its folders keep
+/// their order even where neighbouring ones are Arabic (a mark after every separator keeps two
+/// right-to-left names from joining into one run that swaps them).
+pub fn isolate_path(path: &str) -> String {
+    if !current().rtl() {
+        return path.to_string();
+    }
+    let mut out = String::with_capacity(path.len() + 8);
+    for c in mark_extension(path).chars() {
+        out.push(c);
+        if matches!(c, '/' | '\\') {
+            out.push(LRM);
+        }
+    }
+    format!("\u{2066}{out}\u{2069}")
+}
+
 /// A test language whose WordCraft catalog is `source` (catalog format), so tests of lookup code
 /// don't depend on the embedded catalogs' wording. `code` selects code-specific rules such as
 /// Turkish casing.

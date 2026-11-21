@@ -555,10 +555,10 @@ pub fn font_definitions() -> FontDefinitions {
 }
 
 pub fn medium(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("medium".into()))
+    FontId::proportional(size)
 }
 pub fn semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("semibold".into()))
+    FontId::proportional(size)
 }
 pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
