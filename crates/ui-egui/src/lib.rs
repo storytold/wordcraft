@@ -42,6 +42,7 @@ pub mod dialogs;
 pub mod documents;
 pub mod equation_tab;
 pub mod file_dialogs;
+pub mod file_providers;
 pub mod font_download;
 pub mod format_shape;
 pub mod i18n;

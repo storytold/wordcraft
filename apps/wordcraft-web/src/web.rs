@@ -8,6 +8,7 @@ use std::sync::Arc;
 use craft::automation::control::ControlChannel;
 use craft::host::{Files, Host, Wake};
 use craft::platform::appearance::SystemReader;
+use craft::platform::browser::{DownloadOptions, download_bytes};
 use craft::platform::browser_files::BrowserFiles;
 use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, LateOffers, TEXT};
 use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
@@ -120,6 +121,11 @@ pub fn start() {
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(&host, ctx.clone(), dirty, messages.clone(), intake);
+                    let provider = wordcraft_ui_egui::file_providers::Host::default();
+                    if let Err(error) = crate::file_providers::install(provider.clone(), ctx.clone()) {
+                        log::error!("file providers are unavailable: {error:?}");
+                    }
+                    services.file_providers = Some(provider);
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, sender.clone());
                     }
@@ -210,6 +216,9 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host, ctx);
+        }
         if let Some(author) = &self.author {
             author.keep_own_author(&self.settings);
         }
@@ -240,6 +249,9 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // No `embed::before_ui`: it fits and routes a native window, and the page's canvas is neither.
         self.app.ui(ui);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host, ui.ctx());
+        }
     }
 }
 
@@ -295,6 +307,14 @@ fn services(host: &Host, ctx: egui::Context, dirty: Rc<Cell<bool>>, messages: Rc
     let font_ctx = ctx;
     let font_messages = messages;
     Services {
+        provider_download: Some(Box::new(|name, bytes| {
+            let mime = if name.to_ascii_lowercase().ends_with(".docx") {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            } else {
+                "application/octet-stream"
+            };
+            download_bytes(name, mime, bytes, DownloadOptions { revoke_after_ms: 10_000 }).map_err(|error| format!("{error:?}"))
+        })),
         print: Some(Spool::new(host.jobs_shared().clone())),
         intake: Some(intake),
         on_dirty: Some(Box::new(move |d| dirty.set(d))),

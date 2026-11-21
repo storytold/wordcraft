@@ -1,0 +1,168 @@
+# Optional external file providers — WordCraft
+
+The web editor exposes a small trusted same-origin capability. **It is disconnected and
+inactive by default.** Serving the normal build, a query parameter, a stored preference or
+receiving an unsolicited message does not activate it. Desktop, CLI and engine/control-channel
+file commands retain their existing behavior. No storage server, account database, launcher,
+cloud product, domain or authentication system is added.
+
+An embedding page can opt in by explicitly calling
+`window.wordcraftFileProviders.registerProvider(id, label, namespace)` after the editor starts.
+The object is frozen, has `protocolVersion: 1`, and announces readiness on the
+`wordcraft-file-provider` CustomEvent. An integrator can also discover it directly if the ready
+event has already fired. The matching API/event names are the only app-specific transport
+names; the protocol matches PhotoCraft's optional provider bridge.
+
+## Host authority and activation
+
+The provider is trusted code on the editor's origin, not an untrusted message sender. It owns
+storage, authentication, per-user authorization, namespace selection and the destination
+chooser. There is no cross-origin listener and no provider-origin URL to configure inside the
+editor. Resource IDs are opaque identities, never filesystem paths or arbitrary engine commands.
+The backend must enforce ownership on every list/read/write; browser namespaces do not replace
+server authorization.
+
+`registerProvider(id, label, namespace)` returns a new connection ID on first registration.
+Re-registering the exact identity is idempotent and returns the existing connection ID. Changing
+account requires `unregisterProvider()` first, which refuses while a chooser, serialization,
+upload acknowledgement or read is unresolved. Unregistering
+clears resources and bindings without closing documents. `setEnabled(false)` stops new
+provider choices and hides provider Recents while allowing outstanding operations to settle;
+`setEnabled(true)` restores availability. There is no editor preference or end-user cloud switch.
+Disabling choices preserves existing document bindings and pending saves: local copies still
+cannot acknowledge those provider checkpoints, including after a browser picker finishes.
+Never reuse an account namespace for a different account.
+
+## Save protocol
+
+1. A user presses Save or Save As in the editor. The editor emits `saveDialog` with
+   `requestId`, `documentId`, `revision`, `name`, `saveAs` and an optional `resourceId`.
+   Serialization has not happened and nothing has been marked saved. Repeated Save while
+   this document already has an outstanding operation reuses that operation.
+2. The host asks for **Provider**, **This device**, or **Cancel** every time, then calls
+   `resolveSaveDialog(requestId, destination, name)`. Destinations are `provider`, `device`,
+   `cancel`. An empty name retains the suggestion. Cancel needs no further reply.
+3. On a subsequent logic frame, the editor encodes a complete package in the selected format.
+   Provider selection emits `save` with a fresh owned `Uint8Array` in `bytes`, its
+   `bytesLength`, the exact captured `documentId`/`revision`, `name`, `resourceId` and request
+   identity. Later edits cannot mutate those bytes. Save As never infers overwrite authority
+   from a matching filename.
+4. Persist that exact package durably, then call `saveResult(requestId, "saved", resourceId)`.
+   Only a matching outstanding request can acknowledge the captured revision. Edits made after
+   capture stay dirty, closed document IDs are ignored, and another tab/document is never
+   marked saved. Other open documents bound to the same overwritten resource lose their stale
+   binding and clean state; unrelated local files with the same name are untouched.
+5. On failure call `saveResult(requestId, "failed", "")`, or use `cancel` for cancellation.
+   `download` is a terminal fallback result that does not acknowledge provider persistence.
+   These outcomes keep unsaved work open. A serialization/filename rejection emits `saveFailed`.
+
+Choosing Save in a Save Changes prompt for Close starts this provider choice and cancels the
+held-back Close action. A localized status asks the user to complete the provider save and
+try Close again. New and Open keep their normal multi-document behavior, preserving the existing
+document rather than being held back by this prompt. The dirty document stays open; even a later
+durable acknowledgement does not automatically resume that cancelled action. A refused chooser
+keeps its specific error instead of the informational status. Cancellation or failure still leaves unsaved work open.
+
+A device choice uses the browser's local download service. A device copy of a provider-bound
+project does not acknowledge provider persistence or replace that binding. As with the normal
+browser fallback, accepting a download does not prove the browser wrote it to physical disk.
+Device copies therefore retain the document's unsaved-work state, including for documents
+without a provider binding. Explicit-path saves and template/export pickers keep their local route.
+For a provider-bound document, explicit-path Save/Save As and template/export copies preserve
+its unsaved provider state, including comment drafts committed by Save. A browser copy is never
+an acknowledgement of provider durability. Unbound native local saves keep their original behavior.
+
+Supported Save packages: **DOCX, DOCM, DOTX and DOTM**.
+
+The ordinary Word package serializer includes the document, embedded pictures, headers/footers, comments and preserved package parts. Existing document encryption is retained. Export remains the route for PDF, images and text. An encrypted provider read requiring a password fails explicitly; it never binds the previously active document. A host must supply bytes the editor can open.
+
+## Recent files and opening
+
+`setResources(connectionId, resources)` replaces a bounded list for the current connection.
+Each resource is `{ id, name, updatedAt? }`; IDs must be unique. `updatedAt` is display text,
+not a sorting instruction or trusted timestamp. The editor shows these entries in its native
+Home/Open Recent section under the provider's label, separately from **Recent on this device**.
+No provider resource is inserted into the device's recent filesystem paths. A successful save
+also refreshes the provider entry in this session; the host supplies persistence across visits.
+
+Clicking a provider Recent or calling `requestOpen(resourceId)` emits `openRequest` and returns
+its correlated request ID. Read bytes from authorized storage and call
+`openResource(requestId, name, Uint8Array)`. Only requests the editor issued are accepted.
+`cancelOpen(requestId, message)` finishes a cancelled or failed read. After decoding/admitting
+an actual document, the editor emits `opened`; malformed/unsupported/password-required bytes
+emit `openFailed`. Bytes are not dropped into an uncorrelated general file-picker inbox.
+Resource identity comes from the outstanding read, not a filename sent by the host.
+
+## Identity, limits and lifecycle
+
+Provider operation events carry `providerId`, `namespace` and `connectionId`.
+The initial `ready` event contains only `type: "ready"` and `protocolVersion: 1`.
+It does not carry provider identity or a connection ID.
+
+Request IDs contain a random
+per-WASM-instance nonce plus a checked monotonic counter. Late replies from a previous page,
+connection, account, read or completed save cannot address a newer request. Metadata never
+contains credentials. `snapshot()` reports connection state, current provider resources,
+document IDs/titles/dirty state and outstanding work; `setResources` rejects stale connection IDs.
+This metadata read is available to trusted same-origin callers as soon as the API is installed,
+including before provider registration. Registration enables storage operations; it does not gate
+the document snapshot or authenticate scripts already running on the editor's origin.
+
+- 80 MiB per file, per aggregate queued-open payload total and per aggregate queued-event payload total.
+- Save-choice admission has a 16-slot count covering dialogs, captures, ordinary commands, working
+  saves and reserved failed captures. Read admission separately allows at most 16 read/opening owners.
+  These are separate admission counts, not one aggregate limit of 16 operations. Ordinary commands
+  share a 16-entry queue, and recovery reserves space for up to 16 already admitted failed captures.
+- 64 queued events; 100 listed resources.
+- IDs: 1–160 ASCII letters/digits, hyphen or underscore.
+- Filenames: 1–255 UTF-8 bytes; no controls, slash, backslash, `.` or `..`.
+- Labels and update text: at most 100 UTF-8 bytes; read-error text at most 1024 bytes.
+- The WASM adapter checks JavaScript string/array/byte lengths before copying them into Rust;
+  arbitrary extra host object properties are not stringified or copied.
+
+The host should register listeners before requesting work and always settle each request.
+Recoverable JavaScript byte-copy or dispatch exceptions are caught and logged. A failed save
+delivery moves only its still-owned capture to a bounded failure inbox; the next application
+logic frame consumes it as `failed`, retaining unsaved work and newer edits. The inbox reserves
+space for up to 16 previously admitted captures even when the ordinary 16-command queue is full;
+it admits no new requests or file bytes. A synchronously accepted host result remains authoritative
+if a later dispatch error is reported. Failed `saveDialog` and `openRequest` delivery releases only
+an unresolved matching request and emits a correlated `saveFailed` or `openFailed` when possible.
+Already resolved dialogs or admitted reads are preserved. Publication continues with later events,
+requests another frame for recovery/remaining events, and keeps the current account owned across
+both bounded drains. Unregister also refuses queued terminal notifications until they are drained.
+
+Exceptions raised inside a listener are normally reported and swallowed by the browser's event
+dispatcher, so they cannot be detected by this boundary. Such a listener must still settle its
+request explicitly. A failed delivery never acknowledges persistence; an unrecoverable browser
+termination or true out-of-memory abort cannot be recovered by a Rust `Result`. This contract does not
+provide autosave, a background synchronization daemon, storage conflict resolution or remote
+session authentication. Those are host/backend decisions.
+
+## Validation sources
+
+`crates/ui-egui/src/file_providers/tests.rs` covers opt-in defaults, metadata bounds,
+coalescing, choices, exact captures, cancellation, identity changes, aliases and correlated
+reads. `crates/ui-egui/src/app/provider_files.rs` includes native package round-trip and
+late-edit/failure regressions. They are source fixtures; execution results belong in the PR's
+validation report after running the repository's checks.
+
+`apps/wordcraft-web/src/file_provider_browser_tests.rs` defines one real-window WASM fixture
+using the exported page API, production publisher and actual `WordApp::logic` consumer. It
+uses Rust closures to inject a recoverable JavaScript `RangeError` at the catch-enabled copy
+import and request-dispatch errors. It catches the actual publisher call with `Function::call0`,
+restores each exact own-property descriptor (or removes its temporary shadow) before propagating
+the result, checks correlated failure/retry events, and decodes a successful retry's actual DOCX bytes. It does not simulate
+real memory exhaustion, storage durability or a full editor/WebRunner session. The fixture and
+the new native recovery tests require separate execution on the published lock-bearing source.
+
+Comment/reply drafts are committed again when a destination is resolved, including text typed
+while the choice was open. A refused draft fails the save; an inactive document with parked
+comment drafts must be activated and finished first. ACKs do not clear newer comment drafts.
+Resource overwrites advance alias revisions so delayed ACKs cannot clean an invalidated tab.
+Provider saves with opaque VBA require a macro-enabled .docm/.dotm filename; Device retains the
+official writer and format behavior.
+
+Opening provider bytes preserves the complete device Recent list, including when decoding fails;
+a provider filename is never admitted as a local path. Provider event consumers select a pending
+save dialog by event type rather than assuming the event queue contains only that dialog.

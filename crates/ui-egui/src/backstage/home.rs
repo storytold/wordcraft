@@ -74,6 +74,9 @@ pub(super) fn home(ui: &mut Ui, app: &mut WordApp) {
     if let Some(error) = app.backstage_state.open_error.clone() {
         error_line(ui, &error);
     }
+    if let Some(host) = &app.services.file_providers {
+        host.recent_ui(ui);
+    }
     let recent = recent_files(app);
     let cards = template_cards(&TEMPLATES[..HOME_TEMPLATES.min(TEMPLATES.len())]);
     let store = thumbs::store(&ctx);
@@ -110,6 +113,9 @@ pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
     }
     if let Some(error) = app.backstage_state.open_error.clone() {
         error_line(ui, &error);
+    }
+    if let Some(host) = &app.services.file_providers {
+        host.recent_ui(ui);
     }
     let recent = recent_files(app);
     let store = thumbs::store(&ctx);

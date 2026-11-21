@@ -168,9 +168,7 @@ impl WordApp {
     /// the browser hasn't confirmed. The Save Changes prompt asks about the same work, so the
     /// prompt and a programmatic refusal cannot drift apart (#1268, #3274).
     pub(crate) fn document_unsaved_by_id(&self, id: u64) -> bool {
-        let dirty = self.session.document_dirty(id);
-        let unconfirmed = self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == id);
-        dirty || unconfirmed
+        self.session.document_dirty(id) || self.save_unconfirmed_for(id)
     }
 
     /// Whether the open document `id` has comment or reply text typed but not yet written to
