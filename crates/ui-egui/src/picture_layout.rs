@@ -1,41 +1,25 @@
-//! Quick access to the selected picture's text-wrapping options (#6064).
+//! Layout commands beside the selected picture, using the shared task bar and menu.
 
-use egui::{Context, Order, Popup, Pos2, Rect, vec2};
+use crate::WordApp;
+use craft::behavior::{IconId, overlay::Side};
+use craft::pages::ui::PageBody;
+use craft::ui::buttons::IconButton;
+use craft::ui::canvas_controls::{TaskBar, TaskBarDismiss};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::menu::Menu;
+use egui::{Rect, Ui};
 use wordcraft_doc::{Pos, para::InlineObject};
 use wordcraft_layout::DocLayout;
 
-use crate::{WordApp, theme, widgets};
-
-const SIZE: f32 = 28.0;
-const GAP: f32 = 8.0;
-
-/// Place the button beside the picture's visible bounds, keeping it in the document viewport.
-/// Leave a gap for the resize handles; prefer the right edge, falling back to the left.
-fn button_position(picture: Rect, viewport: Rect) -> Option<Pos2> {
-    if !picture.is_finite()
-        || !viewport.is_finite()
-        || viewport.width() < SIZE
-        || viewport.height() < SIZE
-        || !picture.intersect(viewport).is_positive()
-    {
-        return None;
-    }
-    let right = picture.right() + GAP;
-    let x = if right + SIZE <= viewport.right() { right } else { picture.left() - GAP - SIZE };
-    Some(egui::pos2(x.clamp(viewport.left(), viewport.right() - SIZE), picture.top().clamp(viewport.top(), viewport.bottom() - SIZE)))
-}
-
-fn anchor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, viewport: Rect) -> Option<(Pos, Pos2)> {
-    // Editing overlays must not cover a modal, a context menu or crop/drag handles, nor offer
-    // formatting in Read Mode. A picture selected inside a Drawing Canvas has its own controls.
+fn anchor(app: &WordApp, layout: &DocLayout, body: &PageBody<'_>) -> Option<(Pos, Rect)> {
     if app.session.view.read_mode
-        || app.dialog.is_some()
-        || app.colors.is_some()
+        || app.modal_open()
         || app.ui.backstage
         || app.canvas.context_menu_open
         || app.canvas.crop.is_some()
-        || app.canvas.obj_drag.is_some()
-        || app.ui.keytips != crate::keytips::Phase::Off
+        || app.canvas.object_gesture.is_some()
+        || app.canvas.frame_held
+        || app.keytips_active
         || app.session.cell_range().is_some()
         || wordcraft_engine::cmd::canvas::selected_member(&app.session).is_some()
     {
@@ -43,42 +27,53 @@ fn anchor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, viewpor
     }
     let (pos, InlineObject::Image { .. }) = crate::objects::selected(app)? else { return None };
     let object = layout.object(&pos, app.session.page_hint)?;
-    let page = *pages.get(object.page)?;
-    let picture = crate::frame::to_screen(page, scale, object.bounds());
-    button_position(picture, viewport).map(|at| (pos, at))
+    let page = body.pages.iter().find(|p| p.page == object.page)?;
+    let bounds = object.bounds();
+    let scale = page.scale as f32;
+    let picture = Rect::from_min_size(page.rect.min + egui::vec2(bounds.x, bounds.y) * scale, egui::vec2(bounds.w, bounds.h) * scale);
+    (picture.is_finite() && picture.intersect(body.view.rect).is_positive()).then_some((pos, picture))
 }
 
-/// A page overlay on the Middle layer: above the document, below menus, with its own hit area
-/// so opening the popup cannot deselect the picture by clicking the underlying paragraph.
-pub(crate) fn show(app: &mut WordApp, ctx: &Context, layout: &DocLayout, pages: &[Rect], scale: f32, viewport: Rect) {
-    let id = app.window_id("picture_layout_options");
-    let popup = id.with("popup");
-    let owner = id.with("picture");
-    let Some((pos, at)) = anchor(app, layout, pages, scale, viewport) else {
-        Popup::close_id(ctx, popup);
-        ctx.data_mut(|d| d.remove::<Pos>(owner));
+#[derive(Clone, Default)]
+struct MenuState {
+    picture: Option<(u64, Pos)>,
+    frame: u64,
+    open: bool,
+}
+
+pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &PageBody<'_>) {
+    let key = ui.make_persistent_id("picture_layout_menu");
+    let Some((pos, picture)) = anchor(app, layout, body) else {
+        ui.data_mut(|d| d.remove::<MenuState>(key));
         return;
     };
-    let previous = ctx.data_mut(|d| {
-        let previous = d.get_temp::<Pos>(owner);
-        d.insert_temp(owner, pos.clone());
-        previous
-    });
-    // A popup belongs to one selected picture; changing the selection must not retarget it.
-    if previous.as_ref() != Some(&pos) {
-        Popup::close_id(ctx, popup);
+    let mut state = ui.data(|d| d.get_temp::<MenuState>(key)).unwrap_or_default();
+    let selected = Some((app.session.document_id(), pos.clone()));
+    let frame = ui.ctx().cumulative_frame_nr();
+    // A hidden canvas (Read Mode or File) must not bring back a menu left open on its last frame.
+    if state.picture != selected || frame.saturating_sub(state.frame) > 1 {
+        state.open = false;
     }
-    egui::Area::new(id).order(Order::Middle).fixed_pos(at).constrain_to(viewport).show(ctx, |ui| {
-        ui.spacing_mut().button_padding = vec2(6.0, 6.0);
-        let response = ui
-            .add_enabled_ui(widgets::enabled(app, "arrange.wrap"), |ui| {
-                widgets::icon_only_button(ui, "wrapText", tl!("Layout Options"), theme::regular(12.0), false)
-            })
-            .inner;
-        Popup::menu(&response).id(popup).show(|ui| {
-            crate::rtl::root(ui, |ui| crate::ribbon::wrap_text_items(ui, app));
-        });
+    state.picture = selected;
+    state.frame = frame;
+    // Hang from the picture's top edge: the middle of its right edge belongs to the resize and rotation handles.
+    let corners: Vec<_> = [picture.left_top(), picture.right_top()].into_iter().map(|p| body.view.to_doc(p)).collect();
+    TaskBar::selection(tl!("Picture").to_string(), &corners).side(Side::End).dismiss(TaskBarDismiss::Keep).show(ui, body.view.rect, |ui, _| {
+        let enabled = crate::app::command_board::command_enabled(app, "arrange.wrap");
+        let opener = IconButton::new(IconId::new("wrapText"))
+            .label(tl!("Layout Options").to_string())
+            .id_salt((app.session.document_id(), &pos))
+            .enabled(enabled)
+            .show(ui);
+        if opener.clicked() {
+            state.open = !state.open;
+        }
+        Menu::new(tl!("Layout Options").to_string())
+            .open(Bind::bound(&mut state.open))
+            .opened_by(&opener.response, Trigger::Click)
+            .show(ui, |ui, _| crate::ribbon::wrap_text_items(ui, app));
     });
+    ui.data_mut(|d| d.insert_temp(key, state));
 }
 
 #[cfg(test)]
@@ -88,6 +83,7 @@ mod tests {
     use wordcraft_doc::para::Wrap;
 
     use crate::table_resize::tests::{H, steps};
+    use crate::test_harness::AppFrames as _;
     use crate::{Services, WordApp};
 
     fn window() -> H {
@@ -99,7 +95,7 @@ mod tests {
         let data = wordcraft_engine::cmd::insert::base64_encode(png.get_ref());
         app.run("insert.picture", json!({"data": data})).unwrap();
         app.run("picture.size", json!({"width": 180, "height": 120})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -168,7 +164,7 @@ mod tests {
         let at = crate::canvas::page_to_screen(h.state_mut(), object.page, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0).unwrap();
         h.event(egui::Event::PointerMoved(at));
         crate::table_resize::tests::button(&h, at, true);
-        h.step();
+        h.app_frame();
         crate::table_resize::tests::button(&h, at, false);
         steps(&mut h, 3);
         assert_eq!(h.state().session.sel, selection);
@@ -204,7 +200,7 @@ mod tests {
         let click = |h: &mut H, at| {
             h.event(egui::Event::PointerMoved(at));
             crate::table_resize::tests::button(h, at, true);
-            h.step();
+            h.app_frame();
             crate::table_resize::tests::button(h, at, false);
             steps(h, 3);
         };
@@ -247,10 +243,17 @@ mod tests {
         steps(&mut h, 3);
         assert!(h.query_all_by_label("Layout Options").next().is_none());
         h.state_mut().run("ui.crop", json!({})).unwrap();
+        steps(&mut h, 3);
+        h.get_by_label("Layout Options").click();
+        steps(&mut h, 3);
+        assert!(h.query_all_by_label("Square").next().is_some());
         h.state_mut().run("view.readMode", json!({})).unwrap();
         steps(&mut h, 3);
         assert!(h.query_all_by_label("Layout Options").next().is_none());
         h.state_mut().run("view.printLayout", json!({})).unwrap();
+        steps(&mut h, 3);
+        assert!(h.query_all_by_label("Layout Options").next().is_some());
+        assert!(h.query_all_by_label("Square").next().is_none(), "leaving Read Mode must not reopen the old menu");
         h.state_mut().run("insert.shape", json!({"kind": "rectangle"})).unwrap();
         steps(&mut h, 3);
         assert!(h.query_all_by_label("Layout Options").next().is_none(), "this control belongs only to pictures");
@@ -263,10 +266,17 @@ mod tests {
         let bounds = object.bounds();
         let min = crate::canvas::page_to_screen(h.state_mut(), object.page, bounds.x, bounds.y).unwrap();
         let max = crate::canvas::page_to_screen(h.state_mut(), object.page, bounds.right(), bounds.bottom()).unwrap();
-        let viewport = h.state().canvas.viewport.unwrap();
-        let expected = super::button_position(egui::Rect::from_min_max(min, max), viewport).unwrap();
+        let viewport = h.state().canvas.view_rect().unwrap();
+        let picture = egui::Rect::from_min_max(min, max);
         let actual = h.get_by_label("Layout Options").rect();
-        assert!(actual.min.distance(expected) < 1.0, "button {actual:?} must follow picture at {expected:?}");
+        assert!(
+            actual.center().y >= picture.top() - actual.height() && actual.center().y <= picture.bottom() + actual.height(),
+            "the button follows the selected picture"
+        );
+        assert!(
+            actual.left() >= picture.right() || actual.right() <= picture.left() || picture.width() > viewport.width() - actual.width() * 2.0,
+            "the button sits beside the picture when there is room"
+        );
         assert!(viewport.contains_rect(actual), "the button cannot cover the ribbon or status bar");
     }
 
@@ -281,7 +291,7 @@ mod tests {
         steps(&mut h, 6);
         assert_next_to_picture(&mut h);
         let old = h.get_by_label("Layout Options").rect().min;
-        let viewport = h.state().canvas.viewport.unwrap();
+        let viewport = h.state().canvas.view_rect().unwrap();
         h.event(egui::Event::PointerMoved(viewport.center()));
         h.event(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
@@ -306,15 +316,14 @@ mod tests {
 
     #[test]
     fn layout_options_stays_inside_the_viewport_at_the_picture_edges() {
-        use egui::{Rect, pos2, vec2};
-        let viewport = Rect::from_min_size(pos2(100.0, 200.0), vec2(400.0, 300.0));
-        let right_edge = Rect::from_min_size(pos2(430.0, 250.0), vec2(60.0, 80.0));
-        let at = super::button_position(right_edge, viewport).unwrap();
-        assert!(at.x + super::SIZE < right_edge.left(), "no room on the right: use the left");
-        let partly_above = Rect::from_min_size(pos2(200.0, 150.0), vec2(60.0, 80.0));
-        assert_eq!(super::button_position(partly_above, viewport).unwrap().y, viewport.top());
-        let offscreen = right_edge.translate(vec2(0.0, -500.0));
-        assert!(super::button_position(offscreen, viewport).is_none());
-        assert!(super::button_position(right_edge, Rect::NOTHING).is_none());
+        let mut h = window();
+        h.state_mut().run("arrange.wrap", json!({"wrap":"inFrontOfText"})).unwrap();
+        for x in [0.0, 500.0] {
+            h.state_mut().run("arrange.bounds", json!({"x":x,"y":100})).unwrap();
+            steps(&mut h, 6);
+            let viewport = h.state().canvas.view_rect().unwrap();
+            let actual = h.get_by_label("Layout Options").rect();
+            assert!(viewport.contains_rect(actual), "edge controls stay in the viewport");
+        }
     }
 }
