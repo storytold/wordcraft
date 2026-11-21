@@ -6,14 +6,76 @@
 
 use std::path::Path;
 
+/// Strips an unquoted TOML `#` comment from a single line.
+fn strip_toml_comment(line: &str) -> &str {
+    let mut in_double = false;
+    let mut in_single = false;
+    for (idx, ch) in line.char_indices() {
+        match ch {
+            '"' if !in_single => in_double = !in_double,
+            '\'' if !in_double => in_single = !in_single,
+            '#' if !in_double && !in_single => return &line[..idx],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// Extracts the comment-stripped body of a TOML table section by exact `[header]`.
+fn toml_section(content: &str, header: &str) -> String {
+    let mut in_section = false;
+    let mut out = String::new();
+    for raw_line in content.lines() {
+        let line = strip_toml_comment(raw_line).trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            if in_section {
+                break;
+            }
+            in_section = line == header;
+            continue;
+        }
+        if in_section && !line.is_empty() {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    assert!(in_section, "expected target section {header} in apps/wordcraft/Cargo.toml");
+    out
+}
+
+/// Parses the `features = [...]` string array from the `winit = { ... }` dependency entry in a TOML section.
+fn winit_features(section: &str) -> Vec<&str> {
+    let winit_start = section.find("winit").expect("target section must declare a winit dependency");
+    let after_winit = &section[winit_start..];
+    let table_end = after_winit.find('}').expect("winit inline table must close with '}'");
+    let winit_table = &after_winit[..=table_end];
+    let features_start = winit_table.find("features").expect("winit dependency must declare features");
+    let after_features = &winit_table[features_start..];
+    let open_bracket = after_features.find('[').expect("winit features must open with '['");
+    let after_open = &after_features[open_bracket + 1..];
+    let close_bracket = after_open.find(']').expect("winit features must close with ']'");
+    let array_body = &after_open[..close_bracket];
+    array_body.split(',').map(|item| item.trim().trim_matches('"')).filter(|item| !item.is_empty()).collect()
+}
+
 /// Verifies that `apps/wordcraft/Cargo.toml` enables `wayland-csd-adwaita-notitle` for Linux.
 #[test]
 fn linux_manifest_enables_wayland_csd_adwaita_notitle() {
     let cargo_toml = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let content = std::fs::read_to_string(&cargo_toml).expect("read apps/wordcraft/Cargo.toml");
+
+    let linux_section = toml_section(&content, "[target.'cfg(target_os = \"linux\")'.dependencies]");
+    let linux_features = winit_features(&linux_section);
     assert!(
-        content.contains("wayland-csd-adwaita-notitle"),
-        "apps/wordcraft/Cargo.toml must enable wayland-csd-adwaita-notitle for Linux decorations"
+        linux_features.contains(&"x11") && linux_features.contains(&"wayland-csd-adwaita-notitle"),
+        "Linux winit dependency must enable x11 and wayland-csd-adwaita-notitle, got: {linux_features:?}"
+    );
+
+    let other_unix_section = toml_section(&content, "[target.'cfg(all(unix, not(any(target_os = \"macos\", target_os = \"linux\"))))'.dependencies]");
+    let other_unix_features = winit_features(&other_unix_section);
+    assert!(
+        other_unix_features.contains(&"x11") && !other_unix_features.contains(&"wayland-csd-adwaita-notitle"),
+        "Non-Linux Unix winit dependency must enable x11 without wayland-csd-adwaita-notitle, got: {other_unix_features:?}"
     );
 }
 
@@ -39,7 +101,10 @@ fn cargo_lock_contains_font_free_sctk_adwaita() {
         lockfile.split("[[package]]").find(|chunk| chunk.contains("name = \"sctk-adwaita\"")).expect("sctk-adwaita package entry in Cargo.lock");
 
     assert!(
-        !adwaita_entry.contains("fontdue") && !adwaita_entry.contains("ab_glyph") && !adwaita_entry.contains("cosmic-text"),
+        !adwaita_entry.contains("fontdue")
+            && !adwaita_entry.contains("ab_glyph")
+            && !adwaita_entry.contains("cosmic-text")
+            && !adwaita_entry.contains("crossfont"),
         "sctk-adwaita must not depend on any font renderer in the notitle configuration"
     );
 }
