@@ -1052,3 +1052,463 @@ fn language_document_scope_is_refused_under_protection() {
         assert!(s.prefs.detect_language, "{mode}: the detect preference is untouched");
     }
 }
+
+/// Build a table with `width` points and the given cell paragraph texts.
+fn make_test_table(data: &[&[&str]], width: f32) -> wordcraft_doc::Table {
+    let rows = data.len();
+    let cols = data.first().map(|r| r.len()).unwrap_or(1);
+    let mut t = wordcraft_doc::Table::new(rows, cols, width);
+    for (r, row) in data.iter().enumerate() {
+        for (c, &text) in row.iter().enumerate() {
+            t.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text(text, CharProps::default()))];
+        }
+    }
+    t
+}
+
+/// Temporary `.docx` file removed on drop.
+struct TempDocx(std::path::PathBuf);
+
+impl TempDocx {
+    fn new(tag: &str) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        Self(std::env::temp_dir().join(format!("wc-compare-{tag}-{}-{id}.docx", std::process::id())))
+    }
+}
+
+impl Drop for TempDocx {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn table_texts(t: &wordcraft_doc::Table) -> Vec<Vec<Vec<String>>> {
+    t.rows
+        .iter()
+        .map(|r| r.cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para().map(Paragraph::plain_text)).collect()).collect())
+        .collect()
+}
+
+/// #5921: Editing a cell in a surviving table diffs only that cell in place, survives a `.docx`
+/// save and reopen, and resolves cleanly under both Accept All and Reject All.
+#[test]
+fn compare_table_cell_edit_roundtrips_docx_and_resolves() {
+    let orig = make_test_table(&[&["Header 1", "Header 2"], &["Alpha old", "Keep"], &["Gamma", "Delta"]], 200.0);
+    let mut rev = make_test_table(&[&["Header 1", "Header 2"], &["Alpha new", "Keep"], &["Gamma", "Delta"]], 200.0);
+    let mut edited = Paragraph::with_text("Alpha new", CharProps::default());
+    edited.format(6, 9, &|c| c.bold = Some(true)).unwrap();
+    rev.rows[1].cells[0].blocks = vec![para_block(edited)];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let rev_file = TempDocx::new("tbl-cell-rev");
+    crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    let r = s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy()})).unwrap();
+    assert_eq!(r["changes"], 1);
+
+    let tables: Vec<&wordcraft_doc::Table> = s.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(tables.len(), 1, "changed cell must diff inside the surviving table rather than replacing the table whole");
+    assert_eq!(tables[0].rows.len(), 3);
+    for (ri, ci) in [(0, 0), (0, 1), (1, 1), (2, 0), (2, 1)] {
+        let p = tables[0].rows[ri].cells[ci].blocks[0].as_para().unwrap();
+        assert!(p.runs.iter().all(|run| run.props.ins.is_none() && run.props.del.is_none()), "unchanged cell ({ri}, {ci}) must have no marks");
+    }
+    let p10 = tables[0].rows[1].cells[0].blocks[0].as_para().unwrap();
+    let del_text: String = p10.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(rng, _)| p10.text[rng].to_string()).collect();
+    let ins_text: String = p10.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(rng, _)| p10.text[rng].to_string()).collect();
+    assert_eq!(del_text, "old");
+    assert_eq!(ins_text, "new");
+
+    // Save the Compare result as `.docx`, reopen, and check Accept All and Reject All.
+    let cmp_file = TempDocx::new("tbl-cell-cmp");
+    crate::io::save_path(&cmp_file.0, &s.doc).unwrap();
+
+    let mut s_acc = Session::new(crate::io::open_path(&cmp_file.0).unwrap());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let acc_tables: Vec<&wordcraft_doc::Table> = s_acc.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(acc_tables.len(), 1);
+    assert_eq!(
+        table_texts(acc_tables[0]),
+        vec![
+            vec![vec!["Header 1".to_string()], vec!["Header 2".to_string()]],
+            vec![vec!["Alpha new".to_string()], vec!["Keep".to_string()]],
+            vec![vec!["Gamma".to_string()], vec!["Delta".to_string()]],
+        ]
+    );
+    let acc_p10 = acc_tables[0].rows[1].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(acc_p10.props_of_char(0).bold, None);
+    assert_eq!(acc_p10.props_of_char(6).bold, Some(true));
+
+    let mut s_rej = Session::new(crate::io::open_path(&cmp_file.0).unwrap());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let rej_tables: Vec<&wordcraft_doc::Table> = s_rej.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(rej_tables.len(), 1);
+    assert_eq!(
+        table_texts(rej_tables[0]),
+        vec![
+            vec![vec!["Header 1".to_string()], vec!["Header 2".to_string()]],
+            vec![vec!["Alpha old".to_string()], vec!["Keep".to_string()]],
+            vec![vec!["Gamma".to_string()], vec!["Delta".to_string()]],
+        ]
+    );
+}
+
+/// #5921: Multiple edited rows, interior cell paragraph insertions, formatting revisions and
+/// twip-rounded column grids (`400.0 / 3.0` pt) stay inside one surviving table across `.docx`
+/// save/reopen and Accept/Reject All.
+#[test]
+fn compare_table_multi_row_and_interior_paragraph_edits_roundtrip_docx() {
+    let mut orig = make_test_table(&[&["H1", "H2", "H3"], &["Old 1", "Lead", "Stay"], &["R3C1", "R3C2", "Plain"]], 400.0);
+    orig.rows[1].cells[1].blocks =
+        vec![para_block(Paragraph::with_text("Lead", CharProps::default())), para_block(Paragraph::with_text("Tail", CharProps::default()))];
+
+    let mut rev = make_test_table(&[&["H1", "H2", "H3"], &["New 1", "Lead", "Stay"], &["R3C1", "R3C2", "Plain"]], 400.0);
+    rev.rows[1].cells[1].blocks = vec![
+        para_block(Paragraph::with_text("Lead", CharProps::default())),
+        para_block(Paragraph::with_text("Added middle", CharProps::default())),
+        para_block(Paragraph::with_text("Tail", CharProps::default())),
+    ];
+    let mut italic = Paragraph::with_text("Plain", CharProps::default());
+    italic.format(0, 5, &|c| c.italic = Some(true)).unwrap();
+    rev.rows[2].cells[2].blocks = vec![para_block(italic)];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let rev_file = TempDocx::new("tbl-multi-rev");
+    crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    let r = s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy()})).unwrap();
+    assert_eq!(r["changes"], 3);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+
+    let cmp_file = TempDocx::new("tbl-multi-cmp");
+    crate::io::save_path(&cmp_file.0, &s.doc).unwrap();
+
+    let mut s_acc = Session::new(crate::io::open_path(&cmp_file.0).unwrap());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let acc_tbl = s_acc.doc.body[0].as_table().unwrap();
+    assert_eq!(acc_tbl.rows.len(), 3);
+    assert_eq!(acc_tbl.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "New 1");
+    let acc_mid: Vec<String> = acc_tbl.rows[1].cells[1].blocks.iter().map(|b| b.as_para().unwrap().plain_text()).collect();
+    assert_eq!(acc_mid, vec!["Lead", "Added middle", "Tail"]);
+    assert_eq!(acc_tbl.rows[2].cells[2].blocks[0].as_para().unwrap().props_of_char(0).italic, Some(true));
+
+    let mut s_rej = Session::new(crate::io::open_path(&cmp_file.0).unwrap());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let rej_tbl = s_rej.doc.body[0].as_table().unwrap();
+    assert_eq!(rej_tbl.rows.len(), 3);
+    assert_eq!(rej_tbl.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "Old 1");
+    let rej_mid: Vec<String> = rej_tbl.rows[1].cells[1].blocks.iter().map(|b| b.as_para().unwrap().plain_text()).collect();
+    assert_eq!(rej_mid, vec!["Lead", "Tail"]);
+    assert_eq!(rej_tbl.rows[2].cells[2].blocks[0].as_para().unwrap().props_of_char(0).italic, None);
+}
+
+/// #5921: Edits inside a nested table diff recursively in place and survive `.docx` save/reopen.
+#[test]
+fn compare_table_nested_table_cell_edit_roundtrips_docx() {
+    let mut orig_outer = make_test_table(&[&["Outer keep", ""], &["Bottom L", "Bottom R"]], 300.0);
+    orig_outer.rows[0].cells[1].blocks =
+        vec![Arc::new(Block::Table(make_test_table(&[&["N1", "N2"], &["Inner old", "Inner stay"]], 140.0))), para_block(Paragraph::new())];
+
+    let mut rev_outer = make_test_table(&[&["Outer keep", ""], &["Bottom L", "Bottom R"]], 300.0);
+    rev_outer.rows[0].cells[1].blocks =
+        vec![Arc::new(Block::Table(make_test_table(&[&["N1", "N2"], &["Inner new", "Inner stay"]], 140.0))), para_block(Paragraph::new())];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig_outer)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev_outer)), para_block(Paragraph::new())];
+
+    let rev_file = TempDocx::new("tbl-nested-rev");
+    crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    let r = s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy()})).unwrap();
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+    let outer = s.doc.body[0].as_table().unwrap();
+    assert_eq!(outer.rows[0].cells[1].blocks.iter().filter(|b| b.as_table().is_some()).count(), 1);
+
+    let cmp_file = TempDocx::new("tbl-nested-cmp");
+    crate::io::save_path(&cmp_file.0, &s.doc).unwrap();
+
+    let mut s_acc = Session::new(crate::io::open_path(&cmp_file.0).unwrap());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let inner_acc = s_acc.doc.body[0].as_table().unwrap().rows[0].cells[1].blocks[0].as_table().unwrap();
+    assert_eq!(inner_acc.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "Inner new");
+
+    let mut s_rej = Session::new(crate::io::open_path(&cmp_file.0).unwrap());
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let inner_rej = s_rej.doc.body[0].as_table().unwrap().rows[0].cells[1].blocks[0].as_table().unwrap();
+    assert_eq!(inner_rej.rows[1].cells[0].blocks[0].as_para().unwrap().plain_text(), "Inner old");
+}
+
+/// #5921: Structural changes that need `w:trPr` row marks or alter column grids/merges fall back
+/// to whole-table replacement (counting as 1 block-replacement change) rather than emitting
+/// unpersisted row marks or pairing unrelated rows.
+#[test]
+fn compare_table_falls_back_to_whole_replacement_when_rows_or_grid_differ() {
+    use wordcraft_doc::props::VMerge;
+
+    let run_pair = |orig: wordcraft_doc::Table, rev: wordcraft_doc::Table, tag: &str, formatting: bool| -> (Session, Value) {
+        let mut orig_doc = Document::new();
+        orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+        let mut rev_doc = Document::new();
+        rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+        let rev_file = TempDocx::new(tag);
+        crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+        let mut s = Session::new(orig_doc);
+        let r = s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy(), "formatting": formatting})).unwrap();
+        (s, r)
+    };
+
+    // Row inserted.
+    let (s, r) = run_pair(make_test_table(&[&["A"], &["C"]], 200.0), make_test_table(&[&["A"], &["B"], &["C"]], 200.0), "fb-ins", true);
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+
+    // Row deleted.
+    let (s, r) = run_pair(make_test_table(&[&["A"], &["B"], &["C"]], 200.0), make_test_table(&[&["A"], &["C"]], 200.0), "fb-del", true);
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+
+    // Rows reordered (must not word-diff unrelated rows against each other).
+    let (s, r) = run_pair(
+        make_test_table(&[&["Alpha row"], &["Beta row"]], 200.0),
+        make_test_table(&[&["Beta row"], &["Alpha row"]], 200.0),
+        "fb-reorder",
+        true,
+    );
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+
+    // Grid column widths changed with equal row/column counts.
+    let mut g_orig = make_test_table(&[&["A", "B"]], 200.0);
+    g_orig.grid = vec![100.0, 100.0];
+    let mut g_rev = make_test_table(&[&["A", "B"]], 200.0);
+    g_rev.grid = vec![50.0, 150.0];
+    let (s, r) = run_pair(g_orig, g_rev, "fb-grid", true);
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+
+    // Vertical merge structure changed with identical grid.
+    let mut vm_orig = make_test_table(&[&["A", "Top"], &["B", ""]], 200.0);
+    vm_orig.rows[0].cells[1].props.vmerge = VMerge::Restart;
+    vm_orig.rows[1].cells[1].props.vmerge = VMerge::Continue;
+    let vm_rev = make_test_table(&[&["A", "Top"], &["B", "Bottom"]], 200.0);
+    let (s, r) = run_pair(vm_orig, vm_rev, "fb-vmerge", true);
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+
+    // Structural layout change whose flattened `\t`-joined text matches (`"A\tB"`), even with `formatting: false`.
+    let (s, r) = run_pair(make_test_table(&[&["A", "B"]], 200.0), make_test_table(&[&["A"], &["B"]], 200.0), "fb-flat-collision", false);
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+
+    // Preferred cell width changed while table grid stayed fixed.
+    let mut cw_orig = make_test_table(&[&["Keep", "Old"]], 200.0);
+    cw_orig.rows[0].cells[0].props.width = Some(120.0);
+    cw_orig.rows[0].cells[1].props.width = Some(80.0);
+    let mut cw_rev = make_test_table(&[&["Keep", "New"]], 200.0);
+    cw_rev.rows[0].cells[0].props.width = Some(60.0);
+    cw_rev.rows[0].cells[1].props.width = Some(140.0);
+    let (s, r) = run_pair(cw_orig, cw_rev, "fb-cell-width", true);
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+
+    // Cell shading changed with `formatting: true`.
+    let sh_orig = make_test_table(&[&["Keep", "Old"]], 200.0);
+    let mut sh_rev = make_test_table(&[&["Keep", "New"]], 200.0);
+    sh_rev.rows[0].cells[0].props.shading = Some(wordcraft_doc::Rgb(240, 240, 240));
+    let (s, r) = run_pair(sh_orig, sh_rev, "fb-cell-shading", true);
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
+}
+
+/// Pre-existing revision indices in the revised document must never leak onto unchanged table
+/// cells (where `Reject All` would otherwise delete unchanged text belonging to `revised`'s
+/// revision 0) or onto newly inserted blocks.
+#[test]
+fn compare_unchanged_table_cell_strips_foreign_revised_revisions() {
+    let orig = make_test_table(&[&["Unchanged text", "Old value"]], 200.0);
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+
+    let mut rev = make_test_table(&[&["Unchanged text", "New value"]], 200.0);
+    let mut tracked_p = Paragraph::with_text("Unchanged text", CharProps::default());
+    tracked_p.format(0, tracked_p.len(), &|c| c.ins = Some(0)).unwrap();
+    tracked_p.mark.ins = Some(0);
+    rev.rows[0].cells[0].blocks = vec![para_block(tracked_p)];
+
+    let mut rev_doc = Document::new();
+    rev_doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "OtherAuthor", "2026-11-17T00:00:00Z"));
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let rev_file = TempDocx::new("tbl-foreign-revs");
+    crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    let r = s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy()})).unwrap();
+    assert_eq!(r["changes"], 1);
+    let tbl = s.doc.body[0].as_table().unwrap();
+    let p00 = tbl.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert!(p00.runs.iter().all(|run| run.props.ins.is_none() && run.props.del.is_none()));
+    assert_eq!(p00.mark.ins, None);
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let rej_tbl = s.doc.body[0].as_table().unwrap();
+    assert_eq!(rej_tbl.rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "Unchanged text");
+    assert_eq!(rej_tbl.rows[0].cells[1].blocks[0].as_para().unwrap().plain_text(), "Old value");
+}
+
+/// Comparing a heavily formatted cell paragraph with tens of thousands of runs stays linear in run
+/// count rather than rescanning runs per character.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
+fn compare_many_runs_in_table_cell_stays_linear() {
+    let build_cell_para = |mid_word: &str| {
+        let mut p = Paragraph::new();
+        for idx in 0..10_000usize {
+            let word = if idx == 5_000 { format!("{mid_word} ") } else { "w ".to_string() };
+            let props = CharProps { bold: (idx % 2 == 0).then_some(true), ..Default::default() };
+            let at = p.len();
+            p.insert_text(at, &word, &props).unwrap();
+        }
+        p
+    };
+
+    let mut orig = make_test_table(&[&[""]], 200.0);
+    orig.rows[0].cells[0].blocks = vec![para_block(build_cell_para("before"))];
+    let mut rev = make_test_table(&[&[""]], 200.0);
+    rev.rows[0].cells[0].blocks = vec![para_block(build_cell_para("after"))];
+
+    let mut orig_doc = Document::new();
+    orig_doc.body = vec![Arc::new(Block::Table(orig)), para_block(Paragraph::new())];
+    let mut rev_doc = Document::new();
+    rev_doc.body = vec![Arc::new(Block::Table(rev)), para_block(Paragraph::new())];
+
+    let rev_file = TempDocx::new("tbl-many-runs");
+    crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_doc);
+    let started = std::time::Instant::now();
+    let r = s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy()})).unwrap();
+    let elapsed = started.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(5), "word_diff over 10,000 runs took {elapsed:?}");
+    assert_eq!(r["changes"], 1);
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+}
+
+/// Foreign revision indices on equal tables must be stripped even past `PARA_WALK_DEPTH` (up to
+/// `MAX_TABLE_DEPTH`) and when row count exceeds `MAX_ROWS`, and changed tables at or beyond
+/// `PARA_WALK_DEPTH` must not be duplicated unmarked.
+#[test]
+fn compare_deep_and_large_tables_strip_foreign_revisions_without_unmarked_duplicates() {
+    use wordcraft_doc::{Table, table::MAX_TABLE_DEPTH};
+
+    fn nest(inner: Table, levels: usize) -> Table {
+        let mut cur = inner;
+        for _ in 1..levels {
+            let mut outer = Table::new(1, 1, 200.0);
+            outer.rows[0].cells[0].blocks = vec![Arc::new(Block::Table(cur))];
+            cur = outer;
+        }
+        cur
+    }
+
+    fn has_any_rev(b: &Block) -> bool {
+        match b {
+            Block::Para(p) => {
+                p.mark.ins.is_some()
+                    || p.mark.del.is_some()
+                    || p.mark.fmt_change.is_some()
+                    || p.runs.iter().any(|r| r.props.ins.is_some() || r.props.del.is_some() || r.props.fmt_change.is_some())
+            }
+            Block::Table(t) => t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).any(|x| has_any_rev(x)),
+        }
+    }
+
+    // 1. Equal `MAX_TABLE_DEPTH` tables where both carry revision index `0` in their innermost cell
+    // (foreign index on `revised` pointing to a 3-entry revision table).
+    let mut leaf = make_test_table(&[&["deep"]], 200.0);
+    let mut tracked = Paragraph::with_text("deep", CharProps::default());
+    tracked.format(0, tracked.len(), &|c| c.ins = Some(2)).unwrap();
+    tracked.mark.ins = Some(2);
+    leaf.rows[0].cells[0].blocks = vec![para_block(tracked)];
+    let deep_tbl = nest(leaf, MAX_TABLE_DEPTH);
+
+    let mut orig_doc = Document::new();
+    for _ in 0..3 {
+        orig_doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Delete, "Orig", "2026-11-17T00:00:00Z"));
+    }
+    orig_doc.body = vec![Arc::new(Block::Table(deep_tbl.clone())), para_block(Paragraph::new())];
+
+    let mut rev_doc = Document::new();
+    for _ in 0..3 {
+        rev_doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "Rev", "2026-11-17T00:00:00Z"));
+    }
+    rev_doc.body = vec![Arc::new(Block::Table(deep_tbl)), para_block(Paragraph::new())];
+
+    let rev_file = TempDocx::new("tbl-deep-foreign");
+    crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+    // Make `ta == tb` hold across `.docx` round-trip by opening `orig` from the same saved bytes.
+    let mut orig_reopened = crate::io::open_path(&rev_file.0).unwrap();
+    orig_reopened.revisions.clear();
+    let _ = orig_doc;
+    let mut s = Session::new(orig_reopened);
+    s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy()})).unwrap();
+    assert!(!s.doc.body.iter().any(|b| has_any_rev(b)), "foreign revision indices survived inside deep equal table");
+
+    // 2. Equal `> MAX_ROWS` table carrying foreign revision indices also strips them.
+    let mut big_tbl = Table::new(505, 1, 200.0);
+    let mut tracked_row = Paragraph::with_text("row504", CharProps::default());
+    tracked_row.format(0, tracked_row.len(), &|c| c.ins = Some(2)).unwrap();
+    big_tbl.rows[504].cells[0].blocks = vec![para_block(tracked_row)];
+    let mut big_rev = Document::new();
+    for _ in 0..3 {
+        big_rev.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "Rev", "2026-11-17T00:00:00Z"));
+    }
+    big_rev.body = vec![Arc::new(Block::Table(big_tbl)), para_block(Paragraph::new())];
+    let big_file = TempDocx::new("tbl-big-foreign");
+    crate::io::save_path(&big_file.0, &big_rev).unwrap();
+    let mut big_orig = crate::io::open_path(&big_file.0).unwrap();
+    big_orig.revisions.clear();
+    let mut s_big = Session::new(big_orig);
+    s_big.run("review.compare", &json!({"path": big_file.0.to_string_lossy()})).unwrap();
+    assert!(!s_big.doc.body.iter().any(|b| has_any_rev(b)), "foreign revision indices survived inside > MAX_ROWS equal table");
+
+    // 3. Changed innermost table at `MAX_TABLE_DEPTH` (`>= PARA_WALK_DEPTH`) keeps the single
+    // stripped revised table instead of emitting two unmarked copies.
+    let orig_deep = nest(make_test_table(&[&["old"]], 200.0), MAX_TABLE_DEPTH);
+    let rev_deep = nest(make_test_table(&[&["new1"], &["new2"]], 200.0), MAX_TABLE_DEPTH);
+    let mut d_a = Document::new();
+    d_a.body = vec![Arc::new(Block::Table(orig_deep)), para_block(Paragraph::new())];
+    let orig_deep_file = TempDocx::new("tbl-deep-orig");
+    crate::io::save_path(&orig_deep_file.0, &d_a).unwrap();
+    let d_a = crate::io::open_path(&orig_deep_file.0).unwrap();
+    let mut d_b = Document::new();
+    d_b.body = vec![Arc::new(Block::Table(rev_deep)), para_block(Paragraph::new())];
+    let deep_changed_file = TempDocx::new("tbl-deep-changed");
+    crate::io::save_path(&deep_changed_file.0, &d_b).unwrap();
+    let mut s2 = Session::new(d_a);
+    let r2 = s2.run("review.compare", &json!({"path": deep_changed_file.0.to_string_lossy()})).unwrap();
+    assert_eq!(r2["changes"], 0);
+    let mut cur = s2.doc.body[0].as_table().unwrap();
+    for _ in 1..MAX_TABLE_DEPTH {
+        assert_eq!(cur.rows[0].cells[0].blocks.iter().filter(|b| b.as_table().is_some()).count(), 1);
+        cur = cur.rows[0].cells[0].blocks[0].as_table().unwrap();
+    }
+    assert_eq!(cur.rows.len(), 2);
+}
