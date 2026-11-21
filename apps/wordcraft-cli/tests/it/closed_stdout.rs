@@ -24,7 +24,19 @@ fn commands_json_into_a_closed_pipe_exits_quietly() {
 
 #[test]
 fn mcp_server_ends_cleanly_when_its_client_closes_stdout() {
-    let mut child = cli().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    // The server starts only with both roots (#7124); the temporary folder serves as both.
+    let root = std::env::temp_dir();
+    let mut child = cli()
+        .arg("mcp")
+        .arg("--automation-read-root")
+        .arg(&root)
+        .arg("--automation-write-root")
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     drop(child.stdout.take());
     let mut stdin = child.stdin.take().unwrap();
     // The reply to this request has nowhere to go.
