@@ -298,6 +298,10 @@ pub struct TableForm {
     /// `left`, `center` or `right`.
     pub align: String,
     pub indent: f32,
+    /// Text wrapping: `none` or `around`.
+    pub wrapping: String,
+    /// Whether text wrapping can be changed (only top-level tables in the body text).
+    pub can_wrap: bool,
     /// Table direction: right to left (`w:bidiVisual`).
     pub rtl: bool,
     pub row_height_on: bool,
@@ -351,6 +355,8 @@ impl TableForm {
             }
             .into(),
             indent: fin(t.props.indent.unwrap_or(0.0)),
+            wrapping: if t.props.float.is_some() { "around" } else { "none" }.into(),
+            can_wrap: s.sel.focus.story == wordcraft_doc::StoryRef::Body && tp.0.len() == 1,
             rtl: t.props.bidi_visual,
             row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
             row_height: fin(row.height.unwrap_or(18.0)),
@@ -381,8 +387,11 @@ impl TableForm {
         if self.align != basis.align {
             v.insert("align".into(), json!(self.align));
         }
-        if moved(self.indent, basis.indent) {
+        if self.wrapping != "around" && moved(self.indent, basis.indent) {
             v.insert("indent".into(), json!(self.indent));
+        }
+        if self.wrapping != basis.wrapping && (self.wrapping == "none" || self.can_wrap) {
+            v.insert("wrapping".into(), json!(self.wrapping));
         }
         if self.rtl != basis.rtl {
             v.insert("rtl".into(), json!(self.rtl));
@@ -478,7 +487,20 @@ impl WordForm for TableProperties {
                 &mut f.align,
                 &[("left", tl!("Left").to_string()), ("center", tl!("Center").to_string()), ("right", tl!("Right").to_string())],
             );
-            length(ui, "indent", tl!("Indent from left").to_string(), &mut f.indent, indent, kind, f.align == "left");
+            length(ui, "indent", tl!("Indent from left").to_string(), &mut f.indent, indent, kind, f.align == "left" && f.wrapping != "around");
+            let can_wrap = f.can_wrap;
+            let chosen = RadioGroup::new(Label::from(tl!("Text wrapping").to_string()), Bind::given(f.wrapping.clone())).id_salt("wrapping").show(
+                ui,
+                |ui, _| {
+                    Stack::new().show(ui, |ui, _| {
+                        Radio::new("none".to_string()).label(Label::from(tl!("None").to_string())).show(ui);
+                        Radio::new("around".to_string()).label(Label::from(tl!("Around").to_string())).enabled(can_wrap).show(ui);
+                    });
+                },
+            );
+            if let Some(next) = chosen.output.value().cloned() {
+                f.wrapping = next;
+            }
             let mut dir = if f.rtl { "rtl" } else { "ltr" }.to_string();
             choose(
                 ui,

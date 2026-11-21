@@ -487,3 +487,52 @@ fn find_replace_and_go_to_keys_like_word() {
     assert_eq!(h.state().ui.nav_tab, "results", "Find leaves Pages to show the selected-text matches");
     assert_eq!(h.state().session.find.results.len(), 2);
 }
+
+/// #5884: Table Properties dialog text wrapping options (None and Around).
+#[test]
+fn table_properties_text_wrapping() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    a.run("table.properties", json!({})).unwrap();
+    let ctx = crate::test_harness::context();
+    pump(&mut a, &ctx);
+    let host = a.dialog_host.get::<FormHost<dialogs::TableProperties>>().unwrap();
+    let basis = host.form().form.clone();
+    assert!(basis.can_wrap, "top-level body table can wrap text");
+    assert_eq!(basis.wrapping, "none");
+    let mut w = basis.clone();
+    w.wrapping = "around".into();
+    assert_eq!(w.changes(&basis), json!({"wrapping": "around"}));
+
+    a.run("table.properties", json!({"wrapping": "around"})).unwrap();
+    let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert!(t.props.float.is_some(), "around wrapping floats the table");
+    assert_eq!(dialogs::TableForm::read(&a).unwrap().wrapping, "around");
+
+    a.run("table.properties", json!({"wrapping": "none"})).unwrap();
+    let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+    assert!(t.props.float.is_none(), "none wrapping places the table inline");
+    assert_eq!(dialogs::TableForm::read(&a).unwrap().wrapping, "none");
+
+    // Nested table cannot wrap around.
+    a.run("insert.table", json!({"rows": 1, "cols": 1})).unwrap();
+    let f_nested = dialogs::TableForm::read(&a).unwrap();
+    assert!(!f_nested.can_wrap, "nested table cannot wrap text");
+    assert_eq!(f_nested.wrapping, "none");
+    let mut w_nested = f_nested.clone();
+    w_nested.wrapping = "around".into();
+    assert_eq!(w_nested.changes(&f_nested), json!({}), "disabled wrapping produces no command parameter");
+
+    // Nested floating table can send "none" to unfloat.
+    let mut f_nested_float = f_nested.clone();
+    f_nested_float.wrapping = "around".into();
+    let mut f_nested_unfloat = f_nested_float.clone();
+    f_nested_unfloat.wrapping = "none".into();
+    assert_eq!(f_nested_unfloat.changes(&f_nested_float), json!({"wrapping": "none"}));
+
+    // When wrapping is around, indent is not emitted by TableForm changes.
+    let mut w_indent = w.clone();
+    w_indent.indent = 2.0;
+    assert_eq!(w_indent.changes(&w), json!({}));
+}
