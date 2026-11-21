@@ -355,3 +355,26 @@ fn khmer_ignores_the_ligature_setting() {
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }
+
+#[test]
+fn a_complex_script_run_is_drawn_in_its_script_font_lookup() {
+    crate::test_fonts();
+    // A missing complex-script font is looked up as a script font (#7064): it keeps its name,
+    // and neither the core font its name starts with nor Calibri draws it. The text it covers is
+    // shaped in that face, the one checked for coverage and reported as the substitute, not in
+    // the run font lookup's (Courier New for a missing `Courier Foo`).
+    let font = "Courier Foo 7064";
+    let mut d = Document::from_text("Hello");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.cs = Some(true);
+    p.runs[0].props.font_cs = Some(font.into());
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    let script = wordcraft_fonts::word::resolve(font, false, false).face;
+    let core = wordcraft_fonts::word::resolve("Courier New", false, false).face;
+    assert_ne!(script.id(), core.id(), "the two lookups differ on this machine");
+    assert!(script.covers('H'));
+    for c in &pl.clusters {
+        assert_eq!(pl.styles[c.style as usize].face.id(), script.id(), "{}", pl.styles[c.style as usize].face.family);
+    }
+}

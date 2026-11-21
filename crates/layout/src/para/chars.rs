@@ -121,22 +121,44 @@ pub(crate) fn remap_range(map_starts: &[usize], orig_of: &[usize], orig_len: usi
 }
 
 /// Word draws a font that isn't installed in Cambria when the document's font table classes it
-/// as roman (measured in Word; Calibri otherwise, which our own substitutes already match).
+/// as roman (measured in Word).
 pub(super) const MISSING_ROMAN_FONT: &str = "Cambria";
 
-/// The family to look `font` up as. A font that isn't installed is drawn, as Word draws it
-/// (measured in Word 2024, #2702):
+/// Word draws a run font that isn't installed in Calibri when the font table doesn't class it as
+/// roman and it has no alternate that can be drawn: measured in Word for Windows 16.0.20625 for a
+/// font classed swiss, modern, auto, decorative or script. The generic sans substitutes start
+/// with Carlito, Calibri's metric twin, then Arial, so without this rule Windows drew Arial.
+pub(super) const MISSING_SANS_FONT: &str = "Calibri";
+
+/// The family to look a run's font `font` up as. A font that isn't installed is drawn, as Word
+/// draws it (measured in Word 2024, #2702):
 /// 1. in the alternate the font table names for it (`w:altName`), when that one can be drawn:
 ///    installed, or a font one of whose own substitutes is installed. That comes before the
 ///    family class: a roman font with an installed alternate is drawn in the alternate;
-/// 2. in [`MISSING_ROMAN_FONT`] when the font table classes it as roman, or as modern with an
-///    alternate that can't be drawn either (a modern font with no alternate, and a swiss one with
-///    or without, take the generic substitutes, as Calibri does in Word). Not for a Thai font
-///    (drawn in a Thai face, #1549), a symbol font, or a font with substitutes of its own (Times
-///    New Roman is roman in every font table, and where it isn't installed Liberation Serif has
-///    its metrics; Word never meets it missing);
-/// 3. else as `font`, which [`wordcraft_fonts::word::resolve`] substitutes.
+/// 2. in the core font its name starts with ([`core_font_named_by`]: `Arial MT` in Arial), whatever
+///    its family class;
+/// 3. in [`MISSING_ROMAN_FONT`] when the font table classes it as roman, or as modern with an
+///    alternate that can't be drawn either;
+/// 4. in [`MISSING_SANS_FONT`] otherwise: a swiss font with or without an alternate, and a modern
+///    one with none.
+///
+/// Rules 2 to 4 skip a Thai font (drawn in a Thai face, #1549), a symbol font, and a font with
+/// substitutes of its own (Times New Roman is roman in every font table, and where it isn't
+/// installed Liberation Serif has its metrics; Word never meets it missing): those keep `font`,
+/// which [`wordcraft_fonts::word::resolve`] substitutes. Rules 2 and 4 also skip a fallback list
+/// (`Liberation Sans;Arial`, #5843), which its own candidates draw.
 pub(super) fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    lookup(doc, font, true)
+}
+
+/// The family to look a run's East Asian (`w:eastAsia`) or complex-script (`w:cs`) font up as:
+/// rules 1 and 3 of [`lookup_family`], not the core fonts of rule 2 nor the Calibri of rule 4,
+/// which have no CJK; a missing one keeps its name, and the script's own fallback draws it.
+pub(super) fn lookup_script_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    lookup(doc, font, false)
+}
+
+fn lookup<'f>(doc: &'f Document, font: &'f str, run_font: bool) -> &'f str {
     let settings = &doc.settings;
     // A fallback list (`Liberation Serif;Times New Roman`) is in a class when one of its
     // candidates is.
@@ -145,7 +167,7 @@ pub(super) fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
     };
     let alternate = settings.font_alt_names.iter().find(|(f, _)| f.eq_ignore_ascii_case(font)).map(|(_, alt)| alt.as_str());
     let roman = listed(&settings.roman_fonts);
-    if alternate.is_none() && !roman {
+    if alternate.is_none() && !roman && (!run_font || font.trim().is_empty()) {
         return font;
     }
     let db = wordcraft_fonts::FontDb::global();
@@ -165,16 +187,38 @@ pub(super) fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
     }
     let modern_alternate_missing = alternate.is_some() && listed(&settings.modern_fonts);
     // Thai, symbol and fonts with substitutes of their own keep their name: those substitutes
-    // draw them, Cambria wouldn't.
-    if (roman || modern_alternate_missing)
-        && !wordcraft_fonts::word::is_thai_family(font)
-        && !wordcraft_doc::symbol_fonts::is_symbol_font(font)
-        && !wordcraft_fonts::word::has_named_substitutes(font)
-    {
+    // draw them, Cambria and Calibri wouldn't.
+    let keeps_name = wordcraft_fonts::word::is_thai_family(font)
+        || wordcraft_doc::symbol_fonts::is_symbol_font(font)
+        || wordcraft_fonts::word::has_named_substitutes(font);
+    if keeps_name {
+        font
+    } else if let Some(core) = run_font.then(|| core_font_named_by(font)).flatten() {
+        core
+    } else if roman || modern_alternate_missing {
         MISSING_ROMAN_FONT
+    } else if run_font && !font.contains(';') {
+        MISSING_SANS_FONT
     } else {
         font
     }
+}
+
+/// The font Word draws a missing font in when its name starts with a core font's (measured in
+/// Word for Windows 16.0.20625, whatever the family class): Arial for `Arial MT`, `ArialFoo`,
+/// `Arial Narrow Foo` and the Helvetica names (`Helv…`), Times New Roman for `Times…`, Courier New
+/// for `Courier…`, Segoe UI for `Segoe UI…`. Only the start counts (`Foo Arial` is drawn in
+/// Calibri), and no other installed font is matched this way (`Verdana MT`, `Tahoma Foo` and
+/// `Georgia Foo` are drawn in Calibri). A fallback list (`;`) is left to its candidates.
+fn core_font_named_by(font: &str) -> Option<&'static str> {
+    if font.contains(';') {
+        return None;
+    }
+    let f = font.trim().to_ascii_lowercase();
+    [("arial", "Arial"), ("helv", "Arial"), ("times", "Times New Roman"), ("courier", "Courier New"), ("segoe ui", "Segoe UI")]
+        .into_iter()
+        .find(|(prefix, _)| f.starts_with(prefix))
+        .map(|(_, core)| core)
 }
 
 /// One face for a run in a Thai font that isn't installed (#1549): Word substitutes one font

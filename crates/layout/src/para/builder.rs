@@ -1,7 +1,7 @@
 use super::bidi::{Dir, bidi_levels, strong_rtl, visual_order};
 use super::chars::{
-    SegKey, caps_expands, context_digit_dirs, draws_something, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range,
-    reported_font_name, thai_run_face, upper_char,
+    SegKey, caps_expands, context_digit_dirs, draws_something, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family,
+    lookup_script_family, remap_range, reported_font_name, thai_run_face, upper_char,
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
@@ -261,7 +261,7 @@ impl<'a> Builder<'a> {
         // A font isn't installed when it was substituted, or looked up as a missing roman font or
         // its font table alternate (#2702).
         let resolved_cs = rc_cs.as_ref().map(|r| {
-            let family = lookup_family(self.env.doc, &r.font);
+            let family = lookup_script_family(self.env.doc, &r.font);
             let resolved = wordcraft_fonts::word::resolve(family, r.bold, r.italic);
             (resolved.face, resolved.substituted || !family.eq_ignore_ascii_case(&r.font))
         });
@@ -269,7 +269,7 @@ impl<'a> Builder<'a> {
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
         // it, or the font table alternate it is drawn in (#2702), is installed and has them.
         let wanted_ea = rc.font_ea.as_deref().filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian)).map(|f| {
-            let family = lookup_family(self.env.doc, f);
+            let family = lookup_script_family(self.env.doc, f);
             let resolved = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
             (f, resolved, resolved.substituted || !family.eq_ignore_ascii_case(f))
         });
@@ -336,7 +336,11 @@ impl<'a> Builder<'a> {
             };
             let rc = &rc;
             let small = key.small;
-            let si = self.style(rc, key.face, small);
+            // A complex-script segment the run's complex-script face covers is drawn in that face,
+            // looked up as a script font ([`lookup_script_family`]): `style` would look its font
+            // up as a run font, in Calibri or a core font, which have no Arabic or Hebrew.
+            let face = key.face.or(primary_cs.filter(|_| key.complex));
+            let si = self.style(rc, face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
             // All Caps and Small Caps draw a letter's full capital, which can be several
