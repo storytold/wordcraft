@@ -53,7 +53,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
         }
         // PLAN: assumed `dialogs_chart::open`, `dialogs_smart_art::open` and `dialogs_bullet::open` take
         // `(app, name, params, parent) -> Option<DialogId>` (dialogs-w17, dialogs-w14).
-        "insertChart" | "changeChartType" | "chartData" => crate::dialogs_chart::open(app, name, params, parent),
+        "insertChart" | "changeChartType" | "chartData" | "formatAxis" | "formatSeries" => crate::dialogs_chart::open(app, name, params, parent),
         "insertSmartArt" => crate::dialogs_smart_art::open(app, name, params, parent),
         "defineBullet" => crate::dialogs_bullet::open(app, name, params, parent),
         _ => None,

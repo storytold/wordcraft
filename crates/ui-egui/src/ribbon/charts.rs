@@ -109,6 +109,23 @@ pub(super) fn smart_art_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
 /// and its size.
 pub(super) fn chart_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let Some(chart) = wordcraft_engine::cmd::chart::selected_chart(&app.session) else { return };
+    row.group(RibbonGroup::new("currentSelection", tl!("Current Selection").to_string(), IconId::new("chart").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            let face = Button::new(tl!("Format Axis").to_string()).icon(IconId::new("chart"));
+            menu_button(ui, face, tl!("Format Axis"), Some("chart.axis"), |ui, _| {
+                for (label, side) in [("Value Axis", "value"), ("Category Axis", "category")] {
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "formatAxis", "side": side})))
+                        .label(tl!(label).to_string())
+                        .show(ui);
+                }
+            });
+            Button::command(CommandRef::with_params("ui.dialog", json!({"name": "formatSeries"})))
+                .label(tl!("Format Series").to_string())
+                .icon(IconId::new("chartData"))
+                .enabled(!chart.series.is_empty())
+                .show(ui);
+        });
+    });
     row.group(RibbonGroup::new("chartLayouts", tl!("Chart Layouts").to_string(), IconId::new("chartTitle").into()), |ui| {
         let chart = &chart;
         let face = Button::new(tl!("Chart Title").to_string()).icon(IconId::new("chartTitle")).arrangement(Arrangement::Stacked);

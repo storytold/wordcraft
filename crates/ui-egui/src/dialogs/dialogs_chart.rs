@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use craft::behavior::{ColumnKey, ColumnWidth, IconId, Selection, SelectionChange, keyed};
 use craft::table::ui::{ChartPrimitive, paint_chart};
 use craft::ui::buttons::{Button, IconButton};
+use craft::ui::choice::Checkbox;
 use craft::ui::contract::{
     Bind, CollectionEvent, ColumnEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
@@ -29,6 +30,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::chart::{ChartSpec, ChartType, MAX_POINTS, MAX_SERIES};
 
 use crate::WordApp;
+use crate::dialogs::dialogs_insert::{text_field, word};
 use crate::dialogs::host::{Asks, WordForm, open_form};
 
 /// Insert › Chart (`change` false) or Chart Design › Change Chart Type (`change` true).
@@ -171,6 +173,232 @@ impl ChartDataForm {
         if i < self.cells.len() {
             self.cells.remove(i);
         }
+    }
+}
+
+/// Chart Design ▸ Current Selection ▸ Format Axis (the selected chart's category or value axis): bounds,
+/// tick-label format, gridlines, tick labels and the axis line. Running `chart.axis` with the
+/// same params does the same without the dialog.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartAxisForm {
+    pub title: String,
+    pub min: String,
+    pub max: String,
+    pub fmt: String,
+    pub gridlines: bool,
+    pub labels: bool,
+    pub line: bool,
+    #[serde(default)]
+    category: bool,
+    #[serde(default)]
+    categorical: bool,
+}
+
+impl ChartAxisForm {
+    pub fn new(app: &WordApp, category: bool) -> Option<ChartAxisForm> {
+        let c = wordcraft_engine::cmd::chart::selected_chart(&app.session)?;
+        if c.kind.is_round() {
+            return None;
+        }
+        let a = if category { &c.cat_axis } else { &c.val_axis };
+        Some(ChartAxisForm {
+            title: a.title.clone().unwrap_or_default(),
+            min: a.min.map(number_text).unwrap_or_default(),
+            max: a.max.map(number_text).unwrap_or_default(),
+            fmt: a.fmt.clone().unwrap_or_default(),
+            gridlines: a.gridlines,
+            labels: a.labels,
+            line: a.line,
+            category,
+            // A scatter chart's category axis represents its numeric x values.
+            categorical: category && c.kind != ChartType::Scatter,
+        })
+    }
+
+    /// The `chart.axis` params, or the first bound that isn't a number.
+    pub fn params(&self) -> Result<Value, String> {
+        let bound = |t: &str| -> Result<Option<Value>, String> {
+            let t = t.trim();
+            if t.is_empty() {
+                return Ok(None);
+            }
+            match t.replace(',', ".").parse::<f64>() {
+                Ok(v) if v.is_finite() => Ok(Some(json!(v))),
+                _ => Err(crate::i18n::fmt(tl!("“{text}” isn't a number."), &[("text", t)])),
+            }
+        };
+        let side = if self.category { "category" } else { "value" };
+        let mut params = json!({"side": side, "title": self.title.trim(), "gridlines": self.gridlines, "labels": self.labels, "line": self.line});
+        if !self.categorical {
+            params["min"] = bound(&self.min)?.unwrap_or(Value::Null);
+            params["max"] = bound(&self.max)?.unwrap_or(Value::Null);
+            params["format"] = json!(self.fmt.trim());
+        }
+        Ok(params)
+    }
+}
+
+/// A number as text, without a trailing `.0`.
+fn number_text(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{v:.0}") } else { format!("{v}") }
+}
+
+impl WordForm for ChartAxisForm {
+    fn key(&self) -> &'static str {
+        "formatAxis"
+    }
+
+    fn title(&self) -> Label {
+        if self.category { word("Format Category Axis") } else { word("Format Axis") }
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        text_field(ui, "title", &word("Title:"), &mut self.title);
+        if !self.categorical {
+            text_field(ui, "minimum", &word("Minimum:"), &mut self.min);
+            text_field(ui, "maximum", &word("Maximum:"), &mut self.max);
+            text_field(ui, "format", &word("Number format:"), &mut self.fmt);
+        }
+        Checkbox::new(Bind::bound(&mut self.gridlines)).label(word("Major gridlines")).show(ui);
+        Checkbox::new(Bind::bound(&mut self.labels)).label(word("Tick labels")).show(ui);
+        Checkbox::new(Bind::bound(&mut self.line)).label(word("Axis line")).show(ui);
+        match self.params() {
+            Ok(_) => true,
+            Err(message) => {
+                Text::new(message).show(ui);
+                false
+            }
+        }
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        self.params().map(|params| vec![("chart.axis".to_string(), params)]).unwrap_or_default()
+    }
+}
+
+/// Chart Design ▸ Format Series (the first series, or the one `index` says): fill, line,
+/// markers, smooth lines, labels. `chart.series` with the same params does the same.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartSeriesForm {
+    pub index: usize,
+    pub fill: String,
+    pub no_fill: bool,
+    pub width: String,
+    pub markers: bool,
+    pub smooth: bool,
+    pub labels: bool,
+    pub fmt: String,
+    /// The markers and labels the form opened with. An unchanged box sends nothing, so a series
+    /// that follows the chart's setting keeps following it.
+    opened_markers: bool,
+    opened_labels: bool,
+    stroke_and_fill: bool,
+    markers_and_smooth: bool,
+}
+
+impl ChartSeriesForm {
+    pub fn new(app: &WordApp) -> Option<ChartSeriesForm> {
+        let c = wordcraft_engine::cmd::chart::selected_chart(&app.session)?;
+        let s = c.series.first()?;
+        let markers = s.markers.unwrap_or(c.kind == wordcraft_doc::chart::ChartType::Scatter);
+        let labels = s.labels.unwrap_or(c.data_labels);
+        Some(ChartSeriesForm {
+            index: 0,
+            fill: s.fill.map(|c| c.hex()).unwrap_or_default(),
+            no_fill: s.no_fill,
+            width: s.line_w.filter(|_| !s.no_line).map(|w| number_text(w as f64)).unwrap_or_default(),
+            markers,
+            smooth: s.smooth,
+            labels,
+            fmt: s.fmt.clone().unwrap_or_default(),
+            opened_markers: markers,
+            opened_labels: labels,
+            stroke_and_fill: !c.kind.is_round(),
+            markers_and_smooth: wordcraft_engine::cmd::chart::has_line_markers(c.kind),
+        })
+    }
+
+    /// The `chart.series` params.
+    pub fn params(&self) -> Result<Value, String> {
+        let mut v = serde_json::Map::new();
+        v.insert("index".into(), json!(self.index));
+        if self.stroke_and_fill {
+            self.stroke_and_fill_params(&mut v)?;
+        }
+        if self.markers_and_smooth {
+            if self.markers != self.opened_markers {
+                v.insert("markers".into(), json!(self.markers));
+            }
+            v.insert("smooth".into(), json!(self.smooth));
+        }
+        if self.labels != self.opened_labels {
+            v.insert("labels".into(), json!(self.labels));
+        }
+        if !self.fmt.trim().is_empty() {
+            v.insert("format".into(), json!(self.fmt.trim()));
+        }
+        Ok(Value::Object(v))
+    }
+
+    fn stroke_and_fill_params(&self, v: &mut serde_json::Map<String, Value>) -> Result<(), String> {
+        if self.no_fill {
+            v.insert("fill".into(), json!("none"));
+        } else if !self.fill.trim().is_empty() {
+            let t = self.fill.trim().trim_start_matches('#').to_string();
+            if wordcraft_doc::props::Rgb::parse(&t).is_none() {
+                return Err(crate::i18n::fmt(tl!("“{text}” isn't a colour (RRGGBB)."), &[("text", &t)]));
+            }
+            v.insert("fill".into(), json!(t));
+        } else {
+            // An empty colour with No fill off is "automatic": it also clears a No fill the
+            // series had when the dialog opened.
+            v.insert("fill".into(), json!("auto"));
+        }
+        let width = self.width.trim().replace(',', ".");
+        if let Some(w) = width.parse::<f64>().ok().filter(|w| w.is_finite()) {
+            v.insert("line".into(), json!(w));
+        } else if !self.width.trim().is_empty() {
+            return Err(crate::i18n::fmt(tl!("“{text}” isn't a width in points."), &[("text", self.width.trim())]));
+        }
+        Ok(())
+    }
+}
+
+impl WordForm for ChartSeriesForm {
+    fn key(&self) -> &'static str {
+        "formatSeries"
+    }
+
+    fn title(&self) -> Label {
+        word("Format Series")
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        Text::new(crate::i18n::fmt(tl!("Series {n}"), &[("n", &self.index.saturating_add(1).to_string())])).show(ui);
+        if self.stroke_and_fill {
+            text_field(ui, "fill", &word("Fill:"), &mut self.fill);
+            Checkbox::new(Bind::bound(&mut self.no_fill)).label(word("No fill")).show(ui);
+            text_field(ui, "width", &word("Width (pt):"), &mut self.width);
+        }
+        if self.markers_and_smooth {
+            Checkbox::new(Bind::bound(&mut self.markers)).label(word("Markers")).show(ui);
+            Checkbox::new(Bind::bound(&mut self.smooth)).label(word("Smooth lines")).show(ui);
+        }
+        Checkbox::new(Bind::bound(&mut self.labels)).label(word("Data labels")).show(ui);
+        text_field(ui, "format", &word("Number format:"), &mut self.fmt);
+        match self.params() {
+            Ok(_) => true,
+            Err(message) => {
+                Text::new(message).show(ui);
+                false
+            }
+        }
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        self.params().map(|params| vec![("chart.series".to_string(), params)]).unwrap_or_default()
     }
 }
 
@@ -459,7 +687,7 @@ fn data_body(ui: &mut Ui, f: &mut ChartDataForm) {
 
 /// Opens the dialog `name` names: `insertChart`, `changeChartType` (the selected chart) or `chartData` (the selected
 /// chart); `None` for another name or without a chart to change.
-pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     match name {
         "insertChart" | "changeChartType" => {
             let form = ChartTypeForm::new(app, name == "changeChartType")?;
@@ -467,6 +695,19 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
         }
         "chartData" => {
             let form = ChartDataForm::new(app)?;
+            Some(open_form(app, parent, form))
+        }
+        "formatAxis" => {
+            let category = match params.get("side").and_then(Value::as_str) {
+                Some("category") => true,
+                None | Some("value") => false,
+                _ => return None,
+            };
+            let form = ChartAxisForm::new(app, category)?;
+            Some(open_form(app, parent, form))
+        }
+        "formatSeries" => {
+            let form = ChartSeriesForm::new(app)?;
             Some(open_form(app, parent, form))
         }
         _ => None,
