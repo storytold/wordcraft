@@ -2299,3 +2299,27 @@ fn icons_dialog_keeps_its_size_across_categories() {
         assert_eq!(cancel(&h), all, "the dialog moved or resized on {category}");
     }
 }
+
+/// Insert › Icons is as wide as its row of large previews (#7167), not as wide as the window lets a dialog be: the
+/// first row holds `ICONS_COLUMNS` icons and the next icon starts the second, and the dialog is narrower than one
+/// more column.
+#[test]
+fn icons_dialog_is_as_wide_as_its_columns() {
+    let mut h = app_harness(app_with("x"));
+    open_named(&mut h, "icons", json!({}));
+    h.run_steps(6);
+    let columns = super::bookmarks::ICONS_COLUMNS;
+    // All lists the icons category by category.
+    use wordcraft_render::icon_lib::{Category, ICONS};
+    let order: Vec<&str> =
+        Category::ALL.into_iter().flat_map(|c| ICONS.iter().filter(move |icon| icon.category == c)).map(|icon| icon.name).collect();
+    let tile = |h: &egui_kittest::Harness<'_, WordApp>, at: usize| {
+        let name = order[at];
+        h.query_all_by_label(name).last().unwrap_or_else(|| panic!("no tile for {name}")).rect()
+    };
+    let (first, last, next) = (tile(&h, 0), tile(&h, columns - 1), tile(&h, columns));
+    assert_eq!(last.top(), first.top(), "the first row holds {columns} icons");
+    assert!(next.top() > first.top(), "icon {} starts the second row", columns + 1);
+    let dialog = h.get_by_role(egui::accesskit::Role::Dialog).rect();
+    assert!(dialog.width() < (columns + 1) as f32 * first.width(), "the dialog is {} wide for tiles of {}", dialog.width(), first.width());
+}
