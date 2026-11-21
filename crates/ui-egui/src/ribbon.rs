@@ -83,6 +83,19 @@ const RIBBON_LOOK: RibbonLook = RibbonLook::new(32, 17).arrow(10).row(20).tabs(3
 /// Outlining tabs and showing the available tab strip. The output carries the record of the ribbon's
 /// controls for the keytips.
 pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
+    // #6996's shown-tab press is judged against the frame's start state: a frame runs more than one
+    // pass, and the press has already switched the tab by the second.
+    {
+        let ctx = ui.ctx().clone();
+        let frame = ctx.cumulative_frame_nr();
+        let id = ui.scope_id().with("ribbon-frame-start");
+        ctx.data_mut(|d| {
+            let entry = d.get_temp_mut_or::<(u64, String, bool)>(id, (frame, app.ui.tab.clone(), app.ui.ribbon_collapsed));
+            if entry.0 != frame {
+                *entry = (frame, app.ui.tab.clone(), app.ui.ribbon_collapsed);
+            }
+        });
+    }
     if app.session.view.read_mode {
         reading_toolbar(app, ui);
         return no_ribbon();
@@ -188,7 +201,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
                 custom_groups(row, app, &e.groups);
             }
         });
-    if collapsed != app.ui.ribbon_collapsed {
+    // The framework toggled the minimised state itself this pass (a double click on a tab).
+    let framework_toggled = collapsed != app.ui.ribbon_collapsed;
+    if framework_toggled {
         let _ = app.run("ui.collapseRibbon", json!({}));
     }
     // As in Office (#6996): a press on the tab shown hides the ribbon, and a press on any tab but File
@@ -196,7 +211,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
     // pressed — so the pressed tab is told apart by hit-testing the strip's recorded tab rects. The
     // tab and the collapsed state are snapshotted at the start of the frame (a frame runs more than
     // one pass, and the press has already switched the tab by the second), and the target state is
-    // applied idempotently; a double click is left to the framework's own minimise toggle above.
+    // applied idempotently; when the framework's own minimise toggle fired this pass (a double
+    // click), this branch stays out of it.
     let press = ui.input(|i| i.pointer.primary_pressed().then(|| i.pointer.interact_pos()).flatten());
     if let (Some(pos), Some(controls)) = (press, out.controls.as_ref()) {
         let ctx = ui.ctx().clone();
@@ -215,15 +231,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
         if let Some(tab) = pressed
             && tab != "File"
             && !app.session.view.focus_mode
+            && !framework_toggled
         {
             let frame = ctx.cumulative_frame_nr();
             let id = ui.scope_id().with("ribbon-frame-start");
             let (pre_tab, pre_collapsed) = ctx.data_mut(|d| {
-                let entry = d.get_temp_mut_or::<(u64, String, bool)>(id, (frame, app.ui.tab.clone(), app.ui.ribbon_collapsed));
-                if entry.0 != frame {
-                    *entry = (frame, app.ui.tab.clone(), app.ui.ribbon_collapsed);
-                }
-                (entry.1.clone(), entry.2)
+                d.get_temp::<(u64, String, bool)>(id)
+                    .filter(|e| e.0 == frame)
+                    .map_or((app.ui.tab.clone(), app.ui.ribbon_collapsed), |e| (e.1.clone(), e.2))
             });
             let target = if tab == pre_tab {
                 Some(!pre_collapsed)
@@ -238,6 +253,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
                 let _ = app.run("ui.collapseRibbon", json!({}));
             }
         }
+    }
+    // A pick from the overflow menu has no tab rect to press: it also brings the ribbon back.
+    if out.picked.is_some() && app.ui.ribbon_collapsed {
+        let _ = app.run("ui.collapseRibbon", json!({}));
     }
     // A click on a tab is reported as `shown`, a pick from the overflow menu as `picked`.
     if let Some(tab) = out.picked.clone().or_else(|| out.shown.clone())
