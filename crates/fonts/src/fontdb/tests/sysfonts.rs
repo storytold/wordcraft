@@ -462,6 +462,49 @@ fn a_family_loaded_in_part_takes_the_asked_style_from_its_installed_files() {
 }
 
 #[test]
+fn a_style_file_that_could_not_be_read_is_read_after_a_rescan() {
+    // The Bold is cataloged but gone when the style lookup reads it: the lookup keeps the Regular,
+    // and the file is not marked loaded, so it is read once it is back and the folder is rescanned.
+    const CARRIED: &[u8] = include_bytes!("../../../../../assets/fonts/SourceSans3-Regular.ttf");
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    let dir = std::env::temp_dir().join(format!("dc-sysfonts-{}-unreadable-style", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["SourceSans3-Regular.ttf", "SourceSans3-Bold.ttf"] {
+        std::fs::copy(assets.join(file), dir.join(file)).unwrap();
+    }
+    let db = FontDb::with_static_fonts(vec![dir.clone()], [CARRIED].into_iter());
+    db.load_system_fonts();
+    std::fs::remove_file(dir.join("SourceSans3-Bold.ttf")).unwrap();
+    let regular = db.face(FALLBACK_FAMILY, "Regular");
+    assert_eq!(db.face(FALLBACK_FAMILY, "Bold").id(), regular.id(), "the Bold file is gone");
+    std::fs::copy(assets.join("SourceSans3-Bold.ttf"), dir.join("SourceSans3-Bold.ttf")).unwrap();
+    db.load_system_fonts();
+    assert!(db.face(FALLBACK_FAMILY, "Bold").weight > regular.weight, "the rescan reads the Bold that failed before");
+}
+
+#[test]
+fn a_style_file_larger_than_the_fallback_limit_is_not_read() {
+    // A style lookup in a partly loaded family skips an installed file past the size limit and
+    // keeps the closest loaded face.
+    const CARRIED: &[u8] = include_bytes!("../../../../../assets/fonts/SourceSans3-Regular.ttf");
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    let dir = std::env::temp_dir().join(format!("dc-sysfonts-{}-style-too-large", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(assets.join("SourceSans3-Regular.ttf"), dir.join("SourceSans3-Regular.ttf")).unwrap();
+    let mut bold = std::fs::read(assets.join("SourceSans3-Bold.ttf")).unwrap();
+    bold.resize(bold.len() + SYS_FALLBACK_MAX_FILE as usize, 0);
+    std::fs::write(dir.join("SourceSans3-Bold.ttf"), &bold).unwrap();
+    drop(bold);
+    let db = FontDb::with_static_fonts(vec![dir.clone()], [CARRIED].into_iter());
+    let regular = db.face(FALLBACK_FAMILY, "Regular");
+    let found = db.face(FALLBACK_FAMILY, "Bold").id();
+    std::fs::remove_file(dir.join("SourceSans3-Bold.ttf")).unwrap();
+    assert_eq!(found, regular.id());
+}
+
+#[test]
 fn a_preferred_fallback_family_loads_only_when_it_maps_the_character() {
     // A character no loaded font covers loaded every installed family in the fallback list up
     // to one that covers it, and kept them all: an emoji loaded every CJK family a Mac has,
