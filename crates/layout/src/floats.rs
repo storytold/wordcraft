@@ -117,8 +117,20 @@ pub(crate) fn align_in((start, extent): (f32, f32), offset: f32, size: f32, alig
 
 /// An area text keeps clear of: its bounds, whether text may only go above and below it, and
 /// (Tight and Through wrapping) the outline text follows inside it, the sides text may go on,
-/// and whether it comes from a floating table (inclusive line-bottom contact, #3977).
-pub(crate) type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText, bool);
+/// and what it comes from (a floating table: inclusive line-bottom contact, #3977; Tight and
+/// Through wrapping: a narrower gap beside it before Word 2013 layout, #6316).
+pub(crate) type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText, AreaKind);
+
+/// What a [`WrapArea`] keeps text clear of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AreaKind {
+    /// A floating picture, shape, text box or chart wrapped Square or Top and Bottom.
+    Object,
+    /// A floating object wrapped Tight or Through, with or without an outline.
+    Tight,
+    /// A floating table.
+    Table,
+}
 
 /// Wrap areas a page starts with (#2048): by page index, the floating objects (block, object
 /// index) placed above the top of their anchor paragraph, with text before it on the page, and
@@ -210,19 +222,20 @@ pub(crate) fn wrap_area(r: Rect, float: &Float, outline: Option<&[(f32, f32)]>) 
     if matches!(float.wrap, Wrap::Tight | Wrap::Through)
         && let Some((area, c)) = outline.and_then(|o| contour::contour_area(r, float, o))
     {
-        return Some((area, false, Some(Arc::new(c)), float.wrap_text, false));
+        return Some((area, false, Some(Arc::new(c)), float.wrap_text, AreaKind::Tight));
     }
     let d = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
     let (side, top, bottom) = (d(float.dist), d(float.dist_top), d(float.dist_bottom));
     // A rotated object keeps text clear of its rotated bounds.
     let r = float.spin().bounds(r);
-    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text, false))
+    let kind = if matches!(float.wrap, Wrap::Tight | Wrap::Through) { AreaKind::Tight } else { AreaKind::Object };
+    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text, kind))
 }
 
 /// Wrap areas relative to a paragraph whose column starts at `x0` and whose top is `y0`.
 pub(crate) fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
     excl.iter()
-        .map(|(r, tb, c, side, table)| para::Exclusion {
+        .map(|(r, tb, c, side, kind)| para::Exclusion {
             top: r.y - y0,
             bottom: r.bottom() - y0,
             left: r.x - x0,
@@ -230,7 +243,8 @@ pub(crate) fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::E
             top_bottom: *tb,
             contour: c.clone(),
             side: *side,
-            table: *table,
+            table: *kind == AreaKind::Table,
+            tight: *kind == AreaKind::Tight,
         })
         .filter(|e| e.bottom > 0.0)
         .collect()
