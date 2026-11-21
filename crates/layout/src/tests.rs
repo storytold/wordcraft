@@ -9632,6 +9632,156 @@ fn long_footnotes_continue_on_the_next_page() {
     assert!(own_note.top > p1.3, "own note after the continued one: {own_note:?} {p1:?}");
 }
 
+/// A document of `body` one-line paragraphs, the last of them referencing a footnote of `note`
+/// sentences, with widow control `widow` in the note; the note's id.
+fn long_note_after(body: usize, note: usize, widow: bool) -> (Document, u32) {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(body));
+    let mut p = wordcraft_doc::Paragraph::with_text(&"A long footnote that runs on. ".repeat(note), Default::default());
+    p.props.widow_control = Some(widow);
+    p.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(p)]);
+    d.insert_object(
+        &Pos::body(body.saturating_sub(1), 4),
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    (d, id)
+}
+
+#[test]
+fn a_footnote_continuing_on_the_next_page_ends_on_the_bottom_margin() {
+    crate::test_fonts();
+    // Observed in Word for Mac 16.114.4: whatever room the split leaves goes above the
+    // separator, the note's last line on the page sitting on the bottom margin.
+    let bottom = Document::default().last_section.page_h - Document::default().last_section.margin_bottom;
+    let mut slack = Vec::new();
+    // With widow/orphan control too, which can leave more room than a plain cut.
+    for (body, widow) in (11..24).flat_map(|b| [(b, false), (b, true)]) {
+        let (d, id) = long_note_after(body, 60, widow);
+        let l = lay(&d);
+        let pieces = note_pieces(&l, id);
+        assert!(pieces.len() >= 2 && pieces[0].0 == 0 && pieces[1].0 == 1, "{body} {widow}: {pieces:?}");
+        // Every line of the note is placed once, in order.
+        let lines = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| if let Placed::Lines { story: StoryRef::Part(s), para, .. } = it { (*s == id).then(|| para.lines.len()) } else { None })
+            .unwrap();
+        assert_eq!(pieces.windows(2).find(|w| w[0].2 != w[1].1), None, "{body} {widow}: pieces follow on: {pieces:?}");
+        assert_eq!((pieces[0].1, pieces.last().map(|p| p.2)), (0, Some(lines)), "{body} {widow}: all {lines} lines: {pieces:?}");
+        let (para, l0, l1, y) = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(s), para, l0, l1, y, .. } if *s == id => Some((para.clone(), *l0, *l1, *y)),
+                _ => None,
+            })
+            .unwrap();
+        let end = item_bottom(y, &para, l0, l1).unwrap();
+        slack.push(bottom - end);
+    }
+    assert!(slack.iter().all(|s| s.abs() < 0.05), "room left under the note: {slack:?}");
+}
+
+#[test]
+fn a_footnote_beneath_the_text_stays_under_it_when_it_continues() {
+    crate::test_fonts();
+    // Footnotes placed beneath the text (`w:pos w:val="beneathText"`) start right under the page's
+    // last line even when one continues on the next page: the room left stays below them, not
+    // above the separator as for notes at the page bottom.
+    use wordcraft_doc::section::{NotePos, NoteProps};
+    let mut gaps = Vec::new();
+    for body in 11..24 {
+        let (mut d, id) = long_note_after(body, 60, false);
+        d.settings.footnote_pr = NoteProps { pos: Some(NotePos::BeneathText), ..Default::default() };
+        let l = lay(&d);
+        let pieces = note_pieces(&l, id);
+        assert!(pieces.len() >= 2 && pieces[0].0 == 0, "{body}: {pieces:?}");
+        let body_bottom = l.pages[0]
+            .items
+            .iter()
+            .filter_map(
+                |it| if let Placed::Lines { story: StoryRef::Body, y, para, l0, l1, .. } = it { item_bottom(*y, para, *l0, *l1) } else { None },
+            )
+            .fold(0.0f32, f32::max);
+        gaps.push(pieces[0].3 - body_bottom);
+    }
+    // Under the last line by the default separator's height, whatever the body's length.
+    assert!(gaps.iter().all(|g| (g - crate::notes::NOTE_SEP).abs() < 0.05), "the note starts the separator's height under the text: {gaps:?}");
+}
+
+#[test]
+fn a_footnote_continued_onto_pages_of_notes_stays_above_the_bottom_margin_when_centred() {
+    crate::test_fonts();
+    // A centred (or bottom-aligned) section whose last page's note runs on over pages of notes
+    // alone: each page is aligned once, before its notes are placed, so no note line is moved
+    // past the bottom margin by aligning a page again after its notes went on it.
+    use wordcraft_doc::section::PageVAlign;
+    let bottom = Document::default().last_section.page_h - Document::default().last_section.margin_bottom;
+    for va in [PageVAlign::Center, PageVAlign::Bottom] {
+        let (mut d, id) = long_note_after(3, 400, false);
+        d.last_section.valign = va;
+        let l = lay(&d);
+        let pieces = note_pieces(&l, id);
+        assert!(pieces.iter().map(|p| p.0).max().unwrap_or(0) >= 2, "{va:?}: the note runs over pages of notes alone: {pieces:?}");
+        for (pi, p) in l.pages.iter().enumerate() {
+            for it in &p.items {
+                if let Placed::Lines { story: StoryRef::Part(s), para, l0, l1, y, .. } = it
+                    && *s == id
+                {
+                    let end = item_bottom(*y, para, *l0, *l1).unwrap();
+                    assert!(end <= bottom + 0.05, "{va:?}: page {pi} note lines end at {end}, below the bottom margin {bottom}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn widow_control_leaves_two_lines_of_a_split_footnote_on_the_next_page() {
+    crate::test_fonts();
+    // Observed in Word for Mac 16.114.4: a note that would leave its last line alone on the next
+    // page takes one more line along when its paragraph has widow control.
+    let lines_after = |body: usize, widow: bool| {
+        let (d, id) = long_note_after(body, 60, widow);
+        let pieces = note_pieces(&lay(&d), id);
+        pieces.get(1).filter(|p| p.0 == 1).map(|p| p.2 - p.1)
+    };
+    let widows: Vec<usize> = (9..26).filter(|&b| lines_after(b, false) == Some(1)).collect();
+    assert!(!widows.is_empty(), "no body length leaves one line of the note on page 2");
+    for b in widows {
+        assert_eq!(lines_after(b, true), Some(2), "body of {b} lines");
+    }
+}
+
+#[test]
+fn orphan_control_keeps_two_lines_of_a_split_footnote_with_its_reference() {
+    crate::test_fonts();
+    // Observed in Word for Mac 16.114.4: rather than leave a note paragraph's first line alone at
+    // the bottom of the page, the line with the reference goes on to the next page with it.
+    let first_piece = |body: usize, widow: bool| {
+        let (mut d, id) = long_note_after(body, 60, widow);
+        // Body lines as tall as the note's, so the room under the text shrinks a note line at a time.
+        for block in &mut d.body {
+            if let Block::Para(para) = Arc::make_mut(block) {
+                para.props.space_after = Some(0.0);
+            }
+        }
+        let l = lay(&d);
+        let refs = l.caret(&Pos::body(body - 1, 4)).unwrap().page;
+        let pieces = note_pieces(&l, id);
+        (refs, pieces.first().map(|p| (p.0, p.2 - p.1)))
+    };
+    let orphans: Vec<usize> = (20..60).filter(|&b| first_piece(b, false).1.is_some_and(|p| p.1 == 1)).collect();
+    assert!(!orphans.is_empty(), "no body length leaves one line of the note with its reference");
+    for b in orphans {
+        let (refs, piece) = first_piece(b, true);
+        assert_eq!(piece.map(|p| p.0), Some(refs), "body of {b} lines: the note starts on its reference's page");
+        assert!(piece.is_some_and(|p| p.1 >= 2), "body of {b} lines: {piece:?}");
+    }
+}
+
 #[test]
 fn short_footnotes_stay_whole() {
     crate::test_fonts();
