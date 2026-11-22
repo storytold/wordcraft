@@ -76,6 +76,34 @@ fn new_app() -> WordApp {
     WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default())
 }
 
+/// A saved .docx (so AutoSave can cover it) in the harness.
+fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-autosave-label-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("draft.docx");
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(a.autosaves(), "a saved .docx is covered by AutoSave");
+    let h = harness(a);
+    (h, dir)
+}
+
+/// #3370: clicking the AutoSave switch label toggles AutoSave on and off.
+#[test]
+fn clicking_the_autosave_label_toggles_autosave() {
+    let (mut h, dir) = autosave_harness();
+    assert!(h.state().autosaves());
+    h.get_by_label("AutoSave").click();
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().autosaves(), "clicking the text turns AutoSave off");
+    h.get_by_label("AutoSave").click();
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().autosaves(), "and clicking it again turns it back on");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #701: the arrow beside Undo lists the session's undo steps, newest first; clicking the third
 /// row undoes three steps at once.
 #[test]
