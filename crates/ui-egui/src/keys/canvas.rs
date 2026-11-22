@@ -712,9 +712,10 @@ fn type_text(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, text: &str
     let start = app.session.sel.ordered().0;
     let pending_before = app.session.pending.clone();
     let typed = if let Some(props) = app.canvas.ime_join_text.take() {
-        // The replacement takes the erased text's formatting. `Session::run` does not restore
-        // `pending` on failure (it is not part of the document snapshot), so keep it here: a
-        // refused replacement must not leave its formatting waiting for the next ordinary key.
+        // The replacement takes the erased text's formatting. A failed `Session::run` puts back
+        // what was waiting when it started, which is this formatting, so the earlier one is put
+        // back here: a refused replacement must not leave its formatting waiting for the next
+        // ordinary key.
         // The undo join itself is the engine's scoped body-replacement promise, consumed by
         // `Session::run` only for this `text.insert` at the promised selection.
         app.session.pending = Some(props);
