@@ -11,10 +11,11 @@ use objc2_app_kit::{NSApplication, NSWindow, NSWindowOrderingMode};
 use wordcraft_ui_egui::i18n::t;
 
 /// Ties every Find and Replace window that has no parent yet to the window just below it, the one
-/// it was opened from. Call every frame; it does nothing once they are tied.
+/// it was opened from, and hides them while WordCraft is in the background. Call every frame.
 pub fn tie(mtm: MainThreadMarker) {
     let title = t("Find and Replace");
-    let ordered = NSApplication::sharedApplication(mtm).orderedWindows();
+    let app = NSApplication::sharedApplication(mtm);
+    let ordered = app.orderedWindows();
     let ordered: Vec<_> = ordered.iter().filter(|w| w.isVisible()).collect();
     for (i, panel) in ordered.iter().enumerate() {
         if panel.title().to_string() != title || panel.parentWindow().is_some() {
@@ -26,6 +27,14 @@ pub fn tie(mtm: MainThreadMarker) {
         panel.setHidesOnDeactivate(true);
         panel.setExcludedFromWindowsMenu(true);
         add_child(parent, panel);
+    }
+    // None shows while WordCraft is in the background: `hidesOnDeactivate` alone does not keep a child window hidden.
+    let shown = app.isActive();
+    for panel in app.windows().iter().filter(|w| w.parentWindow().is_some() && w.title().to_string() == title) {
+        if (panel.alphaValue() > 0.0) != shown {
+            panel.setAlphaValue(if shown { 1.0 } else { 0.0 });
+            panel.setIgnoresMouseEvents(!shown);
+        }
     }
 }
 
