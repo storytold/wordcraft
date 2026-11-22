@@ -12,6 +12,7 @@ use craft::ui::contract::{
     ActivateOn, Bind, BodyCx, CollectionEvent, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::ThumbSize;
 use craft::ui::menu::MenuItem;
 use craft::ui::runtime::env::Label;
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
@@ -86,6 +87,7 @@ pub(crate) fn pick_tile<'r>(
         .arrows_select(false)
         .caption(caption)
         .card_columns(columns)
+        .thumb_size(ThumbSize::Small)
         // Shown in a menu whose body is the one scroll (production scrolls the whole menu, not each grid).
         .natural_height(true);
     let out = grid.show_items(ui, &Indexes(count), &mut |key, _| tile(*key));
@@ -393,5 +395,52 @@ mod placeholder_tests {
         let covered = |c: char| c.is_ascii() || matches!(c, '∞' | '→');
         assert_eq!(super::math_placeholder_with("lim┬(n→∞)", covered), "lim\\below(n→∞)");
         assert!(super::placeholder_linears().any(|linear| linear == "lim┬(n→∞)"));
+    }
+
+    /// #7455: the 15-column symbol grid and structure template galleries in the Equation tab
+    /// render compact preview tiles (≤ 30 pt symbol cells, ~50×22 pt templates) instead of expanding
+    /// each thumbnail to default card dimensions (~132 pt) and overflowing the menu (~2,000 pt wide).
+    #[test]
+    fn equation_symbol_and_structure_grids_render_compact_tiles() {
+        use crate::WordApp;
+        use craft::ui::contract::ShowContainer as _;
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        use wordcraft_engine::Session;
+
+        let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Math")), crate::Services::default());
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, _app: &mut WordApp| {
+                craft::ui::menu::Menu::inline("Symbols").show(ui, |ui, _cx| {
+                    let chars: Vec<char> = "+-×÷=≠<>≤≥±~∞≈≡".chars().collect();
+                    let ink = ui.visuals().text_color();
+                    let sources: Vec<super::MathSource> = chars.iter().map(|c| super::symbol_source(*c, ink)).collect();
+                    let tiles: Vec<(String, String)> = chars.iter().map(|c| (c.to_string(), format!("sym:{c}"))).collect();
+                    super::math_grid(ui, "All symbol sets", 15, super::CaptionPlace::None, &tiles, &sources);
+                });
+            },
+            a,
+        );
+        h.run_steps(2);
+
+        let tile = h.get_by_role_and_label(Role::ListItem, "+").rect();
+        assert!(tile.width() <= 30.0 && tile.height() <= 30.0, "symbol tile is compact (≤ 30 pt), got {:?}", tile.size());
+        let grid = h.get_by_role_and_label(Role::ListBox, "All symbol sets").rect();
+        assert!(grid.width() <= 450.0, "15-column symbol grid stays compact within viewport budget, got {:?}", grid.size());
+
+        let mut h_struct = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                craft::ui::menu::Menu::inline("Fraction").show(ui, |ui, cx| {
+                    super::structure_menu(ui, cx, app, "fraction");
+                });
+            },
+            WordApp::new(Session::new(wordcraft_doc::Document::from_text("Math")), crate::Services::default()),
+        );
+        h_struct.run_steps(2);
+
+        let frac_tile = h_struct.get_by_role_and_label(Role::ListItem, "Stacked Fraction").rect();
+        assert!(frac_tile.width() <= 35.0 && frac_tile.height() <= 35.0, "stacked fraction tile is compact, got {:?}", frac_tile.size());
+        let diff_tile = h_struct.get_by_role_and_label(Role::ListItem, "Differential").rect();
+        assert!(diff_tile.width() <= 80.0 && diff_tile.height() <= 35.0, "differential tile is compact, got {:?}", diff_tile.size());
     }
 }
