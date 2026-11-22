@@ -14,7 +14,7 @@ use craft::ui::contract::{
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Text;
 use craft::ui::layout_components::Row;
-use craft::ui::list::{ListRow, ThumbAspect};
+use craft::ui::list::{ListRow, ThumbAspect, ThumbSize};
 // PLAN: assumed `FormCx::accept` (dialogs-w5, S-L285)
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::primitives::DataWidth;
@@ -272,6 +272,9 @@ fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bo
     let current = kinds.iter().position(|k| *k == form.kind).unwrap_or(0);
     let source = keyed(&positions, |i| *i);
     let out = TileGrid::<usize>::new(tl!("Chart types").to_string())
+        .thumb_size(ThumbSize::Large)
+        .zoom(1.6)
+        .aspect(19.0 / 15.0)
         .select(SelectMode::Single)
         .card_columns(3)
         // Every type shows, as in production, so the dialog's body is the one scroll.
