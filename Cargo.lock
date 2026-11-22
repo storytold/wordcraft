@@ -9328,6 +9328,7 @@ dependencies = [
  "craft-fonts-build",
  "craft-ui-test-kit",
  "craft-zip",
+ "eframe",
  "egui",
  "egui_extras",
  "egui_kittest",
