@@ -352,9 +352,14 @@ fn runtime_data_is_exempt_and_wording_is_not() {
     // A stubbed check finds no update and puts no updater error on screen.
     app.run("help.checkForUpdates", json!({})).expect("Check for Updates runs");
     let calls = app.updates_rt.stub_calls.clone();
-    for _ in 0..30 {
+    // The check runs on a worker thread: draw at least 30 frames, and up to 500 until it has run.
+    for n in 0..500 {
         let drawn = frame(&ctx, &mut app);
         assert!(drawn.iter().all(|t| !t.contains("request limit")), "{drawn:?}");
+        if n >= 30 && calls.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the check went through the stub, not GitHub");
 }
