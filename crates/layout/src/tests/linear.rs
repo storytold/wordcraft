@@ -514,9 +514,9 @@ fn after_decimal_tab(text: &str) -> Document {
 #[test]
 fn text_after_a_decimal_tab_is_looked_at_once() {
     let opts = LayoutOptions::default();
-    // The text after the tab still ends at the stop, where it ended before.
+    // The '.' of the text after the tab is at the stop (#7290).
     let l = lay(&after_decimal_tab("12.5"), &opts);
-    let (Some(end), Some(start)) = (l.caret(&Pos::body(0, 5)), l.caret(&Pos::body(0, 0))) else { panic!("no carets") };
-    assert!((end.x - start.x - 200.0).abs() < 1.0, "the text ends at the stop: {} from {}", end.x, start.x);
+    let (Some(dot), Some(start)) = (l.caret(&Pos::body(0, 3)), l.caret(&Pos::body(0, 0))) else { panic!("no carets") };
+    assert!((dot.x - start.x - 200.0).abs() < 1.0, "the '.' is at the stop: {} from {}", dot.x, start.x);
     assert_layout_linear("decimal tab", 2000, |n| after_decimal_tab(&format!("1{}", "\u{AD}".repeat(n))), &opts);
 }
