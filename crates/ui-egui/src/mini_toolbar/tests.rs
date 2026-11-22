@@ -191,7 +191,20 @@ fn every_control_fits_inside_the_bar() {
     let h = bar_over("brown fox");
     let c = canvas(&h);
     let mut rects: Vec<(String, Rect)> = Vec::new();
-    for label in ["Bold", "Italic", "Underline", "Align Left", "Center", "Align Right", "Justify", "Text Highlight Color", "Font Color"] {
+    for label in [
+        "Bold",
+        "Italic",
+        "Underline",
+        "Strikethrough",
+        "Align Left",
+        "Center",
+        "Align Right",
+        "Justify",
+        "Text Highlight Color",
+        "Font Color",
+        "Increase Font Size",
+        "Decrease Font Size",
+    ] {
         let r = member(&h, label).unwrap_or_else(|| panic!("the bar has {label}"));
         rects.push((label.to_string(), r));
     }
@@ -204,6 +217,7 @@ fn every_control_fits_inside_the_bar() {
         .map(|n| n.rect())
         .find(|r| c.contains_rect(*r))
         .expect("the selection bar lies inside the document area");
+    assert!(bar.width() < 350.0, "bar width {} must not be bloated by text labels", bar.width());
     for (name, r) in &rects {
         assert!(bar.contains_rect(*r), "{name} {r:?} must stay inside the bar {bar:?}");
     }
@@ -212,6 +226,14 @@ fn every_control_fits_inside_the_bar() {
             assert!(!a.shrink(0.5).intersects(b.shrink(0.5)), "{a_name} {a:?} overlaps {b_name} {b:?}");
         }
     }
+}
+
+/// #7482: Text Highlight Color appearance follows the picked highlight choice.
+#[test]
+fn highlight_button_appearance_follows_the_picked_colour() {
+    assert_eq!(crate::colors::highlight_button_appearance("cyan"), ("highlight", Some(egui::Color32::from_rgb(0, 255, 255)), "cyan"));
+    assert_eq!(crate::colors::highlight_button_appearance("none"), ("highlightNoColor", None, "none"));
+    assert_eq!(crate::colors::highlight_button_appearance("unknown"), ("highlightNoColor", None, "none"));
 }
 
 /// #7447: the mini toolbar anchors to the start of the selection rather than its center,
@@ -260,9 +282,15 @@ fn formatting_controls_stack_into_two_rows() {
     let size = size_box(&h);
     let bold = member(&h, "Bold").expect("the bar has Bold");
     let align_left = member(&h, "Align Left").expect("the bar has Align Left");
+    let grow = member(&h, "Increase Font Size").expect("the bar has Increase Font Size");
+    let shrink = member(&h, "Decrease Font Size").expect("the bar has Decrease Font Size");
 
-    // Row 1 controls sit on the top row together.
+    // Row 1 controls sit on the top row together and align in height.
     assert!((font.min.y - size.min.y).abs() < 1.0, "Font and Font Size must share Row 1: font {font:?}, size {size:?}");
+    assert!((grow.min.y - size.min.y).abs() < 1.0, "Grow Font and Font Size must share Row 1: grow {grow:?}, size {size:?}");
+    assert!((shrink.min.y - size.min.y).abs() < 1.0, "Shrink Font and Font Size must share Row 1: shrink {shrink:?}, size {size:?}");
+    assert!((grow.height() - size.height()).abs() < 2.0, "grow height ({}) aligns with row 1 height ({})", grow.height(), size.height());
+    assert!((shrink.height() - size.height()).abs() < 2.0, "shrink height ({}) aligns with row 1 height ({})", shrink.height(), size.height());
 
     // Row 2 controls sit on the second row together.
     assert!((bold.min.y - align_left.min.y).abs() < 1.0, "Bold and Align Left must share Row 2: bold {bold:?}, align_left {align_left:?}");
@@ -272,6 +300,20 @@ fn formatting_controls_stack_into_two_rows() {
     assert!(bold.min.y >= size.max.y, "Bold ({bold:?}) must sit strictly below Font Size ({size:?})");
     assert!(align_left.min.y >= font.max.y, "Align Left ({align_left:?}) must sit strictly below Font ({font:?})");
     assert!(align_left.min.y >= size.max.y, "Align Left ({align_left:?}) must sit strictly below Font Size ({size:?})");
+}
+
+/// #7482: Hovering the split buttons for highlight and font colour previews their command.
+#[test]
+fn hovering_the_colour_buttons_previews_their_colour() {
+    let mut h = bar_over("brown fox");
+    let viewport = canvas(&h);
+    for (label, id) in [("Text Highlight Color", "format.highlight"), ("Font Color", "format.color")] {
+        let r = member(&h, label).expect("the bar has the button");
+        assert!(viewport.contains_rect(r), "{label} is inside viewport");
+        hover_at(&mut h, r.center());
+        let previewed = h.state().canvas.command_previewed.clone();
+        assert!(previewed.is_some_and(|(p, _)| p == id), "{label} previews {id}");
+    }
 }
 
 /// Hovering any member of the bar previews its command on the selection; the pick is not made.
@@ -466,6 +508,45 @@ fn context_menu_toolbar_respects_read_mode_and_the_toolbar_preference() {
         assert!(member(&h, "Bold").is_none(), "the context toolbar is suppressed, read_mode={read_mode}");
         assert!(h.query_all_by_label_contains("Copy").any(|n| n.rect().min.y > top), "the menu still offers Copy");
     }
+}
+
+/// #7482: The companion toolbar fits within window bounds even in a narrow window (~380 pt).
+#[test]
+fn context_menu_toolbar_fits_near_the_bottom_right_of_a_narrow_window() {
+    let mut h = bar_over("brown fox");
+    h.set_size(Vec2::new(380.0, 650.0));
+    steps(&mut h);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    steps(&mut h);
+    h.state_mut().canvas.context_menu_at = Some(pos2(370.0, 640.0));
+    steps(&mut h);
+    let screen = h.ctx.content_rect();
+    let bold = h.query_all_by_label("Bold").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the context toolbar is shown");
+    assert!(screen.contains_rect(bold), "the toolbar stays inside the window: {bold:?} in {screen:?}");
+    let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the menu has Copy");
+    assert!(screen.contains_rect(copy), "the menu stays inside the window: {copy:?} in {screen:?}");
+    let align = h.query_all_by_label("Justify").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the last toolbar control is shown");
+    assert!(screen.contains_rect(align), "all controls fit: {align:?} in {screen:?}");
+}
+
+/// #7482: The command panel under the context toolbar keeps its own width, not stretched by the toolbar.
+#[test]
+fn context_menu_panel_keeps_its_own_width_under_the_toolbar() {
+    let copy_width = |toolbar: bool| {
+        let mut h = bar_over("brown fox");
+        h.state_mut().ui.mini_toolbar = toolbar;
+        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+        steps(&mut h);
+        let top = canvas(&h).top();
+        let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| r.min.y > top).expect("the menu has Copy");
+        let bar = h.query_all_by_label("Justify").map(|n| n.rect()).find(|r| r.min.y > top);
+        (copy, bar)
+    };
+    let (plain, _) = copy_width(false);
+    let (copy, justify) = copy_width(true);
+    let justify = justify.expect("the context toolbar is shown");
+    assert!((copy.width() - plain.width()).abs() < 0.5, "panel {} vs plain menu {}", copy.width(), plain.width());
+    assert!(copy.max.x + 20.0 < justify.max.x, "the panel ({copy:?}) is narrower than the toolbar ({justify:?})");
 }
 
 #[test]
