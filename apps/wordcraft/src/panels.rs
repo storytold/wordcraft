@@ -42,8 +42,9 @@ pub fn tie(mtm: MainThreadMarker) {
             }
             (None, None) => continue,
         };
-        // Only the frontmost document's panels show.
-        let shown = front.as_ref().is_some_and(|front| front.windowNumber() == parent.windowNumber());
+        // Only the frontmost document's panels show, and none while WordCraft is in the background:
+        // `hidesOnDeactivate` alone does not keep a child panel hidden.
+        let shown = app.isActive() && front.as_ref().is_some_and(|front| front.windowNumber() == parent.windowNumber());
         if (panel.alphaValue() > 0.0) != shown {
             panel.setAlphaValue(if shown { 1.0 } else { 0.0 });
             panel.setIgnoresMouseEvents(!shown);
