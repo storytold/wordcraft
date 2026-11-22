@@ -29,7 +29,10 @@ pub use date_time::DateTimeForm;
 pub(crate) use date_time::date_time_preview_matches;
 pub use field::{DATE_FORMATS, FIELD_CATEGORIES, FIELDS, FieldForm, FieldKind, NUMBER_FORMATS, STYLEREF_SWITCHES, field_kind};
 pub(crate) use symbol::SymbolDialog;
-pub use symbol::{RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, remember_symbol, subset_of};
+pub use symbol::{
+    RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, SymbolFrom, char_from_code, code_text, cp1252_byte, grid_chars, remember_symbol,
+    subset_of, symbol_shortcut,
+};
 
 /// The dialog `ui.dialog` opens by `name`: `dateTime`, `columns`, `symbol`, `specialCharacters`,
 /// `field`, `dropCap` (where the paragraph can take one), and the chart, diagram and bullet names
@@ -120,3 +123,7 @@ pub(super) fn list_index(ui: &mut Ui, label: &Label, rows: &[String], current: O
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_symbol_from;
+#[cfg(test)]
+mod tests_symbol_recent;
