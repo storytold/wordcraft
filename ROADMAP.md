@@ -423,6 +423,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-11-20 | trivial | Progress log: `wordcraft-cli mcp` needs both automation roots; `--connect` refused (#7124) |
 | 2026-11-17 | trivial | Progress log: file formats, codecs and protocols come from craft-libs (#778) |
 | 2026-11-15 | trivial | Progress log: Get the Missing Fonts (download pages for missing fonts their publisher gives away) |
+| 2026-11-15 | #4558: integrate distinct dashSmallGap through shared model and DOCX/RTF/DOC/ODF IO; retain app rendering/previews and qualification limits. |
 | 2026-11-07 | Narrow windows (#5886): the window can be made 600 pt wide (was 760 pt), enabling split-window layout and edge tiling on Wayland/GNOME and 1280 pt screens; the title bar's search box and Discord button condense, and status-bar texts (page, word count, language, Track Changes, Overtype) stop before the right controls or shorten ("…" for language) instead of overlapping Focus, views and zoom |
 | 2026-11-05 | trivial | Progress log: ODT documents keep their language (gap 19) |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
@@ -987,6 +988,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-06 | trivial | Windows print submissions isolated per helper process; cancelled driver work cannot block a retry (#5710) |
 | 2026-11-06 | trivial | Progress log: print cancellation before sending, including without a document, and the Windows repeated-conversion limitation (#5710) |
 | 2026-11-06 | trivial | Progress log: the printer list no longer waits on printer drivers (#5710) |
+| 2026-11-05 | trivial | PR #4558: keep dashSmallGap distinct through DOC/DOCX/RTF import and document/PDF output; ODT degrades it to dashed rather than solid. Border preview patterns and synthetic round trips are covered; existing Word Mac observations are narrow and other platforms remain unqualified. Dotted table previews now use equal one-stroke-width on/off segments at every tested width. |
 | 2026-11-06 | trivial | Progress log: resolving away an empty paragraph with a section break keeps the next paragraph's properties, #5667; readiness estimates unchanged |
 | 2026-11-05 | trivial | PR #4545: eligible cell floats retain in-bounds offsets and touch the outer cell edge only on overflow, ignoring wrap distances for object placement. Front-of-text, turned-cell and outside-cell opt-outs remain. Synthetic geometry controls; native front/behind-text parity remains unqualified. |
 | 2026-11-04 | trivial | Progress log: CLI convert format options; readiness estimates unchanged |

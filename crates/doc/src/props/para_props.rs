@@ -198,6 +198,8 @@ pub enum BorderStyle {
     Double,
     Dotted,
     Dashed,
+    /// Dashes with small gaps (`dashSmallGap`): four line widths on, one off.
+    DashSmallGap,
     Thick,
     Triple,
     DotDash,
@@ -217,6 +219,7 @@ pub enum BorderStyle {
 }
 
 impl BorderStyle {
+    /// The OOXML border token; small-gap dashes keep their distinct `dashSmallGap` value.
     pub fn ooxml(self) -> &'static str {
         match self {
             BorderStyle::None => "nil",
@@ -224,6 +227,7 @@ impl BorderStyle {
             BorderStyle::Double => "double",
             BorderStyle::Dotted => "dotted",
             BorderStyle::Dashed => "dashed",
+            BorderStyle::DashSmallGap => "dashSmallGap",
             BorderStyle::Thick => "thick",
             BorderStyle::Triple => "triple",
             BorderStyle::DotDash => "dotDash",
@@ -239,12 +243,14 @@ impl BorderStyle {
             BorderStyle::ThinThickThinLargeGap => "thinThickThinLargeGap",
         }
     }
+    /// Read an OOXML border token, using a single line for unrecognized styles.
     pub fn from_ooxml(s: &str) -> BorderStyle {
         match s {
             "nil" | "none" => BorderStyle::None,
             "double" => BorderStyle::Double,
             "dotted" => BorderStyle::Dotted,
-            "dashed" | "dashSmallGap" => BorderStyle::Dashed,
+            "dashed" => BorderStyle::Dashed,
+            "dashSmallGap" => BorderStyle::DashSmallGap,
             "thick" => BorderStyle::Thick,
             "triple" => BorderStyle::Triple,
             "dotDash" | "dotDotDash" => BorderStyle::DotDash,
