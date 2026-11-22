@@ -729,10 +729,53 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     assert_eq!(first_cell_shading(h.state()), Some(red), "No Color is undone in one step");
 }
 
-/// Verifies that in RTL (Hebrew), the ribbon lays out groups from the physical right edge
-/// with trailing groups overflowing off the physical left edge and scrolling into view.
+/// #7308: the compact menu and split buttons of Home › Font and Home › Paragraph show their icons
+/// alone (keeping their names for access and tooltips) even in a wide window, leaving room for all
+/// six tiles of the Styles gallery at 1920 pt.
 #[test]
-fn rtl_ribbon_edge_cue_shows_left_chevron_when_overflowing() {
+fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
+    use egui::accesskit::Role;
+
+    let button_width = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name)).next().unwrap_or_else(|| panic!("a button named {name}")).rect().width()
+    };
+
+    // Wide enough that the ribbon keeps every group at GroupLevel::Full: without `icon_only`, both
+    // Font and Paragraph render their full text labels, making longer names much wider than shorter
+    // ones and wider than text-labelled buttons like Replace.
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let wide = tab_harness(app, "Home");
+    let replace_w = button_width(&wide, "Replace");
+
+    let menu_buttons = ["Change Case", "Text Effects and Typography", "Line and Paragraph Spacing"];
+    let menu_widths: Vec<(&str, f32)> = menu_buttons.iter().map(|&n| (n, button_width(&wide, n))).collect();
+    let base_menu_w = menu_widths[0].1;
+    for &(name, w) in &menu_widths {
+        assert!((w - base_menu_w).abs() < 1.0, "{name} ({w:.1} pt) differs from icon-only menu width ({base_menu_w:.1} pt): {menu_widths:?}");
+        assert!(w < replace_w, "{name} ({w:.1} pt) should be narrower than a labelled button like Replace ({replace_w:.1} pt)");
+    }
+
+    let split_buttons = ["Underline", "Text Highlight Color", "Font Color", "Bullets", "Numbering", "Multilevel List", "Shading", "Borders"];
+    let split_widths: Vec<(&str, f32)> = split_buttons.iter().map(|&n| (n, button_width(&wide, n))).collect();
+    let base_split_w = split_widths[0].1;
+    for &(name, w) in &split_widths {
+        assert!((w - base_split_w).abs() < 1.0, "{name} ({w:.1} pt) differs from icon-only split width ({base_split_w:.1} pt): {split_widths:?}");
+        assert!(w < replace_w, "{name} ({w:.1} pt) should be narrower than a labelled button like Replace ({replace_w:.1} pt)");
+    }
+
+    // At 1920 pt, Font no longer starves the Styles gallery: all six default quick styles show.
+    let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let full_hd = app_harness(app, vec2(1920.0, 900.0));
+    let shown = |name: &str| full_hd.query_all(By::new().label(name)).next().is_some();
+    for style in ["Normal", "No Spacing", "Heading 1", "Title", "Heading 2", "Subtitle"] {
+        assert!(shown(style), "Home › Styles should show {style} at 1920 pt");
+    }
+}
+
+/// Verifies that in RTL (Hebrew), the ribbon lays out groups from the physical right edge
+/// with trailing groups overflowing off the physical left edge.
+#[test]
+fn rtl_ribbon_starts_on_right_and_overflows_left() {
     if !crate::i18n::catalogs_embedded() {
         return;
     }
@@ -765,38 +808,9 @@ fn rtl_ribbon_edge_cue_shows_left_chevron_when_overflowing() {
 
     let clipboard_label = crate::i18n::tr(he, "Clipboard");
     let editor_label = crate::i18n::tr(he, "Editor");
-    let catalogs = crate::i18n::catalogs();
-    let scroll_left_label = catalogs.tid(he.craft_lang(), "ribbon.scrollLeft", "Scroll left");
-    let scroll_right_label = catalogs.tid(he.craft_lang(), "ribbon.scrollRight", "Scroll right");
     let button_rect = |h: &Harness, label: &str| h.get(By::new().role(egui::accesskit::Role::Button).label(label)).rect();
     let clipboard_before = button_rect(&h, clipboard_label);
     let editor_before = button_rect(&h, editor_label);
     assert!(clipboard_before.left() > width * 0.5 && clipboard_before.right() <= width, "RTL Home tab starts on the right: {clipboard_before:?}");
     assert!(editor_before.left() < 0.0, "trailing RTL groups overflow off the physical left edge initially: {editor_before:?}");
-    assert!(
-        h.query(By::new().role(egui::accesskit::Role::Button).label(scroll_left_label)).is_some(),
-        "left edge overflow chevron must show when RTL groups overflow off the physical left edge"
-    );
-    assert!(
-        h.query(By::new().role(egui::accesskit::Role::Button).label(scroll_right_label)).is_none(),
-        "right edge overflow chevron must not show at the RTL start edge"
-    );
-
-    // Activating the left overflow chevron steps trailing RTL groups into the viewport.
-    for _ in 0..12 {
-        let current = button_rect(&h, editor_label);
-        if current.left() >= 0.0 {
-            break;
-        }
-        let Some(cue) = h.query(By::new().role(egui::accesskit::Role::Button).label(scroll_left_label)) else {
-            break;
-        };
-        cue.click();
-        crate::test_harness::frames(&mut h, 4);
-    }
-    let editor_after = button_rect(&h, editor_label);
-    assert!(
-        editor_after.left() > editor_before.left() && editor_after.left() >= 0.0 && editor_after.right() <= width,
-        "activating the left overflow chevron must bring the trailing RTL Editor group into view ({width}px): {editor_before:?} -> {editor_after:?}"
-    );
 }

@@ -123,7 +123,7 @@ impl WordApp {
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));
             }
-            // Word's Alt chords (Alt+Q, Alt+F7, Ctrl+Alt+1…) fire while the person types in the page:
+            // Word's Alt chords (Alt+Q, Alt+F7, Ctrl+Alt+1â€¦) fire while the person types in the page:
             // plain keys type, and every modified chord is offered to the keymap first.
             match AppCatalog::new(defs, generation) {
                 Ok(catalog) => {
@@ -204,6 +204,9 @@ impl WordApp {
                 self.edits = host;
             }
             let result = if fired.source == FireSource::Automation { self.execute(id, params) } else { self.run(id, params) };
+            if from_key && result.is_ok() {
+                crate::announce::after_shortcut(self, id, ctx);
+            }
             if let Err(error) = result {
                 log::debug!("command {id}: {error}");
             }
