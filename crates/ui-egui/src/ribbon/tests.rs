@@ -771,3 +771,84 @@ fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
         assert!(shown(style), "Home › Styles should show {style} at 1920 pt");
     }
 }
+
+/// #7324: Table ribbon menu buttons (Styles, Borders, Delete, AutoFit) bind their command IDs
+/// so they disable when editing is protected or when no table is active.
+#[test]
+fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
+    use egui::accesskit::Role;
+
+    let is_disabled = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name))
+            .next()
+            .unwrap_or_else(|| panic!("button {name} not found"))
+            .accesskit_node()
+            .is_disabled()
+    };
+
+    let description = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name))
+            .next()
+            .unwrap_or_else(|| panic!("button {name} not found"))
+            .accesskit_node()
+            .description()
+            .map(|s| s.to_string())
+    };
+
+    // Configure Table Design & Table Layout as explicit ribbon tabs so they can be
+    // displayed even when the cursor is outside a table.
+    let make_table_tabs_app = |mut app: WordApp| {
+        app.session.ribbon.tabs = vec![
+            wordcraft_engine::ribbon::TabEntry { name: "Table Design".to_string(), custom: false, hidden: false, groups: Vec::new() },
+            wordcraft_engine::ribbon::TabEntry { name: "Table Layout".to_string(), custom: false, hidden: false, groups: Vec::new() },
+        ];
+        app
+    };
+
+    // 1. Without a table active:
+    let app_no_table = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
+    let h_design_empty = tab_harness(app_no_table, "Table Design");
+    assert!(is_disabled(&h_design_empty, "Styles"), "Styles button should be disabled when not in table");
+    assert!(is_disabled(&h_design_empty, "Borders"), "Borders button should be disabled when not in table");
+
+    let app_no_table2 = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
+    let h_layout_empty = tab_harness(app_no_table2, "Table Layout");
+    assert!(is_disabled(&h_layout_empty, "Delete"), "Delete button should be disabled when not in table");
+    assert!(is_disabled(&h_layout_empty, "AutoFit"), "AutoFit button should be disabled when not in table");
+
+    // 2. With an active table and no protection: buttons are enabled:
+    let mut app_table = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_table.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h_design = tab_harness(app_table, "Table Design");
+    assert!(!is_disabled(&h_design, "Styles"), "Styles button should be enabled in table");
+    assert!(!is_disabled(&h_design, "Borders"), "Borders button should be enabled in table");
+
+    let mut app_table2 = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_table2.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h_layout = tab_harness(app_table2, "Table Layout");
+    assert!(!is_disabled(&h_layout, "Delete"), "Delete button should be enabled in table");
+    assert!(!is_disabled(&h_layout, "AutoFit"), "AutoFit button should be enabled in table");
+
+    // 3. With an active table under document protection (read-only): buttons are disabled:
+    let mut app_protected_design = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_protected_design.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app_protected_design.session.doc.settings.protection = Some("readOnly".into());
+    let h_prot_design = tab_harness(app_protected_design, "Table Design");
+    assert!(is_disabled(&h_prot_design, "Styles"), "Styles button should be disabled under protection");
+    assert!(is_disabled(&h_prot_design, "Borders"), "Borders button should be disabled under protection");
+    assert!(
+        description(&h_prot_design, "Styles").as_deref().unwrap_or("").contains("protected"),
+        "Styles should indicate protection in disabled hint"
+    );
+
+    let mut app_protected_layout = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_protected_layout.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app_protected_layout.session.doc.settings.protection = Some("readOnly".into());
+    let h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
+    assert!(is_disabled(&h_prot_layout, "Delete"), "Delete button should be disabled under protection");
+    assert!(is_disabled(&h_prot_layout, "AutoFit"), "AutoFit button should be disabled under protection");
+    assert!(
+        description(&h_prot_layout, "Delete").as_deref().unwrap_or("").contains("protected"),
+        "Delete should indicate protection in disabled hint"
+    );
+}
