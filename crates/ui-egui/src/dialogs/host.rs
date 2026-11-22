@@ -432,13 +432,25 @@ pub(crate) fn open_form<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>
 /// [`open_form`] in a window of its own (a macOS utility panel, `Services::paragraph_window`) titled as the form,
 /// showing its content alone; elsewhere as [`open_form`].
 pub(crate) fn open_form_panel<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>, form: F) -> DialogId {
+    let id = open_node(app, parent, panel_host(app, parent, form));
+    register(app, id, &[form_hooks::<F>()]);
+    id
+}
+
+/// [`open_form_panel`] with the caller's hooks, as [`open_form_with`].
+pub(crate) fn open_form_panel_with<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>, form: F, hooks: DialogHooks) -> DialogId {
+    let id = open_node(app, parent, panel_host(app, parent, form));
+    register(app, id, &[hooks, form_hooks::<F>()]);
+    id
+}
+
+/// A form's host, in a window of its own titled as the form when the app shows panels.
+fn panel_host<F: WordForm>(app: &WordApp, parent: Option<DialogId>, form: F) -> FormHost<F> {
     let mut host = FormHost::new(form, parent);
     if app.services.paragraph_window {
         host.window = Some(host.form.title().as_str().to_owned());
     }
-    let id = open_node(app, parent, host);
-    register(app, id, &[form_hooks::<F>()]);
-    id
+    host
 }
 
 /// [`open_form`] with the caller's hooks: `hooks.prepare` runs before every host run, and the form's own settle runs
