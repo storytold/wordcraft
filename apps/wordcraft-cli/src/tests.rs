@@ -331,13 +331,13 @@ fn mcp_headless_session_takes_the_author_flag() {
     assert_eq!(unnamed.session.author, wordcraft_mcp::Headless::default().session.author, "no flag keeps the default author");
 }
 
-/// `--connect` is refused whether or not it has a value, even with both roots valid.
+/// `--connect` is refused whether or not it has a value, written apart or as `--connect=…`, even with both roots valid.
 #[test]
 fn mcp_connect_is_refused_without_a_value_too() {
     let scratch = Scratch::new("connect-bare");
     let dir = scratch.0.to_string_lossy().into_owned();
     let roots = ["--automation-read-root", &dir, "--automation-write-root", &dir];
-    for tail in [vec!["--connect"], vec!["--connect", "--author", "Claude"]] {
+    for tail in [vec!["--connect"], vec!["--connect", "--author", "Claude"], vec!["--connect=127.0.0.1:9"], vec!["--connect="]] {
         let line = args(&[&["mcp"][..], &roots, &tail].concat());
         let e = run(&line).unwrap_err().to_string();
         assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
