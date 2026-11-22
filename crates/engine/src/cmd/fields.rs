@@ -588,6 +588,23 @@ mod tests {
         assert_eq!(form_fields(&s), [("Al".to_string(), FF.to_string())]);
     }
 
+    /// #5525 review: a front end moving the selection without a command (a click, the context
+    /// menu, the restrict pane) ends a fill, so selecting the field again starts it over instead
+    /// of resuming at the old caret. Setting the selection the fill already has keeps it.
+    #[test]
+    fn a_selection_set_without_a_command_ends_a_fill() {
+        let mut s = form_field_session(FF);
+        let selected = s.sel.clone();
+        type_keys(&mut s, "Jane");
+        s.set_selection(selected.clone());
+        type_keys(&mut s, "t");
+        assert_eq!(form_fields(&s)[0].0, "Janet");
+        s.set_selection(crate::Selection::caret(wordcraft_doc::Pos::body(0, 0)));
+        s.set_selection(selected);
+        type_keys(&mut s, "Bo");
+        assert_eq!(form_fields(&s), [("Bo".to_string(), FF.to_string())]);
+    }
+
     #[test]
     fn form_field_max_length_caps_the_whole_result_across_keystrokes() {
         let mut s = form_field_session(FF6);

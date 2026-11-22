@@ -269,8 +269,13 @@ impl Session {
     /// Move the caret or select text without a command, as a front end does for a right-click,
     /// a click into a header or a balloon. Formatting Backspace carried over stays only if the
     /// caret is still where the character was deleted: once it has been anywhere else, coming
-    /// back does not bring it back (#6518). Assigning [`Self::sel`] directly skips this.
+    /// back does not bring it back (#6518). A form field being filled in goes on only while the
+    /// selection stays the one the fill has: a new selection ends the fill, so selecting the field
+    /// again starts it over (#5525). Assigning [`Self::sel`] directly skips this.
     pub fn set_selection(&mut self, sel: Selection) {
+        if sel != self.sel {
+            self.form_fill = None;
+        }
         self.sel = sel;
         self.drop_stale_carried();
     }
