@@ -77,4 +77,12 @@ mod tests {
             assert_eq!(key_path(dir, 7981), dir.join("control-key.local-7981"));
         }
     }
+
+    #[test]
+    fn settings_dir_is_the_apps_folder() {
+        if let Some(d) = settings_dir() {
+            let name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            assert!(name == "wordcraft" || name == "WordCraft", "{}", d.display());
+        }
+    }
 }
