@@ -28,6 +28,7 @@ struct ElsewhereContext<'a> {
     mark: u64,
     before_doc: Option<RunSnapshot>,
     rev_restore: Option<u64>,
+    dirty_before: Option<bool>,
     math_before: Option<Option<MathEdit>>,
     blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
     default_language_before: Option<String>,
@@ -258,6 +259,7 @@ impl Session {
                     mark,
                     before_doc,
                     rev_restore,
+                    dirty_before,
                     math_before,
                     blocks_before,
                     default_language_before,
@@ -540,6 +542,7 @@ impl Session {
             mark,
             before_doc,
             rev_restore,
+            dirty_before,
             math_before,
             blocks_before,
             default_language_before,
@@ -576,6 +579,9 @@ impl Session {
                 // Layouts made for the edit are not the restored document's.
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
+                }
+                if let Some(dirty) = dirty_before {
+                    self.dirty = dirty;
                 }
                 // The equation session parked with the first document may hold the rejected edit.
                 if let Some(math) = math_before {
