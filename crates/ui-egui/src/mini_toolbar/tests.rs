@@ -214,6 +214,29 @@ fn every_control_fits_inside_the_bar() {
     }
 }
 
+/// #7375: the bar's formatting controls are stacked into two rows: Row 2 controls (Bold,
+/// Align Left) sit strictly below Row 1 controls (Font, Font Size) rather than side-by-side.
+#[test]
+fn formatting_controls_stack_into_two_rows() {
+    let h = bar_over("brown fox");
+    let font = font_box(&h);
+    let size = size_box(&h);
+    let bold = member(&h, "Bold").expect("the bar has Bold");
+    let align_left = member(&h, "Align Left").expect("the bar has Align Left");
+
+    // Row 1 controls sit on the top row together.
+    assert!((font.min.y - size.min.y).abs() < 1.0, "Font and Font Size must share Row 1: font {font:?}, size {size:?}");
+
+    // Row 2 controls sit on the second row together.
+    assert!((bold.min.y - align_left.min.y).abs() < 1.0, "Bold and Align Left must share Row 2: bold {bold:?}, align_left {align_left:?}");
+
+    // Row 2 controls sit strictly below Row 1 controls.
+    assert!(bold.min.y >= font.max.y, "Bold ({bold:?}) must sit strictly below Font ({font:?})");
+    assert!(bold.min.y >= size.max.y, "Bold ({bold:?}) must sit strictly below Font Size ({size:?})");
+    assert!(align_left.min.y >= font.max.y, "Align Left ({align_left:?}) must sit strictly below Font ({font:?})");
+    assert!(align_left.min.y >= size.max.y, "Align Left ({align_left:?}) must sit strictly below Font Size ({size:?})");
+}
+
 /// Hovering any member of the bar previews its command on the selection; the pick is not made.
 #[test]
 fn hovering_a_bar_member_previews_its_command() {
