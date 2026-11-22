@@ -5,11 +5,13 @@ use std::cell::RefCell;
 
 use craft::behavior::IconId;
 use craft::keymap::CommandRef;
+use craft::theme::ControlSize;
 use craft::theme::variant::Variant;
 use craft::ui::bars::{Bar, BarKind};
 use craft::ui::buttons::{Button, ButtonOutput, IconButton, ToggleButton};
-use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _, TooltipSpec, Trigger};
+use craft::ui::contract::{Bind, BodyCx, Gap, Props as _, Show as _, ShowContainer as _, TooltipSpec, Trigger};
 use craft::ui::display::{Divider, Text};
+use craft::ui::layout_components::Row;
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::value_drag::{Slider, SliderScale};
 use egui::Ui;
@@ -209,85 +211,92 @@ fn missing_fonts(app: &mut WordApp, ui: &mut Ui) {
 fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
     use craft::ui::contract::Outcome as _;
     let mut rects = Vec::new();
-    let focus = if fit >= 2 {
-        IconButton::command(IconId::new("focus"), CommandRef::new("view.focus")).label(tl!("Focus").to_string()).show(ui).response
-    } else {
-        Button::command(CommandRef::new("view.focus"))
-            .label(tl!("Focus").to_string())
-            .icon(IconId::new("focus"))
-            .variant(Variant::GHOST)
-            .show(ui)
-            .response
-    };
-    rects.push(focus.rect);
-    // Icons only, Read Mode first and Web Layout last, each named in its tooltip, the current view on (prod
-    // `chrome.rs:925-943`).
-    let (mode, read) = (app.session.view.mode, app.session.view.read_mode);
-    for (id, icon, name, on) in [
-        ("view.readMode", "readMode", tl!("Read Mode"), read),
-        ("view.printLayout", "printLayout", tl!("Print Layout"), mode == wordcraft_layout::ViewMode::Print && !read),
-        ("view.webLayout", "webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
-    ] {
-        // No command carries a checked state, so the view is given at the button (S-L415).
-        let out = ToggleButton::new(name.to_string(), Bind::given(on))
-            .command(CommandRef::new(id))
-            .icon(crate::icons::id(icon))
-            .icon_only()
-            .tooltip(TooltipSpec::new(name.to_string()))
-            .show(ui);
-        rects.push(out.response().rect);
-    }
-    let reading = app.session.view.read_mode;
-    // Reading zoom changes only reading presentation, never the normal view zoom.
-    let current = if reading { f64::from(app.session.view.read_zoom) } else { app.canvas.zoom() };
-    let percent = (current * 100.0).round();
-    let step = |app: &mut WordApp, plus: bool| {
-        if reading {
-            let value = if plus { (percent + 10.0).min(150.0) } else { (percent - 10.0).max(75.0) };
-            let _ = app.run("view.readTextSize", json!({"value": value}));
+    let _ = Row::new().gap(Gap::Section).show(ui, |ui, _| {
+        let focus = if fit >= 2 {
+            IconButton::command(IconId::new("focus"), CommandRef::new("view.focus")).label(tl!("Focus").to_string()).show(ui).response
         } else {
-            let _ = app.run(if plus { "view.zoomIn" } else { "view.zoomOut" }, json!({}));
-        }
-    };
-    let out = IconButton::new(IconId::new("wordcraft.minus"))
-        .label(tl!("Zoom Out").to_string())
-        .tooltip(TooltipSpec::new(tl!("Zoom Out").to_string()))
-        .show(ui);
-    rects.push(out.response.rect);
-    if out.response.clicked() {
-        step(app, false);
-    }
-    if fit < 1 {
-        let mut value = current;
-        let range = if reading { 0.75..=1.5 } else { 0.1..=5.0 };
-        let name = if reading { tl!("Text Size") } else { tl!("Zoom") };
-        let slider = Slider::new(Bind::bound(&mut value), range)
-            .scale(if reading { SliderScale::Linear } else { SliderScale::Log })
-            // A plain rail, as the old zoom slider's (prod `chrome.rs:911`): no fill up to the thumb.
-            .fill(false)
-            .label(name.to_string())
-            .show(ui);
-        rects.push(slider.response().rect);
-        if let Some(v) = slider.value() {
-            let command = if reading { "view.readTextSize" } else { "view.zoom" };
-            let _ = app.run(command, json!({"value": (*v * 100.0).round()}));
-        }
-    }
-    let out = IconButton::new(IconId::new("wordcraft.plus"))
-        .label(tl!("Zoom In").to_string())
-        .tooltip(TooltipSpec::new(tl!("Zoom In").to_string()))
-        .show(ui);
-    rects.push(out.response.rect);
-    if out.response.clicked() {
-        step(app, true);
-    }
-    if !reading {
-        // PLAN: assumed Button::room_for (ribbon-w2, S-L418)
-        let out = Button::new(format!("{percent}%")).variant(Variant::GHOST).room_for(format!("{MOST_ZOOM_PERCENT}%")).show(ui);
-        rects.push(out.response.rect);
-        if out.clicked() {
-            let _ = app.run("ui.dialog", json!({"name": "zoom"}));
-        }
-    }
+            Button::command(CommandRef::new("view.focus"))
+                .label(tl!("Focus").to_string())
+                .icon(IconId::new("focus"))
+                .variant(Variant::GHOST)
+                .show(ui)
+                .response
+        };
+        rects.push(focus.rect);
+        // Icons only, Read Mode first and Web Layout last, each named in its tooltip, the current view on (prod
+        // `chrome.rs:925-943`).
+        let _ = Row::new().gap(Gap::Item).show(ui, |ui, _| {
+            let (mode, read) = (app.session.view.mode, app.session.view.read_mode);
+            for (id, icon, name, on) in [
+                ("view.readMode", "readMode", tl!("Read Mode"), read),
+                ("view.printLayout", "printLayout", tl!("Print Layout"), mode == wordcraft_layout::ViewMode::Print && !read),
+                ("view.webLayout", "webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
+            ] {
+                // No command carries a checked state, so the view is given at the button (S-L415).
+                let out = ToggleButton::new(name.to_string(), Bind::given(on))
+                    .command(CommandRef::new(id))
+                    .icon(crate::icons::id(icon))
+                    .icon_only()
+                    .tooltip(TooltipSpec::new(name.to_string()))
+                    .show(ui);
+                rects.push(out.response().rect);
+            }
+        });
+        let reading = app.session.view.read_mode;
+        // Reading zoom changes only reading presentation, never the normal view zoom.
+        let current = if reading { f64::from(app.session.view.read_zoom) } else { app.canvas.zoom() };
+        let percent = (current * 100.0).round();
+        let step = |app: &mut WordApp, plus: bool| {
+            if reading {
+                let value = if plus { (percent + 10.0).min(150.0) } else { (percent - 10.0).max(75.0) };
+                let _ = app.run("view.readTextSize", json!({"value": value}));
+            } else {
+                let _ = app.run(if plus { "view.zoomIn" } else { "view.zoomOut" }, json!({}));
+            }
+        };
+        let _ = Row::new().show(ui, |ui, _| {
+            let out = IconButton::new(IconId::new("wordcraft.minus"))
+                .label(tl!("Zoom Out").to_string())
+                .tooltip(TooltipSpec::new(tl!("Zoom Out").to_string()))
+                .show(ui);
+            rects.push(out.response.rect);
+            if out.response.clicked() {
+                step(app, false);
+            }
+            if fit < 1 {
+                let mut value = current;
+                let range = if reading { 0.75..=1.5 } else { 0.1..=5.0 };
+                let name = if reading { tl!("Text Size") } else { tl!("Zoom") };
+                let slider = Slider::new(Bind::bound(&mut value), range)
+                    .size(ControlSize::Md)
+                    .scale(if reading { SliderScale::Linear } else { SliderScale::Log })
+                    // A plain rail, as the old zoom slider's (prod `chrome.rs:911`): no fill up to the thumb.
+                    .fill(false)
+                    .label(name.to_string())
+                    .show(ui);
+                rects.push(slider.response().rect);
+                if let Some(v) = slider.value() {
+                    let command = if reading { "view.readTextSize" } else { "view.zoom" };
+                    let _ = app.run(command, json!({"value": (*v * 100.0).round()}));
+                }
+            }
+            let out = IconButton::new(IconId::new("wordcraft.plus"))
+                .label(tl!("Zoom In").to_string())
+                .tooltip(TooltipSpec::new(tl!("Zoom In").to_string()))
+                .show(ui);
+            rects.push(out.response.rect);
+            if out.response.clicked() {
+                step(app, true);
+            }
+            if !reading {
+                // PLAN: assumed Button::room_for (ribbon-w2, S-L418)
+                let out = Button::new(format!("{percent}%")).variant(Variant::GHOST).room_for(format!("{MOST_ZOOM_PERCENT}%")).show(ui);
+                rects.push(out.response.rect);
+                if out.clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "zoom"}));
+                }
+            }
+        });
+    });
     super::union(rects)
 }
