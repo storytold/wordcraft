@@ -685,7 +685,11 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     s.run("file.save", &json!({"path": out}))
                 };
                 r.map_err(engine_error)?;
-                write_stdout(|w| writeln!(w, "wrote {out}"))?;
+                // A reader that hung up only loses the confirmation; the remaining saves still run.
+                match write_stdout(|w| writeln!(w, "wrote {out}")) {
+                    Ok(()) | Err(Failure::StdoutClosed) => {}
+                    Err(e) => return Err(e),
+                }
             }
             Ok(())
         }

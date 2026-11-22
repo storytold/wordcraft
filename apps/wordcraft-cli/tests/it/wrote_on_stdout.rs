@@ -42,3 +42,26 @@ fn run_confirms_each_save_on_stdout() {
     assert_wrote_on_stdout(&run, &out);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A reader that has already hung up does not stop the job: every save still runs, though its
+/// confirmation has nowhere to go. A PNG is written only in the confirming loop, so it shows a
+/// save that was skipped.
+#[test]
+fn run_keeps_saving_after_stdout_closes() {
+    let d = dir("closed");
+    let job = d.join("job.json");
+    std::fs::write(
+        &job,
+        r#"{"template": "blank", "commands": [{"command": "text.insert", "params": {"text": "x"}}], "save": ["first.docx", "second.png"]}"#,
+    )
+    .unwrap();
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let run = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli")).args(["run", "--script"]).arg(&job).stdout(writer).output().unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "status {:?}, stderr: {stderr}", run.status);
+    for out in ["first.docx", "second.png"] {
+        assert!(d.join(out).is_file(), "{out} was not written; stderr: {stderr}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
