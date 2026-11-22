@@ -63,8 +63,21 @@ pub(super) fn save_as(ui: &mut Ui, app: &mut WordApp) {
     if let Some(error) = app.backstage_state.save_as_error.clone() {
         error_line(ui, &error);
     }
+    // The name the file gets: Browse… opens with it, and the web build downloads under it (#5800).
+    let document = app.session.document_id();
+    let mut name = match &app.backstage_state.save_as_name {
+        Some((id, typed)) if *id == document => typed.clone(),
+        _ => app.default_save_stem(),
+    };
+    let _ = Field::new(label("File name:")).show(ui, |ui, _| {
+        let out = TextField::new(label("File name:"), Bind::bound(&mut name)).id_salt("save-as-file-name").show(ui);
+        if out.value().is_some() {
+            app.backstage_state.save_as_name = Some((document, name.clone()));
+        }
+    });
     if clicked(&Button::new(label("Browse…")).id_salt("save-as-browse").show(ui)) {
-        app.save_as_dialog();
+        let typed = app.backstage_state.save_as_name.as_ref().filter(|(id, _)| *id == document).map(|(_, typed)| typed.clone());
+        app.save_as_dialog_named(typed.as_deref());
     }
     // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]

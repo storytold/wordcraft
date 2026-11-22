@@ -102,6 +102,9 @@ pub(crate) struct BackstageState {
     /// The Save As page's write-failure message ([`WordApp::fail_save_as`]): this page skips the
     /// status bar, so a failed write (no permission, disk full, a bad path) says why here.
     pub(crate) save_as_error: Option<String>,
+    /// The Save As page's File name field: what was typed, with the id of the document it was
+    /// typed for (#5800). `None` until the person types, so the field follows the document's title.
+    pub(crate) save_as_name: Option<(u64, String)>,
     /// Why the last attempt to open a personal template failed.
     pub(crate) personal_error: Option<String>,
     /// The personal templates as last read (when New was shown, the folder setting changed, or

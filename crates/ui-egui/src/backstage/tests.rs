@@ -840,3 +840,100 @@ fn a_file_pages_title_is_productions_size() {
         assert!(title.size > section.size + 6.0, "the title stands above a section heading: {title:?} over {section:?}");
     }
 }
+
+/// A Save As page whose Browse… asks a held file service, which records the names it is asked to
+/// suggest. The document is unnamed, with `text` in its body.
+fn save_as_names_for(text: &str) -> (egui_kittest::Harness<'static, WordApp>, Arc<ScriptedFiles>) {
+    let files = Arc::new(ScriptedFiles::held());
+    let mut a = app_with_files(&files);
+    if !text.is_empty() {
+        a.run("text.insert", json!({"text": text})).unwrap();
+    }
+    (file_page(a, "saveAs"), files)
+}
+
+/// [`save_as_names_for`] an empty document.
+fn save_as_names() -> (egui_kittest::Harness<'static, WordApp>, Arc<ScriptedFiles>) {
+    save_as_names_for("")
+}
+
+/// Types `name` into Save As › File name, in place of what the field holds.
+fn type_file_name(h: &mut egui_kittest::Harness<'static, WordApp>, name: &str) {
+    use egui::accesskit::Role;
+    h.get_by_role_and_label(Role::TextInput, "File name:").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "File name:").type_text(name);
+    h.run_steps(2);
+}
+
+/// Browse… on the Save As page, then what the host's dialog was asked to suggest (#5800).
+fn browse_suggestion(h: &mut egui_kittest::Harness<'static, WordApp>, files: &Arc<ScriptedFiles>) -> String {
+    let before = files.requests().len();
+    h.get_by_label("Browse…").click();
+    h.run_steps(3);
+    let asked = files.requests();
+    assert!(asked.len() > before, "Browse… asked the file service");
+    let name = asked.last().and_then(|r| r.file_name.clone()).expect("Browse asked for a name");
+    // Cancel it, so the next Browse… is not ignored for a dialog that is still open.
+    files.answer(Picked::Cancelled);
+    h.run_steps(3);
+    name
+}
+
+/// Save As has a File name field that starts with what Save would suggest, and Browse… opens the
+/// dialog with the name typed there (#5800).
+#[test]
+fn save_as_file_name_is_what_browse_suggests() {
+    use egui::accesskit::Role;
+    let (mut h, files) = save_as_names();
+    let stem = h.state().default_save_stem();
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "File name:").value().as_deref(), Some(stem.as_str()));
+    assert_eq!(browse_suggestion(&mut h, &files), format!("{stem}.docx"), "untouched, Browse… suggests what it always did");
+    type_file_name(&mut h, "Quarterly review");
+    assert_eq!(browse_suggestion(&mut h, &files), "Quarterly review.docx");
+}
+
+/// An unnamed document is suggested under its first words (#5793), and the field shows that same
+/// name, so the field and Browse… agree until something is typed.
+#[test]
+fn save_as_file_name_follows_the_first_words_of_an_unnamed_document() {
+    use egui::accesskit::Role;
+    let (mut h, files) = save_as_names_for("Hello world");
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "File name:").value().as_deref(), Some("Hello world"));
+    assert_eq!(browse_suggestion(&mut h, &files), "Hello world.docx");
+}
+
+/// A typed extension that WordCraft saves is kept (so it sets the format) and not doubled; any
+/// other text after a dot is part of the name; a name with nothing usable falls back.
+#[test]
+fn save_as_file_name_keeps_its_extension_and_falls_back_when_unusable() {
+    let (mut h, files) = save_as_names();
+    let stem = h.state().default_save_stem();
+    for (typed, suggested) in
+        [("Letter.docx", "Letter.docx"), ("Notes.PDF", "Notes.PDF"), ("Report v1.2", "Report v1.2.docx"), ("a/b\\c", "a b c.docx")]
+    {
+        type_file_name(&mut h, typed);
+        assert_eq!(browse_suggestion(&mut h, &files), suggested, "typed {typed:?}");
+    }
+    for nothing in ["  / ", ".docx", "..."] {
+        type_file_name(&mut h, nothing);
+        assert_eq!(browse_suggestion(&mut h, &files), format!("{stem}.docx"), "typed {nothing:?}");
+    }
+}
+
+/// The cleaning rules for a typed name.
+#[test]
+fn typed_save_names_are_cleaned() {
+    use crate::app::clean_save_name;
+    assert_eq!(clean_save_name("Talk", "docx").as_deref(), Some("Talk.docx"));
+    assert_eq!(clean_save_name("  Talk  ", "docm").as_deref(), Some("Talk.docm"));
+    assert_eq!(clean_save_name("Talk.odt", "docx").as_deref(), Some("Talk.odt"));
+    assert_eq!(clean_save_name("Talk.", "docx").as_deref(), Some("Talk.docx"));
+    assert_eq!(clean_save_name("a/b\\c", "docx").as_deref(), Some("a b c.docx"));
+    assert_eq!(clean_save_name("a\tb", "docx").as_deref(), Some("ab.docx"));
+    for nothing in ["", "   ", "/", ".", "..", ".docx", " .pdf"] {
+        assert_eq!(clean_save_name(nothing, "docx"), None, "{nothing:?}");
+    }
+}
