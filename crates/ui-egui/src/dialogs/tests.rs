@@ -1842,25 +1842,30 @@ fn paragraph_in_its_own_window_applies_its_tabs_page_on_ok() {
     assert!(tabs.is_empty(), "the same Undo took back the stop");
 }
 
-/// With `Services::paragraph_window`, Borders and Shading, Page Setup and Footnote and Endnote open in windows of
-/// their own too; without it, in the document window.
+/// With `Services::paragraph_window`, Borders and Shading, Page Setup, Footnote and Endnote and Track Changes Options
+/// open in windows of their own too; without it, in the document window.
 #[test]
-fn borders_page_setup_and_notes_open_in_their_own_windows_with_the_window_service() {
+fn borders_page_setup_notes_and_tracking_open_in_their_own_windows_with_the_window_service() {
     use craft::ui::dialog::StackDialog;
     for service in [true, false] {
         let mut app = app_with("one");
         app.services.paragraph_window = service;
         let mut h = app_harness(app);
         h.run_steps(2);
-        let ids =
-            [open_named(&mut h, "borders", json!({})), open_named(&mut h, "pageSetup", json!({})), open_named(&mut h, "noteOptions", json!({}))];
+        let ids = [
+            open_named(&mut h, "borders", json!({})),
+            open_named(&mut h, "pageSetup", json!({})),
+            open_named(&mut h, "noteOptions", json!({})),
+            open_named(&mut h, "trackChangesOptions", json!({})),
+        ];
         let host = &h.state().dialog_host;
         let windowed = [
             host.get_by_id::<FormHost<super::dialogs_para::BordersForm>>(ids[0]).map(StackDialog::windowed),
             host.get_by_id::<PageSetupHost>(ids[1]).map(StackDialog::windowed),
             host.get_by_id::<FormHost<super::dialogs_notes::NoteForm>>(ids[2]).map(StackDialog::windowed),
+            host.get_by_id::<FormHost<super::dialogs_lists::TrackForm>>(ids[3]).map(StackDialog::windowed),
         ];
-        assert_eq!(windowed, [Some(service); 3], "each dialog is open, in a window of its own exactly with the service");
+        assert_eq!(windowed, [Some(service); 4], "each dialog is open, in a window of its own exactly with the service");
     }
 }
 

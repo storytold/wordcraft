@@ -1,5 +1,5 @@
-//! The Paragraph (with its Tabs page), Borders and Shading, Page Setup and Footnote and Endnote dialogs as Mac utility
-//! panels (`Services::paragraph_window`): the app shows each
+//! The Paragraph (with its Tabs page), Borders and Shading, Page Setup, Footnote and Endnote and Track Changes Options
+//! dialogs as Mac utility panels (`Services::paragraph_window`): the app shows each
 //! in a window of its own, and this ties that window to the document window it was opened from,
 //! as a child window. It moves with that window, stays just above it, goes behind another
 //! document's window with it, and hides while WordCraft is in the background. It is not listed
@@ -14,8 +14,8 @@ use objc2_app_kit::{NSApplication, NSWindow, NSWindowOrderingMode};
 use wordcraft_ui_egui::i18n::t;
 
 /// The translated titles of the windows the app shows as utility panels.
-fn panel_titles() -> [&'static str; 4] {
-    [t("Paragraph"), t("Borders and Shading"), t("Page Setup"), t("Footnote and Endnote")]
+fn panel_titles() -> [&'static str; 5] {
+    [t("Paragraph"), t("Borders and Shading"), t("Page Setup"), t("Footnote and Endnote"), t("Track Changes Options")]
 }
 
 /// Ties every new panel to the frontmost document window, the one it was opened from, and shows
