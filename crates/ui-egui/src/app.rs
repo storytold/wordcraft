@@ -136,7 +136,6 @@ impl WordApp {
             parked: Default::default(),
             windows: windows::Windows::new(shown_document),
             closing: None,
-            nudge_requested: false,
             print_document: None,
             canvas,
             restrict,

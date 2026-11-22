@@ -7,27 +7,20 @@ use egui::{Context, CornerRadius, Id, LayerId, Order, Stroke, StrokeKind, Ui, ve
 
 use crate::WordApp;
 
-/// How long a modal window shakes or flashes after a press beside it or close attempt, in seconds.
+/// How long a modal window shakes or flashes after a press beside it, in seconds.
 pub(crate) const NUDGE_SECS: f64 = 0.4;
-
-/// The `ctx.data` key for when the window `id` was last nudged in `viewport`.
-pub(crate) fn nudge_id_in(id: Id, viewport: egui::ViewportId) -> Id {
-    id.with(("nudge", viewport))
-}
 
 /// The `ctx.data` key for when the window `id` was last nudged, in this document window: the data
 /// is shared by all of them.
 pub(crate) fn nudge_id(ctx: &Context, id: Id) -> Id {
-    nudge_id_in(id, ctx.viewport_id())
+    id.with(("nudge", ctx.viewport_id()))
 }
 
-/// Forgets a nudge of the window `id` in `viewport` as it closes, so it doesn't go on when the window reopens.
-pub(crate) fn forget_nudge_in(ctx: &Context, id: Id, viewport: egui::ViewportId) {
-    let key = nudge_id_in(id, viewport);
-    let cur_key = nudge_id(ctx, id);
+/// Forgets a nudge of the window `id` as it closes, so it doesn't go on when the window reopens.
+pub(crate) fn forget_nudge(ctx: &Context, id: Id) {
+    let key = nudge_id(ctx, id);
     ctx.data_mut(|d| {
         d.remove::<f64>(key);
-        d.remove::<f64>(cur_key);
     });
 }
 
@@ -56,10 +49,19 @@ pub(crate) fn apply_modal_nudge(app: &mut WordApp, ui: &mut Ui) {
     if craft::ui::runtime::measure::active(&ctx) {
         return;
     }
-    let window_vp = app.ctx.as_ref().and_then(|c| app.windows.viewport(c, app.windows.shown())).unwrap_or(egui::ViewportId::ROOT);
-    if ctx.viewport_id() != window_vp {
-        return;
+
+    // Forget nudge on every dialog close, so reopening within NUDGE_SECS opens still.
+    // Tracking the host-provided open_serial distinguishes successive opens sharing the same ID.
+    let prev_open_key = Id::NULL.with("modal_dialogs_open_last_pass").with(ctx.viewport_id());
+    let prev_open: Vec<(Id, u64)> = ctx.data(|d| d.get_temp(prev_open_key)).unwrap_or_default();
+    let current_open: Vec<(Id, u64)> =
+        app.dialog_host.open_dialogs().into_iter().filter_map(|d| app.dialog_host.open_serial(d.id).map(|s| (d.id, s))).collect();
+    for (closed_id, prev_serial) in &prev_open {
+        if !current_open.iter().any(|(id, serial)| id == closed_id && serial == prev_serial) {
+            forget_nudge(&ctx, *closed_id);
+        }
     }
+    ctx.data_mut(|d| d.insert_temp(prev_open_key, current_open));
 
     let prompt_id = app.closing.as_ref().and_then(|c| c.prompt).filter(|&id| app.dialog_host.get_dyn(id).is_some());
     let target_id =
@@ -73,20 +75,21 @@ pub(crate) fn apply_modal_nudge(app: &mut WordApp, ui: &mut Ui) {
         return;
     }
 
-    if let Some(closing) = app.closing.as_mut()
-        && closing.pending_nudge
-        && closing.prompt == Some(id)
-    {
-        closing.pending_nudge = false;
-        closing.viewport = Some(ctx.viewport_id());
-        trigger_prompt_nudge(&ctx, id);
-    }
-
+    // When popups/menus are open inside a modal dialog, overlay::top points to the popup.
+    // Walk up .parent to locate the target modal dialog's own overlay entry so clicking
+    // inside the dialog (outside the popup) does not falsely trigger a shake.
     let top_id = craft::ui::runtime::overlay::top(&ctx);
-    let top_entry = top_id.and_then(|tid| craft::ui::runtime::overlay::entry(&ctx, tid));
+    let mut modal_entry = top_id.and_then(|tid| craft::ui::runtime::overlay::entry(&ctx, tid));
+    while let Some(entry) = modal_entry.as_ref() {
+        if entry.rank.is_modal() {
+            break;
+        }
+        modal_entry = entry.parent.and_then(|pid| craft::ui::runtime::overlay::entry(&ctx, pid));
+    }
+    let modal_entry = modal_entry.filter(|e| e.rank.is_modal());
     let modal_layer_id = ctx.memory(|m| m.top_modal_layer());
 
-    let (dialog_rect, area_layer_id) = if let Some(entry) = top_entry {
+    let (dialog_rect, area_layer_id) = if let Some(ref entry) = modal_entry {
         (Some(entry.rect), Some(LayerId::new(Order::Foreground, craft::ui::runtime::memory::sub(entry.id, "area"))))
     } else if let Some(layer) = modal_layer_id {
         (ctx.memory(|m| m.area_rect(layer.id)), Some(layer))
@@ -98,13 +101,30 @@ pub(crate) fn apply_modal_nudge(app: &mut WordApp, ui: &mut Ui) {
         return;
     };
 
-    let beside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !rect.contains(p)));
-    if beside {
-        if let Some(closing) = app.closing.as_mut()
-            && closing.prompt == Some(id)
-        {
-            closing.viewport = Some(ctx.viewport_id());
+    // Include the modal dialog's rectangle and all open overlays in its family
+    // (such as dropdown popups or submenus) so presses on popup extensions are inside.
+    let mut inside_rects = vec![rect];
+    if let Some(ref entry) = modal_entry {
+        for family_id in craft::ui::runtime::overlay::family(&ctx, entry.id) {
+            if let Some(e) = craft::ui::runtime::overlay::entry(&ctx, family_id) {
+                inside_rects.push(e.rect);
+                if let Some(anchor) = e.anchor {
+                    inside_rects.push(anchor);
+                }
+            }
         }
+    }
+    let is_inside = |pos: egui::Pos2| inside_rects.iter().any(|r| r.contains(pos));
+
+    let beside = ctx.input(|i| {
+        let event_pressed = i.events.iter().any(|e| match e {
+            egui::Event::PointerButton { pos, pressed: true, button: egui::PointerButton::Primary, .. } => !is_inside(*pos),
+            _ => false,
+        });
+        let held_pressed = i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !is_inside(p));
+        event_pressed || held_pressed
+    });
+    if beside {
         trigger_prompt_nudge(&ctx, id);
     }
 
