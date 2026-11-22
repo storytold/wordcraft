@@ -477,3 +477,24 @@ fn a_row_level_control_on_an_overwritten_row_declines_the_overwrite() {
     assert_eq!(grid(t0(&s))[1], before[1], "the row under the control is not overwritten");
     assert!(nested(t0(&s)), "the table nests in the cell instead");
 }
+
+#[test]
+fn an_overwrite_inside_a_spanning_row_control_preserves_the_row() {
+    use wordcraft_doc::{ContentControl, ControlKind, ControlLock};
+
+    let mut s = dest(1, 1);
+    let mut control = ContentControl::new(ControlKind::RichText);
+    control.lock = ControlLock::SdtContentLocked;
+    let destination = s.doc.table_mut(StoryRef::Body, &Path(vec![0])).unwrap();
+    destination.rows[0].controls.open.push(control);
+    destination.rows[2].controls.close = 1;
+    copy(&mut s, table("s", 1, 1));
+    paste(&mut s);
+
+    let table = t0(&s);
+    let cell = &table.rows[1].cells[1];
+    assert!(cell_text(cell).lines().any(|line| line == "d22"));
+    assert!(cell.blocks.iter().any(|block| block.as_table().is_some()));
+    assert_eq!(table.rows[0].controls.open[0].lock, ControlLock::SdtContentLocked);
+    assert_eq!(table.rows[2].controls.close, 1);
+}

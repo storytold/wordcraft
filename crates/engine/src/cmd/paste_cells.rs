@@ -124,8 +124,12 @@ fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) ->
     if dest.rows.len().max(row0.saturating_add(src_rows)) > MAX_ROWS || dest_cols.max(col0.saturating_add(src_cols)) > MAX_COLS {
         return None;
     }
-    // The cells that get overwritten must not hold controls, nor sit in a row-level control.
-    let hit = |r: usize| dest.rows.get(r).is_some_and(|row| !row.controls.is_empty() || row.cells.iter().skip(col0).take(src_cols).any(has_control));
+    // A wrapper may open before the first overwritten row or cell and close after the last.
+    // Use ordinary paste for wrapped grids so an overwrite cannot bypass a structural control.
+    if !dest.controls.is_empty() || dest.rows.iter().any(|row| !row.controls.is_empty() || row.cells.iter().any(|cell| !cell.controls.is_empty())) {
+        return None;
+    }
+    let hit = |r: usize| dest.rows.get(r).is_some_and(|row| row.cells.iter().skip(col0).take(src_cols).any(has_control));
     (!(row0..row0.saturating_add(src_rows).min(dest.rows.len())).any(hit)).then_some(Plan::Overwrite)
 }
 
@@ -135,8 +139,8 @@ fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) ->
 /// - Track Changes is on (the cell edits aren't tracked here);
 /// - the copied table has merged cells, ragged rows, empty cells, pictures or other objects,
 ///   a paragraph with a section break, or a control wrapping the table, a row or a cell;
-/// - the destination table has merged cells or offset rows, or a control in a cell that would be
-///   overwritten at any depth of nested tables;
+/// - the destination table has merged cells or offset rows, or an overwrite would affect a
+///   destination with structural wrappers or a cell containing a control in its blocks;
 /// - the caret is in a content control that shows its placeholder (the ordinary paste replaces
 ///   the placeholder);
 /// - the destination has one column and the copy more (a layout wrapper), or the paste would pass
