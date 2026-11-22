@@ -138,6 +138,8 @@ impl WordApp {
             closing: _,
             session: _,
             services: _,
+            // One Library, whose thumbnails every window shows.
+            library: _,
             host: _,
             settings: _,
             settings_notices: _,
