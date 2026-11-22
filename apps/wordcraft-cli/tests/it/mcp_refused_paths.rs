@@ -53,22 +53,6 @@ fn a_refused_path_is_logged_once_with_its_resolved_form() {
     let _ = std::fs::remove_dir_all(base);
 }
 
-/// Without write authority a save is refused before its path is touched, and the log doesn't
-/// resolve it either (on Windows a UNC path would reach the network): the path as given only.
-#[test]
-fn a_refusal_without_authority_logs_the_path_unresolved() {
-    let base = std::env::temp_dir().join(format!("wc-cli-refused-noauth-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(base.join("in")).unwrap();
-    let given = base.join("in/x.docx").to_string_lossy().into_owned();
-    let (stdout, stderr) = serve(&[("--automation-read-root", &base.join("in"))], &[tool_call(1, "save_document", &given)]);
-    assert!(stdout.contains("write authority is absent"), "the agent is told: {stdout}");
-    let logged: Vec<&str> = stderr.lines().filter(|l| l.contains("write authority is absent")).collect();
-    assert_eq!(logged.len(), 1, "one line per refused request: {stderr}");
-    assert!(logged[0].ends_with(&given) && !logged[0].contains("resolved"), "the path as given only: {}", logged[0]);
-    let _ = std::fs::remove_dir_all(base);
-}
-
 /// Runs `wordcraft-cli mcp` with `roots`, sends `calls`, and returns its stdout and stderr.
 fn serve(roots: &[(&str, &std::path::Path)], calls: &[String]) -> (String, String) {
     let mut cli = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli"));

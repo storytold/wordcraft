@@ -1,7 +1,6 @@
 //! A paragraph whose `w:pStyle` names a style `styles.xml` doesn't define is formatted as Normal,
 //! as in Word, not with the document defaults alone (#5077). Pandoc writes footers as
 //! `<w:pStyle w:val="Footer"/>` without defining Footer.
-use std::io::Write;
 use wordcraft_doc::props::LineSpacing;
 use wordcraft_doc::{Block, Document, PartKind};
 
@@ -20,7 +19,7 @@ fn package(normal_id: &str) -> Vec<u8> {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="{normal_id}"><w:name w:val="Normal"/><w:pPr><w:spacing w:before="20" w:after="40" w:line="259" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="26"/></w:rPr></w:style></w:styles>"#
     );
     let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, body) in [
         ("_rels/.rels", root),
         ("word/document.xml", doc.as_str()),
@@ -28,10 +27,9 @@ fn package(normal_id: &str) -> Vec<u8> {
         ("word/styles.xml", styles.as_str()),
         ("word/footer1.xml", footer.as_str()),
     ] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(body.as_bytes()).unwrap();
+        zw.add(name, body.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn footer_para(d: &Document) -> &wordcraft_doc::Paragraph {
