@@ -59,7 +59,9 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     h.run_steps(4);
     let layout = h.state_mut().session.layout();
     let pages = layout.pages.len();
-    assert!(pages > 30, "the table runs over many pages ({pages})");
+    // The scroll below crosses about 17 pages; the table runs well past that on every platform's fonts (29 pages on
+    // macOS, more elsewhere), so the view never reaches its end.
+    assert!(pages > 25, "the table runs over many pages ({pages})");
     let first = h.state().canvas.page_keys.hashed;
     assert!(first > 0 && first < 6, "only the pages on screen are fingerprinted, not all {pages}: {first}");
     // Idle frames do no per-page work.
@@ -69,7 +71,7 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     // Scroll a long way down: each newly shown page is fingerprinted once. The renders a step asks for finish before
     // the next step, whose frame uploads them.
     let mut max_textures = 0;
-    for _ in 0..11 {
+    for _ in 0..9 {
         wheel(&mut h, -2000.0);
         h.step();
         max_textures = max_textures.max(h.state().canvas.resident_pictures);
@@ -77,12 +79,12 @@ fn scrolling_a_big_table_fingerprints_only_pages_coming_into_view() {
     }
     h.step();
     let offset = h.state().canvas.view.offset.1;
-    assert!(offset > 20_000.0, "scrolled through many pages: {offset}");
+    assert!(offset > 16_000.0, "scrolled through many pages: {offset}");
     let after = std::sync::Arc::clone(&h.state_mut().session.layout());
     assert!(std::sync::Arc::ptr_eq(&layout, &after), "scrolling never lays the document out again");
     let hashed = h.state().canvas.page_keys.hashed;
-    // 11 steps of 2'000 pt cross about 22'000 / 1'056 ≈ 21 pages (at 100%, 1.33 px a point).
-    assert!(hashed < pages && hashed <= first + 30, "pages fingerprinted: {hashed} of {pages}");
+    // 9 steps of 2'000 pt cross about 18'000 / 1'056 ≈ 17 pages (at 100%, 1.33 px a point).
+    assert!(hashed < pages && hashed <= first + 26, "pages fingerprinted: {hashed} of {pages}");
     // Textures stay bounded to the pages near the view.
     max_textures = max_textures.max(h.state().canvas.resident_pictures);
     assert!(max_textures <= 12, "textures kept while scrolling: {max_textures}");
