@@ -936,3 +936,18 @@ fn decorative_text_dropdown_renders_compact_wordart_tiles() {
         rect.height()
     );
 }
+
+/// Romanian is reachable without growing the already full quick-language menu.
+#[test]
+fn romanian_proofing_language_is_selectable_and_named() {
+    assert!(crate::dialogs_layout::LANGUAGES.contains(&("ro-RO", "Romanian")));
+    for tag in ["ro-RO", "ro", "ron", "rum", "mo", "mol"] {
+        assert_eq!(language_name(Some(tag)), "Romanian", "{tag}");
+    }
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text sintetic.")), crate::Services::default());
+    app.run("select.all", json!({})).unwrap();
+    app.run("review.language", json!({"lang":"ro-RO"})).unwrap();
+    app.run("ui.dialog", json!({"name":"language"})).unwrap();
+    let form = crate::dialogs_layout::LanguageForm::read(&app);
+    assert_eq!(form.lang, "ro-RO");
+}
