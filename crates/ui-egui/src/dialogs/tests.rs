@@ -113,6 +113,12 @@ fn confirm(h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId) {
     h.run_steps(3);
 }
 
+fn cancel(h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId) {
+    let ctx = h.ctx.clone();
+    h.state_mut().dialog_host.cancel_by_id(&ctx, id);
+    h.run_steps(3);
+}
+
 /// Opens the Paragraph dialog, edits what it shows through its fields, as automation does, and answers OK.
 fn apply_paragraph(h: &mut egui_kittest::Harness<'_, WordApp>, edit: impl FnOnce(&mut ParagraphFormat)) {
     let id = open_named(h, "paragraph", json!({}));
@@ -787,6 +793,46 @@ fn font_dialog_sets_the_asian_and_latin_fonts_separately() {
 }
 
 #[test]
+fn font_dialog_preview_ignores_a_size_that_is_not_a_number() {
+    use crate::dialogs::font::preview_size;
+    for (size, pt) in [
+        (None, 12.0),
+        (Some(f64::NAN), 12.0),
+        (Some(f64::INFINITY), 12.0),
+        (Some(f64::NEG_INFINITY), 12.0),
+        (Some(10.5), 10.5),
+        (Some(200.0), 72.0),
+        (Some(2.0), 6.0),
+    ] {
+        assert_eq!(preview_size(size), pt, "{size:?}");
+    }
+    let mut h = app_harness(app_with("Example"));
+    h.run_steps(2);
+    let id = open_named(&mut h, "font", json!({}));
+    if let Some(host) = h.state_mut().dialog_host.get_mut_by_id::<FontHost>(id) {
+        host.form_mut().size = Some(f64::NAN);
+    }
+    h.run_steps(2);
+    assert!(is_open(h.state(), "font"), "the dialog stays open");
+    cancel(&mut h, id);
+}
+
+/// #3859: the page's context menu closes when a modal dialog opens from the keyboard (Ctrl+D),
+/// so its items can't act behind the dialog.
+#[test]
+fn a_modal_dialog_closes_the_context_menu() {
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Kilns")), crate::Services::default()));
+    h.run_steps(6);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().canvas.context_menu_open, "the menu is open");
+    let id = open_named(&mut h, "font", json!({}));
+    h.run_steps(2);
+    assert!(!h.state().canvas.context_menu_open, "the dialog closed it");
+    cancel(&mut h, id);
+}
+
+#[test]
 fn font_dialog_ok_keeps_what_the_user_left_alone() {
     // Issue #466: OK sent every field, clearing small caps, spacing and double underline
     // when only the size changed.
@@ -1035,6 +1081,46 @@ fn page_setup_refuses_margins_that_dont_fit_and_applies_smaller_ones_first() {
     assert!(!is_open(h.state(), "pageSetup"));
     let s = wordcraft_engine::cmd::page::sect(&h.state().session);
     assert_eq!((s.page_w.round(), s.page_h.round(), s.margin_left.round(), s.margin_top.round()), (100.0, 500.0, 18.0, 18.0));
+}
+
+/// Large numeric margins that do not fit the page stay refused and do not apply.
+#[test]
+fn page_setup_large_numeric_margins_do_not_expand_after_leaving_field() {
+    let mut h = app_harness(app_with("Page"));
+    h.run_steps(2);
+    let before = wordcraft_engine::cmd::page::sect(&h.state().session);
+    let id = open_named(&mut h, "pageSetup", json!({}));
+    if let Some(d) = h.state_mut().dialog_host.get_mut_by_id::<PageSetupHost>(id) {
+        set_margins(&mut d.setup, (1e36, 1e36, 1e36, 1e36));
+    }
+    h.run_steps(2);
+    confirm(&mut h, id);
+    assert!(is_open(h.state(), "pageSetup"), "dialog stays open with error");
+    let held = h.state().dialog_host.held_state(id);
+    assert!(matches!(held, Some(HeldOk::Refused(_))));
+    assert_eq!(wordcraft_engine::cmd::page::sect(&h.state().session), before);
+    cancel(&mut h, id);
+    assert!(!is_open(h.state(), "pageSetup"));
+}
+
+/// #5650: pasting non-numeric or oversized content into setup number fields refuses invalid
+/// margins and does not corrupt the layout or section state.
+#[test]
+fn page_setup_number_fields_do_not_expand_after_paste() {
+    let mut h = app_harness(app_with("Page"));
+    h.run_steps(2);
+    let before = wordcraft_engine::cmd::page::sect(&h.state().session);
+    let id = open_named(&mut h, "pageSetup", json!({}));
+    if let Some(d) = h.state_mut().dialog_host.get_mut_by_id::<PageSetupHost>(id) {
+        d.setup.margins.top = f64::MAX;
+        d.setup.margins.bottom = f64::MAX;
+    }
+    h.run_steps(2);
+    confirm(&mut h, id);
+    assert!(is_open(h.state(), "pageSetup"));
+    assert_eq!(wordcraft_engine::cmd::page::sect(&h.state().session), before);
+    cancel(&mut h, id);
+    assert!(!is_open(h.state(), "pageSetup"));
 }
 
 /// #1433: one OK in Page Setup is one undo step, whichever order its commands run in (the
