@@ -1,399 +1,279 @@
-use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
-use super::pages::page_screen_scale;
-use super::{
-    Color32, CommentDisplay, DocLayout, HashMap, PX_PER_PT, Pos, Pos2, Rect, Sense, StoryRef, Stroke, Tokens, Ui, WordApp, json, pos2, regular,
-    semibold, vec2,
-};
+//! Comment and revision balloons beside the pages: this file turns the document's comments and tracked changes into
+//! the framework's `BalloonItem`s, shows `CommentBalloons` and applies the edits its cards report. The selected card
+//! and its drafts are `CanvasState::comments`, the one copy the Comments pane shares.
 
-/// Comment balloons in the markup area right of each page, joined to their anchors, with each
-/// comment's replies under it. Clicking a balloon selects it, like Word: its text becomes editable
-/// in place, with Reply, Resolve and Delete (the same commands as the Comments pane).
-pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Rect], layout: &DocLayout, scale: f32, view: Rect) {
+use craft::review::ui::{BalloonItem, BalloonPlace, CommentBalloons, CommentEdit};
+use craft::review::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, Revision, RevisionKind, ThreadId};
+
+use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
+use super::{Color32, CommentDisplay, DocLayout, Env, Pos, Pos2, StoryRef, Ui, WordApp, json};
+
+/// The most revision cards of each kind shown.
+const MAX_REVISIONS: usize = 500;
+
+/// What a card shows.
+enum What {
+    Thread(CommentThread),
+    Revision(Revision),
+}
+
+/// A card with the page, anchor (page points) and document position it hangs from.
+struct Card {
+    page: usize,
+    anchor: Pos2,
+    pos: Pos,
+    what: What,
+}
+
+struct BalloonItems {
+    cards: Vec<Card>,
+}
+
+/// Comment balloons in the markup area right of each page, joined to their anchors, with each comment's replies in
+/// its card. Clicking a card selects it, like Word: its text becomes editable in place, with Reply, Resolve and
+/// Delete (the same commands as the Comments pane).
+pub(crate) fn balloons(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui::PageViewOutput, layout: &DocLayout) {
     app.canvas.balloon_rects.clear();
     let mw = markup_width(app);
     let float = floating_comments(app);
-    if app.canvas.balloon.is_some_and(|id| (mw <= 0.0 && !float) || !app.session.doc.comments.contains_key(&id)) {
+    if app.canvas.selected_balloon().is_some_and(|id| (mw <= 0.0 && !float) || !app.session.doc.comments.contains_key(&id)) {
         deselect_balloon(app);
     }
     if mw <= 0.0 && !float {
         return;
     }
-    let t = Tokens::get(ui.ctx());
-    let clip = view;
     let only_shown = app.session.prefs.markup.comment_display == CommentDisplay::Selected;
     let shown = shown_comment(app);
-    let BalloonItems { replies, mut by_page } = collect_items(app, layout, only_shown, shown);
-    let palette = t.author_colors;
-    let leaders = t.leader_colors;
-    let mut authors: Vec<String> = Vec::new();
-    let mut clicked: Option<(u32, Pos)> = None;
-    // The markup area extends each page.
-    for (pi, pr) in rects.iter().enumerate() {
-        let page_scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
-        let area = Rect::from_min_max(pos2(pr.max.x, pr.min.y), pos2(pr.max.x + mw * page_scale, pr.max.y));
-        if mw > 0.0 && area.intersects(clip) {
-            painter.rect_filled(area, 0.0, t.markup_area);
-            painter.line_segment([area.left_top(), area.left_bottom()], Stroke::new(1.0, t.markup_edge));
-        }
+    // Each author takes the next of the theme's categorical data colours.
+    let palette: Vec<Color32> = Env::of(ui).tokens.color.data.series.iter().map(|c| Color32::from_rgb(c.0[0], c.0[1], c.0[2])).collect();
+    let BalloonItems { cards } = collect_items(app, layout, only_shown, shown, &palette);
+    let items: Vec<BalloonItem<'_>> = cards
+        .iter()
+        .map(|c| match &c.what {
+            What::Thread(thread) => BalloonItem::thread(thread, c.page, c.anchor),
+            What::Revision(revision) => BalloonItem::revision(revision, c.page, c.anchor),
+        })
+        .collect();
+    let scale = out.pages.first().map_or(1.0, |p| p.scale as f32);
+    let (place, width) = if mw > 0.0 { (BalloonPlace::Column, mw * scale) } else { (BalloonPlace::Floating, FLOAT_WIDTH * scale) };
+    let editable = crate::app::command_board::command_enabled(app, "review.editComment");
+    let shown =
+        CommentBalloons::new(tl!("Comments"), &out.pages, &items, &mut app.canvas.comments).place(place).width(width).read_only(!editable).show(ui);
+    app.canvas.balloon_rects = shown.cards.iter().filter_map(|(t, r)| Some((app_id(*t)?, *r))).collect();
+    for edit in shown.edits {
+        apply(app, &cards, edit);
     }
-    let mut pages: Vec<usize> = by_page.keys().copied().collect();
-    pages.sort_unstable();
-    for pi in pages {
-        let Some(list) = by_page.get_mut(&pi) else { continue };
-        let Some(pr) = rects.get(pi) else { continue };
-        if !pr.expand(400.0).intersects(clip) {
-            continue;
-        }
-        list.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.total_cmp(&b.0)));
-        let page_scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
-        // Beside the page in the column; floating, beside it when the view has room, else over its edge.
-        let (x0, w, over_page) = if mw > 0.0 {
-            (pr.max.x + 10.0, (mw * page_scale - 20.0).max(60.0), false)
-        } else {
-            let w = (FLOAT_WIDTH * page_scale - 20.0).max(60.0);
-            let beside = pr.max.x + 10.0;
-            if beside + w <= view.max.x - 8.0 { (beside, w, false) } else { ((view.max.x - w - 8.0).max(view.min.x + 8.0), w, true) }
-        };
-        let mut next_y = pr.min.y;
-        for (ax, ay, item, pos) in list.iter() {
-            let id = match item {
-                Balloon::Comment(id) => id,
-                Balloon::Format(author, text) => {
-                    // A read-only card: who formatted, and how.
-                    let author = author_name(author);
-                    let ai = authors.iter().position(|a| *a == author).unwrap_or_else(|| {
-                        authors.push(author.clone());
-                        authors.len() - 1
-                    });
-                    let color = palette.get(ai % palette.len()).copied().unwrap_or(t.blue);
-                    let fs = (11.0 * page_scale / PX_PER_PT).clamp(8.0, 16.0);
-                    let anchor = pos2(pr.min.x + ax * page_scale, pr.min.y + ay * page_scale);
-                    let top = (anchor.y - 12.0).max(next_y);
-                    let head = painter.layout(author, semibold(fs), t.text, w - 16.0);
-                    let body = painter.layout(text.clone(), regular(fs), t.text_dim, w - 16.0);
-                    let card = Rect::from_min_size(pos2(x0, top), vec2(w, head.size().y + body.size().y + 16.0));
-                    next_y = card.max.y + 6.0;
-                    if !card.intersects(clip) {
-                        continue;
-                    }
-                    let lead = Stroke::new(1.0, color.linear_multiply(0.7));
-                    let on_page = Stroke::new(1.0, leaders.get(ai % leaders.len()).copied().unwrap_or(color).linear_multiply(0.7));
-                    dashed(painter, anchor, pos2(pr.max.x, anchor.y), on_page);
-                    painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
-                    card_shapes(painter, &t, card, color, false, None);
-                    let y = card.min.y + 6.0;
-                    let hh = head.size().y;
-                    painter.galley(pos2(card.min.x + 10.0, y), head, t.text);
-                    painter.galley(pos2(card.min.x + 10.0, y + hh + 4.0), body, t.text_dim);
-                    continue;
-                }
-            };
-            let Some(c) = app.session.doc.comments.get(id) else { continue };
-            let resolved = c.resolved;
-            let author = author_name(&c.author);
-            let ai = authors.iter().position(|a| *a == author).unwrap_or_else(|| {
-                authors.push(author.clone());
-                authors.len() - 1
+}
+
+/// Applies what a card reported through the commands the Comments pane uses.
+fn apply(app: &mut WordApp, cards: &[Card], edit: CommentEdit) {
+    match edit {
+        CommentEdit::Select(thread) => {
+            let Some(id) = app_id(thread) else { return };
+            focus_balloon(app, id);
+            let pos = cards.iter().find_map(|c| match &c.what {
+                What::Thread(t) if t.id == thread => Some(c.pos.clone()),
+                _ => None,
             });
-            let color = palette.get(ai % palette.len()).copied().unwrap_or(t.blue);
-            let fs = (11.0 * page_scale / PX_PER_PT).clamp(8.0, 16.0);
-            let thread: Vec<u32> = replies.get(id).cloned().unwrap_or_default();
-            let anchor = pos2(pr.min.x + ax * page_scale, pr.min.y + ay * page_scale);
-            // Over the page the card goes under the commented line, not on it.
-            let top = (anchor.y + if over_page { 4.0 } else { -12.0 }).max(next_y);
-            let active = app.canvas.balloon == Some(*id);
-            // Lay out a read-only balloon's text: the comment, then each reply under a rule,
-            // each with who wrote it and when. (galley, gap above, a rule above, height shown)
-            let mut lines: Vec<(craft_ui::text::AlignedGalley, f32, bool, f32)> = Vec::new();
-            let card = if active {
-                Rect::from_min_size(pos2(x0, top), vec2(w, app.canvas.balloon_h.max(24.0)))
-            } else {
-                let dim = |r: bool| if r { t.text_dim } else { t.text };
-                let small = regular((fs * 0.9).max(8.0));
-                for (i, cid) in std::iter::once(*id).chain(thread.iter().copied()).enumerate() {
-                    let Some(r) = app.session.doc.comments.get(&cid) else { continue };
-                    let gap = if i == 0 { 0.0 } else { 9.0 };
-                    let g = balloon_text(painter, author_name(&r.author), semibold(fs), t.text, w - 16.0);
-                    let h = g.height();
-                    lines.push((g, gap, i > 0, h));
-                    let when = crate::local_time::comment_time(r);
-                    if !when.is_empty() {
-                        let g = balloon_text(painter, when, small.clone(), t.text_dim, w - 16.0);
-                        let h = g.height();
-                        lines.push((g, 1.0, false, h));
-                    }
-                    let text = app.session.doc.plain_text(StoryRef::Part(r.part));
-                    let g = balloon_text(painter, text.trim().to_string(), regular(fs), dim(resolved), w - 16.0);
-                    let h = shown_height(&g);
-                    lines.push((g, 4.0, false, h));
-                }
-                let h = lines.iter().map(|(_, gap, _, h)| h + gap).sum::<f32>() + 12.0;
-                Rect::from_min_size(pos2(x0, top), vec2(w, h))
-            };
-            if !card.intersects(clip) {
-                next_y = card.max.y + 6.0;
-                continue;
+            if let Some(pos) = pos {
+                app.session.set_selection(wordcraft_engine::Selection::caret(pos));
             }
-            let selected = active || (app.session.sel.focus.path == pos.path && app.session.sel.focus.story == pos.story);
-            // Leader: from the anchor along the text to the page edge, then to the card.
-            let lead = Stroke::new(if selected { 1.5 } else { 1.0 }, color.linear_multiply(if selected { 1.0 } else { 0.7 }));
-            if !over_page {
-                let on_page = Stroke::new(
-                    lead.width,
-                    leaders.get(ai % leaders.len()).copied().unwrap_or(color).linear_multiply(if selected { 1.0 } else { 0.7 }),
-                );
-                dashed(painter, anchor, pos2(pr.max.x, anchor.y), on_page);
-                painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
-            }
-            let card = if active {
-                active_balloon(app, ui, painter, ActiveBalloon { id: *id, thread: &thread, card, font_size: fs, color })
-            } else {
-                card_shapes(painter, &t, card, color, selected, None);
-                let text_painter = painter.with_clip_rect(card.intersect(clip));
-                let mut y = card.min.y + 6.0;
-                for (g, gap, rule, h) in lines {
-                    y += gap;
-                    if rule {
-                        // A reply starts: a hairline between it and what it answers.
-                        painter.hline(card.min.x + 10.0..=card.max.x - 8.0, y - gap / 2.0, Stroke::new(1.0, t.border));
-                    }
-                    // A body cut off at its shown rows paints none of the rows below them.
-                    let shown = if h < g.height() {
-                        text_painter.with_clip_rect(text_painter.clip_rect().intersect(Rect::from_x_y_ranges(card.x_range(), y..=y + h)))
-                    } else {
-                        text_painter.clone()
-                    };
-                    g.paint(&shown, pos2(card.min.x + 10.0, y), t.text);
-                    y += h;
-                }
-                let r = ui.interact(card, ui.scope_id().with(("balloon", *id)), Sense::click());
-                if r.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                if r.clicked() {
-                    clicked = Some((*id, pos.clone()));
-                }
-                card
-            };
-            next_y = card.max.y + 6.0;
-            app.canvas.balloon_rects.push((*id, card));
         }
+        CommentEdit::Edit { thread, index, text, .. } => {
+            let Some(id) = app_id(thread).and_then(|t| message_id(app, t, index)) else { return };
+            // An empty comment is deleted, as Word does.
+            let _ = if text.trim().is_empty() {
+                app.run("review.deleteComment", json!({"id": id}))
+            } else {
+                app.run("review.editComment", json!({"id": id, "text": text}))
+            };
+        }
+        CommentEdit::Reply { thread, text, .. } => {
+            let Some(id) = app_id(thread) else { return };
+            if !text.trim().is_empty() {
+                let _ = app.run("review.reply", json!({"id": id, "text": text.trim_end()}));
+            }
+        }
+        CommentEdit::Resolve { thread, .. } => {
+            if let Some(id) = app_id(thread) {
+                let _ = app.run("review.resolveComment", json!({"id": id}));
+            }
+        }
+        CommentEdit::Delete { thread, index, .. } => {
+            let Some(id) = app_id(thread).and_then(|t| message_id(app, t, index)) else { return };
+            if index == 0 {
+                deselect_balloon(app);
+            }
+            let _ = app.run("review.deleteComment", json!({"id": id}));
+        }
+        // The balloon cards report no other edit.
+        _ => {}
     }
-    if let Some((id, p)) = clicked {
-        select_balloon(app, id);
-        app.session.sel = wordcraft_engine::Selection::caret(p);
-    }
 }
 
-/// What a balloon in the markup area shows.
-enum Balloon {
-    Comment(u32),
-    /// A tracked formatting change, move or deletion: its author and "Formatted: …" /
-    /// "Moved from" / "Deleted: …".
-    Format(String, String),
+fn thread_id(id: u32) -> ThreadId {
+    ThreadId(u64::from(id))
 }
 
-struct BalloonItems {
-    replies: HashMap<u32, Vec<u32>>,
-    by_page: HashMap<usize, Vec<(f32, f32, Balloon, Pos)>>,
+fn app_id(thread: ThreadId) -> Option<u32> {
+    u32::try_from(thread.0).ok()
 }
 
-fn collect_items(app: &WordApp, layout: &DocLayout, only_shown: bool, shown: Option<u32>) -> BalloonItems {
+/// The ids of a thread's messages in card order: the comment, then its replies by id.
+fn message_ids(app: &WordApp, id: u32) -> Vec<u32> {
+    let mut replies: Vec<u32> = app.session.doc.comments.iter().filter(|(_, c)| c.parent == Some(id)).map(|(k, _)| *k).collect();
+    replies.sort_unstable();
+    std::iter::once(id).chain(replies).collect()
+}
+
+/// The comment id of message `index` of thread `id`.
+fn message_id(app: &WordApp, id: u32, index: usize) -> Option<u32> {
+    message_ids(app, id).get(index).copied()
+}
+
+/// Seconds since the epoch of a comment's ISO 8601 date; a date without a zone is read as UTC, an unreadable one is 0.
+fn unix_seconds(date: &str) -> i64 {
+    use chrono::{DateTime, NaiveDateTime};
+    DateTime::parse_from_rfc3339(date)
+        .map(|d| d.timestamp())
+        .or_else(|_| NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%S").map(|d| d.and_utc().timestamp()))
+        .unwrap_or(0)
+}
+
+/// The thread of comment `id`: the comment and its replies.
+fn thread_of(app: &WordApp, id: u32, page: usize, anchor: Pos2, color: Color32) -> Option<CommentThread> {
+    let root = app.session.doc.comments.get(&id)?;
+    let messages = message_ids(app, id)
+        .into_iter()
+        .filter_map(|cid| {
+            let c = app.session.doc.comments.get(&cid)?;
+            let created = c.date_utc.as_deref().map(unix_seconds).filter(|t| *t > 0).unwrap_or_else(|| unix_seconds(&c.date));
+            let text = app.session.doc.plain_text(StoryRef::Part(c.part)).trim().to_string();
+            Some(CommentMessage { author: author_name(&c.author), created, modified: None, text, reactions: Vec::new(), read: true })
+        })
+        .collect();
+    Some(CommentThread {
+        id: thread_id(id),
+        anchor: CommentAnchor::Page { page, at: [f64::from(anchor.x), f64::from(anchor.y)] },
+        kind: None,
+        color: Some([color.r(), color.g(), color.b()]),
+        messages,
+        status: ReviewStatus::None,
+        marked: false,
+        locked: false,
+        resolved: root.resolved,
+    })
+}
+
+/// The cards of the comments and tracked changes the markup preferences show: replies hang under their parent,
+/// `Selected` shows only the shown comment, and formatting, moves and deletions follow the markup preferences.
+fn collect_items(app: &WordApp, layout: &DocLayout, only_shown: bool, shown: Option<u32>, palette: &[Color32]) -> BalloonItems {
     let comments_by_id = &app.session.doc.comments;
     // Replies hang under the comment they answer rather than getting balloons of their own.
     let is_reply = |comment: &wordcraft_doc::Comment| comment.parent.is_some_and(|parent| comments_by_id.contains_key(&parent));
-    let mut replies: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (id, comment) in comments_by_id {
-        if let Some(parent) = comment.parent.filter(|_| is_reply(comment)) {
-            replies.entry(parent).or_default().push(*id);
-        }
-    }
-    let mut by_page: HashMap<usize, Vec<(f32, f32, Balloon, Pos)>> = HashMap::new();
+    let mut cards: Vec<Card> = Vec::new();
+    let mut authors: Vec<String> = Vec::new();
+    let mut color_of = |author: &str| {
+        let ai = authors.iter().position(|a| a == author).unwrap_or_else(|| {
+            authors.push(author.to_string());
+            authors.len() - 1
+        });
+        palette.get(ai % palette.len().max(1)).copied().unwrap_or(Color32::GRAY)
+    };
     let markup = &app.session.prefs.markup;
     let comments = if markup.comments { wordcraft_engine::cmd::review::comment_list(&app.session) } else { Vec::new() };
     for (id, pos) in comments {
         let Some(pos) = pos else { continue };
-        if comments_by_id.get(&id).is_some_and(is_reply) || (only_shown && shown != Some(id)) {
+        let Some(comment) = comments_by_id.get(&id) else { continue };
+        if is_reply(comment) || (only_shown && shown != Some(id)) {
             continue;
         }
-        add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Comment(id));
+        let Some(anchor) = anchor_of(layout, app.session.page_hint, &pos) else { continue };
+        let color = color_of(&author_name(&comment.author));
+        if let Some(thread) = thread_of(app, id, anchor.0, anchor.1, color) {
+            cards.push(Card { page: anchor.0, anchor: anchor.1, pos, what: What::Thread(thread) });
+        }
     }
+    let revision = |cards: &mut Vec<Card>, pos: Pos, kind: RevisionKind, author: String, text: String| {
+        if let Some((page, anchor)) = anchor_of(layout, app.session.page_hint, &pos) {
+            let revision = Revision { kind, heading: author_name(&author), details: vec![text] };
+            cards.push(Card { page, anchor, pos, what: What::Revision(revision) });
+        }
+    };
     if markup.formatting {
-        for (pos, author, props) in wordcraft_engine::cmd::review::format_changes(&app.session).into_iter().take(500) {
+        for (pos, author, props) in wordcraft_engine::cmd::review::format_changes(&app.session).into_iter().take(MAX_REVISIONS) {
             let what = crate::panes::describe_props(&props).join(", ");
             let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
-            add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));
+            revision(&mut cards, pos, RevisionKind::Changed, author, text);
         }
     }
     if markup.insertions_deletions {
-        for (pos, author, from) in wordcraft_engine::cmd::review::move_changes(&app.session).into_iter().take(500) {
-            let text = if from { tl!("Moved from") } else { tl!("Moved to") }.to_string();
-            add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));
+        for (pos, author, from) in wordcraft_engine::cmd::review::move_changes(&app.session).into_iter().take(MAX_REVISIONS) {
+            let (kind, text) = if from { (RevisionKind::Deleted, tl!("Moved from")) } else { (RevisionKind::Inserted, tl!("Moved to")) };
+            revision(&mut cards, pos, kind, author, text.to_string());
         }
     }
     if app.session.revisions_in_balloons() {
         for deletion in wordcraft_engine::cmd::review::deletion_balloons(&app.session) {
             let text = format!("{}: {}", tl!("Deleted"), deletion.text);
-            add_balloon_anchor(&mut by_page, layout, app.session.page_hint, deletion.at, Balloon::Format(deletion.author, text));
+            revision(&mut cards, deletion.at, RevisionKind::Deleted, deletion.author, text);
         }
     }
-    BalloonItems { replies, by_page }
+    BalloonItems { cards }
 }
 
-fn add_balloon_anchor(by_page: &mut HashMap<usize, Vec<(f32, f32, Balloon, Pos)>>, layout: &DocLayout, page_hint: usize, pos: Pos, item: Balloon) {
-    let Some(caret) = layout.caret_on(&pos, page_hint) else { return };
-    by_page.entry(caret.page).or_default().push((caret.x, caret.top + caret.height, item, pos));
-}
-
-struct ActiveBalloon<'a> {
-    id: u32,
-    thread: &'a [u32],
-    card: Rect,
-    font_size: f32,
-    color: Color32,
+/// The page and the point (page points) a card at `pos` hangs from: the bottom of the commented line.
+fn anchor_of(layout: &DocLayout, page_hint: usize, pos: &Pos) -> Option<(usize, Pos2)> {
+    let caret = layout.caret_on(pos, page_hint)?;
+    Some((caret.page, Pos2::new(caret.x, caret.top + caret.height)))
 }
 
 fn author_name(a: &str) -> String {
     if a.is_empty() { tl!("Author").to_string() } else { a.to_string() }
 }
 
-/// A balloon card's background, border and author-colour stripe; `slot` paints them under
-/// widgets added before the card's size was known.
-fn card_shapes(painter: &egui::Painter, t: &Tokens, card: Rect, color: Color32, selected: bool, slot: Option<egui::layers::ShapeIdx>) {
-    let shapes = vec![
-        egui::Shape::rect_filled(card.translate(vec2(0.0, 1.0)), 4.0, t.page_shadow),
-        egui::Shape::rect_filled(card, 4.0, if selected { t.checked } else { t.balloon }),
-        egui::Shape::rect_stroke(card, 4.0, Stroke::new(if selected { 1.5 } else { 1.0 }, color), egui::StrokeKind::Inside),
-        egui::Shape::rect_filled(Rect::from_min_size(card.min, vec2(4.0, card.height())), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color),
-    ];
-    match slot {
-        Some(i) => painter.set(i, egui::Shape::Vec(shapes)),
-        None => {
-            painter.extend(shapes);
-        }
-    }
-}
-
-/// The height of a balloon body's first [`COMMENT_ROWS`](crate::panes::COMMENT_ROWS) rows; the
-/// rest is cut off until the balloon is selected and its field scrolls.
-fn shown_height(g: &craft_ui::text::AlignedGalley) -> f32 {
-    match g {
-        craft_ui::text::AlignedGalley::Aligned { galley, .. } => galley.rows.get(crate::panes::COMMENT_ROWS).map_or(g.height(), |r| r.pos.y),
-        craft_ui::text::AlignedGalley::InvalidWidth { .. } => g.height(),
-    }
-}
-
-/// A read-only balloon's text, wrapped to `width`. The fork's layout orders right-to-left and
-/// mixed-direction paragraphs itself; `TextDirection::Auto` takes each paragraph's first strong
-/// character. Place each already-shaped row against the card's start edge, including neutral
-/// paragraphs inheriting their predecessor's direction. Logical text and glyph order stay intact.
-pub(super) fn balloon_text(painter: &egui::Painter, text: String, font: egui::FontId, color: Color32, width: f32) -> craft_ui::text::AlignedGalley {
-    let mut job = egui::text::LayoutJob::simple(text, font, color, width);
-    job.direction = egui::epaint::text::TextDirection::Auto;
-    job.halign = egui::Align::Min;
-    // Row placement below supplies the reading edge, including empty RTL rows.
-    job.halign_min_is_start = false;
-    craft_ui::text::align_galley_rows(painter.layout_job(job), width, |row| if row.rtl_paragraph { egui::Align::Max } else { egui::Align::Min })
-}
-
-/// The selected balloon: the comment and its replies, each with who wrote it and when, as
-/// editable fields (each edit is one undo step via `review.editComment`), an optional reply
-/// field, and Reply / Resolve / Delete.
-/// `card` carries last frame's size; returns this frame's.
-fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, balloon: ActiveBalloon<'_>) -> Rect {
-    let ActiveBalloon { id, thread, card, font_size: fs, color } = balloon;
-    let t = Tokens::get(ui.ctx());
-    let slot = painter.add(egui::Shape::Noop);
-    // The card's own click area sits under its fields, so a click on its padding stays here.
-    let _ = ui.interact(card, ui.scope_id().with(("balloon", id)), Sense::click());
-    let inner = Rect::from_min_max(pos2(card.min.x + 10.0, card.min.y + 6.0), pos2(card.max.x - 6.0, card.min.y + 20_000.0));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
-    child.spacing_mut().item_spacing.y = 3.0;
-    let (font, bold, small) = (regular(fs), semibold(fs), regular((fs * 0.9).max(8.0)));
-    let focus = std::mem::take(&mut app.canvas.balloon_focus);
-    let name = |app: &WordApp, cid: u32| app.session.doc.comments.get(&cid).map(|c| author_name(&c.author)).unwrap_or_default();
-    // When it was written, in local time, under the author.
-    let when = |app: &WordApp, ui: &mut Ui, cid: u32| {
-        let when = app.session.doc.comments.get(&cid).map(crate::local_time::comment_time).unwrap_or_default();
-        if !when.is_empty() {
-            ui.label(egui::RichText::new(when).font(small.clone()).color(t.text_dim));
-        }
-    };
-    let resolved = app.session.doc.comments.get(&id).is_some_and(|c| c.resolved);
-    child.horizontal(|ui| {
-        ui.label(egui::RichText::new(name(app, id)).font(bold.clone()).color(t.text));
-        if resolved {
-            ui.label(egui::RichText::new(tl!("Resolved")).font(small.clone()).color(t.resolved_text));
-        }
-    });
-    when(app, &mut child, id);
-    crate::panes::comment_editor(app, &mut child, id, Some(font.clone()), focus && !app.canvas.balloon_reply);
-    for rid in thread {
-        child.add_space(4.0);
-        child.label(egui::RichText::new(name(app, *rid)).font(bold.clone()).color(t.text));
-        when(app, &mut child, *rid);
-        crate::panes::comment_editor(app, &mut child, *rid, Some(font.clone()), false);
-    }
-    if app.canvas.balloon_reply && crate::panes::reply_editor(app, &mut child, id, Some(font.clone()), focus) {
-        app.canvas.balloon_reply = false;
-    }
-    let (mut reply, mut resolve, mut delete) = (false, false, false);
-    child.add_space(2.0);
-    child.horizontal(|ui| {
-        let button = |ui: &mut Ui, s: &str| ui.add(egui::Button::new(egui::RichText::new(s).font(small.clone())).small()).clicked();
-        reply = button(ui, tl!("Reply"));
-        resolve = button(ui, if resolved { tl!("Reopen") } else { tl!("Resolve") });
-        delete = button(ui, tl!("Delete"));
-    });
-    let card = Rect::from_min_max(card.min, pos2(card.max.x, child.min_rect().max.y + 6.0));
-    app.canvas.balloon_h = card.height();
-    card_shapes(painter, &t, card, color, true, Some(slot));
-    if reply {
-        app.canvas.balloon_reply = true;
-        app.canvas.balloon_focus = true;
-    }
-    if resolve {
-        let _ = app.run("review.resolveComment", json!({"id": id}));
-    }
-    if delete {
-        deselect_balloon(app);
-        let _ = app.run("review.deleteComment", json!({"id": id}));
-    }
-    card
-}
-
-/// Select a comment's balloon (its text gets the keyboard), writing back any edit in the one
-/// selected before.
-pub fn select_balloon(app: &mut WordApp, id: u32) {
-    if app.canvas.balloon == Some(id) {
-        return;
-    }
-    deselect_balloon(app);
-    app.canvas.balloon = Some(id);
-    app.canvas.balloon_focus = true;
-    app.canvas.balloon_h = 0.0;
-}
-
-/// A press over a balloon card belongs to the card, though the canvas under it also contains the pointer (#1013).
-pub(super) fn over_balloon(app: &WordApp, p: Pos2) -> bool {
-    app.canvas.balloon_rects.iter().any(|(_, r)| r.contains(p))
-}
-
-/// Leave the selected balloon, writing back what was typed in it (its fields may not be drawn
-/// again to notice they lost focus).
-pub fn deselect_balloon(app: &mut WordApp) {
-    let Some(id) = app.canvas.balloon.take() else { return };
-    app.canvas.balloon_reply = false;
-    app.canvas.balloon_focus = false;
-    let thread: Vec<u32> =
-        std::iter::once(id).chain(app.session.doc.comments.iter().filter(|(_, c)| c.parent == Some(id)).map(|(k, _)| *k)).collect();
-    for c in thread {
+/// Writes back the drafts of the thread of comment `id`: each message's edit and the reply.
+fn write_back(app: &mut WordApp, id: u32) {
+    for c in message_ids(app, id) {
         // A refusal is on the status line; the draft stays for when the balloon is selected again.
         let _ = crate::panes::commit_comment(app, c);
     }
     let _ = crate::panes::commit_reply(app, id);
 }
 
-pub(super) fn dashed(p: &egui::Painter, a: Pos2, b: Pos2, s: Stroke) {
-    p.extend(egui::Shape::dashed_line(&[a, b], s, 4.0, 3.0));
+/// Makes comment `id` the selected card with its own text open for editing, writing back the draft of the one edited
+/// before. The card selects itself on a click; this opens its edit so the field has the keyboard.
+fn focus_balloon(app: &mut WordApp, id: u32) {
+    let before = app.canvas.comments.editing.as_ref().and_then(|(t, ..)| app_id(*t)).filter(|b| *b != id);
+    if let Some(before) = before {
+        write_back(app, before);
+    }
+    // Where comments can't change (a read-only document) the card is selected with no edit open: nothing is typed.
+    let editable = crate::app::command_board::command_enabled(app, "review.editComment");
+    let text = app.session.doc.comments.get(&id).filter(|_| editable).map(|c| app.session.doc.plain_text(StoryRef::Part(c.part)));
+    let thread = thread_id(id);
+    let comments = &mut app.canvas.comments;
+    comments.selected = Some(thread);
+    if comments.editing.as_ref().is_none_or(|(t, ..)| *t != thread) {
+        comments.editing = text.map(|t| (thread, 0, t));
+    }
+}
+
+/// Select a comment's balloon (its text gets the keyboard), writing back any edit in the one selected before.
+pub fn select_balloon(app: &mut WordApp, id: u32) {
+    if app.canvas.selected_balloon() == Some(id) {
+        return;
+    }
+    deselect_balloon(app);
+    focus_balloon(app, id);
+}
+
+/// Leave the selected balloon, writing back what was typed in it (its fields may not be drawn again to notice they
+/// lost focus).
+pub fn deselect_balloon(app: &mut WordApp) {
+    let Some(id) = app.canvas.selected_balloon() else { return };
+    // What was written is cleared by the write; a draft the document refused (read-only protection) stays, with its
+    // reason on the status line, for when the balloon is selected again or the document is saved or closed (#1348).
+    write_back(app, id);
+    app.canvas.comments.selected = None;
 }
