@@ -741,14 +741,7 @@ pub(crate) mod testing {
 
     /// A harness that runs the app's logic and UI each frame in a 1440×900 window.
     pub(crate) fn harness(app: WordApp) -> Harness<'static, WordApp> {
-        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                crate::test_harness::driver_logic(&ctx, app);
-                app.ui(ui);
-            },
-            app,
-        )
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app)
     }
 
     /// Confirms the dialog `id` as OK does and runs the passes it takes to file the held OK and finish: the held OK
