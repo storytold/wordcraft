@@ -51,6 +51,7 @@ craft = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e8
 craft-ui-test-kit = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", version = "=0.1.0" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", version = "=0.1.0" }
+wordcraft-webdav = { path = "crates/webdav" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
