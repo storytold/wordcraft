@@ -83,6 +83,7 @@ pub(crate) fn cjk_stand_in(ctx: &egui::Context) {
         matches!(
             u32::from(c),
             0x1100..=0x11FF
+                | 0x2190..=0x21FF
                 | 0x2E80..=0x2FDF
                 | 0x3000..=0x30FF
                 | 0x3130..=0x318F

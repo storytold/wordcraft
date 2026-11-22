@@ -2437,11 +2437,26 @@ fn renaming_a_saved_file_keeps_autosave_and_replaces_its_recent_entry() {
     let mut a = typed();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(a.autosaves());
+    let opened = a.ui.recent[0].last_opened.clone();
+    a.ui.recent.insert(
+        0,
+        RecentDocument {
+            path: renamed.to_string_lossy().into_owned(),
+            last_opened: "stale destination timestamp".into(),
+            modified: "stale destination date".into(),
+        },
+    );
+    a.ui.recent_metadata.insert(
+        renamed.to_string_lossy().into_owned(),
+        RecentMetadata { last_opened: "stale destination timestamp".into(), modified: "stale destination date".into() },
+    );
     a.run("file.rename", json!({"name": "Notes v2"})).unwrap();
     assert_eq!(a.session.path.as_deref(), Some(renamed.as_path()));
     assert!(a.autosaves(), "AutoSave still covers the renamed file");
-    assert_eq!(a.ui.recent.first(), Some(&renamed.to_string_lossy().to_string()));
-    assert!(!a.ui.recent.contains(&path.to_string_lossy().to_string()), "{:?}", a.ui.recent);
+    assert_eq!(a.ui.recent.first().map(|r| r.path.as_str()), Some(renamed.to_string_lossy().as_ref()));
+    assert_eq!(a.ui.recent.first().map(|r| r.last_opened.as_str()), Some(opened.as_str()), "rename preserves the Recent timestamp");
+    assert_eq!(a.ui.recent.iter().filter(|r| r.path == renamed.to_string_lossy()).count(), 1, "rename replaces a stale destination entry");
+    assert!(!a.ui.recent.iter().any(|r| r.path == path.to_string_lossy()), "{:?}", a.ui.recent);
     a.run("text.insert", json!({"text": "More "})).unwrap();
     a.autosave_tick(monotonic_ms() + 10_000.0);
     assert!(!a.session.dirty, "AutoSave wrote the renamed file");

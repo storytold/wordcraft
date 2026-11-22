@@ -40,7 +40,10 @@ pub struct Prefs {
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
     pub quick_access_toolbar: bool,
-    pub recent: Vec<String>,
+    #[serde(deserialize_with = "crate::lenient_recent_documents")]
+    pub recent: Vec<crate::RecentDocument>,
+    /// Timestamps for `recent`, stored separately so older builds keep reading the path list.
+    pub recent_metadata: std::collections::BTreeMap<String, crate::RecentMetadata>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
     /// Saved choices in Insert > Date & Time: format picture.
@@ -180,6 +183,7 @@ impl Default for Prefs {
             ribbon_collapsed: false,
             quick_access_toolbar: true,
             recent: Vec::new(),
+            recent_metadata: Default::default(),
             recent_symbols: Vec::new(),
             date_time_format: String::new(),
             date_time_language: String::new(),
@@ -247,7 +251,9 @@ impl Settings for Prefs {
     /// groups key by key, and every other setting as a whole: this process's value wins.
     fn merge_rule(path: &[&str]) -> MergeRule {
         match path {
-            [] | ["editing" | "keyboard" | "ribbon" | "panePlaces"] | ["editing", "markup" | "marks" | "autocorrect"] => MergeRule::ByKey,
+            [] | ["editing" | "keyboard" | "ribbon" | "panePlaces" | "recentMetadata"] | ["editing", "markup" | "marks" | "autocorrect"] => {
+                MergeRule::ByKey
+            }
             ["recent"] => MergeRule::Recent { cap: MAX_RECENT, key: text_key },
             ["recentSymbols"] => MergeRule::Recent { cap: dialogs_insert::RECENT_SYMBOLS, key: text_key },
             ["recentColors"] => MergeRule::Recent { cap: crate::colors::RECENT_MAX, key: text_key },
@@ -303,6 +309,12 @@ pub fn legacy_ui_json(bytes: &[u8]) -> Result<(Prefs, Vec<SectionError>), String
     let recent_fonts = map.remove("recentFonts");
     migrate_units_of(&mut v);
     let (mut prefs, mut errors) = lenient(&v);
+    for entry in &mut prefs.recent {
+        if let Some(metadata) = prefs.recent_metadata.get(&entry.path) {
+            entry.last_opened = metadata.last_opened.clone();
+            entry.modified = metadata.modified.clone();
+        }
+    }
     if let Some(saved) = keyboard {
         match legacy_keyboard(&saved) {
             Some(overrides) => {

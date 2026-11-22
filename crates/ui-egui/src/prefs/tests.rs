@@ -205,7 +205,7 @@ fn recent_list_edits_are_final_and_persist() {
     a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
     a.session.path = Some(std::path::PathBuf::from("/tmp/beta.docx"));
     let r = a.run("ui.recentRemove", json!({"path": "/tmp/beta.docx"})).unwrap();
-    assert_eq!((r["removed"].clone(), r["saved"].clone()), (json!(1), json!(true)));
+    assert_eq!((r["removed"].clone(), r["saved"].clone()), (json!(true), json!(true)));
     assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "the open document stays off the list");
     assert!(a.run("ui.recentRemove", json!({"path": "/tmp/gamma.docx"})).is_err());
     for junk in [json!({}), json!({"path": 7}), json!({"path": null})] {

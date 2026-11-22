@@ -58,6 +58,7 @@ craft = { workspace = true, features = ["dialogs", "update"] }
 js-sys = "0.3"
 
 [dev-dependencies]
+craft = { workspace = true, features = ["ui-testing"] }
 cfb = { workspace = true }
 # Producer tests simulate a globally exhausted IME revision allocator through the engine's
 # explicit test-support feature; production builds of this crate never enable it.

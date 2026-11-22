@@ -50,7 +50,7 @@ pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
-mod local_time;
+pub(crate) mod local_time;
 pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
@@ -65,6 +65,7 @@ pub mod proofing_pane;
 pub mod read_aloud;
 mod restrict_pane;
 pub mod ribbon;
+pub mod rtl;
 mod save_types;
 pub mod scroll;
 pub use scroll::ScrollSpeed;
@@ -137,6 +138,129 @@ struct SaveInFlight {
     /// Puts back what a Save stamped (zoom, author, dates, revision) and the dirty flag, when the
     /// save doesn't reach its destination and nothing was edited since. `None` for an export.
     undo_stamp: Option<Box<dyn FnOnce(&mut wordcraft_engine::Session)>>,
+}
+
+/// A document in File's Recent list. `last_opened` and `modified` are ISO-8601 UTC timestamps;
+/// empty values are legacy or unavailable metadata and are never looked up while the list draws.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecentDocument {
+    pub path: String,
+    pub last_opened: String,
+    pub modified: String,
+}
+
+/// Keep `recent` compatible with older WordCraft builds, which expect an array of paths.
+impl Serialize for RecentDocument {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.path)
+    }
+}
+
+impl<'de> Deserialize<'de> for RecentDocument {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = RecentDocument;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a path string or a recent document object")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<RecentDocument, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RecentDocument { path: v.to_string(), last_opened: String::new(), modified: String::new() })
+            }
+            fn visit_string<E>(self, v: String) -> Result<RecentDocument, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(RecentDocument { path: v, last_opened: String::new(), modified: String::new() })
+            }
+            fn visit_map<M>(self, mut map: M) -> Result<RecentDocument, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let mut path = None;
+                let mut last_opened = String::new();
+                let mut modified = String::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "path" => path = map.next_value()?,
+                        "lastOpened" => last_opened = map.next_value()?,
+                        "modified" => modified = map.next_value()?,
+                        _ => {
+                            let _ = map.next_value::<serde_json::Value>()?;
+                        }
+                    }
+                }
+                let path = path.unwrap_or_default();
+                Ok(RecentDocument { path, last_opened, modified })
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+impl From<&str> for RecentDocument {
+    fn from(path: &str) -> Self {
+        RecentDocument { path: path.to_string(), last_opened: String::new(), modified: String::new() }
+    }
+}
+
+impl From<String> for RecentDocument {
+    fn from(path: String) -> Self {
+        RecentDocument { path, last_opened: String::new(), modified: String::new() }
+    }
+}
+
+impl PartialEq<str> for RecentDocument {
+    fn eq(&self, other: &str) -> bool {
+        self.path == other
+    }
+}
+
+impl PartialEq<&str> for RecentDocument {
+    fn eq(&self, other: &&str) -> bool {
+        self.path == *other
+    }
+}
+
+impl PartialEq<String> for RecentDocument {
+    fn eq(&self, other: &String) -> bool {
+        &self.path == other
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentMetadata {
+    pub last_opened: String,
+    pub modified: String,
+}
+
+/// Load legacy path strings and timestamped Recent entries, dropping malformed values individually.
+pub fn lenient_recent_documents<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<RecentDocument>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry.as_str().map(|path| RecentDocument { path: path.to_string(), last_opened: String::new(), modified: String::new() }).or_else(|| {
+                let object = entry.as_object()?;
+                Some(RecentDocument {
+                    path: object.get("path")?.as_str()?.to_string(),
+                    last_opened: object.get("lastOpened").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    modified: object.get("modified").and_then(Value::as_str).unwrap_or_default().to_string(),
+                })
+            })
+        })
+        .collect())
 }
 
 /// File › Options › Advanced › Linux display server (#2184, `ui.displayServer`): how the desktop

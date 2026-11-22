@@ -4,7 +4,8 @@ use craft::host::{Picked, ScriptedFiles};
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
-use crate::{Services, WordApp};
+use super::{HOME_TEMPLATES, TEMPLATES};
+use crate::{RecentDocument, Services, WordApp};
 
 /// A window with an empty document.
 fn new_app() -> WordApp {
@@ -29,6 +30,10 @@ fn harness(a: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordA
     );
     h.run_steps(4);
     h
+}
+
+fn a11y_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+    harness(a, egui::vec2(1440.0, 900.0))
 }
 
 /// A 1440 × 900 window showing File on `page`.
@@ -64,7 +69,7 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     let missing = std::env::temp_dir().join(format!("wordcraft-missing-{}.docx", std::process::id()));
     let name = missing.file_name().unwrap().to_string_lossy().into_owned();
     let mut a = new_app();
-    a.ui.recent = vec![missing.to_string_lossy().into_owned()];
+    a.ui.recent = vec![missing.to_string_lossy().into_owned().into()];
     let mut h = file_page(a, "open");
     recent_row(&h, name.as_str()).expect("the missing file's row shows").focus();
     h.run_steps(2);
@@ -449,28 +454,190 @@ fn an_unusable_saved_folder_falls_back_to_the_apps_own() {
     let _ = std::fs::remove_dir_all(&own);
 }
 
-/// A recent row's Remove (the Delete key on the focused row) and Clear Recent Files (the row's
-/// context menu) end in `ui.recentRemove` and `ui.recentClear`: the app's list loses one entry,
-/// then all of them, and the page stays open.
+/// Home and New are different pages (#141): Home has the short template row, the link to New
+/// and Recent; New has every template and no Recent list.
 #[test]
-fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
-    let mut a = new_app();
-    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
-    let mut h = file_page(a, "open");
-    assert!(recent_row(&h, "alpha.docx").is_some() && recent_row(&h, "beta.docx").is_some(), "both rows show");
-    recent_row(&h, "alpha.docx").expect("alpha's row shows").focus();
+fn home_and_new_show_different_sections() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = a11y_harness(a);
+    assert!(h.query_by_label("Recent").is_some(), "Home lists recent documents");
+    assert!(h.query_by_label("Letter").is_some(), "Home shows the first templates");
+    assert!(h.query_by_label("Report").is_none(), "Home shows only a short row of templates");
+    h.get_by_label("More templates →").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.backstage_page, "new", "the link opens New");
+    assert!(h.query_by_label("Report").is_some(), "New shows every template");
+    assert!(h.query_by_label("Recent").is_none(), "New has no Recent list");
+}
+
+/// #3176: a screen reader finds each template and each recent document as a button named by
+/// its caption or file name (they were unnamed text), and pressing one opens it.
+#[test]
+fn templates_and_recent_documents_are_named_buttons() {
+    use egui::accesskit::Role;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    let dir = std::env::temp_dir().join("wordcraft-3176-missing");
+    let path = |folder: &str, file: &str| dir.join(folder).join(file).to_string_lossy().into_owned();
+    let (spring, autumn) = (path("spring", "Report.docx"), path("autumn", "Report.docx"));
+    a.ui.recent = vec![
+        RecentDocument { path: path("notes", "Quarterly notes.docx"), last_opened: String::new(), modified: "2026-10-30".into() },
+        RecentDocument { path: spring.clone(), last_opened: String::new(), modified: "2026-10-30".into() },
+        RecentDocument { path: autumn.clone(), last_opened: String::new(), modified: "2026-10-30".into() },
+    ];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = a11y_harness(a);
+    for (label, _) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
+        assert!(h.query_by_role_and_label(Role::Button, label).is_some(), "{label} is a named button");
+    }
+    let edited = crate::local_time::local_display_date("2026-10-30").unwrap_or_else(|| "Unknown".into());
+    let unique = format!("Quarterly notes.docx, {}, Last opened: Unknown, Last edited: {edited}", path("notes", "Quarterly notes.docx"));
+    assert!(h.query_by_role_and_label(Role::Button, &unique).is_some(), "a unique recent filename includes its path and date: {unique}");
+    for p in [&spring, &autumn] {
+        let label = format!("Report.docx, {p}, Last opened: Unknown, Last edited: {edited}");
+        assert!(h.query_by_role_and_label(Role::Button, &label).is_some(), "a repeated file name is told apart by its path: {label}");
+    }
+    h.get_by_role_and_label(Role::Button, "Letter").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.backstage, "the Letter button opens the template");
+    assert!(!h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "with the template's text");
+}
+
+/// #2716: Recent documents share one table, including legacy path-only entries with unknown dates.
+#[test]
+fn recent_documents_are_listed_in_one_table() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec![
+        RecentDocument { path: "/tmp/today.docx".into(), last_opened: wordcraft_engine::cmd::now_iso(), modified: String::new() },
+        RecentDocument { path: "/tmp/legacy.docx".into(), last_opened: String::new(), modified: String::new() },
+        RecentDocument { path: "/tmp/older.docx".into(), last_opened: "2000-01-01T00:00:00Z".into(), modified: String::new() },
+    ];
+    a.ui.backstage = true;
+    a.ui.backstage_page = "home".into();
+    let mut h = a11y_harness(a);
+    assert!(h.query_by_label("Today").is_none());
+    assert!(h.query_by_label("Older").is_none());
+    assert!(h.query_by_label("Name").is_some());
+    assert!(h.query_all_by_label_contains("today.docx").next().is_some());
+    assert!(h.query_all_by_label_contains("legacy.docx").next().is_some());
+    assert!(h.query_all_by_label_contains("older.docx").next().is_some());
+    h.get_by_label("Recent").click();
     h.run_steps(2);
-    h.key_press(egui::Key::Delete);
-    h.run_steps(4);
-    assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "Remove takes its own row");
-    assert!(h.state().ui.backstage, "removing opens nothing");
-    assert!(recent_row(&h, "alpha.docx").is_none() && recent_row(&h, "beta.docx").is_some());
-    recent_row(&h, "beta.docx").expect("beta's row shows").click_secondary();
-    h.run_steps(3);
-    h.get_by_label("Clear Recent Files").click();
-    h.run_steps(4);
-    assert!(h.state().ui.recent.is_empty(), "Clear empties the list");
-    assert!(recent_row(&h, "beta.docx").is_none());
+    assert!(h.query_by_label("Clear Recent").is_some());
+    h.get_by_label("Clear Recent").click();
+    h.run_steps(2);
+    assert!(!h.state().ui.recent.is_empty(), "clearing requires confirmation");
+    let recent_before_cancel = h.state().ui.recent.clone();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.backstage, "Escape cancels the confirmation without leaving Backstage");
+    assert_eq!(h.state().ui.backstage_page, "home", "Recent stays visible after cancelling");
+    assert_eq!(h.state().ui.recent, recent_before_cancel, "cancelling leaves the Recent entries unchanged");
+    assert!(h.query_by_label("Clear").is_none(), "Escape closes the confirmation");
+    h.get_by_label("Recent").click();
+    h.run_steps(2);
+    h.get_by_label("Clear Recent").click();
+    h.run_steps(2);
+    h.get_by_label("Clear").click();
+    h.run_steps(2);
+    assert!(h.state().ui.recent.is_empty(), "the Recent menu clears the persisted list after confirmation");
+}
+
+#[test]
+fn empty_recent_list_explains_how_to_open_a_document() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.ui.backstage = true;
+    app.ui.backstage_page = "home".into();
+    let h = a11y_harness(app);
+    assert!(h.query_by_label("Documents you open will show up here.").is_some());
+    assert!(h.query_by_label("Name").is_none());
+}
+
+#[test]
+fn recent_actions_use_ui_commands() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.ui.recent = vec![RecentDocument { path: "/tmp/remove.docx".into(), last_opened: String::new(), modified: String::new() }];
+    let removed = app.run("ui.recentRemove", json!({"path": "/tmp/remove.docx"})).unwrap();
+    assert_eq!(removed["removed"], true);
+    assert!(app.ui.recent.is_empty());
+    app.ui.recent.push(RecentDocument { path: "/tmp/clear.docx".into(), last_opened: String::new(), modified: String::new() });
+    let cleared = app.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!(cleared["cleared"], true);
+    assert!(app.ui.recent.is_empty());
+}
+
+#[test]
+fn recent_show_in_folder_uses_the_host_service() {
+    let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let seen = shown.clone();
+    let mut app = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+        Services {
+            show_in_folder: Some(Box::new(move |path| {
+                *seen.borrow_mut() = Some(path.to_path_buf());
+                Ok(())
+            })),
+            ..Default::default()
+        },
+    );
+    app.ui.recent.push(RecentDocument { path: "/tmp/report.docx".into(), last_opened: String::new(), modified: String::new() });
+    assert!(app.run("ui.recentShowInFolder", json!({"path": "/tmp/unlisted.docx"})).is_err());
+    assert!(shown.borrow().is_none());
+    assert_eq!(app.run("ui.recentShowInFolder", json!({"path": "/tmp/report.docx"})).unwrap(), json!({"shown": true}));
+    assert_eq!(shown.borrow().as_deref(), Some(std::path::Path::new("/tmp/report.docx")));
+}
+
+#[test]
+fn recent_context_menu_shows_in_folder() {
+    let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let seen = shown.clone();
+    let mut app = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+        Services {
+            show_in_folder: Some(Box::new(move |path| {
+                *seen.borrow_mut() = Some(path.to_path_buf());
+                Ok(())
+            })),
+            ..Default::default()
+        },
+    );
+    app.ui.recent.push(RecentDocument { path: "/tmp/report.docx".into(), last_opened: String::new(), modified: String::new() });
+    app.ui.backstage = true;
+    app.ui.backstage_page = "home".into();
+    let mut h = a11y_harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "report.docx, /tmp/report.docx, Last opened: Unknown, Last edited: Unknown")
+        .click_secondary();
+    h.run_steps(2);
+    assert!(h.query_by_label("Show in folder").is_some());
+    h.get_by_label("Show in folder").click();
+    h.run_steps(2);
+    assert_eq!(shown.borrow().as_deref(), Some(std::path::Path::new("/tmp/report.docx")));
+}
+
+#[test]
+fn recent_show_in_folder_error_uses_a_translatable_message() {
+    let mut app = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+        Services { show_in_folder: Some(Box::new(|_| Err("platform-specific failure".into()))), ..Default::default() },
+    );
+    app.ui.recent = vec![RecentDocument { path: "/tmp/report.docx".into(), last_opened: String::new(), modified: String::new() }];
+    app.ui.backstage = true;
+    app.ui.backstage_page = "home".into();
+    let mut h = a11y_harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "report.docx, /tmp/report.docx, Last opened: Unknown, Last edited: Unknown")
+        .click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Show in folder").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Couldn't show this file in its folder.").is_some());
+    assert!(h.query_by_label("platform-specific failure").is_none());
+}
+
+#[test]
+fn recent_actions_work_without_a_document() {
+    assert!(crate::works_without_document("ui.recentClear"));
+    assert!(crate::works_without_document("ui.recentRemove"));
+    assert!(crate::works_without_document("ui.recentShowInFolder"));
 }
 
 /// #260, #262: the Info fields once lost typed text when File was left by Escape (or the
@@ -839,4 +1006,98 @@ fn a_file_pages_title_is_productions_size() {
         assert!((title.size - 26.0).abs() < 0.5, "the page title is 26 pt in {size:?}: {title:?}");
         assert!(title.size > section.size + 6.0, "the title stands above a section heading: {title:?} over {section:?}");
     }
+}
+
+/// #2716: `recent_files` reads document timestamps from disk when the file exists, and leaves them
+/// `None` when the file does not exist.
+#[test]
+fn recent_files_reads_timestamps_for_existing_files() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-recent-ts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file_path = dir.join("test.docx");
+    std::fs::write(&file_path, "content").unwrap();
+    let missing_path = dir.join("missing.docx");
+
+    let mut a = new_app();
+    a.ui.recent = vec![file_path.to_string_lossy().into_owned().into(), missing_path.to_string_lossy().into_owned().into()];
+
+    let files = super::home::recent_files(&a);
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].name, "test.docx");
+    assert!(files[0].opened.is_some(), "existing file has a timestamp");
+    assert_eq!(files[1].name, "missing.docx");
+    assert_eq!(files[1].opened, None, "missing file has no timestamp");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #2716: `ui.recentShowInFolder` delegates to `Services::show_in_folder` for files on the recent list.
+#[test]
+fn recent_show_in_folder_invokes_service() {
+    let called = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let called_clone = called.clone();
+
+    let services = crate::Services {
+        show_in_folder: Some(Box::new(move |path| {
+            called_clone.lock().unwrap().push(path.to_path_buf());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    a.ui.recent = vec!["/tmp/doc1.docx".into()];
+
+    // Fails for a file not on the recent list.
+    let err = a.run("ui.recentShowInFolder", json!({"path": "/tmp/other.docx"})).unwrap_err();
+    assert!(err.contains("not on the recent list"));
+    assert!(called.lock().unwrap().is_empty());
+
+    // Succeeds for a file on the recent list.
+    let res = a.run("ui.recentShowInFolder", json!({"path": "/tmp/doc1.docx"})).unwrap();
+    assert_eq!(res["shown"], true);
+    assert_eq!(*called.lock().unwrap(), vec![std::path::PathBuf::from("/tmp/doc1.docx")]);
+}
+
+#[test]
+fn recent_columns_mirror_without_changing_widths() {
+    let row = egui::Rect::from_min_size(egui::pos2(50.0, 20.0), egui::vec2(700.0, 56.0));
+    for (inset, width) in [(52.0, 384.0), (448.0, 120.0), (580.0, 120.0)] {
+        let left = super::recent_cell(row, false, inset, width);
+        let right = super::recent_cell(row, true, inset, width);
+        assert_eq!(left.width(), right.width());
+        assert_eq!(left.min.x - row.min.x, row.max.x - right.max.x);
+        assert!(row.contains_rect(left) && row.contains_rect(right));
+    }
+}
+
+#[test]
+fn recent_cells_stay_bounded_in_tiny_windows() {
+    for width in [0.0, 30.0, 100.0, 320.0, 700.0] {
+        let row = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(width, 56.0));
+        let (icon, name, date, gap) = super::recent_columns(width);
+        for rtl in [false, true] {
+            for (inset, size) in [(icon, name), (icon + name + gap, date), (icon + name + gap + date + gap, date)] {
+                let cell = super::recent_cell(row, rtl, inset, size);
+                assert!(cell.width() >= 0.0 && row.contains_rect(cell));
+            }
+        }
+    }
+}
+
+#[test]
+fn recent_row_actions_open_from_the_keyboard() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.ui.recent.push(RecentDocument { path: "/tmp/keyboard.docx".into(), last_opened: String::new(), modified: String::new() });
+    app.ui.backstage = true;
+    app.ui.backstage_page = "open".into();
+    let mut h = a11y_harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "keyboard.docx, /tmp/keyboard.docx, Last opened: Unknown, Last edited: Unknown").focus();
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: egui::Key::F10, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT });
+    h.run_steps(2);
+    h.get_by_label("Remove from Recent").click();
+    h.run_steps(2);
+    assert!(h.state().ui.recent.is_empty());
 }

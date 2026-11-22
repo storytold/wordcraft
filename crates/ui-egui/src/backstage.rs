@@ -3,6 +3,7 @@
 mod home;
 mod new_page;
 mod pages;
+pub(crate) mod recent_table;
 mod thumbs;
 
 use std::cell::{Cell, RefCell};
@@ -27,7 +28,9 @@ use egui::Ui;
 use serde_json::json;
 
 use crate::WordApp;
-pub(crate) use thumbs::TemplateThumbs;
+pub(crate) use recent_table::open_list;
+#[cfg(test)]
+pub(crate) use recent_table::{recent_cell, recent_columns};
 
 /// The side menu: page id, label and icon (#1714).
 const PAGES: [(&str, &str, &str); 11] = [
@@ -175,8 +178,15 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     while let Some((command, _)) = cx.take_command::<BackstagePageCommand>() {
         match command {
             BackstagePageCommand::Back => {
-                let _ = app.run("ui.backstage", json!({"value": false}));
-                app.canvas.focus_page(&ctx);
+                let recent_clear_confirm_open = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique("recent_clear_confirm"))).unwrap_or(false);
+                if recent_clear_confirm_open {
+                    ui.ctx().data_mut(|d| {
+                        d.remove::<bool>(egui::Id::unique("recent_clear_confirm"));
+                    });
+                } else {
+                    let _ = app.run("ui.backstage", json!({"value": false}));
+                    app.canvas.focus_page(&ctx);
+                }
             }
             // PLAN: `print_requested(app, ctx)` is chrome-w10's new `pub(crate)` fn in print_page.rs (S-L263).
             BackstagePageCommand::Print if app.ui.backstage_page == "print" => crate::print_page::print_requested(app, &ctx),
@@ -403,6 +413,7 @@ fn open_personal(app: &mut WordApp, path: &str, ctx: &egui::Context) -> Result<(
 pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
     app.open_file(path, None)?;
     app.ui.backstage = false;
+    app.canvas.focus_pending = true;
     Ok(())
 }
 

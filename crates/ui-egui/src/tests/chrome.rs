@@ -834,6 +834,6 @@ fn recent_list_edits_work_without_a_document() {
     a.ui.recent = vec!["/tmp/alpha.docx".into()];
     assert!(!a.session.dirty && a.session.path.is_none());
     assert!(works_without_document("ui.recentRemove") && works_without_document("ui.recentClear"));
-    assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
+    assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], true);
     assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
 }

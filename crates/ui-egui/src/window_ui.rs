@@ -225,6 +225,7 @@ impl WordApp {
             ribbon_collapsed: _,
             quick_access_toolbar: _,
             recent: _,
+            recent_metadata: _,
             recent_symbols: _,
             date_time_format: _,
             date_time_language: _,
