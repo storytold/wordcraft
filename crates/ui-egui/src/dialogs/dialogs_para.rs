@@ -103,7 +103,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
 
 /// The caret paragraph's stops, those a dialog can edit (finite, not the `Clear` marks, at most [`MAX_STOPS`]), and
 /// the document's default interval, points.
-fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
+pub(super) fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
     let s = &app.session;
     let rp = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props))?;
     let stops = rp.tabs.iter().copied().filter(|t| t.align != TabAlign::Clear && t.pos.is_finite()).take(MAX_STOPS).collect();
@@ -113,13 +113,9 @@ fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
 /// The Tabs dialog over the caret paragraph's stops, its OK held until `para.tabs` has run. The alignment names
 /// and the leader fills are the framework dialog's.
 pub(crate) fn tabs_dialog(app: &WordApp) -> Option<TabStopsHost> {
-    let (stops, default) = caret_tabs(app)?;
-    let stops = stops.iter().map(|t| UiStop::new(t.pos, ui_align(t.align), ui_leader(t.leader))).collect();
-    // Only pixel units read the resolution, and WordCraft never shows pixels.
-    let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
     // On macOS (Services::paragraph_window) Tabs opens as a panel of its own, as Paragraph does, its content alone.
     let windowed = app.services.paragraph_window;
-    let keyed = Keyed::new("tabs", TabStopsDialog::new(stops, default).unit(unit).held_ok().bare(windowed));
+    let keyed = Keyed::new("tabs", tab_stops(app)?.held_ok().bare(windowed));
     Some(if windowed { keyed.in_own_window(crate::i18n::t("Tabs")) } else { keyed })
 }
 
@@ -161,6 +157,15 @@ fn doc_leader(l: UiLeader) -> TabLeader {
         UiLeader::MiddleDot => TabLeader::MiddleDot,
         _ => TabLeader::None,
     }
+}
+
+/// The Tabs dialog's content over the caret paragraph's stops: the Tabs dialog, or the Paragraph dialog's Tabs page.
+pub(super) fn tab_stops(app: &WordApp) -> Option<TabStopsDialog> {
+    let (stops, default) = caret_tabs(app)?;
+    let stops = stops.iter().map(|t| UiStop::new(t.pos, ui_align(t.align), ui_leader(t.leader))).collect();
+    // Only pixel units read the resolution, and WordCraft never shows pixels.
+    let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
+    Some(TabStopsDialog::new(stops, default).unit(unit))
 }
 
 /// `para.tabs` parameters for what the Tabs dialog changed (`None` when nothing did). `basis` and `default_basis`

@@ -35,7 +35,13 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
     let format = read(app)?;
     // Only pixel units read the resolution, and WordCraft never shows pixels.
     let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
-    let dialog = ParagraphDialog::new(format).word(true).tab(tab).unit(unit).held_ok().bare(app.services.paragraph_window);
+    let windowed = app.services.paragraph_window;
+    let dialog = ParagraphDialog::new(format).word(true).tab(tab).unit(unit).held_ok().bare(windowed);
+    // In a window of its own, Tabs is a page of the dialog instead of a second window.
+    let dialog = match super::dialogs_para::tab_stops(app) {
+        Some(tabs) if windowed => dialog.tabs_page(tabs),
+        _ => dialog,
+    };
     let keyed = Keyed::new(key, dialog);
     // On macOS the Paragraph dialog opens as a utility panel in a window of its own
     // (Services::paragraph_window), titled as in the document window.
@@ -44,14 +50,21 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
 }
 
 /// The settle hook: runs a filed OK as `para.set`. The dialog closes when the command ran and stays, showing the
-/// reason, when it failed. Tabs… applies first and then opens the Tabs dialog. The hook always keeps itself: a
+/// reason, when it failed. Tabs… applies first and then opens the Tabs dialog; a Tabs page's stops run as `para.tabs` after the format. The hook always keeps itself: a
 /// refused OK leaves the dialog open and files its next answer here, and the host drops the hook once the dialog closed.
 fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(answer) = app.dialog_host.get_mut_by_id::<ParagraphHost>(id).and_then(|host| host.inner_mut().take_ok()) else {
         return Settle::Keep;
     };
     let start = read(app).unwrap_or_default();
-    let result = apply_paragraph(app, &answer.format, &start);
+    let (basis, default_basis) = super::dialogs_para::caret_tabs(app).unwrap_or_default();
+    let mut result = apply_paragraph(app, &answer.format, &start);
+    // The Tabs page's stops, after the format.
+    if let Some(params) = answer.tabs.as_ref().and_then(|tabs| super::dialogs_para::tabs_params(&basis, default_basis, tabs))
+        && result.is_ok()
+    {
+        result = app.run("para.tabs", params).map(|_| ());
+    }
     let applied = result.is_ok();
     if let Some(host) = app.dialog_host.get_mut_by_id::<ParagraphHost>(id) {
         host.inner_mut().answer_ok(result.map_err(Label::from));

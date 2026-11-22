@@ -1814,6 +1814,27 @@ fn paragraph_in_its_own_window_runs_windowed_and_answers_ok() {
     assert!(h.ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
 }
 
+/// In its own window the Paragraph dialog has Tabs as a page: a stop set there and a format change both apply on OK.
+#[test]
+fn paragraph_in_its_own_window_applies_its_tabs_page_on_ok() {
+    let mut app = app_with("a\tb");
+    app.services.paragraph_window = true;
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let id = open_named(&mut h, "paragraph", json!({}));
+    let ctx = h.ctx.clone();
+    let host = h.state_mut().dialog_host.get_mut_by_id::<ParagraphHost>(id).expect("the dialog is hosted");
+    host.inner_mut().tabs_page_mut().expect("the dialog has a Tabs page").new_stop();
+    h.state_mut().dialog_host.set_json_field(&ctx, id, "space_before", json!(6.0)).expect("space_before is a field");
+    h.run_steps(2);
+    confirm(&mut h, id);
+    assert_eq!(props(h.state()).space_before, Some(6.0), "the format applied");
+    let s = &h.state().session;
+    let tabs = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).tabs.clone()).unwrap_or_default();
+    assert!(!tabs.is_empty(), "the stop set on the page applied");
+    assert!(!is_open(h.state(), "paragraph"), "OK closed the panel");
+}
+
 /// Without `Services::paragraph_window` the Paragraph dialog is an ordinary in-window one.
 #[test]
 fn paragraph_without_the_window_service_stays_in_the_document_window() {
