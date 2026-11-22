@@ -50,6 +50,17 @@ fn anchor_skips_rects_scrolled_offscreen_and_clips_partial_ones() {
     assert_eq!(visible_anchor([nan], clip), None);
 }
 
+/// #7317: a viewport narrower than the selection or bar still yields a positive anchor rect.
+#[test]
+fn a_viewport_narrower_than_the_bar_still_yields_a_rect() {
+    let clip = Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(20.0, 20.0));
+    let sel = Rect::from_min_size(pos2(5.0, 5.0), Vec2::new(300.0, 15.0));
+    let r = visible_anchor([sel], clip).unwrap_or(Rect::EVERYTHING);
+    assert!(r.width() > 0.0 && r.height() > 0.0, "a tiny viewport must still place a positive-size bar");
+    assert!(r.min.x.is_finite() && r.min.y.is_finite());
+    assert!(clip.contains_rect(r), "the anchor must stay inside the viewport");
+}
+
 /// The whole window over a document with `pick` selected, run until the bar is up.
 fn bar_over(pick: &str) -> H {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
