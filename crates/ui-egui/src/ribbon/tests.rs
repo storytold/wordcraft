@@ -772,6 +772,36 @@ fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
     }
 }
 
+/// #7323: the Home › Bullets dropdown renders the Bullet Library grid as compact
+/// square preview tiles (~22×22 pt), rather than expanding to full card dimensions (~132 pt).
+#[test]
+fn bullets_dropdown_renders_compact_bullet_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Home");
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+
+    // The SplitButton has two button nodes: the command part and the arrow part.
+    let arrow = h.query_all(By::new().role(Role::Button).label("Bullets")).nth(1).expect("Bullets split-button menu arrow");
+    arrow.click();
+    crate::test_harness::frames(&mut h, 3);
+
+    let bullet_tile = h.query_all(By::new().role(Role::ListItem).label("•")).next().expect("bullet tile •");
+    let rect = bullet_tile.rect();
+    assert!(
+        rect.width() >= 16.0 && rect.width() <= 32.0,
+        "bullet tile width ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.width()
+    );
+    assert!(
+        rect.height() >= 16.0 && rect.height() <= 32.0,
+        "bullet tile height ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.height()
+    );
+    assert!((rect.width() - rect.height()).abs() <= 2.0, "bullet tile should be square: {}x{}", rect.width(), rect.height());
+}
+
 /// #7310: unimplemented stub ribbon buttons (Dictate, Ink to Math, Translate, Block Authors)
 /// resolve disabled in the ribbon UI and are known to the command catalog without warnings.
 #[test]
