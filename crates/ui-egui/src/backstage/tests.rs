@@ -353,6 +353,21 @@ fn new_lists_personal_templates_and_opens_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #7373: Personal template cards in File › New paint a white page surface and document icon.
+#[test]
+fn personal_template_cards_render_as_page_cards() {
+    let dir = personal_dir("card-paint");
+    let memo = dir.join("Proposal.dotx");
+    write_template(&memo, "Proposal template text");
+    let h = new_page_harness(Some(dir.clone()));
+    let card = h.query_by_label("Proposal");
+    assert!(card.is_some(), "personal template tile exists");
+    let rect = card.unwrap().rect();
+    assert!(rect.height() > rect.width(), "personal template card is portrait oriented");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An empty (or not yet made) templates folder says where templates come from; no folder (the
 /// web) shows no Personal section. Home keeps only the built-ins.
 #[test]
