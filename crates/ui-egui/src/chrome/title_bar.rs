@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use craft::behavior::IconId;
+use craft::behavior::{IconId, Proposal};
 use craft::keymap::CommandRef;
 use craft::menu::RibbonMenuRequest;
 use craft::review::ui::Avatar;
@@ -39,11 +39,11 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
         } else {
             tl!("Not saved")
         };
-        Title::new(format!("{} — {state}", craft::i18n::file_name(&app.title_stem(), super::interface_direction())))
-            .action(tl!("Rename Document").to_string())
+        let name = app.title_stem();
+        Title::new(distribution_title(ui, app.chrome.title_room, &name, &format!(" — {state}"), true)).action(tl!("Rename Document").to_string())
     } else {
         // No document open (#1129): the app's name alone.
-        Title::new("WordCraft")
+        Title::new(distribution_title(ui, app.chrome.title_room, "WordCraft", "", false))
     };
     // The controls at the end give way in a narrow window (#5886): the step that fits the room the leading controls
     // left in the last pass.
@@ -72,7 +72,10 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
         // is the room it has, less a gap on either side of the title's place between them.
         let span = if super::interface_direction().is_rtl() { l.min.x - t.min.x } else { t.max.x - l.max.x };
         let room = span - TITLE_FIT_GAP;
-        if a.chrome.title_fit.note(step, t.width(), room) {
+        let title_room = (room - t.width()).max(0.0);
+        let title_changed = a.chrome.title_room.is_none_or(|old| (old - title_room).abs() > 0.5);
+        a.chrome.title_room = Some(title_room);
+        if a.chrome.title_fit.note(step, t.width(), room) || title_changed {
             ui.ctx().request_repaint();
         }
     }
@@ -87,6 +90,22 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut WordApp) {
         let ctx = ui.ctx().clone();
         let _ = WindowHost::of(&ctx).act(ctx.viewport_id(), WindowAction::Close);
     }
+}
+
+/// Fit the label using the same component and styling that the shared title bar uses.
+fn distribution_title(ui: &Ui, room: Option<f32>, name: &str, state: &str, action: bool) -> String {
+    let label = crate::build_config::BUILD_LABEL;
+    if label.is_empty() {
+        return if action { format!("{}{state}", craft::i18n::file_name(name, super::interface_direction())) } else { name.to_owned() };
+    }
+    let room = room.unwrap_or(ui.available_width()).max(0.0);
+    super::fitted_document_title(name, state, &format!(" ({label})"), room, |text| {
+        if action {
+            Button::new(text.to_owned()).variant(Variant::GHOST).measure_in(ui, Proposal::Ideal).x
+        } else {
+            Text::new(text.to_owned()).measure_in(ui, Proposal::Ideal).x
+        }
+    })
 }
 
 /// The room kept between the leading controls and the ones at the end, beyond what they take: the bar's gaps on

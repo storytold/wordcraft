@@ -45,7 +45,7 @@ pub(crate) mod arrange;
 
 /// The window title for a document called `name`.
 pub(crate) fn title(name: &str, dirty: bool) -> String {
-    format!("{name}{} - WordCraft", if dirty { " •" } else { "" })
+    format!("{name}{} - {}", if dirty { " •" } else { "" }, crate::build_config::app_name())
 }
 
 /// The id of the container that shows window `id`; the window host names its viewport by it.
@@ -469,7 +469,7 @@ impl WordApp {
     /// The drawn window's title: its document's name as View › Window › Switch Windows gives it.
     pub(crate) fn window_title(&self) -> String {
         if !self.has_document() {
-            return "WordCraft".to_string();
+            return crate::build_config::app_name().to_string();
         }
         let name = self.window_menu().title(self.windows.shown).map(str::to_string).unwrap_or_else(|| self.title_stem());
         title(&name, self.session.dirty)
@@ -479,7 +479,7 @@ impl WordApp {
     fn title_in(menu: &WindowMenu, id: WindowId) -> String {
         match menu.get(id).filter(|e| !e.title.is_empty()) {
             Some(e) => title(&e.title, e.dirty),
-            None => "WordCraft".to_string(),
+            None => crate::build_config::app_name().to_string(),
         }
     }
 
