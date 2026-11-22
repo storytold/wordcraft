@@ -630,4 +630,32 @@ mod tests {
         });
         assert!(!shapes.is_empty(), "{KEY} icon must paint");
     }
+
+    /// #7450: the Dictate microphone icon presents a clean, rounded capsule body (`rx="2.5"`)
+    /// cleanly suspended within the U-stand cradle rather than a harsh horizontal dividing line cutting across it.
+    #[test]
+    fn dictate_icon_geometry_and_rendering() {
+        let (_, bytes) = WORDCRAFT_ICONS.icons.iter().find(|(name, _)| *name == "dictate").expect("dictate is registered");
+        let svg = std::str::from_utf8(bytes).expect("an SVG document is text");
+
+        // 1. Valid SVG syntax and tree parsing
+        let tree = craft::ui::primitives::svg_tree::parse(bytes).expect("dictate.svg must parse as a valid SVG document");
+        let size = tree.size();
+        assert_eq!(size.width(), 20.0, "icon viewBox width must be 20");
+        assert_eq!(size.height(), 20.0, "icon viewBox height must be 20");
+
+        // 2. Geometry assertions: true capsule shape (rx = width / 2.0)
+        assert!(svg.contains("rx=\"2.5\""), "microphone body must use rx=\"2.5\" for full semicircular caps");
+        assert!(!svg.contains("rx=\"1\""), "minimal corner radius rx=\"1\" must not remain");
+        assert!(svg.contains("width=\"5\""), "microphone body width must be 5");
+        assert!(svg.contains("x=\"7.5\""), "microphone body must be horizontally centered at x=10");
+        assert!(svg.contains("y=\"2.5\""), "microphone capsule top must start at y=2.5");
+        assert!(svg.contains("height=\"9.5\""), "microphone capsule height must be 9.5");
+
+        // 3. Cradle and stand suspension assertions
+        assert!(svg.contains("d=\"M5 9.5 L5 11 L10 15 L15 11 L15 9.5\""), "U-stand cradle wraps around microphone body");
+        assert!(svg.contains("d=\"M10 15 L10 18\""), "stem connects bottom vertex to stand base");
+        assert!(svg.contains("stroke-linecap=\"round\""), "cradle and stem should have round caps");
+        assert!(svg.contains("stroke-linejoin=\"round\""), "cradle joins should be rounded");
+    }
 }
