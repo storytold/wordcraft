@@ -521,7 +521,7 @@ fn header_footer_guides(app: &WordApp, ui: &Ui, layout: &DocLayout, body: &PageB
             continue;
         }
         let left = placed.to_screen(Point::new(0.0, 0.0)).x;
-        let right = placed.to_screen(Point::new(f64::from(page.w), 0.0)).x;
+        let right = placed.to_screen(Point::new(f64::from(page.w - page.markup), 0.0)).x;
         for (y, label, header) in [(page.body.y, "Header", true), (page.body.bottom(), "Footer", false)] {
             let y = placed.to_screen(Point::new(0.0, f64::from(y))).y + if header { -4.0 } else { 4.0 };
             painter.line_segment([pos2(left, y), pos2(right, y)], egui::Stroke::new(1.0, selection.stroke.color));
