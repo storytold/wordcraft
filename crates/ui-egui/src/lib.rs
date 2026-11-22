@@ -506,6 +506,8 @@ pub struct WordApp {
     saves_in_flight: Vec<SaveInFlight>,
     /// The Save Changes prompt this window is running and the command it holds back.
     pub(crate) closing: Option<app::Closing>,
+    /// Whether the next Save Changes prompt should nudge on creation (set by native close attempts).
+    pub(crate) nudge_requested: bool,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// Whether the in-app file chooser is forced in place of the system one.

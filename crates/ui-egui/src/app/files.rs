@@ -17,6 +17,10 @@ pub(crate) struct Closing {
     pub params: Value,
     /// The open Save Changes prompt, when the guard waits for an answer.
     pub prompt: Option<DialogId>,
+    /// Whether the prompt should be nudged on next render pass.
+    pub pending_nudge: bool,
+    /// The viewport that owns the prompt and its nudge.
+    pub viewport: Option<egui::ViewportId>,
 }
 
 impl WordApp {
@@ -50,7 +54,9 @@ impl WordApp {
         // PLAN: shell-w6's `run` starts `file.close` and the other held-back commands through this
         let guard = CloseGuard::new(scope, documents);
         let step = guard.current().copied().map_or(GuardStep::Finished, GuardStep::Ask);
-        self.closing = Some(Closing { guard, then, params, prompt: None });
+        let pending_nudge = std::mem::take(&mut self.nudge_requested);
+        let viewport = self.ctx.as_ref().and_then(|c| self.windows.viewport(c, self.windows.shown()));
+        self.closing = Some(Closing { guard, then, params, prompt: None, pending_nudge, viewport });
         self.drive_guard(step, None)
     }
 
@@ -133,8 +139,10 @@ impl WordApp {
         }
         // PLAN: assumed `WordApp::dialog_host: DialogHost`, the shown window's
         let id = self.dialog_host.open(dialog);
+        let viewport = self.ctx.as_ref().and_then(|c| self.windows.viewport(c, self.windows.shown())).unwrap_or(egui::ViewportId::ROOT);
         if let Some(closing) = self.closing.as_mut() {
             closing.prompt = Some(id);
+            closing.viewport = Some(viewport);
         }
         Ok(json!({"pending": "saveChanges"}))
     }
@@ -173,14 +181,22 @@ impl WordApp {
 
     /// End the operation without running anything; the prompt closes with it.
     fn cancel_closing(&mut self) {
-        if let Some(id) = self.closing.take().and_then(|c| c.prompt) {
-            self.close_prompt(id);
+        let closing = self.closing.take();
+        if let Some(id) = closing.as_ref().and_then(|c| c.prompt) {
+            self.close_prompt_with_viewport(id, closing.as_ref().and_then(|c| c.viewport));
         }
     }
 
     /// Close prompt `id` from outside and drop the answer that leaves behind.
     pub(crate) fn close_prompt(&mut self, id: DialogId) {
+        let viewport = self.closing.as_ref().and_then(|c| c.viewport);
+        self.close_prompt_with_viewport(id, viewport);
+    }
+
+    pub(crate) fn close_prompt_with_viewport(&mut self, id: DialogId, viewport: Option<egui::ViewportId>) {
         if let Some(ctx) = self.ctx.clone() {
+            let vp = viewport.unwrap_or_else(|| ctx.viewport_id());
+            crate::dialogs::chrome::forget_nudge_in(&ctx, id, vp);
             self.dialog_host.cancel_by_id(&ctx, id);
         }
         let _ = self.dialog_host.take_by_id::<UnsavedChangesDialog>(id);
@@ -191,8 +207,14 @@ impl WordApp {
     pub(crate) fn pump_close_prompt(&mut self) {
         let Some(id) = self.closing.as_ref().and_then(|c| c.prompt) else { return };
         let Some(result) = self.dialog_host.take_by_id::<UnsavedChangesDialog>(id) else { return };
+        let viewport = self.closing.as_ref().and_then(|c| c.viewport);
+        if let Some(ctx) = self.ctx.as_ref() {
+            let vp = viewport.unwrap_or_else(|| ctx.viewport_id());
+            crate::dialogs::chrome::forget_nudge_in(ctx, id, vp);
+        }
         if let Some(closing) = self.closing.as_mut() {
             closing.prompt = None;
+            closing.viewport = None;
         }
         let (answer, all) = match result {
             DialogResult::Ok(a) => (a.answer, a.apply_to_all),
@@ -212,9 +234,17 @@ impl WordApp {
             // about unsaved changes first); the framework leaves the root's window open on `Hold`, and
             // the root entry moves to the window that stays.
             let root = self.windows.root_key();
+            self.nudge_requested = true;
             self.close_window(root);
+            self.nudge_requested = false;
             CloseDecision::Hold
         } else if self.closing.is_some() {
+            if let Some(closing) = self.closing.as_mut() {
+                closing.pending_nudge = true;
+            }
+            if let Some(ctx) = self.ctx.as_ref() {
+                ctx.request_repaint();
+            }
             CloseDecision::Hold
         } else if self.close_requested() {
             CloseDecision::Close

@@ -136,6 +136,7 @@ impl WordApp {
             // App-wide.
             // A close operation walks every window's documents, so it outlives a window swap.
             closing: _,
+            nudge_requested: _,
             session: _,
             services: _,
             host: _,

@@ -215,13 +215,28 @@ impl WordApp {
             return json!({"quit": true});
         }
         if self.closing.is_some() {
+            if let Some(closing) = self.closing.as_mut() {
+                closing.pending_nudge = true;
+            }
+            if let Some(ctx) = self.ctx.as_ref() {
+                ctx.request_repaint();
+            }
             return json!({"quit": false});
         }
         self.ui.backstage = false;
-        match self.begin_closing(craft::quit::CloseScope::Quit, documents, "file.close".into(), json!({"quit": true})) {
+        self.nudge_requested = true;
+        let res = match self.begin_closing(craft::quit::CloseScope::Quit, documents, "file.close".into(), json!({"quit": true})) {
             Ok(_) => json!({"quit": self.quit_requested}),
             Err(e) => json!({"quit": false, "error": e}),
+        };
+        self.nudge_requested = false;
+        if let Some(closing) = self.closing.as_mut() {
+            closing.pending_nudge = true;
         }
+        if let Some(ctx) = self.ctx.as_ref() {
+            ctx.request_repaint();
+        }
+        res
     }
 }
 

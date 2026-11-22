@@ -1940,3 +1940,138 @@ fn insert_chart_tiles_render_within_compact_bounds() {
     let grid = h.get_by_role_and_label(Role::ListBox, "Chart types").rect();
     assert!(grid.width() <= 380.0, "3-column chart types grid should not exceed comfortable dialog proportions (~360 pt), got {:?}", grid.size());
 }
+
+/// The shake starts and ends where the dialog is and swings at most 6 points either way (#3859, #4076, #7321).
+#[test]
+fn the_shake_comes_back_to_rest() {
+    assert_eq!(chrome::shake_offset(0.0), 0.0);
+    assert!(chrome::shake_offset(1.0).abs() < 1e-4);
+    assert!((0..=100).map(|i| chrome::shake_offset(i as f32 / 100.0).abs()).all(|x| x <= 6.0));
+    assert!((0..=100).any(|i| chrome::shake_offset(i as f32 / 100.0).abs() > 3.0), "it does move");
+}
+
+/// #7321: attempting to close with unsaved changes shakes the modal dialog (or flashes its edge under reduced motion),
+/// repeat close attempts mid-nudge leave the animation running without restarting, clicking beside it nudges again,
+/// and closing clears the nudge state.
+#[test]
+fn unsaved_changes_dialog_shakes_on_close_attempt_and_outside_click() {
+    for animations in ["on", "off"] {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+        app.run("ui.animations", json!({"value": animations})).unwrap();
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| app);
+        h.run_steps(6);
+
+        // Attempt window close while dirty.
+        h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        h.step();
+        h.step();
+
+        let prompt_id = h.state().closing.as_ref().and_then(|c| c.prompt).expect("Save Changes prompt is open");
+        let key = chrome::nudge_id(&h.ctx, prompt_id);
+        let started = |h: &egui_kittest::Harness<'_, WordApp>| h.ctx.data(|d| d.get_temp::<f64>(key));
+
+        let first = started(&h).expect("close attempt nudges the dialog on open");
+
+        let look = |h: &egui_kittest::Harness<'_, WordApp>| {
+            let shapes = &h.output().shapes;
+            let mut flat = Vec::new();
+            fn walk<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match s {
+                    egui::Shape::Vec(children) => {
+                        for c in children {
+                            walk(c, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            for c in shapes {
+                walk(&c.shape, &mut flat);
+            }
+            let save_x = flat.iter().find_map(|s| match s {
+                egui::Shape::Text(t) if t.galley.text() == "Save" || t.galley.text() == "Don't Save" || t.galley.text() == "Cancel" => Some(t.pos.x),
+                _ => None,
+            });
+            let border_flashes =
+                flat.iter().filter(|s| matches!(s, egui::Shape::Rect(r) if r.stroke.width == 2.0 && r.fill == egui::Color32::TRANSPARENT)).count();
+            (save_x, border_flashes)
+        };
+
+        let mut looks = vec![look(&h)];
+
+        // Repeat close attempt while it runs does not restart it
+        h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        h.step();
+        assert_eq!(started(&h), Some(first), "{animations:?}: repeat close attempt does not reset start time mid-nudge");
+
+        for _ in 0..6 {
+            h.step();
+            looks.push(look(&h));
+        }
+
+        let rest_pos = look(&h).0;
+        if animations == "on" {
+            assert!(looks.iter().any(|l| l.0 != rest_pos), "it shakes horizontally under full animations");
+        } else {
+            assert!(looks.iter().any(|l| l.1 > 0), "it flashes 2pt accent border under reduced motion");
+            assert!(looks.iter().all(|l| l.0 == rest_pos), "it does not translate horizontally under reduced motion");
+        }
+
+        // Run until shake completes
+        h.run_steps(30);
+        let final_look = look(&h);
+        assert_eq!(final_look.0, rest_pos, "it comes back to rest");
+        assert_eq!(final_look.1, 0, "border flash ends at rest");
+
+        // Clicking beside the dialog nudges again once rest is reached
+        let rect = craft::ui::runtime::overlay::top(&h.ctx)
+            .and_then(|id| craft::ui::runtime::overlay::entry(&h.ctx, id))
+            .map(|e| e.rect)
+            .or_else(|| h.ctx.memory(|m| m.top_modal_layer().and_then(|l| m.area_rect(l.id))))
+            .expect("dialog rect exists");
+        let beside = egui::pos2(rect.min.x - 20.0, rect.min.y - 20.0);
+        assert!(!rect.contains(beside));
+
+        h.event(egui::Event::PointerMoved(beside));
+        h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+
+        assert!(started(&h).is_some_and(|t| t > first), "{animations:?}: click outside nudges again");
+
+        // Cancel closes the dialog and forgets nudge
+        h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        h.step();
+        assert_eq!(started(&h), None, "{animations:?}: closing the dialog clears nudge state");
+    }
+}
+
+/// #7321: programmatic File › Close with unsaved changes opens the prompt peacefully without triggering a nudge.
+#[test]
+fn programmatic_close_prompt_does_not_nudge_on_open() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+    a.run("file.close", json!({})).unwrap();
+    assert_eq!(a.closing.as_ref().map(|c| c.pending_nudge), Some(false));
+}
+
+/// #7321: an unrelated modal dialog must not consume or clear `pending_nudge` intended for the Save Changes prompt.
+#[test]
+fn unrelated_modal_does_not_consume_pending_close_nudge() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let _ = crate::dialogs::open(&mut app, "wordCount", &json!({}));
+    let other_prompt_id = egui::Id::unique("other_prompt_dialog");
+    app.closing = Some(crate::app::Closing {
+        guard: craft::quit::CloseGuard::new(craft::quit::CloseScope::Close, vec![1]),
+        then: "file.close".into(),
+        params: json!({}),
+        prompt: Some(other_prompt_id),
+        pending_nudge: true,
+        viewport: None,
+    });
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app);
+    h.step();
+    assert_eq!(h.state().closing.as_ref().map(|c| c.pending_nudge), Some(true));
+}

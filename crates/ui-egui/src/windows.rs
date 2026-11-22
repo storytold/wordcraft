@@ -199,7 +199,7 @@ impl Windows {
     }
 
     /// [`Windows::viewport_of`] for the window with the app's key `key`.
-    fn viewport(&self, ctx: &egui::Context, key: u64) -> Option<ViewportId> {
+    pub(crate) fn viewport(&self, ctx: &egui::Context, key: u64) -> Option<ViewportId> {
         self.viewport_of(ctx, self.id_of(key)?)
     }
 }
@@ -616,7 +616,9 @@ impl WordApp {
             if self.quit_requested || self.windows.list.len() <= 1 || !self.windows.list.contains(id) {
                 continue;
             }
+            self.nudge_requested = true;
             self.close_window(id.get());
+            self.nudge_requested = false;
         }
     }
 
@@ -632,8 +634,25 @@ impl WordApp {
             let _ = self.close_shown_document();
             return;
         }
+        if self.closing.is_some() {
+            if let Some(closing) = self.closing.as_mut() {
+                closing.pending_nudge = true;
+            }
+            if let Some(ctx) = self.ctx.as_ref() {
+                ctx.request_repaint();
+            }
+            return;
+        }
+        self.nudge_requested = true;
         if let Err(e) = self.run("file.close", json!({})) {
             log::warn!("closing a window: {e}");
+        }
+        self.nudge_requested = false;
+        if let Some(closing) = self.closing.as_mut() {
+            closing.pending_nudge = true;
+        }
+        if let Some(ctx) = self.ctx.as_ref() {
+            ctx.request_repaint();
         }
     }
 

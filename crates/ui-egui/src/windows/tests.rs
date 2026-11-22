@@ -544,3 +544,63 @@ fn nul_in_the_document_title_never_reaches_an_os_window_title() {
         }
     }
 }
+
+/// #7321: closing a child window with unsaved changes triggers the nudge under that child's viewport,
+/// and cancelling clears the nudge from that viewport.
+#[test]
+fn closing_child_window_with_unsaved_changes_nudges_under_child_viewport() {
+    let mut rig = Rig::new();
+    let mut a = app("First");
+    rig.frames(&mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    rig.frames(&mut a, 2);
+    let child_vp = a.active_viewport();
+    assert_ne!(child_vp, ViewportId::ROOT);
+    a.run("text.insert", json!({"text": "Child dirty"})).unwrap();
+
+    // Closing the child window triggers Save Changes prompt
+    rig.close(child_vp);
+    rig.frame(&mut a);
+    assert_eq!(prompt(&a).as_deref(), Some("saveChanges"));
+    rig.frame(&mut a);
+
+    let prompt_id = a.closing.as_ref().and_then(|c| c.prompt).expect("prompt exists");
+    let key = crate::dialogs::chrome::nudge_id_in(prompt_id, child_vp);
+    assert!(rig.ctx().data(|d| d.get_temp::<f64>(key)).is_some(), "nudge recorded under child viewport");
+
+    // Root viewport's pass must NOT have consumed or clobbered it
+    let root_key = crate::dialogs::chrome::nudge_id_in(prompt_id, ViewportId::ROOT);
+    assert!(rig.ctx().data(|d| d.get_temp::<f64>(root_key)).is_none(), "not under root viewport");
+
+    // Cancelling clears the nudge from the child viewport
+    a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+    rig.frame(&mut a);
+    assert!(rig.ctx().data(|d| d.get_temp::<f64>(key)).is_none(), "nudge cleared from child viewport on cancel");
+}
+
+/// #7321: closing the root window when multiple windows are open triggers nudge under the root viewport.
+#[test]
+fn closing_root_window_with_multiple_windows_nudges_under_root_viewport() {
+    let mut rig = Rig::new();
+    let mut a = app("First dirty");
+    rig.frames(&mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    rig.frames(&mut a, 2);
+    let root = a.windows.root_key();
+    a.enter_window(root);
+    rig.focus(ViewportId::ROOT);
+    rig.frames(&mut a, 2);
+
+    // Close root window
+    rig.close(ViewportId::ROOT);
+    rig.frame(&mut a);
+    assert_eq!(prompt(&a).as_deref(), Some("saveChanges"));
+
+    let prompt_id = a.closing.as_ref().and_then(|c| c.prompt).expect("prompt exists");
+    let root_key = crate::dialogs::chrome::nudge_id_in(prompt_id, ViewportId::ROOT);
+    assert!(rig.ctx().data(|d| d.get_temp::<f64>(root_key)).is_some(), "nudge recorded under root viewport");
+
+    a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+    rig.frame(&mut a);
+    assert!(rig.ctx().data(|d| d.get_temp::<f64>(root_key)).is_none(), "nudge cleared on cancel");
+}
