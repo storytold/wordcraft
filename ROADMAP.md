@@ -423,6 +423,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-11-20 | trivial | Progress log: `wordcraft-cli mcp` needs both automation roots; `--connect` refused (#7124) |
 | 2026-11-17 | trivial | Progress log: file formats, codecs and protocols come from craft-libs (#778) |
 | 2026-11-15 | trivial | Progress log: Get the Missing Fonts (download pages for missing fonts their publisher gives away) |
+| 2026-11-15 | #4593: port per-section RTF stories and facing-page state to active craft-rtf IO; retain synthetic controls and existing native limitations. |
 | 2026-11-07 | Narrow windows (#5886): the window can be made 600 pt wide (was 760 pt), enabling split-window layout and edge tiling on Wayland/GNOME and 1280 pt screens; the title bar's search box and Discord button condense, and status-bar texts (page, word count, language, Track Changes, Overtype) stop before the right controls or shorten ("…" for language) instead of overlapping Focus, views and zoom |
 | 2026-11-05 | trivial | Progress log: ODT documents keep their language (gap 19) |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
@@ -1087,6 +1088,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-30 | trivial | Progress log: the Paragraph dialog's Special box sets First line and Hanging indents |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
+| 2026-10-27 | trivial | PR #4593 (M12): RTF export preserves each section’s header/footer stories, including tables and explicit empty destinations. The section regression was run before the fix and failed; five synthetic regressions cover this path and the facing-page setting. Notes/comments remain tracked by #1056; inline page breaks can still split a paragraph. Estimates unchanged. |
 | 2026-10-19 | trivial | Progress log: Linux display server setting (#2184) |
 | 2026-10-19 | trivial | Progress log: the status bar's count can be words, characters or characters without spaces (#2797) |
 | 2026-10-27 | trivial | Progress log: Return on File › Print prints, as Word's default Print button does |
@@ -1490,6 +1492,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
 | 2026-10-31 | trivial | Progress log: Field dialog capitalization Format list for text fields |
+| 2026-10-27 | trivial | RTF export update (2026-10-27): RTF export now writes the default, first-page and even-page header/footer stories for each section, sharing document font/colour/revision tables. Omitted destinations stay linked; explicit empty stories clear inherited content. Synthetic tests cover section boundaries, tables and styles; readiness estimates are unchanged. Notes/comments remain separate work (#1056). The `\facingp` document setting survives import/export; stored even stories do not enable it when it is off. |
+| 2026-10-27 | trivial | 2026-10-27 · RTF section header/footer export: synthetic regressions for section boundaries, story variants, resources and explicit empty destinations. Readiness estimates unchanged. Facing-page import/export now retains the document setting; two further synthetic regressions cover enabled, disabled and story-local controls. |
 | 2026-10-27 | trivial | 2026-10-27 · #4533 review: numeric REF updates lazily index body bookmarks once per update, retaining the first body bookmark for duplicate names. Unsupported switches and ordinary REF/PAGEREF behavior are unchanged; a synthetic 64-reference regression covers repeated updates and duplicate names. Estimates unchanged. |
 | 2026-10-27 | trivial | 2026-10-27 · #4533: numeric REF fields use paragraph list numbers for no/full/relative context, reusing bounded numbering. Shared context already embedded in a level label is removed; merged-away cells do not count. Unsupported separator/text/position switches and ambiguous contexts or delimiter-free joins retain cached results. Synthetic OOXML regressions; no native Word or real-document validation, estimates unchanged. |
 > 2026-10-29 · Port #3915 to split layout modules: ordinary LTR tab groups follow paragraph alignment. Positional tabs, lists, RTL and display math retain their alignment paths. Source port only; no test execution or new native measurements.
