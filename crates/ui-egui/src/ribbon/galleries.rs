@@ -90,30 +90,7 @@ pub(crate) fn style_tile_image(doc: &Document, id: &str, ppp: f32, dark_page: bo
     if dark && !dark_page {
         dim(&mut img);
     }
-    // The old ribbon drew the sample letters on the ribbon itself, with no page behind them.
-    if !dark_page {
-        clear_white_paper(&mut img);
-    }
     img
-}
-
-/// Takes the white paper out of `img`: each pixel becomes the colour that, laid over white, gives
-/// it, so the letters keep their edges over any background and the paper is transparent.
-fn clear_white_paper(img: &mut ColorImage) {
-    for px in &mut img.pixels {
-        let [r, g, b, _] = px.to_array();
-        let alpha = 255 - r.min(g).min(b);
-        if alpha == 0 {
-            *px = egui::Color32::TRANSPARENT;
-            continue;
-        }
-        // c = a * x + (1 - a) * 255, solved for x.
-        let unlay = |c: u8| -> u8 {
-            let lifted = i32::from(c) - (255 - i32::from(alpha));
-            (lifted.max(0) * 255 / i32::from(alpha)).clamp(0, 255) as u8
-        };
-        *px = egui::Color32::from_rgba_unmultiplied(unlay(r), unlay(g), unlay(b), alpha);
-    }
 }
 
 /// A Style Sets tile: a title, a heading and a paragraph in the set `name`.
@@ -321,7 +298,8 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
         .select(SelectMode::None)
         .activate(ActivateOn::Click)
         .card_columns(WORDART_COLUMNS)
-        .content_cells()
+        .thumb_size(ThumbSize::Small)
+        .zoom(2.0)
         // Every style shows, as in production; the menu's body is the one scroll.
         .natural_height(true)
         .caption(CaptionPlace::None)
@@ -341,18 +319,81 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
 
 #[cfg(test)]
 mod tests {
-    /// White paper turns transparent and black letters stay black and opaque.
-    #[test]
-    fn white_paper_clears_and_ink_stays() {
-        let mut img = egui::ColorImage::new([3, 1], vec![egui::Color32::WHITE, egui::Color32::BLACK, egui::Color32::from_rgb(128, 128, 128)]);
-        super::clear_white_paper(&mut img);
-        assert_eq!(img.pixels[0], egui::Color32::TRANSPARENT);
-        assert_eq!(img.pixels[1], egui::Color32::BLACK);
-        assert_eq!(img.pixels[2].a(), 127);
-    }
-
     use super::*;
     use std::sync::Arc;
+
+    /// Relative luminance (WCAG) of an opaque sRGB colour, in `0.0..=1.0`.
+    fn rel_luma(c: Color32) -> f64 {
+        let [r, g, b, _] = c.to_srgba_unmultiplied();
+        let lin = |u: u8| {
+            let s = f64::from(u) / 255.0;
+            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    /// WCAG contrast ratio between two opaque colours.
+    fn contrast_ratio(a: Color32, b: Color32) -> f64 {
+        let (la, lb) = (rel_luma(a), rel_luma(b));
+        let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// The background paper pixel: the most frequent colour in the tile.
+    fn paper_color(img: &ColorImage) -> Color32 {
+        let mut counts = std::collections::HashMap::<Color32, usize>::new();
+        for &px in &img.pixels {
+            *counts.entry(px).or_insert(0) += 1;
+        }
+        counts.into_iter().max_by_key(|&(_, n)| n).expect("non-empty tile").0
+    }
+
+    /// #7309: Styles gallery tiles keep opaque paper in light and dark modes (dimmed in dark mode,
+    /// matching #663 and sibling galleries) so dark style ink remains legible, and leave Switch
+    /// Modes' dark page untouched by interface dimming.
+    #[test]
+    fn style_tile_keeps_opaque_paper_and_legible_contrast_in_dark_mode() {
+        let doc = Document::new();
+        let light = style_tile_image(&doc, "Normal", 1.0, false, false);
+        let dark = style_tile_image(&doc, "Normal", 1.0, false, true);
+        let dark_page_light_ui = style_tile_image(&doc, "Normal", 1.0, true, false);
+        let dark_page_dark_ui = style_tile_image(&doc, "Normal", 1.0, true, true);
+
+        assert!(light.pixels.iter().all(|p| p.a() == 255), "light-mode style tile keeps opaque paper");
+        assert!(dark.pixels.iter().all(|p| p.a() == 255), "dark-mode style tile keeps opaque paper (not a translucent veil)");
+        assert!(dark_page_dark_ui.pixels.iter().all(|p| p.a() == 255), "dark-page style tile stays opaque");
+
+        let lightest = |img: &ColorImage| img.pixels.iter().copied().max_by(|a, b| rel_luma(*a).total_cmp(&rel_luma(*b))).expect("non-empty tile");
+        let darkest = |img: &ColorImage| img.pixels.iter().copied().min_by(|a, b| rel_luma(*a).total_cmp(&rel_luma(*b))).expect("non-empty tile");
+
+        let light_paper = paper_color(&light);
+        let light_ink = darkest(&light);
+        let dark_paper = paper_color(&dark);
+        let dark_ink = darkest(&dark);
+        let dark_page_paper = paper_color(&dark_page_dark_ui);
+        let dark_page_ink = lightest(&dark_page_dark_ui);
+
+        assert!(rel_luma(light_paper) > rel_luma(dark_paper), "dark mode dims white paper below light mode");
+        assert!(rel_luma(dark_paper) > rel_luma(dark_ink), "dark-mode tile ink stays darker than its dimmed paper");
+        assert!(
+            contrast_ratio(light_paper, light_ink) >= 4.5,
+            "light-mode Normal tile needs >= 4.5:1 contrast (got {:.2}:1)",
+            contrast_ratio(light_paper, light_ink)
+        );
+        assert!(
+            contrast_ratio(dark_paper, dark_ink) >= 4.5,
+            "dark-mode Normal tile needs >= 4.5:1 contrast (got {:.2}:1)",
+            contrast_ratio(dark_paper, dark_ink)
+        );
+        assert_eq!(dark_page_light_ui.pixels, dark_page_dark_ui.pixels, "Switch Modes' dark page is not dimmed again by dark mode");
+        assert!(rel_luma(dark_page_paper) < rel_luma(dark_paper), "Switch Modes renders onto a dark page rather than dimmed white paper");
+        assert!(rel_luma(dark_page_ink) > rel_luma(dark_page_paper), "Switch Modes renders light ink onto the dark page");
+        assert!(
+            contrast_ratio(dark_page_paper, dark_page_ink) >= 4.5,
+            "dark-page Normal tile needs >= 4.5:1 contrast (got {:.2}:1)",
+            contrast_ratio(dark_page_paper, dark_page_ink)
+        );
+    }
 
     /// #2: a style whose hanging indent is larger than its left indent previewed with its first line
     /// starting off the tile's left edge; the first line now starts at the edge.

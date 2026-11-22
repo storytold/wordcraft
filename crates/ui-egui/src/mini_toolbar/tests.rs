@@ -214,6 +214,66 @@ fn every_control_fits_inside_the_bar() {
     }
 }
 
+/// #7447: the mini toolbar anchors to the start of the selection rather than its center,
+/// so its position does not shift with the length of the selection.
+#[test]
+fn the_bar_anchors_to_the_selection_start_rather_than_its_center() {
+    let h_short = bar_over("brown");
+    let h_long = bar_over("brown fox jumps over the lazy dog");
+
+    let bar_from = |h: &H| {
+        let c = canvas(h);
+        h.query_all_by_role(Role::Group)
+            .filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting"))
+            .map(|n| n.rect())
+            .find(|r| c.contains_rect(*r))
+            .expect("the selection bar is shown inside the canvas")
+    };
+
+    let bar_short = bar_from(&h_short);
+    let bar_long = bar_from(&h_long);
+
+    assert!(
+        (bar_short.min.x - bar_long.min.x).abs() < 1e-3,
+        "the toolbar's horizontal position must anchor to the selection start and not shift with selection length: short x={}, long x={}",
+        bar_short.min.x,
+        bar_long.min.x,
+    );
+
+    // A selection starting at a later word on the same line tracks that word's start.
+    let h_later = bar_over("jumps");
+    let bar_later = bar_from(&h_later);
+    assert!(
+        bar_later.min.x > bar_short.min.x + 20.0,
+        "a selection starting later on the line must place the toolbar further to the right: brown x={}, jumps x={}",
+        bar_short.min.x,
+        bar_later.min.x,
+    );
+}
+
+/// #7375: the bar's formatting controls are stacked into two rows: Row 2 controls (Bold,
+/// Align Left) sit strictly below Row 1 controls (Font, Font Size) rather than side-by-side.
+#[test]
+fn formatting_controls_stack_into_two_rows() {
+    let h = bar_over("brown fox");
+    let font = font_box(&h);
+    let size = size_box(&h);
+    let bold = member(&h, "Bold").expect("the bar has Bold");
+    let align_left = member(&h, "Align Left").expect("the bar has Align Left");
+
+    // Row 1 controls sit on the top row together.
+    assert!((font.min.y - size.min.y).abs() < 1.0, "Font and Font Size must share Row 1: font {font:?}, size {size:?}");
+
+    // Row 2 controls sit on the second row together.
+    assert!((bold.min.y - align_left.min.y).abs() < 1.0, "Bold and Align Left must share Row 2: bold {bold:?}, align_left {align_left:?}");
+
+    // Row 2 controls sit strictly below Row 1 controls.
+    assert!(bold.min.y >= font.max.y, "Bold ({bold:?}) must sit strictly below Font ({font:?})");
+    assert!(bold.min.y >= size.max.y, "Bold ({bold:?}) must sit strictly below Font Size ({size:?})");
+    assert!(align_left.min.y >= font.max.y, "Align Left ({align_left:?}) must sit strictly below Font ({font:?})");
+    assert!(align_left.min.y >= size.max.y, "Align Left ({align_left:?}) must sit strictly below Font Size ({size:?})");
+}
+
 /// Hovering any member of the bar previews its command on the selection; the pick is not made.
 #[test]
 fn hovering_a_bar_member_previews_its_command() {
