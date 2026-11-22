@@ -32,22 +32,22 @@ fn anchor_skips_rects_scrolled_offscreen_and_clips_partial_ones() {
     // Page 1's line is above the viewport, page 2's line is inside it.
     let above = Rect::from_min_size(pos2(100.0, clip.top() - 300.0), Vec2::new(200.0, 20.0));
     let inside = Rect::from_min_size(pos2(120.0, clip.top() + 50.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([above, inside], clip), Some(inside));
+    assert_eq!(visible_anchor([above, inside], clip, false), Some(inside));
     // Partly scrolled off the top: anchored to the visible part, never above the viewport.
     let partial = Rect::from_min_size(pos2(100.0, clip.top() - 10.0), Vec2::new(200.0, 20.0));
-    let a = visible_anchor([partial], clip).unwrap();
+    let a = visible_anchor([partial], clip, false).unwrap();
     assert!((a.min.y - clip.top()).abs() < 1e-3 && (a.height() - 10.0).abs() < 1e-3);
     // Entirely off either end, or only touching the edge: nothing to anchor to.
     let below = Rect::from_min_size(pos2(100.0, clip.bottom() + 5.0), Vec2::new(200.0, 20.0));
     let touching = Rect::from_min_size(pos2(100.0, clip.top() - 20.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([above, below, touching], clip), None);
-    assert_eq!(visible_anchor([], clip), None);
+    assert_eq!(visible_anchor([above, below, touching], clip, false), None);
+    assert_eq!(visible_anchor([], clip, false), None);
     // Input order does not matter: the topmost visible rectangle wins.
     let lower = Rect::from_min_size(pos2(100.0, clip.top() + 200.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([lower, inside], clip), Some(inside));
+    assert_eq!(visible_anchor([lower, inside], clip, false), Some(inside));
     // Degenerate input is rejected, not propagated.
     let nan = Rect::from_min_size(pos2(f32::NAN, 0.0), Vec2::new(10.0, 10.0));
-    assert_eq!(visible_anchor([nan], clip), None);
+    assert_eq!(visible_anchor([nan], clip, false), None);
 }
 
 /// The whole window over a document with `pick` selected, run until the bar is up.
@@ -739,8 +739,15 @@ fn the_bar_anchors_at_the_start_of_a_multi_line_left_to_right_selection() {
 fn the_anchor_spans_every_run_on_the_topmost_line() {
     let clip = vp();
     let run = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), Vec2::new(50.0, 20.0));
-    let a = visible_anchor([run(200.0, 100.0), run(300.0, 100.0), run(250.0, 100.0), run(900.0, 130.0)], clip).unwrap();
-    assert!(a.min.x == 200.0 && a.max.x == 350.0 && a.min.y == 100.0 && a.max.y == 120.0, "later line excluded, runs unioned: {a:?}");
+    let line1 = [run(200.0, 100.0), run(300.0, 100.0), run(250.0, 100.0)];
+    let later = run(900.0, 130.0);
+    let rects = [line1[0], line1[1], line1[2], later];
+    let a = visible_anchor(rects, clip, true).unwrap();
+    assert!(line1.iter().all(|r| a.max.x >= r.max.x && a.min.x <= r.min.x), "spans every run of line 1: {a:?}");
+    assert!(a.max.x < later.min.x && a.max.y <= later.min.y, "the later line is excluded: {a:?}");
     let x = start_x(a, true);
     assert!((x - a.max.x).abs() < (x - a.min.x).abs(), "RTL bar x={x} is nearer the line's right edge {}, not the left {}", a.max.x, a.min.x);
+    // Left to right keeps the first rectangle (vertical text stacks whole lines at one y-range).
+    let l = visible_anchor(rects, clip, false).unwrap();
+    assert!(l.min.x == line1[0].min.x && l.max.x < a.max.x, "LTR anchor is the top run only: {l:?}");
 }

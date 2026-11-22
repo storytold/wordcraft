@@ -24,9 +24,11 @@ const ANCHOR_INSET: f32 = 4.0;
 const MIN_VISIBLE_H: f32 = 1.0;
 
 /// The part of the selection the bar anchors to: the topmost visible line of the selection inside
-/// `clip` (the scroll viewport; the union of its runs), cut down to its visible portion. `None` when no usable part of the selection is on screen. Rectangles that only touch the clip's edge, or are
-/// not finite, are ignored. Pure geometry, unit tested without a window.
-pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rect) -> Option<Rect> {
+/// `clip` (the scroll viewport), cut down to its visible portion. `None` when no usable part of the
+/// selection is on screen. Rectangles that only touch the clip's edge, or are not finite, are ignored.
+/// For `rtl` the result spans every run on that line (see below); otherwise it is the first such
+/// rectangle. Pure geometry, unit tested without a window.
+pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rect, rtl: bool) -> Option<Rect> {
     if !clip.is_finite() || !clip.is_positive() {
         return None;
     }
@@ -46,9 +48,12 @@ pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rec
         }
         visible_rects.push(visible);
     }
+    let top = first?;
+    if !rtl {
+        return Some(top);
+    }
     // A bidirectional line is emitted as several visual runs, left to right: span the whole line, so
     // its right edge (the start of a right-to-left paragraph) is not that of the first run.
-    let top = first?;
     Some(visible_rects.into_iter().filter(|r| (top.min.y..=top.max.y).contains(&r.center().y)).fold(top, |u, r| u.union(r)))
 }
 
@@ -58,7 +63,7 @@ fn start_x(anchor: Rect, rtl: bool) -> f32 {
 }
 
 /// Whether the paragraph where the selection starts is right-to-left.
-fn starts_rtl(app: &WordApp) -> bool {
+pub(crate) fn starts_rtl(app: &WordApp) -> bool {
     let start = app.session.sel.ordered().0;
     app.session.doc.para_at(&start).is_some_and(|p| app.session.doc.styles.resolve_para(&p.props).bidi)
 }
