@@ -18,7 +18,8 @@ use crate::WordApp;
 /// Most font files one Add Font pick tries; the rest of a bigger selection is skipped.
 const MAX_FONTS_PER_PICK: usize = 2000;
 
-const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
+/// Picture suffixes shared by native/web choosers, drop dispatch and copied-file paste.
+pub const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "wmf", "emf"];
 const DOCUMENTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
@@ -32,6 +33,11 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
+}
+
+/// Whether a file name has a picture suffix offered by the Insert/Change Picture chooser.
+pub(crate) fn is_picture_name(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| PICTURES.iter().any(|known| known.eq_ignore_ascii_case(ext)))
 }
 
 /// `request` with the file types `open_filters` offers for `purpose`.
@@ -528,3 +534,50 @@ impl WordApp {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod picture_dispatch_tests {
+    use std::sync::Arc;
+
+    use craft::host::{AppInfo, Host, Picked, ScriptedFiles};
+    use craft::platform::open::{DropTarget, DroppedFile, FileIntake};
+
+    use super::*;
+
+    /// Pickers, drops and copied paths must agree on TIFF suffixes after the framework cutover.
+    #[test]
+    fn tiff_suffixes_dispatch_picked_and_dropped_images_and_copied_paths_as_pictures() {
+        for ext in ["tif", "tiff", "TIF", "TIFF"] {
+            let name = format!("scan.{ext}");
+            // Routing depends on the supplied name; the insertion decoder probes these PNG bytes.
+            let bytes = crate::paste_picture::png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap();
+            let files = Arc::new(ScriptedFiles::held());
+            let host = Host::builder(AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+            let session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+            let mut app = WordApp::new(session, crate::Services::default()).with_host(Arc::new(host));
+            let document = app.session.document_id();
+            app.pick_picture();
+            let request = files.requests().pop().unwrap();
+            let extensions: Vec<_> = request.filters.iter().flat_map(|f| f.extensions.iter().map(String::as_str)).collect();
+            assert!(extensions.contains(&"tif") && extensions.contains(&"tiff") && extensions.contains(&"png"));
+            assert!(!extensions.contains(&"txt"));
+            files.answer(Picked::Contents(vec![(name.clone(), bytes.clone())]));
+            app.poll_file_dialog().unwrap().unwrap();
+            assert_eq!(app.session.document_id(), document, "picker inserts into the current document: {ext}");
+            let pictures = app.session.run("arrange.selectionPane", &json!({})).unwrap();
+            assert_eq!(pictures.as_array().unwrap().len(), 1, "picker inserts a picture: {ext}");
+
+            let (intake, sender) = FileIntake::new(craft::host::Wake::none());
+            let services = crate::Services { intake: Some(intake), ..Default::default() };
+            let mut dropped = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+            let document = dropped.session.document_id();
+            sender.dropped(vec![DroppedFile { path: None, name, bytes: Some(bytes.into()) }], DropTarget::Elsewhere);
+            dropped.drain_inbox();
+            assert_eq!(dropped.session.document_id(), document, "drop inserts into the current document: {ext}");
+            let pictures = dropped.session.run("arrange.selectionPane", &json!({})).unwrap();
+            assert_eq!(pictures.as_array().unwrap().len(), 1, "drop inserts a picture: {ext}");
+            assert!(crate::paste_picture::names_picture_files(&format!("file:///tmp/scan.{ext}")));
+        }
+        assert!(!is_picture_name("notes.txt"));
+    }
+}

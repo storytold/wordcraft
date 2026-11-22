@@ -41,7 +41,7 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     let current = if reads_shown_document(app) { app.session.read_aloud.current().map(|u| u.start) } else { None };
     if current != app.read_aloud_at {
         if let Some(start) = &current {
-            app.session.sel = wordcraft_engine::Selection::caret(app.session.doc.clamp(start));
+            app.session.set_selection(wordcraft_engine::Selection::caret(app.session.doc.clamp(start)));
             app.session.goal_x = None;
             app.canvas.scroll_to_caret = true;
         }

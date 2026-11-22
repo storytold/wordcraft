@@ -102,6 +102,7 @@ pub use dialogs::dialogs_ribbon;
 pub use dialogs::dialogs_smart_art;
 pub use file_dialogs::open_filters;
 
+mod announce;
 mod app;
 mod services;
 mod state;
@@ -417,6 +418,8 @@ pub struct WordApp {
     pub spelling_review: Option<proofing_pane::SpellingForm>,
     /// The status bar's message, until its `until` passes.
     pub(crate) status: Option<Status>,
+    /// The latest formatting shortcut announcement for the active window.
+    pub(crate) announcement: Option<announce::Announcement>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,
