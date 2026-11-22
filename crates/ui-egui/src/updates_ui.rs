@@ -53,6 +53,16 @@ impl WordApp {
         rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(refused_check());
     }
 
+    /// Answers every update check with "up to date" instead of asking GitHub, so a test's result
+    /// doesn't depend on the network or its rate limit (#7463).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn stub_update_check(&mut self) {
+        let rt = &mut self.updates_rt;
+        rt.startup_check = false;
+        rt.updater =
+            Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(std::sync::Arc::new(|| Ok(None)));
+    }
+
     /// Starts the helper of an update that is ready, so that it installs once the process has
     /// ended. Call it once the exit is certain, before a path that ends the process without
     /// dropping the app. Later calls do nothing.
