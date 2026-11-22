@@ -1,8 +1,12 @@
+# Russian translation © 2026 SuperSfera LLC, MIT OR Apache-2.0
 [Desktop Entry]
 Type=Application
 Name=WordCraft
+Name[ru]=WordCraft
 GenericName=Word Processor
+GenericName[ru]=Текстовый процессор
 Comment=Write and design documents; open and save Word files
+Comment[ru]=Создание и оформление документов; открытие и сохранение файлов Word
 Exec=wordcraft %F
 TryExec=wordcraft
 Icon=ai.storyteller.wordcraft
@@ -11,4 +15,5 @@ StartupNotify=true
 StartupWMClass=ai.storyteller.wordcraft
 Categories=Office;WordProcessor;
 Keywords=word;processor;document;docx;writer;text;letter;report;
+Keywords[ru]=word;текстовый процессор;документ;docx;редактор текста;текст;письмо;отчёт;
 MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.ms-word.document.macroEnabled.12;application/vnd.openxmlformats-officedocument.wordprocessingml.template;application/vnd.ms-word.template.macroEnabled.12;application/msword;application/msword-template;application/vnd.oasis.opendocument.text;application/rtf;text/rtf;text/markdown;text/x-tex;text/html;
