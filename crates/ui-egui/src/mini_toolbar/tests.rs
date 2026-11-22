@@ -732,3 +732,15 @@ fn the_bar_anchors_at_the_start_of_a_multi_line_left_to_right_selection() {
     assert!(anchor.width() > 100.0, "the first selected line is a wide rect: {anchor:?}");
     assert!((x - anchor.min.x).abs() < (x - anchor.max.x).abs(), "the bar x={x} is nearer the start (left) edge of {anchor:?}");
 }
+
+/// #7464: a right-to-left line mixing Arabic with Latin words or digits is several visual runs
+/// (emitted left to right): the bar hangs from the whole line's right edge, not the first run's.
+#[test]
+fn the_anchor_spans_every_run_on_the_topmost_line() {
+    let clip = vp();
+    let run = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), Vec2::new(50.0, 20.0));
+    let a = visible_anchor([run(200.0, 100.0), run(300.0, 100.0), run(250.0, 100.0), run(900.0, 130.0)], clip).unwrap();
+    assert!(a.min.x == 200.0 && a.max.x == 350.0 && a.min.y == 100.0 && a.max.y == 120.0, "later line excluded, runs unioned: {a:?}");
+    let x = start_x(a, true);
+    assert!((x - a.max.x).abs() < (x - a.min.x).abs(), "RTL bar x={x} is nearer the line's right edge {}, not the left {}", a.max.x, a.min.x);
+}

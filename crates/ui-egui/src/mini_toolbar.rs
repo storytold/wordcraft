@@ -23,15 +23,15 @@ const ANCHOR_INSET: f32 = 4.0;
 /// Least height of a selection rectangle (screen points) that counts as visible for anchoring.
 const MIN_VISIBLE_H: f32 = 1.0;
 
-/// The part of the selection the bar anchors to: the topmost selection rectangle that is actually
-/// visible inside `clip` (the scroll viewport), cut down to its visible portion. `None` when no
-/// usable part of the selection is on screen. Rectangles that only touch the clip's edge, or are
+/// The part of the selection the bar anchors to: the topmost visible line of the selection inside
+/// `clip` (the scroll viewport; the union of its runs), cut down to its visible portion. `None` when no usable part of the selection is on screen. Rectangles that only touch the clip's edge, or are
 /// not finite, are ignored. Pure geometry, unit tested without a window.
 pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rect) -> Option<Rect> {
     if !clip.is_finite() || !clip.is_positive() {
         return None;
     }
     let mut first: Option<Rect> = None;
+    let mut visible_rects = Vec::new();
     for sr in selection_rects {
         if !sr.is_finite() || !sr.intersects(clip) {
             continue;
@@ -44,8 +44,12 @@ pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rec
         if first.is_none_or(|f| visible.min.y < f.min.y) {
             first = Some(visible);
         }
+        visible_rects.push(visible);
     }
-    first
+    // A bidirectional line is emitted as several visual runs, left to right: span the whole line, so
+    // its right edge (the start of a right-to-left paragraph) is not that of the first run.
+    let top = first?;
+    Some(visible_rects.into_iter().filter(|r| (top.min.y..=top.max.y).contains(&r.center().y)).fold(top, |u, r| u.union(r)))
 }
 
 /// The x the bar centres at over `anchor`: its start edge, less the inset, mirrored for right-to-left.
