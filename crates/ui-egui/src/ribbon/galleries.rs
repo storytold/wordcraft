@@ -298,7 +298,8 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
         .select(SelectMode::None)
         .activate(ActivateOn::Click)
         .card_columns(WORDART_COLUMNS)
-        .content_cells()
+        .thumb_size(ThumbSize::Small)
+        .zoom(2.0)
         // Every style shows, as in production; the menu's body is the one scroll.
         .natural_height(true)
         .caption(CaptionPlace::None)

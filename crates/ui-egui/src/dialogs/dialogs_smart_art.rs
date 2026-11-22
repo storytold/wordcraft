@@ -315,6 +315,8 @@ fn layout_tiles(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
     let positions: Vec<usize> = (0..shown.len()).collect();
     let current = shown.iter().position(|l| *l == form.layout).unwrap_or(0);
     let out = TileGrid::<usize>::new(tl!("Layouts").to_string())
+        .thumb_size(ThumbSize::Large)
+        .zoom(1.4)
         .select(SelectMode::Single)
         .card_columns(3)
         // Production's picker is three tile rows high and scrolls the rest; the cap also makes the grid the one owner
