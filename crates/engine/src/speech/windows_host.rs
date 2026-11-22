@@ -197,12 +197,12 @@ impl Host {
         let mut child = command.spawn().map_err(|e| e.to_string())?;
         let Some(stdin) = child.stdin.take() else {
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = wait_for_exit(&mut child, Duration::from_secs(1));
             return Err("Read Aloud host has no input".into());
         };
         let Some(stdout) = child.stdout.take() else {
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = wait_for_exit(&mut child, Duration::from_secs(1));
             return Err("Read Aloud host has no output".into());
         };
         let (tx, lines) = channel();
@@ -218,7 +218,7 @@ impl Host {
             })
             .map_err(|e| {
                 let _ = child.kill();
-                let _ = child.wait();
+                let _ = wait_for_exit(&mut child, Duration::from_secs(1));
                 e.to_string()
             })?;
         // Sentence ids start at 1: id 0 is the host's "could not parse the line" sentinel.
