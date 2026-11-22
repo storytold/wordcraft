@@ -156,6 +156,8 @@ impl Session {
         // Commands may leave an equation (a whole-body replacement) even after they fail; put
         // the editing session back with the document.
         let math_before = spec.mutates.then(|| self.math.clone());
+        // Leaving Markdown Source applies its text and drops it: a failed toggle keeps the text.
+        let md_before = (id == "view.markdownSource").then(|| (self.md_source.clone(), self.md_file.clone()));
         let before_doc: Option<RunSnapshot> = if spec.mutates {
             Some((
                 self.doc.clone(),
@@ -200,6 +202,10 @@ impl Session {
                 self.merge.preview,
             )
         });
+        // What the hooks after a command may change, taken before the tweaks below (a caret move
+        // closes the typing group) and the dispatch (`select.member` picks a member): a failed
+        // command puts back what it started with.
+        let hooks_before = HookState::of(self);
         let typing = spec.id == "text.insert" || spec.id == "equation.type";
         if spec.mutates && !typing {
             self.typing_open = false;
@@ -253,6 +259,7 @@ impl Session {
         if result.is_ok()
             && let Err(e) = self.finish_success_guarded(
                 guard,
+                hooks_before,
                 nav_before,
                 SuccessContext {
                     id,
@@ -274,6 +281,8 @@ impl Session {
             result = Err(e);
         }
         if let Err(e) = &result {
+            // A document the command opened behind this one closes again.
+            self.close_opened(home, mark);
             self.ime_edit_outcome = ImeEditOutcome::default();
             self.pending_ime_application_change = pending_application_change_before;
             self.autocap = None;
@@ -284,6 +293,10 @@ impl Session {
             }
             if let Some(math) = math_before {
                 self.math = math;
+            }
+            if let Some((src, file)) = md_before {
+                self.md_source = src;
+                self.md_file = file;
             }
             if let Some(versions) = versions_before {
                 self.versions = versions;
@@ -332,12 +345,12 @@ impl Session {
     fn finish_success_guarded(
         &mut self,
         guard: bool,
+        hooks_before: HookState,
         nav_before: Option<(Option<ColumnBlock>, Option<MathEdit>)>,
         context: SuccessContext<'_>,
     ) -> Result<(), CmdError> {
         let id = context.id;
         let nav_before = nav_before.map(|(column, math)| (context.sel_before.clone(), column, math));
-        let hooks_before = HookState::of(self);
         let post = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Restrict Editing: outside the exceptions nothing may change.
             if guard
@@ -530,10 +543,7 @@ impl Session {
             self.prefs.default_language = default_language_before;
             if self.is_open(home) {
                 let _ = self.switch_to(home);
-                let opened: Vec<u64> = self.order.iter().copied().filter(|d| *d >= mark && *d != home).collect();
-                for d in opened {
-                    let _ = self.close_document(d);
-                }
+                self.close_opened(home, mark);
                 if let Some((d, s, h, r, t, ev, c)) = before_doc {
                     self.doc = d;
                     self.sel = s;
@@ -552,6 +562,14 @@ impl Session {
         result
     }
 
+    /// Closes the documents a command opened (ids from `mark` on) other than `home`.
+    fn close_opened(&mut self, home: u64, mark: u64) {
+        let opened: Vec<u64> = self.order.iter().copied().filter(|d| *d >= mark && *d != home).collect();
+        for d in opened {
+            let _ = self.close_document(d);
+        }
+    }
+
     /// The success path of [`Self::finish_elsewhere`]: the first document gets its snapshot back
     /// where it is parked, and the input method sees the new document.
     fn settle_elsewhere(&mut self, home: u64, before_doc: Option<RunSnapshot>) {
@@ -567,10 +585,11 @@ impl Session {
     }
 }
 
-/// What the hooks after a command change outside the document snapshot, put back when one of
-/// them panics (#3721).
+/// What the hooks after a command change outside the document snapshot, as it was before the
+/// command ran: put back when one of them panics or refuses (#3721).
 struct HookState {
     typing_open: bool,
+    column_mode: bool,
     collapsed: Vec<(usize, u64)>,
     ime_state_seen: Option<ImeCaretState>,
     ime_state_revision: Option<u64>,
@@ -583,10 +602,11 @@ struct HookState {
 }
 
 impl HookState {
-    /// What the after-command hooks may change, as it is before they run.
+    /// What the after-command hooks may change, as it is before the command runs.
     fn of(s: &Session) -> Self {
         HookState {
             typing_open: s.typing_open,
+            column_mode: s.column_mode,
             collapsed: s.view.outline.collapsed.clone(),
             ime_state_seen: s.ime_state_seen.clone(),
             ime_state_revision: s.ime_state_revision,
@@ -602,6 +622,7 @@ impl HookState {
     /// Puts back what the hooks changed, after a hook panicked or refused.
     fn restore(self, s: &mut Session) {
         s.typing_open = self.typing_open;
+        s.column_mode = self.column_mode;
         s.view.outline.collapsed = self.collapsed;
         s.ime_state_seen = self.ime_state_seen;
         s.ime_state_revision = self.ime_state_revision;

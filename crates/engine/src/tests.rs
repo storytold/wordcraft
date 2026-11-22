@@ -5407,6 +5407,73 @@ fn panic_after_a_caret_move_keeps_the_picked_canvas_member() {
     assert_eq!(crate::cmd::canvas::selected_member(&s).map(|(_, i, _)| i), Some(0));
 }
 
+/// A failed `select.member` leaves the member that was picked before it, not the one it picked
+/// before a hook panicked (#3721).
+#[test]
+fn panic_after_picking_a_canvas_member_keeps_the_one_picked_before() {
+    let mut s = s();
+    run(&mut s, "insert.canvas", json!({}));
+    run(&mut s, "insert.shape", json!({"kind": "rectangle", "width": 100, "height": 40}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 50, "height": 50}));
+    run(&mut s, "select.member", json!({"index": 0}));
+    crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+    let e = s.run("select.member", &json!({"index": 1})).unwrap_err().to_string();
+    assert!(e.contains("select.member panicked"), "{e}");
+    assert_eq!(crate::cmd::canvas::selected_member(&s).map(|(_, i, _)| i), Some(0));
+}
+
+/// A failed caret move keeps the typing group open: typing after it joins the same undo step,
+/// although the move closes the group before it runs (#3721).
+#[test]
+fn panic_after_a_caret_move_keeps_the_typing_group() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some words"}));
+    assert!(s.typing_open());
+    crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+    assert!(s.run("caret.docStart", &json!({})).is_err());
+    assert!(s.typing_open(), "the typing group is still open");
+}
+
+/// Placing the caret ends column selection mode with the block; when a hook after it panics,
+/// both are back, so the arrow keys still extend the block (#3721).
+#[test]
+fn panic_after_placing_the_caret_keeps_column_mode() {
+    let mut s = column_doc();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+    run(&mut s, "select.column", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.down", json!({}));
+    let rows = s.column_segments().map(|c| c.len());
+    crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+    assert!(s.run("caret.set", &json!({"pos": {"block": 2, "off": 0}})).is_err());
+    assert!(s.column_mode, "column mode is still on");
+    assert_eq!(s.column_segments().map(|c| c.len()), rows);
+    let r = run(&mut s, "caret.right", json!({}));
+    assert_eq!(r["rows"], json!(["bc", "bc"]));
+}
+
+/// A command that opens a document and leaves the first one active, then fails in a hook after
+/// it, closes the document it opened again (#3721).
+#[test]
+fn panic_after_a_command_that_opens_a_document_behind_closes_it() {
+    let mut s = s();
+    let open_behind = crate::CommandSpec::new("test.openBehind", "Open Behind", "Test", |s, _| {
+        let home = s.document_id();
+        s.add_document(wordcraft_doc::Document::from_text("Other"));
+        s.activate(home)?;
+        Ok(json!({}))
+    })
+    .pure();
+    let mut specs = s.registry.all().to_vec();
+    specs.push(open_behind);
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    let (home, docs_before) = (s.document_id(), s.documents().len());
+    crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+    assert!(s.run("test.openBehind", &json!({})).is_err());
+    assert_eq!(s.document_id(), home);
+    assert_eq!(s.documents().len(), docs_before, "the document it opened is closed");
+}
+
 /// A command that ends in another document (File › New) settles there under the guard too: a
 /// panic while settling closes the document it opened and leaves the first one shown, with its
 /// text, selection and undo and redo history as they were (#3721).
@@ -5431,6 +5498,34 @@ fn panic_settling_in_a_new_document_closes_it_and_restores_the_first() {
     assert!(s.can_redo(), "the redo step survives");
     run(&mut s, "file.new", json!({}));
     assert_eq!(s.documents().len(), docs_before + 1);
+}
+
+/// A command that edits the first document and then opens another, panicking while settling
+/// there, leaves the first document with its text and undo and redo history as they were.
+#[test]
+fn panic_settling_after_an_edit_and_a_new_document_restores_the_edit() {
+    let mut s = s();
+    let edit_then_new = crate::CommandSpec::new("test.editThenNew", "Edit Then New", "Test", |s, _| {
+        s.run("text.insert", &json!({"text": " lost"}))?;
+        s.add_document(wordcraft_doc::Document::from_text("Other"));
+        Ok(json!({}))
+    });
+    let mut specs = s.registry.all().to_vec();
+    specs.push(edit_then_new);
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    run(&mut s, "text.insert", json!({"text": "Kept"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " undone"}));
+    run(&mut s, "edit.undo", json!({}));
+    let (home, docs_before, text_before, undo_before) = (s.document_id(), s.documents().len(), text(&s), s.undo_labels());
+    crate::session::PANIC_SETTLING_ELSEWHERE.with(|f| f.set(true));
+    assert!(s.run("test.editThenNew", &json!({})).is_err());
+    assert_eq!(s.document_id(), home);
+    assert_eq!(s.documents().len(), docs_before);
+    assert_eq!(text(&s), text_before);
+    assert_eq!(s.undo_labels(), undo_before);
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(text(&s), "Kept undone");
 }
 
 /// A panic in a command's `enabled` check, before anything ran, is an error too, and the session

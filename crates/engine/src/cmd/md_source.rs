@@ -449,6 +449,23 @@ mod tests {
         assert!(s.can_redo());
     }
 
+    /// Leaving with edits the document doesn't have yet applies them and drops the text; when a
+    /// hook after the toggle panics, the view stays open with the edits (#3721).
+    #[test]
+    fn a_failed_leave_keeps_the_edited_text() {
+        let mut s = session(SAMPLE);
+        let before = s.doc.clone();
+        s.run(TOGGLE, &json!({})).unwrap();
+        let text = s.run(TEXT, &json!({})).unwrap()["text"].as_str().unwrap().replace("First paragraph.", "Changed paragraph.");
+        set_text(&mut s, &text);
+        crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+        assert!(s.run(TOGGLE, &json!({})).is_err());
+        assert_eq!(s.md_source.as_ref().map(|src| src.text.as_str()), Some(text.as_str()), "the edits are kept");
+        assert!(s.doc.same_content(&before));
+        s.run(TOGGLE, &json!({})).unwrap();
+        assert!(body_text(&s).contains("Changed paragraph."));
+    }
+
     static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     /// Generates a unique temporary directory for test file isolation.
