@@ -137,6 +137,8 @@ impl WordApp {
             canvas,
             restrict,
             spelling_review,
+            library: Default::default(),
+            library_thumbs: Default::default(),
             status,
             announcement,
             previews,
@@ -309,6 +311,7 @@ impl WordApp {
 
     /// Per-frame logic before layout: background work, the control channel, file results.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        crate::library_pane::begin_frame(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
@@ -405,6 +408,7 @@ impl WordApp {
         } else {
             self.window_ui(ui);
         }
+        crate::library_pane::end_frame(self);
     }
 
     /// Lay out the drawn window. A command that brings another window's state in (New, Open,
