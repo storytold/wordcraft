@@ -8,7 +8,7 @@ use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk,
 use craft::ui::display::{Kbd, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::Stack;
-use craft::ui::list::{ListRow, ThumbAspect};
+use craft::ui::list::{ListRow, ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::{FormCx, FormDialog};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::runtime::env::Label;
@@ -639,6 +639,7 @@ fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
     let events = {
         let recent = &form.recent;
         TileGrid::new(word("Recently used symbols:"))
+            .thumb_size(ThumbSize::Medium)
             .select(SelectMode::Single)
             .caption(CaptionPlace::None)
             .card_columns(RECENT_SYMBOLS)
@@ -681,8 +682,12 @@ fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
     let font = form.shown_font().to_string();
     let events = {
         let chars = &form.chars;
-        let mut grid =
-            TileGrid::new(word("Symbols")).select(SelectMode::Single).max_rows(8).caption(CaptionPlace::None).selection(Bind::bound(&mut selection));
+        let mut grid = TileGrid::new(word("Symbols"))
+            .thumb_size(ThumbSize::Medium)
+            .select(SelectMode::Single)
+            .max_rows(8)
+            .caption(CaptionPlace::None)
+            .selection(Bind::bound(&mut selection));
         if let Some(at) = reveal {
             grid = grid.reveal(at);
         }

@@ -57,25 +57,31 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("tableStyles", tl!("Table Styles").to_string(), IconId::new("tableStyles").into()), |ui| {
         super::galleries::table_styles(ui, app);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            let _ = menu_button(ui, Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")), tl!("Styles").to_string(), None, |ui, _| {
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
-                    .label(tl!("New Table Style…").to_string())
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
-                    .label(tl!("Modify Table Style…").to_string())
-                    .enabled(can_modify)
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
-                    .label(tl!("Delete Table Style").to_string())
-                    .enabled(can_delete)
-                    .show(ui);
-            });
+            let _ = menu_button(
+                ui,
+                Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")),
+                tl!("Styles").to_string(),
+                Some("table.style"),
+                |ui, _| {
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
+                        .label(tl!("New Table Style…").to_string())
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
+                        .label(tl!("Modify Table Style…").to_string())
+                        .enabled(can_modify)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
+                        .label(tl!("Delete Table Style").to_string())
+                        .enabled(can_delete)
+                        .show(ui);
+                },
+            );
             let _ = crate::colors::shading_split(ui, app, tl!("Shading").to_string(), Target::cmd("table.shading").remember(Remember::Shading));
         });
     });
     row.group(RibbonGroup::new("borders", tl!("Borders").to_string(), IconId::new("borders").into()), |ui| {
         let face = Button::new(tl!("Borders").to_string()).icon(IconId::new("borders")).arrangement(Arrangement::Stacked);
-        let _ = menu_button(ui, face, tl!("Borders").to_string(), None, |ui, _| {
+        let _ = menu_button(ui, face, tl!("Borders").to_string(), Some("table.borders"), |ui, _| {
             for (label, kind) in [
                 ("All Borders", "all"),
                 ("Outside Borders", "outside"),
@@ -181,7 +187,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(RibbonGroup::new("rowsColumns", tl!("Rows & Columns").to_string(), IconId::new("insertAbove").into()), |ui| {
         let face = Button::new(tl!("Delete").to_string()).icon(IconId::new("deleteTable")).arrangement(Arrangement::Stacked);
-        let _ = menu_button(ui, face, tl!("Delete").to_string(), None, |ui, _| {
+        let _ = menu_button(ui, face, tl!("Delete").to_string(), Some("table.deleteTable"), |ui, _| {
             for (label, id) in [
                 ("Delete Cells", "table.deleteCells"),
                 ("Delete Columns", "table.deleteColumn"),
@@ -214,7 +220,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(RibbonGroup::new("cellSize", tl!("Cell Size").to_string(), IconId::new("autofit").into()), |ui| {
         let face = Button::new(tl!("AutoFit").to_string()).icon(IconId::new("autofit")).arrangement(Arrangement::Stacked);
-        let _ = menu_button(ui, face, tl!("AutoFit").to_string(), None, |ui, _| {
+        let _ = menu_button(ui, face, tl!("AutoFit").to_string(), Some("table.autofit"), |ui, _| {
             for (label, mode) in [("AutoFit Contents", "contents"), ("AutoFit Window", "window"), ("Fixed Column Width", "fixed")] {
                 MenuItem::command(CommandRef::with_params("table.autofit", json!({"mode": mode}))).label(tl!(label).to_string()).show(ui);
             }

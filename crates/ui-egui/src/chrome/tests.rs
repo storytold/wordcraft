@@ -436,3 +436,286 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     let focus = wide.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").rect();
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
+
+/// #7311: the title bar's Discord community button keeps its solid accent fill and contrasting
+/// `on_strong` icon/label in both wide (pill with label) and narrow (compact icon-only) windows,
+/// across Light and Dark themes, and still dispatches `ui.discord` when clicked.
+#[test]
+fn title_bar_discord_button_keeps_accent_fill_and_icon_contrast_in_wide_and_narrow_windows() {
+    use egui::accesskit::Role;
+
+    fn to_color32(rgba: craft::theme::Rgba) -> egui::Color32 {
+        egui::Color32::from(craft::theme::Srgba::from(rgba))
+    }
+
+    fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+        for clipped in shapes {
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match shape {
+                    egui::Shape::Vec(children) => {
+                        for child in children {
+                            walk(child, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            walk(&clipped.shape, out);
+        }
+    }
+
+    for theme in ["light", "dark"] {
+        for (width, expect_compact) in [(1440.0_f32, false), (520.0_f32, true)] {
+            let mut a = new_app();
+            a.ui.show_discord = true;
+            a.run("ui.theme", json!({"value": theme})).unwrap();
+            let mut h = crate::test_harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(app_frame, a);
+            crate::test_harness::frames(&mut h, 10);
+
+            let node = h.get_by_role_and_label(Role::Button, "Discord");
+            let rect = node.rect();
+            assert!(rect.is_positive(), "{theme} {width}: Discord button must be laid out");
+            if expect_compact {
+                assert!(rect.width() <= rect.height() + 4.0, "{theme} {width}: expected compact icon-only Discord button, got {rect:?}");
+            } else {
+                assert!(rect.width() > rect.height() + 10.0, "{theme} {width}: expected full labelled Discord pill, got {rect:?}");
+            }
+
+            let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+            let accent_strong = to_color32(env.tokens.color.accent.strong);
+            let on_strong = to_color32(env.tokens.color.text.on_strong);
+
+            let mut shapes = Vec::new();
+            collect_shapes(&h.output().shapes, &mut shapes);
+
+            let bg = shapes.iter().find_map(|s| match s {
+                egui::Shape::Rect(r)
+                    if (r.rect.min.x - rect.min.x).abs() <= 1.5
+                        && (r.rect.max.x - rect.max.x).abs() <= 1.5
+                        && (r.rect.min.y - rect.min.y).abs() <= 1.5
+                        && (r.rect.max.y - rect.max.y).abs() <= 1.5
+                        && r.fill != egui::Color32::TRANSPARENT =>
+                {
+                    Some(r)
+                }
+                _ => None,
+            });
+            let bg = bg.unwrap_or_else(|| panic!("{theme} {width}: expected a filled background rect for Discord button {rect:?}"));
+            assert_eq!(bg.fill, accent_strong, "{theme} {width}: Discord button fill should be accent.strong");
+            if !expect_compact {
+                let min_pill_radius = (rect.height() / 2.0 - 1.5).floor().max(0.0) as u8;
+                assert!(
+                    bg.corner_radius.nw >= min_pill_radius,
+                    "{theme} {width}: wide Discord button should have pill corners (>= {min_pill_radius}), got {:?}",
+                    bg.corner_radius
+                );
+            }
+
+            let icon_tinted_on_strong = shapes.iter().any(|s| match s {
+                egui::Shape::Mesh(mesh) => {
+                    let bounds = mesh.calc_bounds();
+                    rect.expand(1.5).contains_rect(bounds) && !mesh.vertices.is_empty() && mesh.vertices.iter().all(|v| v.color == on_strong)
+                }
+                _ => false,
+            });
+            assert!(
+                icon_tinted_on_strong,
+                "{theme} {width}: Discord icon inside {rect:?} must paint in text.on_strong ({on_strong:?}), not accent ink"
+            );
+
+            if !expect_compact {
+                let has_label = shapes.iter().any(|s| match s {
+                    egui::Shape::Text(t) => rect.expand(1.5).contains_rect(s.visual_bounding_rect()) && t.galley.text() == "Discord",
+                    _ => false,
+                });
+                assert!(has_label, "{theme} {width}: wide Discord pill must paint its \"Discord\" label");
+            }
+
+            // Clicking the button dispatches `ui.discord` and opens the community URL.
+            h.get_by_role_and_label(Role::Button, "Discord").click();
+            let mut opened = None;
+            for _ in 0..4 {
+                crate::test_harness::step(&mut h);
+                for cmd in &h.output().platform_output.commands {
+                    if let egui::OutputCommand::OpenUrl(url) = cmd {
+                        opened = Some(url.url.clone());
+                    }
+                }
+            }
+            assert_eq!(
+                opened.as_deref(),
+                Some("https://discord.gg/artcraft"),
+                "{theme} {width}: clicking the Discord button should open the community URL"
+            );
+        }
+    }
+}
+
+/// #7445: the title bar's Discord community button uses the dedicated single-ink `discordPill` icon
+/// with `on_strong` contrast over the solid accent pill, while the ribbon's Review › Help › Community
+/// Discord button retains the branded `discord` icon with `class="accent"` ink.
+#[test]
+fn discord_icons_distinguish_title_bar_pill_and_ribbon_accent() {
+    use egui::accesskit::Role;
+
+    fn to_color32(rgba: craft::theme::Rgba) -> egui::Color32 {
+        egui::Color32::from(craft::theme::Srgba::from(rgba))
+    }
+
+    fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+        for clipped in shapes {
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match shape {
+                    egui::Shape::Vec(children) => {
+                        for child in children {
+                            walk(child, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            walk(&clipped.shape, out);
+        }
+    }
+
+    for theme in ["light", "dark"] {
+        let mut a = new_app();
+        a.ui.show_discord = true;
+        a.ui.language = "en".into();
+        a.run("ui.theme", json!({"value": theme})).unwrap();
+        a.run("ui.tab", json!({"tab": "Help"})).unwrap();
+
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 700.0)).build_ui_state(app_frame, a);
+        crate::test_harness::frames(&mut h, 6);
+
+        let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+        let on_strong = to_color32(env.tokens.color.text.on_strong);
+        let accent_solid = to_color32(env.tokens.color.accent.solid);
+
+        let mut shapes = Vec::new();
+        collect_shapes(&h.output().shapes, &mut shapes);
+
+        // 1. Title-bar button uses discordPill icon (single-ink text.on_strong).
+        let title_bar_node = h.get_by_role_and_label(Role::Button, "Discord");
+        let title_bar_rect = title_bar_node.rect();
+        assert!(title_bar_rect.is_positive(), "{theme}: Title-bar Discord button must be laid out");
+
+        let title_bar_icon_on_strong = shapes.iter().any(|s| match s {
+            egui::Shape::Mesh(mesh) => {
+                let bounds = mesh.calc_bounds();
+                title_bar_rect.expand(1.5).contains_rect(bounds) && !mesh.vertices.is_empty() && mesh.vertices.iter().all(|v| v.color == on_strong)
+            }
+            _ => false,
+        });
+        assert!(title_bar_icon_on_strong, "{theme}: Title-bar Discord icon inside {title_bar_rect:?} must paint in text.on_strong ({on_strong:?})");
+
+        // 2. Ribbon Help › Community Discord button uses discord icon with class="accent".
+        let ribbon_node = h
+            .query_all_by_role(Role::Button)
+            .find(|n| n.accesskit_node().label().is_some_and(|l| l.contains("Discord")) && n.rect() != title_bar_rect)
+            .expect("Ribbon Community Discord button");
+        let ribbon_rect = ribbon_node.rect();
+        assert!(ribbon_rect.is_positive(), "{theme}: Ribbon Community Discord button must be laid out");
+
+        let ribbon_icon_accent = shapes.iter().any(|s| match s {
+            egui::Shape::Mesh(mesh) => {
+                let bounds = mesh.calc_bounds();
+                ribbon_rect.expand(1.5).contains_rect(bounds) && !mesh.vertices.is_empty() && mesh.vertices.iter().all(|v| v.color == accent_solid)
+            }
+            _ => false,
+        });
+        assert!(ribbon_icon_accent, "{theme}: Ribbon Community Discord icon inside {ribbon_rect:?} must paint in accent.solid ({accent_solid:?})");
+    }
+}
+
+/// #7319: view mode toggle buttons (Read Mode, Print Layout, Web Layout) in the status bar are grouped
+/// with `Gap::Item` intra-group spacing, separated from Focus and Zoom controls via `Gap::Section`.
+/// The Zoom slider has size `ControlSize::Md`, giving its thumb a 14 pt grab affordance matching sibling `IconButton`s.
+#[test]
+fn status_bar_view_mode_toggles_and_zoom_slider_proportions() {
+    use egui::accesskit::Role;
+    let h = harness(new_app());
+
+    let focus = h.get_by_role_and_label(Role::Button, "Focus").rect();
+    let read_mode = h.get_by_role_and_label(Role::Button, "Read Mode").rect();
+    let print_layout = h.get_by_role_and_label(Role::Button, "Print Layout").rect();
+    let web_layout = h.get_by_role_and_label(Role::Button, "Web Layout").rect();
+    let zoom_out = h.get_by_role_and_label(Role::Button, "Zoom Out").rect();
+    let slider = h.get_by_role_and_label(Role::Slider, "Zoom").rect();
+    let zoom_in = h.get_by_role_and_label(Role::Button, "Zoom In").rect();
+
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let gap_section = env.tokens.space.gap.section;
+    let gap_item = env.tokens.space.gap.item;
+    let gap_row = env.tokens.space.gap.row;
+    let glyph_md = env.tokens.size.icon.glyph_md;
+
+    // 1. Spacing and grouping:
+    // Focus -> View modes group gap is Gap::Section.
+    let focus_to_views_gap = read_mode.min.x - focus.max.x;
+    assert!(
+        (focus_to_views_gap - gap_section).abs() <= 0.5,
+        "Focus and Read Mode should be separated by Gap::Section ({gap_section} pt), got {focus_to_views_gap}"
+    );
+
+    // Intra-group spacing between view mode toggle buttons is Gap::Item.
+    let read_to_print_gap = print_layout.min.x - read_mode.max.x;
+    let print_to_web_gap = web_layout.min.x - print_layout.max.x;
+    assert!(
+        (read_to_print_gap - gap_item).abs() <= 0.5,
+        "Read Mode and Print Layout intra-group spacing should be Gap::Item ({gap_item} pt), got {read_to_print_gap}"
+    );
+    assert!(
+        (print_to_web_gap - gap_item).abs() <= 0.5,
+        "Print Layout and Web Layout intra-group spacing should be Gap::Item ({gap_item} pt), got {print_to_web_gap}"
+    );
+
+    // View modes group -> Zoom controls group gap is Gap::Section.
+    let views_to_zoom_gap = zoom_out.min.x - web_layout.max.x;
+    assert!(
+        (views_to_zoom_gap - gap_section).abs() <= 0.5,
+        "Web Layout and Zoom Out should be separated by Gap::Section ({gap_section} pt), got {views_to_zoom_gap}"
+    );
+
+    // Zoom controls intra-group spacing is default row gap (Gap::Row).
+    let zoom_out_to_slider_gap = slider.min.x - zoom_out.max.x;
+    let slider_to_zoom_in_gap = zoom_in.min.x - slider.max.x;
+    assert!(
+        (zoom_out_to_slider_gap - gap_row).abs() <= 0.5,
+        "Zoom Out and Zoom Slider intra-group spacing should be Gap::Row ({gap_row} pt), got {zoom_out_to_slider_gap}"
+    );
+    assert!(
+        (slider_to_zoom_in_gap - gap_row).abs() <= 0.5,
+        "Zoom Slider and Zoom In intra-group spacing should be Gap::Row ({gap_row} pt), got {slider_to_zoom_in_gap}"
+    );
+
+    // 2. Zoom slider thumb proportions:
+    // Slider thumb is rendered as a round knob sized at glyph_md (14 pt) for ControlSize::Md.
+    fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+        for clipped in shapes {
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match shape {
+                    egui::Shape::Vec(children) => {
+                        for child in children {
+                            walk(child, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            walk(&clipped.shape, out);
+        }
+    }
+
+    let mut shapes = Vec::new();
+    collect_shapes(&h.output().shapes, &mut shapes);
+
+    let has_14pt_knob = shapes.iter().any(|s| match s {
+        egui::Shape::Rect(r) => {
+            let rect = r.rect;
+            slider.expand(2.0).contains_rect(rect) && (rect.width() - glyph_md).abs() <= 0.5 && (rect.height() - glyph_md).abs() <= 0.5
+        }
+        _ => false,
+    });
+    assert!(has_14pt_knob, "Zoom slider should paint a {glyph_md} pt thumb (ControlSize::Md) matching 14 pt IconButton icons inside {slider:?}");
+}
