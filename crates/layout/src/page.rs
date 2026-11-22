@@ -71,6 +71,9 @@ pub(crate) struct PageBuilder<'a> {
     /// Balancing columns: (page index, column height) — that page's columns end `height` below
     /// the top of the section on it.
     pub(crate) balance: Option<(usize, f32)>,
+    /// Balancing without the strict widow/orphan and keep rules of Word 2013's layout (#6821): the
+    /// last try when even the full column height does not hold the text with them.
+    pub(crate) relaxed: bool,
     /// The page with the last explicit column break.
     pub(crate) col_break_page: Option<usize>,
     /// The section's footnotes go right below its text, not at the page bottom ...
