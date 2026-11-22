@@ -761,9 +761,9 @@ fn dismiss_ime_on_pointer_press(app: &mut WordApp, ui: &Ui, full: Rect) {
         return;
     }
     let press = ui.input(|i| {
-        i.events.iter().any(|e| {
-            matches!(e, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if full.contains(*pos))
-        })
+        i.events
+            .iter()
+            .any(|e| matches!(e, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if full.contains(*pos)))
     });
     if press {
         app.canvas.ime_preedit.clear();

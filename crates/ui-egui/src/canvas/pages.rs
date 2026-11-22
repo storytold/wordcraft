@@ -160,17 +160,8 @@ fn ime_shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
     }
     match app.session.ime_preview_layout(&preedit, cursor) {
         Some((doc, sel, layout)) => {
-            app.canvas.ime_preview = Some(super::ImePreview {
-                preedit,
-                cursor_chars: cursor,
-                document,
-                rev,
-                real_sel,
-                base,
-                doc,
-                sel,
-                layout: layout.clone(),
-            });
+            app.canvas.ime_preview =
+                Some(super::ImePreview { preedit, cursor_chars: cursor, document, rev, real_sel, base, doc, sel, layout: layout.clone() });
             layout
         }
         None => {

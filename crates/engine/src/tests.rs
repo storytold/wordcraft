@@ -2814,12 +2814,7 @@ fn ime_preview_layout_reflows_the_text_right_of_the_composition() {
 
     let right = wordcraft_doc::Pos { off: base_off + preedit.len(), ..preview_sel.focus.clone() };
     let after_composition = preview.caret_on(&right, 0).expect("the caret before 乙 in the preview");
-    assert!(
-        after_composition.x > base_caret.x + 1.0,
-        "乙 starts further right: {} > {}",
-        after_composition.x,
-        base_caret.x
-    );
+    assert!(after_composition.x > base_caret.x + 1.0, "乙 starts further right: {} > {}", after_composition.x, base_caret.x);
 
     assert_eq!(s.doc, doc, "the composition does not edit the document");
     assert_eq!((&s.sel, s.rev(), s.dirty), (&sel, rev, false));
