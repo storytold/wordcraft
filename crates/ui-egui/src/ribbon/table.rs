@@ -152,8 +152,12 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
 pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("table", tl!("Table").to_string(), IconId::new("table").into()), |ui| {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            let _ =
-                menu_button(ui, Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")), tl!("Select").to_string(), None, |ui, _| {
+            let _ = menu_button(
+                ui,
+                Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")),
+                tl!("Select").to_string(),
+                Some("table.selectTable"),
+                |ui, _| {
                     for (label, id) in [
                         ("Select Cell", "table.selectCell"),
                         ("Select Column", "table.selectColumn"),
@@ -162,7 +166,8 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     ] {
                         MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
                     }
-                });
+                },
+            );
             ToggleButton::command(CommandRef::new("table.viewGridlines"))
                 .label(tl!("View Gridlines").to_string())
                 .icon(IconId::new("gridlines"))
