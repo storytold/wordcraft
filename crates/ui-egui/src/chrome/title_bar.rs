@@ -256,7 +256,7 @@ fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
     if app.ui.show_discord {
         let tip = TooltipSpec::new(tl!("Join the ArtCraft community on Discord").to_string());
         let clicked = if step >= 1 {
-            let out = IconButton::new(IconId::new("discord"))
+            let out = IconButton::new(IconId::new("discordPill"))
                 .label(tl!("Discord").to_string())
                 .variant(Variant::Custom(DISCORD_ICON))
                 .glyphs(GlyphRole::Tool)
@@ -266,7 +266,7 @@ fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
             out.response.clicked()
         } else {
             let out =
-                Button::new(tl!("Discord").to_string()).icon(IconId::new("discord")).variant(Variant::Custom(DISCORD_PILL)).tooltip(tip).show(ui);
+                Button::new(tl!("Discord").to_string()).icon(IconId::new("discordPill")).variant(Variant::Custom(DISCORD_PILL)).tooltip(tip).show(ui);
             rects.push(out.response.rect);
             out.clicked()
         };
