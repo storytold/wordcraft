@@ -330,6 +330,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 > 2026-11-03 · Section `w:chapStyle` values preserve the full unsigned-byte range, including 10, while values above 255 are rejected.
 
+| 2026-11-15 | trivial | PR #5254: shared DOCX/model bookmark port and explicit bidirectional application bridge; existing synthetic controls retained; native Word/corpus qualification remains open. |
 | 2026-10-30 | trivial | DOCX section metadata now preserves independent printer trays, section endnote suppression, chapter numbering settings, and footnote columns through native JSON and repeated save/reopen |
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).
 >
@@ -705,3 +706,24 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 | 2026-11-05 | trivial | DOCX: a block-level content control (including `w15:repeatingSection` / `w15:repeatingSectionItem` nested around one paragraph) followed by body-level bookmark, comment or permission markup (Word's `_GoBack` bookmark) is written back around its paragraph instead of inside it, so Word opens the saved file; the markers are kept at the end of that paragraph (P0069). |
 | 2026-11-04 | trivial | DOCX: paragraph and list-level indents (`w:ind`) and paragraph spacing (`w:spacing` before/after) written as plain twips beyond 16 bits keep their low 16 bits, as Word reads them (`w:left="66256"` is a 36 pt indent), instead of pushing the text off the page (`twips_wrap.rs`, P0059) |
 | 2026-11-12 | trivial | DOCX: `w:lnNumType` without a positive `w:countBy` leaves line numbering off, as Word does, instead of numbering every line on screen, in PDF export and on re-save; saving then omits the element (`section_line_numbering.rs`, #6209) |
+| 2026-11-05 | trivial | PR #5254: preserve structural DOCX bookmarks and source column bounds while the original markers remain; replacing or deleting a bookmark clears its source placement. Synthetic edit, undo/redo and repeated-save controls; native Word and broader corpus acceptance remain open. Unsupported chunks that produce no blocks retain pending bookmarks in one empty carrier paragraph. |
+
+### Shared structural bookmark integration — 2026-11-15
+
+The active DOCX IO uses [the supporting craft-docx/craft-wordmodel contribution](https://github.com/ro-legal-docx/craft-libs/commit/66cd88cd04ed9d6c4bca3b42921401c47995a314)
+based on the same upstream pin `41fb227542efb8a7748caa1c659f271d8605303c`. Same-revision workspace
+dependencies and lock entries move together; other pins and package versions
+remain unchanged. The app's model bridge transfers bookmark identifiers, column
+bounds and source placement in both directions. Replacing/deleting names clears
+source metadata, including after the original markers have already been removed.
+The upstream-migrated legacy modules are not restored to active IO. Their original
+commits remain in the contribution history.
+
+Synthetic integration tests cover row/cell/body/header boundaries, moved/deleted
+markers, numeric ID collisions, content controls, supported/unsupported chunks,
+empty cells, repeated saves and edit undo/redo through the active shared IO.
+No local build/test or native Word round trip was run in this integration.
+The fork has no registered full-library workspace workflow; its existing
+`doc.yml` does not execute craft-docx tests. The consumer's normal full CI runs
+the equivalent bookmark controls through the active shared reader/writer and
+bridge. Overlap with #4853 still needs a maintainer integration decision.
