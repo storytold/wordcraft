@@ -254,8 +254,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
             }
         }
     }
-    // A pick from the overflow menu has no tab rect to press: it also brings the ribbon back.
-    if out.picked.is_some() && app.ui.ribbon_collapsed {
+    // A pick from the overflow menu has no tab rect to press: it also brings the ribbon back, on the
+    // press's terms (not File, not in Focus, where the ribbon is dropped over the page).
+    if out.picked.as_deref().is_some_and(|tab| tab != "File") && !app.session.view.focus_mode && !framework_toggled && app.ui.ribbon_collapsed {
         let _ = app.run("ui.collapseRibbon", json!({}));
     }
     // A click on a tab is reported as `shown`, a pick from the overflow menu as `picked`.
