@@ -55,7 +55,9 @@ pub(super) fn color_row(
     palette: &Palette,
     asks: &mut Vec<Asks>,
 ) {
-    if color_field(ui, label, value, empty, palette).more_colors {
+    // In a Field, as the drop-downs are, so the label shows and the picker lines up with them.
+    let more = Field::new(label.clone()).id_salt(key).show(ui, |ui, _| color_field(ui, label, value, empty, palette).more_colors).inner;
+    if more == Some(true) {
         asks.push(Asks::Color { field: key, current: Rgb::parse(value), tab: ColorPickerTab::Standard });
     }
 }

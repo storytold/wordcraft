@@ -752,6 +752,20 @@ mod tests {
         assert_eq!(b.session.prefs.markup.changed_lines, wordcraft_layout::display::ChangeBar::Right);
     }
 
+    /// Each colour of Track Changes Options shows its "Color:" label, and its picker starts where the drop-down above
+    /// it starts, as the other rows of the form do.
+    #[test]
+    fn track_changes_options_colours_are_labelled_and_line_up_with_their_marks() {
+        let mut h = harness(app());
+        h.state_mut().run("review.trackingOptions", json!({})).unwrap();
+        h.run_steps(2);
+        use egui_kittest::kittest::Queryable as _;
+        let colours: Vec<_> = h.query_all_by_label("Color:").map(|node| node.rect().min.x).collect();
+        assert_eq!(colours.len(), 5, "every colour row draws its label");
+        let mark = h.get_by_label("Insertions:").rect().min.x;
+        assert!((colours[0] - mark).abs() < 1.0, "the Insertions colour row starts at {}, its drop-down at {mark}", colours[0]);
+    }
+
     /// Gap #5: the Moves rows (Moved from / Moved to: mark and colour) start at green double
     /// strikethrough and double underline, and OK applies them. There is no Track moves
     /// checkbox (as in Word for Mac), so OK leaves the document's setting alone.
