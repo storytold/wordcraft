@@ -1,4 +1,11 @@
+use craft::platform::clipboard::{Clipboard, MemoryClipboard};
+use craft::ui::primitives::ImeStamp;
+use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
+
 use super::*;
+
+/// The app harness the key tests drive: frames of the real `WordApp` with events pushed by `h.event`.
+type H = egui_kittest::Harness<'static, WordApp>;
 
 /// Builds an IME edit outcome test fixture with `selection_changed` false.
 fn outcome(classified: bool, content: bool, state: bool, transformed: bool) -> ImeEditOutcome {
@@ -9,9 +16,9 @@ fn outcome(classified: bool, content: bool, state: bool, transformed: bool) -> I
 /// unprovable mutation forces `Other`.
 #[test]
 fn ime_receipt_gate_distinguishes_noop_from_unproven_mutation() {
-    let same = egui::ImeMutationStamp::from_committed("ab", 2, 2, None);
+    let same = ImeStamp::from_committed("ab", 2, 2, None);
     assert_eq!(classify_ime_proof(outcome(true, false, false, false), &same, &same), ImeProof::NoMutation);
-    let changed = egui::ImeMutationStamp::from_committed("abx", 3, 3, None);
+    let changed = ImeStamp::from_committed("abx", 3, 3, None);
     assert_eq!(classify_ime_proof(outcome(true, true, true, false), &same, &changed), ImeProof::Certified);
     assert_eq!(classify_ime_proof(outcome(true, true, true, true), &same, &changed), ImeProof::UnprovenMutation);
     assert_eq!(classify_ime_proof(outcome(false, false, true, false), &same, &changed), ImeProof::UnprovenMutation);
@@ -22,15 +29,15 @@ fn ime_receipt_gate_distinguishes_noop_from_unproven_mutation() {
 /// need the unavailable endpoint's revision.
 #[test]
 fn ime_receipt_gate_checks_unavailable_revisions() {
-    let ten = egui::ImeMutationStamp::unavailable_at_revision(10);
-    let eleven = egui::ImeMutationStamp::unavailable_at_revision(11);
-    let missing = egui::ImeMutationStamp::unavailable();
+    let ten = ImeStamp::unavailable_at_revision(10);
+    let eleven = ImeStamp::unavailable_at_revision(11);
+    let missing = ImeStamp::unavailable();
     let content = outcome(true, true, true, false);
     assert_eq!(classify_ime_proof(content, &ten, &eleven), ImeProof::Certified);
     assert_eq!(classify_ime_proof(content, &eleven, &ten), ImeProof::UnprovenMutation);
     assert_eq!(classify_ime_proof(content, &ten, &ten), ImeProof::UnprovenMutation);
     assert_eq!(classify_ime_proof(content, &missing, &eleven), ImeProof::UnprovenMutation);
-    let available = egui::ImeMutationStamp::from_committed("abx", 3, 3, None);
+    let available = ImeStamp::from_committed("abx", 3, 3, None);
     assert_eq!(classify_ime_proof(content, &ten, &available), ImeProof::Certified);
     assert_eq!(classify_ime_proof(content, &missing, &available), ImeProof::UnprovenMutation);
     assert_eq!(classify_ime_proof(content, &available, &ten), ImeProof::Certified);
@@ -40,8 +47,8 @@ fn ime_receipt_gate_checks_unavailable_revisions() {
 /// A revision-only unavailable change is a changed observation, not a no-op.
 #[test]
 fn ime_receipt_gate_treats_revision_only_changes_as_unproven() {
-    let ten = egui::ImeMutationStamp::unavailable_at_revision(10);
-    let eleven = egui::ImeMutationStamp::unavailable_at_revision(11);
+    let ten = ImeStamp::unavailable_at_revision(10);
+    let eleven = ImeStamp::unavailable_at_revision(11);
     assert_eq!(classify_ime_proof(outcome(true, false, false, false), &ten, &eleven), ImeProof::UnprovenMutation);
 }
 
@@ -49,98 +56,216 @@ fn ime_receipt_gate_treats_revision_only_changes_as_unproven() {
 /// a content change; a classified no-op still leaves an earlier receipt alone.
 #[test]
 fn ime_receipt_gate_rejects_exhausted_unavailable_stamps() {
-    let exhausted = egui::ImeMutationStamp::unavailable();
+    let exhausted = ImeStamp::unavailable();
     assert_eq!(classify_ime_proof(outcome(true, true, true, false), &exhausted, &exhausted), ImeProof::UnprovenMutation);
     assert_eq!(classify_ime_proof(outcome(true, false, false, false), &exhausted, &exhausted), ImeProof::NoMutation);
 }
 
-/// #1678: Ctrl+F1 collapses or expands the ribbon (not on macOS); plain F1 stays Help's.
-#[test]
-fn ctrl_f1_collapses_the_ribbon() {
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
-    let expect = if cfg!(target_os = "macos") { None } else { Some(("ui.collapseRibbon", json!({}))) };
-    assert_eq!(ui_shortcut(Key::F1, ctrl), expect);
-    assert_eq!(ui_shortcut(Key::F1, Modifiers::NONE), None);
-    assert_eq!(ui_shortcut(Key::F1, Modifiers { shift: true, ..ctrl }), None);
+/// An app whose canvas holds focus, in a harness at 60 Hz. The focus goes through `focus_page`, so
+/// the engine's owner rule keeps the IME events of the tests that follow.
+fn app_harness(app: WordApp) -> H {
+    // Every test isolates through an in-memory clipboard, installed before the first frame.
+    let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    for _ in 0..8 {
+        crate::test_harness::frame(&mut h);
+        if h.state().canvas.focused(&ctx) {
+            break;
+        }
+    }
+    assert!(h.state().canvas.focused(&ctx), "the canvas takes the focus it asked for");
+    h
 }
 
-/// #1678: a Ctrl+F1 the user binds runs their command instead of collapsing the ribbon.
-#[test]
-fn a_bound_ctrl_f1_beats_the_ribbon_toggle() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+F1": "view.focus"}}));
-    assert!(dispatch(&mut a, Key::F1, Modifiers { ctrl: true, command: true, ..Default::default() }));
-    assert!(a.session.view.focus_mode && !a.ui.ribbon_collapsed);
+/// A new empty document.
+fn new_app() -> WordApp {
+    WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default())
 }
 
-/// #1678 review: only Ctrl+F1 gives way to a binding; a user's Alt+Q binding leaves Alt+Q
-/// opening the command search.
-#[test]
-fn a_bound_alt_q_still_opens_command_search() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Alt+Q": "view.focus"}}));
-    assert!(dispatch(&mut a, Key::Q, Modifiers { alt: true, ..Default::default() }));
+/// A focused harness over an empty document.
+fn alt_frame_app() -> H {
+    app_harness(new_app())
+}
+
+/// One frame with `events` pushed first.
+fn alt_frame(h: &mut H, events: Vec<egui::Event>) {
+    for e in events {
+        h.event(e);
+    }
+    // Each frame as the app's driver runs it: the runtime is handed the app's commands first.
+    crate::test_harness::frame(h);
+}
+
+/// One frame whose input carries all of `events`, as a platform delivers one raw batch. `alt_frame` queues them
+/// through kittest's `event`, which runs a frame for each queued event, so a batch it is given arrives spread over as
+/// many frames.
+fn batch_frame(h: &mut H, events: Vec<egui::Event>) {
+    h.input_mut().events.extend(events);
+    crate::test_harness::frame(h);
+}
+
+/// The modifiers of the platform's Mod key as egui reports them: Cmd on macOS (`mac_cmd` with `command`, and no
+/// Control), Ctrl elsewhere.
+fn mod_held() -> Modifiers {
     if cfg!(target_os = "macos") {
-        // Option+Q is no interface shortcut on macOS, so the binding runs.
-        assert!(a.session.view.focus_mode);
+        Modifiers { mac_cmd: true, command: true, ..Default::default() }
     } else {
-        assert!(!a.session.view.focus_mode, "the binding doesn't run");
-        assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Commands { .. })), "Alt+Q opens the command search");
+        Modifiers { ctrl: true, command: true, ..Default::default() }
     }
 }
 
-#[test]
-fn shift_backspace_still_erases() {
-    assert_eq!(shift_variant_params("text.backspace"), Some(json!({})));
-    assert_eq!(shift_variant_params("caret.left"), Some(json!({"extend": true})));
-    assert_eq!(shift_variant_params("text.delete"), None);
+/// One frame with `modifiers` held, then `events`.
+fn mods_frame(h: &mut H, modifiers: Modifiers, events: Vec<egui::Event>) {
+    let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
+    alt_frame(h, events);
 }
 
+/// Runs a command on the harness's app.
+fn run(h: &mut H, command: &str, params: serde_json::Value) -> serde_json::Value {
+    h.state_mut().run(command, params).unwrap()
+}
+
+/// Puts the caret in the first body paragraph at byte `off`.
+fn caret(h: &mut H, off: usize) {
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, off));
+}
+
+/// Puts `items` on the window's clipboard.
+fn offer(h: &H, items: Vec<ClipItem>) {
+    let _ = ClipboardHandle::of(&h.ctx).offer(&items).expect("the clipboard takes the offer");
+}
+
+/// The clipboard flavours of a bold word: HTML and text.
+fn bold_flavours(word: &str) -> Vec<ClipItem> {
+    vec![ClipItem::Html(format!("<p><b>{word}</b></p>").into()), ClipItem::Text(word.into())]
+}
+
+/// Whether the state of the app's format at the caret says bold.
+fn is_bold(h: &mut H) -> bool {
+    run(h, "format.state", json!({})).get("bold").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+/// The holder of a chord on the board, as a command.
+fn holder_of(h: &H, text: &str) -> Option<craft::keymap::CommandRef> {
+    craft::ui::runtime::commands::holder(&h.ctx, &craft::keymap::Chord::parse(text).unwrap())
+}
+
+/// #1678 and shell-w6's verdict: an assignment becomes an override that takes the chord from its
+/// default holder; Ctrl+F1 gives way to a binding, Alt+Q does not (off macOS); interface chords
+/// are per platform. The window's platform is set, so both run on every host.
 #[test]
-fn alt_q_opens_command_search() {
-    let m = |alt, shift, command| egui::Modifiers { alt, shift, command, ..Default::default() };
-    let tell_me = Some(("ui.dialog", json!({"name": "commands"})));
-    if cfg!(target_os = "macos") {
-        assert_eq!(ui_shortcut(Key::Q, m(true, false, false)), None, "Option+Q types a character");
-    } else {
-        assert_eq!(ui_shortcut(Key::Q, m(true, false, false)), tell_me);
+fn user_assignments_become_overrides() {
+    use craft::host::target::Os;
+    use craft::keymap::CommandRef;
+    let command = |id: &str| Some(CommandRef::new(id));
+    let tell_me = Some(CommandRef::with_params("ui.dialog", json!({"name": "commands"})));
+    for os in [Os::Mac, Os::Windows] {
+        let mac = os == Os::Mac;
+        // (assignment: chord and command, chord to ask, what holds it afterwards)
+        let rows = [
+            (None, "Mod+F1", if mac { None } else { command("ui.collapseRibbon") }),
+            // The engine binds Mod+Alt+R to the Registered Sign off macOS (decided when it is built, not by the
+            // window's platform), so a build for macOS is the only one where the Mac window's chord is the ribbon's.
+            (
+                None,
+                "Mod+Alt+R",
+                if !cfg!(target_os = "macos") {
+                    command("text.registered")
+                } else if mac {
+                    command("ui.collapseRibbon")
+                } else {
+                    None
+                },
+            ),
+            // Likewise the engine binds Alt+Q to Search off macOS when it is built, so a Mac window on such a build
+            // still finds it held; only a build for macOS leaves the chord free.
+            (
+                None,
+                "Alt+Q",
+                if !mac {
+                    tell_me.clone()
+                } else if !cfg!(target_os = "macos") {
+                    command("tools.search")
+                } else {
+                    None
+                },
+            ),
+            (Some(("Mod+F1", "view.focus")), "Mod+F1", command("view.focus")),
+            (Some(("Alt+Q", "view.focus")), "Alt+Q", if mac { command("view.focus") } else { tell_me.clone() }),
+        ];
+        for (assign, ask, want) in rows {
+            let mut h = alt_frame_app();
+            craft::ui::testing::windows::set_os(&h.ctx, os);
+            crate::test_harness::frame(&mut h);
+            if let Some((chord, id)) = assign {
+                h.state_mut().session.keymap_mut().insert(CommandRef::new(id).key(), vec![chord.to_string()]);
+                crate::test_harness::frame(&mut h);
+            }
+            assert_eq!(holder_of(&h, ask), want, "{os:?} {assign:?} {ask}");
+        }
+        // A bound chord leaves its default holder for the command it is bound to.
+        let mut h = alt_frame_app();
+        craft::ui::testing::windows::set_os(&h.ctx, os);
+        crate::test_harness::frame(&mut h);
+        let default = holder_of(&h, "Mod+Shift+Backspace");
+        assert!(default.is_some() && default != command("select.all"), "{os:?}: the chord starts with its own command");
+        // The way the Customize Keyboard dialog assigns: the board's keymap takes the chord from its holder
+        // (`Policy::Steal`), and its overrides become the session's. A raw override entry only ties with the
+        // default holder, which the catalog order settles.
+        let mut keymap = craft::ui::runtime::commands::keymap(&h.ctx).map(|board| (*board).clone()).expect("the board has a keymap");
+        let chord = craft::keymap::Binding::parse("Mod+Shift+Backspace").unwrap();
+        keymap.assign(&CommandRef::new("select.all"), chord, craft::keymap::Policy::Steal).unwrap();
+        *h.state_mut().session.keymap_mut() = keymap.overrides().clone();
+        crate::test_harness::frame(&mut h);
+        assert_eq!(holder_of(&h, "Mod+Shift+Backspace"), command("select.all"), "{os:?}");
     }
-    assert_eq!(ui_shortcut(Key::Q, m(true, true, false)), None, "Alt+Shift+Q");
-    assert_eq!(ui_shortcut(Key::Q, m(true, false, true)), None, "Mod+Alt+Q");
-    assert_eq!(ui_shortcut(Key::Q, m(false, false, false)), None, "a plain Q");
-    assert_eq!(ui_shortcut(Key::W, m(true, false, false)), None);
 }
 
+/// #5616: Mod+Shift+V pastes once, as text only (the word is not bold) though the clipboard holds
+/// bold HTML, whichever of Shift and V is released first.
 #[test]
-fn cmd_option_r_collapses_the_ribbon_on_macos() {
-    let m = |mac_cmd, alt, shift| egui::Modifiers { mac_cmd, command: mac_cmd, alt, shift, ..Default::default() };
-    let collapse = Some(("ui.collapseRibbon", json!({})));
-    assert_eq!(ui_shortcut(Key::R, m(true, true, false)), if cfg!(target_os = "macos") { collapse } else { None });
-    assert_eq!(ui_shortcut(Key::R, m(true, false, false)), None, "Mod+R aligns right");
-    assert_eq!(ui_shortcut(Key::R, m(false, true, false)), None, "Option+R types a character");
-    assert_eq!(ui_shortcut(Key::R, m(true, true, true)), None, "Mod+Alt+Shift+R");
+fn mod_shift_v_released_shift_first_pastes_once() {
+    let chord = Modifiers { shift: true, ..mod_held() };
+    let ctrl = Modifiers { shift: false, ..chord };
+    let mut h = alt_frame_app();
+    run(&mut h, "text.insert", json!({"text": "source target"}));
+    run(&mut h, "select.text", json!({"text": "target"}));
+    offer(&h, bold_flavours("source"));
+    mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::ShiftLeft, false, ctrl)]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, false, ctrl)]);
+    assert_eq!(body(h.state()), "source source");
+    assert!(!is_bold(&mut h), "Keep Text Only");
 }
 
+/// #5616: Mod+Shift+V, then the next Mod+V: the picture on the clipboard still pastes.
 #[test]
-fn only_plain_paste_releases_paste_a_clipboard_picture() {
-    let m = |command, shift, alt| egui::Modifiers { command, shift, alt, ..Default::default() };
-    assert!(is_paste_release(Key::V, m(true, false, false)), "Mod+V");
-    assert!(is_paste_release(Key::Paste, m(false, false, false)), "the Paste key");
-    assert!(!is_paste_release(Key::V, m(true, true, false)), "Mod+Shift+V is Paste Formatting");
-    assert!(!is_paste_release(Key::V, m(true, false, true)), "Mod+Alt+V is Paste Special");
-    assert!(!is_paste_release(Key::V, m(false, false, false)), "a plain V");
-    assert!(is_paste_special_release(Key::V, m(true, false, true)), "Mod+Alt+V opens Paste Special");
-    assert!(!is_paste_special_release(Key::V, m(true, true, true)) && !is_paste_special_release(Key::V, m(true, false, false)));
+fn a_global_mod_shift_v_leaves_the_next_mod_v_picture_paste_alone() {
+    let mut h = picture_app();
+    let chord = Modifiers { shift: true, ..mod_held() };
+    mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
+    let ctrl = Modifiers { shift: false, ..chord };
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, false, ctrl)]);
+    let before = pictures(h.state_mut());
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(pictures(h.state_mut()), before + 1);
 }
 
-/// An empty document whose clipboard holds a 4 × 4 picture.
-fn picture_app() -> WordApp {
-    use crate::paste_picture::ClipboardPicture;
-    let services = crate::Services {
-        clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Pixels { width: 4, height: 4, rgba: vec![200; 4 * 4 * 4] }))),
-        ..Default::default()
-    };
-    WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services)
+/// A focused empty document whose clipboard holds a 4 × 4 picture.
+fn picture_app() -> H {
+    let h = alt_frame_app();
+    offer(&h, vec![ClipItem::Image(std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([4, 4], &[200u8; 4 * 4 * 4])))]);
+    h
 }
 
 /// How many pictures the document holds (the Selection Pane's list).
@@ -148,10 +273,28 @@ fn pictures(a: &mut WordApp) -> usize {
     a.session.run("arrange.selectionPane", &json!({})).unwrap().as_array().map(|x| x.len()).unwrap_or(0)
 }
 
-/// One canvas frame with `modifiers` held, then `events`.
-fn mods_frame(ctx: &egui::Context, a: &mut WordApp, modifiers: Modifiers, events: Vec<egui::Event>) {
-    let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
-    ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
+/// A source word in bold with Copy Formatting picked up, and "target" selected.
+fn copied_bold_app() -> WordApp {
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "source target"})).unwrap();
+    a.run("select.text", json!({"text": "source"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copyFormat", json!({})).unwrap();
+    a.run("select.text", json!({"text": "target"})).unwrap();
+    a
+}
+
+/// Paste Formatting on a chord the user bound pastes the copied formatting once.
+#[test]
+fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
+    let mut app = copied_bold_app();
+    app.session.keymap_mut().insert(craft::keymap::CommandRef::new("edit.pasteFormat").key(), vec!["Mod+Alt+P".to_string()]);
+    let mut h = app_harness(app);
+    let m = Modifiers::COMMAND | Modifiers::ALT;
+    mods_frame(&mut h, m, vec![key_event(Key::P, true, m)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::P, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source target", "the text stays");
+    assert!(is_bold(&mut h), "the formatting was pasted onto the selection");
 }
 
 /// A press or release of `key` with `modifiers`.
@@ -159,114 +302,30 @@ fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> egui::Event {
     egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }
 }
 
-/// Left Ctrl+V with one hand often lets Ctrl up a moment before V. egui-winit keeps the
-/// Mod+V press, so the canvas sees only Ctrl's release, then V's without Mod: still a paste.
+/// Mod+V keeps the HTML's bold; with a picture on the clipboard it pastes the picture once,
+/// whether V or Ctrl is released first, and a plain V is no paste.
 #[test]
 fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
-    let ctx = egui::Context::default();
-    let mut a = picture_app();
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
-    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::ControlLeft, true, ctrl)]);
-    // The Mod+V press: egui-winit sends no event for it.
-    mods_frame(&ctx, &mut a, ctrl, vec![]);
-    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE)]);
-    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
-    assert_eq!(pictures(&mut a), 1);
+    let ctrl = mod_held();
 
-    // A plain V afterwards (its press arrives) isn't a paste.
-    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::V, true, Modifiers::NONE)]);
-    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
-    assert_eq!(pictures(&mut a), 1);
+    let mut h = alt_frame_app();
+    run(&mut h, "text.insert", json!({"text": "x"}));
+    run(&mut h, "select.all", json!({}));
+    offer(&h, bold_flavours("external"));
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "external");
+    assert!(is_bold(&mut h), "Mod+V keeps the HTML's formatting");
 
-    // Nor is Ctrl+B, Ctrl up, then a V release whose press never came (focus moved in).
-    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::B, true, ctrl)]);
-    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE), egui::Event::WindowFocused(true)]);
-    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
-    assert_eq!(pictures(&mut a), 1);
-
-    // Mod+Shift+V released Mod first stays Paste Formatting, not a picture paste.
-    let ctrl_shift = Modifiers { shift: true, ..ctrl };
-    mods_frame(&ctx, &mut a, ctrl_shift, vec![]);
-    mods_frame(&ctx, &mut a, Modifiers::SHIFT, vec![key_event(Key::ControlLeft, false, Modifiers::SHIFT)]);
-    mods_frame(&ctx, &mut a, Modifiers::SHIFT, vec![key_event(Key::V, false, Modifiers::SHIFT)]);
-    assert_eq!(pictures(&mut a), 1);
-
-    // Released V first, as before, still pastes.
-    let mut a = picture_app();
-    mods_frame(&ctx, &mut a, ctrl, vec![]);
-    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::V, false, ctrl)]);
-    assert_eq!(pictures(&mut a), 1);
-}
-
-/// Ctrl down, the kept Mod+V press, Ctrl up and V up can all arrive in one frame: the frame's
-/// modifiers no longer have Mod, but the ModifiersChanged events in between did.
-#[test]
-fn mod_v_within_one_frame_pastes_the_clipboard_picture() {
-    let ctx = egui::Context::default();
-    let mut a = picture_app();
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
-    let events = vec![
-        egui::Event::ModifiersChanged(ctrl),
-        key_event(Key::ControlLeft, true, ctrl),
-        egui::Event::ModifiersChanged(Modifiers::NONE),
-        key_event(Key::ControlLeft, false, Modifiers::NONE),
-        key_event(Key::V, false, Modifiers::NONE),
-    ];
-    ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| canvas_events(&mut a, ui.ctx())).drop_without_applying_deltas();
-    assert_eq!(pictures(&mut a), 1);
-}
-
-/// egui-winit 0.37 keeps both the Mod+V press and its release, and sends `PasteImage` when the
-/// clipboard holds a picture and no text (Windows, macOS, X11): that pastes the picture, once.
-#[test]
-fn paste_image_event_pastes_the_clipboard_picture() {
-    let ctx = egui::Context::default();
-    let mut a = picture_app();
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
-    let image = egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)));
-    mods_frame(&ctx, &mut a, ctrl, vec![key_event(Key::ControlLeft, true, ctrl), image]);
-    mods_frame(&ctx, &mut a, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE)]);
-    assert_eq!(pictures(&mut a), 1);
-}
-
-/// A V release keeps its own modifiers unless Mod went up first and no V press arrived.
-#[test]
-fn paste_release_modifiers_fall_back_to_those_held_with_mod() {
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
-    assert_eq!(paste_release_modifiers(ctrl, false, None), ctrl, "Mod still down");
-    assert_eq!(paste_release_modifiers(Modifiers::NONE, false, Some(ctrl)), ctrl, "Mod up first, press kept by egui-winit");
-    assert_eq!(paste_release_modifiers(Modifiers::NONE, true, Some(ctrl)), Modifiers::NONE, "a plain V's press arrived");
-    assert_eq!(paste_release_modifiers(Modifiers::NONE, false, None), Modifiers::NONE);
-}
-
-#[test]
-fn shift_delete_is_only_shift_and_delete() {
-    let m = |shift, ctrl, alt| egui::Modifiers { shift, ctrl, command: ctrl, alt, ..Default::default() };
-    assert!(is_shift_delete(Key::Delete, m(true, false, false)));
-    assert!(!is_shift_delete(Key::Delete, m(false, false, false)), "Delete alone erases");
-    assert!(!is_shift_delete(Key::Delete, m(true, true, false)), "Ctrl+Shift+Delete");
-    assert!(!is_shift_delete(Key::Delete, m(true, false, true)), "Alt+Shift+Delete");
-    assert!(!is_shift_delete(Key::Backspace, m(true, false, false)), "Shift+Backspace erases (#707)");
-}
-
-#[test]
-fn shift_f10_is_the_context_menu_key() {
-    let m = |shift, ctrl, alt| egui::Modifiers { shift, ctrl, command: ctrl, alt, ..Default::default() };
-    assert!(is_context_menu_key(Key::F10, m(true, false, false)));
-    assert!(!is_context_menu_key(Key::F10, m(false, false, false)), "F10 alone shows keytips");
-    assert!(!is_context_menu_key(Key::F10, m(true, true, false)), "Ctrl+Shift+F10");
-    assert!(!is_context_menu_key(Key::F9, m(true, false, false)), "Shift+F9 is a field key");
-}
-
-#[test]
-fn alt_shortcuts_work_without_the_canvas_focused() {
-    let m = |command, alt, shift| egui::Modifiers { command, alt, shift, ..Default::default() };
-    assert!(is_global_shortcut(Key::Q, m(false, true, false)), "Alt+Q (#819)");
-    assert!(is_global_shortcut(Key::D, m(false, true, true)), "Alt+Shift+D");
-    assert!(is_global_shortcut(Key::B, m(true, false, false)), "Mod+B");
-    assert!(is_global_shortcut(Key::F7, m(false, false, false)), "F7");
-    assert!(!is_global_shortcut(Key::Q, m(false, false, false)), "a plain letter is typing");
-    assert!(!is_global_shortcut(Key::Q, m(false, false, true)), "Shift+letter is typing");
+    let mut h = picture_app();
+    mods_frame(&mut h, ctrl, vec![key_event(Key::ControlLeft, true, ctrl), key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(pictures(h.state_mut()), 1);
+    // A plain V afterwards is not a paste.
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, true, Modifiers::NONE)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(pictures(h.state_mut()), 1);
 }
 
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
@@ -277,278 +336,98 @@ fn alt_numpad_code_types_its_character_without_keytips() {
     if cfg!(target_os = "macos") {
         return;
     }
-    let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
-    let ctx = egui::Context::default();
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = alt_frame_app();
     // Windows reads codes in the system locale's code pages (0233 is é in 1252 and 1250, й in
-    // 1251); elsewhere the ANSI page is 1252 and the OEM page the locale's own. The app records
-    // the locale when it starts, so ask after `WordApp::new`.
+    // 1251); elsewhere the ANSI page is 1252 and the OEM page the locale's own.
     let (ansi, oem_page) = if cfg!(target_os = "windows") {
         wordcraft_engine::cmd::text::system_code_pages()
     } else {
         (1252, wordcraft_engine::cmd::text::system_oem_code_page())
     };
-    let typed = wordcraft_engine::cmd::text::alt_code_char("0233", ansi, oem_page).unwrap_or('?');
+    let typed = craft::codepage::alt_code_char("0233", ansi, oem_page).unwrap_or('?');
     let alt = Modifiers { alt: true, ..Default::default() };
-    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
-    let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
-        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-            crate::keytips::logic(a, ui.ctx());
-            canvas_events(a, ui.ctx());
-        })
-        .drop_without_applying_deltas();
-    };
-    frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
+    alt_frame(&mut h, vec![egui::Event::ModifiersChanged(alt), key_event(Key::AltLeft, true, alt)]);
     for (k, t) in [(Key::Num0, "0"), (Key::Num2, "2"), (Key::Num3, "3"), (Key::Num3, "3")] {
-        frame(&mut a, vec![key(k, true, alt), egui::Event::Text(t.into()), key(k, false, alt)]);
+        alt_frame(&mut h, vec![key_event(k, true, alt), egui::Event::Text(t.into()), key_event(k, false, alt)]);
     }
-    assert_eq!(doc_text(&a).trim_end(), "", "nothing typed while Alt is held");
-    frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
-    assert_eq!(doc_text(&a).trim_end(), typed.to_string());
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "an Alt code doesn't open keytips");
+    assert_eq!(body(h.state()), "", "nothing typed while Alt is held");
+    alt_frame(&mut h, vec![key_event(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    assert_eq!(body(h.state()), typed.to_string());
+    assert!(!h.state().keytips_active, "an Alt code doesn't open keytips");
     // The platform's own composed character isn't typed twice; the next typing is.
-    frame(&mut a, vec![egui::Event::Text(typed.to_string())]);
-    frame(&mut a, vec![key(Key::E, true, Modifiers::NONE), egui::Event::Text("é".into())]);
-    assert_eq!(doc_text(&a).trim_end(), format!("{typed}é"));
-    // Without the leading zero: the system locale's OEM code page (233 is Θ in 437, Ú in 850).
-    frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
+    alt_frame(&mut h, vec![egui::Event::Text(typed.to_string())]);
+    alt_frame(&mut h, vec![key_event(Key::E, true, Modifiers::NONE), egui::Event::Text("é".into())]);
+    assert_eq!(body(h.state()), format!("{typed}é"));
+    // Without the leading zero: the system locale's OEM code page.
+    alt_frame(&mut h, vec![egui::Event::ModifiersChanged(alt), key_event(Key::AltLeft, true, alt)]);
     for k in [Key::Num2, Key::Num3, Key::Num3] {
-        frame(&mut a, vec![key(k, true, alt), key(k, false, alt)]);
+        alt_frame(&mut h, vec![key_event(k, true, alt), key_event(k, false, alt)]);
     }
-    frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
-    let oem = wordcraft_engine::cmd::text::alt_code_char("233", ansi, oem_page);
-    assert_eq!(doc_text(&a).trim_end(), format!("{typed}é{}", oem.unwrap_or('?')));
+    alt_frame(&mut h, vec![key_event(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    let oem = craft::codepage::alt_code_char("233", ansi, oem_page);
+    assert_eq!(body(h.state()), format!("{typed}é{}", oem.unwrap_or('?')));
     // A bare Alt tap still opens keytips.
-    frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
-    frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Tabs);
+    alt_frame(&mut h, vec![egui::Event::ModifiersChanged(alt), key_event(Key::AltLeft, true, alt)]);
+    alt_frame(&mut h, vec![key_event(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    assert!(h.state().keytips_active);
 }
 
 /// #2388: AltGr (Right Alt on a Polish layout under Wayland) arrives as the Right Alt key
-/// followed by a modifiers event without Alt (it's Level 3 Shift). That event read as Alt
-/// let go opened keytips while AltGr was still held, and the next letter went to them
-/// instead of typing ś, ł, ż. A bare AltGr tap doesn't open keytips either; a Right Alt
-/// that is Alt (US layout) still does.
+/// followed by a modifiers event without Alt (it's Level 3 Shift). That must not open keytips
+/// while AltGr is held, and a bare AltGr tap doesn't either; a Right Alt that is Alt (US layout)
+/// still does.
 #[test]
 fn altgr_types_its_characters_without_keytips() {
     if cfg!(target_os = "macos") {
         return;
     }
-    let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
-    let ctx = egui::Context::default();
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = alt_frame_app();
     let none = Modifiers::NONE;
-    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
-    let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
-        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-            crate::keytips::logic(a, ui.ctx());
-            canvas_events(a, ui.ctx());
-        })
-        .drop_without_applying_deltas();
-    };
-    let altgr_down = || vec![key(Key::AltRight, true, none), egui::Event::ModifiersChanged(none)];
-    let altgr_up = || vec![key(Key::AltRight, false, none), egui::Event::ModifiersChanged(none)];
-    // Held through three letters, one frame per event batch.
-    frame(&mut a, altgr_down());
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "AltGr down doesn't open keytips");
+    let altgr_down = || vec![key_event(Key::AltRight, true, none), egui::Event::ModifiersChanged(none)];
+    let altgr_up = || vec![key_event(Key::AltRight, false, none), egui::Event::ModifiersChanged(none)];
+    alt_frame(&mut h, altgr_down());
+    assert!(!h.state().keytips_active, "AltGr down doesn't open keytips");
     for (k, t) in [(Key::S, "ś"), (Key::L, "ł"), (Key::Z, "ż")] {
-        frame(&mut a, vec![key(k, true, none), egui::Event::Text(t.into())]);
-        frame(&mut a, vec![key(k, false, none)]);
-        assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "{t}");
+        alt_frame(&mut h, vec![key_event(k, true, none), egui::Event::Text(t.into())]);
+        alt_frame(&mut h, vec![key_event(k, false, none)]);
+        assert!(!h.state().keytips_active, "{t}");
     }
-    frame(&mut a, altgr_up());
-    assert_eq!(doc_text(&a).trim_end(), "śłż");
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Off);
+    alt_frame(&mut h, altgr_up());
+    assert_eq!(body(h.state()), "śłż");
+    assert!(!h.state().keytips_active);
     // All in one frame.
-    frame(&mut a, [altgr_down(), vec![key(Key::A, true, none), egui::Event::Text("ą".into()), key(Key::A, false, none)], altgr_up()].concat());
-    assert_eq!(doc_text(&a).trim_end(), "śłżą");
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Off);
-    // A bare AltGr tap, in two frames or one.
-    frame(&mut a, altgr_down());
-    frame(&mut a, altgr_up());
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "an AltGr tap isn't an Alt tap");
-    frame(&mut a, [altgr_down(), altgr_up()].concat());
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Off);
-    // Right Alt that is Alt still opens keytips.
-    let alt = Modifiers { alt: true, ..Default::default() };
-    frame(&mut a, vec![key(Key::AltRight, true, none), egui::Event::ModifiersChanged(alt)]);
-    frame(&mut a, vec![key(Key::AltRight, false, alt), egui::Event::ModifiersChanged(none)]);
-    assert_eq!(a.ui.keytips, crate::keytips::Phase::Tabs);
-}
-
-/// The Find dialog's Find what box, after the frames that open the dialog and focus the box.
-fn find_box_harness() -> egui_kittest::Harness<'static, WordApp> {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    a.dialog = crate::dialogs::Dialog::open("find", &mut a);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
+    alt_frame(
+        &mut h,
+        [altgr_down(), vec![key_event(Key::A, true, none), egui::Event::Text("ą".into()), key_event(Key::A, false, none)], altgr_up()].concat(),
     );
-    h.run_steps(4);
-    h
-}
-
-/// What the Find dialog's Find what box holds.
-fn find_box(h: &egui_kittest::Harness<'static, WordApp>) -> String {
-    match &h.state().dialog {
-        Some(crate::dialogs::Dialog::Find { query, .. }) => query.clone(),
-        _ => panic!("the Find dialog is open"),
-    }
-}
-
-/// One frame: Alt held, `digits` pressed and released (with their text, as Linux sends it, when
-/// `digit_text`), Alt let go; then `after`, which a platform may send once Alt is up.
-fn alt_code_frame(h: &mut egui_kittest::Harness<'static, WordApp>, digits: &str, digit_text: bool, after: &[&str]) {
+    assert_eq!(body(h.state()), "śłżą");
+    assert!(!h.state().keytips_active);
+    // A bare AltGr tap, in two frames or one.
+    alt_frame(&mut h, altgr_down());
+    alt_frame(&mut h, altgr_up());
+    assert!(!h.state().keytips_active, "an AltGr tap isn't an Alt tap");
+    alt_frame(&mut h, [altgr_down(), altgr_up()].concat());
+    assert!(!h.state().keytips_active);
+    // The framework reads every Right Alt key as AltGr, whichever of the key and the modifiers event comes first
+    // (its key stage's `RightAlt`), so a Right Alt that reports Alt opens no keytips either; the Left Alt does.
     let alt = Modifiers { alt: true, ..Default::default() };
-    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
-    h.event(egui::Event::ModifiersChanged(alt));
-    h.event(key(Key::AltLeft, true, alt));
-    for d in digits.chars() {
-        let k = Key::from_name(&d.to_string()).expect("a digit key");
-        h.event(key(k, true, alt));
-        if digit_text {
-            h.event(egui::Event::Text(d.to_string()));
-        }
-        h.event(key(k, false, alt));
-    }
-    h.event(key(Key::AltLeft, false, alt));
-    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-    for t in after {
-        h.event(egui::Event::Text((*t).to_string()));
-    }
-    h.step();
-}
-
-/// #4403: an Alt code typed in a text box (here Find what) types its character there, as on the
-/// page. Before, the box got the digits (Linux sends their text with Alt held), or on Windows only
-/// what the system composes, a byte for a code above 255. The page's text is left alone.
-#[test]
-fn alt_code_types_its_character_in_a_text_box() {
-    if cfg!(target_os = "macos") {
-        return;
-    }
-    // The code pages the page's Alt codes use (`text.typeCode`).
-    let (ansi, oem) = if cfg!(target_os = "windows") {
-        wordcraft_engine::cmd::text::system_code_pages()
-    } else {
-        (1252, wordcraft_engine::cmd::text::system_oem_code_page())
-    };
-    let ch = |code| wordcraft_engine::cmd::text::alt_code_char(code, ansi, oem).expect("a character code").to_string();
-    let mut h = find_box_harness();
-    assert_eq!(find_box(&h), "");
-    // Linux: each digit's text arrives too; none of it is typed.
-    alt_code_frame(&mut h, "0233", true, &[]);
-    let mut want = ch("0233");
-    assert_eq!(find_box(&h), want);
-    // Above 255 the code is the Unicode character's (Word's €), and a platform's echo of the
-    // same character isn't typed twice.
-    alt_code_frame(&mut h, "8364", false, &["\u{20AC}"]);
-    want.push('\u{20AC}');
-    assert_eq!(find_box(&h), want);
-    // Windows composes a code itself: up to 255 its character replaces ours (it knows the code
-    // pages), above that ours stays (it reduces the code to a byte). Elsewhere text after the
-    // release is typed as it comes.
-    alt_code_frame(&mut h, "0199", false, &["\u{1E9E}"]);
-    alt_code_frame(&mut h, "9731", false, &["X"]);
-    if cfg!(target_os = "windows") {
-        want.push_str("\u{1E9E}\u{2603}");
-    } else {
-        want.push_str(&format!("{}\u{1E9E}\u{2603}X", ch("0199")));
-    }
-    assert_eq!(find_box(&h), want);
-    // A code we name no character for (past Unicode here; a double-byte lead byte on Windows)
-    // types nothing of ours, and the character the system composes for it is typed, not taken
-    // for a digit's text. Windows sends no digit text; Linux does.
-    assert_eq!(wordcraft_engine::cmd::text::alt_code_char("1114112", ansi, oem), None);
-    alt_code_frame(&mut h, "1114112", !cfg!(target_os = "windows"), &["Y"]);
-    want.push('Y');
-    assert_eq!(find_box(&h), want);
-    // Digits without Alt type themselves; a bare Alt tap types nothing and opens no keytips.
-    h.event(egui::Event::Key { key: Key::Num5, physical_key: Some(Key::Num5), pressed: true, repeat: false, modifiers: Modifiers::NONE });
-    h.event(egui::Event::Text("5".into()));
-    h.step();
-    alt_code_frame(&mut h, "", false, &[]);
-    want.push('5');
-    assert_eq!(find_box(&h), want);
-    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off);
-    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "", "the page typed nothing");
-}
-
-fn alt_frame_app() -> (egui::Context, WordApp) {
-    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    (egui::Context::default(), a)
-}
-
-fn alt_frame(ctx: &egui::Context, a: &mut WordApp, events: Vec<egui::Event>) {
-    ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
-}
-
-fn alt_key(key: Key, pressed: bool, repeat: bool) -> egui::Event {
-    egui::Event::Key { key, physical_key: Some(key), pressed, repeat, modifiers: Modifiers { alt: true, ..Default::default() } }
+    alt_frame(&mut h, vec![key_event(Key::AltRight, true, none), egui::Event::ModifiersChanged(alt)]);
+    alt_frame(&mut h, vec![key_event(Key::AltRight, false, alt), egui::Event::ModifiersChanged(none)]);
+    assert!(!h.state().keytips_active, "a Right Alt tap is AltGr's");
+    alt_frame(&mut h, vec![egui::Event::ModifiersChanged(alt), key_event(Key::AltLeft, true, alt)]);
+    alt_frame(&mut h, vec![key_event(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(none)]);
+    assert!(h.state().keytips_active, "a Left Alt tap still opens keytips");
 }
 
 /// Option+Shift+- types an em dash outside Outline view, where Word's Alt+Shift+- (Collapse)
 /// can't run, so its shortcut doesn't swallow the character (#1933).
 #[test]
 fn disabled_alt_shortcut_leaves_the_typed_character() {
-    let (ctx, mut a) = alt_frame_app();
+    let mut h = alt_frame_app();
     let alt_shift = Modifiers { alt: true, shift: true, ..Default::default() };
-    let key = |pressed| egui::Event::Key { key: Key::Minus, physical_key: Some(Key::Minus), pressed, repeat: false, modifiers: alt_shift };
-    alt_frame(&ctx, &mut a, vec![key(true), egui::Event::Text("\u{2014}".into()), key(false)]);
-    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "\u{2014}");
-}
-
-/// Holding a digit with Alt adds it once: its auto-repeat presses don't (#961).
-#[test]
-fn alt_code_ignores_auto_repeat() {
-    if cfg!(target_os = "macos") {
-        return;
-    }
-    let (ctx, mut a) = alt_frame_app();
-    alt_frame(&ctx, &mut a, vec![alt_key(Key::Num6, true, false), alt_key(Key::Num6, true, true), alt_key(Key::Num6, true, true)]);
-    alt_frame(&ctx, &mut a, vec![alt_key(Key::Num5, true, false)]);
-    assert_eq!(a.canvas.alt_code, "65");
-    alt_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
-    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "A");
-}
-
-/// Switching to another window mid-code drops the digits: releasing Alt later types nothing.
-#[test]
-fn alt_code_is_dropped_when_the_window_loses_focus() {
-    if cfg!(target_os = "macos") {
-        return;
-    }
-    let (ctx, mut a) = alt_frame_app();
-    alt_frame(&ctx, &mut a, vec![alt_key(Key::Num6, true, false), alt_key(Key::Num5, true, false)]);
-    alt_frame(&ctx, &mut a, vec![egui::Event::WindowFocused(false)]);
-    assert_eq!(a.canvas.alt_code, "");
-    alt_frame(&ctx, &mut a, vec![egui::Event::WindowFocused(true), egui::Event::ModifiersChanged(Modifiers::NONE)]);
-    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "");
-}
-
-/// Windows composes Alt codes with the system's code pages: for a code up to 255 its
-/// character replaces ours (Polish Alt+0185 is ą, not ¹); above 255 Windows reduces the code
-/// to a byte, so ours stays and its text isn't typed (#961).
-#[test]
-fn system_composed_alt_code_character_wins_up_to_255() {
-    let (ctx, mut a) = alt_frame_app();
-    let text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end().to_string();
-    let _ = a.run("text.typeCode", json!({"code": "0185", "ansi": 1252}));
-    a.canvas.alt_code_echo = Some(AltCodeEcho { typed: "¹".into(), system_composes: true, byte_code: true });
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("ą".into())]);
-    assert_eq!(text(&a), "ą");
-    let _ = a.run("text.typeCode", json!({"code": "8364"}));
-    a.canvas.alt_code_echo = Some(AltCodeEcho { typed: "€".into(), system_composes: true, byte_code: false });
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("|".into())]);
-    assert_eq!(text(&a), "ą€");
-    // Elsewhere a different text after the code is ordinary typing.
-    a.canvas.alt_code_echo = Some(AltCodeEcho { typed: "€".into(), system_composes: false, byte_code: false });
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("x".into())]);
-    assert_eq!(text(&a), "ą€x");
+    let key = |pressed| key_event(Key::Minus, pressed, alt_shift);
+    batch_frame(&mut h, vec![key(true), egui::Event::Text("\u{2014}".into()), key(false)]);
+    assert_eq!(body(h.state()), "\u{2014}");
 }
 
 fn body(a: &WordApp) -> String {
@@ -559,30 +438,63 @@ fn surround(before_chars: usize, after_chars: usize) -> egui::Event {
     egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, after_chars })
 }
 
+/// An IME pre-edit event with no active range.
+fn preedit(text: &str) -> egui::Event {
+    egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None })
+}
+
+/// An IME commit event.
+fn commit(text: &str) -> egui::Event {
+    egui::Event::Ime(egui::ImeEvent::Commit(text.into()))
+}
+
+/// Whether the last frame asked the input method to start afresh.
+fn interrupted(h: &H) -> bool {
+    h.output().platform_output.ime.as_ref().is_some_and(|ime| ime.should_interrupt_composition)
+}
+
+/// Whether the last frame told the platform its surrounding snapshot is stale. The framework interrupts a
+/// composition it saw (a pre-edit); with none to interrupt, the frame's output names the application as the cause
+/// of the change (`ImeChangeCause::Other`) beside the surrounding text, which is how the platform resyncs.
+fn resynced(h: &H) -> bool {
+    interrupted(h) || h.output().platform_output.ime.as_ref().is_some_and(|ime| matches!(ime.change_cause, egui::output::ImeChangeCause::Other))
+}
+
+/// Answers the reset an interrupted composition asked the platform for, as a platform does. Until it does the
+/// framework drops the old composition's late events, so a test that goes on typing answers first.
+fn complete_reset(h: &mut H) {
+    let request = h.output().platform_output.ime.as_ref().and_then(|ime| ime.reset_request);
+    if let Some(request_id) = request {
+        alt_frame(h, vec![egui::Event::ImeResetCompleted { request_id }]);
+    }
+}
+
 /// A real body replacement invalidates the old preedit even if its text is unchanged.
 /// Its queued replacement must not edit the new body or add an Undo checkpoint.
 #[test]
 fn ime_interrupted_body_preedit_drops_queued_replacement_before_mutation() {
     for replacement in [
-        vec![egui::Event::Ime(egui::ImeEvent::Commit("stale".into()))],
-        vec![surround(1, 1), egui::Event::Ime(egui::ImeEvent::Commit("stale".into()))],
-        vec![surround_bytes(1, 1), egui::Event::Ime(egui::ImeEvent::Commit("stale".into()))],
-        vec![surround_bytes(1, 1), egui::Event::Text("stale".into()), egui::Event::Ime(egui::ImeEvent::Commit("stale".into()))],
+        vec![commit("stale")],
+        vec![surround(1, 1), commit("stale")],
+        vec![surround_bytes(1, 1), commit("stale")],
+        // The platform's `Text` + `Commit` pair reaches the page as the commit (`ImeCommit`, then its `Text`): the
+        // framework hands the input method's edits over before any keyboard text, so a bare `Text` cannot
+        // come ahead of the commit it belongs to and the older ordering is not expressible.
+        vec![surround(1, 1), commit("stale"), commit("")],
     ] {
-        let (ctx, mut a) = alt_frame_app();
-        a.run("document.setText", json!({"text": "ABCDE"})).unwrap();
-        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 2));
-        alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None })]);
-        assert_eq!(a.canvas.ime_preedit, "に");
-        a.run("document.setText", json!({"text": "ABCDE"})).unwrap();
-        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 2));
-        let depth = a.session.undo_depth();
-        alt_frame(&ctx, &mut a, replacement);
-        assert_eq!(body(&a), "ABCDE", "queued events cannot replace text in the new body");
-        assert_eq!(a.session.sel.focus.off, 2, "not even the new caret moves");
-        assert_eq!(a.session.undo_depth(), depth, "rejection happens before any transaction");
-        assert!(a.canvas.ime_preedit.is_empty());
-        assert!(a.canvas.ime_interrupt_now);
+        let mut h = alt_frame_app();
+        run(&mut h, "document.setText", json!({"text": "ABCDE"}));
+        caret(&mut h, 2);
+        alt_frame(&mut h, vec![preedit("に")]);
+        assert_eq!(h.state().canvas.ime_preedit, "に");
+        run(&mut h, "document.setText", json!({"text": "ABCDE"}));
+        caret(&mut h, 2);
+        let depth = h.state().session.undo_depth();
+        alt_frame(&mut h, replacement);
+        assert_eq!(body(h.state()), "ABCDE", "queued events cannot replace text in the new body");
+        assert_eq!(h.state().session.sel.focus.off, 2, "not even the new caret moves");
+        assert_eq!(h.state().session.undo_depth(), depth, "rejection happens before any transaction");
+        assert!(h.state().canvas.ime_preedit.is_empty());
     }
 }
 
@@ -590,24 +502,30 @@ fn ime_interrupted_body_preedit_drops_queued_replacement_before_mutation() {
 /// before the following body deletion/commit, as does an external target change.
 #[test]
 fn ime_interrupted_equation_preedit_drops_queued_body_replacement() {
+    // The framework swallows Escape (and Enter, Space, Backspace, Delete) while a composition is on, and hands the
+    // input method's edits over before any key, so a key that exits the equation cannot come ahead of the queued
+    // replacement in one batch: only the external exit remains to test.
     for in_batch in [false, true] {
-        let (ctx, mut a) = alt_frame_app();
-        a.run("insert.equation", json!({"linear": "abc"})).unwrap();
-        alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None })]);
-        assert_eq!(a.canvas.ime_preedit, "に");
+        if in_batch {
+            continue;
+        }
+        let mut h = alt_frame_app();
+        run(&mut h, "insert.equation", json!({"linear": "abc"}));
+        alt_frame(&mut h, vec![preedit("に")]);
+        assert_eq!(h.state().canvas.ime_preedit, "に");
         let mut events = Vec::new();
         if in_batch {
             events.push(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
         } else {
-            a.run("equation.exit", json!({})).unwrap();
+            run(&mut h, "equation.exit", json!({}));
         }
-        let before = body(&a);
-        let depth = a.session.undo_depth();
-        events.extend([surround(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("stale".into()))]);
-        alt_frame(&ctx, &mut a, events);
-        assert!(a.session.math.is_none(), "the equation exit itself still takes effect");
-        assert_eq!(body(&a), before, "the equation's queued replacement cannot edit the body");
-        assert_eq!(a.session.undo_depth(), depth, "neither rejected event creates an Undo step");
+        let before = body(h.state());
+        let depth = h.state().session.undo_depth();
+        events.extend([surround(1, 0), commit("stale")]);
+        alt_frame(&mut h, events);
+        assert!(h.state().session.math.is_none(), "the equation exit itself still takes effect");
+        assert_eq!(body(h.state()), before, "the equation's queued replacement cannot edit the body");
+        assert_eq!(h.state().session.undo_depth(), depth, "neither rejected event creates an Undo step");
     }
 }
 
@@ -616,27 +534,31 @@ fn ime_interrupted_equation_preedit_drops_queued_body_replacement() {
 #[test]
 fn ime_interrupted_preedit_does_not_suppress_fresh_input() {
     for fresh_case in 0..4 {
-        let (ctx, mut a) = alt_frame_app();
-        a.run("document.setText", json!({"text": "ABCDE"})).unwrap();
+        let mut h = alt_frame_app();
+        run(&mut h, "document.setText", json!({"text": "ABCDE"}));
         if fresh_case != 0 {
-            alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "old".into(), active_range_chars: None })]);
+            alt_frame(&mut h, vec![preedit("old")]);
         }
-        a.run("document.setText", json!({"text": "ABCDE"})).unwrap();
-        a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 2));
-        let depth = a.session.undo_depth();
+        run(&mut h, "document.setText", json!({"text": "ABCDE"}));
+        caret(&mut h, 2);
+        let depth = h.state().session.undo_depth();
         let mut events = Vec::new();
         match fresh_case {
-            1 => events.push(egui::Event::Ime(egui::ImeEvent::Preedit { text: "fresh".into(), active_range_chars: None })),
-            2 => events.push(egui::Event::Ime(egui::ImeEvent::Commit("stale".into()))),
-            3 => alt_frame(&ctx, &mut a, vec![]),
+            1 => events.push(preedit("fresh")),
+            2 => events.push(commit("stale")),
+            3 => {
+                alt_frame(&mut h, vec![]);
+                // The empty frame interrupts the old composition; the platform answers before fresh input.
+                complete_reset(&mut h);
+            }
             _ => {}
         }
-        events.push(egui::Event::Ime(egui::ImeEvent::Commit("X".into())));
-        alt_frame(&ctx, &mut a, events);
-        assert_eq!(body(&a), "ABXCDE", "fresh case {fresh_case} must remain eligible");
-        assert_eq!(a.session.undo_depth(), depth + 1);
-        a.run("edit.undo", json!({})).unwrap();
-        assert_eq!(body(&a), "ABCDE");
+        events.push(commit("X"));
+        alt_frame(&mut h, events);
+        assert_eq!(body(h.state()), "ABXCDE", "fresh case {fresh_case} must remain eligible");
+        assert_eq!(h.state().session.undo_depth(), depth + 1);
+        run(&mut h, "edit.undo", json!({}));
+        assert_eq!(body(h.state()), "ABCDE");
     }
 }
 
@@ -645,24 +567,22 @@ fn ime_interrupted_preedit_does_not_suppress_fresh_input() {
 /// (#1480). The document follows the agent's value instead of repeating it.
 #[test]
 fn delete_surrounding_from_the_web_text_agent_does_not_repeat_text() {
-    let (ctx, mut a) = alt_frame_app();
-    // The trace from #1480: the agent's caret jumped to 0 after `м`, so it reported `иabм`
-    // and `риabм` as its whole new tail.
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("a".into())]);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("b".into())]);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("м".into())]);
-    alt_frame(&ctx, &mut a, vec![surround(3, 0), egui::Event::Text("иabм".into())]);
-    alt_frame(&ctx, &mut a, vec![surround(4, 0), egui::Event::Text("риabм".into())]);
-    assert_eq!(body(&a), "риabм");
+    let mut h = alt_frame_app();
+    alt_frame(&mut h, vec![egui::Event::Text("a".into())]);
+    alt_frame(&mut h, vec![egui::Event::Text("b".into())]);
+    alt_frame(&mut h, vec![egui::Event::Text("м".into())]);
+    alt_frame(&mut h, vec![surround(3, 0), egui::Event::Text("иabм".into())]);
+    alt_frame(&mut h, vec![surround(4, 0), egui::Event::Text("риabм".into())]);
+    assert_eq!(body(h.state()), "риabм");
     // A correction (`teh` -> `the`): erase three characters, type the replacement.
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text(" teh".into())]);
-    alt_frame(&ctx, &mut a, vec![surround(3, 0), egui::Event::Text("the".into())]);
-    assert_eq!(body(&a), "риabм the");
+    alt_frame(&mut h, vec![egui::Event::Text(" teh".into())]);
+    alt_frame(&mut h, vec![surround(3, 0), egui::Event::Text("the".into())]);
+    assert_eq!(body(h.state()), "риabм the");
     // A plain deletion (Android Backspace): no text follows, or an empty one.
-    alt_frame(&ctx, &mut a, vec![surround(1, 0), egui::Event::Text(String::new())]);
-    assert_eq!(body(&a), "риabм th");
-    alt_frame(&ctx, &mut a, vec![surround(2, 0)]);
-    assert_eq!(body(&a), "риabм ");
+    alt_frame(&mut h, vec![surround(1, 0), egui::Event::Text(String::new())]);
+    assert_eq!(body(h.state()), "риabм th");
+    alt_frame(&mut h, vec![surround(2, 0)]);
+    assert_eq!(body(h.state()), "риabм ");
 }
 
 /// Builds an `ImeEvent::DeleteSurroundingBytes` event with the given before and after byte counts.
@@ -674,27 +594,27 @@ fn surround_bytes(before_bytes: usize, after_bytes: usize) -> egui::Event {
 /// A byte count into the middle of a character is refused rather than slicing the string.
 #[test]
 fn delete_surrounding_bytes_replaces_exact_utf8_and_joins_one_undo_step() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "aé👍b"})).unwrap();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "aé👍b"}));
     // The caret is before `b`, after the four-byte emoji.
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 7));
-    alt_frame(&ctx, &mut a, vec![surround_bytes(4, 0), egui::Event::Text("x".into())]);
-    assert_eq!(body(&a), "aéxb");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "aé👍b", "delete plus commit is one undo step");
+    caret(&mut h, 7);
+    alt_frame(&mut h, vec![surround_bytes(4, 0), egui::Event::Text("x".into())]);
+    assert_eq!(body(h.state()), "aéxb");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "aé👍b", "delete plus commit is one undo step");
 
     // A range that starts inside the emoji is not a UTF-8 boundary: nothing changes.
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 7));
-    alt_frame(&ctx, &mut a, vec![surround_bytes(3, 0)]);
-    assert_eq!(body(&a), "aé👍b");
+    caret(&mut h, 7);
+    alt_frame(&mut h, vec![surround_bytes(3, 0)]);
+    assert_eq!(body(h.state()), "aé👍b");
     // Beyond the paragraph is refused too, and never joins the next paragraph.
-    alt_frame(&ctx, &mut a, vec![surround_bytes(0, 99)]);
-    assert_eq!(body(&a), "aé👍b");
-    let depth = a.session.undo_depth();
+    alt_frame(&mut h, vec![surround_bytes(0, 99)]);
+    assert_eq!(body(h.state()), "aé👍b");
+    let depth = h.state().session.undo_depth();
     for (before, after) in [(99, 0), (usize::MAX, 0), (0, usize::MAX)] {
-        alt_frame(&ctx, &mut a, vec![surround_bytes(before, after)]);
-        assert_eq!(body(&a), "aé👍b", "out-of-range counts must not erase a prefix");
-        assert_eq!(a.session.undo_depth(), depth);
+        alt_frame(&mut h, vec![surround_bytes(before, after)]);
+        assert_eq!(body(h.state()), "aé👍b", "out-of-range counts must not erase a prefix");
+        assert_eq!(h.state().session.undo_depth(), depth);
     }
 }
 
@@ -702,29 +622,29 @@ fn delete_surrounding_bytes_replaces_exact_utf8_and_joins_one_undo_step() {
 /// `document.setText` leaves the caret at the start, so the test moves it past `e` + accent.
 #[test]
 fn delete_surrounding_bytes_replaces_a_combining_mark_and_accepts_empty_commit() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "e\u{301}"})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, "e\u{301}".len()));
-    alt_frame(&ctx, &mut a, vec![surround_bytes(2, 0), egui::Event::Text(String::new())]);
-    assert_eq!(body(&a), "e");
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "e\u{301}"}));
+    caret(&mut h, "e\u{301}".len());
+    alt_frame(&mut h, vec![surround_bytes(2, 0), egui::Event::Text(String::new())]);
+    assert_eq!(body(h.state()), "e");
     // A deletion-only batch and a 0/0 batch stay harmless.
-    alt_frame(&ctx, &mut a, vec![surround_bytes(1, 0)]);
-    assert_eq!(body(&a), "");
-    alt_frame(&ctx, &mut a, vec![surround_bytes(0, 0)]);
-    assert_eq!(body(&a), "");
+    alt_frame(&mut h, vec![surround_bytes(1, 0)]);
+    assert_eq!(body(h.state()), "");
+    alt_frame(&mut h, vec![surround_bytes(0, 0)]);
+    assert_eq!(body(h.state()), "");
 }
 
 /// The real macOS/Wayland path is `ImeEvent::Commit`, not `Event::Text`: the byte deletion
 /// and the committed replacement are one edit, and Undo restores the original text.
 #[test]
 fn ime_commit_replaces_delete_surrounding_bytes_in_one_undo_step() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "e\u{301}"})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, "e\u{301}".len()));
-    alt_frame(&ctx, &mut a, vec![surround_bytes("e\u{301}".len(), 0), egui::Event::Ime(egui::ImeEvent::Commit("é".into()))]);
-    assert_eq!(body(&a), "é", "the combining sequence is replaced by the IME's committed text");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "e\u{301}", "delete plus Commit is one undo step");
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "e\u{301}"}));
+    caret(&mut h, "e\u{301}".len());
+    alt_frame(&mut h, vec![surround_bytes("e\u{301}".len(), 0), commit("é")]);
+    assert_eq!(body(h.state()), "é", "the combining sequence is replaced by the IME's committed text");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "e\u{301}", "delete plus Commit is one undo step");
 }
 
 /// A platform may deliver the `Commit` that replaces a `DeleteSurrounding` in a later raw
@@ -732,92 +652,92 @@ fn ime_commit_replaces_delete_surrounding_bytes_in_one_undo_step() {
 /// frame: the commit still shares its checkpoint, so one Undo restores the original input.
 #[test]
 fn ime_commit_in_a_later_frame_joins_the_delete_surrounding_undo_step() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "teh"})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 3));
-    let depth = a.session.undo_depth();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "teh"}));
+    caret(&mut h, 3);
+    let depth = h.state().session.undo_depth();
 
-    alt_frame(&ctx, &mut a, vec![surround_bytes(3, 0)]);
-    assert_eq!(body(&a), "");
-    assert_eq!(a.session.undo_depth(), depth + 1, "the deletion is one step");
+    alt_frame(&mut h, vec![surround_bytes(3, 0)]);
+    assert_eq!(body(h.state()), "");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "the deletion is one step");
 
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("the".into()))]);
-    assert_eq!(body(&a), "the", "the later commit replaces the erased text");
-    assert_eq!(a.session.undo_depth(), depth + 1, "the later commit joins the deletion's checkpoint");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "teh", "one Undo restores the original input");
+    alt_frame(&mut h, vec![commit("the")]);
+    assert_eq!(body(h.state()), "the", "the later commit replaces the erased text");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "the later commit joins the deletion's checkpoint");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "teh", "one Undo restores the original input");
 }
 
 /// An accepted IME commit can also be empty: it finishes composition without adding text.
 #[test]
 fn ime_empty_commit_finishes_without_inserting() {
-    let (ctx, mut a) = alt_frame_app();
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit(String::new()))]);
-    assert_eq!(body(&a), "");
+    let mut h = alt_frame_app();
+    alt_frame(&mut h, vec![commit("")]);
+    assert_eq!(body(h.state()), "");
 }
 
 /// `after_chars` erases after the caret; both counts are characters, not bytes.
 #[test]
 fn delete_surrounding_erases_characters_on_both_sides_of_the_caret() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("text.insert", json!({"text": "мир дом"})).unwrap();
+    let mut h = alt_frame_app();
+    run(&mut h, "text.insert", json!({"text": "мир дом"}));
     for _ in 0..3 {
-        a.run("caret.left", json!({})).unwrap();
+        run(&mut h, "caret.left", json!({}));
     }
     // The caret is after `мир `: two before (`р `) and one after (`д`).
-    alt_frame(&ctx, &mut a, vec![surround(2, 1)]);
-    assert_eq!(body(&a), "миом");
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("X".into())]);
-    assert_eq!(body(&a), "миXом", "the caret stays where the deletion was");
+    alt_frame(&mut h, vec![surround(2, 1)]);
+    assert_eq!(body(h.state()), "миом");
+    alt_frame(&mut h, vec![egui::Event::Text("X".into())]);
+    assert_eq!(body(h.state()), "миXом", "the caret stays where the deletion was");
 }
 
 /// The counts come from outside: larger than the paragraph they stop at its ends, never
 /// joining paragraphs or panicking.
 #[test]
 fn delete_surrounding_stays_inside_the_paragraph() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "one\ntwo\nthree"})).unwrap();
-    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "one\ntwo\nthree"}));
+    run(&mut h, "caret.docStart", json!({}));
     // After the `t` of `two`.
     for _ in 0..5 {
-        a.run("caret.right", json!({})).unwrap();
+        run(&mut h, "caret.right", json!({}));
     }
-    alt_frame(&ctx, &mut a, vec![surround(usize::MAX, usize::MAX)]);
-    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "one\n\nthree");
-    alt_frame(&ctx, &mut a, vec![surround(5, 5), egui::Event::Text("2".into())]);
-    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "one\n2\nthree");
+    alt_frame(&mut h, vec![surround(usize::MAX, usize::MAX)]);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "one\n\nthree");
+    alt_frame(&mut h, vec![surround(5, 5), egui::Event::Text("2".into())]);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "one\n2\nthree");
 }
 
 /// The agent's rewrite belongs to the typing it corrects: one Undo takes back the typing
 /// and its correction together, not a half-erased word.
 #[test]
 fn delete_surrounding_joins_the_typing_undo_step() {
-    let (ctx, mut a) = alt_frame_app();
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("teh".into())]);
-    alt_frame(&ctx, &mut a, vec![surround(3, 0), egui::Event::Text("the".into())]);
-    assert_eq!(body(&a), "the");
+    let mut h = alt_frame_app();
+    alt_frame(&mut h, vec![egui::Event::Text("teh".into())]);
+    alt_frame(&mut h, vec![surround(3, 0), egui::Event::Text("the".into())]);
+    assert_eq!(body(h.state()), "the");
     // Typing goes on in the same group, not one step per keystroke.
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text(" more".into())]);
-    alt_frame(&ctx, &mut a, vec![surround(4, 0), egui::Event::Text("mores".into())]);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("t".into())]);
-    assert_eq!(body(&a), "the morest");
-    assert_eq!(a.session.undo_label(), Some("Typing"));
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "");
+    alt_frame(&mut h, vec![egui::Event::Text(" more".into())]);
+    alt_frame(&mut h, vec![surround(4, 0), egui::Event::Text("mores".into())]);
+    alt_frame(&mut h, vec![egui::Event::Text("t".into())]);
+    assert_eq!(body(h.state()), "the morest");
+    assert_eq!(h.state().session.undo_label(), Some("Typing"));
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "");
 }
 
 /// The rewritten text keeps the formatting of the text it replaces: a bold `helo` corrected
 /// to `hello` stays bold, as typing over a word does.
 #[test]
 fn delete_surrounding_keeps_the_replaced_texts_formatting() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("text.insert", json!({"text": "plain "})).unwrap();
-    a.run("format.bold", json!({})).unwrap();
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("helo".into())]);
-    alt_frame(&ctx, &mut a, vec![surround(4, 0), egui::Event::Text("hello".into())]);
-    assert_eq!(body(&a), "plain hello");
-    let f = a.session.sel.focus.clone();
-    let para = a.session.doc.para_at(&f).expect("a paragraph");
+    let mut h = alt_frame_app();
+    run(&mut h, "text.insert", json!({"text": "plain "}));
+    run(&mut h, "format.bold", json!({}));
+    alt_frame(&mut h, vec![egui::Event::Text("helo".into())]);
+    alt_frame(&mut h, vec![surround(4, 0), egui::Event::Text("hello".into())]);
+    assert_eq!(body(h.state()), "plain hello");
+    let f = h.state().session.sel.focus.clone();
+    let para = h.state().session.doc.para_at(&f).expect("a paragraph");
     let bold: Vec<bool> = para.text.char_indices().map(|(i, _)| para.props_of_char(i).bold == Some(true)).collect();
     assert_eq!(bold, [false, false, false, false, false, false, true, true, true, true, true], "{bold:?}");
 }
@@ -826,41 +746,43 @@ fn delete_surrounding_keeps_the_replaced_texts_formatting() {
 /// sends to replace what it erased only replaces that.
 #[test]
 fn delete_surrounding_text_does_not_overtype() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("text.insert", json!({"text": "texXY"})).unwrap();
+    let mut h = alt_frame_app();
+    run(&mut h, "text.insert", json!({"text": "texXY"}));
     for _ in 0..2 {
-        a.run("caret.left", json!({})).unwrap();
+        run(&mut h, "caret.left", json!({}));
     }
-    a.run("file.options", json!({"overtype": true})).unwrap();
-    alt_frame(&ctx, &mut a, vec![surround(3, 0), egui::Event::Text("Texas".into())]);
-    assert_eq!(body(&a), "TexasXY");
+    run(&mut h, "file.options", json!({"overtype": true}));
+    alt_frame(&mut h, vec![surround(3, 0), egui::Event::Text("Texas".into())]);
+    assert_eq!(body(h.state()), "TexasXY");
 }
 
 /// A key pressed between the erasure and the text ends the input method's rewrite: the text
 /// is ordinary typing, its own undo step.
 #[test]
 fn delete_surrounding_rewrite_ends_at_a_key_press() {
-    let (ctx, mut a) = alt_frame_app();
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("ab".into())]);
-    let key = egui::Event::Key { key: Key::F20, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
-    alt_frame(&ctx, &mut a, vec![surround(1, 0), key, egui::Event::Text("X".into())]);
-    assert_eq!(body(&a), "aX");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "a");
+    let mut h = alt_frame_app();
+    alt_frame(&mut h, vec![egui::Event::Text("ab".into())]);
+    // The framework hands the page the input method's edits first, then the keys and text in their order; Delete is
+    // a key the page reads (F20 is no editor input), so it stands between the erasure and the text.
+    let key = key_event(Key::Delete, true, Modifiers::NONE);
+    alt_frame(&mut h, vec![surround(1, 0), key, egui::Event::Text("X".into())]);
+    assert_eq!(body(h.state()), "aX");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "a");
 }
 
 /// An automatic change while typing (AutoCorrect `(c)` -> `©`) changes the text behind the
 /// web's text agent, so its later counts would be wrong: the page asks it to start afresh.
 #[test]
 fn automatic_change_asks_the_input_method_to_start_afresh() {
-    let (ctx, mut a) = alt_frame_app();
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("Word".into())]);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text(" ".into())]);
-    assert!(!a.canvas.ime_reset, "plain typing keeps the agent's text");
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text("(c)".into())]);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Text(" ".into())]);
-    assert_eq!(body(&a), "Word \u{a9} ");
-    assert!(a.canvas.ime_reset, "AutoCorrect changed the text");
+    let mut h = alt_frame_app();
+    alt_frame(&mut h, vec![egui::Event::Text("Word".into())]);
+    alt_frame(&mut h, vec![egui::Event::Text(" ".into())]);
+    assert!(!h.state().canvas.ime_reset, "plain typing keeps the agent's text");
+    alt_frame(&mut h, vec![egui::Event::Text("(c)".into())]);
+    alt_frame(&mut h, vec![egui::Event::Text(" ".into())]);
+    assert_eq!(body(h.state()), "Word \u{a9} ");
+    assert!(h.state().canvas.ime_reset, "AutoCorrect changed the text");
 }
 
 /// Both sides of one `DeleteSurrounding` are one request: when the second `text.backspace`
@@ -868,25 +790,25 @@ fn automatic_change_asks_the_input_method_to_start_afresh() {
 /// back and no rewrite or receipt is promised.
 #[test]
 fn a_refused_second_delete_surrounding_rolls_the_request_back() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "ab"})).unwrap();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "ab"}));
     // Wrap `b` in a rich-text control that refuses edits, leaving `a` editable.
-    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 2) };
-    a.run("developer.richText", json!({"tag": "locked"})).unwrap();
-    a.run("developer.properties", json!({"control": "locked", "lockEdit": true})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1));
-    let depth = a.session.undo_depth();
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 2) };
+    run(&mut h, "developer.richText", json!({"tag": "locked"}));
+    run(&mut h, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    caret(&mut h, 1);
+    let depth = h.state().session.undo_depth();
     let pending = wordcraft_doc::props::CharProps { bold: Some(true), ..Default::default() };
-    a.session.pending = Some(pending.clone());
-    a.session.goal_x = Some(123.0);
-    alt_frame(&ctx, &mut a, vec![surround(1, 1)]);
-    assert_eq!(body(&a), "ab", "the applied left side is rolled back with the refused right one");
-    assert_eq!(a.session.undo_depth(), depth, "no half-erasure is left in Undo");
-    assert!(a.canvas.ime_join_text.is_none(), "no text rewrite is promised");
-    assert!(a.canvas.ime_interrupt_now, "the platform's stale surrounding snapshot is discarded");
-    assert_eq!(a.session.sel.focus.off, 1, "the caret is back where the request found it");
-    assert_eq!(a.session.pending, Some(pending), "pending formatting is restored");
-    assert_eq!(a.session.goal_x, Some(123.0), "the Up/Down goal column is restored");
+    h.state_mut().session.pending = Some(pending.clone());
+    h.state_mut().session.goal_x = Some(123.0);
+    alt_frame(&mut h, vec![surround(1, 1)]);
+    assert_eq!(body(h.state()), "ab", "the applied left side is rolled back with the refused right one");
+    assert_eq!(h.state().session.undo_depth(), depth, "no half-erasure is left in Undo");
+    assert!(h.state().canvas.ime_join_text.is_none(), "no text rewrite is promised");
+    assert!(resynced(&h), "the platform's stale surrounding snapshot is discarded");
+    assert_eq!(h.state().session.sel.focus.off, 1, "the caret is back where the request found it");
+    assert_eq!(h.state().session.pending, Some(pending), "pending formatting is restored");
+    assert_eq!(h.state().session.goal_x, Some(123.0), "the Up/Down goal column is restored");
 }
 
 /// A successful body `DeleteSurrounding` followed in the same raw batch by a commit refused
@@ -901,38 +823,31 @@ fn a_refused_second_delete_surrounding_rolls_the_request_back() {
 /// the replacement does not.
 #[test]
 fn a_refused_ime_commit_after_a_successful_delete_restores_pending_and_interrupts() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "zaXY"})).unwrap();
-    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 2) };
-    a.run("developer.richText", json!({"tag": "fill"})).unwrap();
-    a.run("select.text", json!({"text": "X"})).unwrap();
-    a.run("developer.richText", json!({"tag": "locked"})).unwrap();
-    a.run("developer.properties", json!({"control": "locked", "lockEdit": true})).unwrap();
-    a.run("review.restrict", json!({"mode": "forms"})).unwrap();
-    let locked =
-        a.session.doc.control_ranges(wordcraft_doc::StoryRef::Body).into_iter().find(|r| r.control.tag == "locked").expect("the locked control");
-    a.session.sel = wordcraft_engine::Selection::caret(locked.content_start());
-    a.session.pending = None;
-    a.canvas.ime_reset = false;
-    let _ = a.session.take_pending_ime_application_change();
-    let depth = a.session.undo_depth();
-    alt_frame(&ctx, &mut a, vec![surround(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("\"".into()))]);
-    assert_eq!(body(&a), "zXY", "the locked replacement is refused, the earlier deletion stands");
-    assert_eq!(a.session.undo_depth(), depth + 1, "only the successful deletion added an undo step");
-    let locked = a
-        .session
-        .doc
-        .control_ranges(wordcraft_doc::StoryRef::Body)
-        .into_iter()
-        .find(|r| r.control.tag == "locked")
-        .expect("the locked control remains");
-    assert_eq!(a.session.sel.focus, locked.content_start(), "the caret stays where the deletion left it");
-    assert_eq!(a.session.sel.anchor, locked.content_start());
-    assert_eq!(a.session.pending, None, "the refused replacement leaves no pending formatting from the erased text");
-    assert!(a.canvas.ime_join_text.is_none(), "the refused replacement promises no rewrite");
-    assert!(a.canvas.ime_interrupt_now, "the platform's stale surrounding snapshot is interrupted");
-    assert!(!a.canvas.ime_reset, "a refused commit is not an AutoFormat change");
-    assert!(!a.session.take_pending_ime_application_change(), "no application-origin receipt is fabricated");
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "zaXY"}));
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 2) };
+    run(&mut h, "developer.richText", json!({"tag": "fill"}));
+    run(&mut h, "select.text", json!({"text": "X"}));
+    run(&mut h, "developer.richText", json!({"tag": "locked"}));
+    run(&mut h, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    run(&mut h, "review.restrict", json!({"mode": "forms"}));
+    let locked = control(h.state(), "locked");
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(locked.content_start());
+    h.state_mut().session.pending = None;
+    h.state_mut().canvas.ime_reset = false;
+    let _ = h.state_mut().session.take_pending_ime_application_change();
+    let depth = h.state().session.undo_depth();
+    alt_frame(&mut h, vec![surround(1, 0), commit("\"")]);
+    assert_eq!(body(h.state()), "zXY", "the locked replacement is refused, the earlier deletion stands");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "only the successful deletion added an undo step");
+    let locked = control(h.state(), "locked");
+    assert_eq!(h.state().session.sel.focus, locked.content_start(), "the caret stays where the deletion left it");
+    assert_eq!(h.state().session.sel.anchor, locked.content_start());
+    assert_eq!(h.state().session.pending, None, "the refused replacement leaves no pending formatting from the erased text");
+    assert!(h.state().canvas.ime_join_text.is_none(), "the refused replacement promises no rewrite");
+    assert!(resynced(&h), "the platform's stale surrounding snapshot is interrupted");
+    assert!(!h.state().canvas.ime_reset, "a refused commit is not an AutoFormat change");
+    assert!(!h.state_mut().session.take_pending_ime_application_change(), "no application-origin receipt is fabricated");
 }
 
 /// Track Changes can remove the author's own insertion from the stored text. The right-hand
@@ -940,14 +855,14 @@ fn a_refused_ime_commit_after_a_successful_delete_restores_pending_and_interrupt
 /// must erase the character the platform named, not the one that took its stored offset.
 #[test]
 fn tracked_delete_surrounding_shifts_past_its_own_insertion() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("review.trackChanges", json!({"value": true})).unwrap();
-    a.run("text.insert", json!({"text": "abXY"})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 2));
-    alt_frame(&ctx, &mut a, vec![surround(1, 1)]);
-    assert_eq!(body(&a), "aY", "the own insertion `b` and the following `X` are erased");
-    assert_eq!(a.session.sel.focus.off, 1, "the caret points after the stored deletion");
-    assert_eq!(a.session.sel.anchor.off, 1);
+    let mut h = alt_frame_app();
+    run(&mut h, "review.trackChanges", json!({"value": true}));
+    run(&mut h, "text.insert", json!({"text": "abXY"}));
+    caret(&mut h, 2);
+    alt_frame(&mut h, vec![surround(1, 1)]);
+    assert_eq!(body(h.state()), "aY", "the own insertion `b` and the following `X` are erased");
+    assert_eq!(h.state().session.sel.focus.off, 1, "the caret points after the stored deletion");
+    assert_eq!(h.state().session.sel.anchor.off, 1);
 }
 
 /// Track Changes plus a refusal: the first side really removes this author's own insertion
@@ -955,40 +870,68 @@ fn tracked_delete_surrounding_shifts_past_its_own_insertion() {
 /// request is rolled back, including the shifted caret and undo stack.
 #[test]
 fn tracked_own_insertion_then_a_refused_side_rolls_the_whole_request_back() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "aXY"})).unwrap();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "aXY"}));
     // Lock the following `X`; inserting `b` before it under Track Changes is this author's own
     // insertion, which a tracked delete removes from the stored text instead of marking.
-    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 2) };
-    a.run("developer.richText", json!({"tag": "locked"})).unwrap();
-    a.run("developer.properties", json!({"control": "locked", "lockEdit": true})).unwrap();
-    a.run("review.trackChanges", json!({"value": true})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1));
-    a.run("text.insert", json!({"text": "b"})).unwrap();
-    assert_eq!(body(&a), "abXY");
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 2));
-    let depth = a.session.undo_depth();
-    let revisions = a.session.doc.revisions.len();
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 2) };
+    run(&mut h, "developer.richText", json!({"tag": "locked"}));
+    run(&mut h, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    run(&mut h, "review.trackChanges", json!({"value": true}));
+    caret(&mut h, 1);
+    run(&mut h, "text.insert", json!({"text": "b"}));
+    assert_eq!(body(h.state()), "abXY");
+    caret(&mut h, 2);
+    let depth = h.state().session.undo_depth();
+    let revisions = h.state().session.doc.revisions.len();
     let pending = wordcraft_doc::props::CharProps { bold: Some(true), ..Default::default() };
-    a.session.pending = Some(pending.clone());
-    a.session.goal_x = Some(123.0);
-    alt_frame(&ctx, &mut a, vec![surround(1, 1)]);
-    assert_eq!(body(&a), "abXY", "the first side's own-insertion deletion is rolled back with the refused second side");
-    assert_eq!(a.session.undo_depth(), depth, "the half-erasure leaves no undo step");
-    assert_eq!(a.session.doc.revisions.len(), revisions, "revision metadata is restored too");
-    assert!(a.canvas.ime_join_text.is_none(), "no rewrite is promised");
-    assert!(a.canvas.ime_interrupt_now, "the platform's stale surrounding snapshot is discarded");
-    assert_eq!(a.session.sel.focus.off, 2, "the caret is back where the request found it");
-    assert_eq!(a.session.pending, Some(pending), "pending formatting is restored");
-    assert_eq!(a.session.goal_x, Some(123.0), "the Up/Down goal column is restored");
+    h.state_mut().session.pending = Some(pending.clone());
+    h.state_mut().session.goal_x = Some(123.0);
+    alt_frame(&mut h, vec![surround(1, 1)]);
+    assert_eq!(body(h.state()), "abXY", "the first side's own-insertion deletion is rolled back with the refused second side");
+    assert_eq!(h.state().session.undo_depth(), depth, "the half-erasure leaves no undo step");
+    assert_eq!(h.state().session.doc.revisions.len(), revisions, "revision metadata is restored too");
+    assert!(h.state().canvas.ime_join_text.is_none(), "no rewrite is promised");
+    assert!(resynced(&h), "the platform's stale surrounding snapshot is discarded");
+    assert_eq!(h.state().session.sel.focus.off, 2, "the caret is back where the request found it");
+    assert_eq!(h.state().session.pending, Some(pending), "pending formatting is restored");
+    assert_eq!(h.state().session.goal_x, Some(123.0), "the Up/Down goal column is restored");
+}
+
+/// #6518 review: a refused `DeleteSurrounding` rolls back the formatting Backspace carried
+/// over together with where it applies: typing at the restored caret still takes it, and a
+/// caret moved away leaves it behind, as before the request.
+#[test]
+fn a_refused_delete_surrounding_keeps_formatting_backspace_carried() {
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "abc"}));
+    // Wrap `c` in a rich-text control that refuses edits, and make `b` bold.
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 2), focus: wordcraft_doc::Pos::body(0, 3) };
+    run(&mut h, "developer.richText", json!({"tag": "locked"}));
+    run(&mut h, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(0, 2) };
+    run(&mut h, "format.bold", json!({"value": true}));
+    caret(&mut h, 2);
+    // Backspace the bold `b`: the caret, now after `a`, carries its bold.
+    run(&mut h, "text.backspace", json!({}));
+    assert_eq!(h.state().session.typing_props().bold, Some(true));
+    alt_frame(&mut h, vec![surround(1, 1)]);
+    assert_eq!(body(h.state()), "ac", "the request is refused and rolled back");
+    assert_eq!(h.state().session.sel, wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1)));
+    assert_eq!(h.state().session.typing_props().bold, Some(true), "the carried bold still applies at the restored caret");
+    // It is still carried over by Backspace, not picked at the caret: a caret moved elsewhere
+    // and back leaves it behind.
+    h.state_mut().session.set_selection(wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0)));
+    h.state_mut().session.set_selection(wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1)));
+    assert_ne!(h.state().session.typing_props().bold, Some(true), "the caret has been elsewhere");
 }
 
 /// Selects a body range, wraps it in a rich-text content control with `tag`, and sets its
 /// placeholder.
-fn wrap_in_control(a: &mut WordApp, start: usize, end: usize, tag: &str, placeholder: &str) {
-    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, start), focus: wordcraft_doc::Pos::body(0, end) };
-    a.run("developer.richText", json!({"tag": tag})).unwrap();
-    a.run("developer.properties", json!({"control": tag, "placeholder": placeholder})).unwrap();
+fn wrap_in_control(h: &mut H, start: usize, end: usize, tag: &str, placeholder: &str) {
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, start), focus: wordcraft_doc::Pos::body(0, end) };
+    run(h, "developer.richText", json!({"tag": tag}));
+    run(h, "developer.properties", json!({"control": tag, "placeholder": placeholder}));
 }
 
 /// Finds the body content control with `tag`, panicking if it is absent.
@@ -1007,49 +950,51 @@ fn control(a: &WordApp, tag: &str) -> wordcraft_doc::ControlRange {
 /// commit replaces the placeholder in the same undo step as the deletion.
 #[test]
 fn delete_surrounding_maps_after_text_and_caret_past_a_growing_placeholder() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "Name: AdaX"})).unwrap();
-    wrap_in_control(&mut a, 6, 9, "name", "Enter the full name");
-    let r = control(&a, "name");
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "Name: AdaX"}));
+    wrap_in_control(&mut h, 6, 9, "name", "Enter the full name");
+    let r = control(h.state(), "name");
     let placeholder = r.control.placeholder_shown().to_string();
     assert!(placeholder.len() > "Ada".len(), "the fixture grows the paragraph: {placeholder:?}");
-    a.session.sel = wordcraft_engine::Selection::caret(r.end.clone());
-    let depth = a.session.undo_depth();
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(r.end.clone());
+    let depth = h.state().session.undo_depth();
 
-    alt_frame(&ctx, &mut a, vec![surround(3, 1)]);
-    assert_eq!(body(&a), format!("Name: {placeholder}"), "the following `X` is erased, not a placeholder character");
-    let end = control(&a, "name").content_start().off + placeholder.len();
-    assert_eq!((a.session.sel.anchor.off, a.session.sel.focus.off), (end, end), "the caret is at the placeholder's end, never inside it");
-    assert_eq!(a.session.undo_depth(), depth + 1, "both erased sides are one undo step");
+    alt_frame(&mut h, vec![surround(3, 1)]);
+    assert_eq!(body(h.state()), format!("Name: {placeholder}"), "the following `X` is erased, not a placeholder character");
+    let end = control(h.state(), "name").content_start().off + placeholder.len();
+    let sel = &h.state().session.sel;
+    assert_eq!((sel.anchor.off, sel.focus.off), (end, end), "the caret is at the placeholder's end, never inside it");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "both erased sides are one undo step");
 
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("N".into()))]);
-    assert_eq!(body(&a), "Name: N", "the commit replaces the restored placeholder");
-    assert_eq!(a.session.undo_depth(), depth + 1, "the replacement joins the deletion");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "Name: AdaX", "one Undo restores both erased sides and the replacement");
+    alt_frame(&mut h, vec![commit("N")]);
+    assert_eq!(body(h.state()), "Name: N", "the commit replaces the restored placeholder");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "the replacement joins the deletion");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "Name: AdaX", "one Undo restores both erased sides and the replacement");
 }
 
 /// A placeholder shorter than the erased text also has to map the suffix and caret by the
 /// signed delta; subtracting a removed-byte count alone describes only this direction.
 #[test]
 fn delete_surrounding_maps_a_shrinking_placeholder_and_after_text() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "Name: AdaX"})).unwrap();
-    wrap_in_control(&mut a, 6, 9, "name", "N");
-    let r = control(&a, "name");
-    a.session.sel = wordcraft_engine::Selection::caret(r.end.clone());
-    let depth = a.session.undo_depth();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "Name: AdaX"}));
+    wrap_in_control(&mut h, 6, 9, "name", "N");
+    let r = control(h.state(), "name");
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(r.end.clone());
+    let depth = h.state().session.undo_depth();
 
-    alt_frame(&ctx, &mut a, vec![surround(3, 1)]);
-    assert_eq!(body(&a), "Name: N", "the shorter placeholder replaces `Ada`, and `X` still goes");
-    let end = control(&a, "name").content_start().off + 1;
-    assert_eq!((a.session.sel.anchor.off, a.session.sel.focus.off), (end, end));
-    assert_eq!(a.session.undo_depth(), depth + 1);
+    alt_frame(&mut h, vec![surround(3, 1)]);
+    assert_eq!(body(h.state()), "Name: N", "the shorter placeholder replaces `Ada`, and `X` still goes");
+    let end = control(h.state(), "name").content_start().off + 1;
+    let sel = &h.state().session.sel;
+    assert_eq!((sel.anchor.off, sel.focus.off), (end, end));
+    assert_eq!(h.state().session.undo_depth(), depth + 1);
 
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("Z".into()))]);
-    assert_eq!(body(&a), "Name: Z");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "Name: AdaX", "one Undo restores the original value and the following text");
+    alt_frame(&mut h, vec![commit("Z")]);
+    assert_eq!(body(h.state()), "Name: Z");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "Name: AdaX", "one Undo restores the original value and the following text");
 }
 
 /// The after side alone can empty a control and restore a longer placeholder. Its caret
@@ -1057,91 +1002,93 @@ fn delete_surrounding_maps_a_shrinking_placeholder_and_after_text() {
 /// text beyond the after-side range stays put.
 #[test]
 fn delete_surrounding_maps_a_placeholder_restored_by_the_after_side() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "aXY"})).unwrap();
-    wrap_in_control(&mut a, 1, 2, "name", "Enter the value");
-    let r = control(&a, "name");
-    let placeholder = r.control.placeholder_shown().to_string();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "aXY"}));
+    wrap_in_control(&mut h, 1, 2, "name", "Enter the value");
+    let placeholder = control(h.state(), "name").control.placeholder_shown().to_string();
     assert!(placeholder.len() > 1);
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1));
-    let depth = a.session.undo_depth();
+    caret(&mut h, 1);
+    let depth = h.state().session.undo_depth();
 
-    alt_frame(&ctx, &mut a, vec![surround(0, 1)]);
-    assert_eq!(body(&a), format!("a{placeholder}Y"), "only the one after-side `X` is erased; `Y` is beyond the range");
-    let end = control(&a, "name").content_start().off + placeholder.len();
-    assert_eq!((a.session.sel.anchor.off, a.session.sel.focus.off), (end, end));
-    assert_eq!(a.session.undo_depth(), depth + 1);
+    alt_frame(&mut h, vec![surround(0, 1)]);
+    assert_eq!(body(h.state()), format!("a{placeholder}Y"), "only the one after-side `X` is erased; `Y` is beyond the range");
+    let end = control(h.state(), "name").content_start().off + placeholder.len();
+    let sel = &h.state().session.sel;
+    assert_eq!((sel.anchor.off, sel.focus.off), (end, end));
+    assert_eq!(h.state().session.undo_depth(), depth + 1);
 
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("Q".into()))]);
-    assert_eq!(body(&a), "aQY", "the commit replaces the placeholder and leaves the following `Y`");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "aXY", "one Undo restores the emptied control, the following text and the commit");
+    alt_frame(&mut h, vec![commit("Q")]);
+    assert_eq!(body(h.state()), "aQY", "the commit replaces the placeholder and leaves the following `Y`");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "aXY", "one Undo restores the emptied control, the following text and the commit");
 }
 
 /// A refused body request clears the locally painted pre-edit and every replacement join.
 /// The earlier successful deletion stays, but the following commit gets its own Undo step.
 #[test]
 fn a_refused_body_delete_clears_preedit_and_joins() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "ab"})).unwrap();
-    wrap_in_control(&mut a, 1, 2, "locked", "b");
-    a.run("developer.properties", json!({"control": "locked", "lockEdit": true})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 1));
-    let depth = a.session.undo_depth();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "ab"}));
+    wrap_in_control(&mut h, 1, 2, "locked", "b");
+    run(&mut h, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+    caret(&mut h, 1);
+    let depth = h.state().session.undo_depth();
 
-    alt_frame(
-        &ctx,
-        &mut a,
-        vec![surround(1, 0), egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: None }), surround(0, 1)],
-    );
-    assert_eq!(body(&a), "b", "the editable `a` is erased; the locked control's `b` is not");
-    assert!(a.canvas.ime_preedit.is_empty(), "a refused request must not leave its pre-edit painted");
-    assert_eq!(a.canvas.ime_preedit_range, None);
-    assert!(a.canvas.ime_join_text.is_none(), "no replacement formatting is promised");
-    assert!(a.canvas.ime_interrupt_now, "the platform's stale surroundings are interrupted");
-    assert_eq!(a.session.undo_depth(), depth + 1, "only the accepted first deletion has a step");
+    batch_frame(&mut h, vec![surround(1, 0), preedit("に"), surround(0, 1)]);
+    assert_eq!(body(h.state()), "b", "the editable `a` is erased; the locked control's `b` is not");
+    assert!(h.state().canvas.ime_preedit.is_empty(), "a refused request must not leave its pre-edit painted");
+    assert_eq!(h.state().canvas.ime_preedit_range, None);
+    assert!(h.state().canvas.ime_join_text.is_none(), "no replacement formatting is promised");
+    assert!(interrupted(&h), "the platform's stale surroundings are interrupted");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "only the accepted first deletion has a step");
 
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
-    assert_eq!(body(&a), "Xb");
-    assert_eq!(a.session.undo_depth(), depth + 2, "the cleared join gives the commit its own checkpoint");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "b", "Undo takes back only the commit, not the earlier deletion");
+    complete_reset(&mut h);
+    alt_frame(&mut h, vec![commit("X")]);
+    assert_eq!(body(h.state()), "Xb");
+    assert_eq!(h.state().session.undo_depth(), depth + 2, "the cleared join gives the commit its own checkpoint");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "b", "Undo takes back only the commit, not the earlier deletion");
 }
 
 /// A body deletion promises its join only to the immediate matching replacement. An ordinary
 /// mutating command in between consumes the promise and keeps its own Undo checkpoint.
 #[test]
 fn body_delete_join_does_not_leak_to_an_intervening_command() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "abcd"})).unwrap();
-    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 4));
-    let base = a.session.undo_depth();
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "abcd"}));
+    caret(&mut h, 4);
+    let base = h.state().session.undo_depth();
 
-    alt_frame(&ctx, &mut a, vec![surround(1, 0)]);
-    assert_eq!(body(&a), "abc");
-    assert_eq!(a.session.undo_depth(), base + 1, "the deletion is its own step");
+    alt_frame(&mut h, vec![surround(1, 0)]);
+    assert_eq!(body(h.state()), "abc");
+    assert_eq!(h.state().session.undo_depth(), base + 1, "the deletion is its own step");
 
-    a.run("format.bold", json!({})).unwrap();
-    assert_eq!(body(&a), "abc", "the intervening command changes no text");
-    assert_eq!(a.session.undo_depth(), base + 2, "an intervening ordinary command owns its checkpoint");
+    run(&mut h, "format.bold", json!({}));
+    assert_eq!(body(h.state()), "abc", "the intervening command changes no text");
+    assert_eq!(h.state().session.undo_depth(), base + 2, "an intervening ordinary command owns its checkpoint");
 
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
-    assert_eq!(body(&a), "abcX", "the replacement still applies");
-    assert_eq!(a.session.undo_depth(), base + 3, "the replacement no longer joins across the ordinary command");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "abc", "Undo takes back only the commit, not the deletion or the Bold step");
+    alt_frame(&mut h, vec![commit("X")]);
+    assert_eq!(body(h.state()), "abcX", "the replacement still applies");
+    assert_eq!(h.state().session.undo_depth(), base + 3, "the replacement no longer joins across the ordinary command");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "abc", "Undo takes back only the commit, not the deletion or the Bold step");
 }
 
 /// A cross-block selection has no single surrounding snapshot. Refusing the request must
 /// also interrupt the composition instead of leaving the platform's hidden text stale.
 #[test]
 fn cross_block_delete_surrounding_is_refused_and_interrupts() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("document.setText", json!({"text": "one\ntwo"})).unwrap();
-    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(1, 1) };
-    alt_frame(&ctx, &mut a, vec![surround(1, 0)]);
-    assert_eq!(body(&a), "one\ntwo", "nothing is deleted across blocks");
-    assert!(a.canvas.ime_interrupt_now, "the refused request interrupts the composition");
+    let mut h = alt_frame_app();
+    run(&mut h, "document.setText", json!({"text": "one\ntwo"}));
+    h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 1), focus: wordcraft_doc::Pos::body(1, 1) };
+    alt_frame(&mut h, vec![surround(1, 0)]);
+    assert_eq!(body(h.state()), "one\ntwo", "nothing is deleted across blocks");
+    assert!(resynced(&h), "the refused request interrupts the composition");
+}
+
+/// The linear text of the open equation.
+fn linear(h: &mut H) -> String {
+    run(h, "equation.get", json!({})).get("linear").and_then(|v| v.as_str()).unwrap_or("").to_string()
 }
 
 /// An IME replacement inside an equation erases the counted characters with the equation's
@@ -1151,114 +1098,88 @@ fn cross_block_delete_surrounding_is_refused_and_interrupts() {
 /// input and applies; so does one in a later frame.
 #[test]
 fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("insert.equation", json!({"linear": "x+y"})).unwrap();
-    let linear = |a: &mut WordApp| a.run("equation.get", json!({})).unwrap().get("linear").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    assert_eq!(linear(&mut a), "x+y");
-    alt_frame(&ctx, &mut a, vec![surround(1, 0)]);
-    assert_eq!(linear(&mut a), "x+", "the character before the caret in the equation is erased");
-    let base = linear(&mut a);
+    let mut h = alt_frame_app();
+    run(&mut h, "insert.equation", json!({"linear": "x+y"}));
+    assert_eq!(linear(&mut h), "x+y");
+    alt_frame(&mut h, vec![surround(1, 0)]);
+    assert_eq!(linear(&mut h), "x+", "the character before the caret in the equation is erased");
+    let base = linear(&mut h);
 
     // A direct commit in a later frame is fresh input, not the stale replacement.
-    a.canvas.ime_interrupt_now = false;
-    alt_frame(&ctx, &mut a, vec![surround_bytes(1, 0)]);
-    assert_eq!(linear(&mut a), base, "a byte count is not guessed into equation characters");
-    assert!(a.canvas.ime_interrupt_now, "the refused byte deletion interrupts the composition");
-    a.canvas.ime_interrupt_now = false;
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("D".into()))]);
-    assert_eq!(linear(&mut a), format!("{base}D"), "a later direct commit applies without a pre-edit");
+    alt_frame(&mut h, vec![surround_bytes(1, 0)]);
+    assert_eq!(linear(&mut h), base, "a byte count is not guessed into equation characters");
+    assert!(resynced(&h), "the refused byte deletion interrupts the composition");
+    alt_frame(&mut h, vec![commit("D")]);
+    assert_eq!(linear(&mut h), format!("{base}D"), "a later direct commit applies without a pre-edit");
 
     // The immediately following commit belongs to the refused replacement and is dropped;
     // the next commit in the same raw batch is fresh input and applies.
-    let after_pair = linear(&mut a);
-    a.canvas.ime_interrupt_now = false;
-    alt_frame(
-        &ctx,
-        &mut a,
-        vec![surround_bytes(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("Z".into())), egui::Event::Ime(egui::ImeEvent::Commit("Y".into()))],
-    );
-    assert_eq!(linear(&mut a), format!("{after_pair}Y"), "only the adjacent stale commit is dropped");
-    let after_commit = linear(&mut a);
+    let after_pair = linear(&mut h);
+    batch_frame(&mut h, vec![surround_bytes(1, 0), commit("Z"), commit("Y")]);
+    assert_eq!(linear(&mut h), format!("{after_pair}Y"), "only the adjacent stale commit is dropped");
+    let after_commit = linear(&mut h);
 
     // A platform that routes the replacement through `Text` before its `Commit` sends the
     // adjacent pair; both belong to the refused deletion, and a later commit still applies.
-    a.canvas.ime_interrupt_now = false;
-    alt_frame(
-        &ctx,
-        &mut a,
-        vec![
-            surround_bytes(1, 0),
-            egui::Event::Text("Q".into()),
-            egui::Event::Ime(egui::ImeEvent::Commit("Q2".into())),
-            egui::Event::Ime(egui::ImeEvent::Commit("R".into())),
-        ],
-    );
-    assert_eq!(linear(&mut a), format!("{after_commit}R"), "the adjacent Text+Commit pair is stale, the next commit is not");
+    batch_frame(&mut h, vec![surround_bytes(1, 0), egui::Event::Text("Q".into()), commit("Q2"), commit("R")]);
+    assert_eq!(linear(&mut h), format!("{after_commit}R"), "the adjacent Text+Commit pair is stale, the next commit is not");
 
     // Any intervening event ends the pair: a key then its Text is ordinary fresh input.
-    let after_commit = linear(&mut a);
-    a.canvas.ime_interrupt_now = false;
-    let key = egui::Event::Key { key: Key::F20, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
-    alt_frame(&ctx, &mut a, vec![surround_bytes(1, 0), key, egui::Event::Text("K".into())]);
-    assert_eq!(linear(&mut a), format!("{after_commit}K"), "a key between the deletion and text clears the suppression");
+    let after_commit = linear(&mut h);
+    // Delete (at the equation's end it changes nothing) is a key the page reads; F20 is no editor input.
+    let key = key_event(Key::Delete, true, Modifiers::NONE);
+    // The framework takes a Delete in the frame right after a commit as the key that ended the composition
+    // (`ime::GUARD_FRAMES`); this one is a later key, so a frame passes first.
+    batch_frame(&mut h, Vec::new());
+    batch_frame(&mut h, vec![surround_bytes(1, 0), key, egui::Event::Text("K".into())]);
+    assert_eq!(linear(&mut h), format!("{after_commit}K"), "a key between the deletion and text clears the suppression");
 
     // A pre-edit likewise ends the stale pair; its commit is fresh.
-    let after_commit = linear(&mut a);
-    a.canvas.ime_interrupt_now = false;
-    alt_frame(
-        &ctx,
-        &mut a,
-        vec![
-            surround_bytes(1, 0),
-            egui::Event::Ime(egui::ImeEvent::Preedit { text: "p".into(), active_range_chars: None }),
-            egui::Event::Ime(egui::ImeEvent::Commit("P".into())),
-        ],
-    );
-    assert_eq!(linear(&mut a), format!("{after_commit}P"), "a fresh composition in the same batch is accepted");
+    let after_commit = linear(&mut h);
+    batch_frame(&mut h, vec![surround_bytes(1, 0), preedit("p"), commit("P")]);
+    assert_eq!(linear(&mut h), format!("{after_commit}P"), "a fresh composition in the same batch is accepted");
 }
 
 /// An over-cap equation deletion is still a new surrounding request: it discards the
 /// composition that was painted for the snapshot it refuses, and interrupts it.
 #[test]
 fn over_cap_equation_delete_clears_the_painted_preedit() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("insert.equation", json!({"linear": "abc"})).unwrap();
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "p".into(), active_range_chars: None })]);
-    assert_eq!(a.canvas.ime_preedit, "p");
-    a.canvas.ime_interrupt_now = false;
-    alt_frame(&ctx, &mut a, vec![surround(wordcraft_engine::MAX_EQUATION_DELETE_UNITS + 1, 0)]);
-    assert_eq!(body(&a), "abc", "the over-cap request deletes nothing");
-    assert!(a.canvas.ime_preedit.is_empty(), "the refused request's pre-edit is not left painted");
-    assert_eq!(a.canvas.ime_preedit_range, None);
-    assert!(a.canvas.ime_interrupt_now, "the platform's stale snapshot is interrupted");
+    let mut h = alt_frame_app();
+    run(&mut h, "insert.equation", json!({"linear": "abc"}));
+    alt_frame(&mut h, vec![preedit("p")]);
+    assert_eq!(h.state().canvas.ime_preedit, "p");
+    alt_frame(&mut h, vec![surround(wordcraft_engine::MAX_EQUATION_DELETE_UNITS + 1, 0)]);
+    assert_eq!(body(h.state()), "abc", "the over-cap request deletes nothing");
+    assert!(h.state().canvas.ime_preedit.is_empty(), "the refused request's pre-edit is not left painted");
+    assert_eq!(h.state().canvas.ime_preedit_range, None);
+    assert!(interrupted(&h), "the platform's stale snapshot is interrupted");
 }
 
 /// An over-cap equation deletion also clears a previous equation deletion's promised join,
 /// so the next commit cannot silently merge into that earlier undo step.
 #[test]
 fn over_cap_equation_delete_clears_the_previous_replacement_join() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("insert.equation", json!({"linear": "abcd"})).unwrap();
-    alt_frame(&ctx, &mut a, vec![surround(1, 0), surround(wordcraft_engine::MAX_EQUATION_DELETE_UNITS + 1, 0)]);
-    assert_eq!(body(&a), "abc", "the first, valid deletion stands");
-    assert!(a.canvas.ime_interrupt_now, "the over-cap request interrupts the composition");
-    let depth = a.session.undo_depth();
-    a.canvas.ime_interrupt_now = false;
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
-    assert_eq!(body(&a), "abcX");
-    assert_eq!(a.session.undo_depth(), depth + 1, "the cleared join gives the commit its own undo step");
+    let mut h = alt_frame_app();
+    run(&mut h, "insert.equation", json!({"linear": "abcd"}));
+    alt_frame(&mut h, vec![surround(1, 0), surround(wordcraft_engine::MAX_EQUATION_DELETE_UNITS + 1, 0)]);
+    assert_eq!(body(h.state()), "abc", "the first, valid deletion stands");
+    assert!(resynced(&h), "the over-cap request interrupts the composition");
+    let depth = h.state().session.undo_depth();
+    alt_frame(&mut h, vec![commit("X")]);
+    assert_eq!(body(h.state()), "abcX");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "the cleared join gives the commit its own undo step");
 }
 
 /// The transactional equation delete and the following commit are one undo step, like the
 /// body's `DeleteSurrounding` plus its replacement text.
 #[test]
 fn ime_equation_delete_and_commit_are_one_undo_step() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("insert.equation", json!({"linear": "abcd"})).unwrap();
-    alt_frame(&ctx, &mut a, vec![surround(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
-    assert_eq!(body(&a), "abcX");
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "abcd", "one Undo restores the deleted unit and the commit together");
+    let mut h = alt_frame_app();
+    run(&mut h, "insert.equation", json!({"linear": "abcd"}));
+    alt_frame(&mut h, vec![surround(1, 0), commit("X")]);
+    assert_eq!(body(h.state()), "abcX");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "abcd", "one Undo restores the deleted unit and the commit together");
 }
 
 /// An equation deletion promises a join only to its immediate replacement. An unrelated
@@ -1266,72 +1187,55 @@ fn ime_equation_delete_and_commit_are_one_undo_step() {
 /// instead of being merged into the deletion.
 #[test]
 fn ime_equation_delete_join_does_not_leak_to_an_unrelated_command() {
-    let (ctx, mut a) = alt_frame_app();
-    a.run("insert.equation", json!({"linear": "abcd"})).unwrap();
-    let base = a.session.undo_depth();
-    alt_frame(&ctx, &mut a, vec![surround(1, 0)]);
-    assert_eq!(body(&a), "abc");
-    assert_eq!(a.session.undo_depth(), base + 1, "the deletion is its own undo step");
+    let mut h = alt_frame_app();
+    run(&mut h, "insert.equation", json!({"linear": "abcd"}));
+    let base = h.state().session.undo_depth();
+    alt_frame(&mut h, vec![surround(1, 0)]);
+    assert_eq!(body(h.state()), "abc");
+    assert_eq!(h.state().session.undo_depth(), base + 1, "the deletion is its own undo step");
 
-    a.run("equation.justify", json!({"jc": "right"})).unwrap();
-    assert_eq!(a.session.undo_depth(), base + 2, "an unrelated command keeps its own checkpoint");
+    run(&mut h, "equation.justify", json!({"jc": "right"}));
+    assert_eq!(h.state().session.undo_depth(), base + 2, "an unrelated command keeps its own checkpoint");
 
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
-    assert_eq!(body(&a), "abcX");
-    assert_eq!(a.session.undo_depth(), base + 3, "the replacement no longer joins across the unrelated command");
+    alt_frame(&mut h, vec![commit("X")]);
+    assert_eq!(body(h.state()), "abcX");
+    assert_eq!(h.state().session.undo_depth(), base + 3, "the replacement no longer joins across the unrelated command");
 
-    a.run("edit.undo", json!({})).unwrap();
-    assert_eq!(body(&a), "abc", "Undo takes back only the commit, not the deletion and the unrelated command");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(body(h.state()), "abc", "Undo takes back only the commit, not the deletion and the unrelated command");
 }
 
 /// Hostile pre-edit and commit sizes are refused before they reach the canvas or the model.
 #[test]
 fn oversized_ime_events_are_ignored() {
-    let (ctx, mut a) = alt_frame_app();
+    let mut h = alt_frame_app();
     let huge = "a".repeat(MAX_IME_PREEDIT_BYTES + 1);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: huge, active_range_chars: Some(0..1) })]);
-    assert!(a.canvas.ime_preedit.is_empty(), "an oversized pre-edit is not painted");
-    assert_eq!(a.canvas.ime_preedit_range, None);
+    alt_frame(&mut h, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: huge, active_range_chars: Some(0..1) })]);
+    assert!(h.state().canvas.ime_preedit.is_empty(), "an oversized pre-edit is not painted");
+    assert_eq!(h.state().canvas.ime_preedit_range, None);
     let huge = "b".repeat(MAX_IME_COMMIT_BYTES + 1);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit(huge))]);
-    assert_eq!(body(&a), "", "an oversized commit is not inserted");
+    alt_frame(&mut h, vec![commit(&huge)]);
+    assert_eq!(body(h.state()), "", "an oversized commit is not inserted");
     // The equation cap is lower than the byte cap: an over-cap commit is refused before the
     // command, with no prefix committed and the composition interrupted.
-    a.run("insert.equation", json!({})).unwrap();
-    a.canvas.ime_interrupt_now = false;
+    run(&mut h, "insert.equation", json!({}));
     let long = "c".repeat(wordcraft_engine::MAX_EQUATION_TYPE_CHARS + 1);
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit(long))]);
-    assert_eq!(body(&a), "", "no equation prefix is committed");
-    assert!(a.canvas.ime_interrupt_now, "the refused commit starts the composition afresh");
-}
-
-/// A pre-edit belongs to the editor that had focus: losing it drops the painted composition.
-#[test]
-fn observe_ime_drops_a_preedit_without_focus() {
-    let ctx = egui::Context::default();
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    a.canvas.ime_preedit = "に".into();
-    a.canvas.ime_preedit_range = Some(0..1);
-    a.canvas.focused = false;
-    let r = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0));
-    observe_ime(&mut a, &ctx, Some((r, r)), false);
-    assert!(a.canvas.ime_preedit.is_empty(), "no composition is kept for an unfocused editor");
-    assert_eq!(a.canvas.ime_preedit_range, None);
+    alt_frame(&mut h, vec![commit(&long)]);
+    assert_eq!(body(h.state()), "", "no equation prefix is committed");
+    assert!(resynced(&h), "the refused commit starts the composition afresh");
 }
 
 #[test]
 fn typing_with_smart_art_selected_types_into_an_item() {
-    let ctx = egui::Context::default();
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-    a.run("insert.smartArt", json!({"layout": "matrix", "items": ["Ada", "Bea"]})).unwrap();
+    let mut h = alt_frame_app();
+    run(&mut h, "insert.smartArt", json!({"layout": "matrix", "items": ["Ada", "Bea"]}));
     for t in ["x", "y"] {
-        ctx.run_ui(egui::RawInput { events: vec![egui::Event::Text(t.into())], ..Default::default() }, |ui| canvas_events(&mut a, ui.ctx()))
-            .drop_without_applying_deltas();
+        alt_frame(&mut h, vec![egui::Event::Text(t.into())]);
     }
-    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("the graphic stays");
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&h.state().session).expect("the graphic stays");
     assert_eq!(g.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), ["Adaxy", "Bea"]);
-    assert!(a.session.view.smart_art_pane, "the Text Pane opens");
-    a.run("edit.undo", json!({})).unwrap();
-    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
+    assert!(h.state().session.view.smart_art_pane, "the Text Pane opens");
+    run(&mut h, "edit.undo", json!({}));
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&h.state().session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }

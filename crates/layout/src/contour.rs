@@ -286,16 +286,13 @@ impl Alphas {
 /// without transparency or that don't decode; [`OverBudget`] for one that would take `decoded`
 /// past [`MAX_DECODED_PIXELS`]. Pictures whose header says they're opaque cost nothing.
 fn decode_alpha(bytes: &[u8], decoded: &mut u64) -> Result<Option<Alpha>, OverBudget> {
-    use image::ImageDecoder;
     let Ok(pic) = wordcraft_geom::picture::probe(bytes) else { return Ok(None) };
     // Formats that can't be transparent aren't decoded.
     if pic.format == image::ImageFormat::Jpeg || pic.width > MAX_PICTURE_SIDE || pic.height > MAX_PICTURE_SIDE {
         return Ok(None);
     }
     // Only the header is read here (a PNG's `tRNS` counts as transparency).
-    let has_alpha =
-        image::ImageReader::with_format(std::io::Cursor::new(bytes), pic.format).into_decoder().ok().is_some_and(|d| d.color_type().has_alpha());
-    if !has_alpha {
+    if !pic.has_alpha() {
         return Ok(None);
     }
     let pixels = u64::from(pic.width) * u64::from(pic.height);
@@ -310,7 +307,7 @@ fn decode_alpha(bytes: &[u8], decoded: &mut u64) -> Result<Option<Alpha>, OverBu
 fn alpha_in_crop(img: &Alpha, crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
     let (iw, ih) = (img.w, img.h);
     // The part the renderers draw (#1899): a sliver keeps its partly covered pixels.
-    let [cl, ct, vw, vh] = wordcraft_metafile::crop_window(crop);
+    let [cl, ct, vw, vh] = crate::crop_window(crop);
     let (fw, fh) = (f64::from(iw), f64::from(ih));
     let x0 = ((fw * cl) as u32).min(iw);
     let y0 = ((fh * ct) as u32).min(ih);
@@ -352,6 +349,7 @@ mod tests {
 
     #[test]
     fn occupied_follows_the_outline() {
+        crate::test_fonts();
         let c = diamond(false);
         let s = c.occupied(0.0, 10.0);
         assert_eq!(s.len(), 1);
@@ -366,6 +364,7 @@ mod tests {
 
     #[test]
     fn through_keeps_interior_gaps() {
+        crate::test_fonts();
         // A U: two prongs joined at the bottom.
         let u = [(0.0, 0.0), (20.0, 0.0), (20.0, 80.0), (80.0, 80.0), (80.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
         let (_, tight) = Contour::new(&u, 0.0, 0.0, 0.0, false).unwrap();
@@ -377,11 +376,8 @@ mod tests {
 
     #[test]
     fn pictures_wrap_around_their_opaque_pixels() {
-        let png = |img: image::DynamicImage| {
-            let mut buf = Vec::new();
-            img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
-            buf
-        };
+        crate::test_fonts();
+        let png = |img: image::DynamicImage| wordcraft_geom::picture::encode_format(&img, image::ImageFormat::Png).unwrap();
         // An opaque disc in the middle of a transparent 64 × 64 picture.
         let disc = image::RgbaImage::from_fn(64, 64, |x, y| {
             let (dx, dy) = (x as f32 + 0.5 - 32.0, y as f32 + 0.5 - 32.0);
@@ -432,6 +428,7 @@ mod tests {
 
     #[test]
     fn hostile_points_are_dropped() {
+        crate::test_fonts();
         assert!(Contour::new(&[(f32::NAN, 0.0), (1.0, 1.0), (f32::INFINITY, 2.0)], 0.0, 0.0, 0.0, false).is_none());
         let c = diamond(true);
         assert!(c.occupied(f32::NAN, 1.0).is_empty());
