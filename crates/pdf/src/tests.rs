@@ -4,6 +4,7 @@ use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::picfx::PicFx;
 use wordcraft_doc::props::NumRef;
 use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Watermark, para_block};
+use wordcraft_layout::display::{DeleteMark, MarkupOptions};
 
 use crate::*;
 use wordcraft_layout::LayoutOptions;
@@ -167,6 +168,65 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// Extract text runs with their RGB fill colour from `bytes`.
+fn extract_colored_text(bytes: &[u8]) -> Vec<(String, [u8; 3])> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    /// A testing device that records extracted text runs along with their RGB fill colour.
+    struct Ex(Vec<(String, [u8; 3])>);
+    impl Device<'_> for Ex {
+        /// Ignore soft masks during text extraction.
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        /// Ignore blend modes during text extraction.
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        /// Ignore paths during text extraction.
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        /// Ignore clip paths during text extraction.
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        /// Ignore transparency groups during text extraction.
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        /// Records glyph text with its non-stroking RGB color, merging adjacent glyphs of identical color.
+        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, paint: &Paint<'_>, mode: &GlyphDrawMode) {
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
+            let Paint::Color(color) = paint else { return };
+            let rgba = color.to_rgba().to_rgba8();
+            let rgb = [rgba[0], rgba[1], rgba[2]];
+            let ch = match g.as_unicode() {
+                Some(hayro_cmap::BfString::Char(c)) => c.to_string(),
+                Some(hayro_cmap::BfString::String(s)) => s.to_string(),
+                None => "\u{FFFD}".to_string(),
+            };
+            if let Some((last_text, last_rgb)) = self.0.last_mut()
+                && *last_rgb == rgb
+            {
+                last_text.push_str(&ch);
+                return;
+            }
+            self.0.push((ch, rgb));
+        }
+        /// Ignore images during text extraction.
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        /// Ignore clip path pop during text extraction.
+        fn pop_clip_path(&mut self) {}
+        /// Ignore transparency group pop during text extraction.
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
+}
+
 fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -293,6 +353,89 @@ fn tracked_deletions_are_left_out_without_markup() {
     assert_eq!(text, "Keep DELETEDTEXT INSERTED");
 }
 
+/// #5232: the Track Changes Options colours (blue insertions, red deletions) reach the PDF instead
+/// of every revision taking its author's colour.
+#[test]
+fn markup_takes_the_track_changes_option_colours() {
+    use wordcraft_doc::props::Rgb;
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "Kansas ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "Missouri", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+
+    // By author: both revisions take Ada's colour (#B01E8F = [176, 30, 143]), no pure blue or red.
+    let by_author_bytes = export(&d, &PdfOptions { include_markup: true, compress: false, ..Default::default() }).unwrap();
+    let by_author_runs = extract_colored_text(&by_author_bytes);
+    let kansas_author = by_author_runs.iter().find(|(s, _)| s.contains("Kansas")).map(|(_, c)| *c).expect("Kansas present");
+    let missouri_author = by_author_runs.iter().find(|(s, _)| s.contains("Missouri")).map(|(_, c)| *c).expect("Missouri present");
+    assert_eq!(kansas_author, missouri_author, "by-author colours must match for the same author");
+    assert_ne!(kansas_author, [255, 0, 0], "by-author is not red");
+    assert_ne!(missouri_author, [0, 0, 255], "by-author is not blue");
+
+    // With explicit Track Changes colours: insertions are blue, deletions are red.
+    let blue = Rgb(0, 0, 255);
+    let red = Rgb(255, 0, 0);
+    let coloured_opts = PdfOptions {
+        include_markup: true,
+        compress: false,
+        revisions: MarkupOptions { insert_color: Some(blue), delete_color: Some(red), ..Default::default() },
+        ..Default::default()
+    };
+    let coloured_bytes = export(&d, &coloured_opts).unwrap();
+    let coloured_runs = extract_colored_text(&coloured_bytes);
+    let kansas_color = coloured_runs.iter().find(|(s, _)| s.contains("Kansas")).map(|(_, c)| *c).expect("Kansas present");
+    let missouri_color = coloured_runs.iter().find(|(s, _)| s.contains("Missouri")).map(|(_, c)| *c).expect("Missouri present");
+    assert_eq!(kansas_color, [255, 0, 0], "deleted Kansas must be red");
+    assert_eq!(missouri_color, [0, 0, 255], "inserted Missouri must be blue");
+
+    // Also assert the PDF content stream has the corresponding color operators preceding each run.
+    let raw = String::from_utf8_lossy(&coloured_bytes);
+    let tokens: Vec<_> = raw.split_ascii_whitespace().collect();
+    let has = |op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        tokens.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    assert!(has("1 0 0 rg"), "raw PDF stream contains red non-stroking operator");
+    assert!(has("0 0 1 rg"), "raw PDF stream contains blue non-stroking operator");
+}
+
+/// #5232: deletions marked Hidden in Track Changes Options take no space and are omitted from
+/// the exported PDF with markup.
+#[test]
+fn hidden_deletions_stay_out_of_markup_pdf() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "Kansas ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "Missouri", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+
+    // Strikethrough: deleted Kansas is included in markup PDF.
+    let strike_opts = PdfOptions {
+        include_markup: true,
+        revisions: MarkupOptions { delete_mark: DeleteMark::Strikethrough, ..Default::default() },
+        ..Default::default()
+    };
+    let strike_text = squash(&extract_text(&export(&d, &strike_opts).unwrap()).concat());
+    assert_eq!(strike_text, "Keep Kansas Missouri");
+
+    // Hidden: deleted Kansas is omitted from markup PDF.
+    let hidden_opts =
+        PdfOptions { include_markup: true, revisions: MarkupOptions { delete_mark: DeleteMark::Hidden, ..Default::default() }, ..Default::default() };
+    let hidden_text = squash(&extract_text(&export(&d, &hidden_opts).unwrap()).concat());
+    assert_eq!(hidden_text, "Keep Missouri");
+}
+
 #[test]
 fn deleted_heading_text_stays_out_of_bookmarks_and_tags() {
     use wordcraft_doc::{Revision, RevisionKind};
@@ -390,6 +533,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn long_fragmented_hidden_headings_export_in_linear_time() {
     // Headings of n chars in one-char runs: all hidden with bold alternating, and hidden and visible
     // alternating. Layout and the bookmark/tag titles once scanned every left-out range for every
@@ -982,6 +1126,7 @@ fn inline_chart_is_a_figure_with_its_text_inside_it() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: "Sales by quarter".into(), float: Default::default(), graphic: Arc::new(graphic) };
@@ -1916,6 +2061,7 @@ fn comments_print_in_balloons_beside_scaled_pages() {
 /// references) exports in time proportional to its length: each link looked its bookmark up by
 /// walking the whole document, so NIH's 67-page protocol template took 10.6 s (0.9 s now).
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn internal_links_export_in_linear_time() {
     let doc = |n: usize| {
         let mut d = Document::new();
@@ -3120,6 +3266,7 @@ fn only_safe_link_targets_become_annotations() {
 /// without one), found in one pass: a long run of glyphs sharing a cluster used to rescan the rest
 /// of the run for every glyph.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
     let brute = |cl: &[usize], len: usize| -> Vec<usize> {
         (0..cl.len()).map(|i| cl.iter().skip(i + 1).copied().find(|n| *n > cl[i]).unwrap_or(len)).collect::<Vec<_>>()
@@ -3150,6 +3297,27 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+/// The exported PDF shows a body page reference's page and Word's error for a missing bookmark,
+/// as Word's export does, where the document stores "9" for both.
+#[test]
+fn exported_page_references_show_the_page_or_words_error() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let mut d = Document::from_text("See \nMissing \nTarget");
+    for (i, instr) in [(0, "PAGEREF Target"), (1, "PAGEREF NoSuchMark")] {
+        let p = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).unwrap();
+        let n = p.len();
+        p.insert_object(n, field(instr), &CharProps::default()).unwrap();
+    }
+    let target = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    target.props.page_break_before = Some(true);
+    target.insert_object(0, InlineObject::BookmarkStart { name: "Target".into() }, &CharProps::default()).unwrap();
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    let first = squash(&text[0]);
+    assert!(first.contains("See 2"), "{first}");
+    assert!(first.contains("Missing Error! Bookmark not defined."), "{first}");
 }
 
 #[test]
@@ -3216,6 +3384,7 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
@@ -3244,7 +3413,13 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
             shown.insert(String::from_utf16_lossy(&units));
         }
     }
+    // The equation's x is the mathematical italic 𝑥 when the math face has that alphabet. A host
+    // without a math font (no STIX Two Math, Latin Modern Math…) sets math in a text face that
+    // lacks it, and the layout draws the plain letter slanted instead (`math/nodes.rs`), which the
+    // body's "x" already maps.
+    let (math_face, _) = wordcraft_fonts::math::resolve_math("Cambria Math");
+    let equation_x = if math_face.covers('\u{1D465}') { "\u{1D465}" } else { "x" };
     let expected: std::collections::BTreeSet<String> =
-        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
-    assert_eq!(shown, expected);
+        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", equation_x].into_iter().map(String::from).collect();
+    assert_eq!(shown, expected, "math face: {}", math_face.family);
 }
