@@ -297,6 +297,8 @@ pub(crate) struct FormHost<F: WordForm> {
     pending: Vec<Pending>,
     asks: Vec<Asks>,
     children: Vec<Child>,
+    /// The title of the window of its own the form shows in (a macOS utility panel), when it has one.
+    window: Option<String>,
 }
 
 impl<F: WordForm> FormHost<F> {
@@ -310,6 +312,7 @@ impl<F: WordForm> FormHost<F> {
             pending: Vec::new(),
             asks: Vec::new(),
             children: Vec::new(),
+            window: None,
         }
     }
 
@@ -335,6 +338,14 @@ impl<F: WordForm> StackDialog for FormHost<F> {
         self.form.modeless()
     }
 
+    fn windowed(&self) -> bool {
+        self.window.is_some()
+    }
+
+    fn window_title(&self) -> Option<String> {
+        self.window.clone()
+    }
+
     fn key(&self) -> Option<&str> {
         Some(self.form.key())
     }
@@ -347,8 +358,9 @@ impl<F: WordForm> StackDialog for FormHost<F> {
         let buttons = self.form.extra_buttons();
         let collection = self.form.collection_body();
         let waiting = self.held.is_waiting();
+        let bare = self.window.is_some();
         let FormHost { form, held, parent, accepts, pending, asks, .. } = self;
-        let mut dialog = FormDialog::new(title, Bind::bound(&mut *form)).held(held).buttons(buttons_kind).collection_body(collection);
+        let mut dialog = FormDialog::new(title, Bind::bound(&mut *form)).held(held).buttons(buttons_kind).collection_body(collection).bare(bare);
         if let Some(label) = ok_label {
             dialog = dialog.ok_label(label);
         }
@@ -413,6 +425,18 @@ impl<F: WordForm> StackDialog for FormHost<F> {
 /// Opens `form` as a dialog, over `parent` when there is one.
 pub(crate) fn open_form<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>, form: F) -> DialogId {
     let id = open_node(app, parent, FormHost::new(form, parent));
+    register(app, id, &[form_hooks::<F>()]);
+    id
+}
+
+/// [`open_form`] in a window of its own (a macOS utility panel, `Services::paragraph_window`) titled as the form,
+/// showing its content alone; elsewhere as [`open_form`].
+pub(crate) fn open_form_panel<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>, form: F) -> DialogId {
+    let mut host = FormHost::new(form, parent);
+    if app.services.paragraph_window {
+        host.window = Some(host.form.title().as_str().to_owned());
+    }
+    let id = open_node(app, parent, host);
     register(app, id, &[form_hooks::<F>()]);
     id
 }

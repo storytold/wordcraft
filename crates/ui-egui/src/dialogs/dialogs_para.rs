@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, Rgb, TabAlign, TabLeader, TabStop};
 
-use super::host::{Asks, ChildAnswer, DialogHooks, Keyed, Settle, WordForm, open_form, open_with};
+use super::host::{Asks, ChildAnswer, DialogHooks, Keyed, Settle, WordForm, open_form_panel, open_with};
 use crate::WordApp;
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
 use crate::options::unit_kind;
@@ -98,7 +98,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
         _ => return None,
     };
     let form = BordersForm::read(app, tab)?;
-    Some(open_form(app, parent, form))
+    Some(open_form_panel(app, parent, form))
 }
 
 /// The caret paragraph's stops, those a dialog can edit (finite, not the `Clear` marks, at most [`MAX_STOPS`]), and
