@@ -535,13 +535,12 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
         p.touch();
     }
     let f = FieldCode::parse(&instr);
+    // The page numbers' leader, from the first entry with a right stop: a level without page
+    // numbers (`\n`) ends with its number's left stop instead.
     let leader = leader.unwrap_or_else(|| {
-        s.doc
-            .body
-            .get(start + 1)
-            .filter(|_| end > start)
-            .and_then(|b| b.as_para())
-            .and_then(|p| p.props.tabs.as_ref()?.last().map(|t| t.leader))
+        (start + 1..=end)
+            .filter_map(|i| s.doc.body.get(i)?.as_para())
+            .find_map(|p| p.props.tabs.as_ref()?.iter().rev().find(|t| matches!(t.align, TabAlign::Right)).map(|t| t.leader))
             .unwrap_or(TabLeader::Dot)
     });
     for i in (start + 1..=end).rev() {

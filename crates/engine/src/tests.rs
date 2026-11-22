@@ -5313,6 +5313,37 @@ fn toc_entries(s: &Session) -> Vec<(usize, wordcraft_doc::Paragraph)> {
 /// 11 pt past the number, so the title follows the number and the page number stays on the
 /// entry's line at the right margin, on every level and after the cached stops are reused by an
 /// update. A style with a stop of its own, or a hanging indent, gets none.
+/// A first level without page numbers (`\n "1-1"`) ends its entries with the number's left stop:
+/// the next update still takes the page numbers' leader from an entry that has one. The entries
+/// start without direct stops, as in a file whose TOC styles carry them.
+#[test]
+fn toc_leader_survives_a_first_level_without_page_numbers() {
+    use wordcraft_doc::props::{TabAlign, TabLeader};
+    let mut s = numbered_toc(|_| {});
+    for b in s.doc.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            if p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading") {
+                p.props.tabs = None;
+            }
+            for o in &mut p.objects {
+                if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o
+                    && instr.starts_with("TOC")
+                {
+                    instr.push_str(" \\n \"1-1\"");
+                }
+            }
+        }
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    run(&mut s, "references.updateToc", json!({}));
+    let leaders: Vec<Option<TabLeader>> = toc_entries(&s)
+        .iter()
+        .filter(|(_, p)| p.props.style.as_deref() == Some("TOC2"))
+        .map(|(_, p)| p.props.tabs.as_ref().and_then(|t| t.iter().find(|t| matches!(t.align, TabAlign::Right))).map(|t| t.leader))
+        .collect();
+    assert_eq!(leaders, [Some(TabLeader::Dot)], "{}", text(&s));
+}
+
 #[test]
 fn toc_number_tab_follows_the_number() {
     use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
