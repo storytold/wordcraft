@@ -1814,7 +1814,8 @@ fn paragraph_in_its_own_window_runs_windowed_and_answers_ok() {
     assert!(h.ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
 }
 
-/// In its own window the Paragraph dialog has Tabs as a page: a stop set there and a format change both apply on OK.
+/// In its own window the Paragraph dialog has Tabs as a page: a stop set there and a format change both apply on OK,
+/// as one undo step.
 #[test]
 fn paragraph_in_its_own_window_applies_its_tabs_page_on_ok() {
     let mut app = app_with("a\tb");
@@ -1833,6 +1834,12 @@ fn paragraph_in_its_own_window_applies_its_tabs_page_on_ok() {
     let tabs = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).tabs.clone()).unwrap_or_default();
     assert!(!tabs.is_empty(), "the stop set on the page applied");
     assert!(!is_open(h.state(), "paragraph"), "OK closed the panel");
+    // OK is one undo step: one Undo takes back both the format and the stop.
+    h.state_mut().run("edit.undo", json!({})).expect("undo runs");
+    assert_ne!(props(h.state()).space_before, Some(6.0), "Undo took back the format");
+    let s = &h.state().session;
+    let tabs = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).tabs.clone()).unwrap_or_default();
+    assert!(tabs.is_empty(), "the same Undo took back the stop");
 }
 
 /// Without `Services::paragraph_window` the Paragraph dialog is an ordinary in-window one.
