@@ -50,6 +50,7 @@ pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
+pub mod library_pane;
 mod local_time;
 pub mod md_source;
 pub mod mini_toolbar;
@@ -415,6 +416,9 @@ pub struct WordApp {
     pub(crate) restrict: restrict_pane::RestrictPane,
     /// The language-aware spelling and grammar task pane.
     pub spelling_review: Option<proofing_pane::SpellingForm>,
+    /// The Library pane's tab, folder, search and thumbnails (#2868): one Library for every
+    /// window, so a thumbnail drawn in one shows in the others.
+    pub library: library_pane::State,
     /// The status bar's message, until its `until` passes.
     pub(crate) status: Option<Status>,
     /// The latest formatting shortcut announcement for the active window.

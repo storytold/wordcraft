@@ -1,4 +1,5 @@
-//! File dialogs (Open, Save As, Export, Insert/Change Picture) that don't freeze the window (#94).
+//! File dialogs (Open, Save As, Export, Insert/Change Picture, folders) that don't freeze the window
+//! (#94).
 //!
 //! Every dialog is a ticket on the host's file service (`host.files().pick`). [`WordApp::logic`]
 //! takes the answer on a later frame and finishes what the dialog was for (open the file, save
@@ -74,6 +75,9 @@ pub(crate) enum AfterPick {
     /// document through Manage Sources (#2640).
     #[cfg(not(target_arch = "wasm32"))]
     Sources,
+    /// Add the picked folder to the Library, keep it with the preferences at once and show it in
+    /// the pane (Insert › Library › Add Folder…, #2868).
+    LibraryFolder,
 }
 
 /// What to do once Save As has written the document.
@@ -128,6 +132,13 @@ impl WordApp {
         self.file_dialog = Some(PendingDialog { id, after });
         // A service that answered at once is handled right away.
         self.poll_file_dialog().map_or(Asked::Pending, Asked::Done)
+    }
+
+    /// Whether the host can ask for a folder: the desktop's system dialog, or the framework's
+    /// fallback chooser when it has none (#576). The web can't, so its folder settings take a
+    /// typed path.
+    pub(crate) fn has_folder_picker(&self) -> bool {
+        self.host.files().can_pick()
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
@@ -296,6 +307,17 @@ impl WordApp {
             AfterPick::Recipients => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.load_recipients(json!({"path": path}))
+            }
+            AfterPick::LibraryFolder => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // A failure (not a folder, the Library full) shows on the status bar.
+                let r = self.run("library.addFolder", json!({"path": path}));
+                if let Ok(v) = &r {
+                    // Kept at once, as the pane's own Add does, so it survives a crash.
+                    let _ = self.flush_prefs();
+                    self.library.folder = v["path"].as_str().map(String::from);
+                }
+                r
             }
             AfterPick::Export { ext } => {
                 let Some(mut path) = picked else {

@@ -923,3 +923,80 @@ fn many_failed_fonts_end_with_a_count() {
     a.add_fonts(fonts).unwrap();
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// The preferences store in `dir`.
+fn settings_in(dir: &std::path::Path) -> craft::settings::SharedSettings<crate::prefs::Prefs> {
+    let (store, _) = craft::settings::SettingsStore::<crate::prefs::Prefs>::open_at(dir);
+    craft::settings::SharedSettings::new(store)
+}
+
+/// The Library folders an app started over the preferences store in `dir` reads.
+fn kept_library_folders(dir: &std::path::Path) -> Vec<String> {
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default()).with_settings(settings_in(dir));
+    a.session.prefs.library_folders.clone()
+}
+
+/// Insert › Library › Add Folder… (#2868): a folder is asked for without waiting (the pane is told
+/// nothing more), and the answer adds it, keeps the preferences at once and shows that folder in
+/// the pane.
+#[test]
+fn a_picked_library_folder_is_added_kept_and_shown() {
+    use craft_library_egui::Host as _;
+    let dir = scratch("library-pick");
+    let store = scratch("library-pick-store");
+    let (a, files) = async_app();
+    let mut a = a.with_settings(settings_in(&store));
+    assert_eq!(crate::library_pane::WordHost(&mut a).pick_folder(), Some(None), "the answer comes later");
+    let asked = request(&files, 0);
+    assert_eq!((asked.kind, asked.purpose.as_str()), (PickKind::Folder, "library"));
+    assert!(a.file_dialog_open() && a.session.prefs.library_folders.is_empty(), "nothing is added before the answer");
+    answer(&files, Some(&dir.to_string_lossy()));
+    let r = a.poll_file_dialog().unwrap().unwrap();
+    let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+    assert_eq!(r["added"], true);
+    assert_eq!(a.session.prefs.library_folders, vec![real.clone()]);
+    assert_eq!(a.library.folder.as_deref(), Some(real.as_str()), "the pane shows the new folder");
+    assert_eq!(kept_library_folders(&store), vec![real], "kept with the preferences at once");
+    assert!(!a.file_dialog_open());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+/// Cancelling the folder dialog adds nothing and keeps nothing; a folder the Library can't take
+/// says why on the status bar.
+#[test]
+fn a_cancelled_or_refused_library_folder_adds_nothing() {
+    use craft_library_egui::Host as _;
+    let store = scratch("library-refused-store");
+    let (a, files) = async_app();
+    let mut a = a.with_settings(settings_in(&store));
+    let _ = crate::library_pane::WordHost(&mut a).pick_folder();
+    answer(&files, None);
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
+    let dir = scratch("library-refused");
+    let file = dir.join("not-a-folder.png");
+    std::fs::write(&file, b"x").unwrap();
+    let _ = crate::library_pane::WordHost(&mut a).pick_folder();
+    answer(&files, Some(&file.to_string_lossy()));
+    assert!(a.poll_file_dialog().unwrap().is_err());
+    assert!(a.session.prefs.library_folders.is_empty() && a.library.folder.is_none());
+    assert!(kept_library_folders(&store).is_empty());
+    let msg = status_text(&a);
+    assert!(msg.contains("not a folder"), "{msg}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+/// A host that can't pick a folder (no file service, or the browser's, where the Library is off)
+/// asks for nothing: the pane takes a typed path instead.
+#[test]
+fn without_a_folder_picker_the_library_takes_a_typed_path() {
+    use craft_library_egui::Host as _;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    assert!(!a.has_folder_picker());
+    assert_eq!(crate::library_pane::WordHost(&mut a).pick_folder(), None);
+    let files = Arc::new(ScriptedFiles::new().in_browser());
+    let mut a = app_over(&files, wordcraft_doc::Document::new());
+    assert_eq!(crate::library_pane::WordHost(&mut a).pick_folder(), None);
+    assert!(files.requests().is_empty() && !a.file_dialog_open(), "nothing was asked");
+}
