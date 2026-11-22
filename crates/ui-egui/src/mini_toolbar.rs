@@ -1,47 +1,24 @@
-//! Word's floating mini toolbar: the small translucent bar over a non-collapsed text selection
-//! with the most-used formatting controls. It mirrors Word's trigger (selection, not caret),
-//! position (above, clamped to the viewport, flipping below when tight) and dismissal rules.
+//! Word's floating mini toolbar: the bar over a non-collapsed text selection with the most-used
+//! formatting controls. The framework's selection task bar places it (above the selection, flipped
+//! and clamped inside the document area); this module decides when it shows and what it holds.
 
-use egui::{Align, CornerRadius, Layout, Order, Rect, Sense, Vec2, pos2};
+use craft::behavior::{EditEvent, Preview};
+use craft::keymap::CommandRef;
+use craft::pages::ui::PageBody;
+use craft::ui::buttons::{IconButton, ToggleButton};
+use craft::ui::canvas_controls::TaskBar;
+use craft::ui::contract::{Bind, Entry, Hover, Props, Show as _};
+use craft::ui::display::Divider;
+use craft::ui::pickers::ComboBox;
+use craft::ui::runtime::env::Label;
+use egui::{Rect, Ui};
 use serde_json::{Value, json};
 
-use crate::theme::Tokens;
-use crate::{WordApp, widgets};
+use crate::WordApp;
+use crate::colors::{Remember, Target};
 
-/// Vertical gap between the bar and the selection's first line.
-const VGAP: f32 = 8.0;
 /// Least height of a selection rectangle (screen points) that counts as visible for anchoring.
 const MIN_VISIBLE_H: f32 = 1.0;
-/// Distance from the selection's left edge at which the bar is centred.
-const ANCHOR_INSET: f32 = 4.0;
-/// Padding inside the bar.
-const PAD_X: f32 = 4.0;
-const PAD_Y: f32 = 3.0;
-/// Height of one row of controls (the ribbon's 22 pt buttons plus a little air), and the gap
-/// between the two rows.
-const ROW_H: f32 = 24.0;
-const ROW_GAP: f32 = 2.0;
-/// Horizontal gap between neighbouring controls.
-const SPACING: f32 = 1.0;
-/// The ribbon's widget metrics: a small icon button, a split button (icon part plus its 11 pt
-/// arrow, two allocations), a group divider and the size box.
-const BTN_W: f32 = 24.0;
-const SPLIT_W: f32 = 24.0 + SPACING + 11.0;
-const SEP_W: f32 = 9.0;
-const COMBO_SIZE_W: f32 = 52.0;
-/// Gap between the size box and the grow/shrink buttons.
-const GAP: f32 = 3.0;
-/// Row 2, like Word's: B I U S | highlight, font colour | the four alignments. Fourteen
-/// allocations, so thirteen gaps; the two inside the split buttons are counted in `SPLIT_W`.
-const ROW2_W: f32 = 8.0 * BTN_W + 2.0 * SPLIT_W + 2.0 * SEP_W + 11.0 * SPACING;
-/// Row 1: font, size, grow, shrink. The font box takes what row 2 leaves, so both rows end
-/// together and the box starts at the bar's left edge.
-const COMBO_FONT_W: f32 = ROW2_W - (COMBO_SIZE_W + GAP + 2.0 * BTN_W + 3.0 * SPACING);
-
-/// The bar's size: fixed, so it never jitters as the selection changes, and wide enough for every
-/// control of both rows (#535: one row of a fixed width cut off everything after Align Left).
-pub const BAR_W: f32 = PAD_X * 2.0 + ROW2_W;
-pub const BAR_H: f32 = PAD_Y * 2.0 + ROW_H * 2.0 + ROW_GAP;
 
 /// The part of the selection the bar anchors to: the topmost selection rectangle that is actually
 /// visible inside `clip` (the scroll viewport), cut down to its visible portion. `None` when no
@@ -68,40 +45,6 @@ pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rec
     first
 }
 
-/// Where the bar sits for a selection line and viewport; `None` for degenerate inputs (NaN
-/// rects must never reach egui). Pure geometry, unit tested without a window.
-pub fn anchor_rect(selection_top: f32, selection_left: f32, viewport: Rect) -> Option<Rect> {
-    if !selection_top.is_finite() || !selection_left.is_finite() || !viewport.is_finite() || !viewport.is_positive() {
-        return None;
-    }
-    // Horizontal: centre on the selection's start (a few points in), clamped inside the viewport.
-    let cx = (selection_left + ANCHOR_INSET).clamp(viewport.left(), viewport.right());
-    let x = (cx - BAR_W / 2.0).clamp(viewport.left(), (viewport.right() - BAR_W).max(viewport.left()));
-    // Vertical: prefer above, then below. Check both viewport edges: a selection can be
-    // partially scrolled out of view, so merely checking `above >= viewport.top()` is not enough.
-    let above = selection_top - VGAP - BAR_H;
-    let below = selection_top + VGAP;
-    let above_fits = above >= viewport.top() && above + BAR_H <= viewport.bottom();
-    let below_fits = below >= viewport.top() && below + BAR_H <= viewport.bottom();
-    let y = if above_fits {
-        above
-    } else if below_fits {
-        below
-    } else {
-        // Neither side has room (or the supplied anchor is outside the viewport). Keep the bar
-        // inside the visible area whenever the viewport can accommodate its height.
-        let desired = if above < viewport.top() { below } else { above };
-        desired.clamp(viewport.top(), (viewport.bottom() - BAR_H).max(viewport.top()))
-    };
-    Some(Rect::from_min_size(pos2(x, y), Vec2::new(BAR_W, BAR_H)))
-}
-
-/// Where the bar and the controls in it were drawn last frame (`[bar, controls]`), kept in the
-/// context's memory under this id so tests can check that no control spills out of the bar.
-pub fn shown_id() -> egui::Id {
-    egui::Id::unique("wc_mini_toolbar").with("shown")
-}
-
 /// Whether the bar may be shown for the current app state.
 pub fn visible(app: &WordApp) -> bool {
     // Reading Mode permits text selection and copying, but never formatting controls.
@@ -109,7 +52,7 @@ pub fn visible(app: &WordApp) -> bool {
         return false;
     }
     // Never over a modal dialog or the Backstage.
-    if app.dialog.is_some() || app.colors.is_some() || app.ui.backstage {
+    if app.modal_open() || app.ui.backstage {
         return false;
     }
     // Never while the right-click context menu is open: it owns the pointer and would double up.
@@ -118,12 +61,12 @@ pub fn visible(app: &WordApp) -> bool {
     }
     // Never while a drag-select is in progress, in the text or a table's selection areas (Word
     // shows it on mouse-up), nor while a table is being moved.
-    if app.canvas.drag_selecting() || app.canvas.table_drag.is_some() {
+    if app.canvas.drag_selecting() || crate::table_mouse::dragging(app) {
         return false;
     }
     // Never while keytips are showing: the ribbon owns the letters, and the bar's buttons reuse
     // the ribbon's widgets, so they would record duplicate badges.
-    if app.ui.keytips != crate::keytips::Phase::Off {
+    if app.keytips_active {
         return false;
     }
     // Nor for whole table cells: pinned above them, it would cover the table's column selection
@@ -131,7 +74,7 @@ pub fn visible(app: &WordApp) -> bool {
     if app.session.cell_range().is_some() {
         return false;
     }
-    // Nor once a click outside the document put it away for this selection (`track_dismissal`).
+    // Nor once a click outside the document put it away for this selection (`TaskBarOutput::closed`).
     if app.canvas.mini_dismissed.as_ref() == Some(&app.session.sel) {
         return false;
     }
@@ -139,70 +82,34 @@ pub fn visible(app: &WordApp) -> bool {
     !app.session.sel.is_collapsed()
 }
 
-/// Puts the bar away when the user turns to the ribbon (or a pane, the rulers, the status bar):
-/// a press outside the document hides it until the selection changes, so it never covers the
-/// ribbon's drop-downs. Runs every frame; `viewport` is the document area.
-pub fn track_dismissal(app: &mut WordApp, ctx: &egui::Context, viewport: Rect) {
+/// Shows the bar over the selection's anchor (`CanvasState::mini_anchor`, computed in this pass
+/// from this pass's selection rects). It runs inside the page view's body, because the task bar
+/// maps its anchor through the canvas view of its environment, and stays inside the view's rect.
+pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, body: &PageBody<'_>) {
+    // A new selection brings the bar back, even one over the same text.
     if app.canvas.mini_dismissed.as_ref().is_some_and(|d| *d != app.session.sel) {
         app.canvas.mini_dismissed = None;
     }
-    let Some(p) = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.press_origin() } else { None }) else { return };
-    // A press on a popup (the bar's own lists, or a ribbon list already open) neither hides the
-    // bar nor brings it back: hiding it would close its own list before the click lands.
-    if ctx.layer_id_at(p).is_some_and(|l| l.order >= Order::Foreground) {
-        return;
-    }
-    app.canvas.mini_dismissed = if viewport.contains(p) {
-        // A press in the document starts a new selection, which gets the bar again even when it
-        // covers the same text.
-        None
-    } else {
-        Some(app.session.sel.clone())
-    };
-}
-
-/// Show the bar: `selection` is the screen rect of the selection's first line, `viewport` the
-/// canvas area it must stay inside.
-pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: Rect) {
-    if !visible(app) {
+    if !app.ui.mini_toolbar || !visible(app) {
+        app.canvas.list_preview = None;
         if app.canvas.command_previewed.is_some() {
-            ctx.request_repaint();
+            ui.ctx().request_repaint();
         }
         return;
     }
-    let Some(bar) = anchor_rect(selection.min.y, selection.min.x, viewport) else { return };
-    // The bar belongs to the page: as the selection scrolls under the ribbon (or past the status
-    // bar) it slides under it with the text, and goes once none of it shows.
-    let shown = bar.intersect(viewport);
-    if !shown.is_positive() {
-        return;
+    let Some(anchor) = app.canvas.mini_anchor else { return };
+    let points: Vec<_> = [anchor.left_top(), anchor.right_top(), anchor.right_bottom(), anchor.left_bottom()]
+        .into_iter()
+        .map(|corner| body.view.to_doc(corner))
+        .collect();
+    let shown = TaskBar::selection(tl!("Formatting").to_string(), &points).show(ui, body.view.rect, |ui, _cx| members(app, ui, true));
+    if shown.output.closed {
+        app.canvas.mini_dismissed = Some(app.session.sel.clone());
     }
-    let t = Tokens::get(ctx);
-    // The bar sits on the Middle layer: above the document (Background), below every popup and
-    // menu (Foreground: the ribbon's drop-downs, the context menu, its own lists) and tooltip, so
-    // it never covers one. It is pinned to the selection, not movable, and egui stops a click at
-    // the topmost layer, so a click on the bar never reaches the document underneath. Clipped to
-    // the document area (`constrain_to` without `constrain`, which would push it inside), the part
-    // past its edge takes no clicks either, so the ribbon and the rulers under it keep them.
-    let area = egui::Area::new(egui::Id::unique("wc_mini_toolbar")).order(Order::Middle).interactable(true);
-    let area = area.constrain_to(viewport).constrain(false).fixed_pos(bar.min);
-    area.show(ctx, |ui| {
-        ui.set_clip_rect(shown);
-        let painter = ui.painter();
-        painter.rect_filled(bar.translate(Vec2::new(0.0, 2.0)), CornerRadius::same(6), t.page_shadow);
-        painter.rect_filled(bar, CornerRadius::same(6), t.menu);
-        painter.rect_stroke(bar, CornerRadius::same(6), egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let inner = bar.shrink2(Vec2::new(PAD_X, PAD_Y));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::Min)));
-        child.spacing_mut().item_spacing = Vec2::new(SPACING, ROW_GAP);
-        content(app, &mut child, &t, true);
-        // The page was drawn before the bar this frame: another frame shows or clears the preview.
-        if app.canvas.command_preview != app.canvas.command_previewed {
-            ctx.request_repaint();
-        }
-        let used = child.min_rect();
-        ctx.data_mut(|d| d.insert_temp(shown_id(), [bar, used]));
-    });
+    // The page was drawn before the bar this frame: another frame shows or clears the preview.
+    if app.canvas.command_preview != app.canvas.command_previewed {
+        ui.ctx().request_repaint();
+    }
 }
 
 /// A text context menu offers formatting at a caret too. Object and equation menus keep their
@@ -216,29 +123,17 @@ pub fn context_menu_visible(app: &WordApp) -> bool {
         && wordcraft_engine::cmd::objects::object_selection(&app.session).is_none()
 }
 
-/// The existing two-row toolbar in the context menu's popup, above its command panel. Sharing
-/// the popup lets its font/size/colour lists stay open without dismissing the parent menu.
-pub fn show_in_context_menu(app: &mut WordApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
-        ui.push_id("context_mini_toolbar", |ui| {
-            // Menu styling removes input borders; use the same controls as the standalone bar.
-            ui.set_style(ui.ctx().global_style());
-            ui.set_width(ROW2_W);
-            ui.spacing_mut().item_spacing = Vec2::new(SPACING, ROW_GAP);
-            content(app, ui, &t, false);
-            if app.dialog.is_some() || app.colors.is_some() {
-                ui.close();
-            }
-        });
-    });
-}
-
-/// The controls in two rows like Word's mini toolbar, reusing the ribbon's widgets so the bar
-/// matches the ribbon exactly.
-fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: bool) {
-    let st: Value = app.session.run("format.state", &json!({})).unwrap_or_default();
-    let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
+/// The bar's controls in two rows, like Word's: font, size, grow and shrink; then B I U S, the
+/// highlight and font colour, and the four alignments. With `preview` the page shows a control's
+/// command while the pointer rests on it; the context menu's copy of the bar (which calls this
+/// from `canvas/context_menu.rs`) previews nothing.
+pub(crate) fn members(app: &mut WordApp, ui: &mut Ui, preview: bool) {
+    let st: Value = wordcraft_engine::cmd::format::state(&app.session);
+    let flag = |k: &str| match st.get(k) {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => !s.is_empty() && s != "none",
+        _ => false,
+    };
     // As on the ribbon, the buttons show alignment as seen on the page (#3579).
     let align = app
         .session
@@ -249,224 +144,119 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: b
             r.align.visual(r.bidi)
         })
         .unwrap_or_default();
-    let row = |ui: &mut egui::Ui, app: &mut WordApp, add: &dyn Fn(&mut egui::Ui, &mut WordApp)| {
-        ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), ROW_H), Layout::left_to_right(Align::Center), |ui| {
-            ui.set_min_height(ROW_H);
-            add(ui, app);
-        });
-    };
 
-    row(ui, app, &|ui, app| {
-        let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
-        let warning = app.font_box_warning(&font);
-        let font = app.previews.font_shown(&font);
-        let fams = app.previews.families();
-        let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
-        let prev = app.previews.font_preview_fn();
-        let _ = widgets::take_hover(ui.ctx());
-        let options = widgets::FontComboOptions {
-            id: "mini_font",
-            width: COMBO_FONT_W,
-            current: &font,
-            items: &fams,
-            recent: &recent,
-            preview: Some(&*prev),
-            tip: tl!("Font"),
-            shown_as: warning.as_deref(),
-        };
-        let picked = widgets::font_combo_with_recent_hint(ui, options);
-        if preview_on_hover
-            && picked.is_none()
-            && let Some(f) = widgets::take_hover(ui.ctx())
-            && f != crate::widgets::ADD_FONT
-            && f != crate::widgets::LOAD_SYSTEM_FONTS
-        {
-            app.canvas.command_preview = Some(("format.font".to_string(), json!({"name": app.previews.font_stored(&f)})));
+    // A list's preview, started in an earlier frame, holds until its list ends it.
+    if preview && let Some(held) = app.canvas.list_preview.clone() {
+        app.canvas.command_preview = Some(held);
+    }
+    ui.horizontal(|ui| {
+        let mut family = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+        let picked = crate::widgets::font_box::font_box(ui, app, tl!("Font").to_string(), &mut family);
+        follow_list(app, preview, &picked.preview, |f| Some(("format.font".to_string(), json!({"name": f}))));
+        if let Some(f) = &picked.picked {
+            let _ = app.run("format.font", json!({"name": f}));
         }
-        if let Some(f) = picked {
-            let _ = if f == crate::widgets::ADD_FONT {
-                app.run("font.add", json!({}))
-            } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
-                app.run("font.loadSystem", json!({}))
-            } else {
-                let f = app.previews.font_stored(&f);
-                app.run("format.font", json!({"name": f}))
-            };
-        }
-        let size =
-            st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).unwrap_or_default();
-        let sizes: Vec<String> =
-            wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
-        let _ = widgets::take_hover(ui.ctx());
-        let picked = widgets::combo_hint(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None, tl!("Font Size"));
-        if preview_on_hover
-            && picked.is_none()
-            && let Some(x) = widgets::take_hover(ui.ctx()).and_then(|v| v.trim().parse::<f64>().ok())
-        {
-            app.canvas.command_preview = Some(("format.size".to_string(), json!({"size": x})));
-        }
-        if let Some(v) = picked
-            && let Ok(x) = v.trim().parse::<f64>()
+
+        let size = st.get("size").and_then(Value::as_f64).map(number_text).unwrap_or_default();
+        let sizes: Vec<Entry<String>> =
+            wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(number_text(f64::from(*s)), number_text(f64::from(*s)))).collect();
+        let mut text = size.clone();
+        let combo = ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut text), &sizes).show(ui);
+        follow_list(app, preview, &combo.preview, |v| v.trim().parse::<f64>().ok().map(|x| ("format.size".to_string(), json!({"size": x}))));
+        // Only a pick or Enter applies the size: typing alone is an edit of the box's draft.
+        let committed = combo.edit.submitted || combo.edit.events.iter().any(|e| matches!(e, EditEvent::Set { .. } | EditEvent::Commit { .. }));
+        if committed
+            && text != size
+            && let Ok(x) = text.trim().parse::<f64>()
         {
             let _ = app.run("format.size", json!({"size": x}));
         }
-        ui.add_space(GAP);
-        hover_small(ui, app, "grow", "Increase Font Size", "format.growFont", false, preview_on_hover);
-        hover_small(ui, app, "shrink", "Decrease Font Size", "format.shrinkFont", false, preview_on_hover);
+
+        for (id, icon) in [("format.growFont", "grow"), ("format.shrinkFont", "shrink")] {
+            let b = IconButton::command(crate::icons::id(icon), CommandRef::new(id)).show(ui);
+            preview_on_hover(app, b.hover, b.response.enabled(), id, json!({}), preview);
+        }
     });
 
-    row(ui, app, &|ui, app| {
-        hover_small(ui, app, "bold", "Bold", "format.bold", flag("bold"), preview_on_hover);
-        hover_small(ui, app, "italic", "Italic", "format.italic", flag("italic"), preview_on_hover);
-        hover_small(ui, app, "underline", "Underline", "format.underline", flag("underline"), preview_on_hover);
-        hover_small(ui, app, "strike", "Strikethrough", "format.strikethrough", flag("strike"), preview_on_hover);
-        sep(ui, t);
+    ui.horizontal(|ui| {
+        for (id, key, icon) in [
+            ("format.bold", "bold", "bold"),
+            ("format.italic", "italic", "italic"),
+            ("format.underline", "underline", "underline"),
+            ("format.strikethrough", "strike", "strike"),
+        ] {
+            toggle(ui, app, id, icon, flag(key), preview);
+        }
+        let _ = Divider::vertical().show(ui);
 
-        let hl = app.canvas.last_highlight.clone();
-        let (icon, sw, color) = highlight_button_appearance(&hl);
-        let main = widgets::split(
-            ui,
-            app,
-            icon,
-            "Text Highlight Color",
-            crate::widgets::ButtonAction::new("format.highlight", json!({"color": color}), false),
-            sw,
-            |ui, app| {
-                let _ = widgets::take_hover(ui.ctx());
-                let in_effect = st.get("highlight").and_then(Value::as_str).unwrap_or("none").to_string();
-                widgets::set_current_pick(ui.ctx(), Some(in_effect));
-                highlight_menu(ui, app);
-                widgets::set_current_pick(ui.ctx(), None);
-                if preview_on_hover && let Some(c) = widgets::take_hover(ui.ctx()) {
-                    app.canvas.command_preview = Some(("format.highlight".to_string(), json!({"color": c})));
-                }
-            },
-        );
-        preview_on_hover_if(app, &main, "format.highlight", json!({"color": color}), preview_on_hover);
-        let fc = app.canvas.last_font_color.clone();
-        let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
-        let main = widgets::split(
-            ui,
-            app,
-            "fontcolor",
-            "Font Color",
-            crate::widgets::ButtonAction::new("format.color", json!({"color": fc}), false),
-            sw,
-            |ui, app| {
-                let _ = widgets::take_hover(ui.ctx());
-                widgets::set_current_pick(ui.ctx(), st.get("color").and_then(Value::as_str).map(str::to_string));
-                font_color_menu(ui, app);
-                widgets::set_current_pick(ui.ctx(), None);
-                if preview_on_hover && let Some(c) = widgets::take_hover(ui.ctx()) {
-                    app.canvas.command_preview = Some(("format.color".to_string(), json!({"color": c})));
-                }
-            },
-        );
-        preview_on_hover_if(app, &main, "format.color", json!({"color": fc}), preview_on_hover);
-        sep(ui, t);
+        let hl = crate::colors::highlight_split(ui, app, tl!("Text Highlight Color").to_string());
+        follow_list(app, preview, &hl.preview, |c| {
+            wordcraft_doc::props::Highlight::ALL
+                .iter()
+                .find(|h| h.rgb().as_ref() == Some(c))
+                .map(|h| ("format.highlight".to_string(), json!({"color": h.ooxml()})))
+        });
+        // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
+        let color = app.canvas.last_highlight.clone();
+        preview_on_hover(app, hl.hover, hl.response.enabled(), "format.highlight", json!({"color": color}), preview);
+        if hl.picked.is_some() {
+            app.canvas.focus_page(ui.ctx());
+        }
+        let fc = crate::colors::font_color_split(ui, app, tl!("Font Color").to_string(), Target::cmd("format.color").remember(Remember::FontColor));
+        follow_list(app, preview, &fc.preview, |c| Some(("format.color".to_string(), json!({"color": c.hex()}))));
+        // PLAN: assumed ColorPick::hover (ribbon-w11, S-L413)
+        let color = app.canvas.last_font_color.clone();
+        preview_on_hover(app, fc.hover, fc.response.enabled(), "format.color", json!({"color": color}), preview);
+        if fc.picked.is_some() {
+            app.canvas.focus_page(ui.ctx());
+        }
+        let _ = Divider::vertical().show(ui);
 
         use wordcraft_doc::Align as A;
-        hover_small(ui, app, "alignLeft", "Align Left", "para.alignLeft", align == A::Left, preview_on_hover);
-        hover_small(ui, app, "alignCenter", "Center", "para.alignCenter", align == A::Center, preview_on_hover);
-        hover_small(ui, app, "alignRight", "Align Right", "para.alignRight", align == A::Right, preview_on_hover);
-        hover_small(ui, app, "justify", "Justify", "para.justify", align == A::Justify, preview_on_hover);
+        for (id, icon, a) in [
+            ("para.alignLeft", "alignLeft", A::Left),
+            ("para.alignCenter", "alignCenter", A::Center),
+            ("para.alignRight", "alignRight", A::Right),
+            ("para.justify", "justify", A::Justify),
+        ] {
+            toggle(ui, app, id, icon, align == a, preview);
+        }
     });
 }
 
-/// A bar button that, while hovered, makes the page show its command run on the selection. The
-/// preview runs on a copy, so the document, its undo history and the selection stay as they are.
-fn hover_small(ui: &mut egui::Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, checked: bool, preview: bool) {
-    let action = crate::widgets::ButtonAction::new(id, json!({}), checked);
-    let r = widgets::small(ui, app, icon, None, tip, action);
-    preview_on_hover_if(app, &r, id, json!({}), preview);
+/// Keeps a bar list's preview: the framework reports `Shows` once, when the pointer reaches an
+/// option, and `Ended` once, when it leaves the rows, the list closes or a row is picked. The page
+/// shows the command `command` makes of the option until then (`CanvasState::list_preview`).
+fn follow_list<T>(app: &mut WordApp, preview: bool, event: &Preview<T>, command: impl FnOnce(&T) -> Option<(String, Value)>) {
+    match event {
+        Preview::Shows(v) if preview => app.canvas.list_preview = command(v),
+        Preview::Ended => app.canvas.list_preview = None,
+        _ => {}
+    }
 }
 
-/// Previews command `id` with `params` while its button `r` is hovered and not pressed. After a
-/// click the preview stays off until the pointer leaves the button: a toggle would otherwise
+/// An icon toggle running command `id` and drawn `on`; while hovered it previews the command. The
+/// command carries no checked state, so the value is bound here and only draws the button.
+fn toggle(ui: &mut Ui, app: &mut WordApp, id: &str, icon: &'static str, on: bool, preview: bool) {
+    let r = <ToggleButton as Props>::command(ToggleButton::new(Label::Empty, Bind::given(on)), CommandRef::new(id))
+        .icon(crate::icons::id(icon))
+        .icon_only()
+        .show(ui);
+    preview_on_hover(app, r.hover, r.response.enabled(), id, json!({}), preview);
+}
+
+/// Previews command `id` with `params` while its control is hovered and not clicked. After a
+/// click the control's `Hover::clicked` holds until the pointer leaves, so a toggle does not
 /// preview its other state under the pointer and look as if it flashed.
-fn preview_on_hover_if(app: &mut WordApp, r: &egui::Response, id: &str, params: Value, preview: bool) {
-    let hold = r.id.with("hold_preview");
-    if r.clicked() {
-        r.ctx.data_mut(|d| d.insert_temp(hold, true));
-    } else if !r.hovered() {
-        r.ctx.data_mut(|d| d.remove::<bool>(hold));
-    }
-    let held = r.ctx.data(|d| d.get_temp::<bool>(hold)).unwrap_or(false);
-    if preview && !held && r.hovered() && !r.is_pointer_button_down_on() && !r.clicked() && widgets::enabled(app, id) {
+fn preview_on_hover(app: &mut WordApp, hover: Hover, enabled: bool, id: &str, params: Value, preview: bool) {
+    if preview && enabled && hover.over && !hover.clicked {
         app.canvas.command_preview = Some((id.to_string(), params));
     }
 }
 
-/// A hairline divider between the bar's groups.
-fn sep(ui: &mut egui::Ui, t: &Tokens) {
-    let (r, _) = ui.allocate_exact_size(Vec2::new(SEP_W, 20.0), Sense::hover());
-    let p = ui.painter();
-    p.vline(r.center().x, r.y_range().shrink(4.0), egui::Stroke::new(1.0, t.border));
-}
-
-/// The split-button icon and colour bar for the remembered highlight choice.
-pub(crate) fn highlight_button_appearance(name: &str) -> (&'static str, Option<egui::Color32>, &'static str) {
-    let highlight = wordcraft_doc::props::Highlight::from_ooxml(name);
-    let icon = if highlight == wordcraft_doc::props::Highlight::None { "highlightNoColor" } else { "highlight" };
-    (icon, highlight.rgb().map(crate::theme::c32), highlight.ooxml())
-}
-
-/// Highlight colour grid and No Color, shared by the ribbon and the mini toolbar. The pick,
-/// No Color too, becomes the split button's colour, as in Word: after No Color a click on the
-/// button removes highlighting (#2105).
-pub(crate) fn highlight_menu(ui: &mut egui::Ui, app: &mut WordApp) {
-    crate::rtl::grid(ui, egui::Grid::new("mini_hl").spacing(Vec2::new(3.0, 3.0)), |ui| {
-        for (i, h) in wordcraft_doc::props::Highlight::ALL.iter().enumerate().skip(1) {
-            let Some(c) = h.rgb() else { continue };
-            let (r, resp) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::click());
-            ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(c.0, c.1, c.2));
-            if resp.hovered() {
-                widgets::note_hover(ui.ctx(), h.ooxml().to_string());
-            }
-            if widgets::current_pick(ui.ctx()).is_some_and(|cur| cur.eq_ignore_ascii_case(&c.hex())) {
-                let accent = Tokens::get(ui.ctx()).accent;
-                ui.painter().rect_stroke(r.expand(1.0), 2.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Outside);
-            }
-            if resp.on_hover_text(tl!(h.name())).clicked() {
-                app.canvas.last_highlight = h.ooxml().to_string();
-                widgets::run_from_ribbon(app, "format.highlight", json!({"color": h.ooxml()}));
-                ui.close();
-            }
-            if i % 5 == 0 {
-                ui.end_row();
-            }
-        }
-    });
-    let enabled = widgets::enabled(app, "format.highlight");
-    let none_in_effect = widgets::current_pick(ui.ctx()).is_some_and(|cur| cur == "none");
-    let no_color = ui.add_enabled(enabled, egui::Button::new(tl!("No Color")).selected(none_in_effect).min_size(Vec2::new(200.0, 0.0)));
-    if no_color.hovered() {
-        widgets::note_hover(ui.ctx(), "none".to_string());
-    }
-    if no_color.clicked() {
-        app.canvas.last_highlight = "none".into();
-        widgets::run_from_ribbon(app, "format.highlight", json!({"color": "none"}));
-        ui.close();
-    }
-}
-
-/// Font colour: Automatic, the colour grid, Recent Colors and More Colors… (#606).
-fn font_color_menu(ui: &mut egui::Ui, app: &mut WordApp) {
-    egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
-        let auto_in_effect = widgets::current_pick(ui.ctx()).is_some_and(|cur| cur == "auto");
-        let automatic = ui.selectable_label(auto_in_effect, "Automatic");
-        if automatic.hovered() {
-            widgets::note_hover(ui.ctx(), "auto".to_string());
-        }
-        if automatic.clicked() {
-            widgets::run_from_ribbon(app, "format.color", json!({"color": "auto"}));
-            ui.close();
-            return;
-        }
-        let theme = app.session.doc.settings.theme_colors.clone();
-        let target = crate::colors::Target::cmd("format.color").remember(crate::colors::Remember::FontColor);
-        crate::colors::menu(ui, app, &theme, target);
-    });
+/// A size as the box shows it: whole numbers without a fraction.
+fn number_text(s: f64) -> String {
+    if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }
 }
 
 #[cfg(test)]
