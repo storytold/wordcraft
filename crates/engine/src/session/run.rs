@@ -28,6 +28,7 @@ struct ElsewhereContext<'a> {
     mark: u64,
     before_doc: Option<RunSnapshot>,
     rev_restore: Option<u64>,
+    math_before: Option<Option<MathEdit>>,
     blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
     default_language_before: Option<String>,
     pending_application_change_before: bool,
@@ -257,6 +258,7 @@ impl Session {
                     mark,
                     before_doc,
                     rev_restore,
+                    math_before,
                     blocks_before,
                     default_language_before,
                     pending_application_change_before,
@@ -532,8 +534,17 @@ impl Session {
     /// as it was (opening a document is no edit to undo there). Failed: the documents the command opened close again and the first document is
     /// active and as it was.
     fn finish_elsewhere(&mut self, context: ElsewhereContext<'_>, result: Result<Value, CmdError>) -> Result<Value, CmdError> {
-        let ElsewhereContext { id, home, mark, before_doc, rev_restore, blocks_before, default_language_before, pending_application_change_before } =
-            context;
+        let ElsewhereContext {
+            id,
+            home,
+            mark,
+            before_doc,
+            rev_restore,
+            math_before,
+            blocks_before,
+            default_language_before,
+            pending_application_change_before,
+        } = context;
         // Another document is a state change the input method has to see, never an IME edit.
         self.ime_edit_outcome = ImeEditOutcome::default();
         let mut result = result;
@@ -565,6 +576,10 @@ impl Session {
                 // Layouts made for the edit are not the restored document's.
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
+                }
+                // The equation session parked with the first document may hold the rejected edit.
+                if let Some(math) = math_before {
+                    self.math = math;
                 }
             }
             if let Some(b) = blocks_before {

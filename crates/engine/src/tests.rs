@@ -13682,6 +13682,29 @@ fn a_body_replacement_ends_equation_editing() {
     assert!(s.math.is_none(), "the old equation's editing session is gone");
 }
 
+/// A command that types into an equation and then opens a document, panicking while settling
+/// there, leaves the equation and its editing session as they were before it (#3721).
+#[test]
+fn panic_settling_after_typing_in_an_equation_restores_the_equation_session() {
+    let mut s = s();
+    let type_then_new = crate::CommandSpec::new("test.typeThenNew", "Type Then New", "Test", |s, _| {
+        s.run("equation.type", &json!({"text": "z"}))?;
+        s.add_document(wordcraft_doc::Document::from_text("Other"));
+        Ok(json!({}))
+    });
+    let mut specs = s.registry.all().to_vec();
+    specs.push(type_then_new);
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    run(&mut s, "insert.equation", json!({"linear": "x+y"}));
+    let (home, doc_before, math_before) = (s.document_id(), s.doc.clone(), s.math.clone());
+    assert!(math_before.is_some());
+    crate::session::PANIC_SETTLING_ELSEWHERE.with(|f| f.set(true));
+    assert!(s.run("test.typeThenNew", &json!({})).is_err());
+    assert_eq!(s.document_id(), home);
+    assert!(s.doc.same_content(&doc_before));
+    assert_eq!(s.math, math_before, "the editing session is the one before the command");
+}
+
 /// A failed command that cleared the equation session puts it back with the document.
 #[test]
 fn a_failed_replacement_keeps_equation_editing() {
