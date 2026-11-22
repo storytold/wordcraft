@@ -412,8 +412,7 @@ fn spans(s: &Session) -> Vec<(usize, usize)> {
     s.find.results.iter().map(|(a, b)| (a.off, b.off)).collect()
 }
 
-/// After a candidate is dropped for its formatting, the search goes on one character after its
-/// start, so a match that overlaps the dropped one is still found.
+/// A match at the start of an eligible span can overlap an unformatted occurrence.
 #[test]
 fn a_candidate_overlapping_a_rejected_one_is_still_found() {
     let mut s = s();
@@ -438,12 +437,51 @@ fn replace_all_with_a_format_filter_does_not_overlap_accepted_matches() {
     assert_eq!(text(&s), "bb");
 }
 
-/// Multi-byte text: the step after a rejected candidate stays on a character boundary.
+/// Eligible spans preserve byte offsets in multi-byte text.
 #[test]
-fn a_rejected_candidate_in_multibyte_text_steps_by_a_whole_character() {
+fn a_format_filter_preserves_multibyte_match_offsets() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "äää"}));
     bold_bytes(&mut s, 2, 6);
     run(&mut s, "edit.find", json!({"text": "ää", "format": {"bold": true}}));
-    assert_eq!(spans(&s), [(2, 6)], "the step after the rejected 0..4 is one `ä` (2 bytes)");
+    assert_eq!(spans(&s), [(2, 6)], "the eligible span starts after one `ä` (2 bytes)");
+}
+
+#[test]
+fn greedy_formatted_search_stays_inside_the_eligible_span() {
+    let steps = |n: usize| {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": "a".repeat(n + 1)}));
+        bold_bytes(&mut s, 0, n);
+        let work = wordcraft_doc::work::count(|| {
+            run(&mut s, "edit.find", json!({"text": "a+", "regex": true, "format": {"bold": true}}));
+        });
+        assert_eq!(spans(&s), [(0, n)]);
+        work
+    };
+    let small = steps(1);
+    let large = steps(200_000);
+    assert!(large <= small * 2, "{small} steps for one bold letter, {large} for 200,000");
+}
+
+#[test]
+fn rejecting_tracked_replace_restores_text_and_paragraph_style() {
+    for id in ["edit.replace", "edit.replaceAll"] {
+        for replacement in ["gamma", "gamma^pdelta"] {
+            let mut s = s();
+            run(&mut s, "document.setText", json!({"text": "alpha beta"}));
+            let start = Pos::body(0, 0);
+            let original_style = s.doc.para_at(&start).unwrap().props.style.clone();
+            run(&mut s, "review.trackChanges", json!({"value": true}));
+            run(&mut s, "select.text", json!({"text": "beta"}));
+            let result = run(&mut s, id, json!({"text": "beta", "with": replacement, "withFormat": {"style": "Heading 1"}}));
+            assert_eq!(result["replaced"], 1);
+            let para = s.doc.para_at(&start).unwrap();
+            assert_eq!(para.props.style.as_deref(), Some("Heading1"));
+            assert!(para.props.fmt_change.is_some(), "{id} with {replacement}");
+            run(&mut s, "review.rejectAll", json!({}));
+            assert_eq!(text(&s), "alpha beta");
+            assert_eq!(s.doc.para_at(&start).unwrap().props.style, original_style, "{id} with {replacement}");
+        }
+    }
 }

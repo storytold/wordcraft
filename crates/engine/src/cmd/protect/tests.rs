@@ -1095,3 +1095,22 @@ fn typing_boundary_keeps_duplicate_ids_across_stories_and_start_precedence() {
     // A start to the right wins over an end to the left.
     assert_eq!(typing_pos(&s, &Pos::body(0, 3)), Pos::body(0, 6));
 }
+
+#[test]
+fn formatting_restriction_checks_replacement_formatting() {
+    for id in ["edit.replace", "edit.replaceAll"] {
+        let mut s = Session::new(Document::from_text("Text."));
+        s.run("review.restrict", &json!({"mode": "none", "formatting": true, "lockedStyles": ["Heading1"]})).unwrap();
+        select(&mut s, "Text");
+        let before = s.doc.clone();
+        for (format, reason) in [(json!({"bold": false, "style": "Normal"}), "formatting is limited"), (json!({"style": " heading 1 "}), "is locked")]
+        {
+            let err = s.run(id, &json!({"text": "Text", "with": "", "withFormat": format})).unwrap_err().to_string();
+            assert!(err.contains(reason), "{id}: {err}");
+            assert_eq!(s.doc, before);
+        }
+        let result = s.run(id, &json!({"text": "Text", "with": "", "withFormat": {"style": "Heading 2"}})).unwrap();
+        assert_eq!(result["replaced"], 1);
+        assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.style.as_deref(), Some("Heading2"));
+    }
+}

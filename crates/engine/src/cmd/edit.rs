@@ -526,10 +526,6 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
     search_text(s, story, with_rep)
 }
 
-/// Most text candidates looked at when a format filter drops some of them: the work stays bounded
-/// while the result limit counts only the matches that have the formatting.
-const MAX_CANDIDATES: usize = 2_000_000;
-
 fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
@@ -559,44 +555,60 @@ fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found
         }
     }
     let mut out = Vec::new();
-    let mut retainer = s.find.format.as_ref().map(|f| super::find_format::Retainer::new(s, f));
-    let mut candidates = 0usize;
+    let filter = f.format.as_ref();
     let mut caps = re.create_captures();
     for chunk in chunks {
         let mut hay = String::new();
         let mut segs: Vec<Seg> = Vec::new();
-        // Where the live text breaks (tracked-deleted text, or a paragraph edge when not spanning).
-        let mut cuts: Vec<usize> = Vec::new();
+        // Keep nonmatching live text as context for anchors and word boundaries.
+        // Search only within ranges of eligible text, split at tracked deletions.
+        let mut ranges = Vec::new();
+        let mut from = 0;
         let last = chunk.end.saturating_sub(1);
         for i in chunk {
-            let Some(p) = paths.get(i).and_then(|path| s.doc.para(story, path)) else {
-                cuts.push(hay.len());
+            let Some(path) = paths.get(i) else { continue };
+            let Some(p) = s.doc.para(story, path) else {
+                ranges.push(from..hay.len());
+                from = hay.len();
                 continue;
             };
+            let table = filter.and_then(|f| super::find_format::table_chr(s, f, story, path));
+            let matches = |ch| filter.is_none_or(|f| f.run_matches(&s.doc.styles, p.props.style.as_deref(), table.as_ref(), ch));
             let mut expect = 0;
             for (r, ch) in p.run_ranges() {
                 let Some(t) = p.text.get(r.clone()).filter(|_| ch.del.is_none()) else { continue };
                 if t.is_empty() {
                     continue;
                 }
-                if r.start != expect {
-                    cuts.push(hay.len());
+                let eligible = matches(ch);
+                if r.start != expect || !eligible {
+                    ranges.push(from..hay.len());
+                    from = hay.len();
                 }
                 match segs.last_mut() {
                     Some(sg) if !sg.mark && sg.para == i && sg.raw + sg.len == r.start => sg.len += t.len(),
                     _ => segs.push(Seg { hay: hay.len(), para: i, raw: r.start, len: t.len(), mark: false }),
                 }
                 hay.push_str(t);
+                if !eligible {
+                    from = hay.len();
+                }
                 expect = r.end;
             }
             if i < last {
-                if expect != p.text.len() {
-                    cuts.push(hay.len());
+                let eligible = matches(&p.mark);
+                if expect != p.text.len() || !eligible {
+                    ranges.push(from..hay.len());
+                    from = hay.len();
                 }
                 segs.push(Seg { hay: hay.len(), para: i, raw: p.text.len(), len: 1, mark: true });
                 hay.push(if p.section.is_some() { find_pattern::SECT_MARK } else { find_pattern::PARA_MARK });
+                if !eligible {
+                    from = hay.len();
+                }
             }
         }
+        ranges.push(from..hay.len());
         let pos_of = |x: usize, end: bool| -> Option<Pos> {
             let k = segs.partition_point(|sg| if end { sg.hay + sg.len < x } else { sg.hay + sg.len <= x });
             let sg = segs.get(k)?;
@@ -609,15 +621,10 @@ fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found
             }
             Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
         };
-        cuts.push(hay.len());
-        let mut from = 0;
-        for cut in cuts {
-            if cut <= from {
-                continue;
-            }
-            let mut input = Input::new(&hay).range(from..cut);
-            from = cut;
+        for range in ranges.into_iter().filter(|r| !r.is_empty()) {
+            let mut input = Input::new(&hay).range(range);
             loop {
+                wordcraft_doc::work::steps(1);
                 re.search_captures(&input, &mut caps);
                 let Some(m) = caps.get_match() else { break };
                 // Step past an empty match so the search moves on.
@@ -638,16 +645,8 @@ fn search_text(s: &Session, story: StoryRef, with_rep: bool) -> Result<Vec<Found
                     let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
                     find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
                 });
-                let found = Found { a, b, rep };
-                candidates += 1;
-                if retainer.as_mut().is_none_or(|r| r.accepts(&found)) {
-                    out.push(found);
-                } else if let Some(step) = hay.get(m.start()..).and_then(|t| t.chars().next()).map(|c| m.start() + c.len_utf8()) {
-                    // A match the formatting filter drops does not use up its text: the search goes on one
-                    // character after its start, so an overlapping match that has the formatting is found.
-                    input.set_start(step);
-                }
-                if out.len() >= 100_000 || candidates >= MAX_CANDIDATES {
+                out.push(Found { a, b, rep });
+                if out.len() >= 100_000 {
                     return Ok(out);
                 }
             }
@@ -834,19 +833,18 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     if !keep {
         super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
     }
+    let tracker = super::find_format::replacement_tracker(s, with_format.as_ref());
     for Found { a, b, rep } in results.into_iter().rev() {
         // Replace with › Format and no text: the found text stays, only its formatting changes.
         if keep {
-            super::find_format::apply_with(s, &a, &b, with_format.as_ref())?;
+            super::find_format::apply_with(s, &a, &b, with_format.as_ref(), None)?;
             continue;
         }
         let with = rep.unwrap_or_default();
         if s.doc.settings.track_changes {
             // Same path as a single replace, so the change is a reviewable revision.
-            s.sel = Selection { anchor: a.clone(), focus: b };
-            super::paste_text(s, &with)?;
-            let end = s.sel.focus.clone();
-            super::find_format::apply_with(s, &a, &end, with_format.as_ref())?;
+            s.sel = Selection { anchor: a, focus: b };
+            super::find_format::replace_text(s, &with, with_format.as_ref(), tracker.as_ref())?;
             continue;
         }
         // Replacing a symbol gives the new text the symbol's formatting, not its own font.
@@ -860,7 +858,7 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
                 at = s.doc.insert_text(&at, part, &props)?;
             }
         }
-        super::find_format::apply_with(s, &a, &at, with_format.as_ref())?;
+        super::find_format::apply_with(s, &a, &at, with_format.as_ref(), None)?;
     }
     s.status = format!("All done. We made {n} replacements.");
     Ok(json!({"replaced": n}))

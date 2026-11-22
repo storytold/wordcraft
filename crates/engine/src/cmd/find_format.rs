@@ -142,6 +142,16 @@ impl FormatFilter {
 }
 
 impl FormatApply {
+    pub(super) fn style_id(&self) -> Option<&str> {
+        self.para_style.as_deref().or(self.props.style.as_deref())
+    }
+
+    pub(super) fn has_direct_formatting(&self) -> bool {
+        let mut props = self.props.clone();
+        props.style = None;
+        props != CharProps::default()
+    }
+
     fn is_empty(&self) -> bool {
         self.props == CharProps::default() && self.para_style.is_none()
     }
@@ -369,7 +379,7 @@ pub(crate) fn runs(s: &Session, story: StoryRef) -> Vec<Found> {
 
 /// The run formatting the table style gives the cell holding the paragraph at `path` (the
 /// innermost table's, with its conditional parts), when the filter looks at resolved formatting.
-fn table_chr(s: &Session, f: &FormatFilter, story: StoryRef, path: &Path) -> Option<CharProps> {
+pub(super) fn table_chr(s: &Session, f: &FormatFilter, story: StoryRef, path: &Path) -> Option<CharProps> {
     if !f.needs_resolved() || path.0.len() < 3 {
         return None;
     }
@@ -396,65 +406,6 @@ fn table_chr(s: &Session, f: &FormatFilter, story: StoryRef, path: &Path) -> Opt
     chr
 }
 
-/// A paragraph's live runs as (start, end, has the formatting); deleted text counts as fine (a
-/// text search never matches across it).
-fn spans(s: &Session, f: &FormatFilter, story: StoryRef, path: &Path) -> Vec<(usize, usize, bool)> {
-    let Some(p) = s.doc.para(story, path) else { return Vec::new() };
-    let table = table_chr(s, f, story, path);
-    p.run_ranges()
-        .filter(|(r, _)| !r.is_empty())
-        .map(|(r, ch)| (r.start, r.end, ch.del.is_some() || f.run_matches(&s.doc.styles, p.props.style.as_deref(), table.as_ref(), ch)))
-        .collect()
-}
-
-/// Whether every run of `spans` that overlaps `from..to` has the formatting.
-fn range_ok(spans: &[(usize, usize, bool)], from: usize, to: usize) -> bool {
-    if from >= to {
-        return true;
-    }
-    let k = spans.partition_point(|(_, end, _)| *end <= from);
-    spans.get(k..).unwrap_or_default().iter().take_while(|(start, _, _)| *start < to).all(|(_, _, ok)| *ok)
-}
-
-/// Decides, match by match and in document order, whether a text search's match has the
-/// formatting `f` asks for. A paragraph's runs are read once while the matches stay in it.
-pub(crate) struct Retainer<'a> {
-    s: &'a Session,
-    f: &'a FormatFilter,
-    cache: Option<(Path, Vec<(usize, usize, bool)>)>,
-}
-
-impl<'a> Retainer<'a> {
-    pub(crate) fn new(s: &'a Session, f: &'a FormatFilter) -> Self {
-        Self { s, f, cache: None }
-    }
-
-    /// Whether every character of `m` has the formatting, and, when the match runs across a
-    /// paragraph mark, the mark too (a `^p` match is only as bold as its mark).
-    pub(crate) fn accepts(&mut self, m: &Found) -> bool {
-        let (s, f) = (self.s, self.f);
-        if m.a.path == m.b.path {
-            if self.cache.as_ref().is_none_or(|(path, _)| *path != m.a.path) {
-                self.cache = Some((m.a.path.clone(), spans(s, f, m.a.story, &m.a.path)));
-            }
-            return self.cache.as_ref().is_some_and(|(_, sp)| range_ok(sp, m.a.off, m.b.off));
-        }
-        s.doc.paths_between(&m.a, &m.b).iter().all(|path| {
-            let from = if *path == m.a.path { m.a.off } else { 0 };
-            let to = if *path == m.b.path { m.b.off } else { s.doc.para(m.a.story, path).map_or(0, |p| p.len()) };
-            // Every paragraph but the last has its mark inside the match.
-            (*path == m.b.path || mark_ok(s, f, m.a.story, path)) && (from >= to || range_ok(&spans(s, f, m.a.story, path), from, to))
-        })
-    }
-}
-
-/// Whether the mark of the paragraph at `path` has the formatting.
-fn mark_ok(s: &Session, f: &FormatFilter, story: StoryRef, path: &Path) -> bool {
-    let Some(p) = s.doc.para(story, path) else { return true };
-    let table = table_chr(s, f, story, path);
-    f.run_matches(&s.doc.styles, p.props.style.as_deref(), table.as_ref(), &p.mark)
-}
-
 /// Replace with has formatting and no text: the found text stays and only its formatting changes.
 pub(crate) fn keeps_text(s: &Session, with: Option<&FormatApply>) -> bool {
     with.is_some() && s.find.replace.is_empty()
@@ -462,7 +413,13 @@ pub(crate) fn keeps_text(s: &Session, with: Option<&FormatApply>) -> bool {
 
 /// Apply Replace with › Format to `a..b`, the text that stands in a match's place. Text marked
 /// deleted (the replaced text, under Track Changes) is left as it is.
-pub(crate) fn apply_with(s: &mut Session, a: &Pos, b: &Pos, with: Option<&FormatApply>) -> Result<(), CmdError> {
+pub(crate) fn apply_with(
+    s: &mut Session,
+    a: &Pos,
+    b: &Pos,
+    with: Option<&FormatApply>,
+    tracker: Option<&super::fmt_revisions::ParaPropTracker>,
+) -> Result<(), CmdError> {
     let Some(w) = with else { return Ok(()) };
     if a.story != b.story {
         return Ok(());
@@ -475,18 +432,47 @@ pub(crate) fn apply_with(s: &mut Session, a: &Pos, b: &Pos, with: Option<&Format
         })?;
     }
     if let Some(id) = &w.para_style {
-        s.doc.format_paragraphs(a, b, &|p| p.style = Some(id.clone()))?;
+        if let Some(tracker) = tracker {
+            for path in s.doc.para_paths_in(a, b) {
+                let Some(para) = s.doc.para(a.story, &path) else { continue };
+                let before = para.props.clone();
+                let mut after = before.clone();
+                after.style = Some(id.clone());
+                after.fmt_change = tracker.changed(s, &before, &after);
+                let para = s.doc.para_mut(a.story, &path)?;
+                para.props = after;
+                para.touch();
+            }
+        } else {
+            s.doc.format_paragraphs(a, b, &|p| p.style = Some(id.clone()))?;
+        }
     }
     Ok(())
 }
 
 /// Replace the match the selection is on (`rep`, its Replace with text), then format what stands there.
 pub(crate) fn replace_current(s: &mut Session, rep: Option<String>, with: Option<&FormatApply>) -> Result<(), CmdError> {
-    let (a, b) = s.sel.ordered();
     if keeps_text(s, with) {
-        return apply_with(s, &a, &b, with);
+        let (a, b) = s.sel.ordered();
+        return apply_with(s, &a, &b, with, None);
     }
-    super::paste_text(s, &rep.unwrap_or_default())?;
-    let end = s.sel.focus.clone();
-    apply_with(s, &a, &end, with)
+    let tracker = replacement_tracker(s, with);
+    replace_text(s, &rep.unwrap_or_default(), with, tracker.as_ref())
+}
+
+pub(super) fn replacement_tracker(s: &Session, with: Option<&FormatApply>) -> Option<super::fmt_revisions::ParaPropTracker> {
+    (s.doc.settings.track_changes && s.prefs.markup.track_formatting && !keeps_text(s, with) && with.is_some_and(|w| w.para_style.is_some()))
+        .then(|| super::fmt_revisions::ParaPropTracker::new(s))
+}
+
+pub(super) fn replace_text(
+    s: &mut Session,
+    rep: &str,
+    with: Option<&FormatApply>,
+    tracker: Option<&super::fmt_revisions::ParaPropTracker>,
+) -> Result<(), CmdError> {
+    let (a, _) = s.sel.ordered();
+    super::paste_text(s, rep)?;
+    let b = s.sel.focus.clone();
+    apply_with(s, &a, &b, with, tracker)
 }
