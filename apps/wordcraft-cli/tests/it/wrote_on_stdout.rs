@@ -6,6 +6,9 @@ use std::process::{Command, Output};
 
 fn dir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("wc-cli-wrote-{name}-{}", std::process::id()));
+    // A failed run leaves its directory behind (cleanup runs only after the assertions), and a
+    // later process can reuse the PID: start clean so a stale file cannot pass a check.
+    let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -63,5 +66,16 @@ fn run_keeps_saving_after_stdout_closes() {
     for out in ["first.docx", "second.png"] {
         assert!(d.join(out).is_file(), "{out} was not written; stderr: {stderr}");
     }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// The helper starts from a clean directory, so a file left by an earlier failed run cannot
+/// satisfy a later run's existence checks.
+#[test]
+fn dir_resets_leftover_state() {
+    let d = dir("leftover");
+    std::fs::write(d.join("second.png"), b"stale").unwrap();
+    let d = dir("leftover");
+    assert!(!d.join("second.png").exists(), "a stale second.png survived dir()");
     let _ = std::fs::remove_dir_all(&d);
 }
