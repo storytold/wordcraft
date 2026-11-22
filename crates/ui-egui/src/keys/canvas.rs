@@ -487,8 +487,12 @@ fn handle_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &Edi
         }
         EditorInput::Preedit { text, cursor, .. } => {
             if text.len() <= MAX_IME_PREEDIT_BYTES {
+                let next_range = cursor.as_ref().map(|r| chars_range(text, r));
+                if !text.is_empty() && (app.canvas.ime_preedit != text.as_ref() || app.canvas.ime_preedit_range != next_range) {
+                    app.canvas.scroll_to_caret = true;
+                }
                 app.canvas.ime_preedit = text.to_string();
-                app.canvas.ime_preedit_range = cursor.as_ref().map(|r| chars_range(text, r));
+                app.canvas.ime_preedit_range = next_range;
             } else {
                 log::warn!("ignoring an IME pre-edit of {} bytes", text.len());
                 app.canvas.ime_preedit.clear();

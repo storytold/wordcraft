@@ -1091,7 +1091,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                         table: None,
                         proofing: None,
                         typing_word: None,
-                        composition: None,
+                        composition: ctx.opts.ime_composition.filter(|c| c.rev == p.rev).map(|c| (c.start, c.end)),
                         numeral: ctx.opts.numeral,
                         exclusions: &[],
                         eq_number: ctx.eq_count,

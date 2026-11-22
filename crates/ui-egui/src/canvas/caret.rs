@@ -142,12 +142,21 @@ fn step(app: &mut WordApp, request: LookRequest) -> Look {
 }
 
 /// Build per-line overlay slices for the active IME composition from the reflowed preview layout.
-fn build_preview_compositions(app: &mut WordApp, pages: &[PlacedPage], pass_right: f32, color: Color32) -> Option<Vec<Composition>> {
+/// Falls back (`None`) when the scaled composition size exceeds [`FaceRun::largest_size`], where
+/// atlas glyph clamping shrinks the overlay below document scale.
+fn build_preview_compositions(
+    app: &mut WordApp,
+    ctx: &egui::Context,
+    pages: &[PlacedPage],
+    pass_right: f32,
+    color: Color32,
+) -> Option<Vec<Composition>> {
     let preview = super::pages::ensure_ime_preview(app)?;
     let slices = preview.layout.composition_lines(&preview.start, &preview.end, app.session.page_hint);
     if slices.is_empty() {
         return None;
     }
+    let max_face_size = FaceRun::largest_size(ctx);
     let text = &app.canvas.ime_preedit;
     let cursor_chars = preedit_cursor_chars(text, app.canvas.ime_preedit_range.as_ref());
     let cursor_byte = text.char_indices().nth(cursor_chars).map_or(text.len(), |(i, _)| i);
@@ -180,6 +189,9 @@ fn build_preview_compositions(app: &mut WordApp, pages: &[PlacedPage], pass_righ
             size: run.size * scale,
             baseline: pr_rect.min.y + base * scale,
         });
+        if typing.is_some_and(|t| t.size > max_face_size) {
+            return None;
+        }
         out.push(Composition {
             left,
             bottom,
@@ -246,7 +258,7 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
         // The caret is steady inside the composition, so the glide stands down while it shows.
         app.canvas.glide.reset();
         let color = ink(app);
-        if let Some(slices) = build_preview_compositions(app, body.pages, pass.rect.right(), color) {
+        if let Some(slices) = build_preview_compositions(app, &ctx, body.pages, pass.rect.right(), color) {
             compositions = slices;
         } else {
             let text = app.canvas.ime_preedit.clone();

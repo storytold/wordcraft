@@ -801,10 +801,6 @@ impl DocLayout {
             }
             for li in *l0..*l1 {
                 if let Some(slice) = line_composition_slice(pi, para, (*l0, li), (*x, *y), (start.off, end.off)) {
-                    let line_w = para.lines.get(li).map_or(0.0, |l| (l.right - l.left).max(1.0));
-                    if slice.typing.as_ref().is_some_and(|(run, _)| run.size > line_w) {
-                        return Vec::new();
-                    }
                     out.push(slice);
                 }
             }

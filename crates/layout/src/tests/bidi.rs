@@ -807,3 +807,62 @@ fn scripts_that_join_their_letters_are_told_apart() {
         assert!(!joins_cursively(c), "{c:?}");
     }
 }
+
+/// An active IME composition elsewhere in the paragraph keeps committed Arabic letters joined
+/// across formatting runs, while stopping joining across the composition's own boundaries.
+#[test]
+fn active_ime_composition_preserves_committed_joining_without_crossing_boundaries() {
+    if arabic_face().is_none() {
+        eprintln!("skipped: no font with Persian letters installed");
+        return;
+    }
+    let two_joined = letters(&lay(&doc_of(&[("بب", true)])));
+    let isolated = letters(&lay(&doc_of(&[("ب", true)])));
+    assert_eq!((two_joined.len(), isolated.len()), (2, 1));
+
+    // Formatted `بب` followed by CJK text with an active composition `"da"` inside `"中文"`.
+    let text = "بب 中da文";
+    let d = formatted(text, &[(0, BEH)], &red);
+    let comp_start = "بب 中".len();
+    let comp_end = comp_start + "da".len();
+    let rev = d.para_at(&Pos::body(0, 0)).unwrap().rev;
+    let l = layout(
+        &d,
+        &mut LayoutCache::new(),
+        &LayoutOptions { ime_composition: Some(crate::ImeComposition { rev, start: comp_start, end: comp_end }), ..LayoutOptions::default() },
+    );
+    let (pl, _) = first_line(&l, 0);
+    let beh_glyphs: Vec<Vec<u32>> = pl
+        .clusters
+        .iter()
+        .filter(|c| c.end <= 2 * BEH && c.g1 > c.g0)
+        .map(|c| pl.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect())
+        .collect();
+    assert_eq!(beh_glyphs, two_joined, "committed formatted Arabic letters keep their joined forms: {beh_glyphs:?} vs {two_joined:?}");
+
+    // Uncommitted vowel mark between two committed `ب`s must NOT let them join across the composition.
+    let split_by_comp = "بَب";
+    let d_mid = doc_of(&[(split_by_comp, true)]);
+    let mark_end = BEH + 'َ'.len_utf8();
+    let rev_mid = d_mid.para_at(&Pos::body(0, 0)).unwrap().rev;
+    let l_mid = layout(
+        &d_mid,
+        &mut LayoutCache::new(),
+        &LayoutOptions { ime_composition: Some(crate::ImeComposition { rev: rev_mid, start: BEH, end: mark_end }), ..LayoutOptions::default() },
+    );
+    let (pl_mid, _) = first_line(&l_mid, 0);
+    let first_beh: Vec<u32> = pl_mid
+        .clusters
+        .iter()
+        .find(|c| c.start == 0)
+        .map(|c| pl_mid.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect())
+        .unwrap_or_default();
+    let second_beh: Vec<u32> = pl_mid
+        .clusters
+        .iter()
+        .find(|c| c.start == mark_end)
+        .map(|c| pl_mid.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect())
+        .unwrap_or_default();
+    assert_eq!(&first_beh, isolated.first().unwrap(), "committed letter before composition stays unjoined across it");
+    assert_eq!(&second_beh, isolated.first().unwrap(), "committed letter after composition stays unjoined across it");
+}

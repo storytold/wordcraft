@@ -36,7 +36,14 @@ struct Cx<'a> {
     /// The first character, if it is to be a drop cap.
     drop_first: Option<char>,
     /// The text on the page, when its letters can join across runs (see [`shown_text`]).
-    shown: Option<String>,
+    shown: Option<ShownText>,
+}
+
+/// Visible text of a paragraph with cursively joining letters, along with the mapped byte span of
+/// any active IME composition so committed neighbours never join across uncommitted text.
+struct ShownText {
+    text: String,
+    composition: Option<(usize, usize)>,
 }
 
 /// Where a cluster for an object or a break goes in the paragraph: its text, style and first glyph.
@@ -247,7 +254,7 @@ impl<'a> Shaped<'a> {
     /// A run shown: its text, with the breaks and objects in it as clusters of their own.
     fn visible_run(&mut self, cx: &Cx, (rc, props): (&Arc<ResolvedChar>, &CharProps), range: &std::ops::Range<usize>, text: &str) {
         let shown_start = self.shown_at;
-        let around = self.next_shown(cx, text.len());
+        let around = self.next_shown(cx, range.start, text.len());
         let mut seg = self.drop_cap_letter(cx, rc, text, range.start);
         if seg > 0 {
             // A drop cap is drawn apart from its word: nothing after it joins it, in this run or
@@ -275,13 +282,29 @@ impl<'a> Shaped<'a> {
         }
     }
 
-    /// The text shown on either side of the next `len` bytes shown, and moves past them. What
-    /// comes before starts after a drop cap ([`Shaped::shown_floor`]).
-    fn next_shown<'c>(&mut self, cx: &'c Cx, len: usize) -> ShapeContext<'c> {
+    /// The text shown on either side of the next `len` bytes shown (starting at paragraph offset
+    /// `range_start`), advancing past them. Context stops at a drop cap ([`Shaped::shown_floor`])
+    /// and at any active IME composition boundary so committed letters keep joining each other
+    /// without joining into or across uncommitted text.
+    fn next_shown<'c>(&mut self, cx: &'c Cx, range_start: usize, len: usize) -> ShapeContext<'c> {
         let Some(shown) = &cx.shown else { return ShapeContext::default() };
         let start = self.shown_at;
-        self.shown_at = start.saturating_add(len);
-        ShapeContext { before: shown.get(self.shown_floor.min(start)..start).unwrap_or(""), after: shown.get(self.shown_at..).unwrap_or("") }
+        let end = start.saturating_add(len);
+        self.shown_at = end;
+        let (wall_start, wall_end) = match (cx.env.composition, shown.composition) {
+            (Some((ca, cb)), Some((sa, sb))) => {
+                if range_start < ca {
+                    (0, sa)
+                } else if range_start < cb {
+                    (sa, sb)
+                } else {
+                    (sb, shown.text.len())
+                }
+            }
+            _ => (0, shown.text.len()),
+        };
+        let floor = self.shown_floor.max(wall_start).min(start);
+        ShapeContext { before: shown.text.get(floor..start).unwrap_or(""), after: shown.text.get(end..wall_end).unwrap_or("") }
     }
 
     /// Drop cap: the first character, sized so its capital spans `lines` lines. Returns how much
@@ -629,24 +652,44 @@ fn joined_cluster_starts(p: &Paragraph, clusters: &[Cluster]) -> Vec<usize> {
 /// The paragraph's text without the runs left out of the layout, if it has letters that join their
 /// neighbours: a letter joins the next one on the page, across a change of formatting and past
 /// text that isn't shown (#4093). `None` for every other paragraph, which don't need it.
-fn shown_text(cx: &Cx) -> Option<String> {
-    if cx.env.composition.is_some() {
-        return None;
-    }
+fn shown_text(cx: &Cx) -> Option<ShownText> {
     let text = &cx.p.text;
     if text.is_ascii() || !text.chars().any(wordcraft_fonts::joins_cursively) {
         return None;
     }
     let mut shown = String::with_capacity(text.len());
+    let mut comp_shown: Option<(usize, usize)> = None;
+    let mut sub_ranges = Vec::new();
     for (range, props) in cx.p.run_ranges() {
         let rc = cx.res.char(props);
-        if !left_out(cx.env.doc, &rc, cx.env.show_hidden, cx.env.hide_deleted)
-            && let Some(run) = text.get(range)
-        {
-            shown.push_str(run);
+        let hidden = left_out(cx.env.doc, &rc, cx.env.show_hidden, cx.env.hide_deleted);
+        split_at_composition(range, text, cx.env.composition, &mut sub_ranges);
+        for sub in sub_ranges.drain(..) {
+            if let Some((ca, cb)) = cx.env.composition
+                && sub.start >= ca
+                && sub.end <= cb
+            {
+                let start = shown.len();
+                if !hidden && let Some(run) = text.get(sub) {
+                    shown.push_str(run);
+                }
+                let end = shown.len();
+                comp_shown = Some(match comp_shown {
+                    Some((s, _)) => (s, end),
+                    None => (start, end),
+                });
+            } else if !hidden && let Some(run) = text.get(sub) {
+                shown.push_str(run);
+            }
         }
     }
-    Some(shown)
+    if comp_shown.is_none()
+        && let Some((ca, _)) = cx.env.composition
+        && ca == text.len()
+    {
+        comp_shown = Some((shown.len(), shown.len()));
+    }
+    Some(ShownText { text: shown, composition: comp_shown })
 }
 
 /// Split `range` at any `composition` boundary strictly inside it so no cluster or ligature

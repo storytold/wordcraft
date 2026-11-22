@@ -1281,22 +1281,72 @@ fn ime_preedit_reflows_following_text_without_overlapping() {
     app.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 6));
     let mut h = composing_harness(app);
     let before_hao_x = h.state_mut().session.layout().caret(&Pos::body(0, 6)).expect("caret before composition").x;
+    // A single `app_frame()` must discard the stale pass and align both page raster and overlay immediately.
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: None }));
-    for _ in 0..4 {
-        h.app_frame();
-    }
-    let drawn = drawn_composition(&h, "da").expect("the composition overlay is drawn");
+    h.app_frame();
+    let drawn = drawn_composition(&h, "da").expect("the composition overlay is drawn on the first frame");
     let shown = shown_layout(h.state_mut());
-    let after_hao_x = shown.caret(&Pos::body(0, 8)).expect("following glyph moved right").x;
-    assert!(after_hao_x > before_hao_x, "'好' must move strictly right past 'da': {before_hao_x} -> {after_hao_x}");
+    let after_hao = shown.caret(&Pos::body(0, 8)).expect("following glyph moved right");
+    assert!(after_hao.x > before_hao_x, "'好' must move strictly right past 'da': {before_hao_x} -> {}", after_hao.x);
     assert!(drawn.galley.size().x > 0.0);
+    let hao_screen = super::page_to_screen(h.state_mut(), after_hao.page, after_hao.x, after_hao.top).expect("following caret on screen");
+    let comp_right = drawn.pos.x + drawn.galley.size().x;
+    // Sub-pixel glyph quantization between `epaint` and `rustybuzz` stays within 0.5 screen pt.
+    assert!(
+        hao_screen.x + 0.5 >= comp_right,
+        "following caret screen x ({}) must sit at or beyond painted composition right edge ({comp_right})",
+        hao_screen.x
+    );
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "大家好");
+
+    // Extending the pre-edit in one frame reflows `"好"` past the wider overlay in that same frame.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "dajia".into(), active_range_chars: None }));
+    h.app_frame();
+    let drawn_long = drawn_composition(&h, "dajia").expect("extended composition overlay is drawn");
+    let shown_long = shown_layout(h.state_mut());
+    let hao_long = shown_long.caret(&Pos::body(0, 11)).expect("following glyph moved right for longer preedit");
+    let hao_long_screen = super::page_to_screen(h.state_mut(), hao_long.page, hao_long.x, hao_long.top).expect("following caret on screen");
+    assert!(
+        hao_long_screen.x + 0.5 >= drawn_long.pos.x + drawn_long.galley.size().x,
+        "same-frame discard keeps following text ({}) past extended composition right edge ({})",
+        hao_long_screen.x,
+        drawn_long.pos.x + drawn_long.galley.size().x
+    );
+
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("大".into())));
     for _ in 0..2 {
         h.app_frame();
     }
     assert!(h.state().canvas.ime_preedit.is_empty());
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "大家大好");
+}
+
+/// When an active IME composition wraps onto another page, the viewport follows the preview cursor
+/// so the text being composed stays visible without mutating the committed selection.
+#[test]
+fn ime_preedit_wrapping_to_next_page_scrolls_to_preview_cursor() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let filler = "Line\n".repeat(42);
+    app.run("document.setText", json!({"text": filler})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    let mut h = composing_harness(app);
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    let start_offset_y = h.state().canvas.view.offset.1;
+    let long_preedit = "zhongguorenmin ".repeat(80);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: long_preedit, active_range_chars: None }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    let preview = super::pages::ensure_ime_preview(h.state_mut()).expect("active IME preview");
+    let end_caret = preview.layout.caret_on(&preview.end, h.state().session.page_hint).expect("preview cursor caret");
+    assert!(end_caret.page >= 1, "long composition wraps onto a later page: {end_caret:?}");
+    assert!(h.state().canvas.view.offset.1 > start_offset_y, "viewport scrolled down to follow wrapped composition cursor");
+    assert!(
+        super::page_to_screen(h.state_mut(), end_caret.page, end_caret.x, end_caret.top).is_some(),
+        "preview cursor's page is placed in the viewport"
+    );
 }
 
 /// Clicking elsewhere on the canvas during an active IME composition dismisses the uncommitted

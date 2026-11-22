@@ -837,6 +837,32 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Preview cursor position inside `preview.doc` for the active `ime_preedit` and cursor range.
+fn ime_preview_cursor_pos(app: &WordApp, preview: &wordcraft_engine::ImePreview) -> Pos {
+    let text = &app.canvas.ime_preedit;
+    let cursor_chars = cursor::preedit_cursor_chars(text, app.canvas.ime_preedit_range.as_ref());
+    let cursor_byte = text.char_indices().nth(cursor_chars).map_or(text.len(), |(i, _)| i);
+    let off = preview.start.off.saturating_add(cursor_byte).min(preview.end.off);
+    Pos { off, ..preview.start.clone() }
+}
+
+/// Layout and caret used for post-input viewport scrolling: the composition's preview cursor while
+/// an IME composition is active on a focused canvas, else the committed selection's caret.
+fn scroll_target_caret(app: &mut WordApp, focused: bool) -> (Arc<DocLayout>, Option<wordcraft_layout::hit::Caret>) {
+    if focused
+        && !app.canvas.ime_preedit.is_empty()
+        && let Some(preview) = pages::ensure_ime_preview(app)
+    {
+        let pos = ime_preview_cursor_pos(app, &preview);
+        if let Some(c) = preview.layout.caret_on(&pos, app.session.page_hint) {
+            return (preview.layout, Some(c));
+        }
+    }
+    let fresh = app.session.layout();
+    let c = fresh.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+    (fresh, c)
+}
+
 /// The page view and everything shown over it.
 fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect, secondary_dismissed_ime: bool) {
     // The document's layout the pages are drawn from: the pass's keys and press run inside the page view, after the
@@ -936,8 +962,8 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                 tool_response = Some(response);
                 caret::paint_caret(app, ui, pass, body, Env::of(ui).motion.mode);
                 // This pass's keys and press have moved the caret: follow it, not the one from before the pass.
-                let fresh = app.session.layout();
-                caret_after = fresh.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+                let (scroll_layout, target_caret) = scroll_target_caret(app, app.canvas.focused(ui.ctx()));
+                caret_after = target_caret;
                 if app.canvas.scroll_to_caret
                     && !held
                     && let Some(c) = &caret_after
@@ -953,7 +979,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
                             );
                         }
                         None => {
-                            let h = fresh.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
+                            let h = scroll_layout.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
                             fix.go_to = Some((c.page, f64::from(c.top / h)));
                             unplaced = Some((c.page, h, *c));
                         }
@@ -987,12 +1013,13 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
             }
         }
     }
-    // This pass's own input changed the document under the pages it drew: run the pass again, so the frame that
-    // delivers a key paints its text (production laid out and painted in the one pass) rather than the next frame.
-    if ran && !Arc::ptr_eq(&laid_before, &app.session.layout()) {
+    // This pass's own input changed the document or pre-edit under the pages it drew: run the pass again, so the frame
+    // that delivers a key or composition paints its reflowed pages and overlay together rather than flashing for a frame.
+    if ran && (!Arc::ptr_eq(&laid_before, &app.session.layout()) || preedit_before != app.canvas.ime_preedit) {
         ui.ctx().request_discard("the page's input changed the document");
-    } else if ran && preedit_before != app.canvas.ime_preedit {
-        ui.ctx().request_repaint();
+        if !ui.ctx().will_discard() {
+            ui.ctx().request_repaint();
+        }
     }
     // The caret's page was not placed this pass: the whole layout says where it lies on screen, so the follow moves the
     // view by the same margin rule as for a placed page, from whichever side the caret is on.

@@ -217,4 +217,22 @@ fn ime_composition_reserves_space_suppresses_autospace_and_hides_raster_glyphs()
     }
     assert!(drawn.contains("大家") && drawn.contains("好"), "committed text stays in raster: {drawn:?}");
     assert!(!drawn.contains("da"), "composition glyphs are omitted from page raster: {drawn:?}");
+
+    // Narrow lines narrower than the font size still retain all wrapped composition slices.
+    let mut narrow = Document::from_text("abcd");
+    {
+        let (_, sec) = narrow.sections()[0];
+        let body_w = sec.page_w - sec.margin_left - sec.margin_right;
+        let p = narrow.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.indent_right = Some(body_w - 8.0);
+        p.touch();
+    }
+    let narrow_rev = narrow.para(StoryRef::Body, &Path::top(0)).unwrap().rev;
+    let narrow_comp = layout(
+        &narrow,
+        &mut LayoutCache::new(),
+        &LayoutOptions { ime_composition: Some(ImeComposition { rev: narrow_rev, start: 0, end: 4 }), ..Default::default() },
+    );
+    let slices = narrow_comp.composition_lines(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, 4), 0);
+    assert!(slices.len() >= 2, "narrow line narrower than font size keeps wrapped composition slices: {slices:?}");
 }
