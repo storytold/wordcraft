@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::WordApp;
 use crate::colors::{Remember, Target};
 
-/// Distance from the selection's start at which the bar is centred.
+/// Distance from the selection's start (its left edge, or right in a right-to-left paragraph) at which the bar is centred.
 const ANCHOR_INSET: f32 = 4.0;
 /// Least height of a selection rectangle (screen points) that counts as visible for anchoring.
 const MIN_VISIBLE_H: f32 = 1.0;
@@ -46,6 +46,17 @@ pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rec
         }
     }
     first
+}
+
+/// The x the bar centres at over `anchor`: its start edge, less the inset, mirrored for right-to-left.
+fn start_x(anchor: Rect, rtl: bool) -> f32 {
+    if rtl { anchor.max.x - ANCHOR_INSET } else { anchor.min.x + ANCHOR_INSET }
+}
+
+/// Whether the paragraph where the selection starts is right-to-left.
+fn starts_rtl(app: &WordApp) -> bool {
+    let start = app.session.sel.ordered().0;
+    app.session.doc.para_at(&start).is_some_and(|p| app.session.doc.styles.resolve_para(&p.props).bidi)
 }
 
 /// Whether the bar may be shown for the current app state.
@@ -101,8 +112,9 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, body: &PageBody<'_>) {
         return;
     }
     let Some(anchor) = app.canvas.mini_anchor else { return };
-    // The bar centres over the selection's start rather than drifting to the centre of long selections (#7447).
-    let start_x = anchor.min.x + ANCHOR_INSET;
+    // The bar centres over the selection's start rather than drifting to the centre of long selections (#7447);
+    // a right-to-left paragraph at the start puts it at the right edge (#7464).
+    let start_x = start_x(anchor, starts_rtl(app));
     let anchor_box = Rect::from_min_max(pos2(start_x, anchor.min.y), pos2(start_x, anchor.max.y));
     let points: Vec<_> = [anchor_box.left_top(), anchor_box.right_top(), anchor_box.right_bottom(), anchor_box.left_bottom()]
         .into_iter()

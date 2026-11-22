@@ -55,6 +55,11 @@ fn bar_over(pick: &str) -> H {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "The quick brown fox jumps over the lazy dog"})).unwrap();
     a.run("select.text", json!({"text": pick})).unwrap();
+    bar_over_app(a)
+}
+
+/// `bar_over` for an app whose document and selection are already set up.
+fn bar_over_app(a: WordApp) -> H {
     let mut h = crate::test_harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -681,4 +686,49 @@ fn a_clicked_member_holds_its_preview_until_the_pointer_leaves() {
             assert_ne!(crate::canvas::page_doc(h.state()), &h.state().session.doc, "{label}: the page shows the toggled-back state");
         }
     }
+}
+
+/// The bar's centre, and the selection's first visible line (the anchor) it hangs from.
+fn bar_centre_and_anchor(h: &H) -> (f32, Rect) {
+    let c = canvas(h);
+    let bar = h
+        .query_all_by_role(Role::Group)
+        .filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting"))
+        .map(|n| n.rect())
+        .find(|r| c.contains_rect(*r))
+        .expect("the selection bar is shown inside the canvas");
+    (bar.center().x, h.state().canvas.mini_anchor.expect("the selection has an anchor"))
+}
+
+/// A paragraph long enough to wrap onto several lines, with a selection from `from_char` to its end.
+fn wrapped_selection(text: &str, rtl: bool, from_char: usize) -> H {
+    let text = text.repeat(40);
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+    if rtl {
+        a.run("select.all", json!({})).unwrap();
+        a.run("para.rtl", json!({})).unwrap();
+    }
+    let off = text.char_indices().nth(from_char).map_or(0, |(i, _)| i);
+    let end = text.len();
+    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, off), focus: wordcraft_doc::Pos::body(0, end) };
+    bar_over_app(a)
+}
+
+/// #7464: in a right-to-left paragraph the selection starts at the right, so the bar sits there,
+/// not at the left margin where the selection's first line ends.
+#[test]
+fn the_bar_anchors_at_the_right_in_a_right_to_left_paragraph() {
+    let h = wrapped_selection("سلام دنیا ", true, 12);
+    let (x, anchor) = bar_centre_and_anchor(&h);
+    assert!(anchor.width() > 100.0, "the first selected line is a wide rect: {anchor:?}");
+    assert!((x - anchor.max.x).abs() < (x - anchor.min.x).abs(), "the bar x={x} is nearer the start (right) edge of {anchor:?}");
+}
+
+/// #7464: a left-to-right selection from mid-line 1 to a later line keeps the bar at its start.
+#[test]
+fn the_bar_anchors_at_the_start_of_a_multi_line_left_to_right_selection() {
+    let h = wrapped_selection("The quick brown fox ", false, 12);
+    let (x, anchor) = bar_centre_and_anchor(&h);
+    assert!(anchor.width() > 100.0, "the first selected line is a wide rect: {anchor:?}");
+    assert!((x - anchor.min.x).abs() < (x - anchor.max.x).abs(), "the bar x={x} is nearer the start (left) edge of {anchor:?}");
 }
