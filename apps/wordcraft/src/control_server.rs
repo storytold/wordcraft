@@ -45,6 +45,16 @@ fn remove(path: Option<&Path>) {
 /// `port` in `settings`; a file left by a run that did not exit cleanly is replaced. Without a
 /// settings folder a fresh token is generated and reported by the log.
 pub fn start(options: &ControlOptions, port: u16, host: WindowHost, settings: Option<&Path>) -> Option<(Receiver<ControlRequest>, Control)> {
+    start_with(options, port, host, settings, serve)
+}
+
+fn start_with(
+    options: &ControlOptions,
+    port: u16,
+    host: WindowHost,
+    settings: Option<&Path>,
+    serve: impl FnOnce(TcpListener, String, WindowHost) -> std::io::Result<(Receiver<ControlRequest>, Listening)>,
+) -> Option<(Receiver<ControlRequest>, Control)> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
@@ -285,5 +295,151 @@ mod tests {
         }
         assert!(rx.try_recv().is_err(), "refused auth attempts must not reach the UI");
         control.shut_down();
+    }
+
+    #[test]
+    fn a_stale_key_file_is_replaced() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-control-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = wordcraft_control_key::key_path(&dir, 0);
+        std::fs::write(&p, "old").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let options = ControlOptions::default();
+        let (_rx, control) = start(&options, 0, host(), Some(&dir)).unwrap();
+        let token = std::fs::read_to_string(&p).unwrap();
+        assert_ne!(token.trim(), "old");
+        assert_eq!(token.trim().len(), 64);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert!(ControlClient::connect(control.listening.addr, token.trim()).is_ok());
+        control.shut_down();
+        assert!(!p.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_accept_thread_spawn_failure_aborts_start_and_removes_the_key() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-control-spawn-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = wordcraft_control_key::key_path(&dir, 0);
+        let options = ControlOptions::default();
+        let result = start_with(&options, 0, host(), Some(&dir), |_listener, _token, _host| {
+            assert!(path.exists(), "startup wrote the token file before spawning");
+            Err(std::io::Error::other("injected accept thread spawn failure"))
+        });
+        assert!(result.is_none(), "a server without its accept thread must not report success");
+        assert!(!path.exists(), "failed startup must remove its published key");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_complete_json_request_at_eof_can_reach_the_ui() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        let dir = std::env::temp_dir().join(format!("wordcraft-control-eof-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let options = ControlOptions::default();
+        let (rx, control) = start(&options, 0, host(), Some(&dir)).unwrap();
+        let path = control.created.clone().unwrap();
+        let token = std::fs::read_to_string(&path).unwrap();
+
+        let mut stream = TcpStream::connect(control.listening.addr).unwrap();
+        let auth = serde_json::json!({"id": 1, "method": "auth", "params": {"token": token.trim()}}).to_string();
+        writeln!(stream, "{auth}").unwrap();
+        stream.flush().unwrap();
+
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let auth_reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(auth_reply["ok"], true);
+
+        // Send a complete request without a trailing newline and half-close (Shutdown::Write).
+        let body = serde_json::json!({
+            "id": 2,
+            "method": "engine.execute",
+            "params": {"command": "text.insert", "params": {"text": "once"}}
+        });
+        stream.write_all(body.to_string().as_bytes()).unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+
+        let req = rx.recv_timeout(Duration::from_secs(2)).expect("request reached UI");
+        assert_eq!(req.method, "engine.execute");
+        assert_eq!(req.params["params"]["text"], "once");
+        req.reply.send(serde_json::json!({"ok": true})).unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["id"], 2);
+
+        let mut rest = [0u8; 1];
+        assert_eq!(reader.read(&mut rest).unwrap(), 0, "stream closed at EOF");
+        assert!(rx.try_recv().is_err());
+
+        control.shut_down();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unauthenticated_connections_are_limited() {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        let dir = std::env::temp_dir().join(format!("wordcraft-control-limits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let options = ControlOptions::default();
+        let (rx, control) = start(&options, 0, host(), Some(&dir)).unwrap();
+
+        // Fill up all MAX_CONNECTIONS (16) slots with idle unauthenticated connections.
+        let mut conns = Vec::new();
+        for _ in 0..16 {
+            conns.push(TcpStream::connect(control.listening.addr).unwrap());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+
+        // The 17th connection exceeds MAX_CONNECTIONS and receives the error.
+        let extra = TcpStream::connect(control.listening.addr).unwrap();
+        let mut reader = BufReader::new(extra);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let r: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(r["error"], "connection limit reached");
+        assert_eq!(r["ok"], false);
+
+        // Closing one connection frees a slot.
+        drop(conns.pop());
+
+        // Now a new connection can connect without being refused (retry until the worker releases the permit).
+        let path = control.created.clone().unwrap();
+        let token = std::fs::read_to_string(&path).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match ControlClient::connect(control.listening.addr, token.trim()) {
+                Ok(_) => break,
+                Err(e) if e.to_string().contains("connection limit reached") && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("expected slot reuse to succeed, got: {e}"),
+            }
+        }
+
+        assert!(rx.try_recv().is_err());
+        drop(conns);
+        control.shut_down();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
