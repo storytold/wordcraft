@@ -31,13 +31,13 @@ const PAGE_WIDE: u16 = 3;
 const PAGE_HIGH: u16 = 4;
 
 /// A grid of template tiles, one per card, that reports the chosen key.
-fn grid(name: Label) -> TileGrid<'static, String> {
+fn grid(name: Label, wide: u16, high: u16) -> TileGrid<'static, String> {
     TileGrid::<String>::new(name)
         .select(SelectMode::Single)
         .activate(ActivateOn::Click)
         .caption(CaptionPlace::Below)
         .card()
-        .aspect(f32::from(PAGE_WIDE) / f32::from(PAGE_HIGH))
+        .aspect(f32::from(wide) / f32::from(high))
         .sizing(Sizing::FillWidth)
         .natural_height(true)
 }
@@ -96,16 +96,18 @@ pub(super) fn show(ui: &mut Ui, app: &mut WordApp) {
             return;
         }
         let store = thumbs::store(&ctx);
-        let source = thumbs::TemplateThumbs { region: app.session.region() };
+        let region = app.session.region();
+        let (wide, high) = thumbs::page_aspect(&region);
+        let source = thumbs::TemplateThumbs { region };
         if !found.is_empty() {
             let (store, source) = (&store, &source);
             let cards = template_cards(&found);
             let items = keyed(&cards, |t: &Template| t.id.clone()).with_text(|t| Cow::Borrowed(t.name.as_str()));
-            let out = grid(label("Templates")).show_items(ui, &items, &mut |id, _| {
+            let out = grid(label("Templates"), wide, high).show_items(ui, &items, &mut |id, _| {
                 let Some(card) = cards.iter().find(|c| &c.id == id) else { return Tile::new(Label::Empty) };
                 let thumb = ThumbKey::Template(card.id.clone());
                 Tile::new(Label::from(card.name.clone()))
-                    .thumb(ThumbAspect::new(PAGE_WIDE, PAGE_HIGH), move |cx, rect| thumbs::paint(cx, rect, store, source, &thumb))
+                    .thumb(ThumbAspect::new(wide, high), move |cx, rect| thumbs::paint(cx, rect, store, source, &thumb))
             });
             for id in activated(out.response.events) {
                 let _ = app.run("file.new", json!({"template": id}));
@@ -140,7 +142,7 @@ pub(super) fn show(ui: &mut Ui, app: &mut WordApp) {
             let tiles: Vec<&PersonalTemplate> = personal_found.iter().filter(|p| p.category == category).collect();
             let items = keyed(&tiles, |p: &&PersonalTemplate| p.path.clone()).with_text(|p| Cow::Borrowed(p.label.as_str()));
             let name = if category.is_empty() { label("Personal templates") } else { Label::from(category.to_owned()) };
-            let out = grid(name).id_salt(("personal-templates", category.to_owned())).show_items(ui, &items, &mut |path, _| {
+            let out = grid(name, PAGE_WIDE, PAGE_HIGH).id_salt(("personal-templates", category.to_owned())).show_items(ui, &items, &mut |path, _| {
                 let Some(p) = tiles.iter().find(|p| &p.path == path) else { return Tile::new(Label::Empty) };
                 Tile::new(Label::from(p.label.clone())).thumb(ThumbAspect::new(PAGE_WIDE, PAGE_HIGH), paint_personal_card).tooltip(p.path.clone())
             });
