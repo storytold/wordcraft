@@ -4,6 +4,9 @@ use serde_json::{Value, json};
 
 use crate::{Headless, Server};
 
+mod differential;
+mod oracle;
+
 fn call(s: &mut Server, id: u64, method: &str, params: Value) -> Value {
     let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string();
     let r = s.handle_line(&line).expect("reply");
@@ -169,7 +172,9 @@ fn render_and_screenshot_through_the_app_use_no_temp_file() {
     let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut s = Server::new(Box::new(FakeApp { calls: calls.clone() }));
     for (tool, method) in [("render_page", "ui.render"), ("screenshot", "ui.screenshot")] {
-        let r = call(&mut s, 10, "tools/call", json!({"name": tool, "arguments": {"page": 1}}));
+        // `screenshot` takes no arguments (the shared check refuses ones its schema does not list).
+        let args = if tool == "render_page" { json!({"page": 1}) } else { json!({}) };
+        let r = call(&mut s, 10, "tools/call", json!({"name": tool, "arguments": args}));
         let content = &r["result"]["content"];
         assert_eq!(r["result"]["isError"], false, "{tool}: {r}");
         assert_eq!(content[0]["type"], "image", "{tool}");
@@ -310,7 +315,8 @@ fn over_long_request_line_is_rejected_and_serving_continues() {
     let text = String::from_utf8(out).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");
-    assert!(lines[0].contains("too long"), "{}", lines[0]);
+    // The shared core words it "request too large" (was "request line too long"); same -32600.
+    assert!(lines[0].contains("too large") && lines[0].contains("-32600"), "{}", lines[0]);
     assert!(lines[1].contains(r#""id":5"#), "{}", lines[1]);
 }
 
@@ -430,4 +436,25 @@ fn render_page_rejects_a_page_number_that_does_not_fit() {
     assert_eq!(r["result"]["isError"], true, "page 2^32: {r}");
     let r = call(&mut s, 31, "tools/call", json!({"name": "render_page", "arguments": {"page": 1, "scale": 0.5}}));
     assert_eq!(r["result"]["isError"], false, "page 1 still renders: {r}");
+}
+
+#[test]
+fn invalid_utf8_does_not_change_arguments_or_stop_later_requests() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    let mut input = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"type_text","arguments":{"text":"bad"}}}"#.to_vec();
+    let pos = input.windows(3).position(|w| w == b"bad").unwrap();
+    input[pos] = 0xff;
+    input.push(b'\n');
+    input.extend_from_slice(
+        b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"type_text\",\"arguments\":{\"text\":\"good\"}}}\n",
+    );
+    let mut out = Vec::new();
+    s.serve(std::io::Cursor::new(input), &mut out).unwrap();
+    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[0]["error"]["code"], -32700);
+    assert_eq!(replies[1]["id"], 2);
+    assert_eq!(replies[1]["result"]["isError"], false);
+    assert_eq!(tool(&mut s, "get_text", json!({}))["text"], "good", "malformed text must never reach the backend");
 }

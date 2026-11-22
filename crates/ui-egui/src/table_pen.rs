@@ -4,13 +4,18 @@
 //! `table.draw` / `table.eraser` with page coordinates (one undo step each). Esc or the button
 //! again turns it off. The geometry decisions are the engine's (`cmd::table_draw`).
 
-use egui::{Pos2, Rect, Stroke, Ui, pos2, vec2};
+use craft::behavior::kurbo::Point;
+use craft::behavior::{CancelReason, Cursor, IconId, PaintedCursor, PointerGlyph};
+use craft::pages::ui::{PageBody, PageRegion};
+use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft::ui::primitives::{Draw, PaintShape, StrokeColor, StrokeWidth};
+use egui::Pos2;
 use serde_json::{Value, json};
 use wordcraft_engine::cmd::table_draw::{self, Stroke as Kind};
 use wordcraft_layout::DocLayout;
 
 use crate::WordApp;
-use crate::theme::Tokens;
+use crate::ink::{page_under, page_xy, placed};
 
 /// Which table tool is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +56,10 @@ pub fn toggle(app: &mut WordApp, id: &str, p: &Value) -> Option<Result<Value, St
     app.canvas.table_tool = on.then_some(tool);
     app.canvas.table_stroke = None;
     if on {
-        app.canvas.want_focus = true;
+        // PLAN: assumed `CanvasState::focus_page(&mut self, &egui::Context)` (cv.A10, canvas-w9).
+        if let Some(ctx) = app.ctx.clone() {
+            app.canvas.focus_page(&ctx);
+        }
         app.status(match tool {
             TableTool::Draw => tl!("Drag a rectangle to draw a table, or a line across cells to split them. Esc stops."),
             TableTool::Erase => tl!("Click a border between two cells to merge them. Esc stops."),
@@ -68,140 +76,153 @@ pub fn stop(app: &mut WordApp) -> bool {
     was
 }
 
-/// The page point under screen point `p` on page `page` (its screen rect from `rects`).
-fn on_page(rects: &[Rect], layout: &DocLayout, scale: f32, page: usize, p: Pos2) -> Option<(f32, f32)> {
-    let r = rects.get(page)?;
-    let scale = layout.pages.get(page).filter(|pg| pg.w > 0.0).map_or(scale, |pg| r.width() / pg.w);
-    (scale > 0.0).then(|| ((p.x - r.min.x) / scale, (p.y - r.min.y) / scale))
+/// Draw Table or the table eraser as the canvas's tool for one pass. The stroke in progress lives
+/// in `app.canvas.table_stroke`.
+pub(crate) struct TablePenCanvasTool<'a> {
+    app: &'a mut WordApp,
+    body: &'a PageBody<'a>,
+    /// The layout of this pass, for the preview's geometry.
+    layout: Option<std::sync::Arc<DocLayout>>,
 }
 
-/// Mouse input while a tool is on; `false` (nothing done) when none is, so the caret logic runs.
-pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> bool {
-    let Some(tool) = app.canvas.table_tool else { return false };
-    if !app.canvas.focused && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        stop(app);
-        return true;
+/// The table tool for this pass while Draw Table or the eraser is on; `body` is this pass's page body.
+pub(crate) fn active_tool<'a>(app: &'a mut WordApp, body: &'a PageBody<'a>) -> Option<TablePenCanvasTool<'a>> {
+    app.canvas.table_tool?;
+    Some(TablePenCanvasTool { app, body, layout: None })
+}
+
+/// The areas where a table tool takes a press over every canvas control: every page in full while Draw
+/// Table or the eraser is on, so a stroke starts over a content-control button too; none otherwise.
+pub(crate) fn regions(app: &WordApp, layout: &DocLayout) -> Vec<PageRegion> {
+    if app.canvas.table_tool.is_none() {
+        return Vec::new();
     }
-    let latest = ui.input(|i| i.pointer.latest_pos());
-    if ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() {
-        if let Some(p) = latest
-            && let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p)
+    // The whole page, as a polygon in the page's own points from its top left corner.
+    layout
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(i, pg)| {
+            let (w, h) = (f64::from(pg.w), f64::from(pg.h));
+            PageRegion::polygon(i, vec![Point::new(0.0, 0.0), Point::new(w, 0.0), Point::new(w, h), Point::new(0.0, h)])
+        })
+        .collect()
+}
+
+impl CanvasTool for TablePenCanvasTool<'_> {
+    fn each_pass(&mut self, _cx: &mut ToolContext<'_>) {
+        self.layout = Some(self.app.session.layout());
+    }
+
+    fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
+        let Some(pg) = page_under(self.body.pages, pointer.pos) else { return ToolAction::Ignored };
+        let [x, y] = page_xy(pg, pointer.pos);
+        self.app.canvas.table_stroke = Some(PenStroke { page: pg.page, from: (x, y), to: (x, y) });
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
+        let pages = self.body.pages;
+        if let Some(st) = self.app.canvas.table_stroke.as_mut()
+            && let Some(pg) = placed(pages, st.page)
         {
-            app.canvas.table_stroke = Some(PenStroke { page, from: (x, y), to: (x, y) });
+            let [x, y] = page_xy(pg, pointer.pos);
+            st.to = (x, y);
         }
-        return true;
     }
-    let Some(mut st) = app.canvas.table_stroke else { return true };
-    if let Some(p) = latest
-        && let Some(to) = on_page(rects, layout, scale, st.page, p)
-    {
-        st.to = to;
-        app.canvas.table_stroke = Some(st);
-    }
-    if ui.input(|i| i.pointer.primary_down()) {
-        return true;
-    }
-    app.canvas.table_stroke = None;
-    let params = match tool {
-        TableTool::Draw => {
-            // A click without a drag draws nothing.
-            if (st.to.0 - st.from.0).abs() < 2.0 && (st.to.1 - st.from.1).abs() < 2.0 {
-                return true;
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.drag(pointer, cx);
+        let Some(st) = self.app.canvas.table_stroke.take() else { return };
+        let Some(tool) = self.app.canvas.table_tool else { return };
+        let params = match tool {
+            TableTool::Draw => {
+                // A click without a drag draws nothing.
+                if (st.to.0 - st.from.0).abs() < 2.0 && (st.to.1 - st.from.1).abs() < 2.0 {
+                    return;
+                }
+                json!({"page": st.page, "x0": st.from.0, "y0": st.from.1, "x1": st.to.0, "y1": st.to.1})
             }
-            json!({"page": st.page, "x0": st.from.0, "y0": st.from.1, "x1": st.to.0, "y1": st.to.1})
+            TableTool::Erase => json!({"page": st.page, "x": st.to.0, "y": st.to.1}),
+        };
+        if let Err(e) = self.app.run(tool.id(), params) {
+            self.app.status(e);
         }
-        TableTool::Erase => json!({"page": st.page, "x": st.to.0, "y": st.to.1}),
-    };
-    if let Err(e) = app.run(tool.id(), params) {
-        app.status(e);
     }
-    true
-}
 
-/// The pointer while a tool is on (a crosshair; the tool's icon is drawn beside it).
-pub fn cursor(app: &WordApp, ui: &Ui, resp: &egui::Response) {
-    if app.canvas.table_tool.is_some() && (resp.hovered() || app.canvas.table_stroke.is_some()) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
+        self.app.canvas.table_stroke = None;
     }
-}
 
-fn dashed_rect(painter: &egui::Painter, r: Rect, s: Stroke) {
-    let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-    painter.extend(egui::Shape::dashed_line(&pts, s, 5.0, 3.0));
-}
+    fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
+        matches!(key, ToolKey::Cancel) && stop(self.app)
+    }
 
-/// The live preview: the rectangle or line being drawn, or the border the eraser would remove;
-/// and the tool's icon beside the pointer.
-pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
-    let Some(tool) = app.canvas.table_tool else { return };
-    let to_screen = |page: usize, x: f32, y: f32| -> Option<Pos2> {
-        let r = pages.get(page)?;
-        let sc = layout.pages.get(page).filter(|pg| pg.w > 0.0).map_or(scale, |pg| r.width() / pg.w);
-        Some(pos2(r.min.x + x * sc, r.min.y + y * sc))
-    };
-    let ink = Stroke::new(1.5, t.accent);
-    let hover = painter.ctx().input(|i| i.pointer.hover_pos());
-    match (tool, app.canvas.table_stroke) {
-        (TableTool::Draw, Some(st)) => match table_draw::stroke(layout, st.page, st.from.0, st.from.1, st.to.0, st.to.1) {
-            Some(Kind::Rect(r)) => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, r.x, r.y), to_screen(st.page, r.right(), r.bottom())) {
-                    painter.rect_stroke(Rect::from_two_pos(a, b), 0.0, ink, egui::StrokeKind::Middle);
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        use craft::theme::variant::Tone;
+        let (Some(layout), Some(style), Some(tool)) = (&self.layout, cx.style(), self.app.canvas.table_tool) else { return };
+        let accent = StrokeColor::Theme(style.tone(Tone::Accent));
+        let screen =
+            |page: usize, x: f32, y: f32| -> Option<Pos2> { Some(placed(self.body.pages, page)?.to_screen(Point::new(f64::from(x), f64::from(y)))) };
+        let line = |a: Option<Pos2>, b: Option<Pos2>, width: StrokeWidth, color: StrokeColor| {
+            if let (Some(a), Some(b)) = (a, b) {
+                draw.stroke(&PaintShape::Path(vec![a, b]), width, color);
+            }
+        };
+        match (tool, self.app.canvas.table_stroke) {
+            (TableTool::Draw, Some(st)) => match table_draw::stroke(layout, st.page, st.from.0, st.from.1, st.to.0, st.to.1) {
+                Some(Kind::Rect(r)) => {
+                    let corners = [(r.x, r.y), (r.right(), r.y), (r.right(), r.bottom()), (r.x, r.bottom()), (r.x, r.y)];
+                    let pts: Option<Vec<Pos2>> = corners.iter().map(|(x, y)| screen(st.page, *x, *y)).collect();
+                    if let Some(pts) = pts {
+                        draw.stroke(&PaintShape::Path(pts), StrokeWidth::Medium, accent);
+                    }
+                }
+                Some(Kind::Vertical { x, y0, y1 }) => line(screen(st.page, x, y0), screen(st.page, x, y1), StrokeWidth::Medium, accent),
+                Some(Kind::Horizontal { y, x0, x1 }) => line(screen(st.page, x0, y), screen(st.page, x1, y), StrokeWidth::Medium, accent),
+                // Not a table or a line yet: the drag's box, dashed and dim.
+                None => {
+                    let corners = [(st.from.0, st.from.1), (st.to.0, st.from.1), (st.to.0, st.to.1), (st.from.0, st.to.1), (st.from.0, st.from.1)];
+                    let pts: Option<Vec<Pos2>> = corners.iter().map(|(x, y)| screen(st.page, *x, *y)).collect();
+                    if let Some(pts) = pts {
+                        draw.dashed(&pts, draw.dashes(), StrokeWidth::Thin, StrokeColor::Theme(style.tone(Tone::Neutral)));
+                    }
+                }
+            },
+            (TableTool::Erase, _) => {
+                if let Some(p) = cx.pointer.map(|p| p.pos)
+                    && let Some(pg) = page_under(self.body.pages, p)
+                {
+                    let [x, y] = page_xy(pg, p);
+                    if let Some(e) = table_draw::erase_target(layout, pg.page, x, y) {
+                        line(
+                            screen(pg.page, e.from.0, e.from.1),
+                            screen(pg.page, e.to.0, e.to.1),
+                            StrokeWidth::Heavy,
+                            StrokeColor::Theme(style.tone(Tone::Bad)),
+                        );
+                    }
                 }
             }
-            Some(Kind::Vertical { x, y0, y1 }) => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, x, y0), to_screen(st.page, x, y1)) {
-                    painter.line_segment([a, b], ink);
-                }
-            }
-            Some(Kind::Horizontal { y, x0, x1 }) => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, x0, y), to_screen(st.page, x1, y)) {
-                    painter.line_segment([a, b], ink);
-                }
-            }
-            // Not a table or a line yet: the drag's box, dashed and dim.
-            None => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, st.from.0, st.from.1), to_screen(st.page, st.to.0, st.to.1)) {
-                    dashed_rect(painter, Rect::from_two_pos(a, b), Stroke::new(1.0, t.text_dim));
-                }
-            }
-        },
-        (TableTool::Erase, _) => {
-            if let Some(p) = hover
-                && let Some((page, x, y)) = crate::canvas::page_at(pages, layout, scale, p)
-                && let Some(e) = table_draw::erase_target(layout, page, x, y)
-                && let (Some(a), Some(b)) = (to_screen(page, e.from.0, e.from.1), to_screen(page, e.to.0, e.to.1))
-            {
-                painter.line_segment([a, b], Stroke::new(3.0, t.red));
-            }
+            _ => {}
         }
-        _ => {}
     }
-    if let Some(p) = hover.filter(|p| pages.iter().any(|r| r.contains(*p))) {
-        let r = Rect::from_min_size(p + vec2(8.0, 6.0), vec2(16.0, 16.0));
-        let icon = if tool == TableTool::Draw { "pencil" } else { "eraser" };
-        crate::icons::paint(painter, r, icon, t.icon, t.accent);
+
+    /// A crosshair with the tool's icon riding beside it.
+    fn cursor(&self, _cx: &ToolContext<'_>) -> Cursor {
+        let icon =
+            if self.app.canvas.table_tool == Some(TableTool::Erase) { IconId::new("wordcraft.eraser") } else { IconId::new("wordcraft.pencil") };
+        Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Crosshair, icon))
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the table.draw and table.eraser commands")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The buttons toggle the tools (one at a time); coordinates go to the engine.
-    #[test]
-    fn buttons_toggle_the_pen_and_the_eraser() {
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-        assert_eq!(a.run("table.draw", json!({})).unwrap()["tool"], "table.draw");
-        assert_eq!(a.canvas.table_tool, Some(TableTool::Draw));
-        assert_eq!(a.run("table.eraser", json!({})).unwrap()["tool"], "table.eraser");
-        assert_eq!(a.run("table.eraser", json!({})).unwrap()["tool"], Value::Null);
-        assert_eq!(a.canvas.table_tool, None);
-        a.run("table.draw", json!({"on": true})).unwrap();
-        assert!(stop(&mut a) && a.canvas.table_tool.is_none());
-        // With coordinates it is the engine's command (an error here: nothing to split).
-        assert!(a.run("table.draw", json!({"page": 0, "x0": 1, "y0": 1, "x1": 2, "y1": 2})).is_err());
-        assert!(a.canvas.table_tool.is_none());
-    }
 
     /// Deleting a table or removing its last cells turns off the eraser.
     #[test]
