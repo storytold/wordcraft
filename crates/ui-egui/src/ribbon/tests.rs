@@ -772,6 +772,64 @@ fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
     }
 }
 
+/// #7323: the Home › Bullets dropdown renders the Bullet Library grid as compact
+/// square preview tiles (~22×22 pt), rather than expanding to full card dimensions (~132 pt).
+#[test]
+fn bullets_dropdown_renders_compact_bullet_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Home");
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+
+    // The SplitButton has two button nodes: the command part and the arrow part.
+    let arrow = h.query_all(By::new().role(Role::Button).label("Bullets")).nth(1).expect("Bullets split-button menu arrow");
+    arrow.click();
+    crate::test_harness::frames(&mut h, 3);
+
+    let bullet_tile = h.query_all(By::new().role(Role::ListItem).label("•")).next().expect("bullet tile •");
+    let rect = bullet_tile.rect();
+    assert!(
+        rect.width() >= 16.0 && rect.width() <= 32.0,
+        "bullet tile width ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.width()
+    );
+    assert!(
+        rect.height() >= 16.0 && rect.height() <= 32.0,
+        "bullet tile height ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.height()
+    );
+    assert!((rect.width() - rect.height()).abs() <= 2.0, "bullet tile should be square: {}x{}", rect.width(), rect.height());
+}
+
+/// #7310: unimplemented stub ribbon buttons (Dictate, Ink to Math, Translate, Block Authors)
+/// resolve disabled in the ribbon UI and are known to the command catalog without warnings.
+#[test]
+fn unimplemented_stub_ribbon_buttons_are_disabled() {
+    use egui::accesskit::Role;
+
+    let cases = [
+        ("Home", "Dictate", "tools.dictate"),
+        ("Draw", "Ink to Math", "draw.inkToMath"),
+        ("Review", "Translate", "review.translate"),
+        ("Review", "Block Authors", "review.blockAuthors"),
+    ];
+
+    for (tab, expected_label, id) in cases {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let h = tab_harness(app, tab);
+
+        let keymap = craft::ui::runtime::commands::keymap(&h.ctx).expect("command board has a keymap");
+        assert!(keymap.catalog().iter().any(|def| def.command.id == id), "{tab}: stub command {id} should be registered in the app catalog");
+
+        let button = h
+            .query_all(By::new().role(Role::Button))
+            .find(|n| n.accesskit_node().label().is_some_and(|l| l.split_whitespace().collect::<Vec<_>>().join(" ") == expected_label))
+            .unwrap_or_else(|| panic!("{tab}: ribbon button '{expected_label}' should exist"));
+        assert!(button.accesskit_node().is_disabled(), "{tab}: stub button {:?} ({id}) must be disabled", button.accesskit_node().label());
+    }
+}
+
 /// #7324: Table ribbon menu buttons (Styles, Borders, Delete, AutoFit) bind their command IDs
 /// so they disable when editing is protected or when no table is active.
 #[test]
@@ -851,62 +909,4 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
         description(&h_prot_layout, "Delete").as_deref().unwrap_or("").contains("protected"),
         "Delete should indicate protection in disabled hint"
     );
-}
-
-/// #7323: the Home › Bullets dropdown renders the Bullet Library grid as compact
-/// square preview tiles (~22×22 pt), rather than expanding to full card dimensions (~132 pt).
-#[test]
-fn bullets_dropdown_renders_compact_bullet_tiles() {
-    use egui::accesskit::Role;
-
-    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
-    let mut h = tab_harness(app, "Home");
-    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
-
-    // The SplitButton has two button nodes: the command part and the arrow part.
-    let arrow = h.query_all(By::new().role(Role::Button).label("Bullets")).nth(1).expect("Bullets split-button menu arrow");
-    arrow.click();
-    crate::test_harness::frames(&mut h, 3);
-
-    let bullet_tile = h.query_all(By::new().role(Role::ListItem).label("•")).next().expect("bullet tile •");
-    let rect = bullet_tile.rect();
-    assert!(
-        rect.width() >= 16.0 && rect.width() <= 32.0,
-        "bullet tile width ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
-        rect.width()
-    );
-    assert!(
-        rect.height() >= 16.0 && rect.height() <= 32.0,
-        "bullet tile height ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
-        rect.height()
-    );
-    assert!((rect.width() - rect.height()).abs() <= 2.0, "bullet tile should be square: {}x{}", rect.width(), rect.height());
-}
-
-/// #7310: unimplemented stub ribbon buttons (Dictate, Ink to Math, Translate, Block Authors)
-/// resolve disabled in the ribbon UI and are known to the command catalog without warnings.
-#[test]
-fn unimplemented_stub_ribbon_buttons_are_disabled() {
-    use egui::accesskit::Role;
-
-    let cases = [
-        ("Home", "Dictate", "tools.dictate"),
-        ("Draw", "Ink to Math", "draw.inkToMath"),
-        ("Review", "Translate", "review.translate"),
-        ("Review", "Block Authors", "review.blockAuthors"),
-    ];
-
-    for (tab, expected_label, id) in cases {
-        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
-        let h = tab_harness(app, tab);
-
-        let keymap = craft::ui::runtime::commands::keymap(&h.ctx).expect("command board has a keymap");
-        assert!(keymap.catalog().iter().any(|def| def.command.id == id), "{tab}: stub command {id} should be registered in the app catalog");
-
-        let button = h
-            .query_all(By::new().role(Role::Button))
-            .find(|n| n.accesskit_node().label().is_some_and(|l| l.split_whitespace().collect::<Vec<_>>().join(" ") == expected_label))
-            .unwrap_or_else(|| panic!("{tab}: ribbon button '{expected_label}' should exist"));
-        assert!(button.accesskit_node().is_disabled(), "{tab}: stub button {:?} ({id}) must be disabled", button.accesskit_node().label());
-    }
 }
