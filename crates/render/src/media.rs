@@ -1,6 +1,9 @@
 use wordcraft_geom::picture::Refusal;
 
-use super::{Affine, Arc, Document, FontDb, HashMap, Item, Mutex, Page, Picture, Pixmap, PlacedItem, RenderContext, Seg, Shape, Weak, kurbo, peniko};
+use super::{
+    Affine, Arc, Document, FontDb, HashMap, Item, MAX_SIDE, Mutex, Page, Picture, Pixmap, PlacedItem, RenderContext, Rendered, Resources, Seg, Shape,
+    Weak, kurbo, peniko,
+};
 use craft_metafile::{ClipPath, Tile};
 use std::collections::HashSet;
 
@@ -238,6 +241,40 @@ pub(crate) fn vector_for(doc: &Document, key: &str) -> Option<Arc<Vector>> {
     v
 }
 
+/// Most pixels [`render_metafile`] draws (a 4,096-pixel square, 64 MB of RGBA): a thumbnail or a
+/// preview, not a page.
+pub const MAX_METAFILE_PIXELS: u64 = 1 << 24;
+
+/// A Windows Metafile or Enhanced Metafile picture drawn alone into a `width` × `height` raster
+/// (premultiplied RGBA), stretched over it as a page stretches the picture over its frame, through
+/// the same drawing ([`draw_vector`]), and transparent where the picture draws nothing: a list of
+/// pictures shows it as the metafile's thumbnail. Each side is 1 to [`MAX_SIDE`] pixels, and a
+/// raster of more than [`MAX_METAFILE_PIXELS`] is drawn smaller, keeping its shape. None when the
+/// bytes are not a metafile, or don't parse to a picture with a size.
+pub fn render_metafile(bytes: &[u8], width: u32, height: u32) -> Option<Rendered> {
+    render_metafile_within(bytes, width, height, MAX_METAFILE_PIXELS)
+}
+
+/// [`render_metafile`] with an explicit pixel cap (a small one in tests).
+pub(crate) fn render_metafile_within(bytes: &[u8], width: u32, height: u32, max_pixels: u64) -> Option<Rendered> {
+    if !craft_metafile::is_metafile(bytes) {
+        return None;
+    }
+    let v = build_vector(bytes)?;
+    let (w, h) = wordcraft_geom::fit_pixels(width.clamp(1, MAX_SIDE), height.clamp(1, MAX_SIDE), max_pixels);
+    let (w16, h16) = (u16::try_from(w).ok()?, u16::try_from(h).ok()?);
+    let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+    let frame = kurbo::Rect::new(0.0, 0.0, f64::from(w16), f64::from(h16));
+    draw_vector(&mut ctx, &v, &frame, &[0.0; 4], 1.0, Affine::IDENTITY);
+    ctx.flush();
+    let mut pixels = vec![0u8; usize::from(w16) * usize::from(h16) * 4];
+    let mut res = Resources::new();
+    let pm = vello_cpu::PixmapMut::new(w16, h16, &mut pixels)?;
+    ctx.render(pm, &mut res);
+    Some(Rendered { width: u32::from(w16), height: u32::from(h16), pixels })
+}
+
+/// Parses a metafile and decodes its bitmaps. None when the picture has no usable size.
 /// Parses a metafile and decodes its bitmaps and pattern tiles. None when the picture has no
 /// usable size.
 pub(crate) fn build_vector(bytes: &[u8]) -> Option<Vector> {

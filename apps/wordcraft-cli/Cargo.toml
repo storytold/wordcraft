@@ -19,6 +19,8 @@ wordcraft-engine = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-mcp = { workspace = true }
 wordcraft-zotero = { workspace = true }
+# The app's settings folder, where the Library folders `run` and `mcp` browse are kept (#2868).
+wordcraft-control-key = { workspace = true }
 serde_json = { workspace = true }
 sys-locale = "0.3"
 
