@@ -12,12 +12,13 @@ use craft::ui::contract::{
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
 use craft::ui::notices::Notice;
-use craft::ui::primitives::IconSpec;
+use craft::ui::primitives::{ContentPainterCx, IconSpec};
 use craft::ui::runtime::env::Label;
 use craft::ui::shell::{Template, ThumbKey};
+use craft::ui::style::DataColor;
 use craft::ui::text::TextField;
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
-use egui::Ui;
+use egui::{Color32, Rect, Shape, Ui, vec2};
 use serde_json::json;
 
 use super::home::template_cards;
@@ -56,6 +57,14 @@ fn read_listing(app: &WordApp) -> PersonalListing {
         _ => Vec::new(),
     };
     PersonalListing { key, folder, templates }
+}
+
+/// Paints a personal template card thumbnail: a white page surface with a centered 44×44 pt
+/// `documentTemplate` icon (#7373).
+pub(super) fn paint_personal_card(cx: &ContentPainterCx, rect: Rect) {
+    cx.data_shapes([Shape::rect_filled(rect, 2.0, Color32::WHITE)]);
+    let icon_rect = Rect::from_center_size(rect.center(), vec2(44.0, 44.0));
+    cx.icon(icon_rect, &IconSpec::svg(IconId::new("documentTemplate")).data_color(DataColor::new(Color32::from_gray(150))));
 }
 
 /// New: the whole template gallery with a search box, then the personal templates (#2852); no
@@ -133,7 +142,7 @@ pub(super) fn show(ui: &mut Ui, app: &mut WordApp) {
             let name = if category.is_empty() { label("Personal templates") } else { Label::from(category.to_owned()) };
             let out = grid(name).id_salt(("personal-templates", category.to_owned())).show_items(ui, &items, &mut |path, _| {
                 let Some(p) = tiles.iter().find(|p| &p.path == path) else { return Tile::new(Label::Empty) };
-                Tile::new(Label::from(p.label.clone())).icon(IconSpec::svg(IconId::new("documentTemplate"))).tooltip(p.path.clone())
+                Tile::new(Label::from(p.label.clone())).thumb(ThumbAspect::new(PAGE_WIDE, PAGE_HIGH), paint_personal_card).tooltip(p.path.clone())
             });
             for path in activated(out.response.events) {
                 let failed = open_personal(app, &path, &ctx).err();
