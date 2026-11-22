@@ -416,9 +416,13 @@ address are checked (`address_after_a_wide_space_is_an_internet_token`, in craft
 
 - Typing Arabic, Hebrew or another right-to-left script as the first letters of a paragraph
   whose direction nothing sets (not the paragraph, its style or the document defaults) makes it
-  a right-to-left paragraph, so the caret starts at the right margin. A paragraph that already
-  has letters keeps its direction, and so do opened documents: a paragraph without `w:bidi` stays
-  left-to-right whatever its text (`typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl`).
+  a right-to-left paragraph, so the caret starts at the right margin. A paragraph that began with
+  other letters (an English word, then an Arabic sentence) also becomes right to left once most
+  of its letters are Arabic, Hebrew…, so the final full stop and other punctuation end the
+  sentence at its left end instead of being drawn at the start. A paragraph with a direction of
+  its own (set on it, its style or the document defaults) keeps it, and an opened paragraph
+  without `w:bidi` stays left-to-right until Arabic is typed into it
+  (`typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl`).
   Word takes the direction from the keyboard language instead; not yet compared side by side.
 - A table inserted in a right-to-left paragraph is a right-to-left table (its first cell at the
   right), as in Word, so Tab moves to the cell on the left (the next one in reading order) and

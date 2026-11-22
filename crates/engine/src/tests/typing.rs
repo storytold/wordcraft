@@ -2549,7 +2549,9 @@ fn plain_text_paste_keeps_empty_lines_as_paragraphs() {
 }
 
 /// #713: Arabic or Hebrew typed into an empty paragraph makes it right-to-left; a paragraph that
-/// already has letters, or whose style sets a direction, keeps its own.
+/// starts with other letters becomes right-to-left once most of its letters are, so a final full
+/// stop is drawn at the end of the Arabic sentence; a paragraph or style with a direction of its
+/// own keeps it.
 #[test]
 fn typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl() {
     let bidi = |s: &Session, i: usize| s.doc.body.iter().filter_map(|b| b.as_para()).nth(i).and_then(|p| p.props.bidi);
@@ -2559,9 +2561,20 @@ fn typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl() {
     // Digits first, then Arabic: still no letters before, so it flips.
     let s = typed("1. سلام");
     assert_eq!(bidi(&s, 0), Some(true));
-    // Latin first: Arabic typed later doesn't flip the paragraph.
+    // Latin first: a little Arabic typed later doesn't flip the paragraph...
     let s = typed("Hello سلام");
     assert_eq!(bidi(&s, 0), None);
+    // ...but an Arabic sentence that began with a Latin word does, once Arabic has most letters.
+    let mut s = typed("Hello مرحبا بالعالم.");
+    assert_eq!(bidi(&s, 0), Some(true));
+    let x_stop = s.layout().caret(&s.sel.focus).map(|c| c.x).unwrap_or(f32::MAX);
+    let x_start = s.layout().caret(&Pos::body(0, 0)).map(|c| c.x).unwrap_or(f32::MIN);
+    assert!(x_stop < x_start, "the sentence ends to the left of where it starts: {x_stop} < {x_start}");
+    // An explicit left-to-right paragraph stays so.
+    let mut s = typed("Hello");
+    run(&mut s, "para.ltr", json!({}));
+    typ(&mut s, " مرحبا بالعالم جميعا");
+    assert_eq!(bidi(&s, 0), Some(false));
     // A new paragraph after an RTL one starts its own detection.
     let s = typed("سلام\nHello");
     assert_eq!(bidi(&s, 1), Some(true), "Enter carries the paragraph's direction on, as in Word");
