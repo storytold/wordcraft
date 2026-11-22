@@ -1690,8 +1690,11 @@ mod tests {
             assert!(a.packs_rt.errors.get(locale).is_some_and(|e| e.contains("Only you")), "{row}: {:?}", a.packs_rt.errors);
             let tree = settled(&mut a, &ctx);
             let shown = bounds_of(&tree, row).expect("the row stays listed");
+            // The row's bounds stop at the list's visible edge, and the reason may run past it, so the reason starts
+            // inside the row.
             let says_why = tree.nodes.iter().any(|(_, n)| {
-                n.label().is_some_and(|l| l.contains("Only you")) && n.bounds().is_some_and(|b| b.x1 > b.x0 && b.y0 >= shown.y0 && b.y1 <= shown.y1)
+                n.label().is_some_and(|l| l.contains("Only you"))
+                    && n.bounds().is_some_and(|b| b.x1 > b.x0 && b.x0 >= shown.x0 && b.x1 <= shown.x1 && b.y0 >= shown.y0 && b.y0 < shown.y1)
             });
             let why: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.label().is_some_and(|l| l.contains("Only you"))).map(|(_, n)| n.bounds()).collect();
             assert!(says_why, "{row}'s row ({shown:?}) says why: {why:?}");
