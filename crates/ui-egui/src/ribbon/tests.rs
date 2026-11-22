@@ -910,3 +910,29 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
         "Delete should indicate protection in disabled hint"
     );
 }
+
+/// #7374: the Decorative Text / WordArt Styles dropdown menu renders compact tiles (~40×36 pt)
+/// rather than expanding to default card thumbnail size (~132×119 pt).
+#[test]
+fn decorative_text_dropdown_renders_compact_wordart_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Insert");
+    click_button(&mut h, "Decorative Text");
+
+    let tile = h.query_all(By::new().role(Role::ListItem).label("Solid Accent")).next().expect("Solid Accent WordArt tile");
+    let rect = tile.rect();
+    assert!(
+        rect.width() >= 32.0 && rect.width() <= 50.0,
+        "WordArt tile width ({:.1} pt) should be compact (expected ~40 pt, bound [32, 50]), got {:.1}",
+        rect.width(),
+        rect.width()
+    );
+    assert!(
+        rect.height() >= 28.0 && rect.height() <= 46.0,
+        "WordArt tile height ({:.1} pt) should be compact (expected ~36 pt, bound [28, 46]), got {:.1}",
+        rect.height(),
+        rect.height()
+    );
+}
