@@ -512,4 +512,27 @@ mod tests {
             assert!((x - ex).abs() < 0.05 && (y - ey).abs() < 0.05, "({x}, {y}) vs ({ex}, {ey})");
         }
     }
+
+    /// #7317: the `fitOnePage` app icon is a document the registry resolves and the rasteriser draws.
+    /// A document the engine fails to parse or draw gives no texture, and so no shape: the tile would
+    /// be blank. The pre-#7101 test painted the hand-written vector path; this checks the same icon
+    /// through the SVG set that replaced it.
+    #[test]
+    fn fit_one_page_icon_paints_without_panic() {
+        const KEY: &str = "fitOnePage";
+        use craft::theme::{Contrast, Mode};
+        use craft::ui::primitives::{Draw, DrawEnv, PaintRecord};
+        use craft::ui::testing::{Frames, style};
+
+        register();
+        let tokens = style::tokens(Mode::Light, Contrast::Standard);
+        let record = std::cell::RefCell::new(PaintRecord::default());
+        let mut frames = Frames::new();
+        let shapes = frames.frame_shapes(|ui| {
+            let env = DrawEnv { tokens: &tokens, direction: craft::i18n::Direction::Ltr, ink: craft::ui::style::Ink::OnPanel };
+            let icon = IconSpec::svg(IconId::new(KEY));
+            Draw::new(ui.painter(), &record, env).icon(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), &icon);
+        });
+        assert!(!shapes.is_empty(), "{KEY} icon must paint");
+    }
 }
