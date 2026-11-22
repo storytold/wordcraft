@@ -1285,13 +1285,23 @@ fn ime_preedit_reflows_following_text_without_overlapping() {
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: None }));
     h.app_frame();
     let drawn = drawn_composition(&h, "da").expect("the composition overlay is drawn on the first frame");
+    let rendered = h.state().canvas.page_keys.layout.clone().expect("layout rendered by WordPages in this frame");
+    let rendered_hao = rendered.caret(&Pos::body(0, 8)).expect("frame raster moved following glyph right");
+    let rendered_hao_screen =
+        super::page_to_screen(h.state_mut(), rendered_hao.page, rendered_hao.x, rendered_hao.top).expect("rendered following caret on screen");
+    let comp_right = drawn.pos.x + drawn.galley.size().x;
+    // Sub-pixel glyph quantization between `epaint` and `rustybuzz` stays within 0.5 screen pt.
+    assert!(
+        rendered_hao_screen.x + 0.5 >= comp_right,
+        "rendered following caret screen x ({}) must sit at or beyond painted composition right edge ({comp_right})",
+        rendered_hao_screen.x
+    );
     let shown = shown_layout(h.state_mut());
+    assert!(std::sync::Arc::ptr_eq(&rendered, &shown), "frame raster used the current preview layout");
     let after_hao = shown.caret(&Pos::body(0, 8)).expect("following glyph moved right");
     assert!(after_hao.x > before_hao_x, "'好' must move strictly right past 'da': {before_hao_x} -> {}", after_hao.x);
     assert!(drawn.galley.size().x > 0.0);
     let hao_screen = super::page_to_screen(h.state_mut(), after_hao.page, after_hao.x, after_hao.top).expect("following caret on screen");
-    let comp_right = drawn.pos.x + drawn.galley.size().x;
-    // Sub-pixel glyph quantization between `epaint` and `rustybuzz` stays within 0.5 screen pt.
     assert!(
         hao_screen.x + 0.5 >= comp_right,
         "following caret screen x ({}) must sit at or beyond painted composition right edge ({comp_right})",
@@ -1303,14 +1313,24 @@ fn ime_preedit_reflows_following_text_without_overlapping() {
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "dajia".into(), active_range_chars: None }));
     h.app_frame();
     let drawn_long = drawn_composition(&h, "dajia").expect("extended composition overlay is drawn");
+    let rendered_long = h.state().canvas.page_keys.layout.clone().expect("layout rendered by WordPages for extended preedit");
+    let rendered_hao_long = rendered_long.caret(&Pos::body(0, 11)).expect("frame raster moved following glyph right for longer preedit");
+    let rendered_hao_long_screen = super::page_to_screen(h.state_mut(), rendered_hao_long.page, rendered_hao_long.x, rendered_hao_long.top)
+        .expect("rendered following caret on screen");
+    let comp_long_right = drawn_long.pos.x + drawn_long.galley.size().x;
+    assert!(
+        rendered_hao_long_screen.x + 0.5 >= comp_long_right,
+        "same-frame discard keeps rendered following text ({}) past extended composition right edge ({comp_long_right})",
+        rendered_hao_long_screen.x
+    );
     let shown_long = shown_layout(h.state_mut());
+    assert!(std::sync::Arc::ptr_eq(&rendered_long, &shown_long), "extended frame raster used the updated preview layout");
     let hao_long = shown_long.caret(&Pos::body(0, 11)).expect("following glyph moved right for longer preedit");
     let hao_long_screen = super::page_to_screen(h.state_mut(), hao_long.page, hao_long.x, hao_long.top).expect("following caret on screen");
     assert!(
-        hao_long_screen.x + 0.5 >= drawn_long.pos.x + drawn_long.galley.size().x,
-        "same-frame discard keeps following text ({}) past extended composition right edge ({})",
-        hao_long_screen.x,
-        drawn_long.pos.x + drawn_long.galley.size().x
+        hao_long_screen.x + 0.5 >= comp_long_right,
+        "same-frame discard keeps following text ({}) past extended composition right edge ({comp_long_right})",
+        hao_long_screen.x
     );
 
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("大".into())));
