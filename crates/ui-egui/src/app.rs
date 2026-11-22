@@ -114,6 +114,7 @@ impl WordApp {
             control: None,
             capture_token: 0,
             native_scale: 1.0,
+            software_drawing: false,
             auto_scale_limit: f32::INFINITY,
             legacy_interface_size: None,
             applied_editing: None,
@@ -207,9 +208,16 @@ impl WordApp {
             .wheel_speed(WheelSpeed::new(line, point))
             .alt_code_pages(AltCodePages::new(ansi, oem))
             .set(ComponentSet::Productivity);
-        env.motion = self.ui.animations.motion();
+        env.motion = self.ui.animations.motion_drawn(self.software_drawing);
         env.sizes = std::sync::Arc::clone(&APP_SIZES);
         env
+    }
+
+    /// The window is drawn by the processor (`on`), as the desktop app finds once it knows the
+    /// graphics adapter. Animations that follow the system then stop: the caret blinks without
+    /// fading or gliding, and nothing fades, slides or spins. On in File › Options still animates.
+    pub fn set_software_drawing(&mut self, on: bool) {
+        self.software_drawing = on;
     }
 
     /// What this frame's mode and motion choices resolve to: the system's answer replaces `System`.

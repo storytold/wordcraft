@@ -548,6 +548,15 @@ fn main() -> eframe::Result {
             }
             let spool = Spool::new(host.jobs_shared().clone());
             let mut app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
+            // Drawn by the processor (WARP, llvmpipe; #2221), animations that follow the system stop.
+            if let Some(state) = &cc.wgpu_render_state {
+                let info = state.adapter.get_info();
+                let software = info.device_type == eframe::wgpu::DeviceType::Cpu;
+                if software {
+                    log::warn!("graphics: drawing in software on {} ({:?}): animations that follow the system are off", info.name, info.backend);
+                }
+                app.set_software_drawing(software);
+            }
             // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
             // the region check below reads the saved region the settings apply.
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
