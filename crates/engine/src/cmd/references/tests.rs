@@ -1,6 +1,18 @@
 use super::properties::{new_property_value, text_result};
 use super::*;
 
+#[test]
+fn a_toc_title_is_capped() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let before = s.doc.body.len();
+    let long = "x".repeat(super::toc::MAX_TOC_TITLE + 1);
+    let r = s.run("references.toc", &json!({"title": long}));
+    assert!(matches!(r, Err(crate::CmdError::Params(_))), "{r:?}");
+    assert_eq!(s.doc.body.len(), before, "a rejected title changes nothing");
+    let at_cap = "x".repeat(super::toc::MAX_TOC_TITLE);
+    s.run("references.toc", &json!({"title": at_cap})).unwrap();
+}
+
 fn fields(s: &Session) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
@@ -56,7 +68,7 @@ fn docx_styleref_header_shows_each_page_s_chapter() {
     );
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in [
         ("_rels/.rels", root),
         ("word/document.xml", body.as_str()),
@@ -64,10 +76,9 @@ fn docx_styleref_header_shows_each_page_s_chapter() {
         ("word/header1.xml", header.as_str()),
         ("word/styles.xml", styles.as_str()),
     ] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let bytes = zw.finish().unwrap().into_inner();
+    let bytes = zw.finish().unwrap();
     let headers = |s: &mut Session| -> Vec<String> {
         s.layout()
             .pages
@@ -714,12 +725,11 @@ fn output_numbers_text_box_captions_where_their_boxes_are_anchored() {
     let body: String = paras.iter().map(|p| format!("<w:p>{p}</w:p>")).collect();
     let document = format!("<w:document {ns}><w:body>{body}<w:sectPr/></w:body></w:document>");
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in [("_rels/.rels", root), ("word/document.xml", document.as_str())] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let s = Session::new(crate::io::open_bytes("boxes.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let s = Session::new(crate::io::open_bytes("boxes.docx", &zw.finish().unwrap()).unwrap());
     let out = crate::cmd::references::output_fields(&s.doc).expect("fresh numbers");
     // The SEQ and REF results in reading order, text boxes where they are anchored.
     let mut results = Vec::new();
@@ -774,12 +784,11 @@ fn output_shows_references_to_bookmarks_outside_the_body() {
         ("word/endnotes.xml", endnotes),
         ("word/comments.xml", comments),
     ];
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, text) in &files {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        zw.add(name, text.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    let s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap()).unwrap());
     let out = crate::cmd::references::output_fields(&s.doc).expect("fresh references");
     let mut results = Vec::new();
     for path in out.para_paths(StoryRef::Body) {
@@ -863,6 +872,34 @@ fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     assert_eq!(shown(&s.export_layout()), [REFERENCE_NOT_FOUND, "stale"]);
     assert_eq!(shown(&s.layout()), ["stale", "stale"], "the editor shows the stored result");
     assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
+}
+
+/// Word prints a REF's missing-bookmark error in its interface language: output takes the text
+/// the shell sets ([`crate::set_reference_error`]), and a REF to a bookmark the document has
+/// still shows the bookmark's text.
+#[test]
+fn a_missing_references_error_is_in_the_interface_language() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Target"));
+    s.run("select.text", &json!({"text": "Target"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Here"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for instr in ["REF NoSuchMark \\h", "REF Here \\h"] {
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+        s.run("insert.field", &json!({"instr": instr, "result": "stale"})).unwrap();
+    }
+    let french = "Erreur ! Source du renvoi introuvable.";
+    let out = output_fields_with(&s.doc, french).expect("both results change");
+    let shown: Vec<String> = out
+        .para(StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown, [french, "Target"]);
 }
 
 /// A REF showing the bookmarked paragraph's number (`\r`, `\n`, `\w`), which output doesn't

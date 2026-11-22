@@ -13,10 +13,12 @@ workspace = true
 # `zip_guard::zip64_entry_count_sample`) and the step count of
 # `work::count`; turned on only as a dev-dependency, so never built into
 # the app.
-test-support = []
+test-support = ["craft-zip/test-support"]
 
 [dependencies]
+craft-codepage = { workspace = true }
 wordcraft-geom = { workspace = true }
+craft-zip = { workspace = true }
 base64 = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
@@ -30,4 +32,5 @@ unicode-segmentation = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+craft-zip = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
