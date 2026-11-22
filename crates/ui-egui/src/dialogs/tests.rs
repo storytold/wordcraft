@@ -1849,19 +1849,17 @@ fn paragraph_without_the_window_service_stays_in_the_document_window() {
     assert!(!is_open(h.state(), "paragraph"), "cancel closes it");
 }
 
-/// With `Services::paragraph_window` Tabs opens in a window of its own, as Paragraph does.
+/// With `Services::paragraph_window`, Format › Tabs opens the Paragraph panel on its Tabs page.
 #[test]
-fn tabs_open_in_their_own_window_with_the_window_service() {
+fn tabs_open_the_paragraph_panel_on_its_tabs_page_with_the_window_service() {
     let mut app = app_with("one");
     app.services.paragraph_window = true;
     let mut h = app_harness(app);
     h.run_steps(2);
     let id = open_named(&mut h, "tabs", json!({}));
-    let windowed = h
-        .state()
-        .dialog_host
-        .get_by_id::<super::dialogs_para::TabStopsHost>(id)
-        .map(craft::ui::dialog::StackDialog::windowed)
-        .unwrap_or_else(|| panic!("the tabs dialog is on the host"));
-    assert!(windowed, "the dialog asked for a window of its own");
+    let host = h.state_mut().dialog_host.get_mut_by_id::<ParagraphHost>(id).unwrap_or_else(|| panic!("the paragraph dialog is on the host"));
+    assert!(craft::ui::dialog::StackDialog::windowed(host), "in a window of its own");
+    assert!(host.inner_mut().tabs_page_mut().is_some(), "with its Tabs page");
+    let tab = craft::ui::dialog::StackDialog::json_fields(host).and_then(|fields| fields.get("tab").cloned());
+    assert_eq!(tab, serde_json::to_value(craft::text::ui::character::ParagraphTab::Tabs).ok(), "opened on it");
 }

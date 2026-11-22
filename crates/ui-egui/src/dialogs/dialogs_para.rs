@@ -113,10 +113,7 @@ pub(super) fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
 /// The Tabs dialog over the caret paragraph's stops, its OK held until `para.tabs` has run. The alignment names
 /// and the leader fills are the framework dialog's.
 pub(crate) fn tabs_dialog(app: &WordApp) -> Option<TabStopsHost> {
-    // On macOS (Services::paragraph_window) Tabs opens as a panel of its own, as Paragraph does, its content alone.
-    let windowed = app.services.paragraph_window;
-    let keyed = Keyed::new("tabs", tab_stops(app)?.held_ok().bare(windowed));
-    Some(if windowed { keyed.in_own_window(crate::i18n::t("Tabs")) } else { keyed })
+    Some(Keyed::new("tabs", tab_stops(app)?.held_ok()))
 }
 
 fn ui_align(a: TabAlign) -> UiAlign {

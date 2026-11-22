@@ -1,4 +1,4 @@
-//! The Paragraph and Tabs dialogs as Mac utility panels (`Services::paragraph_window`): the app shows each
+//! The Paragraph dialog (with its Tabs page) as a Mac utility panel (`Services::paragraph_window`): the app shows it
 //! in a window of its own, and this ties that window to the document window it was opened from,
 //! as a child window. It moves with that window, stays just above it, goes behind another
 //! document's window with it, and hides while WordCraft is in the background. It is not listed
@@ -13,8 +13,8 @@ use objc2_app_kit::{NSApplication, NSWindow, NSWindowOrderingMode};
 use wordcraft_ui_egui::i18n::t;
 
 /// The translated titles of the windows the app shows as utility panels.
-fn panel_titles() -> [&'static str; 2] {
-    [t("Paragraph"), t("Tabs")]
+fn panel_titles() -> [&'static str; 1] {
+    [t("Paragraph")]
 }
 
 /// Ties every new panel to the frontmost document window, the one it was opened from, and shows

@@ -24,12 +24,13 @@ pub(crate) type ParagraphHost = Keyed<ParagraphDialog>;
 /// dialog shows them.
 const ON_PAGE: [&str; 3] = ["align", "left", "right"];
 
-/// Opens the Paragraph dialog (`paragraph`) or its Asian Typography page (`asianTypography`) over the selected
-/// paragraphs. `None` for another name, and while no paragraph holds the caret.
+/// Opens the Paragraph dialog (`paragraph`), its Asian Typography page (`asianTypography`) or, in a window of its own,
+/// its Tabs page (`tabs`) over the selected paragraphs. `None` for another name, and while no paragraph holds the caret.
 pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     let (key, tab) = match name {
         "paragraph" => ("paragraph", ParagraphTab::IndentsAndSpacing),
         "asianTypography" => ("asianTypography", ParagraphTab::AsianTypography),
+        "tabs" => ("paragraph", ParagraphTab::Tabs),
         _ => return None,
     };
     let format = read(app)?;
