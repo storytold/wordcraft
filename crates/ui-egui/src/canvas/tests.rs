@@ -23,7 +23,7 @@ fn section_badges_are_painted_when_editing_header_or_footer() {
     app.run("insert.header", json!({"text": "Head"})).unwrap();
     app.run("insert.footer", json!({"text": "Foot"})).unwrap();
     app.run("insert.closeHeader", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 2200.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 2200.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
