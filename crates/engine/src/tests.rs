@@ -5501,7 +5501,8 @@ fn panic_settling_in_a_new_document_closes_it_and_restores_the_first() {
 }
 
 /// A command that edits the first document and then opens another, panicking while settling
-/// there, leaves the first document with its text and undo and redo history as they were.
+/// there, leaves the first document with its text, revision and undo and redo history as they
+/// were.
 #[test]
 fn panic_settling_after_an_edit_and_a_new_document_restores_the_edit() {
     let mut s = s();
@@ -5517,10 +5518,11 @@ fn panic_settling_after_an_edit_and_a_new_document_restores_the_edit() {
     run(&mut s, "caret.docEnd", json!({}));
     run(&mut s, "text.insert", json!({"text": " undone"}));
     run(&mut s, "edit.undo", json!({}));
-    let (home, docs_before, text_before, undo_before) = (s.document_id(), s.documents().len(), text(&s), s.undo_labels());
+    let (home, docs_before, text_before, undo_before, rev_before) = (s.document_id(), s.documents().len(), text(&s), s.undo_labels(), s.rev());
     crate::session::PANIC_SETTLING_ELSEWHERE.with(|f| f.set(true));
     assert!(s.run("test.editThenNew", &json!({})).is_err());
     assert_eq!(s.document_id(), home);
+    assert_eq!(s.rev(), rev_before, "no layout of the edit is kept for the restored text");
     assert_eq!(s.documents().len(), docs_before);
     assert_eq!(text(&s), text_before);
     assert_eq!(s.undo_labels(), undo_before);

@@ -20,11 +20,14 @@ struct SuccessContext<'a> {
     sel_before: &'a Selection,
 }
 
+type MdSnapshot = (Option<crate::cmd::md_source::MdSource>, Option<crate::cmd::md_source::FileText>);
+
 struct ElsewhereContext<'a> {
     id: &'a str,
     home: u64,
     mark: u64,
     before_doc: Option<RunSnapshot>,
+    rev_restore: Option<u64>,
     blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
     default_language_before: Option<String>,
     pending_application_change_before: bool,
@@ -156,8 +159,7 @@ impl Session {
         // Commands may leave an equation (a whole-body replacement) even after they fail; put
         // the editing session back with the document.
         let math_before = spec.mutates.then(|| self.math.clone());
-        // Leaving Markdown Source applies its text and drops it: a failed toggle keeps the text.
-        let md_before = (id == "view.markdownSource").then(|| (self.md_source.clone(), self.md_file.clone()));
+        let md_before = self.md_snapshot(id);
         let before_doc: Option<RunSnapshot> = if spec.mutates {
             Some((
                 self.doc.clone(),
@@ -249,7 +251,16 @@ impl Session {
         let mut result = result.unwrap_or_else(|p| Err(panicked(id, &*p)));
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
             return self.finish_elsewhere(
-                ElsewhereContext { id, home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
+                ElsewhereContext {
+                    id,
+                    home,
+                    mark,
+                    before_doc,
+                    rev_restore,
+                    blocks_before,
+                    default_language_before,
+                    pending_application_change_before,
+                },
                 result,
             );
         }
@@ -294,10 +305,7 @@ impl Session {
             if let Some(math) = math_before {
                 self.math = math;
             }
-            if let Some((src, file)) = md_before {
-                self.md_source = src;
-                self.md_file = file;
-            }
+            self.restore_md(md_before);
             if let Some(versions) = versions_before {
                 self.versions = versions;
             }
@@ -524,7 +532,8 @@ impl Session {
     /// as it was (opening a document is no edit to undo there). Failed: the documents the command opened close again and the first document is
     /// active and as it was.
     fn finish_elsewhere(&mut self, context: ElsewhereContext<'_>, result: Result<Value, CmdError>) -> Result<Value, CmdError> {
-        let ElsewhereContext { id, home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before } = context;
+        let ElsewhereContext { id, home, mark, before_doc, rev_restore, blocks_before, default_language_before, pending_application_change_before } =
+            context;
         // Another document is a state change the input method has to see, never an IME edit.
         self.ime_edit_outcome = ImeEditOutcome::default();
         let mut result = result;
@@ -553,6 +562,10 @@ impl Session {
                     self.undo_evicted = ev;
                     self.column = c;
                 }
+                // Layouts made for the edit are not the restored document's.
+                if let Some(rev) = rev_restore {
+                    self.restore_rev(rev);
+                }
             }
             if let Some(b) = blocks_before {
                 self.building_blocks = b;
@@ -560,6 +573,22 @@ impl Session {
             self.status = e.to_string();
         }
         result
+    }
+
+    /// Leaving Markdown Source applies its text and drops it, and the text command edits it: what
+    /// a failed one puts back. Only the toggle touches the file's own text.
+    fn md_snapshot(&self, id: &str) -> Option<MdSnapshot> {
+        matches!(id, "view.markdownSource" | "view.markdownSourceText")
+            .then(|| (self.md_source.clone(), (id == "view.markdownSource").then(|| self.md_file.clone())))
+    }
+
+    fn restore_md(&mut self, snapshot: Option<MdSnapshot>) {
+        if let Some((src, file)) = snapshot {
+            self.md_source = src;
+            if let Some(file) = file {
+                self.md_file = file;
+            }
+        }
     }
 
     /// Closes the documents a command opened (ids from `mark` on) other than `home`.

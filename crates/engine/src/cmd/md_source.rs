@@ -466,6 +466,21 @@ mod tests {
         assert!(body_text(&s).contains("Changed paragraph."));
     }
 
+    /// A text edit whose after-command hook panics leaves the text, and the unsaved-changes
+    /// flag, as they were (#3721).
+    #[test]
+    fn a_failed_text_edit_keeps_the_text_as_it_was() {
+        let mut s = session(SAMPLE);
+        s.run(TOGGLE, &json!({})).unwrap();
+        let text = s.run(TEXT, &json!({})).unwrap()["text"].as_str().unwrap().to_string();
+        crate::session::PANIC_AFTER_COMMAND.with(|f| f.set(true));
+        assert!(s.run(TEXT, &json!({"text": text.replace("First paragraph.", "Lost paragraph.")})).is_err());
+        assert_eq!(s.md_source.as_ref().map(|src| src.text.as_str()), Some(text.as_str()));
+        assert!(!s.dirty);
+        s.run(TOGGLE, &json!({})).unwrap();
+        assert!(!body_text(&s).contains("Lost paragraph."));
+    }
+
     static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     /// Generates a unique temporary directory for test file isolation.
