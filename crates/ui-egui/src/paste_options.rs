@@ -5,7 +5,9 @@
 //! ([`wordcraft_engine::cmd::paste::paste_options`]): it ends when anything is typed or the caret
 //! moves away, and Esc hides it.
 
-use egui::{Context, Order, Sense, pos2, vec2};
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Props as _, Show as _};
+use egui::{Context, Order, pos2, vec2};
 use serde_json::json;
 
 use crate::{WordApp, theme::Tokens};
@@ -80,7 +82,7 @@ fn button_pos(app: &mut WordApp, ctx: &Context) -> Option<egui::Pos2> {
     }
     let (caret, height) = crate::canvas::caret_screen(app)?;
     let at = pos2(caret.x, caret.y + height + 4.0);
-    let view = app.canvas.canvas_rect.unwrap_or_else(|| ctx.content_rect());
+    let view = app.canvas.canvas_rect().unwrap_or_else(|| ctx.content_rect());
     view.contains_rect(egui::Rect::from_min_size(at, vec2(BUTTON_W + 6.0, BUTTON_H + 6.0))).then_some(at)
 }
 
@@ -88,6 +90,17 @@ fn button_pos(app: &mut WordApp, ctx: &Context) -> Option<egui::Pos2> {
 /// else (it must not also leave full screen).
 pub fn wants_escape(app: &mut WordApp, ctx: &Context) -> bool {
     button_pos(app, ctx).is_some()
+}
+
+/// Escape with the button showing: hide the offer for this revision (it comes back with the next
+/// paste) and close its menu. True when it took the key, so nothing nearer the page also acts on it.
+pub fn dismiss(app: &mut WordApp, ctx: &Context) -> bool {
+    if button_pos(app, ctx).is_none() {
+        return false;
+    }
+    app.paste_options.hidden_rev = Some(app.session.rev());
+    app.paste_options.open = false;
+    true
 }
 
 /// Draw the button below the caret while the engine offers paste options.
@@ -114,22 +127,17 @@ pub fn show(app: &mut WordApp, ctx: &Context) {
     let mut button_rect = egui::Rect::NOTHING;
     egui::Area::new(egui::Id::unique("wc_paste_options")).order(Order::Foreground).fixed_pos(at).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).fill(t.menu).inner_margin(2.0).show(ui, |ui| {
-            let (rect, resp) = ui.allocate_exact_size(vec2(BUTTON_W, BUTTON_H), Sense::click());
-            // Screen readers (and tests) find the button by its name; its icon and "(Ctrl)" are drawn.
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Paste Options")));
-            button_rect = rect;
-            if resp.hovered() || app.paste_options.open {
-                ui.painter().rect_filled(rect, 3.0, t.hover);
-            }
-            crate::icons::paint(ui.painter(), egui::Rect::from_min_size(rect.min + vec2(2.0, 1.0), vec2(18.0, 18.0)), "paste", t.icon, t.accent);
-            ui.painter().text(
-                pos2(rect.min.x + 22.0, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                tl!("(Ctrl)"),
-                egui::FontId::proportional(12.0),
-                t.text,
-            );
-            if resp.clicked() {
+            let row = ui.horizontal(|ui| {
+                // The framework's icon button: its label is the accessible name (screen readers and
+                // tests find the button by it); the "(Ctrl)" beside it names the key that opens it.
+                let label = tl!("Paste Options");
+                let clicked =
+                    IconButton::new(crate::icons::id("paste")).label(label).tooltip(label).selected(app.paste_options.open).show(ui).clicked();
+                ui.label(egui::RichText::new(tl!("(Ctrl)")).size(12.0).color(t.text));
+                clicked
+            });
+            button_rect = row.response.rect;
+            if row.inner {
                 app.paste_options.open = !app.paste_options.open;
             }
         });
@@ -199,7 +207,7 @@ mod tests {
     }
 
     fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -207,9 +215,7 @@ mod tests {
             },
             app,
         );
-        for _ in 0..6 {
-            h.step();
-        }
+        crate::test_harness::frames(&mut h, 6);
         h
     }
 
@@ -225,9 +231,7 @@ mod tests {
     fn press(h: &mut egui_kittest::Harness<'static, WordApp>, k: Key) {
         h.event(Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
         h.event(Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
-        for _ in 0..3 {
-            h.step();
-        }
+        crate::test_harness::frames(h, 3);
     }
 
     #[test]
@@ -242,13 +246,9 @@ mod tests {
                 .is_some_and(|p| p.props.style.is_some() || p.runs.iter().any(|r| r.props.color.is_some()))
         );
         h.get_by_label("Paste Options").click();
-        for _ in 0..3 {
-            h.step();
-        }
+        crate::test_harness::frames(&mut h, 3);
         h.get_by_label("Keep Text Only").click();
-        for _ in 0..3 {
-            h.step();
-        }
+        crate::test_harness::frames(&mut h, 3);
         let s = &h.state().session;
         assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Shopping day\nApples");
         assert_eq!(wordcraft_engine::cmd::paste::paste_mode(s), Some("text"));
@@ -268,14 +268,10 @@ mod tests {
         let before = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
         let mut h = harness(a);
         h.get_by_label("Paste Options").click();
-        for _ in 0..3 {
-            h.step();
-        }
+        crate::test_harness::frames(&mut h, 3);
         h.get_by_label("Picture").click();
-        for _ in 0..3 {
-            h.step();
-        }
-        let msg = h.state().status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        crate::test_harness::frames(&mut h, 3);
+        let msg = h.state().status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
         assert!(msg.contains("too long") && msg.contains("choose another option"), "the status line says why and what to do: {msg:?}");
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), before, "the paste is unchanged");
         assert!(h.query_by_label("Paste Options").is_some(), "the button stays");
@@ -289,9 +285,7 @@ mod tests {
         assert!(h.query_by_label("Paste Options").is_none(), "Escape hides the offer");
         let mut h = harness(pasted());
         h.event(Event::Text("x".into()));
-        for _ in 0..3 {
-            h.step();
-        }
+        crate::test_harness::frames(&mut h, 3);
         assert!(h.query_by_label("Paste Options").is_none(), "typing ends the offer");
     }
 

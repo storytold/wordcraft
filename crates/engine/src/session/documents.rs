@@ -276,6 +276,8 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            // Stamped with the document id and revision, so one cache serves every document.
+            findings: _,
             ribbon: _,
             editing_lang: _,
             math_latex: _,
