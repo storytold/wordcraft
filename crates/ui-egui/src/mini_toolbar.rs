@@ -12,12 +12,14 @@ use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::pickers::ComboBox;
 use craft::ui::runtime::env::Label;
-use egui::{Rect, Ui};
+use egui::{Rect, Ui, pos2};
 use serde_json::{Value, json};
 
 use crate::WordApp;
 use crate::colors::{Remember, Target};
 
+/// Distance from the selection's start at which the bar is centred.
+const ANCHOR_INSET: f32 = 4.0;
 /// Least height of a selection rectangle (screen points) that counts as visible for anchoring.
 const MIN_VISIBLE_H: f32 = 1.0;
 
@@ -99,7 +101,10 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, body: &PageBody<'_>) {
         return;
     }
     let Some(anchor) = app.canvas.mini_anchor else { return };
-    let points: Vec<_> = [anchor.left_top(), anchor.right_top(), anchor.right_bottom(), anchor.left_bottom()]
+    // The bar centres over the selection's start rather than drifting to the centre of long selections (#7447).
+    let start_x = anchor.min.x + ANCHOR_INSET;
+    let anchor_box = Rect::from_min_max(pos2(start_x, anchor.min.y), pos2(start_x, anchor.max.y));
+    let points: Vec<_> = [anchor_box.left_top(), anchor_box.right_top(), anchor_box.right_bottom(), anchor_box.left_bottom()]
         .into_iter()
         .map(|corner| body.view.to_doc(corner))
         .collect();

@@ -88,6 +88,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("designMode", include_bytes!("../icons/designMode.svg")),
     ("dictate", include_bytes!("../icons/dictate.svg")),
     ("discord", include_bytes!("../icons/discord.svg")),
+    ("discordPill", include_bytes!("../icons/discordPill.svg")),
     ("distributeCols", include_bytes!("../icons/distributeCols.svg")),
     ("distributeRows", include_bytes!("../icons/distributeRows.svg")),
     ("docPrefs", include_bytes!("../icons/docPrefs.svg")),
