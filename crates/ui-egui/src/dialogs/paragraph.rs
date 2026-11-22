@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use wordcraft_doc::props::{Align, LineSpacing as DocSpacing, ParaProps};
 use wordcraft_doc::resolve::ResolvedPara;
 
-use super::host::{DialogHooks, Keyed, Settle, open_with};
+use super::host::{DialogHooks, Keyed, Settle, open_with, run_as_one_step};
 use crate::WordApp;
 use crate::options::unit_kind;
 
@@ -51,7 +51,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
 }
 
 /// The settle hook: runs a filed OK as `para.set`. The dialog closes when the command ran and stays, showing the
-/// reason, when it failed. Tabs… applies first and then opens the Tabs dialog; a Tabs page's stops run as `para.tabs` after the format. The hook always keeps itself: a
+/// reason, when it failed. Tabs… applies first and then opens the Tabs dialog; a Tabs page's stops run as `para.tabs` after the format, in the same undo step. The hook always keeps itself: a
 /// refused OK leaves the dialog open and files its next answer here, and the host drops the hook once the dialog closed.
 fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     let Some(answer) = app.dialog_host.get_mut_by_id::<ParagraphHost>(id).and_then(|host| host.inner_mut().take_ok()) else {
@@ -59,13 +59,11 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
     };
     let start = read(app).unwrap_or_default();
     let (basis, default_basis) = super::dialogs_para::caret_tabs(app).unwrap_or_default();
-    let mut result = apply_paragraph(app, &answer.format, &start);
-    // The Tabs page's stops, after the format.
-    if let Some(params) = answer.tabs.as_ref().and_then(|tabs| super::dialogs_para::tabs_params(&basis, default_basis, tabs))
-        && result.is_ok()
-    {
-        result = app.run("para.tabs", params).map(|_| ());
-    }
+    // The format, then the Tabs page's stops: one undo step, and nothing applied if either fails.
+    let tabs = answer.tabs.as_ref().and_then(|tabs| super::dialogs_para::tabs_params(&basis, default_basis, tabs));
+    let commands: Vec<(String, Value)> =
+        paragraph_command(&answer.format, &start).into_iter().chain(tabs.map(|params| ("para.tabs".to_owned(), params))).collect();
+    let result = run_as_one_step(app, commands);
     let applied = result.is_ok();
     if let Some(host) = app.dialog_host.get_mut_by_id::<ParagraphHost>(id) {
         host.inner_mut().answer_ok(result.map_err(Label::from));
@@ -257,10 +255,10 @@ fn fields(f: &ParagraphFormat) -> Map<String, Value> {
     m
 }
 
-/// OK as one `para.set`, so one undo step: the fields that differ from what every selected paragraph had when the
+/// OK as one `para.set`: the fields that differ from what every selected paragraph had when the
 /// dialog opened. The alignment and indents are as seen on the page, so a new direction sends them again to keep them
-/// where the dialog shows them. Nothing changed runs nothing.
-fn apply_paragraph(app: &mut WordApp, new: &ParagraphFormat, start: &ParagraphFormat) -> Result<(), String> {
+/// where the dialog shows them. `None` when nothing changed.
+fn paragraph_command(new: &ParagraphFormat, start: &ParagraphFormat) -> Option<(String, Value)> {
     let (fields, start) = (fields(new), fields(start));
     let turned = matches!((fields.get("bidi"), start.get("bidi")), (Some(a), Some(b)) if a != b);
     let (mut props, mut page) = (Map::new(), Map::new());
@@ -275,8 +273,5 @@ fn apply_paragraph(app: &mut WordApp, new: &ParagraphFormat, start: &ParagraphFo
             props.insert(k, v);
         }
     }
-    if props.is_empty() && page.is_empty() {
-        return Ok(());
-    }
-    app.run("para.set", json!({"props": props, "onPage": page})).map(|_| ())
+    (!props.is_empty() || !page.is_empty()).then(|| ("para.set".to_owned(), json!({"props": props, "onPage": page})))
 }
