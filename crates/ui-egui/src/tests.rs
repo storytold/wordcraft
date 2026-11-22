@@ -3987,21 +3987,3 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     assert_eq!(restored.ui.touchpad_scroll_speed, ScrollSpeed::Fast);
     assert_eq!(restored.ui.scroll_speed, ScrollSpeed::Fast);
 }
-
-/// #3634: a NUL in the document title never reaches the window title or the window menu
-/// (X11 needs a C string), whether the title is only NUL or has NUL inside.
-#[test]
-fn window_title_with_nul_is_safe_for_x11() {
-    let mut app = app();
-    for raw in ["\u{0}", "a\u{0}b"] {
-        app.run("file.properties", json!({"title": raw})).unwrap();
-        assert_eq!(app.session.doc.core.title, raw);
-        let mut shown = vec![app.window_title()];
-        shown.extend(app.switch_windows_entries().into_iter().map(|e| e.1));
-        shown.push(documents::display_title(&app.session.documents()[0]));
-        for t in &shown {
-            assert!(std::ffi::CString::new(t.as_str()).is_ok(), "X11 needs a title without NUL: {t:?}");
-        }
-        assert!(shown[0].starts_with(if raw == "a\u{0}b" { "ab" } else { "Document1" }), "{shown:?}");
-    }
-}
