@@ -52,6 +52,8 @@ fn back_is_off_on_the_start_screen() {
     assert!(!h.state().has_document() && h.state().ui.backstage);
     let back = h.get_by_role_and_label(Role::Button, "Back");
     assert!(back.accesskit_node().is_disabled());
+    let open = h.get_by_role_and_label(Role::Button, "Open");
+    assert!(back.rect().width() >= open.rect().width(), "Back should occupy a full menu row");
     back.click();
     crate::test_harness::frames(&mut h, 4);
     assert!(h.state().ui.backstage);
