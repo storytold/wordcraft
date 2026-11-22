@@ -453,6 +453,37 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
     Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
 }
 
+/// Insert uncommitted IME pre-edit text into a preview copy of the document: replaces any active
+/// selection (preserving tracked deletions when Track Changes is enabled) and inserts `text` with
+/// the caret's typing properties without marking the pre-edit itself as a tracked insertion.
+pub(crate) fn insert_ime_preview(s: &mut Session, text: &str) -> Result<(Pos, Pos), CmdError> {
+    s.drop_stale_carried();
+    let mut props = s.typing_props();
+    if s.sel.is_collapsed() {
+        s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
+    }
+    if let Some(p) = controls::prepare_edit(s)? {
+        props = p;
+    }
+    delete_selection_effect(s)?;
+    props.fmt_change = None;
+    props.rtl = None;
+    props.ins = None;
+    props.del = None;
+    let start = s.sel.focus.clone();
+    let starts_para = direction_unset(s, &start);
+    let end = s.doc.insert_text(&start, text, &props)?;
+    if starts_para
+        && let Ok(p) = s.doc.para_mut(end.story, &end.path)
+        && wordcraft_doc::bidi::first_strong_is_rtl(&p.text)
+    {
+        p.props.bidi = Some(true);
+        p.touch();
+    }
+    s.sel = crate::Selection::caret(end.clone());
+    Ok((start, end))
+}
+
 /// Is the paragraph at `at` still without letters (empty, or only spaces, digits and
 /// punctuation), with no direction set on it, its style chain or the document defaults?
 fn direction_unset(s: &Session, at: &Pos) -> bool {

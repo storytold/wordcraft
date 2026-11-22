@@ -630,6 +630,9 @@ fn joined_cluster_starts(p: &Paragraph, clusters: &[Cluster]) -> Vec<usize> {
 /// neighbours: a letter joins the next one on the page, across a change of formatting and past
 /// text that isn't shown (#4093). `None` for every other paragraph, which don't need it.
 fn shown_text(cx: &Cx) -> Option<String> {
+    if cx.env.composition.is_some() {
+        return None;
+    }
     let text = &cx.p.text;
     if text.is_ascii() || !text.chars().any(wordcraft_fonts::joins_cursively) {
         return None;
@@ -644,6 +647,49 @@ fn shown_text(cx: &Cx) -> Option<String> {
         }
     }
     Some(shown)
+}
+
+/// Split `range` at any `composition` boundary strictly inside it so no cluster or ligature
+/// straddles committed and uncommitted text.
+fn split_at_composition(range: std::ops::Range<usize>, text: &str, composition: Option<(usize, usize)>, out: &mut Vec<std::ops::Range<usize>>) {
+    out.clear();
+    let Some((a, b)) = composition else {
+        out.push(range);
+        return;
+    };
+    let mut cur = range.start;
+    for cut in [a, b] {
+        if cut > cur && cut < range.end && text.is_char_boundary(cut) {
+            out.push(cur..cut);
+            cur = cut;
+        }
+    }
+    if cur < range.end || out.is_empty() {
+        out.push(cur..range.end);
+    }
+}
+
+/// Reserve at least 1 em advance for wide East Asian `.notdef` clusters inside an uncommitted
+/// IME composition when no CJK font is installed in the document font database.
+fn pad_composition_cjk_notdef(b: &mut Builder, text: &str, composition: Option<(usize, usize)>) {
+    let Some((comp_a, comp_b)) = composition else { return };
+    for c in &mut b.clusters {
+        if c.kind != ClKind::Text || c.start < comp_a || c.end > comp_b {
+            continue;
+        }
+        let Some(glyphs) = b.glyphs.get(c.g0 as usize..c.g1 as usize) else { continue };
+        if glyphs.is_empty() || !glyphs.iter().all(|g| g.gid == 0) {
+            continue;
+        }
+        if !text.get(c.start..c.end).is_some_and(|s| s.chars().any(super::grid::is_east_asian)) {
+            continue;
+        }
+        if let Some(st) = b.styles.get(c.style as usize)
+            && st.size.is_finite()
+        {
+            c.adv = c.adv.max(st.size);
+        }
+    }
 }
 
 /// Lay out one paragraph.
@@ -670,15 +716,23 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
     let mark_style = sh.b.style(&mark_rc, None, false);
+    let mut sub_ranges = Vec::new();
     for (range, props) in p.run_ranges() {
-        sh.run(&cx, range, props);
+        split_at_composition(range, &p.text, env.composition, &mut sub_ranges);
+        for sub in sub_ranges.drain(..) {
+            sh.run(&cx, sub, props);
+        }
     }
+    pad_composition_cjk_notdef(&mut sh.b, &p.text, env.composition);
     if rp.snap_to_grid {
         snap_chars(&mut sh.b, &p.text, &env.grid);
     }
     // Text on a character grid keeps to its cells.
-    let auto_space =
-        if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    let auto_space = if rp.snap_to_grid && env.grid.chars.is_some() {
+        Vec::new()
+    } else {
+        auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn, env.composition)
+    };
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
@@ -686,6 +740,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
+    let mut issues = env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default();
+    if let Some((comp_a, comp_b)) = env.composition {
+        issues.retain(|&(a, b, _)| !(a < comp_b && comp_a < b));
+    }
     let mut pl = ParaLayout {
         rp,
         substituted: b.substituted,
@@ -700,7 +758,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         joined_cluster_starts,
         has_page_fields,
         notes,
-        issues: env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default(),
+        issues,
         drop_cap,
         hyph_after: Vec::new(),
         bidi_levels: b.levels,
@@ -713,6 +771,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        composition: env.composition,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);

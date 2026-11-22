@@ -191,3 +191,30 @@ fn the_space_takes_no_room_at_the_end_of_a_justified_line() {
     let end = line.xs[k - line.c0] + plain;
     assert!((end - line.right).abs() < 0.01, "the 1 ends at {end}, the line at {}", line.right);
 }
+
+#[test]
+fn ime_composition_reserves_space_suppresses_autospace_and_hides_raster_glyphs() {
+    crate::test_fonts();
+    let d = Document::from_text("大家da好");
+    let rev = d.para(StoryRef::Body, &Path::top(0)).unwrap().rev;
+    let plain = lay(&d);
+    let comp =
+        layout(&d, &mut LayoutCache::new(), &LayoutOptions { ime_composition: Some(ImeComposition { rev, start: 6, end: 8 }), ..Default::default() });
+    let pl_plain = first_para(&plain);
+    let pl_comp = first_para(&comp);
+    let x_before = pl_comp.x_of(0, 6).unwrap();
+    let x_after = pl_comp.x_of(0, 8).unwrap();
+    assert!(x_after > x_before, "composition reserves horizontal width ({x_before} -> {x_after})");
+    let plain_span = pl_plain.x_of(0, 8).unwrap() - pl_plain.x_of(0, 6).unwrap();
+    assert!(x_after - x_before < plain_span, "auto-space at composition edges is suppressed ({} < {})", x_after - x_before, plain_span);
+    let mut drawn = String::new();
+    for (_opacity, items) in display::page_layers(&d, &comp.pages[0], &display::DisplayOptions::default()) {
+        for item in items {
+            if let display::Draw::Glyphs { text, .. } = item {
+                drawn.push_str(&text);
+            }
+        }
+    }
+    assert!(drawn.contains("大家") && drawn.contains("好"), "committed text stays in raster: {drawn:?}");
+    assert!(!drawn.contains("da"), "composition glyphs are omitted from page raster: {drawn:?}");
+}

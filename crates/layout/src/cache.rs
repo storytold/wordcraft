@@ -27,6 +27,8 @@ pub(crate) struct Key {
     pub(crate) sref: u64,
     /// The word being typed in this paragraph, left without a spelling squiggle.
     pub(crate) typing: Option<(usize, usize)>,
+    /// Uncommitted IME composition byte range in this paragraph.
+    pub(crate) composition: Option<(usize, usize)>,
 }
 
 /// Memoised paragraph layouts.

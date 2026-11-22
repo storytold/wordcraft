@@ -13,7 +13,7 @@ use wordcraft_doc::{Document, Pos};
 use wordcraft_layout::DocLayout;
 
 use super::WordApp;
-use super::pages::{PageKeys, page_doc, page_render_options, page_shows, view_key};
+use super::pages::{PageKeys, page_render_options, page_shows, render_doc, view_key};
 
 /// A page dimension (points) safe to lay out: finite, at least 1 pt, at most `cap`.
 fn dim(v: f32, cap: f32) -> f64 {
@@ -38,7 +38,7 @@ impl WordPages {
     pub(super) fn new(app: &mut WordApp, layout: &Arc<DocLayout>, dim_body: bool, hidden: Option<(usize, Pos)>) -> Self {
         let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
         let options = page_render_options(app, dim_body);
-        let doc = Arc::new(page_doc(app).clone());
+        let doc = Arc::new(render_doc(app).clone());
         WordPages { doc, layout: layout.clone(), keys: RefCell::new(std::mem::take(&mut app.canvas.page_keys)), view, options, hidden }
     }
 

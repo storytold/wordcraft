@@ -385,6 +385,9 @@ pub struct ParaEnv<'a> {
     /// The byte range of the word being typed in this paragraph: it gets no spelling squiggle
     /// until the caret leaves it ([`crate::LayoutOptions::typing_word`]).
     pub typing_word: Option<(usize, usize)>,
+    /// Uncommitted IME composition byte range in this paragraph
+    /// ([`crate::LayoutOptions::ime_composition`]).
+    pub composition: Option<(usize, usize)>,
     /// How digits look on screen (an unresolved `System` shows Western digits).
     pub numeral: NumeralMode,
     /// Areas text must flow around (floating objects), relative to the paragraph: x from the

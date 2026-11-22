@@ -1272,6 +1272,67 @@ fn the_composition_takes_the_documents_font_and_size() {
     assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hello");
 }
 
+/// #1888: Typing Chinese Pinyin between existing characters reflows the text after the caret so
+/// the composition and following glyphs never overlap, and commits cleanly back into the document.
+#[test]
+fn ime_preedit_reflows_following_text_without_overlapping() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "大家好"})).unwrap();
+    app.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 6));
+    let mut h = composing_harness(app);
+    let before_hao_x = h.state_mut().session.layout().caret(&Pos::body(0, 6)).expect("caret before composition").x;
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: None }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    let drawn = drawn_composition(&h, "da").expect("the composition overlay is drawn");
+    let shown = shown_layout(h.state_mut());
+    let after_hao_x = shown.caret(&Pos::body(0, 8)).expect("following glyph moved right").x;
+    assert!(after_hao_x > before_hao_x, "'好' must move strictly right past 'da': {before_hao_x} -> {after_hao_x}");
+    assert!(drawn.galley.size().x > 0.0);
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "大家好");
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("大".into())));
+    for _ in 0..2 {
+        h.app_frame();
+    }
+    assert!(h.state().canvas.ime_preedit.is_empty());
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "大家大好");
+}
+
+/// Clicking elsewhere on the canvas during an active IME composition dismisses the uncommitted
+/// pre-edit without dragging it to the clicked spot or leaving it in the document.
+#[test]
+fn clicking_during_ime_composition_dismisses_preedit_without_dragging_it() {
+    use egui::{Event, PointerButton};
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "甲乙"})).unwrap();
+    app.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 3));
+    app.session.dirty = false;
+    let mut h = composing_harness(app);
+    h.event(Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: Some(2..2) }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+    assert!(drawn_composition(&h, "da").is_some(), "pre-edit is shown before clicking");
+
+    let start_caret = h.state_mut().session.layout().caret(&Pos::body(0, 0)).expect("start caret");
+    let click_at =
+        page_to_screen(h.state_mut(), start_caret.page, start_caret.x + 1.0, start_caret.top + start_caret.height * 0.5).expect("start on screen");
+    h.event(Event::PointerMoved(click_at));
+    h.app_frame();
+    h.event(Event::PointerButton { pos: click_at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.app_frame();
+    h.event(Event::PointerButton { pos: click_at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    for _ in 0..4 {
+        h.app_frame();
+    }
+
+    assert!(h.state().canvas.ime_preedit.is_empty(), "pointer press clears the pre-edit");
+    assert!(drawn_composition(&h, "da").is_none(), "no composition is drawn after the click");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "甲乙", "uncommitted pre-edit must not enter the document");
+    assert!(!h.state().session.dirty, "dismissed composition does not mark the document dirty");
+}
+
 /// The composition's size never fails egui, which draws each glyph into its font atlas and
 /// panics on one wider than the atlas. In 1,638-point text at 500% the text's size is about
 /// 11,000 points, so the composition is drawn smaller.

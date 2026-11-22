@@ -48,7 +48,7 @@ use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
 use wordcraft_geom::{Point, Rect, Spin};
 
 pub use fields::FieldCtx;
-pub use hit::VisualStep;
+pub use hit::{CompositionLine, VisualStep};
 pub use missing::{MetafileTextLayout, layout_metafile_text};
 pub use para::{LineEnd, ParaLayout};
 pub use table::{autofit_widths, cell_margins, measure_table_columns};
@@ -230,6 +230,9 @@ pub struct LayoutOptions {
     pub proof: ProofOptions,
     /// The word being typed, which gets no spelling squiggle until the caret leaves it (#1552).
     pub typing_word: Option<TypingWord>,
+    /// Uncommitted IME composition range in a preview document: reserves space and line wraps in
+    /// the paragraph while leaving its glyphs out of the page raster so the live overlay draws it.
+    pub ime_composition: Option<ImeComposition>,
     /// Document file name for FILENAME fields ([`FieldCtx::filename`]).
     pub filename: Option<Arc<str>>,
     /// Document full path for FILENAME \p fields ([`FieldCtx::filepath`]).
@@ -248,6 +251,15 @@ pub struct LayoutOptions {
 /// ([`Paragraph::rev`]) and the word's byte range in it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TypingWord {
+    pub rev: u64,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Uncommitted IME pre-edit range ([`LayoutOptions::ime_composition`]): the paragraph by its
+/// revision ([`Paragraph::rev`]) and the composition's byte range in it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ImeComposition {
     pub rev: u64,
     pub start: usize,
     pub end: usize,
