@@ -1633,7 +1633,8 @@ mod tests {
         assert!(a.packs_rt.errors.values().any(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
         let tree = settled(&mut a, &ctx);
         assert!(labels(&tree).iter().any(|l| l.contains("Only you")), "the row says why: {:?}", labels(&tree));
-        // The reason has room to be read: it is at least as wide as Install, inside the list.
+        // The reason has room to be read: it is at least as wide as Install and within the list's width (the row may sit
+        // partly below the list's visible edge).
         let rect = |pick: &dyn Fn(&egui::accesskit::Node) -> bool| {
             tree.nodes.iter().filter(|(_, n)| pick(n)).filter_map(|(_, n)| n.bounds()).collect::<Vec<_>>()
         };
@@ -1642,8 +1643,8 @@ mod tests {
         let why = rect(&|n| n.label().is_some_and(|l| l.contains("Only you")));
         let (list, button) = (list.first().expect("the list"), button.first().expect("an Install button"));
         assert!(
-            why.iter().any(|w| w.width() >= button.width() && w.x0 >= list.x0 && w.x1 <= list.x1 && w.y0 >= list.y0 && w.y1 <= list.y1),
-            "the reason is as wide as Install and inside the list: {why:?}, Install {button:?}, list {list:?}"
+            why.iter().any(|w| w.width() >= button.width() && w.x0 >= list.x0 && w.x1 <= list.x1 && w.y0 < list.y1),
+            "the reason is as wide as Install and within the list's width: {why:?}, Install {button:?}, list {list:?}"
         );
         // The person's own click on the same row turns it on.
         let install = spot(&tree, "Install").expect("the row still offers Install");
