@@ -733,7 +733,7 @@ fn alt_q_opens_search_and_typing_goes_there() {
     // Both in one frame's input, as the platform sends them: kittest's `event` runs a frame for each queued event.
     h.input_mut().events.extend([open.clone(), egui::Event::Text("q".into())]);
     h.step();
-    // The chord fires the command in that pass; the app runs it when the next pass begins (`driver_logic`).
+    // The chord fires the command in that pass; the app runs it before the next pass (`raw_input_hook`).
     h.step();
     // The title bar shows the Search box, so Search opens there, in place (#5398).
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "no Search Commands dialog over the page");
