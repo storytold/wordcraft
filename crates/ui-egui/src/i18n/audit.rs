@@ -350,11 +350,13 @@ fn runtime_data_is_exempt_and_wording_is_not() {
     assert!(!exempt.allows(&app, "See https://example.com now"), "a sentence with a link is not a link");
     assert!(!exempt.allows(&app, "11/22/1999 5:28:50 PM"), "a time before the audit began is not the preview");
     // A stubbed check finds no update and puts no updater error on screen.
-    let _ = app.run("help.checkForUpdates", json!({}));
+    app.run("help.checkForUpdates", json!({})).expect("Check for Updates runs");
+    let calls = app.updates_rt.stub_calls.clone();
     for _ in 0..30 {
         let drawn = frame(&ctx, &mut app);
         assert!(drawn.iter().all(|t| !t.contains("request limit")), "{drawn:?}");
     }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the check went through the stub, not GitHub");
 }
 
 /// Fails on interface text drawn without going through the catalog, listed per UI state, and
