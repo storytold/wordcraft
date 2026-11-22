@@ -35,6 +35,18 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                     cap: Default::default(),
                 })
             }
+            GraphicItem::Text { rect: r, angle, .. } if angle.is_finite() && angle.rem_euclid(360.0) != 0.0 => {
+                // Turned text is laid out level in its box turned the same way, then turned about
+                // the box's center.
+                let at = inside(r);
+                let (cx, cy) = (at.x + at.w / 2.0, at.y + at.h / 2.0);
+                let quarter = ((angle / 90.0).round() as i64).rem_euclid(2) == 1;
+                let level = if quarter { Rect::new(cx - at.h / 2.0, cy - at.w / 2.0, at.h, at.w) } else { at };
+                let items = text_glyphs(doc, level, it, alpha, k);
+                if !items.is_empty() {
+                    out.push(Draw::Rotated { cx, cy, spin: Spin::new(*angle, false, false), items });
+                }
+            }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
             GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
                 rect: inside(r),
@@ -280,7 +292,7 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
 /// or the item's rectangle or size isn't a finite number (a degenerate scale: `r` itself is always
 /// finite, as [`Rect::new`] makes it).
 fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Vec<Draw> {
-    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return Vec::new() };
+    let GraphicItem::Text { rect, text, size, color, bold, align, font, .. } = it else { return Vec::new() };
     let size = *size * k;
     if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
         return Vec::new();
