@@ -25,3 +25,6 @@ log = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
 craft-zip = { workspace = true }
+# Retained synthetic OOXML controls inspect package XML directly.
+quick-xml = { version = "0.41", default-features = false }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

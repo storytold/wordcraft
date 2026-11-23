@@ -69,3 +69,5 @@ wordcraft-formats = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 craft-zip = { workspace = true }
 cfb = { workspace = true }
+# The retained bookmark lifecycle regression builds an in-memory OOXML package.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
