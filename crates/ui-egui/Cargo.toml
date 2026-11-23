@@ -9,14 +9,14 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
-# Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
-# catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
-# `craft-i18n.rev`). Same craft-libs rev as craft-ui; it brings lazy per-locale parsing
-# (storytold/craft-libs#247), ICU4X plural rules and bidi isolates around inserted values.
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
-# One native window per open document: the window list, the Window menu and the egui viewports.
-craft-window = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
+# The craft libraries through their one facade (`craft::ui`, `craft::i18n`, `craft::window`, `craft::update`, ...),
+# at the workspace's one craft-libs pin.
+craft = { workspace = true, features = [
+    "ui", "automation", "codepage", "keymap", "platform", "quit", "settings",
+    "color", "color-ui", "control", "draw", "font-manager", "gpu", "menu", "pages", "print", "review", "table", "text",
+    "text-find", "web-api", "web-host", "window",
+] }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
@@ -35,6 +35,11 @@ image = { workspace = true }
 # The system's preferred interface languages (#8) and region (#838). Native: OS APIs; wasm:
 # the browser's languages (`js`).
 sys-locale = { version = "0.3", features = ["js"] }
+# `Prefs::merge_rule`'s key functions read the settings store's TOML values; the version is the one
+# `craft::settings` builds, so the types are the same.
+toml_edit = "0.25"
+# Comment dates are parsed with it (canvas/balloons.rs); the native clock is added below.
+chrono = { workspace = true }
 
 # Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own accessibility
@@ -45,7 +50,8 @@ zbus = "=5.19.0"
 # Comment times in the user's own time zone (`local_time.rs`); the web app asks the browser.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
-craft-update = { workspace = true }
+# The native file dialogs (rfd) and the self-updater (ureq, ring) do not build for wasm32.
+craft = { workspace = true, features = ["dialogs", "update"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).
@@ -59,12 +65,22 @@ wordcraft-engine = { workspace = true, features = ["test-support"] }
 # kittest's own dev-dependencies do not propagate their font features. Declare the fonts the
 # interface tests lay out explicitly: default faces plus monochrome emoji fallbacks.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
-egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
-zip = { workspace = true }
-# #2726's regression test: the consumer the Windows adapter runs, fed with our updates.
-# Pinned to the version egui already brings into the tree, so nothing is built twice.
-accesskit_consumer = "=0.39.1"
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
+# The app-window tests run `WordApp` as an `eframe::App` (`test_harness`), so the runtime gets the app's input before
+# every pass as on the desktop. The desktop app's feature set, so a workspace build shares one eframe.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
+craft-zip = { workspace = true }
+# The window tests' frame driver for child viewports; it is not part of the `craft` facade.
+craft-ui-test-kit = { workspace = true }
+# The interface tests' fixture and access tree (`craft::ui::testing`).
+craft = { workspace = true, features = ["ui-testing"] }
 
 [build-dependencies]
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", features = ["subset"] }
 serde_json = { workspace = true }
 toml = "1"
+
+# The headless screenshot tool is a program, so `cl build ui_shot` (a test build) runs its main.
+[[example]]
+name = "ui_shot"
+harness = false

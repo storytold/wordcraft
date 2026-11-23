@@ -124,7 +124,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions (English and Polish, by each run's language), thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어, Svenska, Hrvatski, Nederlands, Dansk, Română, العربية (mirrored) or Slovenščina (follows the system language by default) |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어, Svenska, Hrvatski, Nederlands, Dansk, Română, العربية (mirrored) Slovenščina or Bosanski (follows the system language by default) |
 | **Files** | .docx read/write, legacy 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md), the
@@ -206,14 +206,15 @@ Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?s
 WordCraft was designed to be driven by people *and* by AI agents.
 
 ```sh
-claude mcp add wordcraft -- wordcraft-cli mcp                  # headless documents
-# confine the agent to folders: wordcraft-cli mcp --automation-read-root DIR --automation-write-root DIR
-wordcraft --control 7981 &                                     # or drive the running app…
-claude mcp add wordcraft-app -- wordcraft-cli mcp --connect 127.0.0.1:7981
+# headless documents; the agent reads only inside the first folder and writes only inside the second
+claude mcp add wordcraft -- wordcraft-cli mcp --automation-read-root DIR --automation-write-root DIR
 ```
 
+Both roots are required. Bridging an agent to the running app (`mcp --connect`) is refused until
+the app confines its control channel to the same roots (#3695).
+
 Tools include `list_commands`, `execute`, `batch`, `type_text`, `select_text`, `inspect_document`,
-`render_page`, `save_document`, and, with a running app, `screenshot`, `click` and `key`. Agents
+`render_page` and `save_document`. Agents
 can check their work through `inspect_document` without screenshots. See [docs/mcp.md](docs/mcp.md)
 and the [control protocol](docs/control-protocol.md). Macros record any sequence of commands and
 play it back (`tools.recordMacro`, `tools.macros`).
@@ -451,8 +452,10 @@ Copyright (c) 2026 ArtCraft Team and the WordCraft contributors. Required notice
 Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
 with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 
-The English spelling dictionary and hyphenation come from Grady Ward's public-domain Moby
-Hyphenator II word list. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled), as
+English spelling first tries a matching Hunspell dictionary from the Dictionaries folder.
+Otherwise it uses dialect-specific SCOWL 2026 dictionaries when built with language data;
+without it, spelling falls back to system Hunspell dictionaries or Grady Ward's public-domain
+Moby Hyphenator II word list. English hyphenation uses the Moby list and patterns trained from it. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled), as
 do Russian, Portuguese, Czech, Italian, Croatian and Turkish spelling (how to install them:
 [docs/spelling-dictionaries.md](docs/spelling-dictionaries.md)), and
 Polish hyphenation the TeX patterns by Hanna Kołodziejska, Bogusław Jackowski and Marek Ryćko (MIT
