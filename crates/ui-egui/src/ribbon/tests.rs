@@ -771,3 +771,168 @@ fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
         assert!(shown(style), "Home › Styles should show {style} at 1920 pt");
     }
 }
+
+/// #7323: the Home › Bullets dropdown renders the Bullet Library grid as compact
+/// square preview tiles (~22×22 pt), rather than expanding to full card dimensions (~132 pt).
+#[test]
+fn bullets_dropdown_renders_compact_bullet_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Home");
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+
+    // The SplitButton has two button nodes: the command part and the arrow part.
+    let arrow = h.query_all(By::new().role(Role::Button).label("Bullets")).nth(1).expect("Bullets split-button menu arrow");
+    arrow.click();
+    crate::test_harness::frames(&mut h, 3);
+
+    let bullet_tile = h.query_all(By::new().role(Role::ListItem).label("•")).next().expect("bullet tile •");
+    let rect = bullet_tile.rect();
+    assert!(
+        rect.width() >= 16.0 && rect.width() <= 32.0,
+        "bullet tile width ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.width()
+    );
+    assert!(
+        rect.height() >= 16.0 && rect.height() <= 32.0,
+        "bullet tile height ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.height()
+    );
+    assert!((rect.width() - rect.height()).abs() <= 2.0, "bullet tile should be square: {}x{}", rect.width(), rect.height());
+}
+
+/// #7310: unimplemented stub ribbon buttons (Dictate, Ink to Math, Translate, Block Authors)
+/// resolve disabled in the ribbon UI and are known to the command catalog without warnings.
+#[test]
+fn unimplemented_stub_ribbon_buttons_are_disabled() {
+    use egui::accesskit::Role;
+
+    let cases = [
+        ("Home", "Dictate", "tools.dictate"),
+        ("Draw", "Ink to Math", "draw.inkToMath"),
+        ("Review", "Translate", "review.translate"),
+        ("Review", "Block Authors", "review.blockAuthors"),
+    ];
+
+    for (tab, expected_label, id) in cases {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let h = tab_harness(app, tab);
+
+        let keymap = craft::ui::runtime::commands::keymap(&h.ctx).expect("command board has a keymap");
+        assert!(keymap.catalog().iter().any(|def| def.command.id == id), "{tab}: stub command {id} should be registered in the app catalog");
+
+        let button = h
+            .query_all(By::new().role(Role::Button))
+            .find(|n| n.accesskit_node().label().is_some_and(|l| l.split_whitespace().collect::<Vec<_>>().join(" ") == expected_label))
+            .unwrap_or_else(|| panic!("{tab}: ribbon button '{expected_label}' should exist"));
+        assert!(button.accesskit_node().is_disabled(), "{tab}: stub button {:?} ({id}) must be disabled", button.accesskit_node().label());
+    }
+}
+
+/// #7324: Table ribbon menu buttons (Styles, Borders, Delete, AutoFit) bind their command IDs
+/// so they disable when editing is protected or when no table is active.
+#[test]
+fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
+    use egui::accesskit::Role;
+
+    let is_disabled = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name))
+            .next()
+            .unwrap_or_else(|| panic!("button {name} not found"))
+            .accesskit_node()
+            .is_disabled()
+    };
+
+    let description = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name))
+            .next()
+            .unwrap_or_else(|| panic!("button {name} not found"))
+            .accesskit_node()
+            .description()
+            .map(|s| s.to_string())
+    };
+
+    // Configure Table Design & Table Layout as explicit ribbon tabs so they can be
+    // displayed even when the cursor is outside a table.
+    let make_table_tabs_app = |mut app: WordApp| {
+        app.session.ribbon.tabs = vec![
+            wordcraft_engine::ribbon::TabEntry { name: "Table Design".to_string(), custom: false, hidden: false, groups: Vec::new() },
+            wordcraft_engine::ribbon::TabEntry { name: "Table Layout".to_string(), custom: false, hidden: false, groups: Vec::new() },
+        ];
+        app
+    };
+
+    // 1. Without a table active:
+    let app_no_table = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
+    let h_design_empty = tab_harness(app_no_table, "Table Design");
+    assert!(is_disabled(&h_design_empty, "Styles"), "Styles button should be disabled when not in table");
+    assert!(is_disabled(&h_design_empty, "Borders"), "Borders button should be disabled when not in table");
+
+    let app_no_table2 = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
+    let h_layout_empty = tab_harness(app_no_table2, "Table Layout");
+    assert!(is_disabled(&h_layout_empty, "Delete"), "Delete button should be disabled when not in table");
+    assert!(is_disabled(&h_layout_empty, "AutoFit"), "AutoFit button should be disabled when not in table");
+
+    // 2. With an active table and no protection: buttons are enabled:
+    let mut app_table = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_table.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h_design = tab_harness(app_table, "Table Design");
+    assert!(!is_disabled(&h_design, "Styles"), "Styles button should be enabled in table");
+    assert!(!is_disabled(&h_design, "Borders"), "Borders button should be enabled in table");
+
+    let mut app_table2 = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_table2.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h_layout = tab_harness(app_table2, "Table Layout");
+    assert!(!is_disabled(&h_layout, "Delete"), "Delete button should be enabled in table");
+    assert!(!is_disabled(&h_layout, "AutoFit"), "AutoFit button should be enabled in table");
+
+    // 3. With an active table under document protection (read-only): buttons are disabled:
+    let mut app_protected_design = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_protected_design.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app_protected_design.session.doc.settings.protection = Some("readOnly".into());
+    let h_prot_design = tab_harness(app_protected_design, "Table Design");
+    assert!(is_disabled(&h_prot_design, "Styles"), "Styles button should be disabled under protection");
+    assert!(is_disabled(&h_prot_design, "Borders"), "Borders button should be disabled under protection");
+    assert!(
+        description(&h_prot_design, "Styles").as_deref().unwrap_or("").contains("protected"),
+        "Styles should indicate protection in disabled hint"
+    );
+
+    let mut app_protected_layout = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_protected_layout.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app_protected_layout.session.doc.settings.protection = Some("readOnly".into());
+    let h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
+    assert!(is_disabled(&h_prot_layout, "Delete"), "Delete button should be disabled under protection");
+    assert!(is_disabled(&h_prot_layout, "AutoFit"), "AutoFit button should be disabled under protection");
+    assert!(
+        description(&h_prot_layout, "Delete").as_deref().unwrap_or("").contains("protected"),
+        "Delete should indicate protection in disabled hint"
+    );
+}
+
+/// #7374: the Decorative Text / WordArt Styles dropdown menu renders compact tiles (~40×36 pt)
+/// rather than expanding to default card thumbnail size (~132×119 pt).
+#[test]
+fn decorative_text_dropdown_renders_compact_wordart_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Insert");
+    click_button(&mut h, "Decorative Text");
+
+    let tile = h.query_all(By::new().role(Role::ListItem).label("Solid Accent")).next().expect("Solid Accent WordArt tile");
+    let rect = tile.rect();
+    assert!(
+        rect.width() >= 32.0 && rect.width() <= 50.0,
+        "WordArt tile width ({:.1} pt) should be compact (expected ~40 pt, bound [32, 50]), got {:.1}",
+        rect.width(),
+        rect.width()
+    );
+    assert!(
+        rect.height() >= 28.0 && rect.height() <= 46.0,
+        "WordArt tile height ({:.1} pt) should be compact (expected ~36 pt, bound [28, 46]), got {:.1}",
+        rect.height(),
+        rect.height()
+    );
+}
