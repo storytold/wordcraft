@@ -1965,6 +1965,62 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// A pointer drag on a pane's resize edge leaves no keyboard focus behind, so Ctrl and
+/// F-key shortcuts run right after it, docked or floating (#1756).
+#[test]
+fn shortcuts_run_after_a_pane_resize() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    type H = egui_kittest::Harness<'static, WordApp>;
+    fn key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+        h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+        h.run_steps(2);
+    }
+    fn drag(h: &mut H, from: egui::Pos2, by: egui::Vec2) {
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(button(from, true));
+        h.step();
+        for t in [0.5, 1.0] {
+            h.event(egui::Event::PointerMoved(from + by * t));
+            h.step();
+        }
+        h.event(button(from + by, false));
+        h.run_steps(2);
+    }
+    // Ctrl+H opens Replace; Escape closes it again.
+    fn replace_opens(h: &mut H) -> bool {
+        key(h, egui::Key::H, egui::Modifiers::COMMAND);
+        let opened = h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("find"));
+        key(h, egui::Key::Escape, egui::Modifiers::NONE);
+        opened && h.state().dialog_host.open_dialogs().is_empty()
+    }
+    let styles_pane =
+        |h: &H| h.query_all(By::new().role(Role::Group).label("Styles")).map(|n| n.rect()).find(|r| r.height() > 300.0).expect("Styles pane frame");
+
+    let mut a = app();
+    a.run("view.stylesPane", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+
+    let pane = styles_pane(&h);
+    // On the pane's inner edge: drag left by 40 px to widen it.
+    drag(&mut h, egui::pos2(pane.left() + 1.0, pane.center().y), egui::vec2(-40.0, 0.0));
+    let width = h.state().ui.styles_pane_width.unwrap_or_default();
+    assert!((width - 290.0).abs() <= 2.0, "the drag widened the docked pane: {width}");
+    assert!(replace_opens(&mut h), "Ctrl+H runs after the docked drag");
+
+    h.state_mut().run("view.stylesPaneDock", json!({"dock": "float"})).unwrap();
+    h.run_steps(3);
+    let float_pane = styles_pane(&h);
+    let before = h.state().ui.styles_pane_float;
+    // Drag the bottom-right corner.
+    drag(&mut h, float_pane.max - egui::vec2(2.0, 2.0), egui::vec2(30.0, 30.0));
+    assert_ne!(h.state().ui.styles_pane_float, before, "the drag resized the floating pane");
+    assert!(replace_opens(&mut h), "Ctrl+H runs after the floating pane's resize");
+}
+
 /// #3172: the Paste button is named "Paste": its tooltip adds the key as the platform writes it,
 /// so its name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
 #[test]
