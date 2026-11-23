@@ -16,6 +16,8 @@
 mod appimage_env;
 mod control_server;
 mod default_apps;
+#[cfg(test)]
+mod portal_save;
 mod prefs;
 mod region;
 
