@@ -58,43 +58,12 @@ pub(super) fn insert_code(s: &mut Session, v: &Value) -> CmdResult {
     };
     let ansi = page("ansi", &SINGLE_BYTE_CODE_PAGES, 1252)?;
     let oem = page("oem", &OEM_CODE_PAGES, system_oem_code_page())?;
-    let c = alt_code_char(code, ansi, oem).ok_or_else(|| CmdError::Failed(format!("{code:?} isn't a character code")))?;
+    let c = craft_codepage::alt_code_char(code, ansi, oem).ok_or_else(|| CmdError::Failed(format!("{code:?} isn't a character code")))?;
     let mut r = insert(s, &serde_json::json!({"text": c.to_string()}))?;
     if let Value::Object(m) = &mut r {
         m.insert("char".into(), Value::String(c.to_string()));
     }
     Ok(r)
-}
-
-/// The character Word on Windows types for an Alt+numpad code (decimal digits, as typed):
-/// - with a leading 0 and a value up to 255, the ANSI code page's character (`ansi`, one of
-///   [`wordcraft_doc::encoding::SINGLE_BYTE_CODE_PAGES`]): `0233` → é and `0128` → € in
-///   Windows-1252, `0185` → ą in 1250;
-/// - without one, 1–255 is the OEM code page's character (`oem`, one of
-///   [`wordcraft_doc::encoding::OEM_CODE_PAGES`]): `233` → Θ in 437, Ú in 850 (é is `130` in
-///   both), `165` → ą in 852; 1–31 and 127 are the code page's glyphs (`1` → ☺, `7` → •);
-/// - above 255, with or without the 0, the Unicode character with that decimal value
-///   (`8364` → €), as Word inserts it.
-///
-/// `None` for an empty or non-numeric code, 0, a control character, a byte the code page leaves
-/// unassigned or a value past Unicode.
-pub fn alt_code_char(code: &str, ansi: u16, oem: u16) -> Option<char> {
-    if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let digits = code.trim_start_matches('0');
-    // More than seven significant digits is past U+10FFFF (1114111).
-    if digits.len() > 7 {
-        return None;
-    }
-    let value: u32 = if digits.is_empty() { 0 } else { digits.parse().ok()? };
-    let c = match u8::try_from(value) {
-        Ok(0) => return None,
-        Ok(b) if code.starts_with('0') => wordcraft_doc::encoding::windows_byte(ansi, b),
-        Ok(b) => wordcraft_doc::encoding::oem_byte(oem, b),
-        Err(_) => char::from_u32(value)?,
-    };
-    Some(c).filter(|c| codeable(*c) && *c != '\u{FFFD}')
 }
 
 /// The OEM code page for the system locale the shell reported (437 headless).
@@ -103,52 +72,18 @@ pub fn system_oem_code_page() -> u16 {
 }
 
 /// The (ANSI, OEM) code pages of the system locale the shell reported, as Windows sets them
-/// ([`windows_code_pages`]).
+/// ([`craft_codepage::windows_code_pages`]).
 pub fn system_code_pages() -> (u16, u16) {
-    windows_code_pages(crate::session::system_locale())
+    craft_codepage::windows_code_pages(crate::session::system_locale())
 }
 
 /// The OEM code page `text.typeCode` assumes for a locale (BCP 47 tag) when the shell names
 /// none: 850 for Western European languages and English outside the US, 437 otherwise. The
-/// other pages come only from the shell (Windows passes [`windows_code_pages`]).
+/// other pages come only from the shell (Windows passes [`craft_codepage::windows_code_pages`]).
 pub fn oem_code_page(locale: Option<&str>) -> u16 {
-    match windows_code_pages(locale) {
+    match craft_codepage::windows_code_pages(locale) {
         (_, 850) => 850,
         _ => 437,
-    }
-}
-
-/// The (ANSI, OEM) code pages Windows uses for a locale (BCP 47 tag or POSIX name), limited to
-/// the pages `text.typeCode` decodes: Windows-1252 and OEM 437 for US English, unknown locales
-/// and those with other pages (Asian double-byte pages, OEM 775/720/862…).
-pub fn windows_code_pages(locale: Option<&str>) -> (u16, u16) {
-    let Some(tag) = locale else { return (1252, 437) };
-    let parts: Vec<&str> = tag.split(['-', '_', '.', '@']).collect();
-    let lang = parts.first().copied().unwrap_or_default().to_ascii_lowercase();
-    let rest = parts.get(1..).unwrap_or_default();
-    let region = rest.iter().find(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())).map(|r| r.to_ascii_uppercase());
-    let script = rest.iter().find(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_alphabetic())).map(|r| r.to_ascii_lowercase());
-    const WESTERN: [&str; 18] = ["ca", "da", "de", "es", "eu", "fi", "fo", "fr", "ga", "gl", "is", "it", "nb", "nl", "nn", "no", "pt", "sv"];
-    match lang.as_str() {
-        "en" => match region.as_deref() {
-            None | Some("US") => (1252, 437),
-            Some(_) => (1252, 850),
-        },
-        l if WESTERN.contains(&l) => (1252, 850),
-        "pl" | "cs" | "sk" | "hu" | "sl" | "hr" | "ro" | "sq" | "bs" => (1250, 852),
-        "sr" if script.as_deref() == Some("latn") => (1250, 852),
-        "ru" | "uk" | "be" | "bg" => (1251, 866),
-        // Macedonian and Cyrillic Serbian use OEM 855, which isn't decoded.
-        "sr" | "mk" => (1251, 437),
-        "el" => (1253, 737),
-        "az" if script.as_deref() == Some("cyrl") => (1251, 866),
-        "tr" | "az" => (1254, 857),
-        "he" => (1255, 437),
-        "ar" | "fa" | "ur" => (1256, 437),
-        "et" | "lv" | "lt" => (1257, 437),
-        "vi" => (1258, 437),
-        "th" => (874, 437),
-        _ => (1252, 437),
     }
 }
 

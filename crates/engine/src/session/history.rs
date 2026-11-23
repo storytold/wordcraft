@@ -14,6 +14,7 @@ impl Session {
             doc: self.doc.clone(),
             sel: self.sel.clone(),
             pending: self.pending.clone(),
+            pending_at: self.pending_at.clone(),
             column: self.column.clone(),
         }));
         if self.history.len() > MAX_UNDO {
@@ -34,7 +35,14 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None }));
+        self.history.push(Arc::new(Undo {
+            label: label.to_string(),
+            doc,
+            sel,
+            pending: self.pending.clone(),
+            pending_at: self.pending_at.clone(),
+            column: None,
+        }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -70,6 +78,12 @@ impl Session {
     /// ordinary edit gets its own checkpoint.
     pub fn join_next_ime_text_replacement(&mut self) {
         self.ime_text_join = Some(self.sel.clone());
+    }
+
+    /// Whether a body `DeleteSurrounding`'s replacement join is still promised: no command has
+    /// consumed it since. The page keeps the erased text's formatting only while this holds.
+    pub fn ime_text_join_pending(&self) -> bool {
+        self.ime_text_join.is_some()
     }
 
     /// Discard a body replacement join that received no replacement (an empty or refused
@@ -156,6 +170,16 @@ impl Session {
         self.history.truncate(usize::try_from(keep).unwrap_or(usize::MAX));
     }
 
+    /// Takes back every step recorded since `mark` and drops them from redo, so a cancelled gesture leaves no trace.
+    /// Does nothing when `mark` has already left the history (evicted steps cannot be undone).
+    pub fn revert_since(&mut self, mark: u64) {
+        if mark < self.undo_evicted {
+            return;
+        }
+        while self.undo_mark() > mark && self.undo() {}
+        self.redo.clear();
+    }
+
     pub fn undo_labels(&self) -> Vec<String> {
         self.history.iter().rev().map(|u| u.label.clone()).collect()
     }
@@ -194,6 +218,7 @@ impl Session {
             doc: std::mem::replace(&mut self.doc, u.doc),
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
+            pending_at: std::mem::replace(&mut self.pending_at, u.pending_at),
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.redo.push(Arc::new(cur));
@@ -220,6 +245,7 @@ impl Session {
             doc: std::mem::replace(&mut self.doc, u.doc),
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
+            pending_at: std::mem::replace(&mut self.pending_at, u.pending_at),
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.history.push(Arc::new(cur));
