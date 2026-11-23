@@ -663,6 +663,13 @@ fn insert_inner(s: &mut Session, mut frag: Fragment, source: Option<Fragment>, p
     super::controls::prepare_edit(s)?;
     let source = source.unwrap_or_else(|| frag.clone());
     let dest = destination_formatting(s);
+    // The alignment the first pasted paragraph states itself, before the fill below gives it the
+    // destination's: into an empty paragraph it is what Keep Source keeps, like the paragraphs after it.
+    let stated_first = match frag.blocks.first() {
+        Some(Block::Para(p)) if paste => p.props.align,
+        _ => None,
+    };
+    let into_empty = s.sel.is_collapsed() && s.doc.para_at(&s.sel.focus).is_some_and(|p| p.is_empty());
     // Plain text has no paragraph formatting of its own: every paragraph it makes takes the
     // destination's (a centered paragraph stays centered through all of them), as in Word.
     if !paste {
@@ -714,6 +721,15 @@ fn insert_inner(s: &mut Session, mut frag: Fragment, source: Option<Fragment>, p
         }
     }
     let end = s.doc.insert_fragment(&at, &frag)?;
+    // Into an empty paragraph, the first pasted paragraph is that paragraph: it follows what its
+    // source says, as the paragraphs after it do. Into text, it joins the text and changes nothing.
+    if into_empty
+        && let Some(align) = stated_first
+        && let Ok(para) = s.doc.para_mut(at.story, &at.path)
+    {
+        para.props.align = Some(align);
+        para.touch();
+    }
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.
     if let Some(r) = rid
@@ -890,8 +906,8 @@ mod tests {
         let rtf = "{\\rtf1\\ansi\\pard\\ql First\\par\\pard\\ql Second\\par}";
         s.run("edit.paste", &json!({"text": "First\nSecond", "rtf": rtf})).unwrap();
         let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
-        // The first paragraph joins the destination's; the second keeps the \ql the source set.
-        assert_eq!(aligns.last(), Some(&Some(wordcraft_doc::Align::Left)), "{aligns:?}");
+        // Into an empty paragraph every pasted paragraph keeps the \ql the source set, the first included.
+        assert!(aligns.len() >= 2 && aligns.iter().all(|a| *a == Some(wordcraft_doc::Align::Left)), "{aligns:?}");
         // The same from a browser (its computed left): Keep Source follows it; Merge Formatting
         // and Keep Text Only keep the destination's centered alignment.
         let mut s = Session::new(wordcraft_doc::Document::new());
@@ -901,14 +917,37 @@ mod tests {
         let aligns = |s: &Session| -> Vec<_> {
             s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect()
         };
-        assert_eq!(aligns(&s).last(), Some(&Some(wordcraft_doc::Align::Left)), "Keep Source follows the browser: {:?}", aligns(&s));
+        assert!(
+            aligns(&s).iter().all(|a| *a == Some(wordcraft_doc::Align::Left)),
+            "Keep Source follows the browser, the first too: {:?}",
+            aligns(&s)
+        );
         assert!(!paste_options(&s).is_empty(), "the paste offers its options: {:?}", s.last_paste.as_ref().map(|lp| (lp.rev, lp.end.clone())));
         for mode in ["merge", "text"] {
             s.run("edit.pasteChange", &json!({"mode": mode})).unwrap_or_else(|e| panic!("{mode}: {e}"));
             assert!(aligns(&s).iter().all(|a| *a == Some(wordcraft_doc::Align::Center)), "{mode} takes the destination's: {:?}", aligns(&s));
         }
         s.run("edit.pasteChange", &json!({"mode": "source"})).unwrap();
-        assert_eq!(aligns(&s).last(), Some(&Some(wordcraft_doc::Align::Left)), "and back to Keep Source: {:?}", aligns(&s));
+        assert!(aligns(&s).iter().all(|a| *a == Some(wordcraft_doc::Align::Left)), "and back to Keep Source: {:?}", aligns(&s));
+        // An alignment the source states other than left is followed just the same.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("para.alignCenter", &json!({})).unwrap();
+        let html = "<p style=\"text-align:right\">First</p><p style=\"text-align:right\">Second</p>";
+        s.run("edit.paste", &json!({"text": "First\nSecond", "html": html})).unwrap();
+        assert!(aligns(&s).iter().all(|a| *a == Some(wordcraft_doc::Align::Right)), "{:?}", aligns(&s));
+    }
+
+    /// Pasted into text, the first pasted paragraph joins it and the paragraph keeps its alignment;
+    /// only the paragraphs the paste adds follow their source.
+    #[test]
+    fn the_first_pasted_paragraph_joins_existing_text_without_changing_its_alignment() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        s.run("para.alignCenter", &json!({})).unwrap();
+        let html = "<p style=\"text-align:left\">First</p><p style=\"text-align:left\">Second</p>";
+        s.run("edit.paste", &json!({"text": "First\nSecond", "html": html})).unwrap();
+        let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
+        assert_eq!(aligns, vec![Some(wordcraft_doc::Align::Center), Some(wordcraft_doc::Align::Left)], "{aligns:?}");
     }
 
     /// Paste Special › HTML follows the source's alignment as a plain paste does, and inserting the
@@ -920,7 +959,7 @@ mod tests {
         let html = "<p style=\"text-align:left\">First</p><p style=\"text-align:left\">Second</p>";
         s.run("edit.pasteSpecial", &json!({"as": "html", "html": html})).unwrap();
         let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
-        assert_eq!(aligns.last(), Some(&Some(wordcraft_doc::Align::Left)), "{aligns:?}");
+        assert!(aligns.iter().all(|a| *a == Some(wordcraft_doc::Align::Left)), "{aligns:?}");
 
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.run("text.insert", &json!({"text": "Spiked"})).unwrap();
