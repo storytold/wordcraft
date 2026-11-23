@@ -168,6 +168,9 @@ pub(crate) fn insert_custom_xml_part(passthrough: &mut BTreeMap<String, Arc<Vec<
     let manifest = match passthrough.get(EMBEDDED_PARTS) {
         Some(existing) => {
             let mut text = String::from_utf8_lossy(existing).to_string();
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
             text.push_str(&manifest_entry);
             Arc::new(text.into_bytes())
         }
@@ -179,6 +182,9 @@ pub(crate) fn insert_custom_xml_part(passthrough: &mut BTreeMap<String, Arc<Vec<
     let roots = match passthrough.get(CUSTOM_XML_ROOTS) {
         Some(existing) => {
             let mut text = String::from_utf8_lossy(existing).to_string();
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
             text.push_str(&root_entry);
             Arc::new(text.into_bytes())
         }

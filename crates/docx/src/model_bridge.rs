@@ -1361,7 +1361,7 @@ mod tests {
         // 2. Foreign custom XML at canonical PART path is preserved on export, while our store writes to an unused path.
         let mut doc_foreign_at_part = doc.clone();
         let foreign_at_part = br#"<?xml version="1.0" encoding="UTF-8"?><foreign/>"#.to_vec();
-        doc_foreign_at_part.passthrough.insert(crate::num_change::PART.into(), Arc::new(foreign_at_part.clone()));
+        crate::num_change::insert_custom_xml_part(&mut doc_foreign_at_part.passthrough, crate::num_change::PART, foreign_at_part.clone());
         let bytes_foreign = crate::write(&doc_foreign_at_part).expect("write with occupied PART");
         let shared_foreign = craft_docx::read(&bytes_foreign).expect("read shared model");
         assert_eq!(shared_foreign.passthrough.get(crate::num_change::PART).map(|b| b.as_slice()), Some(foreign_at_part.as_slice()));
