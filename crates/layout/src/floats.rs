@@ -718,12 +718,18 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
     // (#4250). Inline objects go with their own line.
     let first = l0 == 0;
     let late = at.late.filter(|l| !l.placed.is_empty());
-    let late_lines = late.map(LateFloats::lines_here).unwrap_or_default();
-    for li in 0..pl.lines.len() {
+    // A later piece looks only at its own lines and those holding the anchors of the late floats
+    // it draws, in order: walking every line of the paragraph for each piece made a paragraph of
+    // many pages quadratic (#6757).
+    let (piece, mut late_lines) =
+        if first { (0..pl.lines.len(), Vec::new()) } else { (l0..l1.min(pl.lines.len()), late.map(LateFloats::lines_here).unwrap_or_default()) };
+    late_lines.retain(|li| !piece.contains(li));
+    late_lines.sort_unstable();
+    late_lines.dedup();
+    let (before, after) = late_lines.split_at(late_lines.partition_point(|li| *li < piece.start));
+    for li in before.iter().copied().chain(piece).chain(after.iter().copied()) {
+        crate::work::steps(1);
         let in_piece = (l0..l1).contains(&li);
-        if !in_piece && !first && !late_lines.contains(&li) {
-            continue;
-        }
         let Some(line) = pl.lines.get(li) else { continue };
         for k in line.c0..line.c1 {
             let Some(c) = pl.clusters.get(k) else { continue };

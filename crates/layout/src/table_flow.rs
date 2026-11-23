@@ -255,6 +255,13 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 .rows
                 .get(ri)
                 .is_some_and(|r| r.props.cant_split || (r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
+        // A Can't Split row (not an exact one) that is taller than a page splits where the page
+        // ends, as in Word (measured with synthetic documents): it moves to a new page first
+        // when it fits there, and only on a page it still doesn't fit does it break.
+        let splits_when_too_tall = ri >= header_rows.len()
+            && t.rows
+                .get(ri)
+                .is_some_and(|r| r.props.cant_split && !(r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
         let mut rest: Option<table::RowLayout> = None;
         // The row as it opens a page the table doesn't start on, once it has moved on whole.
         let mut opened: Option<table::RowLayout> = None;
@@ -294,7 +301,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             let moves_on = first_part && short_of_min(ri, room);
             // Whether the header rows repeat over what goes on to the next page.
             let headed = ri >= header_rows.len() && !header_rows.is_empty() && ctx.header_repeats.saturating_add(header_cost) <= header_cap;
-            let split = match (splittable && !moves_on && !defer_kept, first_part) {
+            // A row that fits the room but for the border below it is still placed whole.
+            let too_tall_to_keep = splits_when_too_tall && !first_part && cur.height > room + 0.01;
+            let split = match ((splittable || too_tall_to_keep) && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
                 (true, true) => table::split_row_opening(cur, nested_keep_cut(ctx.doc, cur, room), true, &ctx.row_tops, headed),
                 // On a fresh page, a nested row taller than the room splits rather than overflowing.
