@@ -44,7 +44,7 @@ fn the_previewed_pages_are_drawn_from_the_previewed_document() {
     app.session.run("caret.end", &json!({})).unwrap();
     app.canvas.table_preview = Some((2, 2));
     let layout = shown_layout(&mut app);
-    assert!(std::sync::Arc::ptr_eq(&visible_layout(&app), &layout), "the blur uses the same layout as the canvas");
+    assert!(std::sync::Arc::ptr_eq(&visible_layout(&mut app), &layout), "the blur uses the same layout as the canvas");
     let text = |doc: &wordcraft_doc::Document, story, path| doc.para(story, path).map(|p| p.text.clone());
     let mut kites = 0;
     for it in layout.pages.iter().flat_map(|p| &p.items) {

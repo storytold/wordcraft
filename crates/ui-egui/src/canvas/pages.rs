@@ -129,8 +129,11 @@ pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
 }
 
 /// The layout for the pages currently shown, including Insert › Table's preview copy.
-pub(crate) fn visible_layout(app: &WordApp) -> std::sync::Arc<DocLayout> {
-    app.canvas.table_preview_layout.as_ref().map_or_else(|| app.session.layout(), |(_, _, _, layout)| layout.clone())
+pub(crate) fn visible_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
+    match app.canvas.table_preview_layout.as_ref() {
+        Some((_, _, _, layout)) => layout.clone(),
+        None => app.session.layout(),
+    }
 }
 
 /// Whether the current pages show the temporary Insert › Table preview.
