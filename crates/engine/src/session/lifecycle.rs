@@ -135,6 +135,8 @@ impl Session {
             ime_state_revision: None,
             ime_state_seen: None,
             ime_edit_outcome: ImeEditOutcome::default(),
+            ime_dispatch_active: false,
+            ime_nested_outcome: None,
             #[cfg(any(test, feature = "test-support"))]
             ime_state_exhausted: false,
             pending_ime_application_change: false,

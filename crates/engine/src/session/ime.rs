@@ -13,6 +13,18 @@ impl Session {
         self.ime_edit_outcome = outcome;
     }
 
+    /// Combine nested effects without certifying the transaction as one directly classified edit.
+    pub(super) fn merge_ime_outcomes(first: ImeEditOutcome, second: ImeEditOutcome) -> ImeEditOutcome {
+        ImeEditOutcome {
+            // Effects from multiple dispatches cannot certify one direct IME edit.
+            classified: false,
+            content_changed: first.content_changed || second.content_changed,
+            state_changed: first.state_changed || second.state_changed,
+            transformed: first.transformed || second.transformed,
+            selection_changed: first.selection_changed || second.selection_changed,
+        }
+    }
+
     /// Take the pending application-origin change signal. The UI owns one session, so a simple
     /// bool is enough; it deliberately survives later commands until drained.
     pub fn take_pending_ime_application_change(&mut self) -> bool {

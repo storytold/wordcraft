@@ -162,6 +162,10 @@ pub struct Session {
     ime_state_seen: Option<ImeCaretState>,
     /// The current command's explicit IME effect classification.
     ime_edit_outcome: ImeEditOutcome,
+    /// Whether a command dispatch is active.
+    ime_dispatch_active: bool,
+    /// Successful nested effects, kept apart from the handler classification.
+    ime_nested_outcome: Option<ImeEditOutcome>,
     /// Simulation of a globally exhausted IME revision allocator for front-end producer tests.
     /// Only [`Self::exhaust_ime_state_revision`] sets it; production builds do not compile it,
     /// and it only makes receipt classification fail closed.

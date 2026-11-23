@@ -144,6 +144,8 @@ impl Session {
             ime_state_revision: _,
             ime_state_seen: _,
             ime_edit_outcome: _,
+            ime_dispatch_active: _,
+            ime_nested_outcome: _,
             #[cfg(any(test, feature = "test-support"))]
                 ime_state_exhausted: _,
             pending_ime_application_change: _,
