@@ -86,12 +86,13 @@ fn xlsx_limits() -> craft_xlsx::Limits {
     limits
 }
 
-/// The package and text limits for an `.ods`, keeping the cells of `only_sheet` alone
+/// The package, cell and text limits for an `.ods`, keeping the cells of `only_sheet` alone
 /// (`Some(usize::MAX)`: none, for the sheet names). Cells past [`MAX_TEXT_BYTES`] of text are
-/// left out instead of refusing the file.
+/// left out instead of refusing the file; a sheet with more than [`MAX_CELLS`] cells is refused.
 fn ods_options(only_sheet: Option<usize>) -> craft_ods::Options {
     craft_ods::Options {
         package: craft_odf::Limits { max_entries: crate::MAX_ZIP_ENTRIES, max_entry: MAX_ENTRY, max_total: MAX_TOTAL },
+        max_cells: MAX_CELLS as u64,
         max_text: MAX_TEXT_BYTES as u64,
         truncate_text: true,
         only_sheet,
@@ -502,5 +503,18 @@ mod tests {
             r#"<table:table-row><table:table-cell table:number-columns-repeated="100" office:value-type="string"><text:p>{long}</text:p></table:table-cell></table:table-row>"#
         ));
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["Name", "Note"]]);
+    }
+
+    /// An OpenDocument sheet with more than a million cells, and fewer than [`MAX_CELLS`], is read
+    /// whole.
+    #[test]
+    fn an_ods_sheet_under_the_cell_budget_is_read_whole() {
+        let book = craft_ods::testing::spreadsheet(
+            r#"<table:table table:name="S"><table:table-row table:number-rows-repeated="75000"><table:table-cell table:number-columns-repeated="20" office:value-type="float" office:value="1"><text:p>1</text:p></table:table-cell></table:table-row></table:table>"#,
+        )
+        .unwrap();
+        let rows = read_rows(&book, Pick::Index(0)).unwrap().1;
+        assert_eq!(rows.len(), 75_000);
+        assert!(rows.iter().all(|r| r.len() == 20 && r.iter().all(|c| c == "1")));
     }
 }
