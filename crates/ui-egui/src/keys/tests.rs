@@ -349,6 +349,20 @@ fn an_unrelated_keys_modifiers_do_not_steer_a_later_paste() {
     }
 }
 
+/// #5616: the browser paste event after a formatting paste is dropped before an open equation
+/// can type it.
+#[test]
+fn the_ignored_paste_event_never_reaches_an_open_equation() {
+    let mut h = app_harness(copied_bold_app());
+    run(&mut h, "insert.equation", json!({"linear": "abc"}));
+    let chord = Modifiers { shift: true, ..mod_held() };
+    mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    let before = h.state().session.math.clone();
+    mods_frame(&mut h, mod_held(), vec![egui::Event::Paste("zzz".into())]);
+    assert_eq!(h.state().session.math, before, "the ignored paste typed nothing into the equation");
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
