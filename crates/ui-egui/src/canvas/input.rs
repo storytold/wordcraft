@@ -458,7 +458,7 @@ fn handle_primary_press(
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
         app.session.page_hint = page;
-        return;
+        return true;
     }
     let Some(pos) = layout.hit(page, x, y, story) else { return true };
     // Ctrl/⌘+click follows a hyperlink.
