@@ -196,6 +196,12 @@ fn is_legacy_header(ctx: &Ctx, story: StoryRef) -> bool {
         && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header))
 }
 
+/// Whether such a header keeps its text in place beside an object wrapped `wrap` (#6805): square
+/// and top and bottom wrapping, and tight and through in mode 14, the legacy mode measured for them.
+fn keeps_legacy_header_text(ctx: &Ctx, wrap: Wrap) -> bool {
+    matches!(wrap, Wrap::TopAndBottom | Wrap::Square) || (ctx.doc.settings.compat_mode == 14 && matches!(wrap, Wrap::Tight | Wrap::Through))
+}
+
 /// Where a top and bottom object at `r` starts and ends for such a header.
 /// The distance below it counts (Word: 14.4 pt more for 14.4 pt); the one above neither moves it
 /// nor makes the header taller.
@@ -246,8 +252,6 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // text keeps its place beside its own objects, which wrap nothing, and only a top and bottom
     // object reaching down from the text makes the header taller (#6805). Not in a table cell.
     let legacy_header = !in_cell && is_legacy_header(ctx, story);
-    // Contour wraps were measured in mode 14; earlier modes keep using their existing rule.
-    let legacy_header_contours = legacy_header && ctx.doc.settings.compat_mode == 14;
     // Top and bottom objects of such a header: where each starts and ends.
     let mut legacy_reach: Vec<(f32, f32)> = Vec::new();
     let mut table_areas = Vec::new();
@@ -356,9 +360,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    if (legacy_header && matches!(float.wrap, Wrap::TopAndBottom | Wrap::Square))
-                        || (legacy_header_contours && matches!(float.wrap, Wrap::Tight | Wrap::Through))
-                    {
+                    if legacy_header && keeps_legacy_header_text(ctx, float.wrap) {
                         // These objects do not reflow the legacy header's own text in Word.
                         legacy_reach.extend(legacy_reach_of(float, r));
                     } else {
