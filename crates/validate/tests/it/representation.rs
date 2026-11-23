@@ -1,8 +1,6 @@
 //! Numeric identity regressions for the representation lane.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#[allow(dead_code)]
-mod common;
-use common::{CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_NUMBERING, CT_STYLES, Doc, NS};
+use crate::common::{CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_NUMBERING, CT_STYLES, Doc, NS};
 use wordcraft_validate::{Report, validate_bytes};
 
 fn rel(kind: &str, target: &str) -> String {
@@ -140,7 +138,7 @@ fn relationship_ids_remain_lexical() {
 
 #[test]
 fn unreached_story_references_never_borrow_main_definitions() {
-    use common::{CT_HEADER, CT_SETTINGS};
+    use crate::common::{CT_HEADER, CT_SETTINGS};
     let mut d = Doc::minimal();
     d.add_with_override("word/orphan.xml", CT_HEADER, format!(r#"<w:hdr {NS}><w:p><w:pPr><w:pStyle w:val="missing"/><w:numPr><w:numId w:val="9"/></w:numPr></w:pPr><w:r><w:footnoteReference w:id="9"/><w:endnoteReference w:id="9"/><w:commentReference w:id="9"/></w:r></w:p></w:hdr>"#));
     d.add_with_override("word/styles.xml", CT_STYLES, format!(r#"<w:styles {NS}/>"#));
@@ -183,7 +181,7 @@ fn either_comment_extension_activates_only_its_established_directions() {
 
 #[test]
 fn every_relationship_reference_binds_the_first_duplicate_declaration() {
-    use common::CT_HEADER;
+    use crate::common::CT_HEADER;
     for image_first in [false, true] {
         let mut d = Doc::minimal();
         d.set_document(r#"<w:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:r><a:blip r:embed="same"/></w:r></w:p><w:sectPr><w:headerReference r:id="same"/></w:sectPr>"#);
@@ -205,7 +203,7 @@ fn every_relationship_reference_binds_the_first_duplicate_declaration() {
 
 #[test]
 fn glossary_roots_keep_distinct_definitions_across_official_and_custom_edges() {
-    use common::{CT_FOOTNOTES, CT_GLOSSARY, rels_xml};
+    use crate::common::{CT_FOOTNOTES, CT_GLOSSARY, rels_xml};
     for matching in [false, true] {
         for edge in ["http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument", "urn:custom/glossaryDocument"] {
             let mut d = Doc::minimal();

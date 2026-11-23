@@ -1,6 +1,5 @@
 #![allow(dead_code, clippy::unwrap_used)]
-mod common;
-use common::{Doc, document_xml, rels_xml};
+use crate::common::{Doc, document_xml, rels_xml};
 use wordcraft_validate::validate_bytes;
 #[test]
 fn retained_root_with_hidden_competitor_cannot_prove_absence() {

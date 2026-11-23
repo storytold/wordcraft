@@ -1,9 +1,8 @@
 //! Round 20 binding H6 probes; raw metadata is patched only in synthetic ZIP headers.
 #![allow(dead_code)]
-mod common;
-#[path = "common/raw_zip.rs"]
+#[path = "../common/raw_zip.rs"]
 mod raw_zip;
-use common::*;
+use crate::common::*;
 use raw_zip::Record;
 use std::io::{Cursor, Write};
 use wordcraft_validate::{Report, Severity, Verdict, validate_bytes, validate_path};
@@ -78,7 +77,7 @@ fn exact_rules(report: &Report, rules: &[&str]) {
     assert_eq!(actual, expected, "{report:?}");
 }
 // Generated policy is included read-only to compare the complete absence-rule surface.
-#[path = "../src/contracts_generated.rs"]
+#[path = "../../src/contracts_generated.rs"]
 mod policy;
 fn stable(a: &Report, b: &Report) {
     assert_eq!(a.verdict, b.verdict);

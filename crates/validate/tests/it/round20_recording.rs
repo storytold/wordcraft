@@ -1,7 +1,6 @@
 //! Round 20 N1 completion probes, including the explicitly retained recording residuals.
 #![allow(dead_code)]
-mod common;
-use common::*;
+use crate::common::*;
 use wordcraft_validate::{Report, Verdict, validate_bytes};
 
 const NOTE: &str = r#"<w:p><w:r><w:footnoteReference w:id="1"/></w:r></w:p>"#;

@@ -1,10 +1,7 @@
 //! Supporting joins use an owner's own relationships, and owner roots gate the scanner.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[allow(dead_code)]
-mod common;
-
-use common::{CT_COMMENTS, CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER, CT_SETTINGS, Doc, NS, rels_xml};
+use crate::common::{CT_COMMENTS, CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER, CT_SETTINGS, Doc, NS, rels_xml};
 use wordcraft_validate::{Verdict, validate_bytes};
 
 fn rel(kind: &str, target: &str) -> String {

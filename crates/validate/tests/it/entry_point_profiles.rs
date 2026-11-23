@@ -1,10 +1,7 @@
 //! Entry-point profiles require agreement, independently of relationship order or target identity.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[allow(dead_code)]
-mod common;
-
-use common::*;
+use crate::common::*;
 use wordcraft_validate::{Report, Verdict, validate_bytes};
 
 const TRANSITIONAL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";

@@ -1,10 +1,7 @@
 //! Selected owner roles reject orphan sources despite unrelated discovery loss.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[allow(dead_code)]
-mod common;
-
-use common::{CT_COMMENTS, CT_COMMENTS_EXT, CT_ENDNOTES, CT_FOOTNOTES, CT_HEADER, CT_SETTINGS, Doc, NS, rels_xml};
+use crate::common::{CT_COMMENTS, CT_COMMENTS_EXT, CT_ENDNOTES, CT_FOOTNOTES, CT_HEADER, CT_SETTINGS, Doc, NS, rels_xml};
 use wordcraft_validate::{Report, Severity, Verdict, validate_bytes};
 
 fn rel(kind: &str, target: &str) -> String {

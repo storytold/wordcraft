@@ -3,11 +3,9 @@
 //! the right rule reported against the wrong part.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
-
 use std::path::{Path, PathBuf};
 
-use common::{
+use crate::common::{
     CT_CHART, CT_COMMENTS, CT_COMMENTS_EXT, CT_COMMENTS_IDS, CT_CUSTOM_PROPS, CT_CUSTOMXML_PROPS, CT_ENDNOTES, CT_FONT_TABLE, CT_FOOTER,
     CT_FOOTNOTES, CT_GLOSSARY, CT_HEADER, CT_MACRO_MAIN, CT_MACRO_TEMPLATE_MAIN, CT_MAIN, CT_NUMBERING, CT_PEOPLE, CT_SETTINGS, CT_STYLES,
     CT_TEMPLATE_MAIN, CT_WEB_SETTINGS, Doc, add_header, claim_entry_method, content_types_xml, corrupt_entry_data, document_xml, ns, rels_xml,
@@ -3113,7 +3111,7 @@ fn media_magic_keeps_the_error_for_a_hyperlink_to_an_image_relationship() {
 
 #[test]
 fn media_magic_calibration_retains_the_picture_error() {
-    let report = validate_bytes(include_bytes!("../corpus/calibration/26-media-magic.docx"));
+    let report = validate_bytes(include_bytes!("../../corpus/calibration/26-media-magic.docx"));
     assert_eq!(report.verdict, Verdict::Fail);
     assert_eq!(assert_finding(&report, "MEDIA-MAGIC", Some("word/media/image1.png")).severity, Severity::Error);
     assert!(has(&report, "NOTE-PR-LISTING"));

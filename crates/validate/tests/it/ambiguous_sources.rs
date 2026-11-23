@@ -1,10 +1,7 @@
 //! Competing official targets leave owner joins unknown in either relationship order.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[allow(dead_code)]
-mod common;
-
-use common::*;
+use crate::common::*;
 use wordcraft_validate::{Report, Verdict, validate_bytes};
 
 fn rel(id: &str, kind: &str, target: &str) -> String {

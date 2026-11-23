@@ -1,10 +1,7 @@
 //! Whole-surface review controls: owner roots, singleton loss and negative evidence.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[allow(dead_code)]
-mod common;
-
-use common::{CT_COMMENTS, CT_CUSTOM_PROPS, CT_GLOSSARY, CT_HEADER, Doc, NS, package_rels_xml, rels_xml};
+use crate::common::{CT_COMMENTS, CT_CUSTOM_PROPS, CT_GLOSSARY, CT_HEADER, Doc, NS, package_rels_xml, rels_xml};
 use wordcraft_validate::{Report, Verdict, validate_bytes};
 
 fn rel(kind: &str, target: &str) -> String {

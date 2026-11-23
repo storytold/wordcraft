@@ -1,6 +1,5 @@
 #![allow(dead_code)]
-mod common;
-use common::{CT_GLOSSARY, Doc, NS};
+use crate::common::{CT_GLOSSARY, Doc, NS};
 use wordcraft_validate::{Report, validate_bytes};
 const A: &str =
     r#"<Relationship Id="glossA" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument" Target="glossA.xml"/>"#;

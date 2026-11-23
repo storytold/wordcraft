@@ -1,7 +1,6 @@
 //! Narrowed F2: unreadable selected document roots cannot claim vacuous reference joins.
 #![allow(dead_code)]
-mod common;
-use common::*;
+use crate::common::*;
 use wordcraft_validate::{Report, Verdict, validate_bytes};
 
 const NOTE: &str = r#"<w:p><w:r><w:footnoteReference w:id="5"/></w:r></w:p>"#;
