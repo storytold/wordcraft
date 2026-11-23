@@ -8991,6 +8991,7 @@ dependencies = [
 name = "wordcraft"
 version = "0.18.1"
 dependencies = [
+ "chrono",
  "craft",
  "craft-proof",
  "eframe",
