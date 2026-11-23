@@ -136,6 +136,8 @@ fn each_pane_scrolls_on_its_own() {
     assert_eq!(h.state().canvas.view.offset.1, lower, "the lower pane didn't");
     assert!(other(&h).active_bottom(), "scrolling doesn't change the pane worked in");
 
+    // A new wheel gesture: one still running stays with the pane it started over, wherever the pointer goes.
+    frames(&mut h, 30);
     scroll(&mut h, bottom.center(), 200.0);
     assert!(h.state().canvas.view.offset.1 - lower > 100.0, "the lower pane scrolled: {lower} → {}", h.state().canvas.view.offset.1);
     assert_eq!(upper_offset(&h), scrolled, "the upper pane stayed");
