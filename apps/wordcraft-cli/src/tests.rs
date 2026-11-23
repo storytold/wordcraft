@@ -284,6 +284,7 @@ fn every_agent_entry_point_refuses_to_start_without_both_roots() {
         ("run", NotAgent("runs the commands and script named on its command line, then exits")),
         ("commands", NotAgent("lists the commands; touches no file")),
         ("parity", NotAgent("prints the feature catalog; touches no file")),
+        ("validate", NotAgent("validates the one file named on its command line, then exits")),
         ("mcp", Agent),
         ("zotero", NotAgent("runs one named Zotero command; Zotero's replies edit citations and name no file")),
     ];
