@@ -627,6 +627,20 @@ fn size_dialog_scales_locks_and_resets_the_picture() {
     assert_eq!(selected_size(&a), (60.0, 15.0), "one undo step");
 }
 
+/// With `Services::paragraph_window`, Picture Format › Size opens in a window of its own (a macOS utility panel);
+/// without it, in the document window.
+#[test]
+fn size_dialog_opens_in_its_own_window_with_the_window_service() {
+    use craft::ui::dialog::StackDialog;
+    for service in [true, false] {
+        let mut a = picture_app(40, 20);
+        a.services.paragraph_window = service;
+        a.run("picture.size", json!({})).unwrap();
+        let windowed = a.dialog_host.get::<FormHost<SizeForm>>().map(StackDialog::windowed);
+        assert_eq!(windowed, Some(service), "the dialog is open, in a window of its own exactly with the service");
+    }
+}
+
 /// #2573: a cropped picture's Reset is what the crop leaves of the original; a shape opens the
 /// dialog unlocked with no original size; with nothing selected nothing opens.
 #[test]

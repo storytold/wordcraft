@@ -420,6 +420,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-11-19 | trivial | Progress log: on macOS the Paragraph dialog opens as a utility panel in a window of its own, tied to the document window |
 | 2026-11-20 | trivial | Progress log: `wordcraft-cli mcp` needs both automation roots; `--connect` refused (#7124) |
 | 2026-11-17 | trivial | Progress log: file formats, codecs and protocols come from craft-libs (#778) |
 | 2026-11-15 | trivial | Progress log: Get the Missing Fonts (download pages for missing fonts their publisher gives away) |

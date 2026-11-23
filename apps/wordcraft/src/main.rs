@@ -16,6 +16,8 @@
 mod appimage_env;
 mod control_server;
 mod default_apps;
+#[cfg(target_os = "macos")]
+mod panels;
 mod prefs;
 mod region;
 
@@ -65,6 +67,10 @@ impl App {
     /// path. Without `frame` (a test over no window) the dialogs have no parent window.
     fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
         self.app.logic(ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            panels::tie(mtm);
+        }
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
         // A quit that waits for nothing (the documents are answered for) closes the root window.
         if self.app.quit_requested && !self.app.printing.busy() {
@@ -208,11 +214,15 @@ fn services(spool: Spool, intake: FileIntake) -> Services {
         (!cfg!(target_os = "macos")).then(|| -> MakeDefault { Box::new(|| craft::platform::default_app::make_default(&default_apps::identity())) });
     #[cfg(not(any(unix, windows)))]
     let make_default_app: Option<MakeDefault> = None;
+    // macOS only: More Colors… shows the system Colors panel, with Cancel and OK, as Mac apps do.
+    craft::color_ui::ui::use_system_color_panel(cfg!(target_os = "macos"));
     Services {
         print: Some(spool),
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
         make_default_app,
         intake: Some(intake),
+        // macOS only: the Paragraph dialog opens as a utility panel in a window of its own.
+        paragraph_window: cfg!(target_os = "macos"),
         ..Default::default()
     }
 }

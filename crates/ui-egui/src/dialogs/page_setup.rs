@@ -125,6 +125,8 @@ pub(crate) struct PageSetupHost {
     was: PageSetup,
     unit: UnitKind,
     held: HeldAnswer<PageSetup>,
+    /// The title of the window of its own (a macOS utility panel, `Services::paragraph_window`), when it has one.
+    window: Option<String>,
 }
 
 impl StackDialog for PageSetupHost {
@@ -132,6 +134,14 @@ impl StackDialog for PageSetupHost {
 
     fn id(&self) -> DialogId {
         dialog_id("pageSetup")
+    }
+
+    fn windowed(&self) -> bool {
+        self.window.is_some()
+    }
+
+    fn window_title(&self) -> Option<String> {
+        self.window.clone()
     }
 
     fn key(&self) -> Option<&str> {
@@ -156,7 +166,8 @@ impl StackDialog for PageSetupHost {
         if self.held.finish().is_some() {
             return Some(DialogResult::Ok(()));
         }
-        let out = PageSetupDialog::new(Bind::bound(&mut self.setup)).unit(self.unit).layout().direction().held(&mut self.held).show(ui);
+        let bare = self.window.is_some();
+        let out = PageSetupDialog::new(Bind::bound(&mut self.setup)).unit(self.unit).layout().direction().held(&mut self.held).bare(bare).show(ui);
         out.closed.map(|_| DialogResult::Cancel)
     }
 }
@@ -223,6 +234,7 @@ fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
 /// Opens Page Setup on the section holding the caret.
 pub(crate) fn open(app: &mut WordApp, _name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     let setup = read_setup(app);
-    let host = PageSetupHost { was: setup.clone(), setup, unit: crate::options::unit_kind(app.session.units()), held: HeldAnswer::new() };
+    let window = app.services.paragraph_window.then(|| crate::i18n::t("Page Setup").to_owned());
+    let host = PageSetupHost { was: setup.clone(), setup, unit: crate::options::unit_kind(app.session.units()), held: HeldAnswer::new(), window };
     Some(open_with(app, parent, host, DialogHooks { prepare: None, settle }))
 }
