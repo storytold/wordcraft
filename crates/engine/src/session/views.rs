@@ -16,6 +16,7 @@ pub struct WindowView {
     sel: Selection,
     view: ViewState,
     pending: Option<CharProps>,
+    pending_at: Option<Pos>,
     goal_x: Option<f32>,
     page_hint: usize,
     hf_return: Option<Selection>,
@@ -65,6 +66,7 @@ impl Session {
             sel: replace(&mut self.sel, Selection::caret(start)),
             view: take(&mut self.view),
             pending: self.pending.take(),
+            pending_at: self.pending_at.take(),
             goal_x: self.goal_x.take(),
             page_hint: take(&mut self.page_hint),
             hf_return: self.hf_return.take(),
@@ -91,6 +93,7 @@ impl Session {
             // A new window, or a new pane, starts with one pane of its own.
             view: ViewState { split: false, ..self.view.clone() },
             pending: self.pending.clone(),
+            pending_at: self.pending_at.clone(),
             goal_x: self.goal_x,
             page_hint: self.page_hint,
             hf_return: self.hf_return.clone(),
@@ -122,6 +125,7 @@ impl Session {
             sel,
             view,
             pending,
+            pending_at,
             goal_x,
             page_hint,
             hf_return,
@@ -144,6 +148,7 @@ impl Session {
         self.view = view;
         self.view.follow_prefs(&self.prefs);
         self.pending = pending;
+        self.pending_at = pending_at;
         self.goal_x = goal_x;
         self.page_hint = page_hint;
         self.column_mode = column_mode;
@@ -168,6 +173,10 @@ impl Session {
         self.equation_join_next = false;
         self.ime_text_join = None;
         self.typing = None;
+        // Formatting Backspace carried over was for the text it was deleted from (#6518).
+        if self.pending_at.take().is_some() {
+            self.pending = None;
+        }
         self.also_selected = Vec::new();
         self.column = None;
         self.widened = None;
