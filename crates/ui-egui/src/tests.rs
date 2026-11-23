@@ -485,6 +485,35 @@ fn a_japanese_file_name_is_drawn_in_the_caption() {
     assert!(drawn || cfg!(not(any(target_os = "macos", windows))), "the caption draws the name");
 }
 
+/// #3257 review: the cache key didn't include the document revision, so editing text right
+/// beside an existing match — adding Georgian next to a Latin match already found — left the
+/// newly-visible Georgian in the Results list's context window without a fallback face, since
+/// neither the query nor the (stale, not recomputed by typing alone) result count changed.
+#[test]
+fn editing_beside_an_existing_match_still_gets_a_fallback_face() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Before some text After"})).unwrap();
+    a.run("edit.find", json!({"text": "some text"})).unwrap();
+    a.session.view.nav_pane = true;
+    a.ui.nav_tab = "results".into();
+
+    let before = a.session.find.results.clone();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("text.insert", json!({"text": " ტექსტი"})).unwrap();
+    assert_eq!(a.session.find.results, before, "typing alone doesn't recompute the stale results");
+
+    let mut h = crate::test_harness::builder().allow_missing_glyphs().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
+    h.run_steps(2);
+    let letter = 'ტ';
+    if wordcraft_fonts::FontDb::global().fallback_for(letter, u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
+        let drawn = h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(13.0), "ტექსტი"));
+        assert!(
+            drawn || cfg!(not(any(target_os = "macos", windows))),
+            "Georgian typed beside the match, inside its context window, gets a fallback face too"
+        );
+    }
+}
+
 /// The app opens its window and shows it for a few frames at the size of a laptop screen: the whole
 /// root (shell, slots, body, dialog host) runs in a debug build, where a debug assertion on the
 /// first frame fires that release builds and the components' own trials never reach.
