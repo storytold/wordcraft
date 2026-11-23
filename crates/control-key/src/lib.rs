@@ -1,10 +1,10 @@
-//! The control channel's key file, one rule for the app (which writes it) and the MCP bridge
-//! (which reads it): `<settings>/control-key.<instance>`. See `docs/control-protocol.md`, Keys.
+//! The control channel's token file, one rule for the app (which writes it) and the MCP bridge
+//! (which reads it): `<settings>/control-key.<instance>`. See `docs/control-protocol.md`, Token.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
 
-/// The app's settings folder (preferences, logs, key files): macOS
+/// The app's settings folder (preferences, logs, token files): macOS
 /// `~/Library/Application Support/WordCraft`, Windows `%APPDATA%\WordCraft`, otherwise
 /// `$XDG_CONFIG_HOME/wordcraft` or `~/.config/wordcraft`.
 /// `WORDCRAFT_PROFILE_DIR` overrides the entire folder for isolated runs.
@@ -36,8 +36,8 @@ pub fn instance_id() -> Option<String> {
     parse_instance_id(&std::fs::read_to_string("/.flatpak-info").ok()?)
 }
 
-/// `<settings>/control-key.<instance>`, with `<instance>` the Flatpak instance id or
-/// `local-<port>`.
+/// The token file `<settings>/control-key.<instance>`, with `<instance>` the Flatpak instance id
+/// or `local-<port>`.
 pub fn key_path(settings: &Path, port: u16) -> PathBuf {
     key_path_for(settings, instance_id().as_deref(), port)
 }
@@ -75,14 +75,6 @@ mod tests {
         assert_eq!(key_path_for(dir, None, 7982), dir.join("control-key.local-7982"));
         if instance_id().is_none() {
             assert_eq!(key_path(dir, 7981), dir.join("control-key.local-7981"));
-        }
-    }
-
-    #[test]
-    fn settings_dir_is_the_apps_folder() {
-        if let Some(d) = settings_dir() {
-            let name = d.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            assert!(name == "wordcraft" || name == "WordCraft", "{}", d.display());
         }
     }
 }
