@@ -1,7 +1,7 @@
 use craft::keymap::CommandRef;
 use craft::ui::bars::{Bar, BarKind};
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Entry, Show as _, ShowContainer as _, Trigger, clicked};
+use craft::ui::contract::{Entry, Props as _, Show as _, ShowContainer as _, Trigger, clicked};
 use craft::ui::display::{Divider, Text};
 use craft::ui::menu::Menu;
 use craft::ui::style::TypeRole;
@@ -26,9 +26,9 @@ pub fn has_shape_selected(s: &wordcraft_engine::Session) -> bool {
 }
 
 /// One picker of the reading toolbar: a button that opens a value menu of `entries` and returns the command of
-/// the one picked.
-fn picker(ui: &mut Ui, label: String, entries: &[Entry<CommandRef>]) -> Option<CommandRef> {
-    let button = Button::new(label.clone()).show(ui);
+/// the one picked. A picker that is not `enabled` is shown greyed out.
+fn picker(ui: &mut Ui, label: String, entries: &[Entry<CommandRef>], enabled: bool) -> Option<CommandRef> {
+    let button = Button::new(label.clone()).enabled(enabled).show(ui);
     Menu::new(label).values().opened_by(&button.response, Trigger::Press).pick(ui, entries).picked
 }
 
@@ -76,6 +76,14 @@ pub(super) fn reading_toolbar(app: &mut WordApp, ui: &mut Ui) {
         color_names.iter().map(|(color, name, value)| choice("view.readPageColor", json!(value), name.to_string(), current == *color)).collect();
     let color_label = format!("{}: {}", tl!("Page color"), color_name);
 
+    // Width, size and spacing are for the columns; the printed pages keep the document's own (#7634).
+    let pages = view.read_pages;
+    let layouts = [
+        choice("view.readLayout", json!("columns"), tl!("Columns").to_string(), !pages),
+        choice("view.readLayout", json!("pages"), tl!("Pages").to_string(), pages),
+    ];
+    let layout_label = format!("{}: {}", tl!("Layout"), if pages { tl!("Pages") } else { tl!("Columns") });
+
     // The bar's closures only record what was picked: the commands run after the bar, which holds no `app`.
     let mut picked: Vec<CommandRef> = Vec::new();
     let mut navigation = false;
@@ -88,13 +96,15 @@ pub(super) fn reading_toolbar(app: &mut WordApp, ui: &mut Ui) {
             // PLAN: assumed `craft::ui::theme::TypeRole` is the re-export path of the theme's type roles.
             Text::new(tl!("Reading Mode").to_string()).role(TypeRole::Heading).show(ui);
             Divider::vertical().show(ui);
-            picked.extend(picker(ui, column_label.clone(), &columns));
+            picked.extend(picker(ui, column_label.clone(), &columns, !pages));
             Divider::vertical().show(ui);
-            picked.extend(picker(ui, size_label.clone(), &sizes));
+            picked.extend(picker(ui, size_label.clone(), &sizes, !pages));
             Divider::vertical().show(ui);
-            picked.extend(picker(ui, spacing_label.clone(), &spacings));
+            picked.extend(picker(ui, spacing_label.clone(), &spacings, !pages));
             Divider::vertical().show(ui);
-            picked.extend(picker(ui, color_label.clone(), &colors));
+            picked.extend(picker(ui, color_label.clone(), &colors, true));
+            Divider::vertical().show(ui);
+            picked.extend(picker(ui, layout_label.clone(), &layouts, true));
             Divider::vertical().show(ui);
             // Headings to jump to, in the Navigation pane beside the columns (Outline view
             // is an editing layout, so it isn't offered here).

@@ -174,8 +174,10 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
             ReadPageColor::Inverse => wordcraft_doc::props::Rgb::WHITE,
         });
     }
-    opts.display.dim_header = !dim_body;
-    opts.display.dim_body = dim_body;
+    // Read Mode shows the pages as they print, with nothing faded (#7634).
+    let reading = app.session.view.read_mode;
+    opts.display.dim_header = !dim_body && !reading;
+    opts.display.dim_body = dim_body && !reading;
     opts
 }
 

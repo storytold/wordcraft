@@ -13,14 +13,20 @@ impl Session {
 
     /// [`Session::layout`] with `typing` as the word being typed.
     fn layout_with(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Arc<DocLayout> {
-        let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
+        // Read Mode's pages are Print Layout's whatever view it was entered from (#7634); its columns are their own
+        // layout.
+        let mode = match (self.view.read_mode, self.view.read_pages) {
+            (true, false) => ViewMode::Read,
+            (true, true) => ViewMode::Print,
+            (false, _) => self.view.mode,
+        };
         let width = match mode {
             ViewMode::Read => self.view.read_width,
             ViewMode::Web => self.view.web_width,
             _ => DRAFT_WIDTH,
         };
-        let height = if self.view.read_mode { self.view.read_height } else { 0.0 };
-        let spacing = if self.view.read_mode { self.view.read_line_spacing.map(f32::to_bits) } else { None };
+        let height = if mode == ViewMode::Read { self.view.read_height } else { 0.0 };
+        let spacing = if mode == ViewMode::Read { self.view.read_line_spacing.map(f32::to_bits) } else { None };
         // Deletions in balloons depend on the view (the Comments pane, Read Mode, side by side), so
         // a view change that moves them in or out of the text lays it out again.
         let hide_deleted = !self.view.show_markup;

@@ -454,10 +454,18 @@ impl Default for CanvasState {
 fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side: f32, ctx: &egui::Context) -> Option<Pos> {
     let mut reflow_anchor: Option<Pos> = None;
     if app.session.view.read_mode {
+        let forced = std::mem::take(&mut app.canvas.read_force_reflow);
+        if app.session.view.read_pages {
+            // The printed pages keep their size (#7634): only a change of layout moves the text.
+            if forced {
+                reflow_anchor = app.canvas.read_first_visible.clone();
+                app.canvas.scroll_to_caret |= reflow_anchor.is_none();
+            }
+            return reflow_anchor;
+        }
         let scale = ReadingView::screen_scale(app.session.view.read_zoom.clamp(0.75, 1.5));
         let (w, h) = reading_size(full.size(), scale, metrics, app.session.view.read_column_width);
         let changed = (app.session.view.read_width - w).abs() > 0.5 || (app.session.view.read_height - h).abs() > 0.5;
-        let forced = std::mem::take(&mut app.canvas.read_force_reflow);
         if changed || forced {
             reflow_anchor = app.canvas.read_first_visible.clone();
             app.session.view.read_width = w;
@@ -698,9 +706,10 @@ fn paper_color(app: &WordApp) -> Color32 {
 
 /// Read Mode: the reading columns, with the page-turn row under them.
 fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect, metrics: &ReadingMetrics) {
-    let zoom = app.session.view.read_zoom.clamp(0.75, 1.5);
     let paper = DataColor::new(paper_color(app));
     let columns = Rect::from_min_max(full.min, pos2(full.max.x, (full.max.y - metrics.nav_bar).max(full.min.y)));
+    let zoom =
+        if app.session.view.read_pages { pages_zoom(layout, columns, metrics.column_gap) } else { app.session.view.read_zoom.clamp(0.75, 1.5) };
     let footer = Rect::from_min_max(pos2(full.min.x, columns.max.y), full.max);
     let mut state = std::mem::take(&mut app.canvas.reading);
     let source = source::WordPages::new(app, layout, false, None);
@@ -726,6 +735,15 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
     if nav.action {
         let _ = app.run("view.printLayout", json!({}));
     }
+}
+
+/// The zoom that fits every printed page in Read Mode's `area` (#7634): the tallest page's whole height, and the widest
+/// page's width with a gap on each side.
+fn pages_zoom(layout: &DocLayout, area: Rect, gap: f32) -> f32 {
+    let (w, h) = layout.pages.iter().fold((0.0_f32, 0.0_f32), |(w, h), p| (w.max(p.w), h.max(p.h)));
+    let per_point = ReadingView::screen_scale(1.0);
+    let fit = ((area.height() - gap) / (h * per_point)).min((area.width() - 2.0 * gap) / (w * per_point));
+    if fit.is_finite() && fit > 0.0 { fit } else { 1.0 }
 }
 
 /// Render the document canvas for the current frame: the pages (or Read Mode's columns) and everything over them.

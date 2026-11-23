@@ -226,6 +226,109 @@ fn read_mode_page_color_sets_the_reading_paper() {
     assert!(page_render_options(&a, false).dark, "Print Layout keeps Switch Modes");
 }
 
+/// Read Mode › View › Layout › Pages (#7634): every printed page fits the reading area whole, by
+/// the tallest page's height or the widest page's width, whichever is tighter, also when a
+/// landscape section follows a portrait one.
+#[test]
+fn read_mode_pages_fit_the_reading_area() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Portrait")), Default::default());
+    a.run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    a.run("layout.orientation", json!({"value": "landscape"})).unwrap();
+    a.run("view.readMode", json!({})).unwrap();
+    a.run("view.readLayout", json!({"value": "pages"})).unwrap();
+    let layout = a.session.layout();
+    assert!(layout.pages.len() == 2 && layout.pages[0].w < layout.pages[1].w, "a portrait page, then a landscape one");
+    let per_point = ReadingView::screen_scale(1.0);
+    let gap = 16.0;
+    for area in [Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1400.0, 700.0)), Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(500.0, 900.0))] {
+        let scale = pages_zoom(&layout, area, gap) * per_point;
+        for (i, page) in layout.pages.iter().enumerate() {
+            let (w, h) = (page.w * scale, page.h * scale);
+            assert!(h <= area.height() - gap + 0.01 && w <= area.width() - 2.0 * gap + 0.01, "{area:?}: page {i} at {w}×{h} fits");
+        }
+        let (w, h) = layout.pages.iter().fold((0.0_f32, 0.0_f32), |(w, h), p| (w.max(p.w * scale), h.max(p.h * scale)));
+        assert!((area.height() - gap - h).abs() < 0.01 || (area.width() - 2.0 * gap - w).abs() < 0.01, "{area:?}: the pages fill the tighter side");
+    }
+}
+
+/// Read Mode shows the pages as they print: their headers and footers aren't faded, as they are
+/// while the body is being edited in Print Layout.
+#[test]
+fn read_mode_pages_show_headers_and_footers_as_printed() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+    assert!(page_render_options(&a, false).display.dim_header, "editing the body fades the header");
+    a.run("view.readMode", json!({})).unwrap();
+    a.run("view.readLayout", json!({"value": "pages"})).unwrap();
+    let opts = page_render_options(&a, false);
+    assert!(!opts.display.dim_header && !opts.display.dim_body);
+}
+
+/// Switching Read Mode between its columns and the printed pages keeps the text that was first on
+/// screen in view, both ways.
+#[test]
+fn read_mode_layout_switch_keeps_the_reading_place() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&"Reading pages. ".repeat(2000))), Default::default());
+    a.run("view.readMode", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    h.state_mut().canvas.reading.column = 12;
+    steps(&mut h, 3);
+    for layout in ["pages", "columns"] {
+        let anchor = h.state_mut().canvas.read_first_visible.clone().expect("the first text on screen");
+        h.state_mut().run("view.readLayout", json!({"value": layout})).unwrap();
+        steps(&mut h, 4);
+        let laid = h.state_mut().session.layout();
+        let at = reading_anchor_page(&laid, &anchor).expect("the text is laid out");
+        assert!(at > 0, "{layout}: not back at the start");
+        assert_eq!(h.state_mut().canvas.reading.column, at, "{layout}: the page or column holding the text");
+    }
+}
+
+/// The reading toolbar's Layout picker switches Read Mode to the printed pages and back; while the
+/// pages are shown, Column width, Text size and Line spacing, which are for the columns, are off.
+#[test]
+fn reading_toolbar_layout_picker_shows_the_pages() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&"Reading pages. ".repeat(600))), Default::default());
+    a.run("view.readMode", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let disabled = |h: &H, label: &str| h.get_by_role_and_label(Role::Button, label).accesskit_node().is_disabled();
+    assert!(!disabled(&h, "Column width: Auto"));
+    h.get_by_role_and_label(Role::Button, "Layout: Columns").click();
+    steps(&mut h, 3);
+    h.query_all_by_label("Pages").find(|n| n.accesskit_node().role() != Role::Button).expect("Pages in the Layout menu").click();
+    steps(&mut h, 4);
+    assert!(h.state_mut().session.view.read_pages);
+    let print = h.state_mut().session.export_layout().pages.len();
+    assert_eq!(h.state_mut().session.layout().pages.len(), print, "the pages as they print");
+    for label in ["Column width: Auto", "Text size: 100%", "Line spacing: Document"] {
+        assert!(disabled(&h, label), "{label} is for the columns");
+    }
+    assert!(!disabled(&h, "Layout: Pages"));
+    h.get_by_role_and_label(Role::Button, "Layout: Pages").click();
+    steps(&mut h, 3);
+    h.query_all_by_label("Columns").find(|n| n.accesskit_node().role() != Role::Button).expect("Columns in the Layout menu").click();
+    steps(&mut h, 4);
+    assert!(!h.state_mut().session.view.read_pages);
+    assert!(!disabled(&h, "Column width: Auto"));
+}
+
 /// What the canvas draws over the pages (ink, object drag previews, table drag arrows) and the
 /// paper drawn under a page before its raster follow Read Mode's Page color, not Switch Modes.
 #[test]

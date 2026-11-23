@@ -72,6 +72,9 @@ pub struct ViewState {
     /// Read Mode's Page Color: the paper the reading columns are drawn on. `Prefs` saves its value.
     #[serde(skip)]
     pub read_page_color: crate::cmd::view::ReadPageColor,
+    /// Read Mode's Layout (#7634): the pages as they print instead of the reading columns.
+    #[serde(skip)]
+    pub read_pages: bool,
     pub dark_mode: bool,
     pub show_markup: bool,
     pub track_changes_pane: bool,
@@ -204,6 +207,7 @@ impl Default for ViewState {
             read_zoom: default_read_zoom(),
             read_line_spacing: None,
             read_page_color: Default::default(),
+            read_pages: false,
             dark_mode: false,
             show_markup: true,
             track_changes_pane: false,

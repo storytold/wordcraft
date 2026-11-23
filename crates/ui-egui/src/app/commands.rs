@@ -386,7 +386,7 @@ impl WordApp {
         if id == "view.outline" {
             self.ui.nav_tab = "headings".into();
         }
-        if matches!(id, "view.readColumnWidth" | "view.readTextSize" | "view.readLineSpacing") {
+        if matches!(id, "view.readLayout" | "view.readColumnWidth" | "view.readTextSize" | "view.readLineSpacing") {
             self.canvas.read_force_reflow = true;
         }
         if id == "view.readMode" {

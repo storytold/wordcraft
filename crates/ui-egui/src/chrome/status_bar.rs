@@ -243,6 +243,8 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
             }
         });
         let reading = app.session.view.read_mode;
+        // Read Mode's printed pages are fitted to the window: the text size is for its columns (#7634).
+        let enabled = !(reading && app.session.view.read_pages);
         // Reading zoom changes only reading presentation, never the normal view zoom.
         let current = if reading { f64::from(app.session.view.read_zoom) } else { app.canvas.zoom() };
         let percent = (current * 100.0).round();
@@ -258,6 +260,7 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
             let out = IconButton::new(IconId::new("wordcraft.minus"))
                 .label(tl!("Zoom Out").to_string())
                 .tooltip(TooltipSpec::new(tl!("Zoom Out").to_string()))
+                .enabled(enabled)
                 .show(ui);
             rects.push(out.response.rect);
             if out.response.clicked() {
@@ -273,6 +276,7 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
                     // A plain rail, as the old zoom slider's (prod `chrome.rs:911`): no fill up to the thumb.
                     .fill(false)
                     .label(name.to_string())
+                    .enabled(enabled)
                     .show(ui);
                 rects.push(slider.response().rect);
                 if let Some(v) = slider.value() {
@@ -283,6 +287,7 @@ fn controls(app: &mut WordApp, ui: &mut Ui, fit: usize) -> Option<egui::Rect> {
             let out = IconButton::new(IconId::new("wordcraft.plus"))
                 .label(tl!("Zoom In").to_string())
                 .tooltip(TooltipSpec::new(tl!("Zoom In").to_string()))
+                .enabled(enabled)
                 .show(ui);
             rects.push(out.response.rect);
             if out.response.clicked() {

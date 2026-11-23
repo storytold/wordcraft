@@ -7843,6 +7843,53 @@ fn reading_page_color_is_a_transient_view_setting() {
     assert_eq!(s.view.read_zoom, 1.0);
 }
 
+/// Read Mode › View › Layout (#7634): Pages shows the pages as Print Layout lays them out, and
+/// Columns goes back to the reading columns. A view setting that leaves the document alone and
+/// resets on each entry, like the other reading controls.
+#[test]
+fn reading_layout_shows_the_printed_pages() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A long paragraph for reading. ".repeat(200)}));
+    let original = s.doc.clone();
+    let print = s.export_layout();
+    let dirty = s.dirty;
+    run(&mut s, "view.readMode", json!({}));
+    s.view.read_width = 240.0;
+    s.view.read_height = 420.0;
+    let columns = s.layout().pages.len();
+    assert!(columns > print.pages.len(), "the columns are not the printed pages");
+    assert_eq!(s.run("view.readLayout", &json!({"value": "pages"})).unwrap(), json!({"layout": "pages"}));
+    let pages = s.layout();
+    assert_eq!(pages.pages.len(), print.pages.len());
+    assert!(pages.pages.iter().zip(&print.pages).all(|(a, b)| (a.w, a.h) == (b.w, b.h)));
+    // Width, size and spacing shape the columns, also when automation asks while the pages are shown.
+    for (id, value) in [("view.readColumnWidth", json!("wide")), ("view.readTextSize", json!(125)), ("view.readLineSpacing", json!(2.0))] {
+        assert!(s.run(id, &json!({"value": value})).is_err(), "{id}");
+    }
+    for bad in [json!({"value": "paper"}), json!({"value": true}), json!({})] {
+        assert!(s.run("view.readLayout", &bad).is_err(), "{bad}");
+    }
+    assert!(s.view.read_pages, "rejected values keep the layout");
+    assert!(serde_json::to_value(&s.view).unwrap().get("readPages").is_none());
+    run(&mut s, "view.readLayout", json!({"value": "columns"}));
+    assert_eq!(s.layout().pages.len(), columns);
+    run(&mut s, "view.readLineSpacing", json!({"value": 2.0}));
+    run(&mut s, "view.readLayout", json!({"value": "pages"}));
+    run(&mut s, "view.printLayout", json!({}));
+    run(&mut s, "view.readMode", json!({}));
+    assert!(!s.view.read_pages, "Read Mode opens in columns");
+    // Immersive Reader enters Read Mode from any view: the pages are still the printed ones.
+    run(&mut s, "view.webLayout", json!({}));
+    run(&mut s, "view.immersive", json!({}));
+    run(&mut s, "view.readLayout", json!({"value": "pages"}));
+    assert_eq!(s.layout().pages.len(), print.pages.len(), "Print Layout's pages, not Web Layout's");
+    run(&mut s, "view.immersive", json!({}));
+    run(&mut s, "view.immersive", json!({}));
+    assert!(!s.view.read_pages, "Immersive Reader opens in columns too");
+    assert_eq!(s.doc, original);
+    assert_eq!(s.dirty, dirty);
+}
+
 #[test]
 fn reading_page_color_follows_saved_prefs_and_new_documents() {
     use crate::cmd::view::ReadPageColor;
