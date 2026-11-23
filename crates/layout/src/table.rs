@@ -1774,6 +1774,17 @@ fn overfull_shares(pcts: &[f32], total: f32, floor: f32) -> Vec<f32> {
 /// (measured in Word: 2 pt, with or without a table width).
 const FIXED_PCT_MIN_COLUMN: f32 = 2.0;
 
+/// The 4 pt a nearly empty column is given at least comes out of the other columns, in
+/// proportion to what each has above it, so the table keeps `room` (its own width).
+fn floors_within(grid: &mut [f32], room: f32) {
+    let over = grid.iter().sum::<f32>() - room;
+    let spare: f32 = grid.iter().map(|w| (w - 4.0).max(0.0)).sum();
+    if over > 0.01 && spare > over {
+        let k = over / spare;
+        grid.iter_mut().for_each(|w| *w -= (*w - 4.0).max(0.0) * k);
+    }
+}
+
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
 /// - With no cell asking for a width the columns come from their content alone, into `room`
 ///   (the table's own width, `target`, else the text area): each its widest line if they fit,
@@ -1804,6 +1815,9 @@ fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32, pref
             let stretch = if target.is_some() && hi > 0.01 { room / hi } else { 1.0 };
             for (w, c) in grid.iter_mut().zip(content) {
                 *w = (c.1.max(c.0) * stretch).max(4.0);
+            }
+            if target.is_some() {
+                floors_within(grid, room);
             }
             return;
         }
@@ -1881,6 +1895,17 @@ mod width_tests {
         let mut stale = [90.0, 110.0, 100.0];
         apply_pct_widths(&t, &mut stale, 468.0);
         assert!(stale.iter().zip([99.96, 100.02, 100.02]).all(|(g, w)| (g - w).abs() < 0.01), "rebuilt: {stale:?}");
+    }
+
+    /// #6606 review: a table with a width of its own keeps it when a nearly empty column takes
+    /// its 4 pt: they come out of the column the table is stretched by.
+    #[test]
+    fn a_stretched_table_keeps_its_width_beside_a_nearly_empty_column() {
+        let mut table = Table::new(1, 2, 100.0);
+        table.rows[0].cells.iter_mut().for_each(|c| c.props.width = None);
+        let mut grid = [50.0, 50.0];
+        autofit(&mut grid, &[(20.0, 20.0), (0.0, 0.0)], &table, 468.0, None, Some(100.0));
+        assert!((grid.iter().sum::<f32>() - 100.0).abs() < 0.01 && grid[1] >= 4.0 - 0.01 && grid[0] > grid[1], "{grid:?}");
     }
 
     #[test]

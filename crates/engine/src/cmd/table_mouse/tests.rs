@@ -503,12 +503,13 @@ fn a_nested_tables_column_fits_within_its_cell() {
     assert!(b.right() < host.right() - 40.0, "{b:?} in {host:?}");
     s.run("table.fitColumn", &json!({"page": 0, "x": a.right(), "y": mid_y(a)})).unwrap();
     let (a1, b1) = (rect(&mut s, &inner, 0), rect(&mut s, &inner, 1));
-    let text_right = host.right() - wordcraft_layout::cell_margins(&s.doc, &first_table(&s), 0, 0)[3];
+    // The table around it is as wide as the text, so it is narrowed by the outer halves of its
+    // borders, and its columns share that half point by what each can give: the nested table
+    // fills the text of the cell as it is now.
+    let host1 = rect(&mut s, &outer, 0);
+    let text_right = host1.right() - wordcraft_layout::cell_margins(&s.doc, &first_table(&s), 0, 0)[3];
     assert!(a1.w > a.w + 40.0 && (b1.w - b.w).abs() < 0.5, "{a:?} {b:?} → {a1:?} {b1:?}");
     assert!((b1.right() - text_right).abs() < 0.5, "the table fills its cell's text: {b1:?}, {text_right}");
-    // The table around it is as wide as the text, so it is narrowed by the outer halves of its
-    // borders, and its columns share that half point by what each can give.
-    let host1 = rect(&mut s, &outer, 0);
     assert!((host1.x - host.x).abs() < 0.01 && (host1.w - host.w).abs() < 0.5, "the table around it keeps its columns: {host:?}, then {host1:?}");
 }
 

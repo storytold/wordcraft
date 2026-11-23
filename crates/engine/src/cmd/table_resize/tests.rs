@@ -43,6 +43,18 @@ fn a_column_border_drag_trades_width_with_the_neighbour() {
     assert_eq!(first_table(&s), start, "one undo step");
 }
 
+/// A column border let go where it was picked up leaves the table as it was: no width of its
+/// own is recorded, so it still fits the room it has.
+#[test]
+fn a_column_border_let_go_where_it_was_changes_nothing() {
+    let mut s = table_session(2, 3);
+    let start = first_table(&s);
+    let a = cell_rect(&mut s, 0, 0);
+    let y = a.y + a.h / 2.0;
+    s.run("table.resizeDrag", &json!({"page": 0, "x": a.right(), "y": y, "toX": a.right(), "toY": y})).unwrap();
+    assert_eq!(first_table(&s), start);
+}
+
 /// With Shift only the left column changes and the table grows; the right edge does the same.
 #[test]
 fn shift_and_the_right_edge_change_the_table_width() {

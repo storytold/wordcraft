@@ -190,8 +190,9 @@ impl ResizeTarget {
                 Plan { cells, ..Plan::default() }
             }
             Edge::Column(line) => match line.checked_sub(1).and_then(|i| share_out(&mut w, i, dx, share)) {
-                Some(_) => Plan { widths: Some(w), ..Plan::default() },
-                None => Plan::default(),
+                // A border left where it was changes nothing: the table keeps the width it had.
+                Some(d) if d.abs() > 0.0 => Plan { widths: Some(w), ..Plan::default() },
+                _ => Plan::default(),
             },
             Edge::Row(row) => {
                 let Some(r) = self.rows.iter().find(|r| r.row == row) else { return Plan::default() };
