@@ -110,13 +110,16 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Counts, count_tests, walk};
+    use super::count_tests;
 
     #[test]
     fn counts_attributes_and_proptest_blocks() {
         let src = "#[test]\nfn a() {}\n// #[test] commented\n    #[test]\nfn b() {}\nproptest! {\n}\n";
         assert_eq!(count_tests(src), (2, 1));
     }
+
+    #[cfg(unix)]
+    use super::{Counts, walk};
 
     #[cfg(unix)]
     #[test]
