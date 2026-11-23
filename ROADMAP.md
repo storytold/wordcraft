@@ -151,7 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-23: Unlocked DATE and TIME fields are refreshed on open, and updated by Update Field, with one walk of each paragraph (#6318). Each field's language was found by rescanning the paragraph's text and runs, so opening a paragraph of many DATE fields cost the square of their number. Languages and results are unchanged; a step-count test checks that 8x the fields costs about 8x the work.
+- 2026-11-23: Unlocked DATE and TIME fields are refreshed on open, and updated by Update Field, with one walk of each paragraph (#6318). Each field's language was found by rescanning the paragraph's text and runs, so opening a paragraph of many DATE fields cost the square of their number. Languages and results are unchanged; a test counts the characters the lookups walk and checks that 8x the fields take about 8x those steps.
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
 - 2026-11-20: `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root` (shared rule 18, #7124); without them it stops with an error naming the two flags, where it used to serve with access to every file the user can reach. `mcp --connect` is refused until the desktop app confines its control channel to the same roots (#3695, #5819). The help, `docs/mcp.md`, the README and `AGENTS.md` pass both roots in every example.
