@@ -161,3 +161,67 @@ pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
 pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
 }
+
+#[cfg(test)]
+mod tests {
+    /// Fast at first, then slowing to rest: 0 → 1.
+    pub(super) fn ease_out_cubic(p: f32) -> f32 {
+        1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3)
+    }
+
+    const UNDERLINE_SLIDE_SECS: f64 = 0.2;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Underline {
+        tab: String,
+        from: (f32, f32),
+        to: (f32, f32),
+        start: f64,
+    }
+
+    fn underline_at(u: &Underline, now: f64) -> (f32, f32) {
+        let e = ease_out_cubic(((now - u.start) / UNDERLINE_SLIDE_SECS) as f32);
+        (egui::lerp(u.from.0..=u.to.0, e), egui::lerp(u.from.1..=u.to.1, e))
+    }
+
+    pub(super) fn slide_underline(ui: &egui::Ui, tab: &str, target: egui::Rect, color: egui::Color32, now: f64, animate: bool) {
+        let id = egui::Id::unique("tab_underline");
+        let prev: Option<Underline> = ui.ctx().data(|d| d.get_temp(id));
+        let snap = Underline { tab: tab.to_owned(), from: (target.center().x, target.width()), to: (target.center().x, target.width()), start: now };
+        let next = match prev {
+            Some(p) if animate && p.tab != tab => Underline { from: underline_at(&p, now), ..snap },
+            Some(p) if animate && now - p.start < UNDERLINE_SLIDE_SECS => Underline { to: (target.center().x, target.width()), ..p },
+            _ => snap,
+        };
+        let (x, width) = underline_at(&next, now);
+        if next.from != next.to && now - next.start < UNDERLINE_SLIDE_SECS {
+            ui.ctx().request_repaint();
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(id, next));
+        ui.painter().rect_filled(egui::Rect::from_center_size(egui::pos2(x, target.center().y), egui::vec2(width, target.height())), 2.0, color);
+    }
+
+    #[test]
+    fn tab_underline_slides_and_can_reverse_mid_motion() {
+        let ctx = egui::Context::default();
+        let draw = |tab: &str, x: f32, now: f64| {
+            ctx.run_ui(egui::RawInput { time: Some(now), ..Default::default() }, |ui| {
+                slide_underline(
+                    ui,
+                    tab,
+                    egui::Rect::from_min_size(egui::pos2(x - 25.0, 10.0), egui::vec2(50.0, 3.0)),
+                    egui::Color32::WHITE,
+                    now,
+                    true,
+                );
+            })
+            .drop_without_applying_deltas();
+        };
+        draw("Home", 40.0, 1.0);
+        draw("Insert", 140.0, 2.0);
+        let frame = ctx.run_ui(egui::RawInput { time: Some(2.1), ..Default::default() }, |ui| {
+            slide_underline(ui, "Draw", egui::Rect::from_min_size(egui::pos2(215.0, 10.0), egui::vec2(50.0, 3.0)), egui::Color32::WHITE, 2.1, true);
+        });
+        assert!(!frame.shapes.is_empty());
+    }
+}
