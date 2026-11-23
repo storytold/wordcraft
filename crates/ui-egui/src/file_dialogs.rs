@@ -1,50 +1,30 @@
 //! File dialogs (Open, Save As, Export, Insert/Change Picture) that don't freeze the window (#94).
 //!
-//! A host with [`Services::file_dialog`](crate::Services::file_dialog) shows the native dialog
-//! without blocking the UI thread and sends the answer back later; [`WordApp::logic`] picks it up
-//! on a later frame and finishes what the dialog was for (open the file, save and carry on with a
-//! pending New/Open/Close, export, insert the picture). A host with only the blocking
-//! `pick_open` / `pick_save` gets the same follow-up straight away. One dialog at a time: asking
+//! Every dialog is a ticket on the host's file service (`host.files().pick`). [`WordApp::logic`]
+//! takes the answer on a later frame and finishes what the dialog was for (open the file, save
+//! and carry on with a pending New/Open/Close, export, insert the picture). A service that
+//! already holds the answer finishes the job inside the request. One dialog at a time: asking
 //! for another while one is open does nothing.
 //!
-//! When the host can't show a system dialog at all (a Linux desktop with neither a file chooser
-//! portal nor zenity, #576) it answers with an error, and the app finishes the job in its own
-//! [`file_browser`](crate::file_browser) instead.
+//! When no system dialog can open (a Linux desktop with neither a file chooser portal nor
+//! zenity, #576) the service opens the framework's fallback chooser itself; the app only asks
+//! for it by name with [`PickRequest::fallback`].
 
-use std::sync::mpsc::{Receiver, TryRecvError};
-
+use craft::host::{PickId, PickRequest, Picked};
 use serde_json::{Value, json};
 
 use crate::WordApp;
 
-/// A file dialog the app asks the host to show ([`Services::file_dialog`](crate::Services::file_dialog)).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FileDialogRequest {
-    /// Pick a file to open; `purpose` says what for (`document`, `picture`, `recipients`, `font`,
-    /// `sources`), as for `pick_open`.
-    Open { purpose: String },
-    /// Pick one or more files (Add Font…); the answer lists every one picked.
-    OpenMany { purpose: String },
-    /// Pick a path to save to, given a suggested file name and, if it matters, the folder to
-    /// start in (Save as Word Template starts in the user templates folder, #2852).
-    Save { name: String, dir: Option<String> },
-}
-
-/// The host's answer to a [`FileDialogRequest`]: the picked paths (one for everything but
-/// [`FileDialogRequest::OpenMany`]), empty when the user cancelled, or an error when no system
-/// dialog could be shown (the app then shows its own).
-pub type FileDialogAnswer = Result<Vec<String>, String>;
-
 /// Most font files one Add Font pick tries; the rest of a bigger selection is skipped.
 const MAX_FONTS_PER_PICK: usize = 2000;
 
-const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
+/// Picture suffixes shared by native/web choosers, drop dispatch and copied-file paste.
+pub const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "wmf", "emf"];
 const DOCUMENTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change
 /// Picture, recipient lists for Select Recipients › Use an Existing List…, documents otherwise.
-/// The host's system dialog and the built-in browser offer the same.
 pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'static str])] {
     match purpose {
         "picture" => &[("Pictures", PICTURES)],
@@ -53,6 +33,25 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
+}
+
+/// Whether a file name has a picture suffix offered by the Insert/Change Picture chooser.
+pub(crate) fn is_picture_name(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| PICTURES.iter().any(|known| known.eq_ignore_ascii_case(ext)))
+}
+
+/// `request` with the file types `open_filters` offers for `purpose`.
+fn with_open_filters(mut request: PickRequest, purpose: &str) -> PickRequest {
+    for (label, exts) in open_filters(purpose) {
+        request = request.filter(tl!(label), exts);
+    }
+    request
+}
+
+/// A path as the status line shows it: isolated in a right-to-left interface, unchanged otherwise.
+fn interface_path(path: &str) -> String {
+    let dir = if crate::i18n::current().rtl() { craft::i18n::Direction::Rtl } else { craft::i18n::Direction::Ltr };
+    craft::i18n::path(path, dir)
 }
 
 /// What to do with the path picked in a dialog.
@@ -75,11 +74,6 @@ pub(crate) enum AfterPick {
     /// document through Manage Sources (#2640).
     #[cfg(not(target_arch = "wasm32"))]
     Sources,
-    /// Hand the picked path to the open dialog (`WordApp::dialog_pick`): Templates and Add-ins,
-    /// Organizer (#377).
-    ForDialog,
-    /// Put the picked document into the Compare dialog (original or revised, #412).
-    ComparePath { revised: bool },
 }
 
 /// What to do once Save As has written the document.
@@ -87,19 +81,14 @@ pub(crate) enum AfterSave {
     Nothing,
     /// The AutoSave switch asked for the save: turn AutoSave on.
     AutoSave,
-    /// "Save changes?" answered Save: run the command it held back (New, Open, Close…), as long as
-    /// the document is safely written and is still the one the prompt asked about.
-    Continue {
-        then: String,
-        params: Value,
-        document: u64,
-    },
+    /// "Save changes?" answered Save: the command it held back (New, Open, Close…) lives in
+    /// `closing` and runs once the document is safely written and is still the one asked about.
+    Closing,
 }
 
-/// A dialog the host is showing; the answer arrives on `rx` (`None`: cancelled).
+/// A dialog the file service is showing; its answer is taken by `id`.
 pub(crate) struct PendingDialog {
-    rx: Receiver<FileDialogAnswer>,
-    req: FileDialogRequest,
+    id: PickId,
     after: AfterPick,
 }
 
@@ -107,117 +96,140 @@ pub(crate) struct PendingDialog {
 pub(crate) enum Asked {
     /// Another file dialog is still open; nothing happened.
     Busy,
-    /// The host shows the dialog; the answer is handled on a later frame.
+    /// The service shows the dialog; the answer is handled on a later frame.
     Pending,
-    /// The host answered straight away and the follow-up ran.
+    /// The service answered on its first poll and the follow-up ran.
     Done(Result<Value, String>),
 }
 
 impl WordApp {
-    /// Whether a file dialog is open (its answer hasn't arrived yet), the host's or the built-in one.
+    /// Whether a file dialog is open (its answer hasn't arrived yet).
     pub fn file_dialog_open(&self) -> bool {
-        self.file_dialog.is_some() || self.file_browser_open()
+        self.file_dialog.is_some()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn file_browser_open(&self) -> bool {
-        self.file_browser.open.is_some()
+    /// Forces the fallback chooser for every file dialog (`WORDCRAFT_FILE_DIALOG=builtin`).
+    pub fn with_fallback_chooser(mut self, on: bool) -> Self {
+        self.fallback_chooser = on;
+        self
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn file_browser_open(&self) -> bool {
-        false
-    }
-
-    /// Ask the host for a file and do `after` with the answer: now for a blocking dialog, on a
-    /// later frame for an asynchronous one. Ignored while another dialog is open.
-    pub(crate) fn ask_file(&mut self, req: FileDialogRequest, after: AfterPick) -> Asked {
+    /// Ask the file service for a file and do `after` with the answer. Called in the pass of the
+    /// user's gesture, since the browser's picker needs its activation. Ignored while another
+    /// dialog is open.
+    pub(crate) fn ask_file(&mut self, req: PickRequest, after: AfterPick) -> Asked {
         if self.file_dialog_open() {
             log::debug!("file dialog already open; ignoring {req:?}");
             self.status(tl!("A file dialog is already open."));
             return Asked::Busy;
         }
-        if let Some(show) = &self.services.file_dialog {
-            let rx = show(req.clone());
-            self.file_dialog = Some(PendingDialog { rx, req, after });
-            // A host that answered at once (or failed to show anything) is handled right away.
-            return self.poll_file_dialog().map_or(Asked::Pending, Asked::Done);
-        }
-        let picked = match &req {
-            FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
-                self.services.pick_open.as_ref().and_then(|f| f(purpose))
-            }
-            FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
-        };
-        Asked::Done(self.finish_pick(after, picked))
+        let fallback = req.fallback || self.fallback_chooser;
+        let id = self.host.files().pick(req.fallback(fallback));
+        self.file_dialog = Some(PendingDialog { id, after });
+        // A service that answered at once is handled right away.
+        self.poll_file_dialog().map_or(Asked::Pending, Asked::Done)
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
     /// and finish what it was for. `None` while there is nothing to finish.
     pub(crate) fn poll_file_dialog(&mut self) -> Option<Result<Value, String>> {
-        let answer = match self.file_dialog.as_ref().map(|d| d.rx.try_recv()) {
-            None | Some(Err(TryRecvError::Empty)) => return None,
-            Some(Ok(answer)) => answer,
-            // The host dropped the dialog without an answer: as good as cancelled.
-            Some(Err(TryRecvError::Disconnected)) => Ok(Vec::new()),
-        };
+        let id = self.file_dialog.as_ref()?.id;
+        let picked = self.host.files().take_answer(id)?;
         let d = self.file_dialog.take()?;
-        match answer {
-            Ok(picked) => Some(self.finish_picks(d.after, picked)),
-            Err(reason) => {
-                log::warn!("no system file dialog ({reason}); showing the built-in file browser");
-                self.dialog_unavailable(d.req, d.after)
+        if matches!(d.after, AfterPick::Recipients) {
+            self.recipient_list_pending = false;
+        }
+        match picked {
+            Picked::Cancelled => Some(self.finish_pick(d.after, None)),
+            Picked::Unavailable(cause) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.status(craft::dialogs::ui::UnavailableWords::default().sentence(&cause));
+                #[cfg(target_arch = "wasm32")]
+                self.status(format!("No file dialog can open: {cause}"));
+                Some(self.finish_pick(d.after, None))
             }
+            Picked::Failed(reason) => {
+                // A plain Save As has no prompt to carry the reason to and Backstage hides the
+                // status bar, so the Save As page says it too.
+                if matches!(d.after, AfterPick::SaveAs { after: AfterSave::Nothing, .. }) {
+                    self.fail_save_as(&reason);
+                } else {
+                    self.status(reason);
+                }
+                Some(self.finish_pick(d.after, None))
+            }
+            Picked::Paths(paths) => {
+                let paths = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                Some(self.finish_picks(d.after, paths))
+            }
+            Picked::Contents(files) => Some(self.finish_contents(d.after, files)),
+            // The page handed the save over as a download: the save finishes under that name, which
+            // the engine answers with `downloaded`, and the document keeps the file it had.
+            Picked::Downloaded(name) => Some(self.finish_pick(d.after, Some(name))),
         }
     }
 
-    /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up;
-    /// returns the format of the export it was for, if any.
+    /// Treat the dialog the service is showing as cancelled, e.g. one that never showed up;
+    /// returns the format of the export it was for, if any. `ui.fileBrowser` reuses it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn give_up_file_dialog(&mut self) -> Option<String> {
-        if let Some(cancel) = &self.services.cancel_file_dialog {
-            cancel();
-        }
         let d = self.file_dialog.take()?;
+        self.host.files().forget(d.id);
         let export = if let AfterPick::Export { ext } = &d.after { Some(ext.clone()) } else { None };
         let _ = self.finish_pick(d.after, None);
         export
-    }
-
-    /// The host couldn't show a system dialog (#576): ask in the built-in browser instead, which
-    /// finishes the job later. `None` while it is open.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn dialog_unavailable(&mut self, req: FileDialogRequest, after: AfterPick) -> Option<Result<Value, String>> {
-        self.show_file_browser(req, after, true);
-        None
-    }
-
-    /// The browser has no built-in file browser (it can't list the user's folders): cancelled.
-    #[cfg(target_arch = "wasm32")]
-    fn dialog_unavailable(&mut self, _req: FileDialogRequest, after: AfterPick) -> Option<Result<Value, String>> {
-        Some(self.finish_pick(after, None))
     }
 
     /// Do what the dialog was for with the picked paths (none: the user cancelled). Only Add Font
     /// takes more than one; the others use the first.
     fn finish_picks(&mut self, after: AfterPick, picked: Vec<String>) -> Result<Value, String> {
         match after {
-            AfterPick::Font if !picked.is_empty() => self.add_fonts(picked),
+            AfterPick::Font if !picked.is_empty() => self.add_fonts(picked.into_iter().map(|p| (p.clone(), json!({"path": p}))).collect()),
             after => self.finish_pick(after, picked.into_iter().next()),
         }
     }
 
-    /// Add each picked font file, going on past the ones that fail, and say how it went in one
-    /// status line (#1789). One file keeps `font.add`'s own result and message.
-    fn add_fonts(&mut self, mut paths: Vec<String>) -> Result<Value, String> {
-        if paths.len() == 1 {
-            return self.run("font.add", json!({"path": paths.remove(0)}));
+    /// Do what the dialog was for with files the host handed over as bytes (the browser's picker
+    /// reads them: a name and the data, no path). Only Add Font takes more than one.
+    fn finish_contents(&mut self, after: AfterPick, mut files: Vec<(String, Vec<u8>)>) -> Result<Value, String> {
+        use wordcraft_engine::cmd::insert::base64_encode;
+        if files.is_empty() {
+            return self.finish_pick(after, None);
         }
-        let skipped = paths.len().saturating_sub(MAX_FONTS_PER_PICK);
-        paths.truncate(MAX_FONTS_PER_PICK);
+        match after {
+            AfterPick::Font => {
+                let fonts = files.into_iter().map(|(name, bytes)| (name.clone(), json!({"name": name, "data": base64_encode(&bytes)}))).collect();
+                self.add_fonts(fonts)
+            }
+            after => {
+                let (name, bytes) = files.swap_remove(0);
+                let data = base64_encode(&bytes);
+                match after {
+                    AfterPick::OpenDocument { .. } => {
+                        let r = self.run("file.open", json!({"path": name, "data": data}));
+                        self.ui.backstage = false;
+                        r
+                    }
+                    AfterPick::Picture => self.insert_or_change_picture(json!({"data": data})),
+                    AfterPick::Recipients => self.load_recipients(json!({"path": name, "data": data})),
+                    _ => Err("this kind of pick answers with a path".into()),
+                }
+            }
+        }
+    }
+
+    /// Add each picked font file, going on past the ones that fail, and say how it went in one
+    /// status line (#1789). Each font is its display name and the `font.add` params that read it;
+    /// one font keeps `font.add`'s own result and message.
+    fn add_fonts(&mut self, mut fonts: Vec<(String, Value)>) -> Result<Value, String> {
+        if fonts.len() == 1 {
+            return self.run("font.add", fonts.remove(0).1);
+        }
+        let skipped = fonts.len().saturating_sub(MAX_FONTS_PER_PICK);
+        fonts.truncate(MAX_FONTS_PER_PICK);
         let (mut added, mut failed) = (0usize, Vec::new());
-        for path in paths {
-            match self.run("font.add", json!({"path": path})) {
+        for (path, params) in fonts {
+            match self.run("font.add", params) {
                 Ok(_) => added += 1,
                 Err(e) => {
                     log::warn!("couldn't add font {path}: {e}");
@@ -263,7 +275,7 @@ impl WordApp {
             }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                self.add_fonts(vec![path])
+                self.add_fonts(vec![(path.clone(), json!({"path": path}))])
             }
             #[cfg(not(target_arch = "wasm32"))]
             AfterPick::Sources => {
@@ -281,20 +293,9 @@ impl WordApp {
                 }
                 r
             }
-            AfterPick::ForDialog => {
-                let picked = picked.filter(|p| !p.is_empty());
-                let r = json!({"picked": picked});
-                self.dialog_pick = picked;
-                Ok(r)
-            }
             AfterPick::Recipients => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.load_recipients(json!({"path": path}))
-            }
-            AfterPick::ComparePath { revised } => {
-                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                crate::dialogs_review::set_compare_path(self, revised, path);
-                Ok(json!({"picked": true}))
             }
             AfterPick::Export { ext } => {
                 let Some(mut path) = picked else {
@@ -306,8 +307,8 @@ impl WordApp {
                     self.run("file.exportPng", json!({"path": path}))
                 } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
                     // The engine takes an explicit format only for an .xml path, and a system Save
-                    // dialog lets the user type any name: give it the extension, as the built-in
-                    // browser does (`notes.docx` becomes `notes.xml`, `notes.v2` `notes.v2.xml`).
+                    // dialog lets the user type any name: give it the extension
+                    // (`notes.docx` becomes `notes.xml`, `notes.v2` `notes.v2.xml`).
                     let named = crate::print_page::export_name(&path, "xml");
                     if named != path {
                         path = named;
@@ -326,7 +327,7 @@ impl WordApp {
                 match &r {
                     Ok(_) => {
                         self.clear_export_error();
-                        self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
+                        self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &interface_path(&path))]));
                     }
                     Err(e) => {
                         self.fail_export(e.clone());
@@ -340,7 +341,7 @@ impl WordApp {
                 params["path"] = json!(path);
                 let r = self.run("file.printPdf", params);
                 if r.is_ok() {
-                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
+                    self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &interface_path(&path))]));
                 }
                 r
             }
@@ -353,15 +354,17 @@ impl WordApp {
                     self.show_document(document)?;
                 }
                 // The save's error, kept for the Save Changes prompt to explain (#1445). A plain
-                // Save As (Backstage's Browse…, AutoSave) has no prompt to carry it to, so it was
-                // otherwise dropped: a failed write (no permission, disk full, a bad path) left the
-                // Save As page sitting there with nothing to say why, since its own render loop
-                // skips the status bar while Backstage is open. `fail_save_as` reaches both.
+                // Save As (Backstage's Browse…, AutoSave) has no prompt to carry it to, so a
+                // failed write would otherwise leave the Save As page with nothing to say why,
+                // since its own render loop skips the status bar while Backstage is open.
+                // `fail_save_as` reaches both.
                 let result = picked.map(|path| self.run("file.save", json!({"path": path})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
                 if saved {
                     self.ui.backstage = false;
-                    self.canvas.want_focus = true;
+                    if let Some(ctx) = self.ctx.clone() {
+                        self.canvas.focus_page(&ctx);
+                    }
                     self.clear_save_as_error();
                 }
                 match after {
@@ -379,15 +382,8 @@ impl WordApp {
                         }
                         Ok(json!({"saved": saved}))
                     }
-                    AfterSave::Continue { then, params, document } => {
-                        if let Some(Err(error)) = result {
-                            return Err(self.save_failed(&error, then, params, document));
-                        }
-                        if !self.safely_saved(saved) || document != self.session.document_id() {
-                            return Ok(json!({"done": false}));
-                        }
-                        self.execute_held_back(&then, params).map(|r| json!({"done": true, "result": r}))
-                    }
+                    // PLAN(shell-w8): sh.A7 continue_after_save
+                    AfterSave::Closing => self.continue_after_save(result, saved),
                 }
             }
         }
@@ -399,14 +395,10 @@ impl WordApp {
     }
 
     /// A plain Save As (Backstage's Browse…, AutoSave) failed to write: say so on the status bar,
-    /// and, if the Save As page is what's showing, there too — its own render loop skips the
-    /// status bar while Backstage is open, so that page was otherwise left with nothing to explain
-    /// a failed write (no permission, disk full, a bad path).
+    /// and on the Save As page, whose render loop skips the status bar while Backstage is open.
     fn fail_save_as(&mut self, error: &str) {
         self.status(error.to_string());
-        if let Some(ctx) = self.ctx.clone() {
-            ctx.data_mut(|d| d.insert_temp(crate::backstage::save_as_error_id(), error.to_string()));
-        }
+        self.backstage_state.save_as_error = Some(error.to_string());
     }
 
     /// An export failed or was refused: say so on the status bar and, for the Export page,
@@ -423,19 +415,22 @@ impl WordApp {
 
     /// Drop a Save As page error once a later attempt has actually saved.
     fn clear_save_as_error(&mut self) {
-        if let Some(ctx) = self.ctx.clone() {
-            crate::backstage::forget_save_as_error(&ctx);
-        }
+        self.backstage_state.clear_errors();
     }
 
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        // Start in the open file's folder (#4143); a document never saved has none. A path opened
-        // as `one.docx` has an empty parent, so it's made absolute first.
-        let dir =
-            self.session.path.as_deref().and_then(|p| std::path::absolute(p).ok()).and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()));
-        self.ask_file(FileDialogRequest::Save { name, dir }, AfterPick::SaveAs { after, document: self.session.document_id() })
+        let mut req = PickRequest::save("document").file_name(name.clone()).save_as(true);
+        req.filters = crate::save_types::save_filters(&name);
+        // Start in the open file's folder (#4143); a document never saved starts in the
+        // remembered one. A path opened as `one.docx` has an empty parent, so it's made absolute
+        // first.
+        let opened = self.session.path.as_deref().and_then(|p| std::path::absolute(p).ok());
+        if let Some(dir) = opened.as_deref().and_then(std::path::Path::parent) {
+            req = req.directory(dir);
+        }
+        self.ask_file(req, AfterPick::SaveAs { after, document: self.session.document_id() })
     }
 
     /// The user templates folder (#2852): the one File › Options names, else the app's own.
@@ -469,18 +464,34 @@ impl WordApp {
         {
             log::warn!("couldn't make the templates folder {}: {e}", d.display());
         }
-        let dir = dir.filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned());
+        let dir = dir.filter(|d| d.is_dir());
         let name = format!("{}.dotx", self.title_stem());
+        let mut req = PickRequest::save("template").file_name(name).save_as(true).filter(tl!("Word template"), &["dotx"]);
+        if let Some(d) = &dir {
+            req = req.directory(d.clone());
+        }
         let after = AfterPick::SaveAs { after: AfterSave::Nothing, document: self.session.document_id() };
-        let _ = self.ask_file(FileDialogRequest::Save { name, dir: dir.clone() }, after);
-        dir
+        let _ = self.ask_file(req, after);
+        dir.map(|d| d.to_string_lossy().into_owned())
     }
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
-        let name = format!("{}.{}", self.title_stem(), crate::print_page::export_file_ext(ext));
+        let req = self.export_request(ext);
         // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
-        let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
+        let _ = self.ask_file(req, AfterPick::Export { ext: ext.to_string() });
+    }
+
+    /// The request that asks where to save a copy in export format `ext`: the format's name and type,
+    /// so the chooser's type menu shows it. Also what Browse in WordCraft… asks again for a pending export.
+    pub(crate) fn export_request(&self, ext: &str) -> PickRequest {
+        let file_ext = crate::print_page::export_file_ext(ext).to_string();
+        let name = format!("{}.{}", self.title_stem(), file_ext);
+        let mut req = PickRequest::save("export").file_name(name).suggested_extension(file_ext.clone());
+        if let Some(&(label, _)) = crate::print_page::EXPORT_FORMATS.iter().find(|&&(_, e)| e == ext) {
+            req = req.filter(tl!(label), &[file_ext.as_str()]);
+        }
+        req
     }
 
     /// File › Print › Save these pages as PDF: ask where, then write the pages the print
@@ -488,33 +499,24 @@ impl WordApp {
     pub(crate) fn print_pdf_dialog(&mut self) {
         let name = format!("{}.pdf", self.title_stem());
         let settings = self.ui.print.params();
-        let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::PrintPdf { settings });
+        let req = PickRequest::save("export").file_name(name).suggested_extension("pdf").filter(tl!("PDF"), &["pdf"]);
+        let _ = self.ask_file(req, AfterPick::PrintPdf { settings });
     }
 
     pub(crate) fn open_dialog(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("document");
-            return;
-        }
-        let _ =
-            self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() });
+        let req = with_open_filters(PickRequest::open("document"), "document");
+        let _ = self.ask_file(req, AfterPick::OpenDocument { document: self.session.document_id() });
     }
 
     pub(crate) fn pick_picture(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("picture");
-            return;
-        }
-        let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
+        let req = with_open_filters(PickRequest::open("picture"), "picture");
+        let _ = self.ask_file(req, AfterPick::Picture);
     }
 
-    /// Pick a font file to add (Add Font…; web: it arrives through the inbox).
+    /// Pick one or more font files to add (Add Font…).
     pub(crate) fn pick_font(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("font");
-            return;
-        }
-        let _ = self.ask_file(FileDialogRequest::OpenMany { purpose: "font".into() }, AfterPick::Font);
+        let req = with_open_filters(PickRequest::open_many("font"), "font");
+        let _ = self.ask_file(req, AfterPick::Font);
     }
 
     /// Request loading local system installed fonts (web: queryLocalFonts).
@@ -529,3 +531,50 @@ impl WordApp {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod picture_dispatch_tests {
+    use std::sync::Arc;
+
+    use craft::host::{AppInfo, Host, Picked, ScriptedFiles};
+    use craft::platform::open::{DropTarget, DroppedFile, FileIntake};
+
+    use super::*;
+
+    /// Pickers, drops and copied paths must agree on TIFF suffixes after the framework cutover.
+    #[test]
+    fn tiff_suffixes_dispatch_picked_and_dropped_images_and_copied_paths_as_pictures() {
+        for ext in ["tif", "tiff", "TIF", "TIFF"] {
+            let name = format!("scan.{ext}");
+            // Routing depends on the supplied name; the insertion decoder probes these PNG bytes.
+            let bytes = crate::paste_picture::png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap();
+            let files = Arc::new(ScriptedFiles::held());
+            let host = Host::builder(AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+            let session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+            let mut app = WordApp::new(session, crate::Services::default()).with_host(Arc::new(host));
+            let document = app.session.document_id();
+            app.pick_picture();
+            let request = files.requests().pop().unwrap();
+            let extensions: Vec<_> = request.filters.iter().flat_map(|f| f.extensions.iter().map(String::as_str)).collect();
+            assert!(extensions.contains(&"tif") && extensions.contains(&"tiff") && extensions.contains(&"png"));
+            assert!(!extensions.contains(&"txt"));
+            files.answer(Picked::Contents(vec![(name.clone(), bytes.clone())]));
+            app.poll_file_dialog().unwrap().unwrap();
+            assert_eq!(app.session.document_id(), document, "picker inserts into the current document: {ext}");
+            let pictures = app.session.run("arrange.selectionPane", &json!({})).unwrap();
+            assert_eq!(pictures.as_array().unwrap().len(), 1, "picker inserts a picture: {ext}");
+
+            let (intake, sender) = FileIntake::new(craft::host::Wake::none());
+            let services = crate::Services { intake: Some(intake), ..Default::default() };
+            let mut dropped = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+            let document = dropped.session.document_id();
+            sender.dropped(vec![DroppedFile { path: None, name, bytes: Some(bytes.into()) }], DropTarget::Elsewhere);
+            dropped.drain_inbox();
+            assert_eq!(dropped.session.document_id(), document, "drop inserts into the current document: {ext}");
+            let pictures = dropped.session.run("arrange.selectionPane", &json!({})).unwrap();
+            assert_eq!(pictures.as_array().unwrap().len(), 1, "drop inserts a picture: {ext}");
+            assert!(crate::paste_picture::names_picture_files(&format!("file:///tmp/scan.{ext}")));
+        }
+        assert!(!is_picture_name("notes.txt"));
+    }
+}
