@@ -324,6 +324,7 @@ impl<'a> Exempt<'a> {
             || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
             || plain == "Figure 1" // the caption dialog's sample: the label goes into the document as is
             || clock_text(plain) // the Date and Time preview: formatted from the clock
+            || plain.starts_with("egui PERF WARNING:") // framework diagnostic, not application interface text
             || is_url(plain) // a link is data, not wording
     }
 }
@@ -356,6 +357,8 @@ fn runtime_data_is_exempt_and_wording_is_not() {
     }
     assert!(exempt.allows(&app, "https://github.com/storytold/wordcraft/releases"));
     assert!(!exempt.allows(&app, "Download the newest release"), "an unwrapped sentence is reported");
+    assert!(exempt.allows(&app, "egui PERF WARNING: request_discard has been called 3 frames in a row"));
+    assert!(!exempt.allows(&app, "Performance warnings should be translated"));
     assert!(!exempt.allows(&app, "See https://example.com now"), "a sentence with a link is not a link");
     assert!(!exempt.allows(&app, "11/22/1999 5:28:50 PM"), "a time before the audit began is not the preview");
     // A stubbed check finds no update and puts no updater error on screen.
