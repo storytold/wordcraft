@@ -66,6 +66,19 @@ fn myanmar_without_spaces_wraps_between_syllables() {
     assert!(pl.lines[0].c1 - pl.lines[0].c0 > 10);
 }
 
+/// Load an explicit shaping fixture without changing layout's global font database.
+fn myanmar_shaping_face() -> Option<wordcraft_fonts::FaceRef> {
+    if let Some(path) = std::env::var_os("WORDCRAFT_TEST_MYANMAR_FONT") {
+        let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+        assert!(db.add_font(std::fs::read(path).expect("read the configured Myanmar test font")) > 0);
+        let face = db.face("Noto Sans Myanmar", "Regular");
+        assert_eq!(face.family, "Noto Sans Myanmar", "configured fixture must contain the Myanmar font");
+        assert!(face.has_layout_tables() && face.covers('\u{1000}'));
+        return Some(wordcraft_fonts::FaceRef::of(&face));
+    }
+    myanmar_face()
+}
+
 /// A face with Myanmar letters (an installed system font), or `None` to skip.
 fn myanmar_face() -> Option<wordcraft_fonts::FaceRef> {
     crate::test_fonts();
@@ -75,7 +88,7 @@ fn myanmar_face() -> Option<wordcraft_fonts::FaceRef> {
 #[test]
 fn myanmar_prevowel_is_drawn_before_its_consonant() {
     crate::test_fonts();
-    let Some(face) = myanmar_face() else {
+    let Some(face) = myanmar_shaping_face() else {
         eprintln!("skipped: no Myanmar font with OpenType tables installed");
         return;
     };
