@@ -230,7 +230,10 @@ pub(crate) fn table_styles(ui: &mut Ui, app: &mut WordApp) {
         let doc = &app.session.doc;
         let makers: Vec<Maker<'_>> = entries.iter().map(|(id, _)| Box::new(move || table_style_image(doc, id, ppp, dark)) as Maker<'_>).collect();
         let items = image_items("table", &entries, &makers, ppp, revision);
-        Gallery::new(tl!("Table Styles"), &items, None).tiles(7, 4).show(ui)
+        // Each tile shows a 5×4 table sample at the large thumbnail size in the 3:2 landscape
+        // ratio `table_style_image` renders (112×74 pt including margins), matching the sibling
+        // `Styles` and `Style Sets` galleries and v0.18.1's ribbon previews.
+        Gallery::new(tl!("Table Styles"), &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(3, 2)).show(ui)
     };
     if let Some(style) = out.picked {
         let _ = app.run("table.style", json!({"style": style}));

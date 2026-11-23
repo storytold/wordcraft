@@ -729,6 +729,57 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     assert_eq!(first_cell_shading(h.state()), Some(red), "No Color is undone in one step");
 }
 
+#[test]
+fn table_styles_gallery_uses_large_landscape_thumbnails() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let mut h = tab_harness(app, "Design");
+    let style_set_height = h
+        .query_all(By::new().role(Role::RadioButton).label_contains("Style set:"))
+        .next()
+        .expect("Design › Style Sets renders its large gallery tiles")
+        .rect()
+        .height();
+
+    h.state_mut().run("ui.tab", json!({"tab": "Table Design"})).unwrap();
+    crate::test_harness::frames(&mut h, 3);
+
+    let mut styles: Vec<(bool, String)> = h
+        .state()
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
+        .map(|s| (s.builtin, crate::i18n::style_name(s)))
+        .collect();
+    styles.sort_by_key(|(builtin, _)| *builtin);
+    let expected: Vec<String> = styles.into_iter().take(7).map(|(_, name)| name).collect();
+    assert_eq!(expected.len(), 7, "built-in document has at least seven table styles");
+
+    let tiles: Vec<(String, egui::Rect)> = expected
+        .iter()
+        .filter_map(|name| h.query_all(By::new().role(Role::RadioButton).label(name)).next().map(|node| (name.clone(), node.rect())))
+        .collect();
+    assert_eq!(tiles.len(), expected.len(), "all seven Table Styles tiles render at full ribbon width: {tiles:?}");
+
+    for (name, rect) in &tiles {
+        assert!(
+            rect.height() >= style_set_height - 1.0,
+            "Table Styles tile `{name}` height should be at least Design › Style Sets' Large thumbnail height ({style_set_height}), got {rect:?}"
+        );
+        let ratio = rect.width() / rect.height();
+        assert!(
+            (1.25..=1.75).contains(&ratio),
+            "Table Styles tile `{name}` should use a landscape aspect ratio matching its 3:2 table preview, got {ratio:.2} ({rect:?})"
+        );
+    }
+    assert!(tiles.windows(2).all(|w| w[0].1.max.x <= w[1].1.min.x + 0.01), "Table Styles tiles sit side by side without overlapping: {tiles:?}");
+}
+
 /// #7308: the compact menu and split buttons of Home › Font and Home › Paragraph show their icons
 /// alone (keeping their names for access and tooltips) even in a wide window, leaving room for all
 /// six tiles of the Styles gallery at 1920 pt.
