@@ -950,6 +950,83 @@ fn opened_paper(h: &mut egui_kittest::Harness<'_, WordApp>) -> (f32, f32) {
     paper
 }
 
+/// #1433: in a right-to-left interface, typing a number wider than the field's column into a
+/// margin spin button keeps the dialog the same width; clicking the visible end of the blurred
+/// field enters editing again, and entering a normal value restores the field.
+#[test]
+fn page_setup_rtl_large_margin_can_be_edited_again_after_blur() {
+    use egui::accesskit::Role;
+    let mut app = app_with("Page");
+    app.run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+    let ar = crate::i18n::fixture_lang("ar", "\tMargins\tMargins\n");
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // Draw the actual dialog in a fixture language even without embedded catalogs.
+            crate::i18n::apply_language(ar);
+            ctx.global_style_mut(|s| s.right_to_left = true);
+            assert!(crate::i18n::current().rtl() && ctx.global_style().right_to_left);
+            craft::ui::runtime::env::with_env(ui, |o| o.direction = Some(craft::i18n::Direction::Rtl), |ui| app.ui(ui));
+            ctx.global_style_mut(|s| s.right_to_left = false);
+            crate::i18n::apply_language(crate::i18n::Lang::EN);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let initial = h.get_by_role_and_label(Role::SpinButton, "Bottom").rect();
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Top").rect().center().x > initial.center().x, "the form is mirrored");
+    let window = |h: &egui_kittest::Harness<'_, WordApp>| h.get_by_role_and_label(Role::Dialog, "Page Setup").rect();
+    let before = window(&h).width();
+    let id = id_of(h.state(), "pageSetup");
+    let initial_bottom = h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom;
+    assert!(initial_bottom < craft::pages::setup::MAX_PAGE_SIDE, "initial margin starts below the upper bound: {initial_bottom}");
+    h.get_by_role_and_label(Role::SpinButton, "Bottom").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste(format!("1{}", "0".repeat(36))));
+    h.run_steps(3);
+    let id = id_of(h.state(), "pageSetup");
+    let value = h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom;
+    assert!(
+        value > initial_bottom && (value - craft::pages::setup::MAX_PAGE_SIDE).abs() < 1e-3,
+        "oversized margin paste should be accepted and clamped to MAX_PAGE_SIDE: got {value}"
+    );
+    // While the 37-digit text is in the field, the dialog does not blow up to the typed text width.
+    assert!(window(&h).width() <= before + 15.0);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let id = id_of(h.state(), "pageSetup");
+    assert_eq!(h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom, value);
+    let field = h.get_by_role_and_label(Role::SpinButton, "Bottom");
+    assert!(!field.is_focused());
+    let wide = field.rect();
+    let visible = wide.intersect(initial).intersect(window(&h));
+    assert!(visible.is_positive());
+    // The inline notice "Margins do not fit" may add a few points, but the dialog does not blow up to the typed text width.
+    assert!(window(&h).width() <= before + 15.0);
+    // The AccessKit bounds include clipped text: click the visible part, not their centre.
+    let pos = visible.center();
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Bottom").is_focused(), "the visible field enters editing");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Paste("2".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let id = id_of(h.state(), "pageSetup");
+    let bottom = h.state().dialog_host.get_by_id::<PageSetupHost>(id).unwrap().setup.margins.bottom;
+    let unit = crate::options::unit_kind(h.state().session.units());
+    let expected =
+        unit.to_pixels(2.0, 0.0, craft::ui::runtime::env::UnitKind::POINTS_PER_INCH, craft::ui::runtime::env::UnitKind::POINTS_PER_INCH).unwrap();
+    assert!((bottom - expected).abs() < 1e-3, "the field accepts a normal value again: got {bottom}, expected {expected}");
+    assert!(window(&h).width() <= before + 2.0);
+}
+
 /// #1433: Page Setup's Paper size shows the named size the section has, in either
 /// orientation, and Custom size (None) for anything else.
 #[test]
