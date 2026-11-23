@@ -11476,6 +11476,29 @@ fn keep_with_next_run_longer_than_a_page_stays_where_it_is() {
     assert_eq!([page(0), page(1), page(2), page(3)], [0, 0, 0, 0], "A to D stay on the first page");
 }
 
+#[test]
+fn keep_with_next_final_paragraph_stays_when_its_line_fits() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    let para = |text, keep_next, space_after| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(space_after),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            keep_next: Some(keep_next),
+            ..Default::default()
+        };
+        wordcraft_doc::para_block(p)
+    };
+    // In the default 648 pt body, the last line reaches 640 pt. Its 20 pt after-spacing would overflow.
+    d.body = (0..31).map(|_| para("Filler", false, 0.0)).collect();
+    d.body.push(para("Final line", true, 20.0));
+
+    let l = lay(&d);
+    assert_eq!(l.caret(&Pos::body(31, 0)).unwrap().page, 0);
+}
+
 /// A kept paragraph with space after that fits in the room left keeps the run before it together
 /// with it: the space after is not part of the paragraph's own fit (placement measures it
 /// without), so it must not end the chain. A is one line, B nine lines with 40 pt after it, C

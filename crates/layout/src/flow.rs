@@ -1169,7 +1169,7 @@ fn next_first_line(
             }
         }
         Some(Block::Table(_)) => prev.space_after + 24.0,
-        None => prev.space_after,
+        None => 0.0,
     }
 }
 
