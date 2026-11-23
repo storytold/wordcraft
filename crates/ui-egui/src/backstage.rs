@@ -268,7 +268,7 @@ fn side_menu(ui: &mut Ui, band: f32, current: &str, has_document: bool, show_dis
             );
         })
         .show(ui, |ui, _| {
-            let _ = inspect::record(ui, egui::Id::unique("wordcraft-backstage-pages"), |ui| {
+            let _ = inspect::record(ui, crate::keytips::backstage_region(), |ui| {
                 // The rows are the side menu place's: production's 38 pt rows of 14 pt names.
                 with_env(
                     ui,

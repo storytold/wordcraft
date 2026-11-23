@@ -529,3 +529,32 @@ fn keytips_update_controls_when_switching_tabs() {
     crate::test_harness::frames(&mut h, 3);
     assert!(bold(&mut h), "Home keytip badge {bold_badge} runs format.bold after switching back from Insert");
 }
+
+/// #4981: the Backstage closed while its badges show (the back chevron, a mouse Save)
+/// ends them. The next letter is typed, and never picks a page with the Backstage gone: C used
+/// to close the document and S to save it.
+#[test]
+fn closing_the_backstage_ends_its_keytips() {
+    let mut h = harness(app());
+    let key = |key| key_event(key, true, egui::Modifiers::NONE);
+    h.input_mut().events.push(key(egui::Key::F10));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active, "F10 activates keytips");
+    h.input_mut().events.extend([key(egui::Key::F), egui::Event::Text("f".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().ui.backstage, "F opens Backstage");
+    assert!(h.state().keytips_active, "keytips active in Backstage");
+
+    // What the back chevron does.
+    h.state_mut().ui.backstage = false;
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().keytips_active, "the badges end with the Backstage");
+    h.input_mut().events.extend([key(egui::Key::C), egui::Event::Text("c".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().keytips_active);
+    assert!(h.state().has_document(), "C does not close the document");
+    assert!(!h.state().ui.backstage);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "c", "C is typed");
+}
