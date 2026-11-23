@@ -1,11 +1,13 @@
-#[cfg(not(target_arch = "wasm32"))]
-use super::file_browser;
-use super::{
-    WordApp, backstage, canvas, chrome, colors, content_controls, dialogs, documents, keys, now_ms, panes, read_aloud, ribbon, theme, updates_ui,
-    zotero,
-};
+use super::{Status, WordApp, canvas, chrome, documents, panes, read_aloud, ribbon, updates_ui, zotero};
+use craft::platform::clock::monotonic_ms;
+use craft::theme::variant::Tone;
+use craft::ui::bars::StatusMessage;
+use craft::ui::contract::Bind;
+use craft::ui::runtime::env::ShellRegions;
+use craft::ui::shell::{AppShell, ScreenModeSet, Slot, SlotSize};
 
 use crate::i18n;
+use crate::language_packs;
 
 /// How long the status bar shows a message, in milliseconds.
 pub(crate) const STATUS_MS: f64 = 6000.0;
@@ -17,37 +19,30 @@ impl WordApp {
     /// whatever handed it over (the command line, a macOS open event, a drop). Returns the message.
     pub fn report_open_failure(&mut self, path: &str, error: &str) -> String {
         log::warn!("{path}: {error}");
-        let msg = crate::i18n::fmt(crate::tl!("Couldn't open {path}: {error}"), &[("path", &crate::i18n::isolate_path(path)), ("error", error)]);
-        self.status(msg.clone());
+        let dir = crate::chrome::interface_direction();
+        let msg = i18n::fmt(crate::tl!("Couldn't open {path}: {error}"), &[("path", &craft::i18n::path(path, dir)), ("error", error)]);
+        self.post_status(msg.clone(), STATUS_MS, Tone::Bad);
         msg
     }
 
     /// Sets a temporary status message in the bottom status bar.
     pub fn status(&mut self, s: impl Into<String>) {
-        self.status_msg = Some((s.into(), now_ms()));
+        self.post_status(s.into(), STATUS_MS, Tone::Neutral);
     }
 
-    /// A status message that stays [`STATUS_LONG_MS`] instead of the usual six seconds: the bar
-    /// shows a message until six seconds after its time, so its time is set that much later.
+    /// A status message that stays [`STATUS_LONG_MS`] instead of the usual six seconds.
     pub fn status_long(&mut self, s: impl Into<String>) {
-        self.status_msg = Some((s.into(), now_ms() + STATUS_LONG_MS - STATUS_MS));
+        self.post_status(s.into(), STATUS_LONG_MS, Tone::Neutral);
     }
 
-    /// Write the current preferences out through the host's hook, if it has one (#2716). The
-    /// desktop app saves them at exit; a change that should survive a crash, like taking a
-    /// document off the recent list, needs a save at the moment of the change. `None`: the host
-    /// has no hook or wrote nothing; `Some(Err)`: the write failed, and the status line says so.
-    pub(super) fn save_prefs_now(&mut self) -> Option<Result<(), String>> {
-        let save = self.services.save_prefs.as_ref()?;
-        match save(self) {
-            Ok(true) => Some(Ok(())),
-            // The host wrote nothing (preferences switched off): same as having no hook.
-            Ok(false) => None,
-            Err(e) => {
-                self.status(i18n::fmt(tl!("Could not save the preferences: {error}"), &[("error", &e)]));
-                Some(Err(e))
-            }
-        }
+    fn post_status(&mut self, text: String, ms: f64, tone: Tone) {
+        self.status = Some(Status { text, until: monotonic_ms() + ms, tone });
+    }
+
+    /// The message the status bar shows now, until its time is up.
+    pub(crate) fn status_message(&self) -> Option<StatusMessage> {
+        let s = self.status.as_ref().filter(|s| monotonic_ms() < s.until)?;
+        Some(StatusMessage::new(s.text.clone()).tone(s.tone))
     }
 
     /// Document title for the title bar (and the suggested file name). An untitled document is
@@ -75,98 +70,95 @@ impl WordApp {
         }
     }
 
-    /// Draw the File page, the empty-window chrome, or the normal document window.
-    pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
+    /// Draw the window: the File page, the empty-window chrome, or the document window, as one
+    /// shell. The shell owns the screen mode and the dropped-down ribbon while it draws; both are
+    /// handed in as values and read back after, so no body reads a stale copy. Returns the
+    /// shell's regions; a window another command swapped in mid-draw returns none.
+    pub(super) fn paint_window(&mut self, ui: &mut egui::Ui) -> ShellRegions {
+        crate::announce::expose(self, ui.ctx());
         let window = self.windows.shown();
-        let moved = |app: &WordApp| app.windows.shown() != window;
-        if self.ui.backstage {
-            backstage::show(self, ui);
-        } else if !self.has_document() {
-            // No document open (#1129): the ribbon greyed out but for Help, and no page.
-            chrome::title_bar(self, ui);
-            ribbon::show(self, ui);
-            chrome::status_bar(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
-        } else {
-            let screen = chrome::Screen::of(&self.session.view);
-            // Focus and Full Screen (#1678) take the whole screen, with only their slim bar.
-            self.focus_ribbon &= screen == chrome::Screen::Focus;
-            if screen != chrome::Screen::Normal {
-                chrome::screen_bar(self, ui, screen);
-            } else {
-                chrome::title_bar(self, ui);
-                if moved(self) {
+        let stale = |app: &WordApp| app.windows.shown() != window;
+        let mode = self.screen_mode();
+        let dropped = self.ribbon_dropped;
+        let key = self.windows.window_key();
+        let shell = AppShell::new(key)
+            .mode_set(ScreenModeSet::Document)
+            .screen_mode(Bind::given(mode))
+            .dropped(Bind::given(dropped))
+            .window_title(self.window_title())
+            .page(self.ui.backstage, crate::backstage::scope(), crate::backstage::show)
+            .title_bar(chrome::title_bar::show)
+            .top(Slot::new("screenBar").screen_bar(), chrome::screen_bar::show)
+            // The ribbon is a tab strip over a group row: its slots are as tall as it is and stack it. A slot of the
+            // default size is one options bar high and lays its content in one line, which put the groups beside the
+            // tabs and collapsed every one of them.
+            .top(Slot::new("ribbonDrop").drops().size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
+                if !stale(app) {
+                    ribbon_slot(app, ui);
+                }
+            })
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
+                if !stale(app) {
+                    ribbon_slot(app, ui);
+                }
+            })
+            // As tall as the bar: a failure's line under the message puts Install below the first line, and a slot of
+            // the default size (one options bar high) clips it, so a press on it reached nothing.
+            .top(Slot::new("languagePack").size(SlotSize::Content).visible(language_packs::bar_offer(self)), language_packs::pack_bar)
+            .status(true, chrome::status_bar::show)
+            .body(|ui, _cx, app: &mut WordApp| {
+                if !app.has_document() || stale(app) {
                     return;
                 }
-                ribbon::show(self, ui);
-                if moved(self) {
-                    return;
-                }
-                crate::language_packs::bar(self, ui);
-                chrome::status_bar(self, ui);
-                panes::show(self, ui);
-            }
-            if moved(self) {
-                return;
-            }
-            let fill = if screen == chrome::Screen::Focus { chrome::FOCUS_CANVAS } else { t.canvas };
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
-                if self.session.md_source.is_some() {
-                    crate::md_source::show(self, ui);
-                } else {
-                    canvas::show(self, ui);
+                panes::show(app, ui, |ui, _cx, app| {
+                    if app.session.md_source.is_some() {
+                        crate::md_source::show(app, ui);
+                    } else {
+                        canvas::show(app, ui);
+                    }
+                });
+                if app.session.read_aloud.open && !stale(app) {
+                    read_aloud::show(app, ui);
                 }
             });
-            if self.focus_ribbon && !moved(self) {
-                chrome::focus_ribbon(self, ctx);
-            }
+        let out = shell.show(ui, self);
+        // The output belongs to the window that drew it: another window swapped in mid-draw
+        // must not take its flags.
+        if stale(self) {
+            return ShellRegions::new(egui::Rect::NOTHING);
         }
+        // `follow_screen_mode` maps one mode onto three view flags: write it back only on a change.
+        if out.screen_mode != mode {
+            self.follow_screen_mode(out.screen_mode);
+        }
+        self.ribbon_dropped = out.dropped;
+        out.regions
     }
 
     /// Dialogs, panes and other overlays drawn over the window. A command that brings another
     /// window's state in ends the drawing: the rest would be the other window's.
-    pub(super) fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    pub(super) fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, regions: &ShellRegions) {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
-        content_controls::popup(self, ctx);
         crate::font_download::tick(self);
-        dialogs::show(self, ctx);
+        zotero::show_question(self);
+        // PLAN: assumed `updates_ui::run(app: &mut WordApp)` (shell-w13, sh.A20) opens the updater's dialogs on the host.
+        updates_ui::run(self);
+        crate::dialogs::host::prepare(self);
+        self.dialog_host.run(ui);
+        crate::dialogs::host::settle(self, ctx);
         if moved(self) {
             return;
         }
-        updates_ui::show(self, ctx);
-        #[cfg(not(target_arch = "wasm32"))]
-        file_browser::show(self, ctx);
-        colors::show(self, ctx);
-        zotero::show_alert(self, ctx);
-        read_aloud::show(self, ctx);
-        crate::keytips::show(self, ctx, ui);
-        if moved(self) {
-            return;
-        }
-        keys::global_shortcuts(self, ctx);
-        if moved(self) {
-            return;
-        }
-        self.refocus_after_chrome_click(ctx);
+        self.refocus_after_chrome_click(ctx, regions);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
     }
+}
 
-    /// Keep the window title and full-screen state in sync, then record this frame's time.
-    pub(super) fn sync_title_and_frame(&mut self, ctx: &egui::Context, t0: f64) {
-        // With native windows the viewport driver gives the window its title.
-        let title = self.window_title();
-        if title != self.sent_title {
-            if !self.windows.driven() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
-            }
-            self.sent_title = title;
-        }
-        self.sync_full_screen(ctx);
-        self.frame_ms = now_ms() - t0;
-        // Typing and formatting land here, after `logic` has reported.
-        self.report_dirty();
-    }
+/// The ribbon, then its keytips, in a top slot: the keytips read what the ribbon recorded this pass.
+fn ribbon_slot(app: &mut WordApp, ui: &mut egui::Ui) {
+    let out = ribbon::show(app, ui);
+    crate::keytips::show(ui, app, &out);
 }
