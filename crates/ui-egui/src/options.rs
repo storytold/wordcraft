@@ -641,10 +641,8 @@ impl PreferencesModel for OptionsModel<'_> {
             ("general.fontDownloadNotice", Bool(v)) => self.app.ui.font_download_notice = v,
             ("general.darkPage", Bool(v)) => self.run("view.darkMode", json!({"value": v})),
             ("general.startScreen", Bool(v)) => self.run("ui.startScreen", json!({"value": v})),
-            ("general.userName", Text(t)) => {
-                if !wordcraft_engine::cmd::protect::enforced(&self.app.session.doc) {
-                    self.app.session.author = t;
-                }
+            ("general.userName", Text(t)) if !wordcraft_engine::cmd::protect::enforced(&self.app.session.doc) => {
+                self.app.session.author = t;
             }
             ("general.initials", Text(t)) => {
                 let t: String = t.chars().take(MAX_INITIALS_CHARS).collect();
@@ -665,11 +663,9 @@ impl PreferencesModel for OptionsModel<'_> {
             ("proofing.ignoreInternet", Bool(v)) => self.options(json!({"ignoreInternet": v})),
             ("proofing.checkSpelling", Bool(v)) => self.options(json!({"checkSpelling": v})),
             ("proofing.markGrammar", Bool(v)) => self.options(json!({"markGrammar": v})),
-            ("save.autosave", Bool(v)) => {
-                if self.app.autosave_block() != Some(crate::AutoSaveBlock::Browser) {
-                    self.app.autosave = v;
-                    self.app.session.autosave = v;
-                }
+            ("save.autosave", Bool(v)) if self.app.autosave_block() != Some(crate::AutoSaveBlock::Browser) => {
+                self.app.autosave = v;
+                self.app.session.autosave = v;
             }
             ("save.removePersonalInfo", Bool(v)) => self.run("file.privacyOptions", json!({"removePersonalInfo": v})),
             ("save.removeDateTime", Bool(v)) => self.run("file.privacyOptions", json!({"removeDateTime": v})),
@@ -708,10 +704,8 @@ impl PreferencesModel for OptionsModel<'_> {
     fn custom_row(&mut self, ui: &mut Ui, key: &str) {
         match key {
             "general.defaultApp" => default_app_row(self.app, ui),
-            "proofing.autoCorrect" => {
-                if Button::new(tl!("AutoCorrect Options")).show(ui).clicked() {
-                    self.run("tools.autocorrect", json!({}));
-                }
+            "proofing.autoCorrect" if Button::new(tl!("AutoCorrect Options")).show(ui).clicked() => {
+                self.run("tools.autocorrect", json!({}));
             }
             "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
             "proofing.customDictionary" => self.custom_dictionary(ui),
@@ -721,10 +715,8 @@ impl PreferencesModel for OptionsModel<'_> {
             // PLAN: assumed `your_languages(app: &mut WordApp, ui: &mut Ui)` (chrome-w12)
             "language.yourLanguages" => crate::language_packs::your_languages(self.app, ui),
             "language.dictionaryFiles" => dictionary_files(ui),
-            "advanced.customizeKeyboard" => {
-                if Button::new(tl!("Customize…")).show(ui).clicked() {
-                    self.run("tools.customizeKeyboard", json!({}));
-                }
+            "advanced.customizeKeyboard" if Button::new(tl!("Customize…")).show(ui).clicked() => {
+                self.run("tools.customizeKeyboard", json!({}));
             }
             "advanced.customizeRibbon" if Button::new(tl!("Customize…")).show(ui).clicked() => {
                 self.run("tools.customizeRibbon", json!({}));

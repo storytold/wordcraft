@@ -455,6 +455,55 @@ fn table_shape(a: &WordApp) -> Vec<usize> {
     a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows.iter().map(|r| r.cells.len()).collect()
 }
 
+#[test]
+fn split_cells_row_control_follows_merge_checkbox() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    use egui_kittest::kittest::Queryable;
+    let mut a = table_app(2, &["A", "B", "C", "D"]);
+    let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
+    a.run("select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 1)})).unwrap();
+    let before = a.session.doc.clone();
+    a.run("table.split", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    crate::test_harness::frames(&mut h, 4);
+    h.get_by_label("Merge cells before split").click();
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.get_by_role_and_label(Role::SpinButton, "Number of rows:").accesskit_node().is_disabled());
+    h.get_by_label("Merge cells before split").click();
+    crate::test_harness::frames(&mut h, 2);
+    let rows = h.get_by_role_and_label(Role::SpinButton, "Number of rows:");
+    assert!(!rows.accesskit_node().is_disabled());
+    rows.click();
+    crate::test_harness::frames(&mut h, 2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    crate::test_harness::frames(&mut h, 1);
+    h.get_by_role_and_label(Role::SpinButton, "Number of rows:").type_text("1");
+
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!(h.state().session.doc, before);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(table_shape(h.state()), [4, 4], "four columns span the two original physical rows");
+    let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.rows[0].cells.iter().all(|c| c.props.vmerge == wordcraft_doc::props::VMerge::Restart));
+    assert!(
+        t.rows[1].cells.iter().all(|c| c.props.vmerge == wordcraft_doc::props::VMerge::Continue),
+        "typing one changes the default two logical rows"
+    );
+    assert_ne!(h.state().session.doc, before);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc, before);
+}
+
 /// #2592, as Word does: for a merged cell the dialog's message says the row count must
 /// divide its height (or lie in 1 to the height); the engine refuses the same counts and the
 /// document stays as it was.

@@ -79,7 +79,7 @@ pub fn crop_of(source: Rect, frame: Rect, crop0: [f32; 4], flips: (bool, bool)) 
     let old_h = fin(fh * (1.0 - shown[1] - shown[3]));
     let same = Cropped { crop: crop0, w: old_w, h: old_h, dx: 0.0, dy: 0.0 };
     let finite = |r: Rect| r.min.is_finite() && r.max.is_finite();
-    if !finite(source) || !finite(frame) || !(fw > 0.0 && fh > 0.0 && fw.is_finite() && fh.is_finite()) {
+    if !(finite(source) && finite(frame) && fw > 0.0 && fh > 0.0 && fw.is_finite() && fh.is_finite()) {
         return same;
     }
     let (l, r) = ((frame.min.x - source.min.x) / fw, (source.max.x - frame.max.x) / fw);
