@@ -18,20 +18,22 @@ use serde_json::{Value, json};
 use crate::WordApp;
 use crate::colors::{Remember, Target};
 
-/// Distance from the selection's start at which the bar is centred.
+/// Distance from the selection's start (its left edge, or right in a right-to-left paragraph) at which the bar is centred.
 const ANCHOR_INSET: f32 = 4.0;
 /// Least height of a selection rectangle (screen points) that counts as visible for anchoring.
 const MIN_VISIBLE_H: f32 = 1.0;
 
-/// The part of the selection the bar anchors to: the topmost selection rectangle that is actually
-/// visible inside `clip` (the scroll viewport), cut down to its visible portion. `None` when no
-/// usable part of the selection is on screen. Rectangles that only touch the clip's edge, or are
-/// not finite, are ignored. Pure geometry, unit tested without a window.
-pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rect) -> Option<Rect> {
+/// The part of the selection the bar anchors to: the topmost visible line of the selection inside
+/// `clip` (the scroll viewport), cut down to its visible portion. `None` when no usable part of the
+/// selection is on screen. Rectangles that only touch the clip's edge, or are not finite, are ignored.
+/// For `rtl` the result spans every run on that line (see below); otherwise it is the first such
+/// rectangle. Pure geometry, unit tested without a window.
+pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rect, rtl: bool) -> Option<Rect> {
     if !clip.is_finite() || !clip.is_positive() {
         return None;
     }
     let mut first: Option<Rect> = None;
+    let mut visible_rects = Vec::new();
     for sr in selection_rects {
         if !sr.is_finite() || !sr.intersects(clip) {
             continue;
@@ -44,8 +46,26 @@ pub fn visible_anchor(selection_rects: impl IntoIterator<Item = Rect>, clip: Rec
         if first.is_none_or(|f| visible.min.y < f.min.y) {
             first = Some(visible);
         }
+        visible_rects.push(visible);
     }
-    first
+    let top = first?;
+    if !rtl {
+        return Some(top);
+    }
+    // A bidirectional line is emitted as several visual runs, left to right: span the whole line, so
+    // its right edge (the start of a right-to-left paragraph) is not that of the first run.
+    Some(visible_rects.into_iter().filter(|r| (top.min.y..=top.max.y).contains(&r.center().y)).fold(top, |u, r| u.union(r)))
+}
+
+/// The x the bar centres at over `anchor`: its start edge, less the inset, mirrored for right-to-left.
+fn start_x(anchor: Rect, rtl: bool) -> f32 {
+    if rtl { anchor.max.x - ANCHOR_INSET } else { anchor.min.x + ANCHOR_INSET }
+}
+
+/// Whether the paragraph where the selection starts is right-to-left.
+pub(crate) fn starts_rtl(app: &WordApp) -> bool {
+    let start = app.session.sel.ordered().0;
+    app.session.doc.para_at(&start).is_some_and(|p| app.session.doc.styles.resolve_para(&p.props).bidi)
 }
 
 /// Past this distance from where the pointer came closest to the bar, it starts to fade…
@@ -147,8 +167,9 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, body: &PageBody<'_>) {
     if opacity == 0.0 {
         return;
     }
-    // The bar centres over the selection's start rather than drifting to the centre of long selections (#7447).
-    let start_x = anchor.min.x + ANCHOR_INSET;
+    // The bar centres over the selection's start rather than drifting to the centre of long selections (#7447);
+    // a right-to-left paragraph at the start puts it at the right edge (#7464).
+    let start_x = start_x(anchor, starts_rtl(app));
     let anchor_box = Rect::from_min_max(pos2(start_x, anchor.min.y), pos2(start_x, anchor.max.y));
     let points: Vec<_> = [anchor_box.left_top(), anchor_box.right_top(), anchor_box.right_bottom(), anchor_box.left_bottom()]
         .into_iter()

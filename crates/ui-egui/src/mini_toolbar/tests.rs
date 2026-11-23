@@ -32,22 +32,22 @@ fn anchor_skips_rects_scrolled_offscreen_and_clips_partial_ones() {
     // Page 1's line is above the viewport, page 2's line is inside it.
     let above = Rect::from_min_size(pos2(100.0, clip.top() - 300.0), Vec2::new(200.0, 20.0));
     let inside = Rect::from_min_size(pos2(120.0, clip.top() + 50.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([above, inside], clip), Some(inside));
+    assert_eq!(visible_anchor([above, inside], clip, false), Some(inside));
     // Partly scrolled off the top: anchored to the visible part, never above the viewport.
     let partial = Rect::from_min_size(pos2(100.0, clip.top() - 10.0), Vec2::new(200.0, 20.0));
-    let a = visible_anchor([partial], clip).unwrap();
+    let a = visible_anchor([partial], clip, false).unwrap();
     assert!((a.min.y - clip.top()).abs() < 1e-3 && (a.height() - 10.0).abs() < 1e-3);
     // Entirely off either end, or only touching the edge: nothing to anchor to.
     let below = Rect::from_min_size(pos2(100.0, clip.bottom() + 5.0), Vec2::new(200.0, 20.0));
     let touching = Rect::from_min_size(pos2(100.0, clip.top() - 20.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([above, below, touching], clip), None);
-    assert_eq!(visible_anchor([], clip), None);
+    assert_eq!(visible_anchor([above, below, touching], clip, false), None);
+    assert_eq!(visible_anchor([], clip, false), None);
     // Input order does not matter: the topmost visible rectangle wins.
     let lower = Rect::from_min_size(pos2(100.0, clip.top() + 200.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([lower, inside], clip), Some(inside));
+    assert_eq!(visible_anchor([lower, inside], clip, false), Some(inside));
     // Degenerate input is rejected, not propagated.
     let nan = Rect::from_min_size(pos2(f32::NAN, 0.0), Vec2::new(10.0, 10.0));
-    assert_eq!(visible_anchor([nan], clip), None);
+    assert_eq!(visible_anchor([nan], clip, false), None);
 }
 
 /// The whole window over a document with `pick` selected, run until the bar is up.
@@ -55,6 +55,11 @@ fn bar_over(pick: &str) -> H {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "The quick brown fox jumps over the lazy dog"})).unwrap();
     a.run("select.text", json!({"text": pick})).unwrap();
+    bar_over_app(a)
+}
+
+/// `bar_over` for an app whose document and selection are already set up.
+fn bar_over_app(a: WordApp) -> H {
     let mut h = crate::test_harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -721,4 +726,68 @@ fn the_bar_fades_as_the_pointer_moves_away_and_goes_for_this_selection() {
     h.state_mut().run("select.text", json!({"text": "brown"})).unwrap();
     steps(&mut h);
     assert!(bar_group(&h).is_some(), "a new selection shows the bar");
+}
+
+/// The bar's centre, and the selection's first visible line (the anchor) it hangs from.
+fn bar_centre_and_anchor(h: &H) -> (f32, Rect) {
+    let c = canvas(h);
+    let bar = h
+        .query_all_by_role(Role::Group)
+        .filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting"))
+        .map(|n| n.rect())
+        .find(|r| c.contains_rect(*r))
+        .expect("the selection bar is shown inside the canvas");
+    (bar.center().x, h.state().canvas.mini_anchor.expect("the selection has an anchor"))
+}
+
+/// A paragraph long enough to wrap onto several lines, with a selection from `from_char` to its end.
+fn wrapped_selection(text: &str, rtl: bool, from_char: usize) -> H {
+    let text = text.repeat(40);
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+    if rtl {
+        a.run("select.all", json!({})).unwrap();
+        a.run("para.rtl", json!({})).unwrap();
+    }
+    let off = text.char_indices().nth(from_char).map_or(0, |(i, _)| i);
+    let end = text.len();
+    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, off), focus: wordcraft_doc::Pos::body(0, end) };
+    bar_over_app(a)
+}
+
+/// #7464: in a right-to-left paragraph the selection starts at the right, so the bar sits there,
+/// not at the left margin where the selection's first line ends.
+#[test]
+fn the_bar_anchors_at_the_right_in_a_right_to_left_paragraph() {
+    let h = wrapped_selection("سلام دنیا ", true, 12);
+    let (x, anchor) = bar_centre_and_anchor(&h);
+    assert!(anchor.width() > 100.0, "the first selected line is a wide rect: {anchor:?}");
+    assert!((x - anchor.max.x).abs() < (x - anchor.min.x).abs(), "the bar x={x} is nearer the start (right) edge of {anchor:?}");
+}
+
+/// #7464: a left-to-right selection from mid-line 1 to a later line keeps the bar at its start.
+#[test]
+fn the_bar_anchors_at_the_start_of_a_multi_line_left_to_right_selection() {
+    let h = wrapped_selection("The quick brown fox ", false, 12);
+    let (x, anchor) = bar_centre_and_anchor(&h);
+    assert!(anchor.width() > 100.0, "the first selected line is a wide rect: {anchor:?}");
+    assert!((x - anchor.min.x).abs() < (x - anchor.max.x).abs(), "the bar x={x} is nearer the start (left) edge of {anchor:?}");
+}
+
+/// #7464: a right-to-left line mixing Arabic with Latin words or digits is several visual runs
+/// (emitted left to right): the bar hangs from the whole line's right edge, not the first run's.
+#[test]
+fn the_anchor_spans_every_run_on_the_topmost_line() {
+    let clip = vp();
+    let run = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), Vec2::new(50.0, 20.0));
+    let line1 = [run(200.0, 100.0), run(300.0, 100.0), run(250.0, 100.0)];
+    let later = run(900.0, 130.0);
+    let rects = [line1[0], line1[1], line1[2], later];
+    let a = visible_anchor(rects, clip, true).unwrap();
+    assert!(line1.iter().all(|r| a.max.x >= r.max.x && a.min.x <= r.min.x), "spans every run of line 1: {a:?}");
+    assert!(a.max.x < later.min.x && a.max.y <= later.min.y, "the later line is excluded: {a:?}");
+    let x = start_x(a, true);
+    assert!((x - a.max.x).abs() < (x - a.min.x).abs(), "RTL bar x={x} is nearer the line's right edge {}, not the left {}", a.max.x, a.min.x);
+    // Left to right keeps the first rectangle (vertical text stacks whole lines at one y-range).
+    let l = visible_anchor(rects, clip, false).unwrap();
+    assert!(l.min.x == line1[0].min.x && l.max.x < a.max.x, "LTR anchor is the top run only: {l:?}");
 }
