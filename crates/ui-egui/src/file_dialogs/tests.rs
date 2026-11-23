@@ -923,3 +923,52 @@ fn many_failed_fonts_end_with_a_count() {
     a.add_fonts(fonts).unwrap();
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// A host with its own Save Changes prompt (a sheet on the document's window on macOS) gets the
+/// question once, the built-in prompt stays out of sight, and the host's answer closes the
+/// document through the same close operation.
+#[test]
+fn a_native_save_prompt_asks_once_and_its_answer_closes_the_document() {
+    let (mut a, _files) = async_app();
+    a.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (answer, rx) = std::sync::mpsc::channel();
+    let rx = std::rc::Rc::new(std::cell::Cell::new(Some(rx)));
+    let log = asked.clone();
+    let hook_rx = rx.clone();
+    a.services.save_prompt = Some(Box::new(move |_, question, _| {
+        log.borrow_mut().push(question);
+        Some(hook_rx.take().unwrap_or_else(|| std::sync::mpsc::channel().1))
+    }));
+    a.run("file.close", json!({})).unwrap();
+    assert_eq!(asked.borrow().len(), 1, "asked once, not again while it waits");
+    assert!(asked.borrow()[0].contains("save changes"), "{:?}", asked.borrow());
+    assert!(a.native_prompt.is_some(), "the sheet is up");
+    assert!(a.closing.as_ref().is_some_and(|c| c.prompt.is_none()), "the built-in prompt stays out of sight");
+    assert!(a.dialog_host.open_dialogs().is_empty(), "no in-window dialog");
+    answer.send("dontSave".to_string()).unwrap();
+    a.pump_close_prompt();
+    assert!(a.native_prompt.is_none(), "the answer was taken");
+    assert!(!a.has_document(), "Don't Save closed the document");
+    assert!(!a.quit_requested);
+}
+
+/// A host that can't place a sheet (no window it can tell is the document's) is asked once and
+/// the built-in prompt takes over.
+#[test]
+fn a_host_without_the_window_leaves_the_question_to_the_built_in_prompt() {
+    let (mut a, _files) = async_app();
+    a.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+    let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = asked.clone();
+    a.services.save_prompt = Some(Box::new(move |_, _, _| {
+        count.set(count.get() + 1);
+        None
+    }));
+    a.run("file.close", json!({})).unwrap();
+    assert_eq!(asked.get(), 1, "asked once");
+    assert!(a.native_prompt.is_none());
+    assert!(a.closing.as_ref().is_some_and(|c| c.prompt.is_some()), "the built-in prompt is up");
+    a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+    assert!(!a.has_document(), "its Don't Save closed the document");
+}

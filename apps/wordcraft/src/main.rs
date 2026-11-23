@@ -16,8 +16,12 @@
 mod appimage_env;
 mod control_server;
 mod default_apps;
+#[cfg(target_os = "macos")]
+mod panels;
 mod prefs;
 mod region;
+#[cfg(target_os = "macos")]
+mod save_sheet;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -49,6 +53,9 @@ struct App {
     app: WordApp,
     /// The native panels behind the file service the app reaches through `Host::files`.
     panels: FilePanels,
+    /// Shows the Save Changes sheets the app queued (macOS).
+    #[cfg(target_os = "macos")]
+    sheets: save_sheet::Launcher,
     /// Feeds the files dropped on the window into the app's intake (`Services::intake`), the one
     /// queue the OS's requests are read from.
     drops: IntakeSender,
@@ -65,6 +72,11 @@ impl App {
     /// path. Without `frame` (a test over no window) the dialogs have no parent window.
     fn logic_pass(&mut self, ctx: &egui::Context, frame: Option<&eframe::Frame>) {
         self.app.logic(ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            panels::tie(mtm);
+            self.sheets.show(mtm);
+        }
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
         // A quit that waits for nothing (the documents are answered for) closes the root window.
         if self.app.quit_requested && !self.app.printing.busy() {
@@ -81,6 +93,10 @@ impl App {
             embed::before_ui(ui.ctx(), frame);
         }
         self.app.ui(ui);
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            self.sheets.show(mtm);
+        }
         self.panels.pump_with(self.app.dialog_host_mut(), frame);
     }
 
@@ -548,6 +564,13 @@ fn main() -> eframe::Result {
             }
             let spool = Spool::new(host.jobs_shared().clone());
             let mut app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
+            #[cfg(target_os = "macos")]
+            let (save_prompt, sheets) = save_sheet::hook(&ctx);
+            #[cfg(target_os = "macos")]
+            {
+                app.services.save_prompt = Some(save_prompt);
+                app.services.find_window = true;
+            }
             // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
             // the region check below reads the saved region the settings apply.
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
@@ -598,7 +621,16 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
-            Ok(Box::new(App { app, panels, drops, settings, spool, control: control_server }))
+            Ok(Box::new(App {
+                app,
+                panels,
+                #[cfg(target_os = "macos")]
+                sheets,
+                drops,
+                settings,
+                spool,
+                control: control_server,
+            }))
         }),
     );
     // The app is dropped by now: whatever it saved on the way out is in the store.
@@ -803,7 +835,23 @@ mod smoke {
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
             let app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None }, frames, ctx, sender }
+            #[cfg(target_os = "macos")]
+            let (_, sheets) = save_sheet::hook(&ctx);
+            Run {
+                app: App {
+                    app,
+                    panels,
+                    #[cfg(target_os = "macos")]
+                    sheets,
+                    drops,
+                    settings,
+                    spool,
+                    control: None,
+                },
+                frames,
+                ctx,
+                sender,
+            }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.

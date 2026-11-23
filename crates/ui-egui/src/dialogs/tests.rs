@@ -1786,6 +1786,40 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     }
 }
 
+/// `Services::find_window`: Find and Replace asks for a window of its own (a macOS utility
+/// panel), so `DialogHost::run` leaves it out of the document window's pass and `run_windowed`
+/// drives it; cancelling closes it.
+#[test]
+fn find_in_its_own_window_runs_windowed_and_closes_on_cancel() {
+    let mut app = app_with("one");
+    app.services.find_window = true;
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let id = open_named(&mut h, "find", json!({}));
+    let windowed = h
+        .state()
+        .dialog_host
+        .get_by_id::<super::find_replace::FindHost>(id)
+        .map(craft::ui::dialog::StackDialog::windowed)
+        .unwrap_or_else(|| panic!("the find dialog is on the host"));
+    assert!(windowed, "the dialog asked for a window of its own");
+    let ctx = h.ctx.clone();
+    h.state_mut().dialog_host.cancel_by_id(&ctx, id);
+    h.run_steps(2);
+    assert!(!is_open(h.state(), "find"), "cancel closes it");
+}
+
+/// Without `Services::find_window` Find and Replace is an ordinary in-window dialog.
+#[test]
+fn find_without_the_window_service_stays_in_the_document_window() {
+    let mut h = app_harness(app_with("one"));
+    h.run_steps(2);
+    let id = open_named(&mut h, "find", json!({}));
+    let windowed =
+        h.state().dialog_host.get_by_id::<super::find_replace::FindHost>(id).map(craft::ui::dialog::StackDialog::windowed).unwrap_or_default();
+    assert!(!windowed);
+}
+
 /// #7446: the SmartArt picker renders compact layout tiles capped at three rows (PICKER_HEIGHT = 304),
 /// instead of expanding each thumbnail to default card dimensions (~132×132 pt) and overflowing.
 #[test]

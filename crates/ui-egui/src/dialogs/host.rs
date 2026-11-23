@@ -613,13 +613,23 @@ fn form_settle<F: WordForm>(app: &mut WordApp, ctx: &Context, id: DialogId) -> S
 pub(crate) struct Keyed<D: StackDialog> {
     key: &'static str,
     id: DialogId,
+    windowed: bool,
+    window_title: Option<String>,
     dialog: D,
 }
 
 impl<D: StackDialog> Keyed<D> {
     /// Wraps `dialog`, whose id becomes `dialog_id(key)`.
     pub(crate) fn new(key: &'static str, dialog: D) -> Self {
-        Keyed { key, id: dialog_id(key), dialog }
+        Keyed { key, id: dialog_id(key), windowed: false, window_title: None, dialog }
+    }
+
+    /// Shows the dialog in a window of its own — a utility panel on macOS — titled `title`, when
+    /// the host also runs [`craft::ui::dialog::DialogHost::run_windowed`].
+    pub(crate) fn in_own_window(mut self, title: impl Into<String>) -> Self {
+        self.windowed = true;
+        self.window_title = Some(title.into());
+        self
     }
 
     /// The wrapped dialog.
@@ -643,6 +653,14 @@ impl<D: StackDialog> StackDialog for Keyed<D> {
 
     fn modeless(&self) -> bool {
         self.dialog.modeless()
+    }
+
+    fn windowed(&self) -> bool {
+        self.windowed || self.dialog.windowed()
+    }
+
+    fn window_title(&self) -> Option<String> {
+        self.window_title.clone().or_else(|| self.dialog.window_title())
     }
 
     fn show(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<DialogResult<D::Result>> {

@@ -152,7 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
-
+- 2026-11-20: macOS system dialogs, ported onto the craft-framework dialog host: "Save changes?" is a sheet on the document's own window (the built-in prompt when the host can't tell which window is the document's); Find and Replace opens in a window of its own, tied to its document window as a child window and hidden while WordCraft is in the background (the smaller utility title bar needs a panel option in the egui and winit forks, a follow-up). The workspace's `unsafe_code` is `deny`, with the two macOS-only files named in AGENTS.md. Readiness estimates unchanged.
 - 2026-11-20: `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root` (shared rule 18, #7124); without them it stops with an error naming the two flags, where it used to serve with access to every file the user can reach. `mcp --connect` is refused until the desktop app confines its control channel to the same roots (#3695, #5819). The help, `docs/mcp.md`, the README and `AGENTS.md` pass both roots in every example.
 
 - 2026-11-19: Layout: when strict column balancing moves an anchor line to the next column, it releases the floating object's wrap area from the abandoned column (#6821). Readiness estimates unchanged.
