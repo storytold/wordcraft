@@ -11277,6 +11277,62 @@ fn keep_with_next_holds_before_a_three_line_paragraph() {
     }
 }
 
+/// Keep with next counts the kept paragraph's own space after: it stands between that paragraph
+/// and the next one's first line, taken with the next one's space before as between any two
+/// paragraphs (the larger, or both with `sum_paragraph_spacing`). Without it a one-line heading
+/// with space after stayed alone at the page bottom while the three-line paragraph after it
+/// (widow control) moved over whole; with both always added, a heading went over that fits with
+/// its paragraph. So the keep holds, and where the paragraph starts on the heading's page without
+/// keep with next, the heading stays on that page with it. Split as in Word for Mac or not: a
+/// one-line paragraph can't be split.
+#[test]
+fn keep_with_next_counts_the_kept_paragraphs_space_after() {
+    crate::test_fonts();
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+        ..Default::default()
+    };
+    let para = |text: &str, props: ParaProps| {
+        let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        x.props = props;
+        wordcraft_doc::para_block(x)
+    };
+    // (The heading's space after, the next paragraph's space before, sum_paragraph_spacing.)
+    for (after, before, sum) in [(24.0, 0.0, false), (6.0, 24.0, false), (6.0, 24.0, true)] {
+        // `shift` moves everything after the first filler down 1 pt at a time, so the room left
+        // below the heading takes every value.
+        for shift in 0..14 {
+            for fillers in 36..50 {
+                let doc = |keep: bool| {
+                    let mut d = Document::new();
+                    d.settings.sum_paragraph_spacing = sum;
+                    d.body = (0..fillers).map(|i| para(&format!("F{i}"), plain.clone())).collect();
+                    if let Some(first) = d.body.get_mut(0) {
+                        *first = para("F0", ParaProps { space_after: Some(shift as f32), ..plain.clone() });
+                    }
+                    d.body.push(para("Heading", ParaProps { keep_next: keep.then_some(true), space_after: Some(after), ..plain.clone() }));
+                    d.body.push(para("Na\nNb\nNc", ParaProps { space_before: Some(before), ..plain.clone() }));
+                    d.body.push(para("NY", plain.clone()));
+                    d
+                };
+                let free = lay_keep_next(&doc(false), false);
+                let free_page = |pos: Pos| free.caret(&pos).unwrap().page;
+                for splits in [false, true] {
+                    let l = lay_keep_next(&doc(true), splits);
+                    let page = |pos: Pos| l.caret(&pos).unwrap().page;
+                    let case = format!("{after} pt after, {before} pt before, sum {sum}, shift {shift}, {fillers} fillers, splits {splits}");
+                    assert_eq!(page(Pos::body(fillers, 0)), page(Pos::body(fillers + 1, 0)), "{case}: the heading stays with the paragraph");
+                    if free_page(Pos::body(fillers, 0)) == free_page(Pos::body(fillers + 1, 0)) {
+                        assert_eq!(page(Pos::body(fillers, 0)), free_page(Pos::body(fillers, 0)), "{case}: the heading fits with the paragraph");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// #4066 review: a kept paragraph split as in Word for Mac whose first line can't go on the page
 /// after all (its footnote leaves no room there) moves to the next page before any line is
 /// placed; there it is no longer split, so all of it stays with the next paragraph instead of

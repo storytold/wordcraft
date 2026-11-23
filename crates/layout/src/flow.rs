@@ -358,7 +358,9 @@ impl<'a> Flow<'a> {
         let closes_page = pb.next_starts_page && self.p.section.is_some();
         let need = height
             + if rp.keep_next && !closes_page {
-                next_first_line(ctx, self.block, self.laid_width, 0, pb.next_starts_page, &mut ctx.counters.clone())
+                // With its own space after, which stands between it and the next paragraph.
+                let after = space_after_kept(ctx, self.block, rp, self.label.is_some());
+                next_first_line(ctx, self.block, self.laid_width, after, 0, pb.next_starts_page, &mut ctx.counters.clone())
             } else {
                 0.0
             };
@@ -1090,14 +1092,18 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966). `new_page`: the next section starts
-/// on a new page, so the chain ends at the paragraph closing this one.
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_page: bool, counters: &mut Counters) -> f32 {
+/// on a new page, so the chain ends at the paragraph closing this one. `after`: the space after
+/// paragraph `block` left below it ([`space_after_kept`]). It comes between the two as in
+/// `merge_gap`, the larger of it and the next one's space before unless paragraph spacing adds
+/// up, and in full above a table.
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, after: f32, depth: usize, new_page: bool, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
             let label =
                 p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+            let listed = label.is_some();
             let pl = match ctx.para_ahead(p, width, label.clone()) {
                 Some(pl) => pl,
                 None => {
@@ -1126,16 +1132,14 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
+            let before = pl.rp.space_before;
+            let between = if before > 0.0 && after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing { after.max(before) } else { after + before };
             // The paragraph closing the section, when the next section starts a new page, keeps
             // with nothing on this page (Word ignores its Keep with next).
             if pl.rp.keep_next && depth < 8 && !(new_page && p.section.is_some()) {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before
-                    + top
-                    + pl.height
-                    + bottom
-                    + pl.rp.space_after
-                    + next_first_line(ctx, block + 1, width, depth + 1, new_page, counters)
+                let after = space_after_kept(ctx, block + 1, &pl.rp, listed);
+                between + top + pl.height + bottom + next_first_line(ctx, block + 1, width, after, depth + 1, new_page, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -1143,7 +1147,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
+                between
                     + top
                     + if pl.rp.keep_lines {
                         pl.height
@@ -1155,7 +1159,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                     }
             }
         }
-        Some(Block::Table(_)) => 24.0,
+        Some(Block::Table(_)) => after + 24.0,
         None => 0.0,
     }
 }
