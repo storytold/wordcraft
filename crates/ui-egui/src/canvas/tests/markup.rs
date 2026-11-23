@@ -858,3 +858,29 @@ fn a_right_click_keeps_selected_cells_only_on_them() {
     assert_menu(&h, &["Split Cells"], true);
     assert_menu(&h, &["Merge Cells"], false);
 }
+
+/// Right-clicking a table cell puts the caret there, and the table's items follow what is
+/// selected, as in Word: with the caret in a cell, Split Cells; with the whole table,
+/// Distribute, AutoFit and Insert Caption… (never Select or Cell Alignment). Delete is there
+/// for both.
+#[test]
+fn the_context_menu_in_a_table_follows_the_selection() {
+    let mut h = table_window();
+    let b = cell(&mut h, 1, 2);
+    let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
+    right_click(&mut h, at);
+    assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 2)), "the caret moved to the cell");
+    assert_menu(&h, &["Insert", "Delete", "Split Cells", "Text Direction", "Table Properties…"], true);
+    assert_menu(&h, &["Merge Cells", "Distribute Rows", "AutoFit", "Select", "Cell Alignment"], false);
+    let depth = h.state().session.undo_depth();
+    pick(&mut h, &["Insert", "Insert Rows Below"]);
+    assert_eq!(h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len()), Some(3));
+    assert_eq!(h.state().session.undo_depth(), depth + 1);
+    h.state_mut().run("table.selectTable", json!({})).unwrap();
+    right_click(&mut h, at);
+    assert!(h.state().session.cell_range().is_some(), "a right-click on the selected table keeps it");
+    assert_menu(&h, &["Delete", "Distribute Rows", "Distribute Columns", "AutoFit", "Insert Caption…", "Table Properties…"], true);
+    assert_menu(&h, &["Split Cells", "Merge Cells"], false);
+    pick(&mut h, &["Delete", "Delete Table"]);
+    assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()));
+}
