@@ -20,6 +20,8 @@ mod build_flavor;
 mod control_server;
 mod default_apps;
 mod launch_profile;
+#[cfg(test)]
+mod logging;
 mod nightly_session;
 mod prefs;
 mod process_identity;
