@@ -518,8 +518,7 @@ mod tests {
         .unwrap();
         assert_eq!(FontForm::read(&mut a).paper, Some(Rgb(128, 128, 128)), "half-transparent black over white, not the black fallback");
 
-        a.run("design.pageFill", json!({"fill": "pattern", "preset": "pct10", "fore": "000000", "back": "000000", "transparency": 100}))
-            .unwrap();
+        a.run("design.pageFill", json!({"fill": "pattern", "preset": "pct10", "fore": "000000", "back": "000000", "transparency": 100})).unwrap();
         assert_eq!(FontForm::read(&mut a).paper, Some(Rgb::WHITE), "a fully transparent pattern leaves the white paper");
     }
 

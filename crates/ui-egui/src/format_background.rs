@@ -241,8 +241,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
             if out.more {
                 more = Some(DraftColor::End);
             }
-            let entries: Vec<Entry<u8>> =
-                DIRECTIONS.iter().enumerate().map(|(i, (label, _))| Entry::new(i as u8, tl!(label))).collect();
+            let entries: Vec<Entry<u8>> = DIRECTIONS.iter().enumerate().map(|(i, (label, _))| Entry::new(i as u8, tl!(label))).collect();
             let mut picked = None;
             Field::new(Label::from(tl!("Direction"))).show(ui, |ui, _| {
                 picked = Select::new(tl!("Direction"), Bind::given(direction_of(*angle) as u8), &entries).show(ui).events.committed().copied();

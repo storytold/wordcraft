@@ -176,10 +176,13 @@ fn caret_contrasts_with_what_lies_under_it() {
     a.session.view.dark_mode = true;
     assert_eq!(at(&mut a, 2), Color32::WHITE, "dark page");
     a.session.view.dark_mode = false;
-    a.run("design.pageFill", json!({"fill": "gradient", "stops": [
-        {"pos": 0, "color": "000000", "transparency": 0},
-        {"pos": 100, "color": "000000", "transparency": 0}
-    ]}))
+    a.run(
+        "design.pageFill",
+        json!({"fill": "gradient", "stops": [
+            {"pos": 0, "color": "000000", "transparency": 0},
+            {"pos": 100, "color": "000000", "transparency": 0}
+        ]}),
+    )
     .unwrap();
     assert_eq!(at(&mut a, 2), Color32::WHITE, "an opaque black gradient fill");
     a.run("design.pageFill", json!({"fill": "pattern", "preset": "pct20", "fore": "000000", "back": "000000"})).unwrap();
@@ -2111,10 +2114,13 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
 fn the_view_key_changes_when_the_gradient_or_pattern_fill_changes() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("x")), Default::default());
     let plain = view_key(&a, false, None);
-    a.run("design.pageFill", json!({"fill": "gradient", "stops": [
-        {"pos": 0, "color": "000000", "transparency": 0},
-        {"pos": 100, "color": "FFFFFF", "transparency": 0}
-    ]}))
+    a.run(
+        "design.pageFill",
+        json!({"fill": "gradient", "stops": [
+            {"pos": 0, "color": "000000", "transparency": 0},
+            {"pos": 100, "color": "FFFFFF", "transparency": 0}
+        ]}),
+    )
     .unwrap();
     let gradient = view_key(&a, false, None);
     assert_ne!(plain, gradient, "a gradient fill gets its own page texture");
