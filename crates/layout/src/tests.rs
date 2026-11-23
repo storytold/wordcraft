@@ -8950,6 +8950,8 @@ fn a_cell_set_not_to_wrap_is_sized_as_one_unbreakable_piece() {
     // many lines the first and the third column's text take.
     let columns = |setup: &dyn Fn(&mut Table)| {
         let mut t = Table::new(1, 3, 300.0);
+        // Percentages are shares of the table's own width (#5074): without one, of the text area.
+        t.props.width = Some(300.0);
         for (c, s) in t.rows[0].cells.iter_mut().zip(["a", "b", LONG]) {
             c.props.width = None;
             c.props.width_pct = Some(100.0 / 3.0);
