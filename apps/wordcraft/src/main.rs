@@ -214,6 +214,8 @@ fn services(spool: Spool, intake: FileIntake) -> Services {
         (!cfg!(target_os = "macos")).then(|| -> MakeDefault { Box::new(|| craft::platform::default_app::make_default(&default_apps::identity())) });
     #[cfg(not(any(unix, windows)))]
     let make_default_app: Option<MakeDefault> = None;
+    // macOS only: More Colors… shows the system Colors panel, with Cancel and OK, as Mac apps do.
+    craft::color_ui::ui::use_system_color_panel(cfg!(target_os = "macos"));
     Services {
         print: Some(spool),
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
