@@ -18,6 +18,7 @@ mod styles;
 mod tabs_borders;
 mod tools;
 
+pub(super) use format::change_list_level;
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{cur as selection_para, fmt, indent, outdent};
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};

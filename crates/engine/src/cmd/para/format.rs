@@ -159,6 +159,17 @@ pub(super) fn drop_direct_indents(p: &mut ParaProps) {
     p.indent_first_chars = None;
 }
 
+/// Apply the indent of a different list level while leaving boundary commands unchanged.
+pub(in crate::cmd) fn change_list_level(s: &mut Session, story: StoryRef, path: &Path, number: NumRef, level: u8) -> Result<(), CmdError> {
+    if level != number.level {
+        let para = s.doc.para_mut(story, path)?;
+        para.props.numbering = Some(NumRef { level, ..number });
+        drop_direct_indents(&mut para.props);
+        para.touch();
+    }
+    Ok(())
+}
+
 /// Change an effective list level, including numbering inherited through a paragraph style.
 pub(super) fn list_level(s: &mut Session, v: &Value) -> CmdResult {
     let level = p::u64(v, "level").unwrap_or(0).min(8) as u8;
@@ -167,12 +178,7 @@ pub(super) fn list_level(s: &mut Session, v: &Value) -> CmdResult {
         let Some(number) = s.doc.para(story, &path).and_then(|p| s.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0) else {
             continue;
         };
-        if number.level != level {
-            let para = s.doc.para_mut(story, &path)?;
-            para.props.numbering = Some(NumRef { num: number.num, level });
-            drop_direct_indents(&mut para.props);
-            para.touch();
-        }
+        change_list_level(s, story, &path, number, level)?;
     }
     sel_result(s)
 }

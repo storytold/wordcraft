@@ -4349,48 +4349,47 @@ fn label_and_text_x(s: &mut Session) -> (f32, f32) {
         .iter()
         .flat_map(|p| &p.items)
         .find_map(|i| {
-            if let wordcraft_layout::Placed::Lines { para, l0: 0, .. } = i { para.label.as_ref().map(|lb| (lb.x, lb.x + lb.width)) } else { None }
+            let wordcraft_layout::Placed::Lines { para, l0: 0, .. } = i else { return None };
+            let label = para.label.as_ref()?;
+            let line = para.lines.first()?;
+            let text = (line.c0..line.c1).find(|&k| para.clusters[k].kind == wordcraft_layout::para::ClKind::Text)?;
+            Some((label.x, line.cl_left(text)?))
         })
-        .expect("a list label")
+        .expect("a list label followed by text")
 }
 
 /// #4287: changing a list item's level (Change List Level, Tab, Shift+Tab) puts it at the new level's
 /// indent, also when it carried a direct indent (a ruler drag, a pasted block, a Word file's `w:ind`).
 #[test]
 fn changing_a_list_level_drops_a_direct_indent() {
-    // The reference: a fresh list item moved to level 2 with no direct indent in the way.
-    let fresh = |command: &str, params: serde_json::Value| {
-        let mut s = s();
-        typ(&mut s, "Item");
-        run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
-        run(&mut s, command, params);
-        label_and_text_x(&mut s)
-    };
-    let dragged = |command: &str, params: serde_json::Value| {
-        let mut s = s();
-        typ(&mut s, "Item");
-        run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
-        // The ruler's left-indent marker dragged to a custom place.
-        run(&mut s, "para.indents", json!({"left": 120.0, "firstLine": -6.0}));
-        run(&mut s, command, params);
-        label_and_text_x(&mut s)
-    };
-    for (command, params) in [("para.listLevel", json!({"level": 1})), ("para.indent", json!({}))] {
-        assert_eq!(dragged(command, params.clone()), fresh(command, params), "{command}");
+    for (initial, command, params, expected) in [
+        (0, "para.listLevel", json!({"level": 1}), 1),
+        (0, "para.indent", json!({}), 1),
+        (0, "text.tab", json!({}), 1),
+        (1, "para.outdent", json!({}), 0),
+        (1, "text.backTab", json!({}), 0),
+    ] {
+        let positions = |drag| {
+            let mut s = typed("Item");
+            run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
+            run(&mut s, "para.listLevel", json!({"level": initial}));
+            if drag {
+                run(&mut s, "para.indents", json!({"left": 120.0, "firstLine": -6.0}));
+                let props = &mut s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props;
+                props.indent_left_chars = Some(5.0);
+                props.indent_first_chars = Some(-1.0);
+            }
+            s.sel = crate::Selection::caret(Pos::body(0, 0));
+            run(&mut s, command, params.clone());
+            let para = s.doc.para_at(&s.sel.focus).unwrap();
+            let p = &para.props;
+            assert_eq!(para.text, "Item", "{command}");
+            assert_eq!(p.numbering.unwrap().level, expected, "{command}");
+            assert_eq!((p.indent_left, p.indent_first, p.indent_left_chars, p.indent_first_chars), (None, None, None, None), "{command}");
+            label_and_text_x(&mut s)
+        };
+        assert_eq!(positions(true), positions(false), "{command}");
     }
-    // Back out (Shift+Tab) from level 2 to 1 as well.
-    let back = |drag: bool| {
-        let mut s = s();
-        typ(&mut s, "Item");
-        run(&mut s, "para.numbering", json!({"kind": "upperLetter"}));
-        run(&mut s, "para.listLevel", json!({"level": 1}));
-        if drag {
-            run(&mut s, "para.indents", json!({"left": 200.0, "firstLine": -30.0}));
-        }
-        run(&mut s, "para.outdent", json!({}));
-        label_and_text_x(&mut s)
-    };
-    assert_eq!(back(true), back(false), "para.outdent");
     // A ruler drag with no level change sticks.
     let mut s = s();
     typ(&mut s, "Item");
@@ -4403,7 +4402,13 @@ fn changing_a_list_level_drops_a_direct_indent() {
 /// Same-level and boundary commands keep all four direct indent forms and do not create history.
 #[test]
 fn list_level_boundaries_keep_direct_indents_and_roundtrip() {
-    for (level, command, params) in [(0, "para.outdent", json!({})), (8, "para.indent", json!({})), (2, "para.listLevel", json!({"level":2}))] {
+    for (level, command, params) in [
+        (0, "para.outdent", json!({})),
+        (8, "para.indent", json!({})),
+        (2, "para.listLevel", json!({"level": 2})),
+        (0, "text.backTab", json!({})),
+        (8, "text.tab", json!({})),
+    ] {
         let mut s = s();
         typ(&mut s, "ELEMENT SINTETIC");
         run(&mut s, "para.numbering", json!({"kind":"upperLetter"}));
@@ -4414,6 +4419,7 @@ fn list_level_boundaries_keep_direct_indents_and_roundtrip() {
         props.indent_left_chars = Some(5.0);
         props.indent_first_chars = Some(-1.0);
         let before = props.clone();
+        s.sel = crate::Selection::caret(Pos::body(0, 0));
         let labels = s.undo_labels();
         run(&mut s, command, params);
         assert_eq!(s.doc.para(StoryRef::Body, &path).unwrap().props, before);

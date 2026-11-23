@@ -2,7 +2,8 @@ use super::autoformat::{
     EnterAutoFormat, apply_border_line, apply_heading_line, apply_table_line, border_line, heading_line, table_line, typing_options,
 };
 use super::unicode::ins_char;
-use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
+use super::{CmdError, CmdResult, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
+use crate::cmd::para::change_list_level;
 
 /// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
 fn sample_text(s: &Session) -> Option<String> {
@@ -204,9 +205,7 @@ pub(super) fn tab(s: &mut Session, _: &Value) -> CmdResult {
         && let Some(n) = s.doc.para_at(&f).and_then(|x| x.props.numbering)
         && n.num != 0
     {
-        let para = s.doc.para_mut(f.story, &f.path)?;
-        para.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_add(1).min(8) });
-        para.touch();
+        change_list_level(s, f.story, &f.path, n, n.level.saturating_add(1).min(8))?;
         return sel_result(s);
     }
     if s.sel.is_collapsed() && tab_indent_on(s) && tab_indents(s, &f) {
@@ -253,9 +252,7 @@ fn indent_by_tab(s: &mut Session, f: &Pos) -> CmdResult {
         && para.props.numbering.is_none()
         && let Some(n) = r.numbering.filter(|n| n.num != 0)
     {
-        let p = s.doc.para_mut(f.story, &f.path)?;
-        p.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_add(1).min(8) });
-        p.touch();
+        change_list_level(s, f.story, &f.path, n, n.level.saturating_add(1).min(8))?;
         return sel_result(s);
     }
     if f.off == 0 && r.indent_first == 0.0 && r.indent_chars[2] == 0.0 {
@@ -286,9 +283,7 @@ pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
     }
     let f = s.sel.focus.clone();
     if let Some(n) = s.doc.para_at(&f).and_then(|x| x.props.numbering).filter(|n| n.num != 0) {
-        let para = s.doc.para_mut(f.story, &f.path)?;
-        para.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_sub(1) });
-        para.touch();
+        change_list_level(s, f.story, &f.path, n, n.level.saturating_sub(1))?;
         return sel_result(s);
     }
     crate::cmd::para::outdent(s, &Value::Null)
