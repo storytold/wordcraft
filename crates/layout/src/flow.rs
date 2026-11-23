@@ -300,8 +300,9 @@ impl<'a> Flow<'a> {
     fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
         let (style, ctxl, mut after, after_auto, listed) = prev;
         let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
-        if style == rp.style {
+        // Contextual spacing suppresses each paragraph's own side of the gap. A style the document
+        // doesn't define is Normal, as the mark ending a table row is (see `place_table`).
+        if crate::table::known_style(ctx.doc, &style) == crate::table::known_style(ctx.doc, &rp.style) {
             if ctxl {
                 pb.y -= after;
                 before = (before - after).max(0.0);
