@@ -155,7 +155,7 @@ impl FontDb {
         }
         // Misses remembered while it was off may be found now.
         self.generation.fetch_add(1, Ordering::AcqRel);
-        self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner).map.clear();
+        *self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = FallbackCache::default();
         *self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = RunFallbackCache::default();
         *self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = DiagramFallbackCache::default();
         #[cfg(target_arch = "wasm32")]

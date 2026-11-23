@@ -13,10 +13,13 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
     let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
     let db = wordcraft_fonts::FontDb::global();
 
-    // A diagram (SmartArt or chart) should maintain a consistent fallback font family across
-    // all its text nodes (#5672). Collect all characters across the graphic that each item's
-    // primary font lacks, and find one fallback face that covers them all (or, when unrelated
-    // symbols need another face, one fallback face that covers all missing East Asian characters).
+    // A graphic (SmartArt diagram or chart) should maintain a consistent fallback font family
+    // across all its text nodes (#5672). Collect all characters across the graphic that each
+    // item's primary font lacks, and find one fallback face that covers them all (or, when
+    // unrelated symbols need another face, one fallback face that covers all missing East Asian
+    // characters). The serif/sans preference comes from the first text item with a missing
+    // character (or the first with a missing East Asian character on the East Asian-only retry),
+    // so mixed-style graphics follow that leading label's style across nodes.
     let mut text_resolved: Vec<Option<wordcraft_fonts::word::Resolved>> = Vec::with_capacity(g.items.len());
     let mut diagram_chars: Vec<char> = Vec::new();
     let mut cjk_chars: Vec<char> = Vec::new();

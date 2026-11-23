@@ -933,15 +933,21 @@ fn fallback_order_matches_primary_font_serif_nature() {
     assert_eq!(mincho_sans < gothic_sans, mincho_serif < gothic_serif, "body text fallback order does not invert between sans and serif primaries");
     drop(faces);
 
-    // Replacing a user font with another of the same face count invalidates run_fallbacks.
+    // Replacing a user font with another of the same face count invalidates both fallbacks and run_fallbacks.
     db.install_font("UserGothic.ttf", &mapping("SourceSans3-Regular.ttf", "User1 Gothic1", 0xF_0001, 0xF_0002)).unwrap();
     let run = ['\u{F0001}', '\u{F0002}'];
+    let first_char = db.fallback_for('\u{F0001}', serif_primary.id()).unwrap();
+    assert_eq!(first_char.family, "User1 Gothic1");
+    assert_eq!(db.fallbacks.read().unwrap().generation, db.generation());
     let first = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
     assert_eq!(first.family, "User1 Gothic1");
     let face_count = db.read_faces().len();
     db.remove_user_font("User1 Gothic1").unwrap();
     db.install_font("UserMincho.ttf", &mapping("SourceSans3-Regular.ttf", "User2 Mincho2", 0xF_0001, 0xF_0002)).unwrap();
     assert_eq!(db.read_faces().len(), face_count);
+    let updated_char = db.fallback_for('\u{F0001}', serif_primary.id()).unwrap();
+    assert_eq!(updated_char.family, "User2 Mincho2");
+    assert_eq!(db.fallbacks.read().unwrap().generation, db.generation());
     let updated = db.fallback_for_run(&run, serif_primary.id(), false, false).unwrap();
     assert_eq!(updated.family, "User2 Mincho2");
 

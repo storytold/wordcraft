@@ -281,6 +281,7 @@ pub(super) fn arabic_block(c: char) -> bool {
 #[derive(Default)]
 pub(super) struct FallbackCache {
     pub(super) faces: usize,
+    pub(super) generation: u64,
     pub(super) map: HashMap<(char, u32), Option<Arc<FontFace>>>,
 }
 

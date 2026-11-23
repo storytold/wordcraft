@@ -31,28 +31,35 @@ impl FontDb {
         Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
     }
 
-    /// The fallback search, cached per (character, excluded face) until more faces load.
+    /// The fallback search, cached per (character, excluded face) until loaded faces or font
+    /// generation change.
     fn cached_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        let generation = self.generation();
         let n = self.read_faces().len();
         {
             let cache = self.fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if cache.faces == n
+                && cache.generation == generation
                 && let Some(hit) = cache.map.get(&(c, exclude))
             {
                 return hit.clone();
             }
         }
         let (found, n) = self.search_fallback(c, exclude);
-        // Keyed by the face count the answer was chosen from (a system fallback may have loaded
-        // fonts, and another thread may have loaded more since: an answer from before that load
-        // is returned but not cached under the new count).
-        if n != self.read_faces().len() {
+        // Keyed by the face count and generation the answer was chosen from (a system fallback may
+        // have loaded fonts, and another thread may have loaded or changed fonts since: an answer
+        // from before that change is returned but not cached under the new state).
+        if n != self.read_faces().len() || generation != self.generation() {
             return found;
         }
         let mut cache = self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cache.faces != n || cache.map.len() >= FALLBACK_CACHE_MAX {
+        if n != self.read_faces().len() || generation != self.generation() {
+            return found;
+        }
+        if cache.faces != n || cache.generation != generation || cache.map.len() >= FALLBACK_CACHE_MAX {
             cache.map.clear();
             cache.faces = n;
+            cache.generation = generation;
         }
         cache.map.insert((c, exclude), found.clone());
         found

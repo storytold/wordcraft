@@ -483,6 +483,7 @@ impl FontDb {
 
     /// Remove document fonts added for `families`: their faces leave the font list
     /// and cached fallback choices are forgotten ([`FontDb::generation`]).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn remove_document_fonts(&self, families: &[&str]) {
         let ids: Vec<u32> = {
             let faces = self.read_faces();
@@ -558,7 +559,7 @@ impl FontDb {
     /// Forget cached fallback choices and tell watchers ([`FontDb::generation`]).
     fn fonts_changed(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
-        self.fallbacks.write().unwrap_or_else(|e| e.into_inner()).map.clear();
+        *self.fallbacks.write().unwrap_or_else(|e| e.into_inner()) = super::FallbackCache::default();
         *self.run_fallbacks.write().unwrap_or_else(|e| e.into_inner()) = super::RunFallbackCache::default();
         *self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = super::DiagramFallbackCache::default();
     }
