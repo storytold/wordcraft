@@ -1662,10 +1662,9 @@ fn copying_puts_rtf_on_the_clipboard() {
     assert!(r["rtf"].as_str().is_some_and(|t| t.starts_with("{\\rtf1") && t.contains("bold")), "{r}");
     assert_eq!(text(&s).lines().next(), Some("plain "));
 
-    // Nothing selected: nothing copied, no RTF.
+    // Nothing selected: Copy is refused, so nothing is copied.
     run(&mut s, "caret.docEnd", json!({}));
-    let r = run(&mut s, "edit.copy", json!({}));
-    assert!(r.get("rtf").is_none(), "{r}");
+    assert!(s.run("edit.copy", &json!({})).is_err(), "Copy with nothing selected");
 }
 
 #[test]
@@ -2633,6 +2632,20 @@ fn tracked_cut_of_a_table_or_row_marks_text_deleted() {
     assert_eq!(body_table_final(&s), row_cells(&["A1", "B1", "C1", "", "", "", "A3", "B3", "C3"]));
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(body_table_final(&s), full);
+}
+
+/// Cut and Copy are off with nothing selected (the ribbon buttons read this) and on with text selected.
+#[test]
+fn cut_and_copy_are_disabled_without_a_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    for id in ["edit.cut", "edit.copy"] {
+        assert!(s.why_disabled(id).is_some(), "{id} with a caret only");
+    }
+    run(&mut s, "select.text", json!({"text": "Hello"}));
+    for id in ["edit.cut", "edit.copy"] {
+        assert!(s.why_disabled(id).is_none(), "{id} with a selection");
+    }
 }
 
 /// #1744 review: Cut of a table, or of cells, holding a content control locked against deletion
