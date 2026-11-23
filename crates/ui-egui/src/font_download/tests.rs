@@ -282,7 +282,11 @@ fn a_long_unbroken_name_stays_inside_its_card() {
     let button = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Download").next().expect("button").rect();
     let name = h.get_by_label(&long).rect();
     let shown = h.get_by_label("Shown as Carlito · Microsoft").rect();
+    // The card has no node of its own; the dialog it fills is the tightest box to hold both to.
+    let dialog = h.query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Dialog)).next().expect("the dialog").rect();
     assert!(name.max.x <= button.min.x, "name runs under the button: {name:?} {button:?}");
-    assert!(button.max.x <= 700.0, "button clipped: {button:?}");
+    assert!(dialog.contains_rect(name) && dialog.contains_rect(button), "outside the dialog: {name:?} {button:?} {dialog:?}");
+    // The card's padding stands between the button and the dialog's edge.
+    assert!(button.max.x < dialog.max.x, "button reaches the dialog's edge: {button:?} {dialog:?}");
     assert!(name.min.x >= shown.min.x - 1.0 && name.width() > 0.0, "{name:?} {shown:?}");
 }
