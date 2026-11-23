@@ -5,7 +5,7 @@ use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_H
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Path, Pos, StoryRef, Table};
 
-use super::{delete_selection, delete_selection_effect, non_mac, sel_result, split_para, split_para_plain, type_text, type_text_effect};
+use super::{delete_selection, delete_selection_effect, non_mac, sel_result, split_para, type_text, type_text_effect};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod autoformat;
@@ -18,7 +18,7 @@ use delete::{backspace, delete, delete_sentence_back, delete_word_back, delete_w
 pub use enter_tab::MAX_TYPED_PARAGRAPHS;
 use enter_tab::{back_tab, new_paragraph, tab};
 use unicode::{ins_char, insert_code, toggle_unicode};
-pub use unicode::{alt_code_char, oem_code_page, system_code_pages, system_oem_code_page, windows_code_pages};
+pub use unicode::{oem_code_page, system_code_pages, system_oem_code_page};
 
 /// Append `n` empty paragraphs at the end of the body, for Click and Type.
 pub(crate) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdError> {

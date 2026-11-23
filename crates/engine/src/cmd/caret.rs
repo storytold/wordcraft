@@ -332,7 +332,6 @@ fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
     let in_body = x >= body.x && x <= body.right() && y >= body.y && y <= body.bottom();
     let on_line = lines.iter().any(|ln| y >= ln.top && y <= ln.bottom);
     let last_bottom = lines.iter().map(|ln| ln.bottom).fold(body.y, f32::max);
-    let below = y - last_bottom;
     let original_body = s.doc.body.len();
     if in_body && !on_line && l.cell_at(page, x, y).is_none() && page == l.pages.len().saturating_sub(1) && y > last_bottom {
         // Add one paragraph at a time until the last line reaches the click, laying out after
