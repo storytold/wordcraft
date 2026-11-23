@@ -437,6 +437,123 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
 
+/// #5886: status bar controls fit is per-window and settles without repaint or discard loops across wide and narrow windows.
+#[test]
+fn status_bar_controls_width_cache_is_per_window_and_avoids_discard_loops() {
+    use std::time::Duration;
+
+    use craft_ui_test_kit::windows::Windows as Kit;
+    use egui::{Pos2, Rect, ViewportId, ViewportInfo, vec2};
+
+    // 1. Multi-window rendering (`Kit`): both wide (800 pt root) and narrow (400 pt child) windows
+    // render together on the same egui context each frame without overwriting each other's `status_fit`.
+    let kit = Kit::new();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+
+    let win1 = a.windows.shown();
+    a.new_window();
+    let win2 = a.windows.shown();
+    assert_ne!(win1, win2, "two distinct windows open");
+
+    let info = |rect: Rect, is_focused: bool| ViewportInfo {
+        focused: Some(is_focused),
+        inner_rect: Some(rect),
+        outer_rect: Some(rect),
+        ..Default::default()
+    };
+    let wide_rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+    let narrow_rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 600.0));
+
+    let step_kit = |a: &mut WordApp, focus_root: bool| {
+        kit.root_info(info(wide_rect, focus_root));
+        kit.child_info(info(narrow_rect, !focus_root));
+        craft::ui::shell::embed::before_input(&kit.ctx, |out| a.frame_input(out));
+        kit.frame(Vec::new(), Vec::new(), |ui| {
+            a.logic(ui.ctx());
+            craft::ui::shell::embed::logic(ui.ctx(), || a.close_decision());
+            a.ui(ui);
+        })
+    };
+
+    let mut out = step_kit(&mut a, true);
+    for _ in 0..5 {
+        out = step_kit(&mut a, true);
+    }
+    let child_vp = out.trees.iter().map(|(id, _)| *id).find(|id| *id != ViewportId::ROOT).expect("child viewport rendered");
+
+    assert!(a.enter_window(win1));
+    let fit1 = a.chrome.status_fit.clone();
+    assert!(a.enter_window(win2));
+    let fit2 = a.chrome.status_fit.clone();
+
+    assert_eq!(fit1.step(), 0, "wide window stays at full controls step: {fit1:?}");
+    assert!(fit2.step() >= 1, "narrow window compacts controls (step >= 1): {fit2:?}");
+    assert_ne!(fit1, fit2, "per-window status fits are distinct");
+
+    let has_zoom_slider = |out: &craft_ui_test_kit::windows::Out, vp: ViewportId| {
+        let (_, tree) = out.trees.iter().find(|(id, _)| *id == vp).expect("viewport access tree");
+        tree.keys().into_iter().any(|key| tree.role_of(key) == Some(craft::ui::contract::Role::SLIDER) && tree.name_of(key) == Some("Zoom"))
+    };
+    assert!(has_zoom_slider(&out, ViewportId::ROOT), "wide window keeps the Zoom slider");
+    assert!(!has_zoom_slider(&out, child_vp), "narrow window drops the Zoom slider at step >= 1");
+
+    for (frame, focus_root) in [true, true, false, false].into_iter().enumerate() {
+        let frame_out = step_kit(&mut a, focus_root);
+        assert!(has_zoom_slider(&frame_out, ViewportId::ROOT), "frame {frame} wide window keeps Zoom slider");
+        assert!(!has_zoom_slider(&frame_out, child_vp), "frame {frame} narrow window keeps compact controls");
+        assert!(a.enter_window(win1));
+        assert_eq!(a.chrome.status_fit, fit1, "frame {frame} wide window 1 settled without changes");
+        assert!(a.enter_window(win2));
+        assert_eq!(a.chrome.status_fit, fit2, "frame {frame} narrow window 2 settled without changes");
+    }
+
+    // 2. Direct single-pass inspection (`ctx.run_ui`): both narrow (400 pt) and wide (1200 pt)
+    // layouts settle to distinct steps and run in 1 pass with no immediate `request_repaint()` loop.
+    let ctx = crate::test_harness::context();
+    let mut b = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+
+    let run_pass = |app: &mut WordApp, width: f32| -> (usize, Duration) {
+        let mut passes = 0;
+        craft::ui::shell::embed::before_input(&ctx, |out| app.frame_input(out));
+        let full =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 700.0))), ..Default::default() }, |ui| {
+                crate::test_harness::logic(ui.ctx(), app);
+                app.ui(ui);
+                passes += 1;
+            });
+        let delay = full.viewport_output.get(&ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
+        full.drop_without_applying_deltas();
+        (passes, delay)
+    };
+
+    for _ in 0..6 {
+        let _ = run_pass(&mut b, 400.0);
+    }
+    let settled_narrow = b.chrome.status_fit.clone();
+    assert!(settled_narrow.step() >= 1, "narrow window settled at compact step: {settled_narrow:?}");
+
+    for frame in 0..4 {
+        let (passes, delay) = run_pass(&mut b, 400.0);
+        assert_eq!(passes, 1, "frame {frame} narrow window completed in 1 pass (no discard loop)");
+        assert!(delay > Duration::ZERO, "frame {frame} narrow window requested no immediate repaint (delay {delay:?})");
+        assert_eq!(b.chrome.status_fit, settled_narrow, "frame {frame} narrow window status_fit remained unchanged");
+    }
+
+    for _ in 0..6 {
+        let _ = run_pass(&mut b, 1200.0);
+    }
+    let settled_wide = b.chrome.status_fit.clone();
+    assert_eq!(settled_wide.step(), 0, "wide window settled at full step: {settled_wide:?}");
+    assert_ne!(settled_narrow, settled_wide);
+
+    for frame in 0..4 {
+        let (passes, delay) = run_pass(&mut b, 1200.0);
+        assert_eq!(passes, 1, "frame {frame} wide window completed in 1 pass (no discard loop)");
+        assert!(delay > Duration::ZERO, "frame {frame} wide window requested no immediate repaint (delay {delay:?})");
+        assert_eq!(b.chrome.status_fit, settled_wide, "frame {frame} wide window status_fit remained unchanged");
+    }
+}
+
 /// #7311: the title bar's Discord community button keeps its solid accent fill and contrasting
 /// `on_strong` icon/label in both wide (pill with label) and narrow (compact icon-only) windows,
 /// across Light and Dark themes, and still dispatches `ui.discord` when clicked.
