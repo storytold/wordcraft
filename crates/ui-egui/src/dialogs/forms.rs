@@ -1,5 +1,65 @@
-use super::chrome::buttons;
-use super::{MeasureExt, Sense, Serialize, Tokens, Ui, Value, WordApp, json, semibold, vec2};
+use super::{Value, WordApp};
+use egui::Ui;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use craft::behavior::{Mixed, Selection, keyed};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Politeness, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::dialog::DialogId;
+use craft::ui::display::{Shade, Text};
+use craft::ui::layout_components::Stack;
+use craft::ui::list::{List, ListRow};
+use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::runtime::env::{Label, LengthUnits, UnitKind};
+use craft::ui::sections::Section;
+use craft::ui::style::TypeRole;
+use craft::ui::text::{NumberField, TextField};
+
+use super::host::{Asks, WordForm, open_form};
+
+/// Opens the form dialog `name` when it is one of this file's: Table Properties (only with a table selection) or Custom
+/// Properties.
+pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    match name {
+        "tableProperties" => {
+            let form = TableProperties::read(app)?;
+            Some(open_form(app, parent, form))
+        }
+        "customProperties" => Some(open_form(app, parent, CustomPropertiesForm::read(app))),
+        _ => None,
+    }
+}
+
+/// A muted caption under the rows.
+fn note(ui: &mut Ui, text: String) {
+    Text::new(Label::from(text)).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+}
+
+/// A check box over `value`; `enabled` off greys it.
+fn flag(ui: &mut Ui, id: &'static str, label: String, value: &mut bool, enabled: bool) {
+    let shown = Checkbox::new(Bind::given(*value)).label(Label::from(label)).id_salt(id).enabled(enabled).show(ui);
+    if let Some(on) = shown.value().cloned() {
+        *value = on;
+    }
+}
+
+/// A radio group choosing one of `options` (key, label) into `value`.
+fn choose(ui: &mut Ui, id: &'static str, label: String, value: &mut String, options: &[(&str, String)]) {
+    let chosen = RadioGroup::new(Label::from(label), Bind::given(value.clone())).id_salt(id).show(ui, |ui, _| {
+        Stack::new().show(ui, |ui, _| {
+            for (key, text) in options {
+                Radio::new((*key).to_string()).label(Label::from(text.clone())).show(ui);
+            }
+        });
+    });
+    if let Some(next) = chosen.output.value().cloned() {
+        *value = next;
+    }
+}
 
 /// The Custom tab of File › Info › Properties › Advanced Properties (#2982): the document's
 /// custom properties, edited as a working copy. OK sends the whole difference from what the
@@ -7,8 +67,8 @@ use super::{MeasureExt, Sense, Serialize, Tokens, Ui, Value, WordApp, json, semi
 /// refreshing File › Info); Cancel sends nothing. Text properties only for now: Word's
 /// number/date/yes-no types aren't offered, and a property of another type keeps its stored
 /// form — the dialog lists it but refuses to change it (Delete still removes one outright).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct CustomPropertiesForm {
     /// The working copy, in document order.
     pub props: Vec<wordcraft_doc::CustomProp>,
@@ -166,10 +226,72 @@ impl CustomPropertiesForm {
     }
 }
 
-/// The Table Properties dialog's fields. Lengths are in the interface unit
-/// ([`wordcraft_geom::Unit`], inches by default).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+impl WordForm for CustomPropertiesForm {
+    fn key(&self) -> &'static str {
+        "customProperties"
+    }
+
+    fn title(&self) -> Label {
+        Label::from(tl!("Custom Properties").to_string())
+    }
+
+    fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
+        let _ = (cx, asks);
+        let rows: Vec<String> = self.props.iter().map(|p| format!("{} = {}", p.name, p.value)).collect();
+        let positions: Vec<usize> = (0..rows.len()).collect();
+        let mut selection = if self.selected < rows.len() { Selection::single(self.selected) } else { Selection::default() };
+        List::new(Label::from(tl!("Properties").to_string()))
+            .id_salt("props")
+            .max_rows(6)
+            .select(SelectMode::Single)
+            .allow_empty(true)
+            .empty(Label::from(tl!("This document has no custom properties.").to_string()))
+            .selection(Bind::bound(&mut selection))
+            .show_items(ui, &keyed(&positions, |at| *at), &mut |at, _| ListRow::new(rows.get(*at).cloned().unwrap_or_default()));
+        if let Some(at) = selection.items.first().copied()
+            && at != self.selected
+        {
+            self.select(at);
+        }
+        let has_row = self.selected < self.props.len();
+        Stack::new().show(ui, |ui, _| {
+            if Button::new(Label::from(tl!("Add").to_string())).id_salt("add").show(ui).clicked() {
+                self.add();
+            }
+            if Button::new(Label::from(tl!("Modify").to_string())).id_salt("modify").enabled(has_row).show(ui).clicked() {
+                self.modify();
+            }
+            if Button::new(Label::from(tl!("Delete").to_string())).id_salt("delete").enabled(has_row).show(ui).clicked() {
+                self.delete();
+            }
+        });
+        let typed = TextField::new(Label::from(tl!("Name:").to_string()), Bind::given(self.name.clone()))
+            .id_salt("name")
+            .limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME)
+            .show(ui);
+        if let Some(text) = typed.value().cloned() {
+            self.name = text;
+        }
+        let typed = TextField::new(Label::from(tl!("Value:").to_string()), Bind::given(self.value.clone())).id_salt("value").show(ui);
+        if let Some(text) = typed.value().cloned() {
+            self.value = text;
+        }
+        if !self.message.is_empty() {
+            // A refusal is announced to a screen reader as it appears (an Alert node).
+            Notice::new(Tone::Bad, Label::from(self.message.clone())).layout(NoticeLayout::Inline).announce(Politeness::Assertive).show(ui);
+        }
+        note(ui, tl!("Text properties only: Word's number, date and yes-no types aren't offered.").to_string());
+        true
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        if self.props == self.start { Vec::new() } else { vec![("file.properties".to_string(), self.params())] }
+    }
+}
+
+/// The Table Properties dialog's fields. Lengths are in points; the length fields show them in the interface unit.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct TableForm {
     pub width_on: bool,
     pub width: f32,
@@ -191,47 +313,9 @@ pub struct TableForm {
     pub cell_width: f32,
     /// `top`, `center` or `bottom`.
     pub valign: String,
-}
-
-/// The Cell Margins dialog's values, in the interface unit.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CellMarginsForm {
-    pub top: f32,
-    pub left: f32,
-    pub bottom: f32,
-    pub right: f32,
-}
-
-impl CellMarginsForm {
-    pub(crate) fn read(app: &WordApp) -> Option<Self> {
-        let (tp, _, _) = app.session.sel.focus.path.cell()?;
-        let table = app.session.doc.table(app.session.sel.focus.story, &tp)?;
-        let scale = crate::options::unit().pt_per_unit();
-        let style = table.props.style.as_deref().and_then(|id| app.session.doc.styles.table_style(id));
-        let margins = table.props.cell_margins.or_else(|| style.and_then(|s| s.parts.cell_margins)).unwrap_or([0.0, 5.4, 0.0, 5.4]);
-        let field = |value: f32, fallback: f32| if value.is_finite() { value.clamp(0.0, 144.0) / scale } else { fallback / scale };
-        Some(Self { top: field(margins[0], 0.0), left: field(margins[1], 5.4), bottom: field(margins[2], 0.0), right: field(margins[3], 5.4) })
-    }
-
-    /// Send all four values together: changing one side must preserve the other three.
-    pub(crate) fn changes(&self, basis: &CellMarginsForm) -> Value {
-        if [self.top, self.left, self.bottom, self.right]
-            .into_iter()
-            .zip([basis.top, basis.left, basis.bottom, basis.right])
-            .all(|(a, b)| (a - b).abs() <= 1e-4)
-        {
-            return json!({});
-        }
-        let scale = crate::options::unit().pt_per_unit();
-        let points = |v: f32, old: f32| if v.is_finite() { (v * scale).clamp(0.0, 144.0) } else { old * scale };
-        json!({
-            "top": points(self.top, basis.top),
-            "left": points(self.left, basis.left),
-            "bottom": points(self.bottom, basis.bottom),
-            "right": points(self.right, basis.right),
-        })
-    }
+    /// The interface unit the length fields show, set when the dialog opens; not part of the dialog's values.
+    #[serde(skip)]
+    unit: Option<wordcraft_geom::Unit>,
 }
 
 impl TableForm {
@@ -242,7 +326,6 @@ impl TableForm {
         let s = &app.session;
         let (tp, r, c) = s.sel.focus.path.cell()?;
         let t = s.doc.table(s.sel.focus.story, &tp)?;
-        let k = crate::options::unit().pt_per_unit();
         let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
         let mut rows: Vec<usize> = wordcraft_engine::cmd::table::selected_cells(s).into_iter().map(|(r, _)| r).collect();
         rows.sort_unstable();
@@ -260,46 +343,46 @@ impl TableForm {
         let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
         Some(TableForm {
             width_on: width.is_some(),
-            width: fin(width.unwrap_or(tw)) / k,
+            width: fin(width.unwrap_or(tw)),
             align: match t.props.align {
                 Some(Align::Center) => "center",
                 Some(Align::Right) => "right",
                 _ => "left",
             }
             .into(),
-            indent: fin(t.props.indent.unwrap_or(0.0)) / k,
+            indent: fin(t.props.indent.unwrap_or(0.0)),
             rtl: t.props.bidi_visual,
             row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
-            row_height: fin(row.height.unwrap_or(18.0)) / k,
+            row_height: fin(row.height.unwrap_or(18.0)),
             row_exact: row.height_rule == HeightRule::Exact,
             allow_break: !row.cant_split,
             header_row: row.header,
             mixed,
-            column_width: fin(t.grid.get(t.grid_col(r, c)).copied().unwrap_or(72.0)) / k,
+            column_width: fin(t.grid.get(t.grid_col(r, c)).copied().unwrap_or(72.0)),
             cell_width_on: cell.width.is_some(),
-            cell_width: fin(cell.width.unwrap_or(72.0)) / k,
+            cell_width: fin(cell.width.unwrap_or(72.0)),
             valign: match cell.valign {
                 Some(VAlign::Center) => "center",
                 Some(VAlign::Bottom) => "bottom",
                 _ => "top",
             }
             .into(),
+            unit: Some(s.units()),
         })
     }
 
     /// `table.properties` parameters for what differs from `basis` (empty when nothing does).
     pub fn changes(&self, basis: &TableForm) -> Value {
-        let k = crate::options::unit().pt_per_unit();
         let moved = |a: f32, b: f32| (a - b).abs() > 1e-4;
         let mut v = serde_json::Map::new();
         if self.width_on != basis.width_on || (self.width_on && moved(self.width, basis.width)) {
-            v.insert("width".into(), if self.width_on { json!(self.width * k) } else { Value::Null });
+            v.insert("width".into(), if self.width_on { json!(self.width) } else { Value::Null });
         }
         if self.align != basis.align {
             v.insert("align".into(), json!(self.align));
         }
         if moved(self.indent, basis.indent) {
-            v.insert("indent".into(), json!(self.indent * k));
+            v.insert("indent".into(), json!(self.indent));
         }
         if self.rtl != basis.rtl {
             v.insert("rtl".into(), json!(self.rtl));
@@ -307,7 +390,7 @@ impl TableForm {
         if self.row_height_on != basis.row_height_on
             || (self.row_height_on && (moved(self.row_height, basis.row_height) || self.row_exact != basis.row_exact))
         {
-            v.insert("rowHeight".into(), if self.row_height_on { json!(self.row_height * k) } else { Value::Null });
+            v.insert("rowHeight".into(), if self.row_height_on { json!(self.row_height) } else { Value::Null });
             v.insert("rowHeightRule".into(), json!(if self.row_exact { "exact" } else { "atLeast" }));
         }
         // A mixed box sends nothing until clicked; clicked, it sets every selected row.
@@ -319,10 +402,10 @@ impl TableForm {
             v.insert("headerRow".into(), json!(self.header_row));
         }
         if moved(self.column_width, basis.column_width) {
-            v.insert("columnWidth".into(), json!(self.column_width * k));
+            v.insert("columnWidth".into(), json!(self.column_width));
         }
         if self.cell_width_on != basis.cell_width_on || (self.cell_width_on && moved(self.cell_width, basis.cell_width)) {
-            v.insert("cellWidth".into(), if self.cell_width_on { json!(self.cell_width * k) } else { Value::Null });
+            v.insert("cellWidth".into(), if self.cell_width_on { json!(self.cell_width) } else { Value::Null });
         }
         if self.valign != basis.valign {
             v.insert("valign".into(), json!(self.valign));
@@ -331,236 +414,115 @@ impl TableForm {
     }
 }
 
-/// Grid picker for Insert › Table (hover to size and preview on the page, click to insert).
-pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
-    let t = Tokens::get(ui.ctx());
-    let id = egui::Id::unique("table_picker_hover");
-    let hover: (usize, usize) = ui.data(|d| d.get_temp(id)).unwrap_or((0, 0));
-    ui.label(if hover.0 > 0 {
-        crate::i18n::fmt(tl!("{cols}×{rows} Table"), &[("cols", &hover.1.to_string()), ("rows", &hover.0.to_string())])
-    } else {
-        tl!("Insert Table").to_string()
-    });
-    let mut new_hover = (0, 0);
-    let mut clicked = None;
-    crate::rtl::grid(ui, egui::Grid::new("tgp").spacing(vec2(2.0, 2.0)), |ui| {
-        for r in 1..=8 {
-            for c in 1..=10 {
-                let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
-                let on = r <= hover.0 && c <= hover.1;
-                ui.painter().rect(
-                    rect,
-                    1.0,
-                    if on { t.checked } else { t.input },
-                    egui::Stroke::new(1.0, if on { t.accent } else { t.border_strong }),
-                    egui::StrokeKind::Inside,
-                );
-                if resp.hovered() {
-                    new_hover = (r, c);
-                }
-                if resp.clicked() {
-                    clicked = Some((r, c));
-                }
-            }
-            ui.end_row();
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(id, new_hover));
-    if new_hover != hover {
-        // The page may already be drawn this frame (Focus drops the ribbon over it afterwards).
-        ui.ctx().request_repaint();
-    }
-    if let Some((r, c)) = clicked {
-        let _ = app.run("insert.table", json!({"rows": r, "cols": c}));
-        ui.close();
-    } else if new_hover.0 > 0 {
-        // Word's Live Preview: the page shows the hovered table until a square is clicked.
-        app.canvas.table_preview = Some(new_hover);
+/// The Table Properties dialog's form: the fields and what they were when it opened.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TableProperties {
+    pub form: TableForm,
+    basis: TableForm,
+}
+
+impl TableProperties {
+    /// The form for the caret's table; `None` outside a table.
+    pub(crate) fn read(app: &WordApp) -> Option<Self> {
+        let form = TableForm::read(app)?;
+        Some(Self { basis: form.clone(), form })
     }
 }
 
-/// The Table Properties dialog's fields: Table, Row, Column and Cell sections.
-pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
-    let unit = crate::options::unit();
-    fn len(v: &mut f32, lo: f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
-        egui::DragValue::new(v).speed(0.01).range(lo..=22.0).measure(unit).max_decimals(2)
+/// A check box over a setting the selected rows may differ in: mixed while its key is in `mixed`, and a click makes it
+/// checked or unchecked and removes the key.
+fn mixed_check(ui: &mut Ui, id: &'static str, label: String, key: &str, value: &mut bool, mixed: &mut std::collections::BTreeSet<String>) {
+    let mut state = if mixed.contains(key) { Mixed::Mixed } else { Mixed::Same(*value) };
+    Checkbox::new(Bind::bound_mixed(&mut state)).label(Label::from(label)).id_salt(id).show(ui);
+    if let Mixed::Same(v) = state {
+        *value = v;
+        mixed.remove(key);
     }
-    let heading = |ui: &mut Ui, s: &str| {
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
-    };
-    heading(ui, "Table");
-    crate::rtl::Table::new("tp_table").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.checkbox(&mut f.width_on, tl!("Preferred width:")));
-            r.cell(|ui| ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit)));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Alignment:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    for (v, l) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
-                        ui.radio_value(&mut f.align, v.to_string(), tl!(l));
-                    }
-                });
-            });
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Indent from left:")));
-            r.cell(|ui| {
-                ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).measure(unit).max_decimals(2))
-            });
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Table direction:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut f.rtl, false, tl!("Left-to-right"));
-                    ui.radio_value(&mut f.rtl, true, tl!("Right-to-left"));
-                });
-            });
-        });
-    });
-    heading(ui, "Row");
-    crate::rtl::Table::new("tp_row").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            let specify = r.cell(|ui| ui.checkbox(&mut f.row_height_on, tl!("Specify height:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
-                    ui.add_enabled_ui(f.row_height_on, |ui| {
-                        let rule = craft_ui::ComboBox::from_id_salt("tp_rule")
-                            .selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" }))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut f.row_exact, false, tl!("At least"));
-                                ui.selectable_value(&mut f.row_exact, true, tl!("Exactly"));
-                            });
-                        // A screen reader names the rule by the box it belongs to.
-                        rule.response.labelled_by(specify.id);
-                    });
-                });
-            });
-        });
-    });
-    super::paragraph::para_check(ui, &mut f.allow_break, tl!("Allow row to break across pages"), "allowBreak", &mut f.mixed);
-    super::paragraph::para_check(ui, &mut f.header_row, tl!("Repeat as header row on each page"), "headerRow", &mut f.mixed);
-    heading(ui, "Column");
-    crate::rtl::Table::new("tp_col").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Preferred width:")));
-            r.cell(|ui| ui.add(len(&mut f.column_width, 0.1, unit)));
-        });
-    });
-    heading(ui, "Cell");
-    crate::rtl::Table::new("tp_cell").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:")));
-            r.cell(|ui| ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit)));
-        });
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Vertical alignment:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    for (v, l) in [("top", "Top"), ("center", "Center"), ("bottom", "Bottom")] {
-                        ui.radio_value(&mut f.valign, v.to_string(), tl!(l));
-                    }
-                });
-            });
-        });
-    });
 }
 
-pub(super) fn cell_margins_dialog(ui: &mut Ui, f: &mut CellMarginsForm) {
-    let unit = crate::options::unit();
-    let max = 144.0 / unit.pt_per_unit();
-    crate::rtl::Table::new("cell_margins").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        for (label, value) in [("Top:", &mut f.top), ("Left:", &mut f.left), ("Bottom:", &mut f.bottom), ("Right:", &mut f.right)] {
-            t.row(|r| {
-                r.cell(|ui| ui.label(tl!(label)));
-                r.cell(|ui| ui.add(egui::DragValue::new(value).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2)));
-            });
-        }
-    });
+/// A length field over points, shown in the interface unit of `units`, within `lo..=hi` points.
+fn length(ui: &mut Ui, id: &'static str, label: String, value: &mut f32, (lo, hi): (f32, f32), units: LengthUnits, enabled: bool) {
+    let mut points = Some(f64::from(*value));
+    NumberField::length(Label::from(label), Bind::bound(&mut points), units)
+        .id_salt(id)
+        .range(f64::from(lo)..=f64::from(hi))
+        .enabled(enabled)
+        .show(ui);
+    if let Some(next) = points {
+        *value = next as f32;
+    }
 }
 
-/// A custom property's one-line list preview: its first line, at most 80 characters, with an
-/// ellipsis when either is cut. The Value box keeps the whole value.
-pub(super) fn custom_value_preview(value: &str) -> String {
-    const MAX: usize = 80;
-    let first = value.lines().next().unwrap_or("");
-    let mut chars = first.chars();
-    let mut shown: String = chars.by_ref().take(MAX).collect();
-    if chars.next().is_some() || first.len() < value.len() {
-        shown.push('…');
+impl WordForm for TableProperties {
+    fn key(&self) -> &'static str {
+        "tableProperties"
     }
-    shown
-}
 
-/// The Custom tab of File › Info › Properties › Advanced Properties (#2982): the document's
-/// custom properties with Add, Modify and Delete over a name/value form. OK is one undo step
-/// (one `file.properties` call), Cancel leaves the document as it was.
-pub(super) fn custom_properties(app: &mut WordApp, ui: &mut Ui, f: &mut CustomPropertiesForm) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let mut clicked = None;
-    let rows = f.props.len().clamp(1, 8);
-    let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
-    egui::ScrollArea::vertical().id_salt("custom_props").max_height(rows as f32 * row_h + 4.0).auto_shrink([false, true]).show(ui, |ui| {
-        if f.props.is_empty() {
-            ui.label(egui::RichText::new(tl!("This document has no custom properties.")).color(t.text_dim));
-        }
-        for (i, p) in f.props.iter().enumerate() {
-            let row = ui.selectable_label(f.selected == i, format!("{} = {}", p.name, custom_value_preview(&p.value)));
-            if row.clicked() {
-                clicked = Some(i);
-            }
-        }
-    });
-    if let Some(i) = clicked {
-        f.select(i);
+    fn title(&self) -> Label {
+        Label::from(tl!("Table Properties").to_string())
     }
-    ui.horizontal(|ui| {
-        if ui.button(tl!("Add")).clicked() {
-            f.add();
-        }
-        if ui.add_enabled(f.selected < f.props.len(), egui::Button::new(tl!("Modify"))).clicked() {
-            f.modify();
-        }
-        if ui.add_enabled(f.selected < f.props.len(), egui::Button::new(tl!("Delete"))).clicked() {
-            f.delete();
-        }
-    });
-    ui.separator();
-    crate::rtl::Table::new("custom_props_form").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            let name = r.cell(|ui| ui.label(tl!("Name:")));
-            r.cell(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut f.name).desired_width(300.0).char_limit(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME))
-                    .labelled_by(name.id)
-            });
+
+    fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
+        let _ = (cx, asks);
+        let f = &mut self.form;
+        let kind = f.unit.map_or(LengthUnits::new(UnitKind::Points, UnitKind::Points, 96.0), crate::options::lengths);
+        let (wide, row, indent) = ((7.2, 1584.0), (1.44, 1584.0), (-792.0, 1584.0));
+        Section::fixed(Label::from(tl!("Table").to_string())).id_salt("table").show(ui, |ui, _| {
+            flag(ui, "widthOn", tl!("Preferred width").to_string(), &mut f.width_on, true);
+            length(ui, "width", tl!("Width").to_string(), &mut f.width, wide, kind, f.width_on);
+            choose(
+                ui,
+                "align",
+                tl!("Alignment").to_string(),
+                &mut f.align,
+                &[("left", tl!("Left").to_string()), ("center", tl!("Center").to_string()), ("right", tl!("Right").to_string())],
+            );
+            length(ui, "indent", tl!("Indent from left").to_string(), &mut f.indent, indent, kind, f.align == "left");
+            let mut dir = if f.rtl { "rtl" } else { "ltr" }.to_string();
+            choose(
+                ui,
+                "direction",
+                tl!("Table direction").to_string(),
+                &mut dir,
+                &[("ltr", tl!("Left-to-right").to_string()), ("rtl", tl!("Right-to-left").to_string())],
+            );
+            f.rtl = dir == "rtl";
         });
-        t.row(|r| {
-            let value = r.cell(|ui| ui.label(tl!("Value:")));
-            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.value).desired_width(300.0)).labelled_by(value.id));
+        Section::fixed(Label::from(tl!("Row").to_string())).id_salt("row").show(ui, |ui, _| {
+            flag(ui, "heightOn", tl!("Specify height").to_string(), &mut f.row_height_on, true);
+            length(ui, "height", tl!("Height").to_string(), &mut f.row_height, row, kind, f.row_height_on);
+            let mut rule = if f.row_exact { "exact" } else { "atLeast" }.to_string();
+            choose(
+                ui,
+                "rule",
+                tl!("Row height is").to_string(),
+                &mut rule,
+                &[("atLeast", tl!("At least").to_string()), ("exact", tl!("Exactly").to_string())],
+            );
+            f.row_exact = rule == "exact";
+            mixed_check(ui, "allowBreak", tl!("Allow row to break across pages").to_string(), "allowBreak", &mut f.allow_break, &mut f.mixed);
+            mixed_check(ui, "headerRow", tl!("Repeat as header row on each page").to_string(), "headerRow", &mut f.header_row, &mut f.mixed);
         });
-    });
-    if !f.message.is_empty() {
-        ui.colored_label(ui.visuals().error_fg_color, f.message.as_str());
+        Section::fixed(Label::from(tl!("Column").to_string())).id_salt("column").show(ui, |ui, _| {
+            length(ui, "columnWidth", tl!("Width").to_string(), &mut f.column_width, wide, kind, true);
+        });
+        Section::fixed(Label::from(tl!("Cell").to_string())).id_salt("cell").show(ui, |ui, _| {
+            flag(ui, "cellWidthOn", tl!("Preferred width").to_string(), &mut f.cell_width_on, true);
+            length(ui, "cellWidth", tl!("Width").to_string(), &mut f.cell_width, wide, kind, f.cell_width_on);
+            choose(
+                ui,
+                "valign",
+                tl!("Vertical alignment").to_string(),
+                &mut f.valign,
+                &[("top", tl!("Top").to_string()), ("center", tl!("Center").to_string()), ("bottom", tl!("Bottom").to_string())],
+            );
+        });
+        true
     }
-    ui.label(egui::RichText::new(tl!("Text properties only: Word's number, date and yes-no types aren't offered.")).small().weak());
-    let (ok, cancel) = buttons(ui, tl!("OK"));
-    if cancel {
-        return true;
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        let changes = self.form.changes(&self.basis);
+        if changes.as_object().is_some_and(|m| m.is_empty()) { Vec::new() } else { vec![("table.properties".to_string(), changes)] }
     }
-    if ok {
-        let params = f.params();
-        if params["custom"].as_object().is_some_and(serde_json::Map::is_empty) {
-            return true;
-        }
-        // One call: one undo step, the document marked changed, File › Info reads it afresh.
-        match app.run("file.properties", params) {
-            Ok(_) => return true,
-            Err(e) => f.message = e,
-        }
-    }
-    false
 }

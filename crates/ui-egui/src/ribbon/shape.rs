@@ -1,240 +1,240 @@
+use craft::behavior::{ColumnWidth, IconId};
+use craft::draw::ui::gradient::GradientSwatch;
+use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::ui::buttons::{Arrangement, Button, ToggleButton};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Divider;
+use craft::ui::layout_components::{Grid, Row, Stack};
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::runtime::commands::CommandRef;
+use craft::ui::runtime::overlay::close_popups;
+
 use super::arrange::{align_menu, rotate_menu, rotation_field, wrap_menu};
-use super::common::{mi, size_field, stack};
-use super::language::mi_check;
-use super::{Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
+use super::common::{menu_button, size_field, weight_menu};
+use super::{Ui, WordApp, json};
+use crate::colors::Target;
+
+/// The variation grids' columns: five tiles per row, each as wide as its tile.
+const VARIATION_GRID: [ColumnWidth; 5] = [ColumnWidth::Content; 5];
 
 /// Shape Fill › Gradient: No Gradient, Light and Dark Variations of the shape's colour, More
-/// Gradients… (the Format Shape pane).
+/// Gradients… (the Format Shape pane). A pick closes the menus, as a colour pick does.
 pub(crate) fn gradient_menu(ui: &mut Ui, app: &mut WordApp, fill: Option<&wordcraft_doc::fill::Fill>) {
     use wordcraft_engine::cmd::shape_fill;
     let pos = wordcraft_engine::cmd::objects::selected(&app.session).map(|(p, _)| p);
     let main = match (fill, &pos) {
-        (Some(f), Some(p)) => crate::format_shape::variation_base(ui.ctx(), p, f),
+        (Some(f), Some(p)) => crate::format_shape::variation_base(app, p, f),
         (Some(f), None) => f.main_color(),
         _ => app.session.doc.settings.theme_colors.get(4).copied().unwrap_or(wordcraft_doc::Rgb(68, 114, 196)),
     };
     // No Gradient: the shape's colour, solid.
-    ui.label(egui::RichText::new(tl!("No Gradient")).small().weak());
-    if crate::format_shape::swatch(ui, &wordcraft_doc::fill::Fill::solid(main), "No Gradient") {
+    MenuItem::heading(tl!("No Gradient")).show(ui);
+    let solid = wordcraft_doc::fill::Fill::solid(main);
+    let (stops, tile) = crate::format_shape::fill_tile(&solid);
+    if GradientSwatch::new(tl!("No Gradient"), &stops).tile(tile).show(ui).clicked {
         let _ = app.run("shape.fill", json!({"color": main.hex()}));
-        ui.close();
+        close_popups(ui.ctx());
     }
     for (title, tiles) in ["Light Variations", "Dark Variations"].into_iter().zip(shape_fill::variations(main)) {
-        ui.label(egui::RichText::new(tl!(title)).small().weak());
-        crate::rtl::grid(ui, egui::Grid::new(title).spacing(vec2(4.0, 4.0)), |ui| {
-            for (i, (f, name)) in tiles.iter().enumerate() {
-                if crate::format_shape::swatch(ui, f, name) {
+        MenuItem::heading(tl!(title)).show(ui);
+        Grid::new(&VARIATION_GRID).show(ui, |ui, _| {
+            for (f, name) in tiles.iter() {
+                let (stops, tile) = crate::format_shape::fill_tile(f);
+                if GradientSwatch::new(name.clone(), &stops).tile(tile).show(ui).clicked {
                     let _ = app.run("shape.fill", shape_fill::params(Some(f)));
                     if let (Some(p), Some(Some(now))) = (pos.clone(), crate::format_shape::current(app)) {
-                        crate::format_shape::remember_variation(ui.ctx(), p, now, main);
+                        crate::format_shape::remember_variation(app, p, now, main);
                     }
-                    ui.close();
-                }
-                if i % 5 == 4 {
-                    ui.end_row();
+                    close_popups(ui.ctx());
                 }
             }
         });
     }
-    ui.separator();
-    if ui.button(tl!("More Gradients…")).clicked() {
-        let _ = app.run("view.formatShapePane", json!({"value": true}));
-        ui.close();
+    Divider::horizontal().show(ui);
+    MenuItem::command(CommandRef::with_params("view.formatShapePane", json!({"value": true}))).label(tl!("More Gradients…")).show(ui);
+}
+
+/// The outline (colour, width) Shape Outline changes: the selected shape's, or the selected
+/// drawing canvas's border.
+pub(super) fn selected_outline(s: &wordcraft_engine::Session) -> Option<(wordcraft_doc::Rgb, f32)> {
+    match wordcraft_engine::cmd::objects::selected(s)?.1 {
+        wordcraft_doc::para::InlineObject::Shape { stroke, stroke_width, .. } => stroke.map(|c| (c, stroke_width)),
+        o => o.canvas_style().and_then(|c| c.stroke.map(|stroke| (stroke, c.stroke_width))),
     }
 }
 
+/// Shape Outline › Weight: a new weight keeps the outline's colour (black when it has none).
+pub(super) fn shape_weight_menu(ui: &mut Ui, app: &mut WordApp) {
+    let outline = selected_outline(&app.session);
+    let color = outline.map_or(wordcraft_doc::Rgb::BLACK, |o| o.0).hex();
+    weight_menu(ui, app, "shape.outline", outline.map(|o| o.1), |w| json!({"color": color, "width": w}));
+}
+
 /// Shape Format: fill, outline and effects of the selected shape, and its arrangement.
-pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
-    let (stroke, glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, wordcraft_doc::para::InlineObject::Shape { stroke, effects, fill, .. })) => (stroke, effects.glow.map(|g| g.size), fill),
-        Some((_, o)) => (None, None, o.canvas_style().and_then(|c| c.fill.clone())),
-        _ => (None, None, None),
+pub(super) fn shape_format(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    let (glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        Some((_, wordcraft_doc::para::InlineObject::Shape { effects, fill, .. })) => (effects.glow.map(|g| g.size), fill),
+        Some((_, o)) => (None, o.canvas_style().and_then(|c| c.fill.clone())),
+        _ => (None, None),
     };
     let theme = app.session.doc.settings.theme_colors.clone();
-    group(ui, "Shape Styles", None, app, |ui, app| {
-        stack(ui, |ui| {
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("shading", Some("Shape Fill"), "Shape Fill", false, "shape.fill"),
-                |ui, app| {
-                    mi(ui, app, "No Color", "shape.fill", json!({"color": null}));
-                    crate::colors::menu(ui, app, &theme, Target::cmd("shape.fill"));
-                    ui.separator();
-                    ui.menu_button(tl!("Gradient"), |ui| gradient_menu(ui, app, fill.as_ref()));
-                },
-            );
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("pen", Some("Shape Outline"), "Shape Outline", false, "shape.outline"),
-                |ui, app| {
-                    mi(ui, app, "No Color", "shape.outline", json!({"color": null}));
-                    crate::colors::menu(ui, app, &theme, Target::cmd("shape.outline"));
-                    ui.separator();
-                    ui.menu_button(tl!("Weight"), |ui| {
-                        let color = stroke.unwrap_or(wordcraft_doc::Rgb::BLACK).hex();
-                        for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0] {
-                            mi(ui, app, &format!("{w} pt"), "shape.outline", json!({"color": color, "width": w}));
-                        }
-                    });
-                },
-            );
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("shapeEffects", Some("Shape Effects"), "Shadow, glow and soft edges", false, "shape.effects"),
-                |ui, app| shape_effects_menu(ui, app, &theme, glow_size),
-            );
+    row.group(RibbonGroup::new("shape.styles", tl!("Shape Styles"), IconId::new("wordcraft.more").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            menu_button(ui, Button::new(tl!("Shape Fill")).icon(IconId::new("shading")), tl!("Shape Fill"), Some("shape.fill"), |ui, _| {
+                MenuItem::command(CommandRef::with_params("shape.fill", json!({"color": null}))).label(tl!("No Color")).show(ui);
+                crate::colors::menu(ui, app, Target::cmd("shape.fill"));
+                Divider::horizontal().show(ui);
+                Menu::submenu_row(ui, tl!("Gradient"), |ui, _| gradient_menu(ui, app, fill.as_ref()));
+            });
+            menu_button(ui, Button::new(tl!("Shape Outline")).icon(IconId::new("pen")), tl!("Shape Outline"), Some("shape.outline"), |ui, _| {
+                MenuItem::command(CommandRef::with_params("shape.outline", json!({"color": null}))).label(tl!("No Color")).show(ui);
+                crate::colors::menu(ui, app, Target::cmd("shape.outline"));
+                Divider::horizontal().show(ui);
+                Menu::submenu_row(ui, tl!("Weight"), |ui, _| shape_weight_menu(ui, app));
+            });
+            let effects = Button::new(tl!("Shape Effects")).icon(IconId::new("shapeEffects")).tooltip(tl!("Shadow, glow and soft edges"));
+            menu_button(ui, effects, tl!("Shape Effects"), Some("shape.effects"), |ui, _| shape_effects_menu(ui, app, glow_size));
         });
     });
-    alt_text_group(ui, app);
+    alt_text_group(row);
     if wordcraft_engine::cmd::canvas::selected_canvas(&app.session).is_some() {
-        group(ui, "Drawing Canvas", None, app, |ui, app| {
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("canvas", Some("Drawing\nCanvas"), "Drawing Canvas", true, ""), |ui, app| {
-                mi(ui, app, "Fit", "canvas.fit", json!({}));
-                mi(ui, app, "Expand", "canvas.expand", json!({}));
-                ui.menu_button(tl!("Scale Drawing"), |ui| {
+        row.group(RibbonGroup::new("shape.canvas", tl!("Drawing Canvas"), IconId::new("wordcraft.more").into()), |ui| {
+            let face =
+                Button::new(tl!("Drawing\nCanvas")).icon(IconId::new("canvas")).tooltip(tl!("Drawing Canvas")).arrangement(Arrangement::Stacked);
+            menu_button(ui, face, tl!("Drawing Canvas"), None, |ui, _| {
+                MenuItem::command(CommandRef::new("canvas.fit")).label(tl!("Fit")).show(ui);
+                MenuItem::command(CommandRef::new("canvas.expand")).label(tl!("Expand")).show(ui);
+                Menu::submenu_row(ui, tl!("Scale Drawing"), |ui, _| {
                     for pct in [50, 75, 125, 150, 200] {
-                        mi(ui, app, &format!("{pct}%"), "canvas.scale", json!({"factor": pct as f32 / 100.0}));
+                        let label = format!("{pct}%");
+                        MenuItem::command(CommandRef::with_params("canvas.scale", json!({"factor": pct as f32 / 100.0})))
+                            .label(tl!(label.as_str()).to_string())
+                            .show(ui);
                     }
                 });
             });
         });
     }
-    group(ui, "WordArt Styles", None, app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("wordArt", Some("Styles"), "WordArt Styles", true, ""), |ui, app| {
-            crate::wordart_menus::style_gallery(ui, app, "wordArt.style")
-        });
-        stack(ui, |ui| {
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("textFill", Some("Text Fill"), "Text Fill", false, ""), |ui, app| {
-                crate::wordart_menus::fill_menu(ui, app, &theme)
+    row.group(RibbonGroup::new("shape.wordart", tl!("Decorative Text Styles"), IconId::new("wordcraft.more").into()), |ui| {
+        let styles = Button::new(tl!("Styles")).icon(IconId::new("wordArt")).tooltip(tl!("Decorative Text Styles")).arrangement(Arrangement::Stacked);
+        menu_button(ui, styles, tl!("Decorative Text Styles"), None, |ui, cx| super::galleries::wordart(ui, cx, app, "wordArt.style"));
+        let outline = crate::wordart_menus::current_outline(app);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            menu_button(ui, Button::new(tl!("Text Fill")).icon(IconId::new("textFill")), tl!("Text Fill"), None, |ui, cx| {
+                crate::wordart_menus::fill_menu(ui, cx, app, &theme)
             });
-            let outline = crate::wordart_menus::current_outline(app);
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("textOutline", Some("Text Outline"), "Text Outline", false, ""),
-                |ui, app| crate::wordart_menus::outline_menu(ui, app, &theme, outline),
-            );
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("transform", Some("Text Effects"), "Text Effects", false, ""), |ui, app| {
-                crate::wordart_menus::effects_menu(ui, app, &theme, true)
+            menu_button(ui, Button::new(tl!("Text Outline")).icon(IconId::new("textOutline")), tl!("Text Outline"), None, |ui, _| {
+                crate::wordart_menus::outline_menu(ui, app, outline)
+            });
+            menu_button(ui, Button::new(tl!("Text Effects")).icon(IconId::new("transform")), tl!("Text Effects"), None, |ui, _| {
+                crate::wordart_menus::effects_menu(ui, app, true)
             });
         });
     });
-    shape_text_group(app, ui);
-    group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+    shape_text_group(row, app);
+    row.group(RibbonGroup::new("shape.arrange", tl!("Arrange"), IconId::new("wordcraft.more").into()), |ui| {
+        Button::command(CommandRef::new("arrange.position")).icon(IconId::new("position")).arrangement(Arrangement::Stacked).show(ui);
         wrap_menu(ui, app);
-        stack(ui, |ui| {
-            rotate_menu(ui, app, Some("Rotate"));
-            align_menu(ui, app, Some("Align"));
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            rotate_menu(ui);
+            align_menu(ui);
         });
     });
-    group(ui, "Size", None, app, |ui, app| {
+    row.group(RibbonGroup::new("shape.size", tl!("Size"), IconId::new("wordcraft.more").into()), |ui| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
         // As Picture Format › Size, each side on its own.
-        stack(ui, |ui| {
-            crate::widgets::row(ui, |ui| {
-                for (label, key, v0) in [("W:", "width", w0), ("H:", "height", h0)] {
-                    let hint = tl!("Type a size in any unit, such as 3 cm or 300 px.");
-                    if let Some(v) = size_field(ui, app, label, v0, egui::Id::unique(("shape_size_field", key)), hint) {
-                        let _ = app.run("picture.size", json!({key: v, "lockAspect": false}));
-                    }
-                }
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                size_field(ui, app, "W:", "width", w0, false, 1.0..=4000.0);
+                size_field(ui, app, "H:", "height", h0, false, 1.0..=4000.0);
             });
-            ui.add_space(2.0);
-            crate::widgets::row(ui, |ui| rotation_field(ui, app));
+            Row::new().show(ui, |ui, _| rotation_field(ui, app));
         });
     });
 }
 
 /// Shape Format › Text: the text box's Text Direction and Align Text, and Create Link (Break Link
 /// once it is linked to another box).
-fn shape_text_group(app: &mut WordApp, ui: &mut Ui) {
+fn shape_text_group(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     use wordcraft_doc::props::{TextVert, VAlign};
     let target = wordcraft_engine::cmd::objects::text_box_target(&app.session);
     let body = target.and_then(|(_, id)| app.session.doc.parts.get(&id).map(|p| p.body)).unwrap_or_default();
-    group(ui, "Text", None, app, |ui, app| {
-        stack(ui, |ui| {
-            menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new("textDirection", Some("Text Direction"), "Text Direction", false, ""),
-                |ui, app| {
-                    for (label, vert) in [
-                        ("Horizontal", TextVert::Horz),
-                        ("Rotate all text 90°", TextVert::Vert),
-                        ("Rotate all text 270°", TextVert::Vert270),
-                        ("Stacked", TextVert::Stacked),
-                    ] {
-                        mi_check(ui, app, label, body.vert == vert, "shape.textDirection", json!({"dir": vert.ooxml()}));
-                    }
-                },
-            );
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("alignText", Some("Align Text"), "Align Text", false, ""), |ui, app| {
+    row.group(RibbonGroup::new("shape.text", tl!("Text"), IconId::new("wordcraft.more").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            menu_button(ui, Button::new(tl!("Text Direction")).icon(IconId::new("textDirection")), tl!("Text Direction"), None, |ui, _| {
+                for (label, vert) in [
+                    ("Horizontal", TextVert::Horz),
+                    ("Rotate all text 90°", TextVert::Vert),
+                    ("Rotate all text 270°", TextVert::Vert270),
+                    ("Stacked", TextVert::Stacked),
+                ] {
+                    MenuItem::command(CommandRef::with_params("shape.textDirection", json!({"dir": vert.ooxml()})))
+                        .label(tl!(label))
+                        .radio_mark(body.vert == vert)
+                        .show(ui);
+                }
+            });
+            menu_button(ui, Button::new(tl!("Align Text")).icon(IconId::new("alignText")), tl!("Align Text"), None, |ui, _| {
                 for (label, anchor) in [("Top", VAlign::Top), ("Middle", VAlign::Center), ("Bottom", VAlign::Bottom)] {
-                    mi_check(ui, app, label, body.anchor == anchor, "shape.alignText", json!({"anchor": wordcraft_doc::props::anchor_ooxml(anchor)}));
+                    MenuItem::command(CommandRef::with_params("shape.alignText", json!({"anchor": wordcraft_doc::props::anchor_ooxml(anchor)})))
+                        .label(tl!(label))
+                        .radio_mark(body.anchor == anchor)
+                        .show(ui);
                 }
             });
             if body.next.is_some() {
-                small(
-                    ui,
-                    app,
-                    "textBoxUnlink",
-                    Some("Break Link"),
-                    "Break Link",
-                    crate::widgets::ButtonAction::new("shape.breakLink", json!({}), false),
-                );
+                Button::command(CommandRef::new("shape.breakLink")).label(tl!("Break Link")).icon(IconId::new("textBoxUnlink")).show(ui);
             } else {
-                let waiting = app.canvas.link_from.is_some();
-                small(
-                    ui,
-                    app,
-                    "textBoxLink",
-                    Some("Create Link"),
-                    "Create Link",
-                    crate::widgets::ButtonAction::new("ui.linkTextBox", json!({}), waiting),
-                );
+                ToggleButton::command(CommandRef::new("ui.linkTextBox"))
+                    .label(tl!("Create Link"))
+                    .icon(IconId::new("textBoxLink"))
+                    .selected(app.canvas.link_from.is_some())
+                    .show(ui);
             }
         });
     });
 }
 
 /// Picture/Shape Format › Accessibility: Alt Text opens the Alt Text pane.
-pub(super) fn alt_text_group(ui: &mut Ui, app: &mut WordApp) {
-    group(ui, "Accessibility", None, app, |ui, app| {
-        big(ui, app, "altText", "Alt\nText", "view.altTextPane", json!({"value": true}), false);
+pub(super) fn alt_text_group(row: &mut RibbonRow<'_>) {
+    row.group(RibbonGroup::new("accessibility", tl!("Accessibility"), IconId::new("wordcraft.more").into()), |ui| {
+        Button::command(CommandRef::with_params("view.altTextPane", json!({"value": true})))
+            .label(tl!("Alt\nText"))
+            .icon(IconId::new("altText"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
     });
 }
 
 /// Shape Format › Shape Effects: Shadow, Glow and Soft Edges, each with presets and a "No …" entry.
-fn shape_effects_menu(ui: &mut Ui, app: &mut WordApp, theme: &[wordcraft_doc::Rgb], glow_size: Option<f32>) {
-    ui.menu_button(tl!("Shadow"), |ui| {
-        mi(ui, app, "No Shadow", "shape.effects", json!({"shadow": null}));
-        ui.separator();
+fn shape_effects_menu(ui: &mut Ui, app: &mut WordApp, glow_size: Option<f32>) {
+    Menu::submenu_row(ui, tl!("Shadow"), |ui, _| {
+        MenuItem::command(CommandRef::with_params("shape.effects", json!({"shadow": null}))).label(tl!("No Shadow")).show(ui);
+        Divider::horizontal().show(ui);
         for (id, label) in wordcraft_doc::effects::SHADOW_PRESETS {
-            mi(ui, app, label, "shape.effects", json!({"shadow": id}));
+            MenuItem::command(CommandRef::with_params("shape.effects", json!({"shadow": id}))).label(tl!(label)).show(ui);
         }
     });
-    ui.menu_button(tl!("Glow"), |ui| {
-        mi(ui, app, "No Glow", "shape.effects", json!({"glow": null}));
-        ui.separator();
+    Menu::submenu_row(ui, tl!("Glow"), |ui, _| {
+        MenuItem::command(CommandRef::with_params("shape.effects", json!({"glow": null}))).label(tl!("No Glow")).show(ui);
+        Divider::horizontal().show(ui);
         for size in [5.0, 8.0, 11.0, 18.0] {
-            mi(ui, app, &format!("{size} pt"), "shape.effects", json!({"glow": size}));
+            let label = format!("{size} pt");
+            MenuItem::command(CommandRef::with_params("shape.effects", json!({"glow": size}))).label(tl!(label.as_str()).to_string()).show(ui);
         }
-        ui.separator();
-        ui.menu_button(tl!("Glow Colors"), |ui| {
+        Divider::horizontal().show(ui);
+        Menu::submenu_row(ui, tl!("Glow Colors"), |ui, _| {
             let target = Target::at("shape.effects", json!({"glow": {"color": null, "size": glow_size.unwrap_or(8.0)}}), "/glow/color");
-            crate::colors::menu(ui, app, theme, target);
+            crate::colors::menu(ui, app, target);
         });
     });
-    ui.menu_button(tl!("Soft Edges"), |ui| {
-        mi(ui, app, "No Soft Edges", "shape.effects", json!({"softEdge": null}));
-        ui.separator();
+    Menu::submenu_row(ui, tl!("Soft Edges"), |ui, _| {
+        MenuItem::command(CommandRef::with_params("shape.effects", json!({"softEdge": null}))).label(tl!("No Soft Edges")).show(ui);
+        Divider::horizontal().show(ui);
         for r in [1.0, 2.5, 5.0, 10.0, 25.0, 50.0] {
-            mi(ui, app, &format!("{r} pt"), "shape.effects", json!({"softEdge": r}));
+            let label = format!("{r} pt");
+            MenuItem::command(CommandRef::with_params("shape.effects", json!({"softEdge": r}))).label(tl!(label.as_str()).to_string()).show(ui);
         }
     });
 }
