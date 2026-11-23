@@ -141,6 +141,7 @@ impl Session {
             ime_origin: false,
             cache,
             layout,
+            bg_layout: None,
             typing,
             originals,
             md_source,

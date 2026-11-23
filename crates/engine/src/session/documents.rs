@@ -230,6 +230,8 @@ impl Session {
             ime_body_epoch: _,
             cache: _,
             layout: _,
+            // Names its document, so a layout made for one never lands in another.
+            bg_layout: _,
             typing: _,
             originals: _,
             md_source: _,

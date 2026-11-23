@@ -10,6 +10,9 @@ use super::{
 };
 use crate::colors;
 
+/// Documents with at least this many body blocks are laid out on another thread when opened.
+const BACKGROUND_LAYOUT_BLOCKS: usize = 300;
+
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
     pub(crate) fn run_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -354,6 +357,11 @@ impl WordApp {
         let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
         let r = self.execute(id, params);
+        // A long document is paginated on another thread while a spinner shows, not on the first
+        // draw, which would freeze the window for as long as it takes.
+        if id == "file.open" && r.is_ok() && self.session.doc.body.len() >= BACKGROUND_LAYOUT_BLOCKS {
+            self.session.begin_background_layout();
+        }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {

@@ -115,6 +115,7 @@ impl Session {
             protect_facts: _,
             cache: _,
             layout: _,
+            bg_layout: _,
             // The word being typed, like `column`: valid only while `sel` is where typing left it.
             typing: _,
             originals: _,
