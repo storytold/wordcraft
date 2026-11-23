@@ -3,6 +3,7 @@
 //! reference/id collection, structural checks and the small auxiliary parsers for numbering,
 //! settings and the comment-threading parts.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::xml::XmlReader;
@@ -803,6 +804,16 @@ enum Encoding {
 /// declaring an unsupported encoding is reported as such; every consumer reads the one decoded
 /// representation.
 pub(crate) fn decode_strict(bytes: &[u8]) -> Result<String, DecodeError> {
+    let (encoding, rest) = xml_encoding(bytes)?;
+    match encoding {
+        Encoding::Utf8 => std::str::from_utf8(rest).map(str::to_owned).map_err(|e| DecodeError::Malformed(format!("invalid UTF-8: {e}"))),
+        Encoding::Utf16Le => decode_utf16_strict(rest, true),
+        Encoding::Utf16Be => decode_utf16_strict(rest, false),
+        Encoding::Other(enc) => Err(DecodeError::Unsupported(enc)),
+    }
+}
+
+fn xml_encoding(bytes: &[u8]) -> Result<(Encoding, &[u8]), DecodeError> {
     let (encoding, rest) = if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         (Encoding::Utf8, rest)
     } else if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
@@ -827,11 +838,44 @@ pub(crate) fn decode_strict(bytes: &[u8]) -> Result<String, DecodeError> {
             },
         }
     };
+    Ok((encoding, rest))
+}
+
+/// Recover the strictly decodable prefix of a part with malformed UTF-8 or UTF-16.
+/// The prefix can supply prolog evidence even if the rest of the part is unreadable.
+pub(crate) fn decoded_prefix(bytes: &[u8]) -> Option<Cow<'_, str>> {
+    let (encoding, rest) = xml_encoding(bytes).ok()?;
     match encoding {
-        Encoding::Utf8 => std::str::from_utf8(rest).map(str::to_owned).map_err(|e| DecodeError::Malformed(format!("invalid UTF-8: {e}"))),
-        Encoding::Utf16Le => decode_utf16_strict(rest, true),
-        Encoding::Utf16Be => decode_utf16_strict(rest, false),
-        Encoding::Other(enc) => Err(DecodeError::Unsupported(enc)),
+        Encoding::Utf8 => {
+            let prefix = match std::str::from_utf8(rest) {
+                Ok(text) => text,
+                Err(err) => std::str::from_utf8(&rest[..err.valid_up_to()]).ok()?,
+            };
+            Some(Cow::Borrowed(prefix))
+        }
+        Encoding::Utf16Le | Encoding::Utf16Be => {
+            let le = matches!(encoding, Encoding::Utf16Le);
+            let units = rest.as_chunks::<2>().0.iter().map(|unit| if le { u16::from_le_bytes(*unit) } else { u16::from_be_bytes(*unit) });
+            Some(Cow::Owned(char::decode_utf16(units).map_while(Result::ok).collect()))
+        }
+        Encoding::Other(_) => None,
+    }
+}
+
+/// Look for a declaration at its XML prolog position, without interpreting its subset.
+pub(crate) fn doctype_in_prolog(text: &str) -> bool {
+    let mut reader = quick_xml::Reader::from_str(text);
+    loop {
+        let offset = reader.buffer_position() as usize;
+        match reader.read_event() {
+            Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::Text(_)) => {}
+            Ok(Event::DocType(_)) => {
+                // The reader accepts a case-insensitive keyword. XML requires the exact keyword
+                // followed by XML whitespace.
+                return matches!(text.as_bytes()[offset..].strip_prefix(b"<!DOCTYPE"), Some([b' ' | b'\t' | b'\r' | b'\n', ..]));
+            }
+            _ => return false,
+        }
     }
 }
 

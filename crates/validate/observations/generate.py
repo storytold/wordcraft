@@ -162,7 +162,7 @@ def recognize(sources):
     if _RECOGNIZER is None:
         root = Path(__file__).resolve().parents[3]
         manifest = Path(__file__).parent / 'recognizer/Cargo.toml'
-        target = root / 'target/observation-recognizer'
+        target = Path(os.environ.get('CARGO_TARGET_DIR') or root / 'target/observation-recognizer')
         build_start=time.perf_counter()
         build=subprocess.run(['cargo', 'build', '--locked', '--quiet', '--manifest-path', str(manifest),
                               '--target-dir', str(target), '--message-format=json'],

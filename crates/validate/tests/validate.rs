@@ -30,6 +30,7 @@ const ALL_CHECKS: &[&str] = &[
     "PKG-CASE-COLLISION",
     "PKG-NO-CONTENT-TYPES",
     "PKG-NO-MAIN",
+    "XML-DOCTYPE",
     "CT-UNDECLARED",
     "CT-MAIN-TYPE",
     "CT-DUP-MAIN",
@@ -359,6 +360,85 @@ fn xml_malformed_in_main_is_corrupt() {
     assert_eq!(report.verdict, Verdict::Fail);
     let f = assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
     assert_eq!(f.severity, Severity::Corrupt);
+}
+
+fn with_doctype(xml: Vec<u8>, declaration: &str) -> String {
+    String::from_utf8(xml).unwrap().replacen("?>", &format!("?>\n{declaration}\n"), 1)
+}
+
+#[test]
+fn xml_doctype_is_a_refusal_in_the_main_part() {
+    let internal = r#"<!DOCTYPE w:document [<!ENTITY greeting "hello">]>"#;
+    let mut doc = Doc::minimal();
+    for (declaration, text) in [
+        (internal, "&greeting;"),
+        (internal, "hello"),
+        (r#"<!DOCTYPE w:document SYSTEM 'wordcraft-test.dtd'>"#, "hello"),
+        ("<!DOCTYPE\tw:document>", "hello"),
+    ] {
+        let body = format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
+        doc.set("word/document.xml", with_doctype(document_xml(&body), declaration));
+        let report = validate(&doc);
+        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+        assert_eq!(assert_finding(&report, "XML-DOCTYPE", Some("word/document.xml")).severity, Severity::Error);
+    }
+}
+
+#[test]
+fn xml_doctype_is_a_refusal_in_relationships_and_other_xml_parts() {
+    let mut doc = Doc::minimal();
+    let rel =
+        r#"<Relationship Id="rLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="other.docx"/>"#;
+    let dtd = r#"<!DOCTYPE Relationships [<!ATTLIST Relationship TargetMode CDATA "External">]>"#;
+    doc.set("word/_rels/document.xml.rels", with_doctype(rels_xml(rel), dtd));
+    doc.add_with_override("customXml/data.dat", "application/xml", "<!DOCTYPE data><data/>");
+    let report = validate(&doc);
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    for part in ["word/_rels/document.xml.rels", "customXml/data.dat"] {
+        assert_eq!(assert_finding(&report, "XML-DOCTYPE", Some(part)).severity, Severity::Error);
+    }
+}
+
+#[test]
+fn xml_doctype_evidence_survives_a_document_profile_gate_or_encoding_error() {
+    let mut doc = Doc::minimal();
+    let strict = document_xml("<w:p/>");
+    let strict = with_doctype(strict, "<!DOCTYPE w:document>").replace(W_NS, "http://purl.oclc.org/ooxml/wordprocessingml/main");
+    doc.set("word/document.xml", strict);
+    let report = validate(&doc);
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    assert_finding(&report, "XML-DOCTYPE", Some("word/document.xml"));
+    assert!(report.coverage_notes.iter().any(|note| note.contains("Strict OOXML")), "{report:?}");
+
+    let xml = "<!DOCTYPE w:document><w:document>";
+    let utf8 = [xml.as_bytes(), &[0xff]].concat();
+    let utf16_le = [vec![0xff, 0xfe], xml.encode_utf16().flat_map(u16::to_le_bytes).collect(), vec![0xff]].concat();
+    let utf16_be = [vec![0xfe, 0xff], xml.encode_utf16().flat_map(u16::to_be_bytes).collect(), vec![0xd8, 0x00]].concat();
+    for bytes in [utf8, utf16_le, utf16_be] {
+        doc.set("word/document.xml", bytes);
+        let report = validate(&doc);
+        assert_finding(&report, "XML-DOCTYPE", Some("word/document.xml"));
+        assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
+    }
+}
+
+#[test]
+fn xml_doctype_requires_readable_declaration_evidence() {
+    let mut doc = Doc::minimal();
+    let xml = document_xml("<w:p><w:r><w:t><![CDATA[<!DOCTYPE w:document>]]></w:t></w:r></w:p>");
+    let lookalikes = "<!-- <!DOCTYPE w:document> --><?test <!DOCTYPE w:document>?>";
+    doc.set("word/document.xml", with_doctype(xml, lookalikes));
+    let report = validate(&doc);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    assert!(report.findings.is_empty(), "{report:?}");
+
+    for declaration in [lookalikes, "<!DOCTYPE w:document>"] {
+        doc.set("word/document.xml", with_doctype(document_xml("<w:p/>"), declaration));
+        let unreadable = claim_entry_method(&doc.build(), "word/document.xml", 12);
+        let report = validate_bytes(&unreadable);
+        assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+        assert!(report.findings.is_empty(), "{report:?}");
+    }
 }
 
 #[test]
@@ -5770,7 +5850,7 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
     let report = validate(&d);
     assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
 
-    // Declared internal DOCTYPE entity passes.
+    // A declared plain-text entity produces no diagnostic beyond the DOCTYPE refusal.
     d.set(
         "word/document.xml",
         format!(
@@ -5778,7 +5858,9 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
         ),
     );
     let report = validate(&d);
-    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    assert_eq!(report.findings.len(), 1, "{report:?}");
+    assert_finding(&report, "XML-DOCTYPE", Some("word/document.xml"));
 
     // External DTD subset leaves unresolved entity names incomplete instead of XML-MALFORMED.
     d.set(
@@ -5789,7 +5871,8 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
     );
     let report = validate(&d);
     assert!(!has(&report, "XML-MALFORMED"), "{report:?}");
-    assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+    assert!(report.coverage_notes.iter().any(|note| note.contains("unresolvable DOCTYPE subset")), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
 
     // Parameter entity in internal subset leaves unresolved entity names incomplete instead of XML-MALFORMED.
     d.set(
@@ -5800,7 +5883,8 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
     );
     let report = validate(&d);
     assert!(!has(&report, "XML-MALFORMED"), "{report:?}");
-    assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+    assert!(report.coverage_notes.iter().any(|note| note.contains("unresolvable DOCTYPE subset")), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
 
     // Predefined numeric reference behavior stays intact.
     d.set(
@@ -5830,7 +5914,7 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
     let report = validate(&d);
     assert_finding(&report, "XML-MALFORMED", Some("word/document.xml"));
 
-    // Replacement text containing markup or another entity ref marks the run Incomplete without false Pass.
+    // Replacement text containing markup or another entity ref leaves a coverage note.
     for entity in [r#"<!ENTITY markup "<w:p/>">"#, r#"<!ENTITY greet "hi"><!ENTITY alias "&greet;">"#] {
         let name = if entity.contains("markup") { "markup" } else { "alias" };
         d.set(
@@ -5841,10 +5925,11 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
         );
         let report = validate(&d);
         assert!(!has(&report, "XML-MALFORMED"), "{entity}: {report:?}");
-        assert_eq!(report.verdict, Verdict::Incomplete, "{entity}: {report:?}");
+        assert!(report.coverage_notes.iter().any(|note| note.contains("was not expanded")), "{entity}: {report:?}");
+        assert_eq!(report.verdict, Verdict::Fail, "{entity}: {report:?}");
     }
 
-    // Entity-supplied field begin paired with a later visible field end stays Incomplete without FLD-UNBALANCED.
+    // An entity-supplied field begin leaves field balance unexamined.
     d.set(
         "word/document.xml",
         format!(
@@ -5853,5 +5938,6 @@ fn coderabbit_doctype_entities_and_unresolved_general_refs() {
     );
     let report = validate(&d);
     assert!(!has(&report, "FLD-UNBALANCED"), "{report:?}");
-    assert_eq!(report.verdict, Verdict::Incomplete, "{report:?}");
+    assert!(report.coverage_notes.iter().any(|note| note.contains("was not expanded")), "{report:?}");
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
 }

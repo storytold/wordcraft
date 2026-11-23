@@ -224,6 +224,9 @@ pub(crate) const CT_MAIN_TYPE: RuleSpec = RuleSpec { id: "CT-MAIN-TYPE", severit
 pub(crate) const CT_DUP_DEFAULT: RuleSpec = RuleSpec { id: "CT-DUP-DEFAULT", severity: Severity::Error, evidence: Evidence::ByConstruction };
 /// `CT-DUP-OVERRIDE`: two Override entries for one part name (case-insensitive), OPC §7.2.3.2.1.
 pub(crate) const CT_DUP_OVERRIDE: RuleSpec = RuleSpec { id: "CT-DUP-OVERRIDE", severity: Severity::Error, evidence: Evidence::ByConstruction };
+/// `XML-DOCTYPE`: Word for the web refuses declarations in the main part, and desktop Word
+/// requires recovery for a declaration in a relationships part (Experiment A, 2026-11-22).
+pub(crate) const XML_DOCTYPE: RuleSpec = RuleSpec { id: "XML-DOCTYPE", severity: Severity::Error, evidence: Evidence::Observed };
 /// `XML-MALFORMED`: an XML part does not parse. Severity is graded per part at the finding site
 /// (main part Corrupt, reachable Error, unreferenced Warning); the evidence for the unused
 /// Warning case is Observed, the referenced case is Inferred, the main part ByConstruction.
@@ -505,6 +508,7 @@ pub(crate) const RULES: &[RuleSpec] = &[
     CT_DUP_MAIN,
     CT_DUP_DEFAULT,
     CT_DUP_OVERRIDE,
+    XML_DOCTYPE,
     XML_MALFORMED,
     XML_UNDECLARED_PREFIX,
     XML_INVALID_CHAR,
@@ -771,15 +775,6 @@ pub fn validate_bytes(bytes: &[u8]) -> Report {
 
 /// [`validate_bytes`] with explicit [`Limits`] (used by the budget tests).
 pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
-    observation_contract! {
-        rules: "-";
-        collections: "field.content_parts*1";
-        scope: "source-local bounded extraction; no implicit document owner";
-        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
-        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
-        package_loss: "independent";
-    }
-
     let mut acc = Acc::with_limits(limits);
     if bytes.len() > limits.input_bytes {
         acc.note(format!("the input is {} bytes, over the {}-byte examination limit; it was not examined", bytes.len(), limits.input_bytes));
@@ -789,39 +784,80 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     let Some(pkg) = package::load(bytes, &mut acc) else {
         return acc.finish();
     };
+    check_doctypes(&pkg, &mut acc);
+    check_document(&pkg, &mut acc);
+    acc.finish()
+}
+
+/// Apply document checks after the package-wide prolog policy has run.
+fn check_document(pkg: &Package, acc: &mut Acc) {
+    observation_contract! {
+        rules: "-";
+        collections: "field.content_parts*1";
+        scope: "source-local bounded extraction; no implicit document owner";
+        loss: "source unavailable or malformed; XML event/depth budget; category allocation cap";
+        fallback: "retain proven prefix presence and duplicates; return loss to the caller; no negative membership from an incomplete set";
+        package_loss: "independent";
+    }
+
     if !pkg.roots_ambiguous {
-        match package::entry_point_profile(&pkg) {
+        match package::entry_point_profile(pkg) {
             Resolution::Ambiguous(_) => {
                 acc.note(
                     "mixed Transitional/Strict officeDocument entry points leave the package profile uncertain; document checks were skipped"
                         .to_string(),
                 );
                 acc.set_incomplete();
-                return acc.finish();
+                return;
             }
             Resolution::One(package::EntryPointProfile::Strict) => {
                 // The XML scanner understands Transitional WML only. Running it on Strict markup would
                 // silently skip its elements and could manufacture a PASS without checking that profile.
                 acc.note("the Strict OOXML profile is unsupported; document checks require the Transitional profile".to_string());
                 acc.set_incomplete();
-                return acc.finish();
+                return;
             }
             Resolution::One(package::EntryPointProfile::Transitional) | Resolution::Absent | Resolution::Unknown(_) => {}
         }
-        if !owner_roots_supported(&pkg, &mut acc) {
-            return acc.finish();
+        if !owner_roots_supported(pkg, acc) {
+            return;
         }
     }
-    check_content_types(&pkg, &mut acc);
-    let xml = check_xml(&pkg, &mut acc);
-    check_rels(&pkg, &xml, &mut acc);
-    check_content_part_types(&pkg, &xml.content_parts(), &mut acc);
+    check_content_types(pkg, acc);
+    let xml = check_xml(pkg, acc);
+    check_rels(pkg, &xml, acc);
+    check_content_part_types(pkg, &xml.content_parts(), acc);
     if !pkg.roots_ambiguous {
-        check_story(&pkg, &xml, &mut acc);
-        check_note_pr(&pkg, &xml, &mut acc);
+        check_story(pkg, &xml, acc);
+        check_note_pr(pkg, &xml, acc);
     }
-    check_media(&pkg, &xml, &mut acc);
-    acc.finish()
+    check_media(pkg, &xml, acc);
+}
+
+/// A declaration in the original prolog is sufficient evidence, whatever the document profile.
+fn check_doctypes(pkg: &Package, acc: &mut Acc) {
+    observation_contract! {
+        rules: "XML-DOCTYPE";
+        collections: "field.bytes*1,field.entries*1";
+        scope: "original prolog of every XML and relationships part, independent of ownership and profile";
+        loss: "unavailable part bytes, undecidable or unsupported encoding, or unreadable prolog";
+        fallback: "emit an Error for an observed declaration; leave unavailable evidence to the existing coverage checks";
+        package_loss: "independent";
+    }
+
+    acc.ran("XML-DOCTYPE");
+    for entry in pkg.entries.iter().filter(|entry| !entry.is_dir && package::is_xml_part(pkg, &entry.name)) {
+        let declared = match entry.decoded.as_deref() {
+            Some(text) => scan::doctype_in_prolog(text),
+            None if matches!(entry.decode_error, Some(DecodeError::Malformed(_))) => {
+                entry.bytes.as_deref().and_then(scan::decoded_prefix).is_some_and(|text| scan::doctype_in_prolog(&text))
+            }
+            None => false,
+        };
+        if declared {
+            acc.add("XML-DOCTYPE", Some(entry.name.clone()), format!("{} contains a DOCTYPE declaration, which Word refuses", entry.name));
+        }
+    }
 }
 
 /// Reject owner roots the Transitional scanner cannot interpret. Malformed or unavailable XML
@@ -4511,6 +4547,14 @@ mod budget_tests {
         w.finish().unwrap().into_inner()
     }
 
+    /// Exercise document diagnostics on DTD fixtures independently of the prolog policy.
+    fn document_check_report(bytes: &[u8]) -> Report {
+        let mut acc = Acc::default();
+        let pkg = package::load(bytes, &mut acc).unwrap();
+        check_document(&pkg, &mut acc);
+        acc.finish()
+    }
+
     /// Build minimal `[Content_Types].xml` bytes declaring default rels/xml and the main document override.
     fn content_types() -> Vec<u8> {
         format!(
@@ -5725,7 +5769,7 @@ mod budget_tests {
             format!(r#"{doctype}<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"{declarations}><w:body>{body}</w:body></w:document>"#)
         };
         let validate = |document: &str| {
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types_with_override("word/media/drawn.png", "image/png")),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", document.as_bytes().to_vec()),
@@ -5822,7 +5866,7 @@ mod budget_tests {
         let year = format!("<!DOCTYPE w:document [<!ENTITY ns \"{NS_W}\">]>");
         let validate = |body: &str| {
             let document = format!(r#"{year}<w:document xmlns:w="{NS_W}" xmlns:m="{NS_M}" xmlns:r="{NS_R}"><w:body>{body}</w:body></w:document>"#);
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types()),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", document.into_bytes()),
@@ -5995,7 +6039,7 @@ mod budget_tests {
                     ("word/document.xml", document.into_bytes()),
                     ("word/_rels/document.xml.rels", rels(&declarations)),
                 ]);
-                let report = validate_bytes(&tiny_zip(&entries));
+                let report = document_check_report(&tiny_zip(&entries));
                 assert_eq!(report.findings.iter().any(|f| f.rule == *rule), claimed, "{rule} spelled {prefix}:{local}: {report:?}");
                 assert_eq!(report.verdict == Verdict::Incomplete, incomplete, "{rule} spelled {prefix}:{local}: {report:?}");
             }
@@ -6006,7 +6050,7 @@ mod budget_tests {
         let rels_ns = "http://schemas.openxmlformats.org/package/2006/relationships";
         let document = format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:wp="{NS_WP}"><w:body>{DRAWN}</w:body></w:document>"#);
         let report = |relationships: String| {
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types_with_override("word/media/drawn.png", "image/png")),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", document.clone().into_bytes()),
@@ -6029,7 +6073,7 @@ mod budget_tests {
         let document =
             format!(r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}"><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body></w:document>"#);
         let report = |relationships: String| {
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types()),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", document.clone().into_bytes()),
@@ -6073,7 +6117,7 @@ mod budget_tests {
         let ext = format!(r#"<Relationship Id="rExt" Type="{NS_R}/hyperlink" Target="other.docx" TargetMode="External"/>"#);
         let styles = format!(r#"<w:styles xmlns:w="{NS_W}"/>"#);
         let report = |types: Vec<u8>, relationships: String| {
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", types),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", document.clone().into_bytes()),
@@ -6126,7 +6170,7 @@ mod budget_tests {
             r#"xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#
         );
         let story = |body: &str| {
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types()),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", format!("<?xml version=\"1.0\"?>{dtd}<w:document {ns}><w:body>{body}</w:body></w:document>").into_bytes()),
@@ -6134,7 +6178,7 @@ mod budget_tests {
             ]))
         };
         let settings = |body: &str| {
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types_with_override("word/settings.xml", &format!("{wml}settings+xml"))),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", document()),
@@ -6222,7 +6266,7 @@ mod budget_tests {
                     xml.into_bytes(),
                 ),
             ]);
-            validate_bytes(&tiny_zip(&entries))
+            document_check_report(&tiny_zip(&entries))
         };
         let rules = |report: &Report| report.findings.iter().map(|f| f.rule).collect::<Vec<_>>();
         // A footnote listing is missing (its absence is established); only a footnote-family element could be it.
@@ -6259,7 +6303,7 @@ mod budget_tests {
         );
         let dtd = r#"<!DOCTYPE w:document [<!ENTITY mcns "http://schemas.openxmlformats.org/markup-compatibility/2006"><!ENTITY u "w14">]>"#;
         let story = |attrs: &str, body: &str| {
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types()),
                 ("_rels/.rels", package_rels()),
                 (
@@ -6307,7 +6351,7 @@ mod budget_tests {
             let text = format!(
                 r#"{entities}<w:document xmlns:w="{NS_W}" xmlns:mc="{mc}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" {root}><w:body>{body}</w:body></w:document>"#
             );
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 ("[Content_Types].xml", content_types()),
                 ("_rels/.rels", package_rels()),
                 ("word/document.xml", text.into_bytes()),
@@ -6346,7 +6390,7 @@ mod budget_tests {
             let settings = format!(
                 r#"{entities}<w:settings xmlns:w="{NS_W}" xmlns:q="{NS_W}&year;"><w:documentProtection w:algorithmName="SHA-512" w:hashValue="AA==" {attribute}/></w:settings>"#
             );
-            validate_bytes(&tiny_zip(&[
+            document_check_report(&tiny_zip(&[
                 (
                     "[Content_Types].xml",
                     content_types_with_override("word/settings.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"),
