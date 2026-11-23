@@ -97,6 +97,8 @@ pub struct CanvasState {
     /// The page view's state: zoom, fit, offset and current page. The session's view settings are copied in at the
     /// start of each pass and the zoom the framework changed is written back after it.
     pub(crate) view: PageViewState,
+    /// The frosted ribbon's page thumbnails and strip slot (File › Options › General).
+    pub(crate) blur: crate::ribbon_blur::BlurState,
     /// Read Mode's column state.
     pub(crate) reading: ReadingState,
     /// What the last pass showed.
@@ -381,6 +383,7 @@ impl Default for CanvasState {
     fn default() -> Self {
         CanvasState {
             view: PageViewState::default(),
+            blur: Default::default(),
             reading: ReadingState::default(),
             shown: ShownPages::default(),
             focus_pending: true,

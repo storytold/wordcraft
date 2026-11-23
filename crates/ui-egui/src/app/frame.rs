@@ -127,6 +127,7 @@ impl WordApp {
         if stale(self) {
             return ShellRegions::new(egui::Rect::NOTHING);
         }
+        crate::ribbon_blur::update(self, ui.ctx());
         // `follow_screen_mode` maps one mode onto three view flags: write it back only on a change.
         if out.screen_mode != mode {
             self.follow_screen_mode(out.screen_mode);
@@ -159,6 +160,10 @@ impl WordApp {
 
 /// The ribbon, then its keytips, in a top slot: the keytips read what the ribbon recorded this pass.
 fn ribbon_slot(app: &mut WordApp, ui: &mut egui::Ui) {
+    let slot = app.ribbon_glass().then(|| crate::ribbon_blur::BlurState::reserve(ui));
     let out = ribbon::show(app, ui);
     crate::keytips::show(ui, app, &out);
+    if let Some(slot) = slot {
+        app.canvas.blur.set_ribbon(slot, ui.min_rect());
+    }
 }

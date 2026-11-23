@@ -252,6 +252,7 @@ impl WordApp {
             dark_page: _,
             check_spelling: _,
             caret_animation: _,
+            ribbon_blur: _,
             keyboard: _,
             print: _,
             ribbon: _,

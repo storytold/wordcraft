@@ -285,6 +285,15 @@ impl WordApp {
         self.ui.start_screen
     }
 
+    /// Whether the ribbon is drawn frosted over the page strip.
+    pub fn ribbon_glass(&self) -> bool {
+        self.ui.ribbon_blur
+            && self.has_document()
+            && !self.ui.backstage
+            && !self.session.view.read_mode
+            && chrome::Screen::of(&self.session.view) == chrome::Screen::Normal
+    }
+
     /// Whether a document is open: false from a Start screen launch until the user creates or
     /// opens one (#1129).
     pub fn has_document(&self) -> bool {

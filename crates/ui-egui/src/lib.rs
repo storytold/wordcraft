@@ -65,6 +65,7 @@ pub mod proofing_pane;
 pub mod read_aloud;
 mod restrict_pane;
 pub mod ribbon;
+pub mod ribbon_blur;
 mod save_types;
 pub mod scroll;
 pub use scroll::ScrollSpeed;
