@@ -47,14 +47,14 @@ impl Rig {
         ViewportInfo { focused: Some(self.focused.iter().any(is_it)), events, inner_rect: Some(rect), outer_rect: Some(rect), ..Default::default() }
     }
 
-    /// One frame of every window.
-    fn frame(&mut self, a: &mut WordApp) {
+    /// One frame of every window with custom events.
+    fn frame_events(&mut self, a: &mut WordApp, root: Vec<egui::Event>, child: Vec<egui::Event>) {
         self.kit.root_info(self.info(false));
         // The kit has one child, whichever viewport the app opens it in.
         self.kit.child_info(self.info(true));
         // PLAN: assumed `embed::before_input(ctx, |out| app.frame_input(out))` (sh.A2) from app-hub.
         craft::ui::shell::embed::before_input(&self.kit.ctx, |out| a.frame_input(out));
-        let out = self.kit.frame(Vec::new(), Vec::new(), |ui| {
+        let out = self.kit.frame(root, child, |ui| {
             a.logic(ui.ctx());
             // The root window's close request goes through the app's close decision, as the host's frame runs it.
             craft::ui::shell::embed::logic(ui.ctx(), || a.close_decision());
@@ -64,6 +64,11 @@ impl Rig {
         self.commands = out.commands;
         self.drawn = out.trees.iter().map(|(v, _)| *v).collect();
         self.closing.clear();
+    }
+
+    /// One frame of every window.
+    fn frame(&mut self, a: &mut WordApp) {
+        self.frame_events(a, Vec::new(), Vec::new());
     }
 
     fn frames(&mut self, a: &mut WordApp, n: usize) {
@@ -294,6 +299,31 @@ fn quitting_from_the_empty_window_asks_about_the_other_windows() {
     assert_ne!(a.windows.shown(), empty, "the document's own window asks");
     a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
     assert!(a.quit_requested);
+}
+
+/// Keys sent to a child window after closing it don't reach the document behind it.
+#[test]
+fn keys_after_closing_a_window_go_nowhere() {
+    let mut rig = Rig::new();
+    let mut a = app("First");
+    rig.frame(&mut a);
+    a.run("file.new", json!({})).unwrap();
+    rig.frame(&mut a);
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+    rig.focus(child);
+    rig.frame(&mut a);
+
+    let mac = cfg!(target_os = "macos");
+    let modifiers = egui::Modifiers { ctrl: !mac, mac_cmd: mac, command: true, ..Default::default() };
+    rig.frame_events(
+        &mut a,
+        Vec::new(),
+        vec![egui::Event::Key { key: egui::Key::W, physical_key: None, pressed: true, repeat: false, modifiers }, egui::Event::Text("x".into())],
+    );
+    rig.frame(&mut a);
+    assert_eq!(a.window_count(), 1, "the child window closed");
+    assert_eq!(text(&a), "First", "keys after closing a window go nowhere");
 }
 
 /// A window whose document closed without the windows following (an agent closed it) isn't
