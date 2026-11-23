@@ -549,6 +549,55 @@ fn selected(s: &Session) -> (usize, usize) {
     (a.off, b.off)
 }
 
+/// Two edits an hour apart in the repeated hour as daylight saving time ends are two changes,
+/// though both were made at 01:30 local time: the document dates them in UTC (#6851). Rejecting
+/// one at the caret leaves the other pending. Saved as DOCX, both are dated 01:30, as Word dates
+/// them.
+#[test]
+fn edits_in_the_repeated_hour_stay_separate_changes() {
+    use crate::cmd::{TEST_NOW, TEST_ZONE};
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_NOW.with(|c| c.set(None));
+            TEST_ZONE.with(|z| z.set(None));
+        }
+    }
+    let _reset = Reset;
+    TEST_ZONE.with(|z| z.set(Some(crate::io_ext::tests::new_york)));
+
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run("document.setText", &json!({"text": "Draft."})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    // 1 November 2026, 01:30 EDT (05:30 UTC) and then 01:30 EST (06:30 UTC).
+    for (now, text) in [(1_793_511_000, " One"), (1_793_514_600, " Two")] {
+        TEST_NOW.with(|c| c.set(Some(now)));
+        s.run("text.insert", &json!({"text": text})).unwrap();
+    }
+    assert_eq!(change_spans(&mut s), [("insert".into(), 6, 10), ("insert".into(), 10, 14)]);
+    let dates: Vec<&str> = s.doc.revisions.iter().map(|r| r.date.as_str()).collect();
+    assert_eq!(dates, ["2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"]);
+
+    // A Word package and a Word XML Document are dated as Word dates them, and read back in UTC.
+    // `w:date` can't tell the two apart, so they read back as the earlier 01:30, and the reader
+    // makes them one change (it groups changes by author and date). The session keeps both.
+    for name in ["repeated.docx", "repeated.xml"] {
+        let bytes = crate::io::save_bytes(name, &s.doc).unwrap();
+        let written = if name.ends_with(".xml") { wordcraft_docx::read_xml(&bytes) } else { wordcraft_docx::read(&bytes) }.unwrap();
+        assert!(written.revisions.iter().all(|r| r.date == "2026-11-01T01:30:00Z"), "{name}: {:?}", written.revisions);
+        let opened = crate::io::open_bytes(name, &bytes).unwrap();
+        assert!(!opened.revisions.is_empty() && opened.revisions.iter().all(|r| r.date == "2026-11-01T05:30:00Z"), "{name}: {:?}", opened.revisions);
+    }
+    assert_eq!(s.doc.revisions.get(1).map(|r| r.date.as_str()), Some("2026-11-01T06:30:00Z"));
+
+    s.run("caret.set", &json!({"pos": {"block": 0, "off": 12}})).unwrap();
+    s.run("review.reject", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Draft. One");
+    assert_eq!(change_spans(&mut s), [("insert".into(), 6, 10)], "the earlier insertion is still pending");
+}
+
 /// Accept and Move to Next, Reject and Move to Next: the change at the caret is resolved and
 /// the next one is selected; without `next` the caret stays where the change was.
 #[test]

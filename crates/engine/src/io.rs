@@ -265,8 +265,18 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
 
 /// Read a Word package (decrypted with `password` if it is encrypted), bringing in its
 /// alternative format chunks (`w:altChunk`) as Word does when it opens one: see [`import_chunk`].
+/// Its tracked changes are dated in UTC (see `io_ext::utc_revision_dates`).
 pub(crate) fn read_docx(bytes: &[u8], password: Option<&str>) -> Result<Document, wordcraft_docx::DocxError> {
-    wordcraft_docx::read_with(bytes, &wordcraft_docx::ReadOptions { password, chunks: Some(&import_chunk) })
+    let mut doc = wordcraft_docx::read_with(bytes, &wordcraft_docx::ReadOptions { password, chunks: Some(&import_chunk) })?;
+    crate::io_ext::utc_revision_dates(&mut doc);
+    Ok(doc)
+}
+
+/// Read a Word XML Document (Flat OPC) or Word 2003 XML file, its tracked changes dated in UTC.
+pub(crate) fn read_word_xml(bytes: &[u8]) -> Result<Document, wordcraft_docx::DocxError> {
+    let mut doc = wordcraft_docx::read_xml(bytes)?;
+    crate::io_ext::utc_revision_dates(&mut doc);
+    Ok(doc)
 }
 
 /// An alternative format chunk in a format the docx reader leaves to the format importers, as a
@@ -426,7 +436,7 @@ fn open_by_content(
     } else if bytes.starts_with(b"{\\rtf") {
         (wordcraft_formats::rtf::import(bytes)?, false)
     } else if is_word_xml(bytes) {
-        (wordcraft_docx::read_xml(bytes).map_err(|e| format!("{name}: {e}"))?, false)
+        (read_word_xml(bytes).map_err(|e| format!("{name}: {e}"))?, false)
     } else if matches!(ext, "doc" | "dot" | "docx" | "docm" | "dotx" | "dotm" | "rtf") && looks_like_web_page(bytes) {
         let opened = crate::io_ext::open("html", bytes, page).unwrap_or_else(|| Err(format!("{name}: can't open web pages")));
         (opened?, false)

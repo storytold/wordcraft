@@ -200,7 +200,7 @@ pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
 
 /// A revision record for the current author.
 pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
-    let date = revision_date();
+    let date = now_iso();
     // Never one end of a move, nor the deletion a cut may still turn into one.
     let held = s.pending_move.as_ref().map(|m| m.rev);
     if let Some((i, _)) = s
@@ -555,6 +555,10 @@ pub fn iso_from_unix_secs(secs: u64) -> String {
 
 /// Seconds since the Unix epoch (UTC): the system clock, or the browser's on the web.
 pub fn now_unix() -> u64 {
+    #[cfg(test)]
+    if let Some(now) = TEST_NOW.with(std::cell::Cell::get) {
+        return now;
+    }
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -573,34 +577,24 @@ pub fn now_iso() -> String {
     iso_from_unix_secs(now_unix())
 }
 
-/// A tracked change's time (`w:date`): the local wall-clock time now, written with a `Z` as Word
-/// writes it. Word reads `w:date` as local time, so a UTC time showed shifted by the user's offset
-/// from UTC (#6851). A comment keeps its UTC time beside its date (`w16cex:dateUtc`).
-pub fn revision_date() -> String {
-    let now = now_unix();
+/// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving
+/// included: the system's zone, or the browser's on the web. 0 (UTC) when it can't be found.
+pub fn local_offset_secs(unix: u64) -> i64 {
     #[cfg(test)]
-    if let Some(offset) = TEST_REVISION_OFFSET.with(std::cell::Cell::get) {
-        return revision_date_at(now, offset);
+    if let Some(zone) = TEST_ZONE.with(std::cell::Cell::get) {
+        return zone(unix);
     }
-    revision_date_at(now, local_offset_secs(now))
+    system_offset_secs(unix).clamp(-26 * 3600, 26 * 3600)
 }
 
 #[cfg(test)]
 thread_local! {
-    /// The zone [`revision_date`] uses on this thread in place of the system's. CI runs on UTC,
-    /// where a UTC stamp is also the local one, so a test sets a zone that isn't to tell them apart.
-    pub static TEST_REVISION_OFFSET: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
-}
-
-/// [`revision_date`] for `unix` seconds since the epoch in a zone `offset_secs` east of UTC.
-pub fn revision_date_at(unix: u64, offset_secs: i64) -> String {
-    iso_from_unix_secs(unix.saturating_add_signed(offset_secs))
-}
-
-/// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving
-/// included: the system's zone, or the browser's on the web. 0 (UTC) when it can't be found.
-pub fn local_offset_secs(unix: u64) -> i64 {
-    system_offset_secs(unix).clamp(-26 * 3600, 26 * 3600)
+    /// The clock [`now_unix`] reads on this thread in place of the system's, so a test can make
+    /// edits at the instants it needs.
+    pub static TEST_NOW: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// The zone [`local_offset_secs`] gives on this thread in place of the system's. CI runs on
+    /// UTC, where local time is UTC, so a test sets a zone that isn't to tell them apart.
+    pub static TEST_ZONE: std::cell::Cell<Option<fn(u64) -> i64>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -696,20 +690,7 @@ pub fn default_lang(s: &Session) -> Option<String> {
 
 #[cfg(test)]
 mod iso_tests {
-    use super::{civil_from_days, iso_from_unix_secs, revision_date_at};
-
-    /// A tracked change's time is the local wall-clock time with Word's `Z` (#6851).
-    #[test]
-    fn revision_dates_are_local_wall_clock_time() {
-        // 08:33:24 UTC is 16:33:24 at UTC+8.
-        assert_eq!(revision_date_at(1_794_818_004, 8 * 3600), "2026-11-16T16:33:24Z");
-        // 03:00 UTC on New Year's Day is still the old year at UTC-5.
-        assert_eq!(revision_date_at(1_767_236_400, -5 * 3600), "2025-12-31T22:00:00Z");
-        assert_eq!(revision_date_at(1_767_236_400, 0), "2026-01-01T03:00:00Z");
-        // A clock or offset at the ends of the range saturates rather than overflows.
-        assert_eq!(revision_date_at(0, -3600), "1970-01-01T00:00:00Z");
-        assert!(!revision_date_at(u64::MAX, 3600).is_empty());
-    }
+    use super::{civil_from_days, iso_from_unix_secs};
 
     #[test]
     fn formats_epoch_and_known_timestamps() {
