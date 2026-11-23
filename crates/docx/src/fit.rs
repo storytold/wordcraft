@@ -4,10 +4,8 @@
 //! never be mistaken for a user's data. It is not a document property, so it stays out of
 //! `docProps/custom.xml`.
 
+use craft_docx::DocxError;
 use wordcraft_doc::FitState;
-
-use crate::DocxError;
-use crate::xml::{El, esc};
 
 /// The part this crate writes and reads back.
 pub(crate) const PART: &str = "customxml/wordcraftfit.xml";
@@ -16,27 +14,23 @@ pub(crate) const ROOT: &str = "wordcraftFit";
 /// Namespace of the store.
 pub(crate) const NS: &str = "urn:wordcraft:fit";
 /// Marker attribute the parser keeps (namespace declarations are stripped from `El`).
-const KIND: &str = "wordcraft-fit-v1";
-
-/// Whether `root` is our store (and not a user's custom XML part with a coincidental name).
-pub(crate) fn is_state(root: &El) -> bool {
-    root.local() == ROOT && root.attr("kind") == Some(KIND)
-}
+pub(crate) const KIND: &str = "wordcraft-fit-v1";
 
 /// Serialize `fit` as the custom XML store.
 pub(crate) fn write(fit: &FitState) -> Result<Vec<u8>, DocxError> {
     let json = serde_json::to_string(fit).map_err(|e| DocxError::Xml(e.to_string()))?;
-    Ok(format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><fitState>{}</fitState></{ROOT}>"#, esc(&json))
-        .into_bytes())
+    let esc_json = craft_xml::esc(&json);
+    Ok(format!(r#"<?xml version="1.0" encoding="UTF-8"?><{ROOT} xmlns="{NS}" kind="{KIND}"><fitState>{}</fitState></{ROOT}>"#, esc_json).into_bytes())
 }
 
-/// Read the state from a parsed custom XML root, if it is ours.
-pub(crate) fn read(root: &El) -> Option<FitState> {
-    if !is_state(root) {
+/// Read the state from a custom XML part's bytes, if it is ours.
+pub(crate) fn read_from_bytes(bytes: &[u8]) -> Option<FitState> {
+    let root = craft_xml::parse(bytes).ok()?;
+    if root.local() != ROOT || root.attr("kind") != Some(KIND) {
         return None;
     }
-    let state = root.els().find(|e| e.local() == "fitState")?;
-    serde_json::from_str(&state.text()).ok()
+    let text = root.child_text("fitState")?;
+    serde_json::from_str(text.as_ref()).ok()
 }
 
 #[cfg(test)]
