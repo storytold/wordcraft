@@ -433,14 +433,14 @@ fn selection_bar_clicks_select_lines() {
         layout.selection_bar_at(placed.page, p.x as f32, p.y as f32).expect("in the selection bar")
     };
     let span = |h: &mut H, pos: &Pos| h.state_mut().session.layout().line_span(pos, 0).expect("line");
-    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
-    let clicks_drag = |h: &mut H, from: Pos2, to: Pos2, clicks: usize| {
+    let button = |at: Pos2, pressed: bool, modifiers: Modifiers| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers };
+    let clicks_drag = |h: &mut H, from: Pos2, to: Pos2, clicks: usize, mods: Modifiers| {
         h.event(Event::PointerMoved(from));
         for i in 0..clicks {
-            h.event(button(from, true));
+            h.event(button(from, true, mods));
             h.app_frame();
             if i + 1 < clicks {
-                h.event(button(from, false));
+                h.event(button(from, false, mods));
                 h.app_frame();
             }
         }
@@ -448,7 +448,7 @@ fn selection_bar_clicks_select_lines() {
             h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
             h.app_frame();
         }
-        h.event(button(to, false));
+        h.event(button(to, false, mods));
         for _ in 0..3 {
             h.app_frame();
         }
@@ -462,22 +462,22 @@ fn selection_bar_clicks_select_lines() {
     let at = margin(&mut h, Pos::body(0, 0), 1.0);
     let l2 = line_start(&mut h, at);
     assert!(l2.off > 0 && l2.path == wordcraft_doc::Path::top(0));
-    clicks_drag(&mut h, at, at, 1);
+    clicks_drag(&mut h, at, at, 1, Modifiers::NONE);
     let (_, l2_end, _) = span(&mut h, &l2);
     assert_eq!(h.state().session.sel.ordered(), (l2.clone(), l2_end.clone()), "the line");
     // Double-click: the paragraph, mark included.
     pause(&mut h);
-    clicks_drag(&mut h, at, at, 2);
+    clicks_drag(&mut h, at, at, 2, Modifiers::NONE);
     assert_eq!(h.state().session.sel.ordered(), (Pos::body(0, 0), Pos::body(1, 0)), "the paragraph");
     // Triple-click: the whole document.
     pause(&mut h);
-    clicks_drag(&mut h, at, at, 3);
+    clicks_drag(&mut h, at, at, 3, Modifiers::NONE);
     assert_eq!(h.state().session.sel.ordered(), (Pos::body(0, 0), Pos::body(2, 10)), "everything");
     // Drag from beside the first line down past the third: three whole lines.
     pause(&mut h);
     let (from, to) = (margin(&mut h, Pos::body(0, 0), 0.0), margin(&mut h, Pos::body(0, 0), 2.0));
     let l3 = line_start(&mut h, to);
-    clicks_drag(&mut h, from, to, 1);
+    clicks_drag(&mut h, from, to, 1, Modifiers::NONE);
     let (_, l3_end, _) = span(&mut h, &l3);
     let sel = h.state().session.sel.clone();
     assert_eq!((sel.anchor, sel.focus), (Pos::body(0, 0), l3_end), "three lines");
@@ -486,7 +486,7 @@ fn selection_bar_clicks_select_lines() {
     let second = margin(&mut h, Pos::body(1, 0), 0.0);
     h.event(Event::ModifiersChanged(Modifiers::SHIFT));
     h.app_frame();
-    clicks_drag(&mut h, second, second, 1);
+    clicks_drag(&mut h, second, second, 1, Modifiers::SHIFT);
     h.event(Event::ModifiersChanged(Modifiers::default()));
     h.app_frame();
     let sel = h.state().session.sel.clone();
