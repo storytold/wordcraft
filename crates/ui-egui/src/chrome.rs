@@ -248,20 +248,58 @@ impl WordApp {
     /// words as the status bar and the Word Count dialog count them, and characters with and
     /// without spaces as the dialog does (#2797).
     pub fn cached_status_counts(&mut self) -> StatusCounts {
-        // The count option changes the counts without a document change.
-        let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
+        let key = self.status_counts_key();
         if self.status_counts.0 != key {
-            let text = self.session.counted_text();
-            self.status_counts = (
-                key,
-                StatusCounts {
-                    words: self.session.word_count(),
-                    chars: wordcraft_doc::count_chars(&text),
-                    chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text),
-                },
-            );
+            self.status_counts = (key, count_document(&self.session.doc, self.session.prefs.count_notes));
+            self.status_recount = None;
         }
         self.status_counts.1
+    }
+
+    /// What the cached counts are keyed by: the revision, and the count option, which changes the
+    /// counts without a document change.
+    fn status_counts_key(&self) -> u64 {
+        self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes)
+    }
+
+    /// The counts the status bar shows: those of the document as of a moment ago while a recount is
+    /// being made on another thread, so typing in a long document doesn't wait for the whole text to
+    /// be counted again. Returns whether the counts are up to date; when not, the caller asks for
+    /// another frame. The first count of a document is made here, so the bar never shows no count.
+    pub fn status_counts_shown(&mut self) -> (StatusCounts, bool) {
+        let key = self.status_counts_key();
+        if self.status_counts.0 == key {
+            return (self.status_counts.1, true);
+        }
+        if self.status_counts.0 == crate::window_ui::NOT_COUNTED.0 {
+            return (self.cached_status_counts(), true);
+        }
+        if let Some((for_key, rx)) = &self.status_recount {
+            match rx.try_recv() {
+                Ok(counts) => {
+                    self.status_counts = (*for_key, counts);
+                    self.status_recount = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return (self.status_counts.1, false),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.status_recount = None,
+            }
+            if self.status_counts.0 == key {
+                return (self.status_counts.1, true);
+            }
+        }
+        let (doc, count_notes) = (self.session.doc.clone(), self.session.prefs.count_notes);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new().name("wordcraft-count".into()).spawn(move || {
+            let _ = tx.send(count_document(&doc, count_notes));
+        });
+        match started {
+            Ok(_) => {
+                self.status_recount = Some((key, rx));
+                (self.status_counts.1, false)
+            }
+            // No thread to be had: count here.
+            Err(_) => (self.cached_status_counts(), true),
+        }
     }
 }
 
@@ -281,6 +319,18 @@ pub(crate) fn status_count_text(unit: StatusCount, total: usize, selected: Optio
         (StatusCount::CharactersNoSpaces, Some(n)) => {
             crate::i18n::fmt(tl!("{selected} of {chars} characters (no spaces)"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
         }
+    }
+}
+
+/// The counts of `doc`: words as the status bar and the Word Count dialog count them, and the
+/// characters of the counted stories ([`wordcraft_engine::Session::counted_text`]).
+fn count_document(doc: &wordcraft_doc::Document, count_notes: bool) -> StatusCounts {
+    let stories = if count_notes { doc.counted_stories() } else { vec![wordcraft_doc::StoryRef::Body] };
+    let text = stories.iter().map(|st| doc.plain_text(*st)).collect::<Vec<_>>().join("\n");
+    StatusCounts {
+        words: if count_notes { doc.word_count_including_notes() } else { doc.word_count() },
+        chars: wordcraft_doc::count_chars(&text),
+        chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text),
     }
 }
 

@@ -1103,3 +1103,23 @@ fn a_page_reference_into_nested_text_boxes_stops_where_layout_does() {
     let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
     assert_eq!(shown_in(&output, 0, StoryRef::Body), ["2", "2", "9"]);
 }
+
+/// The cache keeps a hash of the styles between layouts so typing does not serialise them again each time. A style
+/// edited in between (the document's shared copy is replaced, as an undo step's copy-on-write does) must still lay the
+/// paragraphs out again: the lines come out more with a larger default size, through the one cache.
+#[test]
+fn a_style_edited_between_layouts_is_laid_out_again_through_the_same_cache() {
+    use crate::tests::lines_of;
+    crate::test_fonts();
+    let mut d = Document::from_text(&"word ".repeat(120));
+    Arc::make_mut(&mut d.styles).default_chr.font = Some("Source Sans 3".into());
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(10.0);
+    let mut cache = LayoutCache::new();
+    let small = layout(&d, &mut cache, &LayoutOptions::default());
+    // The same document again: the cache answers, and the hash is not made over.
+    let again = layout(&d, &mut cache, &LayoutOptions::default());
+    assert_eq!(lines_of(&small), lines_of(&again));
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(20.0);
+    let large = layout(&d, &mut cache, &LayoutOptions::default());
+    assert!(lines_of(&large) > lines_of(&small), "a larger default size laid out again: {} vs {} lines", lines_of(&large), lines_of(&small));
+}

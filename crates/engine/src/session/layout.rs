@@ -4,6 +4,18 @@ use super::snapshot_types::LayoutEntry;
 use super::view::DRAFT_WIDTH;
 use super::{Arc, BgLayout, DocLayout, Document, LayoutCache, LayoutJob, LayoutOptions, Session, StoryRef, Value, ViewMode};
 
+/// Free a layout that was pushed out of the kept ones on another thread: a long document's is
+/// thousands of small allocations, which is time a keystroke doesn't have. Only the last holder
+/// of a layout does this; one still shown elsewhere is just let go of.
+fn retire(evicted: Option<LayoutEntry>) {
+    let Some(entry) = evicted else { return };
+    let laid: Arc<DocLayout> = entry.5;
+    if Arc::strong_count(&laid) == 1 {
+        // No thread to be had: it is freed here.
+        let _ = std::thread::Builder::new().name("wordcraft-free".into()).spawn(move || drop(laid));
+    }
+}
+
 impl Session {
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
@@ -58,8 +70,9 @@ impl Session {
         };
         if let Some((cache, laid)) = got {
             self.cache = cache;
-            let [newest, _] = std::mem::take(&mut self.layout);
+            let [newest, evicted] = std::mem::take(&mut self.layout);
             self.layout = [Some((bg.entry)(laid)), newest];
+            retire(evicted);
         }
         true
     }
@@ -70,8 +83,9 @@ impl Session {
             Ok(l) => l,
             Err(job) => {
                 let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &job.opts));
-                let [newest, _] = std::mem::take(&mut self.layout);
+                let [newest, evicted] = std::mem::take(&mut self.layout);
                 self.layout = [Some((job.entry)(l.clone())), newest];
+                retire(evicted);
                 l
             }
         }

@@ -703,6 +703,11 @@ pub(crate) struct ObjectPlacement<'a> {
 /// worked out from `at`. Returns what goes behind the text, and what goes in front.
 pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>) {
     let ObjectPlacement { story, path, p, pl, lines: (l0, l1), origin: (x, y), at, floats, depth } = *req;
+    // Every item comes from an object of the paragraph: a paragraph of plain text has none, and walking its lines and
+    // clusters to find that out was a share of every layout.
+    if p.objects.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
     // Each object's items (behind the text, in front), with its stacking order: drawn lowest
     // first once all are placed, as Word stacks floating objects by `relativeHeight`, not by
     // their order in the paragraph. Inline objects and objects without one keep their order.

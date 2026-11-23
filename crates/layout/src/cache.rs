@@ -41,6 +41,10 @@ pub struct LayoutCache {
     /// kept, so no other picture's bytes can come to have its address ([`Outlines`]).
     pub(crate) outlines: Outlines,
     pub(crate) env: u64,
+    /// The hash of the styles and numbering the last pass saw, with the shared copies it was made from. Holding
+    /// them keeps any edit from changing a copy in place (a changed one is a new allocation), so the pointers say
+    /// whether the hash still holds; typing then skips serialising every style on each pass.
+    pub(crate) env_shared: Option<(Arc<wordcraft_doc::StyleSheet>, Arc<wordcraft_doc::Numbering>, u64)>,
     pub(crate) used: HashSet<Key>,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
     /// (shared, so an edited block is a different pointer) and `env` (styles and numbering). Kept
@@ -88,11 +92,20 @@ pub(crate) fn hash_of<T: Hash>(t: &T) -> u64 {
     h.finish()
 }
 
-pub(crate) fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
-    let s = serde_json::to_string(&(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
+pub(crate) fn env_hash(doc: &Document, opts: &LayoutOptions, cache: &mut LayoutCache) -> u64 {
+    let shared = match &cache.env_shared {
+        Some((s, n, h)) if Arc::ptr_eq(s, &doc.styles) && Arc::ptr_eq(n, &doc.numbering) => *h,
+        _ => {
+            let h = hash_of(&serde_json::to_string(&(&doc.styles, &doc.numbering)).unwrap_or_default());
+            cache.env_shared = Some((doc.styles.clone(), doc.numbering.clone(), h));
+            h
+        }
+    };
+    let s = serde_json::to_string(&(doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
     // Outline view lays paragraphs out changed (no indents; plain without text formatting).
     let outline = (opts.view == ViewMode::Outline).then(|| opts.outline.as_ref().is_some_and(|o| o.plain));
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    shared.hash(&mut h);
     s.hash(&mut h);
     opts.show_hidden.hash(&mut h);
     opts.hide_deleted.hash(&mut h);

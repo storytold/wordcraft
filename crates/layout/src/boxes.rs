@@ -356,7 +356,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 }
                 // Bordered paragraphs: room for their borders, those of a group joined in one box.
                 let cell = table.map(|t| &t.para);
-                let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), cell), joined(ctx.doc, blocks, i, Some(i + 1), cell));
+                let (above, below) = joined_around(ctx.doc, blocks, i, cell);
                 let mut edges = Edges::own(&pl, 0, pl.lines.len());
                 if above {
                     edges.top = 0.0;
@@ -655,8 +655,13 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
 /// border goes above the first of them only, the bottom one below the last, and the shading and
 /// side borders run on through the space between them (`table`: the cell's paragraph properties).
 fn border_group(doc: &Document, a: &Paragraph, b: &Paragraph, table: Option<&wordcraft_doc::props::ParaProps>) -> bool {
-    let (a, b) = (doc.styles.resolve_para_in(&a.props, table), doc.styles.resolve_para_in(&b.props, table));
-    a.borders.is_some() && a.borders == b.borders && a.indent_left == b.indent_left && a.indent_right == b.indent_right
+    // Most paragraphs have no borders: the second one is resolved only when the first can be of a group.
+    let a = doc.styles.resolve_para_in(&a.props, table);
+    if a.borders.is_none() {
+        return false;
+    }
+    let b = doc.styles.resolve_para_in(&b.props, table);
+    a.borders == b.borders && a.indent_left == b.indent_left && a.indent_right == b.indent_right
 }
 
 /// Whether paragraph `i` of `blocks` and the one at `j` are of one border group.
@@ -665,6 +670,24 @@ pub(crate) fn joined(doc: &Document, blocks: &Blocks, i: usize, j: Option<usize>
         (Some(Block::Para(a)), Some(Block::Para(b))) => border_group(doc, a, b, table),
         _ => false,
     }
+}
+
+/// Whether paragraph `i` of `blocks` is of one border group with the one above it, and with the
+/// one below it: [`joined`] twice, resolving the paragraph once.
+pub(crate) fn joined_around(doc: &Document, blocks: &Blocks, i: usize, table: Option<&wordcraft_doc::props::ParaProps>) -> (bool, bool) {
+    let Some(Block::Para(a)) = blocks.get(i).map(|b| &**b) else { return (false, false) };
+    let a = doc.styles.resolve_para_in(&a.props, table);
+    if a.borders.is_none() {
+        return (false, false);
+    }
+    let with = |j: Option<usize>| match j.and_then(|j| blocks.get(j)).map(|b| &**b) {
+        Some(Block::Para(b)) => {
+            let b = doc.styles.resolve_para_in(&b.props, table);
+            a.borders == b.borders && a.indent_left == b.indent_left && a.indent_right == b.indent_right
+        }
+        _ => false,
+    };
+    (with(i.checked_sub(1)), with(Some(i + 1)))
 }
 
 /// The room a paragraph's top or bottom border takes in the text flow: its distance from the
