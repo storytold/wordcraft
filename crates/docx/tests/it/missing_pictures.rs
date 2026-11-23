@@ -1,18 +1,17 @@
 //! Pictures dropped at open are recorded for strict export (#6005): a missing part, an external
 //! target and a link-only picture (ECMA-376 Part 1 §20.1.8.13 `a:blip` `r:embed`/`r:link`).
 //! Original synthetic packages; nothing is fetched, the reader has no network code.
-use std::io::Write;
 use wordcraft_doc::{Document, InlineObject, MissingPictureReason};
 
 const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:v="urn:schemas-microsoft-com:vml""#;
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 fn png() -> Vec<u8> {
-    let mut out = Vec::new();
-    image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 90, 200, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-        .unwrap();
-    out
+    wordcraft_geom::picture::encode_format(
+        &image::DynamicImage::from(image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 90, 200, 255])).clone()),
+        image::ImageFormat::Png,
+    )
+    .unwrap()
 }
 
 fn blip(attrs: &str) -> String {
@@ -32,10 +31,9 @@ fn package(body: &str, doc_rels: &str, header: Option<(&str, &str)>, extra: &[(&
     );
     let drels = format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{doc_rels}{hdr_rel}</Relationships>"#);
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/octet-stream"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     let mut put = |name: &str, bytes: &[u8]| {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(bytes).unwrap();
+        zip.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     };
     put("[Content_Types].xml", types.as_bytes());
     put("_rels/.rels", rels.as_bytes());
@@ -51,7 +49,7 @@ fn package(body: &str, doc_rels: &str, header: Option<(&str, &str)>, extra: &[(&
     for (n, b) in extra {
         put(n, b);
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 fn image_rel(id: &str, target: &str, external: bool) -> String {
