@@ -247,4 +247,44 @@ mod tests {
         let unbound_labels = keys_list_labels(&h);
         assert!(unbound_labels.iter().any(|t| t == "None"), "empty keys list says None: {unbound_labels:?}");
     }
+
+    /// The shortcut capture field has a name and reports the combination it records.
+    #[test]
+    fn shortcut_capture_exposes_its_name_and_current_value() {
+        use craft::ui::dialog::StackDialog;
+        use egui_kittest::kittest::Queryable;
+
+        use super::CustomizeKeyboardDialog;
+
+        let frames = crate::test_harness::frames;
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app(),
+        );
+        frames(&mut h, 4);
+
+        h.state_mut().run("ui.dialog", json!({"name": "customizeKeyboard"})).unwrap();
+        let id = craft::ui::dialog::dialog_id("customizeKeyboard");
+        frames(&mut h, 2);
+        assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.id == id), "customizeKeyboard is open");
+
+        let ctx = h.ctx.clone();
+        h.state_mut().dialog_host.set_json_field(&ctx, id, "command", json!("format.bold")).unwrap();
+        frames(&mut h, 4);
+
+        let input = h.query_by_label("New shortcut: None").expect("New shortcut recorder is present");
+        assert_eq!(input.value().as_deref(), Some(""));
+
+        h.state_mut().dialog_host.set_json_field(&ctx, id, "pressed", json!("F6")).unwrap();
+        frames(&mut h, 2);
+
+        let fields = h.state().dialog_host.get_by_id::<CustomizeKeyboardDialog>(id).and_then(|d| d.json_fields()).unwrap();
+        assert_eq!(fields["pressed"], "F6", "recorder exposed the captured shortcut in fields");
+        let captured = h.query_by_label("New shortcut: F6").expect("recorder label reflects captured chord");
+        assert_eq!(captured.value().as_deref(), Some("F6"));
+    }
 }
