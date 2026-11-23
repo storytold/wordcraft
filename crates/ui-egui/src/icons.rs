@@ -512,4 +512,98 @@ mod tests {
             assert!((x - ex).abs() < 0.05 && (y - ey).abs() < 0.05, "({x}, {y}) vs ({ex}, {ey})");
         }
     }
+
+    /// Rasterises a registered app icon through the framework's real SVG icon pipeline at `side`×`side` physical pixels.
+    fn rasterize_icon(name: &'static str, side: u32) -> egui::ColorImage {
+        use craft::ui::primitives::{Draw, DrawEnv, PaintRecord};
+        use craft::ui::style::Ink;
+        use std::cell::RefCell;
+
+        register();
+        let ctx = crate::test_harness::context();
+        let tokens = craft::ui::testing::style::tokens(craft::theme::Mode::Light, craft::theme::Contrast::Standard);
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(64.0, 64.0))), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            let record = RefCell::new(PaintRecord::default());
+            let env = DrawEnv { tokens: &tokens, direction: craft::i18n::Direction::Ltr, ink: Ink::OnPanel };
+            let draw = Draw::new(ui.painter(), &record, env);
+            draw.icon(Rect::from_min_size(Pos2::ZERO, vec2(side as f32, side as f32)), &IconSpec::svg(id(name)));
+        });
+        let wanted = [side as usize, side as usize];
+        let image = out
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .find_map(|delta| match &delta.image {
+                egui::ImageData::Color(img) if img.size == wanted => Some(img.as_ref().clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("icon {name:?} should rasterise a {side}x{side} texture"));
+        out.textures_delta.clear();
+        image
+    }
+
+    /// `italic` and `underline` use filled paths matching `bold`'s contrast at 14–20 px instead of thin 1.25-unit
+    /// strokes that fade out under anti-aliasing, and `underline` renders a distinct, visible bar below the `U`.
+    #[test]
+    fn italic_and_underline_icons_match_bold_weight_and_render_underline_bar() {
+        for name in ["bold", "italic", "underline"] {
+            let (_, bytes) = WORDCRAFT_ICONS.icons.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is registered"));
+            let tree = craft::ui::primitives::svg_tree::parse(bytes).unwrap_or_else(|e| panic!("{name}.svg must parse: {e}"));
+            assert_eq!(tree.size().width(), 20.0, "{name} viewBox width");
+            assert_eq!(tree.size().height(), 20.0, "{name} viewBox height");
+
+            let svg = std::str::from_utf8(bytes).expect("SVG is UTF-8");
+            assert!(svg.contains("fill=\"currentColor\""), "{name}.svg should draw filled glyph geometry");
+            assert!(!svg.contains("stroke-width=\"1.25\""), "{name}.svg must not use thin 1.25 stroke weight");
+        }
+
+        for side in [14u32, 16, 20] {
+            let bold = rasterize_icon("bold", side);
+            let italic = rasterize_icon("italic", side);
+            let underline = rasterize_icon("underline", side);
+
+            let max_alpha = |img: &egui::ColorImage| img.pixels.iter().map(|p| p.a()).max().unwrap_or(0);
+            let solid_pixels = |img: &egui::ColorImage| img.pixels.iter().filter(|p| p.a() >= 200).count();
+
+            let bold_solid = solid_pixels(&bold);
+            let italic_solid = solid_pixels(&italic);
+            let underline_solid = solid_pixels(&underline);
+
+            assert!(max_alpha(&italic) >= 240, "italic peak alpha at {side}px should reach full ink contrast, got {}", max_alpha(&italic));
+            assert!(max_alpha(&underline) >= 240, "underline peak alpha at {side}px should reach full ink contrast, got {}", max_alpha(&underline));
+            assert!(italic_solid * 4 >= bold_solid, "italic solid coverage at {side}px ({italic_solid}) is too faint beside bold ({bold_solid})");
+            assert!(
+                underline_solid * 2 >= bold_solid,
+                "underline solid coverage at {side}px ({underline_solid}) is too faint beside bold ({bold_solid})"
+            );
+
+            // Check the underline bar in the lower band and a clear gap separating it from the U curve above.
+            let w = underline.size[0];
+            let h = underline.size[1];
+            let row_solid = |y: usize| underline.pixels[y * w..(y + 1) * w].iter().filter(|p| p.a() >= 200).count();
+            let row_mean_alpha = |y: usize| {
+                let sum: usize = underline.pixels[y * w..(y + 1) * w].iter().map(|p| usize::from(p.a())).sum();
+                sum / w
+            };
+
+            let bar_band_start = (h * 3) / 4;
+            let (bar_row, bar_solid) =
+                (bar_band_start..h).map(|y| (y, row_solid(y))).max_by_key(|&(_, count)| count).expect("lower band is non-empty");
+            assert!(
+                bar_solid * 5 >= w * 2,
+                "underline bar at {side}px (row {bar_row}) should span at least 40% of width with solid pixels, got {bar_solid}/{w}"
+            );
+
+            // At least one row directly above the underline bar separates the U curve from the bar.
+            let body_end = bar_row.saturating_sub(1);
+            let gap_min_alpha = (h / 2..=body_end).map(row_mean_alpha).min().unwrap_or(255);
+            let bar_mean_alpha = row_mean_alpha(bar_row);
+            assert!(
+                gap_min_alpha * 3 < bar_mean_alpha,
+                "underline bar at {side}px (mean alpha {bar_mean_alpha}) should be clearly separated from the U curve (min gap mean alpha {gap_min_alpha})"
+            );
+        }
+    }
 }
