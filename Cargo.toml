@@ -44,6 +44,7 @@ craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd5
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
+wordcraft-gdrive = { path = "crates/gdrive" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }

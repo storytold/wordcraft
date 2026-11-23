@@ -121,6 +121,7 @@ impl WordApp {
             quit_requested: false,
             autosave: true,
             zotero: zotero::ZoteroLink::default(),
+            drive: crate::gdrive::DriveLink::default(),
             ctx: None,
             ime_origin: false,
             user_origin: false,
@@ -390,6 +391,7 @@ impl WordApp {
             }
         }
         zotero::poll(self, ctx);
+        crate::gdrive::poll(self);
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();

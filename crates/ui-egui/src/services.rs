@@ -28,4 +28,8 @@ pub struct Services {
     pub templates_dir: Option<std::path::PathBuf>,
     /// Files the system asked the app to open, and files dropped on a window, read once per frame.
     pub intake: Option<craft::platform::open::FileIntake>,
+    /// Desktop: the profile folder holding `google-drive.json` (the OAuth client). Set, File ›
+    /// Google Drive can sign in and open and save documents; unset (tests, headless, web), every
+    /// `ui.drive.*` command answers that Drive isn't available and nothing touches the network.
+    pub drive_profile: Option<std::path::PathBuf>,
 }

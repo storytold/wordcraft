@@ -209,5 +209,7 @@ pub(super) fn export(ui: &mut Ui, app: &mut WordApp) {
     }
     heading(ui, "Export");
     let _ = Text::new(label("Save a copy in another format. Printing goes through a PDF you can print from any viewer.")).show(ui);
+    crate::gdrive::export_checkbox(app, ui);
     crate::print_page::export_formats(app, ui);
+    crate::gdrive::export_google_doc_button(app, ui);
 }

@@ -44,6 +44,7 @@ pub mod equation_tab;
 pub mod file_dialogs;
 pub mod font_download;
 pub mod format_shape;
+pub mod gdrive;
 pub mod i18n;
 pub mod icons;
 pub mod ink;
@@ -480,6 +481,8 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// Google Drive: sign-in, the file list and where Drive documents came from (`ui.drive.*`).
+    pub drive: gdrive::DriveLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine
