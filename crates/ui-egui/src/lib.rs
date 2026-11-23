@@ -425,9 +425,6 @@ pub struct WordApp {
     pub change_picture_target: Option<String>,
     /// The Format Background pane's unsaved fill (Apply runs it as one command).
     pub(crate) background: format_background::Draft,
-    /// Web: the picture picker was asked for by Format Background, so the next picked image
-    /// becomes the pane's draft instead of being inserted.
-    pub(crate) background_picture_pending: bool,
     /// Web: a recipient list was asked for (Select Recipients › Use an Existing List…), so the
     /// next text file from the picker loads as recipients instead of opening (#240).
     pub recipient_list_pending: bool,
