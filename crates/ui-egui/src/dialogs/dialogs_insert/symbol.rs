@@ -1,4 +1,28 @@
-use super::{Color32, Deserialize, Rect, Sense, Serialize, Stroke, Tokens, Ui, Value, WordApp, buttons, json, pos2, regular, semibold, vec2};
+use std::sync::Arc;
+
+use craft::behavior::{ColumnWidth, Selection, SelectionChange, keyed};
+use craft::font_manager::Catalog;
+use craft::font_manager::picker::FontPickerSettings;
+use craft::ui::contract::{Bind, CollectionEvent, ColumnKey, ColumnSpec, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
+use craft::ui::display::{Kbd, Text};
+use craft::ui::form::Field;
+use craft::ui::layout_components::Stack;
+use craft::ui::list::{ListRow, ThumbAspect, ThumbSize};
+use craft::ui::patterns::form_dialogs::{FormCx, FormDialog};
+use craft::ui::primitives::ContentPainterCx;
+use craft::ui::runtime::env::Label;
+use craft::ui::table::Table;
+use craft::ui::tabs::{Tab, TabKind, TabStrip};
+use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
+use egui::Ui;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use super::{select_index, settled, text_field, word};
+use crate::WordApp;
+use crate::dialogs::host::{DialogHooks, Settle, open_with};
+use crate::widgets::font_box::font_picker;
 
 // ---------------------------------------------------------------------------------------------
 // Symbol
@@ -106,10 +130,38 @@ pub const SPECIAL: &[(&str, char, Option<&str>)] = &[
     ("No-Width Non Break", '\u{2060}', None),
 ];
 
+/// What a form asks the Symbol dialog to pick: the character and font it opens on.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SymbolRequest {
+    /// The character the dialog opens on.
+    pub ch: char,
+    /// The font the dialog opens on; empty is the text's own.
+    pub font: String,
+    /// Whether the dialog blocks the window while it picks (a bullet for Define New Bullet).
+    pub modal: bool,
+}
+
+/// The character and font a picking Symbol dialog ended with.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SymbolPick {
+    /// The picked character.
+    pub ch: char,
+    /// Its font; empty is the text's own.
+    pub font: String,
+}
+
+/// What OK inserts: the command that does it, and what to remember.
+struct Insertion {
+    command: String,
+    params: Value,
+    ch: String,
+    font: String,
+}
+
 /// The Symbol dialog: the Symbols tab (a font's characters by Unicode subset) and the Special
 /// Characters tab.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SymbolForm {
     /// 0 Symbols, 1 Special Characters.
     pub tab: u8,
@@ -128,33 +180,32 @@ pub struct SymbolForm {
     /// The font `chars` was read from.
     #[serde(skip)]
     chars_of: Option<String>,
-    /// Scroll the grid to this row on the next frame.
+    /// Scroll the grid to this character index once.
     #[serde(skip)]
-    scroll_to: Option<usize>,
+    reveal: Option<usize>,
+    /// The recently inserted symbols the Recently used list offers.
+    #[serde(skip)]
+    recent: Vec<RecentSymbol>,
 }
-
-/// Grid geometry.
-const GRID_COLS: usize = 16;
-
-const CELL: f32 = 30.0;
-
-const GRID_ROWS: usize = 8;
 
 impl SymbolForm {
     pub fn new(app: &WordApp, tab: u8) -> SymbolForm {
-        let text_font = app
-            .session
-            .doc
-            .para_at(&app.session.sel.focus)
-            .map(|p| app.session.doc.styles.resolve_char(p.props.style.as_deref(), &app.session.typing_props()).font)
-            .unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
         let recent = app.ui.recent_symbols.first().cloned();
         let font = recent.as_ref().map(|r| r.font.clone()).unwrap_or_default();
         let selected = recent.and_then(|r| r.ch.chars().next());
         let mut f =
-            SymbolForm { tab, font, selected, code: String::new(), special: 0, text_font, chars: Vec::new(), chars_of: None, scroll_to: None };
+            SymbolForm { tab, font, selected, text_font: Self::text_font_of(app), recent: app.ui.recent_symbols.clone(), ..SymbolForm::default() };
         f.sync_code();
         f
+    }
+
+    /// The font of the text at the caret.
+    fn text_font_of(app: &WordApp) -> String {
+        app.session
+            .doc
+            .para_at(&app.session.sel.focus)
+            .map(|p| app.session.doc.styles.resolve_char(p.props.style.as_deref(), &app.session.typing_props()).font)
+            .unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string())
     }
 
     /// The font the grid shows: the chosen one, or the text's.
@@ -177,11 +228,11 @@ impl SymbolForm {
             self.selected = self.chars.iter().copied().find(|c| *c > ' ').or(self.chars.first().copied());
         }
         self.sync_code();
-        self.scroll_to = self.selected.and_then(|c| self.row_of(c));
+        self.reveal = self.selected.and_then(|c| self.index_of(c));
     }
 
-    fn row_of(&self, c: char) -> Option<usize> {
-        self.chars.binary_search(&c).ok().map(|i| i / GRID_COLS)
+    fn index_of(&self, c: char) -> Option<usize> {
+        self.chars.binary_search(&c).ok()
     }
 
     fn sync_code(&mut self) {
@@ -196,7 +247,7 @@ impl SymbolForm {
             return false;
         }
         self.selected = Some(c);
-        self.scroll_to = self.row_of(c);
+        self.reveal = self.index_of(c);
         true
     }
 
@@ -207,7 +258,7 @@ impl SymbolForm {
         if let Some(c) = self.chars.get(i).filter(|c| (**c as u32) <= *b) {
             self.selected = Some(*c);
             self.sync_code();
-            self.scroll_to = Some(i / GRID_COLS);
+            self.reveal = Some(i);
         }
     }
 
@@ -216,248 +267,452 @@ impl SymbolForm {
         let c = self.selected?;
         Some(if self.font.is_empty() { json!({"char": c.to_string()}) } else { json!({"char": c.to_string(), "font": self.font}) })
     }
-}
 
-/// A character rendered in `font` as a coverage mask (tinted when painted), cached; `None`
-/// while waiting for this frame's rendering budget.
-fn glyph_texture(app: &mut WordApp, ctx: &egui::Context, font: &str, c: char) -> Option<egui::TextureHandle> {
-    let ppp = ctx.pixels_per_point();
-    let key = format!("symbol:{font}:{:x}:{ppp}", c as u32);
-    let font = font.to_string();
-    app.previews.get_or(ctx, &key, || glyph_image(&font, c, ppp))
-}
-
-fn glyph_image(font: &str, c: char, ppp: f32) -> Option<egui::ColorImage> {
-    use wordcraft_doc::props::{Align, CharProps, LineSpacing};
-    let size = 16.0;
-    let mut p =
-        wordcraft_doc::Paragraph::with_text(&c.to_string(), CharProps { font: Some(font.to_string()), size: Some(size), ..Default::default() });
-    p.props.align = Some(Align::Center);
-    p.props.space_before = Some(((CELL - size * 1.3) / 2.0).max(0.0));
-    p.props.space_after = Some(0.0);
-    p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
-    let mut img = crate::previews::snippet(&wordcraft_doc::Document::new(), p, CELL - 2.0, CELL - 2.0, ppp, 0.0)?;
-    // Ink against the paper (the first pixel) becomes coverage.
-    let lum = |p: &Color32| (p.r() as u16 + p.g() as u16 + p.b() as u16) / 3;
-    let bg = img.pixels.first().map(lum).unwrap_or(255);
-    for px in img.pixels.iter_mut() {
-        let a = lum(&*px).abs_diff(bg).min(255) as u8;
-        *px = Color32::from_rgba_premultiplied(a, a, a, a);
-    }
-    Some(img)
-}
-
-/// One grid cell; returns the click response.
-fn symbol_cell(app: &mut WordApp, ui: &mut Ui, font: &str, c: char, selected: bool, t: &Tokens) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(CELL, CELL), Sense::click());
-    let fill = if selected {
-        t.accent
-    } else if resp.hovered() {
-        t.hover
-    } else {
-        t.input
-    };
-    ui.painter().rect(r, 0.0, fill, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    if let Some(tex) = glyph_texture(app, ui.ctx(), font, c) {
-        let sz = tex.size_vec2() / ui.ctx().pixels_per_point();
-        let tint = if selected { t.on_accent } else { t.text };
-        ui.painter().image(tex.id(), Rect::from_center_size(r.center(), sz), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
-    }
-    resp
-}
-
-pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> bool {
-    let t = Tokens::get(ui.ctx());
-    ui.set_width(GRID_COLS as f32 * CELL + 24.0);
-    let names = [tl!("Symbols").to_string(), tl!("Special Characters").to_string()];
-    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
-        f.tab = k as u8;
-    }
-    ui.add_space(6.0);
-    let mut insert: Option<(Value, String, String)> = None;
-    if f.tab == 1 {
-        if special_ui(app, ui, f, &mut insert, &t) {
-            return true;
-        }
-    } else {
-        f.load();
-        ui.horizontal(|ui| {
-            ui.label(tl!("Font:"));
-            let normal = tl!("(normal text)").to_string();
-            let mut items = vec![normal.clone()];
-            items.extend(app.previews.families());
-            let shown = if f.font.is_empty() { normal.clone() } else { f.font.clone() };
-            let pf = app.previews.font_preview_fn();
-            let normal_row = normal.clone();
-            let preview = move |ui: &mut Ui, name: &str| -> egui::Response {
-                if name == normal_row {
-                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
-                    let t = Tokens::get(ui.ctx());
-                    if resp.hovered() {
-                        ui.painter().rect_filled(r, 3.0, t.hover);
-                    }
-                    ui.painter().text(pos2(r.min.x + 8.0, r.center().y), egui::Align2::LEFT_CENTER, name, regular(12.0), t.text);
-                    resp
-                } else {
-                    pf(ui, name)
-                }
+    /// What OK inserts for the shown tab; `None` while nothing is selected.
+    fn insertion(&self) -> Option<Insertion> {
+        if self.tab == 1 {
+            // Special characters with their own command insert through it (non-breaking hyphen…).
+            let (_, c, command) = SPECIAL.get(self.special)?;
+            let (command, params) = match command {
+                Some(id) => ((*id).to_string(), json!({})),
+                None => ("insert.symbol".to_string(), json!({"char": c.to_string()})),
             };
-            if let Some(v) = crate::widgets::combo(ui, "symbol_font", 190.0, &shown, &items, Some(&preview)) {
-                f.font = if v == normal || v.trim().is_empty() { String::new() } else { v.trim().to_string() };
-                f.load();
-            }
-            ui.add_space(8.0);
-            ui.label(tl!("Subset:"));
-            let current = f.selected.and_then(subset_of).unwrap_or("");
-            let mut chosen = None;
-            craft_ui::ComboBox::from_id_salt("symbol_subset").selected_text(current).width(170.0).show_ui(ui, |ui| {
-                for (name, a, b) in SUBSETS {
-                    let i = f.chars.partition_point(|c| (*c as u32) < *a);
-                    if f.chars.get(i).is_some_and(|c| (*c as u32) <= *b) && ui.selectable_label(*name == current, *name).clicked() {
-                        chosen = Some(*name);
-                    }
-                }
-            });
-            if let Some(s) = chosen {
-                f.jump_to(s);
-            }
-        });
-        ui.add_space(4.0);
-        let rows = f.chars.len().div_ceil(GRID_COLS);
-        let mut area = egui::ScrollArea::vertical().id_salt("symbol_grid").max_height(CELL * GRID_ROWS as f32).auto_shrink([false, false]);
-        if let Some(row) = f.scroll_to.take() {
-            // Keep the row in view: it lands on the grid's second row when there is room.
-            area = area.vertical_scroll_offset(row.saturating_sub(1) as f32 * CELL);
+            return Some(Insertion { command, params, ch: c.to_string(), font: String::new() });
         }
-        let font = f.shown_font().to_string();
-        let chars = f.chars.clone();
-        let mut picked = None;
-        let mut double = false;
-        area.show_rows(ui, CELL, rows, |ui, range| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            for row in range {
-                ui.horizontal(|ui| {
-                    for c in chars.iter().skip(row * GRID_COLS).take(GRID_COLS) {
-                        let resp = symbol_cell(app, ui, &font, *c, f.selected == Some(*c), &t);
-                        if resp.clicked() {
-                            picked = Some(*c);
-                        }
-                        if resp.double_clicked() {
-                            picked = Some(*c);
-                            double = true;
-                        }
-                    }
-                });
-            }
-        });
-        if chars.is_empty() {
-            ui.label(egui::RichText::new(tl!("This font has no characters to show.")).weak());
-        }
-        if let Some(c) = picked {
-            f.selected = Some(c);
-            f.sync_code();
-        }
-        ui.add_space(6.0);
-        ui.label(tl!("Recently used symbols:"));
-        let recent = app.ui.recent_symbols.clone();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            for r in recent.iter().take(GRID_COLS) {
-                let Some(c) = r.ch.chars().next() else { continue };
-                let rfont = if r.font.is_empty() { f.text_font.clone() } else { r.font.clone() };
-                let resp = symbol_cell(app, ui, &rfont, c, false, &t);
-                if resp.clicked() || resp.double_clicked() {
-                    f.font = r.font.clone();
-                    f.selected = Some(c);
-                    f.load();
-                    f.sync_code();
-                    f.scroll_to = f.row_of(c);
-                }
-                if resp.double_clicked() {
-                    double = true;
-                }
-            }
-            if recent.is_empty() {
-                let _ = ui.allocate_exact_size(vec2(CELL, CELL), Sense::hover());
-            }
-        });
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            let name = f.selected.map(|c| format!("U+{:04X}", c as u32)).unwrap_or_default();
-            ui.label(egui::RichText::new(name).font(semibold(12.0)));
-            ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-                ui.label(tl!("from Unicode (hex)"));
-                let resp = ui.add(egui::TextEdit::singleline(&mut f.code).desired_width(70.0).font(egui::TextStyle::Monospace));
-                if resp.changed() {
-                    let code = f.code.clone();
-                    f.select_code(&code);
-                }
-                ui.label(tl!("Character code:"));
-            });
-        });
-        if double && let Some(p) = f.params() {
-            insert = Some((p, f.selected.map(String::from).unwrap_or_default(), f.font.clone()));
-        }
-        // The Insert button.
-        let (ok, close) = buttons(ui, "Insert", "Close", f.selected.is_some());
-        if ok && let Some(p) = f.params() {
-            insert = Some((p, f.selected.map(String::from).unwrap_or_default(), f.font.clone()));
-        }
-        if close {
-            return true;
-        }
+        let params = self.params()?;
+        Some(Insertion { command: "insert.symbol".into(), params, ch: self.selected.map(String::from)?, font: self.font.clone() })
     }
-    if let Some((params, ch, font)) = insert {
-        // Special characters with their own command insert through it (non-breaking hyphen…).
-        let r = match params.get("command").and_then(Value::as_str) {
-            Some(id) => app.run(id, json!({})),
-            None => app.run("insert.symbol", params),
-        };
-        if r.is_ok() {
-            remember_symbol(app, &ch, &font);
-        }
-    }
-    false
 }
 
-/// The Special Characters tab; returns true to close.
-fn special_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm, insert: &mut Option<(Value, String, String)>, t: &Tokens) -> bool {
-    let mut double = false;
-    egui::ScrollArea::vertical().id_salt("special_chars").max_height(CELL * GRID_ROWS as f32 + 60.0).auto_shrink([false, false]).show(ui, |ui| {
-        crate::rtl::Table::new("special_grid").columns(3).striped(true).spacing(vec2(14.0, 4.0)).show(ui, |table| {
-            table.row(|r| {
-                r.cell(|ui| ui.label(egui::RichText::new(tl!("Character")).font(semibold(12.0))));
-                r.cell(|ui| ui.label(""));
-                r.cell(|ui| ui.label(egui::RichText::new(tl!("Shortcut key:")).font(semibold(12.0))));
-            });
-            for (i, (name, c, cmd)) in SPECIAL.iter().enumerate() {
-                table.row(|r| {
-                    let shown = if c.is_whitespace() || matches!(*c, '\u{00AD}' | '\u{200B}' | '\u{2060}') { String::new() } else { c.to_string() };
-                    r.cell(|ui| ui.label(egui::RichText::new(shown).font(regular(15.0)).color(t.text)));
-                    r.cell(|ui| {
-                        let resp = ui.selectable_label(f.special == i, tl!(name));
-                        if resp.clicked() {
-                            f.special = i;
-                        }
-                        if resp.double_clicked() {
-                            f.special = i;
-                            double = true;
-                        }
-                    });
-                    r.cell(|ui| ui.label(cmd.map(|id| crate::widgets::shortcut_text(app, id)).unwrap_or_default()));
+/// The Symbol dialog on the dialog host: it inserts (insert mode, modeless, Insert and Close) or
+/// picks a character for another dialog (`for_pick`, OK and Cancel).
+pub(crate) struct SymbolDialog {
+    form: SymbolForm,
+    request: Option<SymbolRequest>,
+    catalog: Option<Arc<Catalog>>,
+    settings: FontPickerSettings,
+    /// The font box changed `settings` since the app last saved them.
+    settings_changed: bool,
+    /// Insert mode: OK files the form here for the settle hook to insert.
+    held: HeldAnswer<SymbolForm>,
+}
+
+impl SymbolDialog {
+    /// The hooks every Symbol dialog opens with.
+    pub(crate) fn hooks() -> DialogHooks {
+        DialogHooks { prepare: Some(prepare), settle }
+    }
+
+    /// Opens the inserting dialog on `page` (0 Symbols, 1 Special Characters), as a child of `parent`
+    /// when one asks.
+    pub(crate) fn open(app: &mut WordApp, page: u8, parent: Option<DialogId>) -> DialogId {
+        let dialog = SymbolDialog {
+            form: SymbolForm::new(app, page),
+            request: None,
+            catalog: None,
+            settings: FontPickerSettings::default(),
+            settings_changed: false,
+            held: HeldAnswer::new(),
+        };
+        open_with(app, parent, dialog, Self::hooks())
+    }
+
+    /// The dialog picking the character `req` names; it finishes with `Some(SymbolPick)`. The
+    /// app's state (fonts, recent symbols) arrives through the prepare hook.
+    pub(crate) fn for_pick(req: SymbolRequest) -> SymbolDialog {
+        let mut form = SymbolForm { font: req.font.clone(), selected: Some(req.ch), ..SymbolForm::default() };
+        form.sync_code();
+        SymbolDialog {
+            form,
+            request: Some(req),
+            catalog: None,
+            settings: FontPickerSettings::default(),
+            settings_changed: false,
+            held: HeldAnswer::new(),
+        }
+    }
+
+    /// Takes the app's current state in before each pass.
+    fn refresh(&mut self, catalog: Arc<Catalog>, settings: FontPickerSettings, text_font: String, recent: Vec<RecentSymbol>) {
+        self.catalog = Some(catalog);
+        if !self.settings_changed {
+            self.settings = settings;
+        }
+        self.form.text_font = text_font;
+        self.form.recent = recent;
+        self.form.load();
+    }
+
+    /// The form OK filed, once.
+    fn take_ok(&mut self) -> Option<SymbolForm> {
+        self.held.take()
+    }
+
+    /// The app's answer to the filed form.
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        self.held.answer(answer);
+    }
+}
+
+fn prepare(app: &mut WordApp, id: DialogId) {
+    // PLAN: assumed `WordApp::{font_catalog, font_picker_settings}` (ribbon-w11, S-L284, S-L316).
+    let catalog = app.font_catalog();
+    let settings = app.font_picker_settings();
+    let text_font = SymbolForm::text_font_of(app);
+    let recent = app.ui.recent_symbols.clone();
+    if let Some(d) = app.dialog_host.get_mut_by_id::<SymbolDialog>(id) {
+        d.refresh(catalog, settings, text_font, recent);
+    }
+}
+
+/// Inserts what OK filed, remembers it, and keeps the dialog open; writes back the font box's
+/// remembered fonts.
+fn settle(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    let (filed, changed) = match app.dialog_host.get_mut_by_id::<SymbolDialog>(id) {
+        Some(d) => {
+            let changed = d.settings_changed.then(|| d.settings.clone());
+            d.settings_changed = false;
+            (d.take_ok(), changed)
+        }
+        None => return Settle::Done,
+    };
+    if let Some(settings) = changed {
+        // PLAN: assumed `WordApp::set_font_picker_settings` (ribbon-w11, S-L284, S-L316).
+        app.set_font_picker_settings(settings);
+    }
+    let Some(form) = filed else { return settled(app, id) };
+    let answer = match form.insertion() {
+        None => Ok(()),
+        Some(i) => match app.run(&i.command, i.params) {
+            Ok(_) => {
+                remember_symbol(app, &i.ch, &i.font);
+                Ok(())
+            }
+            Err(e) => Err(Label::from(e.to_string())),
+        },
+    };
+    if let Some(d) = app.dialog_host.get_mut_by_id::<SymbolDialog>(id) {
+        d.answer_ok(answer);
+    }
+    settled(app, id)
+}
+
+impl StackDialog for SymbolDialog {
+    type Result = Option<SymbolPick>;
+
+    fn id(&self) -> DialogId {
+        dialog_id("symbol")
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some("symbol")
+    }
+
+    fn modeless(&self) -> bool {
+        self.request.as_ref().is_none_or(|r| !r.modal)
+    }
+
+    /// OK as a click would: a picking dialog answers with the selected character (`None` while nothing
+    /// is selected); the Insert dialog holds its OK like a form's and has no programmatic one here.
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<Option<SymbolPick>> {
+        self.request.as_ref()?;
+        let ch = self.form.selected?;
+        Some(Some(SymbolPick { ch, font: self.form.font.clone() }))
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
+    }
+
+    fn json_fields(&self) -> Option<Value> {
+        serde_json::to_value(&self.form).ok()
+    }
+
+    /// Automation sets the form's own fields (`selected`, `font`, `tab`, `code`, `special`).
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        let mut fields = serde_json::to_value(&self.form).map_err(|e| e.to_string())?;
+        let map = fields.as_object_mut().ok_or_else(|| "the dialog has no fields".to_string())?;
+        if !map.contains_key(field) {
+            return Err(format!("no field `{field}` in this dialog"));
+        }
+        map.insert(field.to_string(), value);
+        let mut form: SymbolForm = serde_json::from_value(fields).map_err(|e| e.to_string())?;
+        // The skipped (derived) state is the dialog's own: keep it across the round trip.
+        form.chars = std::mem::take(&mut self.form.chars);
+        form.chars_of = self.form.chars_of.take();
+        form.reveal = self.form.reveal.take();
+        form.recent = std::mem::take(&mut self.form.recent);
+        self.form = form;
+        if field == "selected" {
+            self.form.sync_code();
+        }
+        Ok(())
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Option<SymbolPick>>> {
+        let picking = self.request.is_some();
+        let SymbolDialog { form, catalog, settings, settings_changed, held, .. } = self;
+        if !picking {
+            // An accepted insert leaves the dialog open: drop the accepted answer.
+            let _ = held.finish();
+        }
+        let before = settings.clone();
+        let mut dialog = FormDialog::new(word("Symbol"), Bind::bound(&mut *form));
+        dialog = if picking {
+            dialog.ok_label(word("OK"))
+        } else {
+            dialog.ok_label(word("Insert")).cancel_label(word("Close")).accept_stays_open(true).held(&mut *held)
+        };
+        let out = dialog.show(ui, |ui, cx, form| symbol_body(ui, cx, form, catalog.as_ref(), settings, picking));
+        *settings_changed |= *settings != before;
+        if picking {
+            let pick = |form: &SymbolForm| form.selected.map(|ch| SymbolPick { ch, font: form.font.clone() });
+            if let Some(accepted) = &out.accepted {
+                return Some(match pick(accepted) {
+                    Some(p) => DialogResult::Ok(Some(p)),
+                    None => DialogResult::Cancel,
                 });
             }
-        });
-    });
-    let (ok, close) = buttons(ui, "Insert", "Close", true);
-    if (ok || double)
-        && let Some((_, c, cmd)) = SPECIAL.get(f.special)
-    {
-        let params = match cmd {
-            Some(id) => json!({"command": id}),
-            None => json!({"char": c.to_string()}),
-        };
-        *insert = Some((params, c.to_string(), String::new()));
+            return out.closed.map(|_| DialogResult::Cancel);
+        }
+        out.closed.map(|_| DialogResult::Ok(None))
     }
-    close
+}
+
+/// The dialog's body; whether OK is enabled. A double click or Enter on a cell is the OK press
+/// (`FormCx::accept`).
+fn symbol_body(
+    ui: &mut Ui,
+    cx: &mut FormCx<'_, '_>,
+    form: &mut SymbolForm,
+    catalog: Option<&Arc<Catalog>>,
+    settings: &mut FontPickerSettings,
+    picking: bool,
+) -> bool {
+    Stack::new().show(ui, |ui, _| {
+        if picking {
+            // A bullet is one character in a font: the Special Characters tab has nothing for it.
+            form.tab = 0;
+        } else {
+            let pages = [0u8, 1u8];
+            let out = TabStrip::new(word("Symbol pages")).kind(TabKind::Text).shown(form.tab).natural_height(true).show_items(
+                ui,
+                &keyed(&pages, |t: &u8| *t),
+                &mut |t, _| Tab::new(word(if *t == 0 { "Symbols" } else { "Special Characters" })),
+            );
+            for event in out.response.events {
+                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    && let Some(t) = keys.last()
+                {
+                    form.tab = *t;
+                }
+            }
+        }
+        let activated = if form.tab == 1 { special_table(ui, form) } else { symbol_page(ui, form, catalog, settings) };
+        if activated {
+            // PLAN: assumed `FormCx::accept` (dialogs-w5, S-L285).
+            cx.accept();
+        }
+    });
+    form.insertion().is_some()
+}
+
+/// Paints `ch` in `font` as the tile's picture. The image comes from `previews::glyph_image`.
+fn paint_glyph(cx: &ContentPainterCx<'_>, rect: egui::Rect, ch: char, font: &str, dark: bool) {
+    let ctx = cx.painter.ctx();
+    let chr = wordcraft_doc::props::CharProps { font: Some(font.to_string()).filter(|f| !f.is_empty()), ..Default::default() };
+    let ppp = ctx.pixels_per_point();
+    // The texture is kept by what makes the picture, so a settled grid paints without rendering again.
+    let key = egui::Id::unique(("symbol-glyph", ch, font, dark, rect.width().round() as i32, rect.height().round() as i32, (ppp * 100.0) as i32));
+    let texture = match ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        Some(texture) => texture,
+        None => {
+            // PLAN: assumed `previews::glyph_image(..)` (ribbon-w12, dg.A6); its image goes to a texture
+            // here until the tile picture hook (ribbon-w4, S-L213) takes it.
+            let Some(image) = crate::previews::glyph_image(&ch.to_string(), &chr, (rect.width(), rect.height(), ppp), dark) else { return };
+            let texture = ctx.load_texture("symbol-glyph", image, egui::TextureOptions::LINEAR);
+            ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
+            texture
+        }
+    };
+    cx.picture(texture.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), 0.0);
+}
+
+/// The Special Characters table: the character, its name and the shortcut that inserts it. Whether a
+/// row was activated.
+fn special_table(ui: &mut Ui, form: &mut SymbolForm) -> bool {
+    // PLAN: assumed `ColumnKey::new(&'static str)` (contract collection columns).
+    let (glyph, name, keys) = (ColumnKey::new("glyph"), ColumnKey::new("name"), ColumnKey::new("keys"));
+    let columns = vec![
+        ColumnSpec::new(glyph.clone(), Label::Empty, ColumnWidth::fill(0.5)),
+        ColumnSpec::new(name.clone(), word("Special Characters"), ColumnWidth::fill(2.0)),
+        ColumnSpec::new(keys.clone(), word("Shortcut key:"), ColumnWidth::fill(1.0)),
+    ];
+    let positions: Vec<usize> = (0..SPECIAL.len()).collect();
+    let source = keyed(&positions, |at: &usize| *at);
+    let mut selection = Selection::single(form.special);
+    let ctx = ui.ctx().clone();
+    let events = Table::<usize>::new(word("Special Characters"), columns)
+        .select(SelectMode::Single)
+        .max_rows(10)
+        .selection(Bind::bound(&mut selection))
+        .show_items(ui, &source, &mut |at, icx| {
+            let Some((label, c, command)) = SPECIAL.get(*at) else { return ListRow::new(Label::Empty) };
+            let shown = if c.is_whitespace() || matches!(*c, '\u{00AD}' | '\u{200B}' | '\u{2060}') { String::new() } else { c.to_string() };
+            let row = ListRow::new(shown).cells(icx.cells()).cell(name.clone(), word(label));
+            // The chord comes from the framework's command chords, as the ribbon's.
+            match command.and_then(|id| craft::ui::runtime::commands::chord(&ctx, &craft::ui::runtime::commands::CommandRef::from(id))) {
+                Some(chord) => row.cell_field(keys.clone(), Kbd::chord(chord), |_| ()),
+                None => row,
+            }
+        })
+        .events;
+    let mut activated = false;
+    for event in events {
+        match event {
+            CollectionEvent::Selection(SelectionChange::Set(set)) => {
+                if let Some(at) = set.last() {
+                    form.special = *at;
+                }
+            }
+            CollectionEvent::Activate(row) => {
+                form.special = row;
+                activated = true;
+            }
+            _ => {}
+        }
+    }
+    activated
+}
+
+/// The Symbols tab: font, subset, the characters, recent symbols and the code. Whether a character
+/// was activated.
+fn symbol_page(ui: &mut Ui, form: &mut SymbolForm, catalog: Option<&Arc<Catalog>>, settings: &mut FontPickerSettings) -> bool {
+    form.load();
+    if let Some(catalog) = catalog {
+        let mut family = form.shown_font().to_string();
+        let shown = family.clone();
+        Field::new(word("Font:")).show(ui, |ui, _| {
+            font_picker(word("Font:"), Bind::bound(&mut family), catalog, Bind::bound(settings), &[], None).show(ui);
+        });
+        if family != shown {
+            form.font = if family == form.text_font { String::new() } else { family.trim().to_string() };
+            form.load();
+        }
+    }
+    let available: Vec<usize> = (0..SUBSETS.len())
+        .filter(|i| {
+            SUBSETS
+                .get(*i)
+                .is_some_and(|(_, a, b)| form.chars.get(form.chars.partition_point(|c| (*c as u32) < *a)).is_some_and(|c| (*c as u32) <= *b))
+        })
+        .collect();
+    let rows: Vec<Label> = available.iter().filter_map(|i| SUBSETS.get(*i)).map(|(name, _, _)| Label::from(*name)).collect();
+    let current = form.selected.and_then(subset_of).and_then(|s| available.iter().position(|i| SUBSETS.get(*i).is_some_and(|(n, _, _)| *n == s)));
+    if let Some(at) = select_index(ui, &word("Subset:"), &rows, current)
+        && let Some((name, _, _)) = available.get(at).and_then(|i| SUBSETS.get(*i))
+    {
+        form.jump_to(name);
+    }
+    let dark = ui.visuals().dark_mode;
+    let activated = glyph_grid(ui, form, dark);
+    recent_row(ui, form, dark);
+    if let Some(c) = form.selected {
+        Text::new(Label::from(format!("U+{:04X}", c as u32))).show(ui);
+    }
+    let before = form.code.clone();
+    text_field(ui, "symbol_code", &word("Character code:"), &mut form.code);
+    if form.code != before {
+        let code = form.code.clone();
+        form.select_code(&code);
+    }
+    activated
+}
+
+/// The recently inserted symbols as one row of glyphs, each in its own font; a click picks one.
+fn recent_row(ui: &mut Ui, form: &mut SymbolForm, dark: bool) {
+    if form.recent.is_empty() {
+        return;
+    }
+    let positions: Vec<usize> = (0..form.recent.len()).collect();
+    let source = keyed(&positions, |at: &usize| *at);
+    let events = {
+        let recent = &form.recent;
+        TileGrid::new(word("Recently used symbols:"))
+            .thumb_size(ThumbSize::Medium)
+            .select(SelectMode::Single)
+            .caption(CaptionPlace::None)
+            .card_columns(RECENT_SYMBOLS)
+            .natural_height(true)
+            .selection(Bind::given(Selection::default()))
+            .show_items(ui, &source, &mut |at, _| {
+                let r = recent.get(*at).cloned().unwrap_or_default();
+                let ch = r.ch.chars().next().unwrap_or(' ');
+                let font = r.font;
+                Tile::new(r.ch).thumb(ThumbAspect::SQUARE, move |cx, rect| paint_glyph(cx, rect, ch, &font, dark))
+            })
+            .response
+            .events
+    };
+    for event in events {
+        if let CollectionEvent::Selection(SelectionChange::Set(rows)) = event
+            && let Some(r) = rows.last().and_then(|i| form.recent.get(*i)).cloned()
+            && let Some(c) = r.ch.chars().next()
+        {
+            form.font = r.font;
+            form.selected = Some(c);
+            form.load();
+            form.sync_code();
+            form.reveal = form.index_of(c);
+        }
+    }
+}
+
+/// The characters of the shown font as a single-selection grid, each painted in the font; whether
+/// one was activated.
+fn glyph_grid(ui: &mut Ui, form: &mut SymbolForm, dark: bool) -> bool {
+    if form.chars.is_empty() {
+        Text::new(word("This font has no characters to show.")).show(ui);
+        return false;
+    }
+    let positions: Vec<usize> = (0..form.chars.len()).collect();
+    let source = keyed(&positions, |at: &usize| *at);
+    let mut selection = form.selected.and_then(|c| form.index_of(c)).map_or_else(Selection::default, Selection::single);
+    let reveal = form.reveal.take();
+    let font = form.shown_font().to_string();
+    let events = {
+        let chars = &form.chars;
+        let mut grid = TileGrid::new(word("Symbols"))
+            .thumb_size(ThumbSize::Medium)
+            .select(SelectMode::Single)
+            .max_rows(8)
+            .caption(CaptionPlace::None)
+            .selection(Bind::bound(&mut selection));
+        if let Some(at) = reveal {
+            grid = grid.reveal(at);
+        }
+        grid.show_items(ui, &source, &mut |at, _| {
+            let ch = chars.get(*at).copied().unwrap_or(' ');
+            let font = font.clone();
+            Tile::new(ch.to_string()).thumb(ThumbAspect::SQUARE, move |cx, rect| paint_glyph(cx, rect, ch, &font, dark))
+        })
+        .response
+        .events
+    };
+    let (mut picked, mut activated) = (None, false);
+    for event in events {
+        match event {
+            CollectionEvent::Selection(SelectionChange::Set(rows)) => picked = rows.last().copied().or(picked),
+            CollectionEvent::Activate(row) => {
+                picked = Some(row);
+                activated = true;
+            }
+            _ => {}
+        }
+    }
+    if let Some(c) = picked.and_then(|i| form.chars.get(i).copied()) {
+        form.selected = Some(c);
+        form.sync_code();
+    }
+    activated
 }
