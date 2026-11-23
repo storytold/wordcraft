@@ -3,21 +3,39 @@
 //! (line style, width and colour, and which edges) and cell alignment, over a live preview. OK
 //! runs `table.newStyle` / `table.modifyStyle` with only what changed.
 
-use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
-use serde::Serialize;
+use craft::behavior::Anchor9;
+use craft::color_ui::ui::ColorPickerTab;
+use craft::font_manager::picker::FontPickerSettings;
+use craft::ui::buttons::{Button, ToggleButton};
+use craft::ui::contract::{Bind, Entry, Show as _, ShowContainer as _, Trigger};
+use craft::ui::dialog::DialogId;
+use craft::ui::display::Picture;
+use craft::ui::form::{Field, FieldGroup};
+use craft::ui::list::ThumbAspect;
+use craft::ui::menu::Menu;
+use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::pickers::{ReferencePoint, ReferencePointKind, Select};
+use craft::ui::primitives::{ContentPainterCx, Glyph, IconSpec};
+use craft::ui::runtime::env::Label;
+use craft::ui::sections::Section;
+use craft::ui::style::{UiTokens, rgba_color};
+use craft::ui::text::TextField;
+use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, TableLook, Underline, VAlign};
 use wordcraft_doc::styles::{PartFormat, PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{CharProps, Rgb, TextColor};
-use wordcraft_engine::cmd::table_style::CELL_ALIGNS;
+use wordcraft_engine::cmd::table_style::{self, CELL_ALIGNS};
 
 use crate::WordApp;
-use crate::dialogs::{Dialog, buttons, color_menu};
-use crate::theme::Tokens;
+use crate::colors::{ColorFieldEmpty, Palette, color_field};
+use crate::dialogs::host::{Asks, ChildAnswer, WordForm, open_form};
+use crate::widgets::font_box::{CatalogRef, font_picker}; // PLAN: assumed CatalogRef / WordApp::font_* (ribbon-w11, S-L284)
 
 /// One table style part in the dialog, as it resolves through the based-on chain: colours are
 /// hex, empty for none.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableRegion {
     pub font: String,
@@ -34,7 +52,7 @@ pub struct TableRegion {
 }
 
 /// The line the border buttons draw.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BorderPen {
     pub style: BorderStyle,
@@ -91,17 +109,17 @@ const EDGES: [(&str, &str); 10] = [
     ("Inside Vertical Border", "insideV"),
 ];
 
-/// The alignment grid's tooltips, in `CELL_ALIGNS` order.
-const ALIGN_TIPS: [&str; 9] = [
-    "Align Top Left",
-    "Align Top Center",
-    "Align Top Right",
-    "Align Center Left",
-    "Align Center",
-    "Align Center Right",
-    "Align Bottom Left",
-    "Align Bottom Center",
-    "Align Bottom Right",
+/// The alignment picker's cells in the order of [`CELL_ALIGNS`] (row by row from the top left).
+const ANCHORS: [Anchor9; 9] = [
+    Anchor9::TopLeft,
+    Anchor9::Top,
+    Anchor9::TopRight,
+    Anchor9::Left,
+    Anchor9::Centre,
+    Anchor9::Right,
+    Anchor9::BottomLeft,
+    Anchor9::Bottom,
+    Anchor9::BottomRight,
 ];
 
 /// The `cellAlign` name for a part's alignments, empty when it sets neither.
@@ -252,68 +270,56 @@ fn edges_on(b: &Borders, edges: &str) -> bool {
     }
 }
 
-/// A small square showing which edges a border choice draws: the drawn edges in the text colour,
-/// the others as faint dotted guides.
-fn edge_glyph(ui: &mut Ui, edges: &str) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-    let p = ui.painter_at(r);
-    let r = r.shrink(2.0);
-    let c = r.center();
-    let segs = [
-        ("top", [r.left_top(), r.right_top()]),
-        ("bottom", [r.left_bottom(), r.right_bottom()]),
-        ("left", [r.left_top(), r.left_bottom()]),
-        ("right", [r.right_top(), r.right_bottom()]),
-        ("insideH", [pos2(r.left(), c.y), pos2(r.right(), c.y)]),
-        ("insideV", [pos2(c.x, r.top()), pos2(c.x, r.bottom())]),
-    ];
-    for (e, seg) in segs {
-        let on = match edges {
-            "all" => true,
-            "none" => false,
-            "outside" => matches!(e, "top" | "bottom" | "left" | "right"),
-            "inside" => matches!(e, "insideH" | "insideV"),
-            x => x == e,
-        };
-        if on {
-            p.line_segment(seg, Stroke::new(1.5, t.icon));
-        } else {
-            p.extend(egui::Shape::dotted_line(&seg, t.text_disabled, 2.5, 0.6));
-        }
-    }
+/// A square showing which edges a border choice draws: the drawn edges in the icon colour, the
+/// others as faint dotted guides.
+#[derive(craft::ui::contract::MemoProps)]
+struct EdgeGlyph {
+    edges: &'static str,
 }
 
-/// One button of the alignment grid: a square with three short bars where the text sits.
-fn align_button(ui: &mut Ui, (v, h): (VAlign, Align), on: bool, tip: &str) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tip));
-    let resp = resp.on_hover_text(tip);
-    let p = ui.painter_at(r);
-    let bg = if on {
-        t.checked
-    } else if resp.hovered() {
-        t.hover
-    } else {
-        t.input
-    };
-    p.rect(r, 2.0, bg, Stroke::new(1.0, t.input_border), egui::StrokeKind::Inside);
-    let inner = r.shrink(4.0);
-    let y0 = match v {
-        VAlign::Top => inner.top(),
-        VAlign::Center => inner.center().y - 4.0,
-        VAlign::Bottom => inner.bottom() - 8.0,
-    };
-    for (i, w) in [10.0f32, 6.0, 10.0].into_iter().enumerate() {
-        let x0 = match h {
-            Align::Center => inner.center().x - w / 2.0,
-            Align::Right => inner.right() - w,
-            _ => inner.left(),
-        };
-        p.rect_filled(Rect::from_min_size(pos2(x0, y0 + i as f32 * 3.0), vec2(w, 1.6)), 0.0, t.icon);
+/// One glyph per [`EDGES`] choice, `'static` so a menu entry can borrow it as its icon.
+static EDGE_GLYPHS: [EdgeGlyph; 10] = [
+    EdgeGlyph { edges: "all" },
+    EdgeGlyph { edges: "none" },
+    EdgeGlyph { edges: "outside" },
+    EdgeGlyph { edges: "inside" },
+    EdgeGlyph { edges: "top" },
+    EdgeGlyph { edges: "bottom" },
+    EdgeGlyph { edges: "left" },
+    EdgeGlyph { edges: "right" },
+    EdgeGlyph { edges: "insideH" },
+    EdgeGlyph { edges: "insideV" },
+];
+
+impl Glyph for EdgeGlyph {
+    fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
+        let stroke = Stroke::new(tokens.stroke.medium, color);
+        let guide = rgba_color(tokens.color.text.faint);
+        let r = rect.shrink(rect.width() * 0.125);
+        let c = r.center();
+        let segs = [
+            ("top", [r.left_top(), r.right_top()]),
+            ("bottom", [r.left_bottom(), r.right_bottom()]),
+            ("left", [r.left_top(), r.left_bottom()]),
+            ("right", [r.right_top(), r.right_bottom()]),
+            ("insideH", [pos2(r.left(), c.y), pos2(r.right(), c.y)]),
+            ("insideV", [pos2(c.x, r.top()), pos2(c.x, r.bottom())]),
+        ];
+        for (e, seg) in segs {
+            let on = match self.edges {
+                "all" => true,
+                "none" => false,
+                "outside" => matches!(e, "top" | "bottom" | "left" | "right"),
+                "inside" => matches!(e, "insideH" | "insideV"),
+                x => x == e,
+            };
+            if on {
+                painter.line_segment(seg, stroke);
+            } else {
+                painter.extend(Shape::dotted_line(&seg, guide, tokens.stroke.medium * 2.0, tokens.stroke.medium * 0.5));
+            }
+        }
     }
-    resp
 }
 
 /// The table style options that show `part` in the preview.
@@ -336,7 +342,7 @@ fn look_for(mut look: TableLook, part: TablePart) -> TableLook {
 
 /// A small sample table drawn with `style` (5 columns, a header, three body rows and a total
 /// row), showing the parts `look` turns on: the dialog's live preview.
-pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: TableLook) {
+fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyleProps>, look: &TableLook) {
     const COLS: usize = 5;
     const ROWS: usize = 5;
     const TEXT: [[&str; COLS]; ROWS] = [
@@ -346,17 +352,16 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
         ["West", "3", "8", "4", "15"],
         ["Total", "13", "16", "11", "40"],
     ];
-    let (rect, _) = ui.allocate_exact_size(vec2(360.0, 130.0), Sense::hover());
-    let painter = ui.painter_at(rect);
-    // The page is white whatever the interface theme.
-    painter.rect_filled(rect, 2.0, egui::Color32::WHITE);
-    let t = Tokens::get(ui.ctx());
-    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    // The page is white whatever the interface theme; the style's colours are data, so they go through
+    // `data_shapes` and dim with a disabled picture.
+    cx.data_shapes([Shape::rect_filled(rect, 2.0, Color32::WHITE)]);
+    cx.painter.rect_stroke(rect, 2.0, Stroke::new(cx.stroke_width(craft::ui::primitives::StrokeWidth::Thin), cx.ink()), egui::StrokeKind::Inside);
     let Some(st) = style else { return };
+    let mut shapes: Vec<Shape> = Vec::new();
     let formats: Vec<PartFormat> = TablePart::ALL.iter().map(|p| st.part(*p)).collect();
     let table = rect.shrink2(vec2(14.0, 10.0));
     let (cw, rh) = (table.width() / COLS as f32, table.height() / ROWS as f32);
-    let rgb = |c: Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
+    let rgb = |c: Rgb| Color32::from_rgb(c.0, c.1, c.2);
     let tb = st.parts.borders.unwrap_or_default();
     let band = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
     for (ri, row) in TEXT.iter().enumerate() {
@@ -376,7 +381,7 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                 inside_v: None,
             };
             // Parts from lowest to highest precedence, as layout applies them.
-            for part in PartSet::of_cell(&look, band, (ri, ROWS), (ci, 1, COLS)).iter() {
+            for part in PartSet::of_cell(look, band, (ri, ROWS), (ci, 1, COLS)).iter() {
                 let Some(f) = TablePart::ALL.iter().position(|p| *p == part).and_then(|i| formats.get(i)) else { continue };
                 fill = f.fill.or(fill);
                 chr.overlay(&f.chr);
@@ -400,16 +405,16 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                 }
             }
             if let Some(f) = fill {
-                painter.rect_filled(cell, 0.0, rgb(f));
+                shapes.push(Shape::rect_filled(cell, 0.0, rgb(f)));
             }
-            let edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
+            let mut edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
                 if let Some(e) = e.filter(Border::is_visible) {
-                    let color = e.color.map_or(egui::Color32::BLACK, rgb);
+                    let color = e.color.map_or(Color32::BLACK, rgb);
                     let stroke = Stroke::new(e.width.clamp(0.5, 3.0) * 1.3, color);
                     if matches!(e.style, BorderStyle::Dotted | BorderStyle::Dashed | BorderStyle::DotDash) {
-                        painter.extend(egui::Shape::dashed_line(&[from, to], stroke, 3.0, 2.0));
+                        shapes.extend(Shape::dashed_line(&[from, to], stroke, 3.0, 2.0));
                     } else {
-                        painter.line_segment([from, to], stroke);
+                        shapes.push(Shape::line_segment([from, to], stroke));
                     }
                 }
             };
@@ -419,7 +424,7 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
             edge(cell.right_top(), cell.right_bottom(), b.right);
             let color = match chr.color {
                 Some(TextColor::Rgb(c)) => rgb(c),
-                _ => egui::Color32::BLACK,
+                _ => Color32::BLACK,
             };
             let font = egui::FontId::proportional(11.0);
             let (ax, x) = match h {
@@ -432,186 +437,248 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                 Some(VAlign::Bottom) => (egui::Align::Max, cell.bottom() - 2.0),
                 _ => (egui::Align::Min, cell.top() + 2.0),
             };
-            let pos = pos2(x, y);
-            let r = painter.text(pos, egui::Align2([ax, ay]), txt, font.clone(), color);
+            let galley = cx.painter.layout_no_wrap(txt.to_string(), font, color);
+            let r = egui::Align2([ax, ay]).anchor_size(pos2(x, y), galley.size());
             if chr.bold.unwrap_or(false) {
                 // A second pass a hair to the right reads as bold at this size.
-                painter.text(pos + vec2(0.6, 0.0), egui::Align2([ax, ay]), txt, font, color);
+                shapes.push(Shape::galley(r.min + vec2(0.6, 0.0), galley.clone(), color));
             }
+            shapes.push(Shape::galley(r.min, galley, color));
             if chr.underline.is_some_and(|u| u != Underline::None) && !txt.is_empty() {
-                painter.line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(0.8, color));
+                shapes.push(Shape::line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(0.8, color)));
             }
         }
     }
+    cx.data_shapes(shapes);
+}
+
+/// A table style the form can be based on, with the parts it resolves to: a new style takes these
+/// as its starting point when the base changes, without the form reaching into the session.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Base {
+    id: String,
+    name: String,
+    regions: Box<[TableRegion; 13]>,
+}
+
+/// The form's label for `text`, translated.
+fn lab(text: &str) -> Label {
+    tl!(text).to_string().into()
 }
 
 /// The dialog's state.
-pub struct Form<'a> {
-    pub id: &'a Option<String>,
-    pub name: &'a mut String,
-    pub based_on: &'a mut String,
-    pub region: &'a mut usize,
-    pub regions: &'a mut Box<[TableRegion; 13]>,
-    pub basis: &'a mut Box<[TableRegion; 13]>,
-    pub pen: &'a mut BorderPen,
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStyleForm {
+    /// The style being modified; `None` creates one.
+    id: Option<String>,
+    name: String,
+    /// Style id.
+    based_on: String,
+    /// Index into `regions` (see [`PARTS`]).
+    region: usize,
+    regions: Box<[TableRegion; 13]>,
+    /// What the parts showed when the dialog opened (or the base style changed): only changes are
+    /// sent, so everything else stays inherited.
+    basis: Box<[TableRegion; 13]>,
+    /// The line the border choices draw.
+    pen: BorderPen,
+    /// The table styles this one can be based on, read at open.
+    #[serde(skip)]
+    bases: Vec<Base>,
+    /// The colour lists the colour fields offer, read at open.
+    #[serde(skip)]
+    palette: Palette,
+    /// The installed fonts the font box lists, read at open.
+    #[serde(skip)]
+    catalog: CatalogRef,
+    /// Recent fonts and the picker's remembered state, read at open.
+    #[serde(skip)]
+    font_settings: FontPickerSettings,
+    /// The options of the table at the caret, which the preview shows with the edited part on.
+    #[serde(skip)]
+    look: TableLook,
+    /// The style as OK would leave it, copied in by [`prepare_preview`] before each pass.
+    #[serde(skip)]
+    preview: Option<TableStyleProps>,
 }
 
-/// The dialog body. Returns true to close.
-pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
-    let Form { id, name, based_on, region, regions, basis, pen } = f;
-    let styles: Vec<(String, String)> = app
-        .session
-        .doc
-        .styles
-        .styles
-        .iter()
-        .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && Some(&s.id) != id.as_ref())
-        .map(|s| (s.id.clone(), s.name.clone()))
-        .collect();
-    let base_name = styles.iter().find(|(i, _)| i == based_on).map(|(_, n)| n.clone()).unwrap_or_else(|| based_on.clone());
-    let mut rebased = false;
-    crate::rtl::Table::new("tstyle").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            let name_label = r.cell(|ui| ui.label(tl!("Name:")));
-            r.cell(|ui| ui.text_edit_singleline(name).labelled_by(name_label.id));
-        });
-        t.row(|r| {
-            let base_label = r.cell(|ui| ui.label(tl!("Style based on:")));
-            r.cell(|ui| {
-                let base = craft_ui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
-                    for (sid, sname) in &styles {
-                        if ui.selectable_label(sid == based_on, sname).clicked() && sid != based_on {
-                            *based_on = sid.clone();
-                            rebased = true;
-                        }
-                    }
-                });
-                base.response.labelled_by(base_label.id);
-            });
-        });
-        t.row(|r| {
-            let region_label = r.cell(|ui| ui.label(tl!("Apply formatting to:")));
-            r.cell(|ui| {
-                let part = craft_ui::ComboBox::from_id_salt("tstyle_region")
-                    .width(200.0)
-                    .selected_text(tl!(PARTS.get(*region).map_or("Whole Table", |(_, l)| *l)))
-                    .show_ui(ui, |ui| {
-                        for (i, (_, n)) in PARTS.iter().enumerate() {
-                            ui.selectable_value(region, i, tl!(*n));
-                        }
-                    });
-                part.response.labelled_by(region_label.id);
-            });
-        });
-    });
-    // A new style shows its new base's formatting; a modified one keeps its own.
-    if rebased && id.is_none() {
-        *regions = table_regions(app, based_on);
-        *basis = regions.clone();
+impl TableStyleForm {
+    /// The params of the command OK runs.
+    fn params(&self) -> Value {
+        table_style_params(self.id.as_deref(), &self.name, &self.based_on, &self.regions, &self.basis)
     }
-    ui.separator();
-    let theme = app.session.doc.settings.theme_colors.clone();
-    let fams = app.previews.families();
-    let preview_fn = app.previews.font_preview_fn();
-    if let Some(r) = regions.get_mut(*region) {
-        ui.label(egui::RichText::new(tl!("Formatting")).font(crate::theme::semibold(12.5)));
-        // Font, size, bold, italic, underline and text colour.
-        ui.horizontal(|ui| {
-            if let Some(f) = crate::widgets::font_combo(ui, "tstyle_font", 170.0, &r.font, &fams, Some(&*preview_fn))
-                && f != crate::widgets::ADD_FONT
+
+    /// The part being edited.
+    fn part(&self) -> TablePart {
+        PARTS.get(self.region).map_or(TablePart::WholeTable, |(p, _)| *p)
+    }
+
+    /// Name and base style.
+    fn identity(&mut self, ui: &mut Ui) {
+        FieldGroup::new(lab("Table style")).show(ui, |ui, _| {
+            let name_label = lab("Name:");
+            Field::new(name_label.clone()).show(ui, |ui, _| {
+                TextField::new(name_label.clone(), Bind::bound(&mut self.name)).show(ui);
+            });
+            let entries: Vec<Entry<usize>> = self.bases.iter().enumerate().map(|(i, b)| Entry::new(i, b.name.clone())).collect();
+            let current = self.bases.iter().position(|b| b.id == self.based_on).unwrap_or(usize::MAX);
+            if let Some(i) = pick_index(ui, "Style based on:", &entries, current)
+                && let Some(base) = self.bases.get(i)
             {
-                r.font = f;
-            }
-            let size = ui.add(egui::TextEdit::singleline(&mut r.size).desired_width(36.0));
-            size.on_hover_text(tl!("Size:")).accessible_name(tl!("Size:"));
-            ui.toggle_value(&mut r.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold")).accessible_name(tl!("Bold"));
-            ui.toggle_value(&mut r.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic")).accessible_name(tl!("Italic"));
-            ui.toggle_value(&mut r.underline, egui::RichText::new("U").underline()).on_hover_text(tl!("Underline")).accessible_name(tl!("Underline"));
-            ui.push_id("tstyle_color", |ui| {
-                ui.label(tl!("Font color:"));
-                color_menu(ui, &theme, &mut r.color);
-            });
-        });
-        // Borders: the pen (style, width, colour) and which edges; then the cell shading.
-        ui.horizontal(|ui| {
-            let current = LINE_STYLES.iter().find(|(s, _)| *s == pen.style).map_or("Single", |(_, n)| *n);
-            let style_label = ui.label(tl!("Style:"));
-            let style = craft_ui::ComboBox::from_id_salt("tstyle_pen_style").selected_text(tl!(current)).width(90.0).show_ui(ui, |ui| {
-                for (s, n) in LINE_STYLES {
-                    ui.selectable_value(&mut pen.style, s, tl!(n));
+                self.based_on = base.id.clone();
+                // A new style shows its new base's formatting; a modified one keeps its own.
+                if self.id.is_none() {
+                    self.regions = base.regions.clone();
+                    self.basis = self.regions.clone();
                 }
-            });
-            style.response.labelled_by(style_label.id);
-            let width_label = ui.label(tl!("Width:"));
-            let width = craft_ui::ComboBox::from_id_salt("tstyle_pen_width")
-                .selected_text(crate::i18n::fmt(tl!("{n} pt"), &[("n", &pen.width.to_string())]))
-                .width(70.0)
-                .show_ui(ui, |ui| {
-                    for w in WIDTHS {
-                        ui.selectable_value(&mut pen.width, w, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
-                    }
-                });
-            width.response.labelled_by(width_label.id);
-            ui.push_id("tstyle_pen_color", |ui| {
-                ui.label(tl!("Color:"));
-                color_menu(ui, &theme, &mut pen.color);
-            });
-            ui.menu_button(format!("{} ▾", tl!("Borders")), |ui| {
-                for (label, edges) in EDGES {
-                    ui.horizontal(|ui| {
-                        edge_glyph(ui, edges);
-                        if ui.selectable_label(edges_on(&r.borders, edges), tl!(label)).clicked() {
-                            pick_edges(&mut r.borders, edges, pen);
-                            ui.close();
-                        }
+            }
+            let part_entries: Vec<Entry<usize>> = PARTS.iter().enumerate().map(|(i, (_, n))| Entry::new(i, lab(n))).collect();
+            if let Some(i) = pick_index(ui, "Apply formatting to:", &part_entries, self.region) {
+                self.region = i;
+            }
+        });
+    }
+
+    /// The edited part's font, size, toggles, colours, borders and alignment.
+    fn formatting(&mut self, ui: &mut Ui, asks: &mut Vec<Asks>) {
+        let Self { region, regions, pen, palette, catalog, font_settings, .. } = self;
+        let Some(r) = regions.get_mut(*region) else { return };
+        Section::fixed(lab("Formatting")).show(ui, |ui, _| {
+            FieldGroup::new(lab("Formatting")).show(ui, |ui, _| {
+                if let Some(catalog) = catalog.get() {
+                    let font_label = lab("Font:");
+                    Field::new(font_label.clone()).show(ui, |ui, _| {
+                        font_picker(font_label.clone(), Bind::bound(&mut r.font), catalog, Bind::bound(&mut *font_settings), &[], None).show(ui);
                     });
                 }
-            });
-        });
-        ui.horizontal(|ui| {
-            ui.push_id("tstyle_fill", |ui| {
-                ui.label(tl!("Fill color:"));
-                color_menu(ui, &theme, &mut r.fill);
-            });
-            ui.add_space(12.0);
-            ui.label(tl!("Alignment:"));
-            crate::rtl::grid(ui, egui::Grid::new("tstyle_align").spacing(vec2(1.0, 1.0)), |ui| {
-                for (i, ((n, v, h), tip)) in CELL_ALIGNS.iter().zip(ALIGN_TIPS).enumerate() {
-                    let on = r.align == *n;
-                    if align_button(ui, (*v, *h), on, tl!(tip)).clicked() {
-                        r.align = if on { String::new() } else { n.to_string() };
+                // Text, so an empty box means the size is inherited.
+                let size_label = lab("Size:");
+                Field::new(size_label.clone()).show(ui, |ui, _| {
+                    TextField::new(size_label.clone(), Bind::bound(&mut r.size)).show(ui);
+                });
+                Field::new(lab("Font style:")).show(ui, |ui, _| {
+                    ui.horizontal(|ui| {
+                        ToggleButton::new(lab("Bold"), Bind::bound(&mut r.bold)).show(ui);
+                        ToggleButton::new(lab("Italic"), Bind::bound(&mut r.italic)).show(ui);
+                        ToggleButton::new(lab("Underline"), Bind::bound(&mut r.underline)).show(ui);
+                    });
+                });
+                if color_field(ui, &lab("Font color:"), &mut r.color, &ColorFieldEmpty::NoColor, palette).more_colors {
+                    asks.push(Asks::Color { field: "color", current: Rgb::parse(&r.color), tab: ColorPickerTab::Standard });
+                }
+                let styles: Vec<Entry<usize>> = LINE_STYLES.iter().enumerate().map(|(i, (_, n))| Entry::new(i, lab(n))).collect();
+                let current = LINE_STYLES.iter().position(|(s, _)| *s == pen.style).unwrap_or(0);
+                if let Some((s, _)) = pick_index(ui, "Style:", &styles, current).and_then(|i| LINE_STYLES.get(i)) {
+                    pen.style = *s;
+                }
+                let widths: Vec<Entry<usize>> =
+                    WIDTHS.iter().enumerate().map(|(i, w)| Entry::new(i, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]))).collect();
+                let current = WIDTHS.iter().position(|w| *w == pen.width).unwrap_or(usize::MAX);
+                if let Some(w) = pick_index(ui, "Width:", &widths, current).and_then(|i| WIDTHS.get(i)) {
+                    pen.width = *w;
+                }
+                if color_field(ui, &lab("Color:"), &mut pen.color, &ColorFieldEmpty::NoColor, palette).more_colors {
+                    asks.push(Asks::Color { field: "pen", current: Rgb::parse(&pen.color), tab: ColorPickerTab::Standard });
+                }
+                Field::new(lab("Borders:")).show(ui, |ui, _| {
+                    let button = Button::new(lab("Borders")).show(ui);
+                    let entries: Vec<Entry<usize>> = EDGES
+                        .iter()
+                        .zip(EDGE_GLYPHS.iter())
+                        .enumerate()
+                        .map(|(i, ((label, edges), glyph))| {
+                            Entry::new(i, lab(label)).icon(IconSpec::glyph(glyph)).checked(edges_on(&r.borders, edges))
+                        })
+                        .collect();
+                    let picked = Menu::new(lab("Borders")).opened_by(&button, Trigger::Press).pick(ui, &entries).picked;
+                    if let Some((_, edges)) = picked.and_then(|i| EDGES.get(i)) {
+                        pick_edges(&mut r.borders, edges, pen);
                     }
-                    if i % 3 == 2 {
-                        ui.end_row();
-                    }
+                });
+                if color_field(ui, &lab("Fill color:"), &mut r.fill, &ColorFieldEmpty::NoColor, palette).more_colors {
+                    asks.push(Asks::Color { field: "fill", current: Rgb::parse(&r.fill), tab: ColorPickerTab::Standard });
+                }
+                // The grid is row by row from the top left, as `CELL_ALIGNS` is.
+                let current = CELL_ALIGNS.iter().position(|(n, _, _)| *n == r.align).and_then(|i| ANCHORS.get(i)).copied();
+                let picked =
+                    ReferencePoint::new(lab("Alignment:"), Bind::given(current)).kind(ReferencePointKind::Alignment).show(ui).value().copied();
+                if let Some(anchor) = picked {
+                    // Picking the selected cell again clears the alignment.
+                    r.align = anchor
+                        .and_then(|a| ANCHORS.iter().position(|x| *x == a))
+                        .and_then(|i| CELL_ALIGNS.get(i))
+                        .map(|(n, _, _)| n.to_string())
+                        .unwrap_or_default();
                 }
             });
         });
     }
-    // Live preview: the style as OK would leave it, on the current table's options with the
-    // part being edited turned on.
-    let v = table_style_params(id.as_deref(), name, based_on, regions, basis);
-    let look = app
-        .session
-        .sel
-        .focus
-        .path
-        .cell()
-        .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look))
-        .unwrap_or_default();
-    let look = look_for(look, PARTS.get(*region).map_or(TablePart::WholeTable, |(p, _)| *p));
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(tl!("Preview")).small().weak());
-    table_style_preview(ui, wordcraft_engine::cmd::table_style::preview(&app.session, &v).as_ref(), look);
-    let (ok, cancel) = buttons(ui, tl!("OK"));
-    if ok {
-        let cmd = if id.is_some() { "table.modifyStyle" } else { "table.newStyle" };
-        if let Err(e) = app.run(cmd, v) {
-            app.status(e);
-            return false;
+}
+
+/// A named `Select` over `entries` in a `Field`: the index picked in this pass.
+fn pick_index(ui: &mut Ui, label: &str, entries: &[Entry<usize>], current: usize) -> Option<usize> {
+    let label = lab(label);
+    Field::new(label.clone()).show(ui, |ui, _| Select::new(label.clone(), Bind::given(current), entries).show(ui).value().copied()).inner.flatten()
+}
+
+impl WordForm for TableStyleForm {
+    fn key(&self) -> &'static str {
+        if self.id.is_none() { "newTableStyle" } else { "modifyTableStyle" }
+    }
+
+    fn title(&self) -> Label {
+        if self.id.is_none() { lab("New Table Style") } else { lab("Modify Table Style") }
+    }
+
+    fn prepare(&mut self, app: &WordApp) {
+        // PLAN: assumed `WordForm::prepare(&mut self, &WordApp)` and `Palette::of` (dialogs-w13 S-L283, ribbon-w11 S-L284)
+        self.palette = Palette::of(app);
+        self.catalog = CatalogRef(Some(app.font_catalog()));
+        self.font_settings = app.font_picker_settings();
+        // The style as OK would leave it, redone each pass so nothing outlives it.
+        self.preview = table_style::preview(&app.session, &self.params());
+    }
+
+    fn write_back(&self, app: &mut WordApp) {
+        app.set_font_picker_settings(self.font_settings.clone());
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
+        self.identity(ui);
+        self.formatting(ui, asks);
+        // Live preview: the style as OK would leave it, on the current table's options with the
+        // part being edited turned on.
+        let look = look_for(self.look, self.part());
+        let preview = self.preview.as_ref();
+        Section::fixed(lab("Preview")).show(ui, |ui, _| {
+            Picture::painter(lab("Table style preview"), ThumbAspect::new(36, 13), |cx, rect| paint_preview(cx, rect, preview, &look)).show(ui);
+        });
+        true
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        let cmd = if self.id.is_some() { "table.modifyStyle" } else { "table.newStyle" };
+        vec![(cmd.to_string(), self.params())]
+    }
+
+    fn answer(&mut self, answer: ChildAnswer) {
+        let ChildAnswer::Color { field, hex } = answer else { return };
+        match field {
+            "color" => {
+                if let Some(r) = self.regions.get_mut(self.region) {
+                    r.color = hex;
+                }
+            }
+            "fill" => {
+                if let Some(r) = self.regions.get_mut(self.region) {
+                    r.fill = hex;
+                }
+            }
+            "pen" => self.pen.color = hex,
+            _ => {}
         }
     }
-    ok || cancel
 }
 
 /// The border styles the pen offers (the Borders and Shading dialog's list).
@@ -628,24 +695,54 @@ const LINE_STYLES: [(BorderStyle, &str); 8] = [
 
 const WIDTHS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
 
-/// The dialog for `name` (`newTableStyle` / `modifyTableStyle`), `None` when there's no table
-/// style to modify.
-pub fn open(app: &WordApp, name: &str) -> Option<Dialog> {
+/// Opens the dialog for `name` (`newTableStyle` / `modifyTableStyle`), `None` when there's no table
+/// style to modify. `params["part"]` opens it on that part (`"firstRow"`…).
+pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     let current = current_table_style(app);
-    let (id, name, based_on, regions) = if name == "newTableStyle" {
+    let (id, style_name, based_on, regions) = if name == "newTableStyle" {
         let based_on = current.unwrap_or_else(|| "TableGrid".into());
         let styles = &app.session.doc.styles;
-        let name = (1..1000).map(|i| format!("Table Style {i}")).find(|n| styles.find(n).is_none()).unwrap_or_default();
+        let style_name = (1..1000).map(|i| format!("Table Style {i}")).find(|n| styles.find(n).is_none()).unwrap_or_default();
         let regions = table_regions(app, &based_on);
-        (None, name, based_on, regions)
+        (None, style_name, based_on, regions)
     } else {
         let id = current?;
         let st = app.session.doc.styles.get(&id)?;
-        let (name, based_on) = (st.name.clone(), st.based_on.clone().unwrap_or_default());
+        let (style_name, based_on) = (st.name.clone(), st.based_on.clone().unwrap_or_default());
         let regions = table_regions(app, &id);
-        (Some(id), name, based_on, regions)
+        (Some(id), style_name, based_on, regions)
     };
-    Some(Dialog::TableStyle { id, name, based_on, region: 0, basis: regions.clone(), regions, pen: BorderPen::default() })
+    let bases: Vec<Base> = app
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && Some(&s.id) != id.as_ref())
+        .map(|s| Base { id: s.id.clone(), name: s.name.clone(), regions: table_regions(app, &s.id) })
+        .collect();
+    let look = app
+        .session
+        .sel
+        .focus
+        .path
+        .cell()
+        .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look))
+        .unwrap_or_default();
+    let region = params.get("part").and_then(Value::as_str).and_then(table_style::part_named).map_or(0, part_index);
+    let form = TableStyleForm {
+        id,
+        name: style_name,
+        based_on,
+        region,
+        basis: regions.clone(),
+        regions,
+        pen: BorderPen::default(),
+        bases,
+        look,
+        ..Default::default()
+    };
+    Some(open_form(app, parent, form))
 }
 
 /// The style of the table at the caret, when it is a table style.
@@ -662,46 +759,22 @@ mod tests {
     use egui_kittest::kittest::Queryable;
     use wordcraft_engine::Session;
 
-    /// Alignment choices expose their names and current selection, and can be toggled.
-    #[test]
-    fn alignment_buttons_expose_names_selection_and_clicks() {
-        use egui::accesskit::{Role, Toggled};
-        use egui_kittest::kittest::NodeT;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(200.0, 120.0)).build_ui_state(
-            |ui, selected: &mut Option<usize>| {
-                for (i, align, label) in
-                    [(0, (VAlign::Top, Align::Left), "Align Top Left"), (1, (VAlign::Bottom, Align::Right), "Align Bottom Right")]
-                {
-                    let on = *selected == Some(i);
-                    if align_button(ui, align, on, label).clicked() {
-                        *selected = if on { None } else { Some(i) };
-                    }
-                }
-                ui.add_enabled_ui(false, |ui| {
-                    align_button(ui, (VAlign::Center, Align::Center), false, "Align Center");
-                });
-            },
-            Some(0usize),
-        );
-        h.run_steps(2);
-        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Top Left").accesskit_node().toggled(), Some(Toggled::True));
-        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::False));
-        assert!(h.get_by_role_and_label(Role::Button, "Align Center").accesskit_node().is_disabled());
-        h.get_by_role_and_label(Role::Button, "Align Bottom Right").click();
-        h.run_steps(2);
-        assert_eq!(*h.state(), Some(1));
-        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Top Left").accesskit_node().toggled(), Some(Toggled::False));
-        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::True));
-        h.get_by_role_and_label(Role::Button, "Align Bottom Right").click();
-        h.run_steps(2);
-        assert_eq!(*h.state(), None);
-        assert_eq!(h.get_by_role_and_label(Role::Button, "Align Bottom Right").accesskit_node().toggled(), Some(Toggled::False));
-    }
-
     fn steps(h: &mut egui_kittest::Harness<'_, WordApp>) {
         for _ in 0..4 {
             h.step();
         }
+    }
+
+    /// The app, drawn whole, with the dialog host running after its UI.
+    fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+        crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        )
     }
 
     /// #714: picking a part under "Apply formatting to" and changing it edits that part (here the
@@ -713,34 +786,25 @@ mod tests {
         let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
         app.run("insert.table", json!({"rows": 4, "cols": 3})).unwrap();
         app.run("table.newStyle", json!({"name": "Parts"})).unwrap();
-        app.dialog = Dialog::open("modifyTableStyle", &mut app);
-        assert!(matches!(app.dialog, Some(Dialog::TableStyle { .. })));
+        assert!(crate::dialogs::open(&mut app, "modifyTableStyle", &json!({})).is_some());
         // Keep the background ribbon's character controls out of the dialog's label queries.
         app.ui.tab = "Insert".into();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = harness(app);
         steps(&mut h);
-        // The picker is a combo box showing the part being edited.
-        h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("Whole Table")).click();
+        h.get_by_label("Apply formatting to:").click();
         steps(&mut h);
         h.get_by_label("Even Banded Rows").click();
         steps(&mut h);
-        assert!(matches!(&h.state().dialog, Some(Dialog::TableStyle { region, .. }) if *region == part_index(TablePart::Band2Horz)));
         for label in ["Bold", "Italic", "Underline"] {
-            assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::False));
+            // An off toggle button reports no toggled state; only an on one says `True`.
+            assert_ne!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True), "{label} starts off");
             h.get_by_label(label).click();
             steps(&mut h);
             assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True));
         }
         h.get_by_label("OK").click();
         steps(&mut h);
-        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
         let st = h.state().session.doc.styles.get("Parts").cloned().unwrap();
         let chr = st.table_part(TablePart::Band2Horz).chr;
         assert_eq!(chr.bold, Some(true));
@@ -798,31 +862,27 @@ mod tests {
         let before = rules(&mut app);
         let top = before.iter().copied().fold(f32::INFINITY, f32::min);
         assert!(top.is_finite(), "Table Grid draws the table's top edge");
-        app.dialog = Dialog::open("modifyTableStyle", &mut app);
-        let mut r = table_regions(&app, "Parts")[part_index(TablePart::FirstRow)].clone();
+        let r = table_regions(&app, "Parts")[part_index(TablePart::FirstRow)].clone();
         assert!(!edges_on(&r.borders, "none"), "inherited lines aren't \"No Border\"");
-        pick_edges(&mut r.borders, "none", &BorderPen::default());
-        assert!(edges_on(&r.borders, "none"));
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut picked = r;
+        pick_edges(&mut picked.borders, "none", &BorderPen::default());
+        assert!(edges_on(&picked.borders, "none"));
+        assert!(crate::dialogs::open(&mut app, "modifyTableStyle", &json!({})).is_some());
+        app.ui.tab = "Insert".into();
+        let mut h = harness(app);
         steps(&mut h);
-        h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("Whole Table")).click();
+        h.get_by_label("Apply formatting to:").click();
         steps(&mut h);
         h.get_by_label("Header Row").click();
         steps(&mut h);
-        h.get_by_label("Borders ▾").click();
+        // The Borders: field names its button by the field's label.
+        h.get_by_label("Borders:").click();
         steps(&mut h);
         h.get_by_label("No Border").click();
         steps(&mut h);
         h.get_by_label("OK").click();
         steps(&mut h);
-        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
         let head = h.state().session.doc.styles.get("Parts").unwrap().table_part(TablePart::FirstRow);
         let b = head.borders.unwrap();
         for e in [b.top, b.bottom, b.left, b.right, b.between, b.inside_v] {
