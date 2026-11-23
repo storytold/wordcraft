@@ -1,5 +1,12 @@
-use super::common::mi;
-use super::{Rect, Stroke, Target, Tokens, Ui, WordApp, json, pos2, vec2};
+use craft::menu::CommandRef;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::display::Divider;
+use craft::ui::menu::{Menu, MenuItem};
+
+use egui::{Rect, Stroke, pos2};
+
+use super::{Ui, WordApp, json};
+use crate::colors::Target;
 
 /// The underline styles Home › Underline offers as line samples: (`format.underline` style, name).
 pub(super) const UNDERLINE_STYLES: [(&str, &str); 8] = [
@@ -17,38 +24,24 @@ pub(super) const UNDERLINE_STYLES: [(&str, &str); 8] = [
 /// Underlines… (the Font dialog) and Underline Color.
 pub(super) fn underline_menu(ui: &mut Ui, app: &mut WordApp) {
     for (style, name) in UNDERLINE_STYLES {
-        underline_item(ui, app, style, name);
+        // The sample stands for the label; the name is the tooltip and what assistive technology reads.
+        MenuItem::command(CommandRef::with_params("format.underline", json!({"style": style})))
+            .label(tl!(name).to_string())
+            .tooltip(tl!(name).to_string())
+            .sample(move |cx, r| paint_underline(&cx.painter, r, style, cx.ink()))
+            .sample_only()
+            .hide_shortcut()
+            .show(ui);
     }
-    mi(ui, app, "Words only", "format.wordUnderline", json!({}));
-    // Not `mi`: Ctrl+U beside None would read as its shortcut, but Ctrl+U toggles a single underline.
-    let enabled = crate::widgets::enabled(app, "format.underline");
-    if ui.add_enabled(enabled, egui::Button::new(tl!("None")).min_size(vec2(200.0, 0.0))).clicked() {
-        crate::widgets::run_from_ribbon(app, "format.underline", json!({"value": false}));
-        ui.close();
-    }
-    ui.separator();
-    mi(ui, app, "More Underlines…", "format.fontDialog", json!({}));
-    ui.menu_button(tl!("Underline Color"), |ui| {
-        mi(ui, app, "Automatic", "format.underlineColor", json!({"color": "auto"}));
-        let theme = app.session.doc.settings.theme_colors.clone();
-        crate::colors::menu(ui, app, &theme, Target::cmd("format.underlineColor"));
+    MenuItem::command(CommandRef::new("format.wordUnderline")).label(tl!("Words only").to_string()).show(ui);
+    // Ctrl+U beside None would read as its shortcut, but Ctrl+U toggles a single underline.
+    MenuItem::command(CommandRef::with_params("format.underline", json!({"value": false}))).label(tl!("None").to_string()).hide_shortcut().show(ui);
+    Divider::horizontal().show(ui);
+    MenuItem::command(CommandRef::new("format.fontDialog")).label(tl!("More Underlines…").to_string()).show(ui);
+    Menu::submenu_row(ui, tl!("Underline Color").to_string(), |ui, _| {
+        MenuItem::command(CommandRef::with_params("format.underlineColor", json!({"color": "auto"}))).label(tl!("Automatic").to_string()).show(ui);
+        let _ = crate::colors::menu(ui, app, Target::cmd("format.underlineColor"));
     });
-}
-
-/// A menu entry drawn as a sample of its underline; its name is the tooltip and what assistive
-/// technology reads.
-fn underline_item(ui: &mut Ui, app: &mut WordApp, style: &str, name: &str) {
-    let enabled = crate::widgets::enabled(app, "format.underline");
-    let resp = ui.add_enabled(enabled, egui::Button::new("").min_size(vec2(200.0, 22.0)));
-    let label = tl!(name);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
-    let t = Tokens::get(ui.ctx());
-    let color = if enabled { t.text } else { t.text_disabled };
-    paint_underline(ui.painter(), resp.rect.shrink2(vec2(10.0, 0.0)), style, color);
-    if resp.on_hover_text(label).clicked() {
-        crate::widgets::run_from_ribbon(app, "format.underline", json!({"style": style}));
-        ui.close();
-    }
 }
 
 /// A line in `style` across `r` at its middle: our own drawing of each underline kind.

@@ -346,15 +346,43 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        // A paragraph closing a section that the next one starts on a new page keeps with
+        // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
+        let closes_page = pb.next_starts_page && self.p.section.is_some();
+        let need = height
+            + if rp.keep_next && !closes_page {
+                next_first_line(ctx, self.block, self.laid_width, 0, pb.next_starts_page, &mut ctx.counters.clone())
+            } else {
+                0.0
+            };
         // (Against the whole column: balanced columns grow to hold it.)
-        // With the 0.01 pt of slack the other fit checks take.
-        if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
+        // With the 0.01 pt of slack the other fit checks take. Balancing from Word 2013's layout
+        // keeps the lines and the next paragraph together at the top of a column too (#6821).
+        if pb.y + need > pb.bottom + 0.01 && (!pb.fresh() || Self::strict_widow_control(ctx, pb)) && need <= pb.next_room(self.body_top) {
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);
         }
         before
+    }
+
+    /// Balancing from Word 2013's layout, a paragraph that was moved to the top of a column by
+    /// the lines before it (not by `keep_together`) keeps its lines, or itself with the next
+    /// paragraph, together there too: asks again, and places the paragraph's floats again where it
+    /// ends up (#6821).
+    fn keep_again(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms) {
+        while self.l0 == 0 && (self.pl.rp.keep_lines || self.pl.rp.keep_next) && pb.fresh() && Self::strict_widow_control(ctx, pb) {
+            let (col, pages) = (pb.col, pb.pages.len());
+            let before = self.keep_together(ctx, pb, rooms, 0.0);
+            if (pb.col, pb.pages.len()) == (col, pages) {
+                break;
+            }
+            // Reflow before testing the new column: wraps can change the paragraph's height.
+            let y0 = pb.y;
+            self.reanchor(ctx, pb, (y0, before), &[]);
+            self.anchor_y = y0 - before;
+            (self.rechecked, self.forced) = (false, Vec::new());
+        }
     }
 
     /// The lines going into a new column (or page) were broken around the wrap areas where the
@@ -447,14 +475,19 @@ impl<'a> Flow<'a> {
         fit
     }
 
-    /// Whether the line may overflow the page: one holding nothing but a page or column break stays
-    /// at the bottom of the page even when it doesn't fit (it only ends the page, and moving it
-    /// would leave a blank page behind it, as in Word), and so does an empty paragraph closing a
-    /// section before a new page (measured in Word: it stays on a full page instead of starting
-    /// one of its own).
+    /// Whether the line (the paragraph's line `l0`) may overflow the page: one holding nothing but
+    /// a page or column break, with text after it in the paragraph, stays at the bottom of the
+    /// page even when it doesn't fit (it only ends the page, and moving it would leave a blank
+    /// page behind it, as in Word), and so does an empty paragraph closing a section before a new
+    /// page (measured in Word: it stays on a full page instead of starting one of its own).
+    /// Measured in Word: a paragraph of only a page break is an ordinary line, and when its mark's
+    /// text doesn't fit it goes to the next page, blank page and all.
     fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
         let p = self.p;
+        let mark_only_after =
+            l.end == LineEnd::PageBreak && self.pl.lines.get(self.l0 + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
         let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
+            && !mark_only_after
             && p.text
                 .get(l.start..l.stop)
                 .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
@@ -477,25 +510,46 @@ impl<'a> Flow<'a> {
 
     /// The end of the lines on this page after widow/orphan control, and keeping the rows beside
     /// floating objects together.
-    fn settled_end(&self, pb: &PageBuilder, fit: &Fit) -> usize {
+    /// Also says whether, balancing from Word 2013's layout, widow/orphan control alone moved every
+    /// line back (the next column has them, #6821).
+    fn settled_end(&self, ctx: &Ctx, pb: &PageBuilder, fit: &Fit) -> (usize, bool) {
         let (n, l0, mut l1) = (self.n(), self.l0, fit.l1);
-        // Widow/orphan control (2-line minimum at either end).
+        // Widow/orphan control (2-line minimum at either end). Balancing the columns of a
+        // section's last page from Word 2013's layout (compatibility mode 15) applies it at the
+        // top of a column too, where moving on is no loss, and never leaves one line of a
+        // paragraph that goes on in the next column, even when the paragraph began in an earlier
+        // one (#6821).
+        let strict = Self::strict_widow_control(ctx, pb);
         if fit.forced.is_none() && l1 < n && self.pl.rp.widow_control && n >= 2 {
-            if l1 - l0 == 1 && l0 == 0 && !pb.fresh() {
+            if l1 - l0 == 1 && l0 == 0 && (!pb.fresh() || strict) {
                 l1 = l0; // orphan: move the first line to the next page
             } else if n - l1 == 1 && (l1 - l0 >= 3 || (l0 > 0 && l1 - l0 >= 2)) {
                 l1 -= 1; // widow: take one more line along
-            } else if n - l1 == 1 && l0 == 0 && l1 - l0 == 2 && !pb.fresh() {
+            } else if n - l1 == 1 && l0 == 0 && l1 - l0 == 2 && (!pb.fresh() || strict) {
                 // Neither split of a three-line paragraph is allowed (two and a widow, or an
                 // orphan and two): it moves whole, as in Word.
                 l1 = l0;
             }
+            // One line of a continued paragraph, with more after it (what was left of two lines
+            // after the widow line went along included): the rest moves with it.
+            if strict && l0 > 0 && l1 - l0 == 1 && l1 < n {
+                l1 = l0;
+            }
         }
+        let moved_on = strict && fit.l1 > l0 && l1 == l0;
         // A row (text both sides of a floating object) stays together.
         while l1 > l0 && l1 < n && self.pl.lines.get(l1).is_some_and(|l| l.beside) {
             l1 -= 1;
         }
-        l1
+        (l1, moved_on)
+    }
+
+    /// Whether the columns of this page are being balanced (`balance_columns`) and the document
+    /// has Word 2013's layout: Word then keeps the lines of a paragraph together that widow or
+    /// orphan control would split, at the top of a column as anywhere (#6821). Before compatibility
+    /// mode 15 it splits them.
+    fn strict_widow_control(ctx: &Ctx, pb: &PageBuilder) -> bool {
+        ctx.doc.settings.compat_mode >= 15 && !pb.relaxed && pb.balance.is_some_and(|(page, _)| page + 1 == pb.pages.len())
     }
 
     /// Nothing fits on this page: move to the next column or page, and place the floats again
@@ -656,16 +710,16 @@ impl<'a> Flow<'a> {
         }
     }
 
-    /// Late floats placed for lines that went on after all (past `l1`) wait for the next piece;
-    /// one whose own wrap pushed its line on stays, as before. Whether the lines from `l0` are to
-    /// be broken again without them. Does nothing once the wrap relays are used up
+    /// Late floats placed for lines past `l1` wait for the next piece. An overflow line keeps
+    /// its floats because it is still emitted here. Whether the lines from `l0` are to be broken
+    /// again without the released floats. Does nothing once the wrap relays are used up
     /// ([`MAX_WRAP_RELAYS`]).
-    fn settle_late(&mut self, pb: &mut PageBuilder, l1: usize) -> bool {
+    fn settle_late(&mut self, pb: &mut PageBuilder, l1: usize, overflow: bool) -> bool {
         let l0 = self.l0;
         if l0 == 0 || pb.web || self.late.placed.is_empty() || self.wrap_relays >= MAX_WRAP_RELAYS {
             return false;
         }
-        let end = if l1 == l0 && pb.fresh() { l0 + 1 } else { l1 }; // what the overflow keeps
+        let end = l1 + usize::from(overflow);
         let moved = self.late.release(self.p, &self.pl, end, &mut pb.excl) || self.late.keep_back(self.p, &self.pl, l0..end);
         moved && l1 > l0
     }
@@ -850,6 +904,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         f.anchor_y = y0 - applied_before;
     }
     while f.l0 < f.n() {
+        f.keep_again(ctx, pb, rooms);
         f.place_due_late(ctx, pb);
         f.relay_wrap(ctx, pb);
         f.relay_pages(ctx, pb);
@@ -860,12 +915,20 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { 0.0 };
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
-        fit.l1 = f.settled_end(pb, &fit);
-        if f.settle_late(pb, fit.l1) {
+        let (end, widowed) = f.settled_end(ctx, pb, &fit);
+        fit.l1 = end;
+        // On a fresh column an unfitting line can overflow. Strict widow control instead moves
+        // the lines on without emitting anything and must release their late floats as well.
+        let overflow = end == f.l0 && pb.fresh() && !widowed;
+        if f.settle_late(pb, end, overflow) {
             continue;
         }
         if fit.l1 == f.l0 {
-            if !pb.fresh() {
+            // Balancing: widow/orphan control moved all the lines that fit on to the next column
+            // (or, short of room, the page after, which fails the try), where the lines of a
+            // column's first paragraph would otherwise overflow it. Lines pushed back for a row
+            // beside a floating object keep the overflow as before.
+            if !overflow {
                 f.move_on(ctx, pb);
                 continue;
             }
@@ -1005,8 +1068,9 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of a three-line one under that control (two would leave a widow), or all
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
-/// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
+/// when the paragraph after it cannot start on the page (#966). `new_page`: the next section starts
+/// on a new page, so the chain ends at the paragraph closing this one.
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_page: bool, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
@@ -1041,9 +1105,16 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
-            if pl.rp.keep_next && depth < 8 {
+            // The paragraph closing the section, when the next section starts a new page, keeps
+            // with nothing on this page (Word ignores its Keep with next).
+            if pl.rp.keep_next && depth < 8 && !(new_page && p.section.is_some()) {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+                pl.rp.space_before
+                    + top
+                    + pl.height
+                    + bottom
+                    + pl.rp.space_after
+                    + next_first_line(ctx, block + 1, width, depth + 1, new_page, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -1065,5 +1136,87 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
         }
         Some(Block::Table(_)) => 24.0,
         None => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::Pos;
+    use wordcraft_doc::para::{Anchor, Float, LINE_BREAK, Wrap, WrapText};
+    use wordcraft_doc::props::LineSpacing;
+
+    #[test]
+    fn strict_balancing_remeasures_kept_lines_in_the_next_column() {
+        crate::test_fonts();
+        let mut doc = Document::new();
+        doc.settings.compat_mode = 15;
+        doc.last_section.columns.count = 2;
+        let mut p = Paragraph::with_text("One two three four five six", Default::default());
+        p.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+        p.props.keep_lines = Some(true);
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let p = doc.body[0].as_para().unwrap();
+
+        crate::pass::with_flow_page(&doc, |ctx, pb| {
+            let top = pb.top;
+            pb.balance = Some((0, 28.1));
+            pb.cap_columns();
+            // A preceding floating object leaves a narrow strip of the first column, but does
+            // not occupy the second column. The same kept paragraph fits there in one line.
+            pb.excl.push((Rect::new(pb.col_x(), top, pb.col_w() - 26.0, 100.0), false, None, WrapText::BothSides, false));
+            place_para_in_flow(ctx, pb, p, 0, top);
+
+            assert_eq!(pb.pages.len(), 1, "a fitting candidate kept the balance attempt on its page");
+            assert_eq!(pb.col, 1);
+            assert!(
+                pb.pages[0]
+                    .items
+                    .iter()
+                    .any(|item| { matches!(item, Placed::Lines { x, l0: 0, l1: 1, story: StoryRef::Body, .. } if (*x - pb.col_x()).abs() < 0.01) })
+            );
+        });
+    }
+
+    #[test]
+    fn strict_widow_control_releases_a_late_float_when_no_line_is_emitted() {
+        crate::test_fonts();
+        let mut doc = Document::new();
+        doc.settings.compat_mode = 15;
+        doc.last_section.columns.count = 2;
+        let mut p = Paragraph::with_text(&format!("First{LINE_BREAK}Second{LINE_BREAK}Third"), Default::default());
+        p.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+        p.props.widow_control = Some(true);
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let anchor = Pos::body(0, "First".len() + LINE_BREAK.len_utf8());
+        let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        doc.insert_object(&anchor, crate::tests::rect_shape(20.0, 20.0, float), &Default::default()).unwrap();
+        let p = doc.body[0].as_para().unwrap();
+
+        crate::pass::with_flow_page(&doc, |ctx, pb| {
+            let top = pb.top;
+            let height = 14.1;
+            pb.advance(0, top); // start in the last column of the previous page
+            pb.bottom = top + height;
+            pb.balance = Some((1, height));
+            let mut flow = Flow::new(ctx, pb, p, (0, top));
+            assert!(pb.excl.is_empty(), "the float waits for its anchor line");
+
+            // Continue after the first line. The balance attempt can fit only one of the two lines left.
+            flow.l0 = 1;
+            pb.advance(0, top);
+            assert!(pb.fresh());
+            assert!((pb.bottom - pb.top - height).abs() < 0.01);
+            flow.place_due_late(ctx, pb);
+            assert_eq!(pb.excl.len(), 1, "the anchor line fits before widow control");
+
+            let fit = flow.fit_lines(ctx, pb, &[], 0.0);
+            assert_eq!(fit.l1, 2);
+            let (end, widowed) = flow.settled_end(ctx, pb, &fit);
+            assert_eq!((end, widowed), (1, true));
+            let overflow = end == flow.l0 && pb.fresh() && !widowed;
+            assert!(!flow.settle_late(pb, end, overflow));
+            assert!(pb.excl.is_empty(), "no text is emitted here, so no wrap area may remain here");
+        });
     }
 }
