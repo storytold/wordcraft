@@ -87,12 +87,7 @@ fn html_matches_clipboard(h: &str, clip: &str) -> bool {
     if clip.is_empty() {
         return false;
     }
-    if let Some(body) = extract_body(h) {
-        if body == clip || body.trim() == clip.trim() {
-            return true;
-        }
-    }
-    false
+    extract_body(h).is_some_and(|body| body == clip || body.trim() == clip.trim())
 }
 
 /// Whether the clipboard payload matches WordCraft's session clipboard copy, so the session's
