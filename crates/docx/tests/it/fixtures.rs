@@ -1,6 +1,5 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
-use std::io::Write;
 use std::sync::Arc;
 
 use wordcraft_doc::fill::Fill;
@@ -13,12 +12,11 @@ const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingm
 const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
 pub fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn rels(list: &[(&str, &str, &str)]) -> String {
@@ -1282,10 +1280,12 @@ fn anchor_stacking_order_is_read_and_kept() {
         paras(d)[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.z) } else { None }).collect()
     };
     let d = read_body(&body);
-    assert_eq!(zs(&d), [251660288, 251657214, 0]);
+    // The shared reader keeps one more than the file's `relativeHeight` (so a file's 0 is the
+    // lowest order, not "none") and the writer writes one less.
+    assert_eq!(zs(&d), [251660289, 251657215, 0]);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     let z = zs(&again);
-    assert_eq!(&z[..2], &[251660288, 251657214]);
+    assert_eq!(&z[..2], &[251660289, 251657215]);
     assert!(z[2] > 0, "an object without one gets an order on saving: {z:?}");
 }
 
@@ -1483,10 +1483,9 @@ fn word_watermark_survives_save() {
     };
     assert_eq!(headers(&d2), headers(&d));
     assert_eq!(headers(&d2)[0], vec!["Header label".to_string(), "Second line".to_string()]);
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
     for name in ["word/header1.xml", "word/header2.xml"] {
-        let mut xml = String::new();
-        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut xml).unwrap();
+        let xml = String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap();
         assert_eq!(xml.matches("<v:shape ").count(), 1, "{name}");
     }
 
@@ -1662,14 +1661,12 @@ fn chart_docx() -> Vec<u8> {
 
 /// The entries of a zip, by name.
 fn unzip(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
-    use std::io::Read;
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
     let mut out = std::collections::BTreeMap::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).unwrap();
-        let mut b = Vec::new();
-        f.read_to_end(&mut b).unwrap();
-        out.insert(f.name().to_string(), b);
+    for name in names {
+        let b = z.read(&name, 16 << 20).unwrap().unwrap();
+        out.insert(name, b);
     }
     out
 }
@@ -2127,9 +2124,10 @@ fn rotated_ole_objects_round_trip() {
     let body = text(&unzip(&out), "word/document.xml");
     assert_eq!(attr_values(&body, "a:xfrm", "rot"), ["5400000"]);
     assert_eq!(attr_values(&body, "a:xfrm", "flipH"), ["1"]);
-    // 72 × 36 pt turned 90°: 18 pt narrower each side, 18 pt taller each side.
-    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["-228600"]);
-    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["228600"]);
+    // 72 × 36 pt turned 90°: Word measures that against the frame turned with it, so a quarter
+    // turn adds no effect extent.
+    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["0"]);
+    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
     let back = wordcraft_docx::read(&out).unwrap();
     let o = &paras(&back)[0].objects[0];
     assert!(matches!(o, InlineObject::Image { ole: Some(_), .. }), "{o:?}");
@@ -2174,9 +2172,8 @@ fn formatting_revisions_round_trip() {
 
     // Written back: each change is the last child of its parent, and reads back the same.
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     for (tag, parent) in [
         ("w:rPrChange", "</w:rPr></w:rPrChange></w:rPr>"),
         ("w:pPrChange", "</w:pPr></w:pPrChange></w:pPr>"),
@@ -2432,10 +2429,9 @@ fn note_separators_and_continuation_notice_round_trip() {
 
     let out = wordcraft_docx::write(&d).unwrap();
     let part = |name: &str| {
-        let mut z = zip::ZipArchive::new(std::io::Cursor::new(&out)).unwrap();
-        let mut xml = String::new();
-        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut xml).unwrap();
-        xml
+        let mut z = craft_zip::Archive::open(&out, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+        String::from_utf8(z.read(name, 16 << 20).unwrap().unwrap()).unwrap()
     };
     let notes = part("word/footnotes.xml");
     for (kind, id) in [("separator", "-1"), ("continuationSeparator", "0"), ("continuationNotice", "1")] {
@@ -2558,13 +2554,12 @@ fn includepicture_keeps_its_embedded_picture() {
         let bytes = docx(&format!("<w:p>{field}</w:p><w:sectPr/>"), &[("rIdPic", "image", "media/picture.png")], &[]);
         let bytes = {
             // `docx` takes text parts; add the picture bytes as a binary part.
-            let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+            let names: Vec<String> = z.names().map(|n| n.into_owned()).collect();
             let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-            for i in 0..z.len() {
-                let mut f = z.by_index(i).unwrap();
-                let mut v = Vec::new();
-                std::io::Read::read_to_end(&mut f, &mut v).unwrap();
-                entries.push((f.name().to_string(), v));
+            for name in names {
+                let v = z.read(&name, 16 << 20).unwrap().unwrap();
+                entries.push((name, v));
             }
             entries.push(("word/media/picture.png".into(), png.to_vec()));
             zip(&entries.iter().map(|(n, v)| (n.as_str(), v.as_slice())).collect::<Vec<_>>())
@@ -2678,9 +2673,8 @@ fn rounded_rectangle_corners_are_read_and_saved() {
     let d = read_body(&format!("<w:p>{body}</w:p>"));
     assert_eq!(corners(&d), expected);
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut xml = String::new();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 3565"/></a:avLst></a:prstGeom>"#), "{xml}");
     assert_eq!(corners(&wordcraft_docx::read(&bytes).unwrap()), expected);
 }
@@ -2745,9 +2739,8 @@ fn arrowheads_keep_their_kind_and_size() {
     let d = read_body(&format!("<w:p>{body}</w:p>"));
     assert_eq!(ends(&d), expected);
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut xml = String::new();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
-    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut zip = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(zip.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"<a:headEnd type="stealth" w="sm" len="lg"/>"#), "{xml}");
     assert!(xml.contains(r#"<a:tailEnd type="diamond" w="lg" len="sm"/>"#), "{xml}");
     assert_eq!(ends(&wordcraft_docx::read(&bytes).unwrap()), expected);
@@ -2870,9 +2863,8 @@ fn vml_preset_shape_survives_saving() {
         r##"<w:p><w:r><w:pict>{VML_RIGHT_ARROW_TYPE}<v:shape type="#_x0000_t13" style="width:120pt;height:40pt" fillcolor="#ffa500"/></w:pict></w:r></w:p>"##
     );
     let saved = wordcraft_docx::write(&read_body(&body)).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.as_slice())).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&saved, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"prst="rightArrow""#), "{xml}");
     let again = wordcraft_docx::read(&saved).unwrap();
     assert!(
@@ -2898,9 +2890,8 @@ fn vml_preset_shape_survives_saving() {
 fn vml_nearest_preset_shape_survives_saving() {
     let body = r##"<w:p><w:r><w:pict><v:shape type="#_x0000_t66" style="width:60pt;height:20pt" fillcolor="#ffa500"/></w:pict></w:r></w:p>"##;
     let saved = wordcraft_docx::write(&read_body(body)).unwrap();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.as_slice())).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&saved, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains(r#"prst="leftArrow""#), "{xml}");
     let again = wordcraft_docx::read(&saved).unwrap();
     assert!(
@@ -3047,9 +3038,8 @@ fn drawingml_shapes_survive_saving() {
     let again = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(shapes(&again), read, "every shape survives saving");
     assert_eq!(part_text_box(&again), "Floating text box");
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let mut z = craft_zip::Archive::open(&bytes[..], craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let xml = String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(xml.matches("<wps:wsp>").count(), 7);
     for p in presets.iter().chain(&["straightConnector1"]) {
         assert!(xml.contains(&format!(r#"<a:prstGeom prst="{p}">"#)), "{p} is written");
@@ -3327,7 +3317,7 @@ fn native_ink_markup_limit_does_not_write_a_dangling_reference() {
 fn native_ink_preserves_inner_transform_and_rotation_padding_on_unrelated_saves() {
     let mut files = unzip(&ink_docx(false, false));
     let body = text(&files, "word/document.xml")
-        .replace("<wp:docPr", r#"<wp:effectExtent l="55468" t="512668" r="55468" b="512668"/><wp:docPr"#)
+        .replace("<wp:docPr", r#"<wp:effectExtent l="512668" t="55468" r="512668" b="55468"/><wp:docPr"#)
         .replace("<q:xfrm>", r#"<q:xfrm rot="2700000">"#)
         .replace(r#"<a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/>"#, r#"<a:off x="127000" y="254000"/><a:ext cx="914400" cy="457200"/>"#);
     files.insert("word/document.xml".into(), body.into_bytes());
@@ -4044,20 +4034,19 @@ fn hyperlink_with_empty_target_is_no_link() {
     let bytes = docx(body, &[("rId2", "hyperlink", "https://x"), ("rId3", "hyperlink", "mailto:a@example.com")], &[]);
     // Blank the first target and mark the mailto one external (the helper only does that for http).
     let bytes = {
-        let mut zr = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut zr = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+        let names: Vec<String> = zr.names().map(|n| n.into_owned()).collect();
         let mut entries = Vec::new();
-        for i in 0..zr.len() {
-            let mut f = zr.by_index(i).unwrap();
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
-            if f.name() == "word/_rels/document.xml.rels" {
+        for name in names {
+            let mut buf = zr.read(&name, 16 << 20).unwrap().unwrap();
+            if name == "word/_rels/document.xml.rels" {
                 buf = String::from_utf8(buf)
                     .unwrap()
                     .replace("Target=\"https://x\"", "Target=\"\"")
                     .replace("a@example.com\"", "a@example.com\" TargetMode=\"External\"")
                     .into_bytes();
             }
-            entries.push((f.name().to_string(), buf));
+            entries.push((name, buf));
         }
         let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
         zip(&refs)
@@ -4575,7 +4564,7 @@ fn shape_gradients_and_transparency_are_read_and_survive_saving() {
             rot_with_shape: false,
             flip: GradientFlip::Xy,
         }))),
-        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(0x20, 0x40, 0x60), 0.0)], lin(90.0, false), true)),
+        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(44, 92, 140), 0.0)], lin(90.0, false), true)),
         Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, black, 0.0)], centre, true)),
         None,
     ];
@@ -4645,6 +4634,29 @@ fn our_banded_table_styles_write_their_band_sizes() {
     assert!(style.contains(r#"<w:tblPr><w:tblStyleRowBandSize w:val="1"/><w:tblStyleColBandSize w:val="1"/>"#), "{style}");
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(back.styles.table_style("GridTable4AccentBlue").map(|t| t.parts.band_size), Some(Some(1)));
+}
+
+/// #4198: built-in styles and table styles write `w:bCs` beside `w:b` and `w:iCs` beside `w:i` in
+/// `word/styles.xml`, so Word and LibreOffice draw Arabic and Hebrew headers and emphasis bold or
+/// italic just as WordCraft does.
+#[test]
+fn builtin_styles_write_bcs_and_ics_with_b_and_i() {
+    let d = Document::new();
+    let xml = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/styles.xml");
+    let start = xml.find(r#"w:styleId="GridTable4AccentBlue""#).expect("Grid Table 4 – Blue is written");
+    let style = &xml[start..start + xml[start..].find("</w:style>").unwrap()];
+    assert!(
+        style.contains(r#"<w:tblStylePr w:type="firstRow"><w:rPr><w:b/><w:bCs/><w:color w:val="FFFFFF"/></w:rPr>"#),
+        "firstRow has w:bCs beside w:b: {style}"
+    );
+    assert!(
+        style.contains(r#"<w:tblStylePr w:type="firstCol"><w:rPr><w:b/><w:bCs/></w:rPr></w:tblStylePr>"#),
+        "firstCol has w:bCs beside w:b: {style}"
+    );
+    for rpr in xml.split("<w:rPr>").skip(1).filter_map(|s| s.split("</w:rPr>").next()) {
+        assert_eq!(rpr.contains("<w:b/>"), rpr.contains("<w:bCs/>"), "unpaired w:b / w:bCs in {rpr}");
+        assert_eq!(rpr.contains("<w:i/>"), rpr.contains("<w:iCs/>"), "unpaired w:i / w:iCs in {rpr}");
+    }
 }
 
 #[test]
