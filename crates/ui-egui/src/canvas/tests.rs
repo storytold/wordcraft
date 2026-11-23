@@ -747,7 +747,7 @@ fn double_click_empty_page_space_adds_lines_and_places_the_caret() {
     use egui::{Event, PointerButton};
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Top")), Default::default());
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -756,18 +756,18 @@ fn double_click_empty_page_space_adds_lines_and_places_the_caret() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let double_click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2| {
         h.event(Event::PointerMoved(at));
         for _ in 0..2 {
             h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-            h.step();
+            h.app_frame();
             h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
-            h.step();
+            h.app_frame();
         }
         for _ in 0..40 {
-            h.step();
+            h.app_frame();
         }
     };
     let before = h.state().session.doc.body.len();
@@ -790,7 +790,7 @@ fn double_click_beside_a_line_selects_a_word() {
     use egui::{Event, PointerButton};
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Alpha beta")), Default::default());
     a.run("view.commentsPane", json!({"value": false})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -799,7 +799,7 @@ fn double_click_beside_a_line_selects_a_word() {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     let (x, y) = {
         let page = h.state_mut().session.layout().pages[0].clone();
@@ -810,12 +810,12 @@ fn double_click_beside_a_line_selects_a_word() {
     h.event(Event::PointerMoved(at));
     for _ in 0..2 {
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
         h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     }
     for _ in 0..40 {
-        h.step();
+        h.app_frame();
     }
     assert!(!h.state().session.sel.is_collapsed(), "the word is selected: {:?}", h.state().session.sel);
     assert_eq!(h.state().session.selected_text(), "beta");
