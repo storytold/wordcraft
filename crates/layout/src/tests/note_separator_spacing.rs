@@ -234,6 +234,49 @@ fn separator_wrapping_object_covered_by_after_space_stays_clear_of_notes() {
     assert!(note >= bottom - 0.01, "note {note} overlaps separator shape ending at {bottom}");
 }
 
+#[test]
+fn separator_frame_covered_by_after_space_stays_clear_of_notes() {
+    use wordcraft_doc::props::TextFrame;
+
+    let mut doc = pagination_fixture_document("SYNTHETIC BODY");
+    let id = footnote(&mut doc, &Pos::body(0, 0), "SYNTHETIC NOTE");
+    let note = doc.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    note.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+    note.props.space_after = Some(0.0);
+
+    let mut frame = Paragraph::with_text("Frame", Default::default());
+    frame.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+    frame.props.frame = Some(TextFrame {
+        w: Some(100.0),
+        h: Some(30.0),
+        h_exact: true,
+        x: 200.0,
+        y: 4.0,
+        h_anchor: "text".into(),
+        v_anchor: "text".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    });
+    let mut blocks = separator(false, Some(48.0));
+    blocks.insert(0, para_block(frame));
+    doc.footnote_separators.separator = Some(blocks);
+
+    let layout = lay(&doc);
+    let frame_bottom = layout.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Lines { story, path, para, y, l0, l1, .. } if *story == DECOR_STORY && *path == Path::top(0) => {
+                assert_eq!(*l1, *l0 + 1);
+                Some(*y + para.lines[*l0].height)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let note_top = layout.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).unwrap().top;
+    assert!(note_top >= frame_bottom - 0.01, "note at {note_top} overlaps separator frame ending at {frame_bottom}");
+}
+
 /// A shape beyond the original separator height does not acquire a new full-height reservation.
 #[test]
 fn separator_keeps_the_prior_limit_for_an_overflowing_wrapping_object() {

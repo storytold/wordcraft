@@ -463,9 +463,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // Trim only after-space actually applied by a final footnote-separator paragraph block.
     // A trailing table or framed paragraph makes the preceding paragraph's gap internal.
     // Keep line height and border room; ordinary boxes retain their after-space.
-    // Keep wrapping objects that the original paragraph height covered clear of the notes.
-    // Objects beyond that prior height keep their existing unreserved extent.
-    let height = (y - trailing_after).max(float_objects_bottom.min(y)).max(0.0);
+    // Keep floats and frames covered by the original height clear of the notes.
+    // Content beyond that prior height keeps its existing unreserved extent.
+    let height = (y - trailing_after).max(floats_bottom.min(y)).max(0.0);
     BoxLayout { items, height, floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
