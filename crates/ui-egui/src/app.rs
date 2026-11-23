@@ -6,6 +6,7 @@ use super::{
     theme, updates_ui, window_ui, windows, zotero,
 };
 use craft::platform::clock::monotonic_ms;
+use craft::theme::ComponentSet;
 use craft::ui::runtime::commands::CommandInput;
 use craft::ui::runtime::env::{AltCodePages, ResolvedRoot, RootEnv, WheelSpeed};
 use craft::ui::runtime::frame::{FrameInput, FrameOutput};
@@ -184,7 +185,7 @@ impl WordApp {
     }
 
     /// This frame's root values: the wheel speed, the Alt-code pages, the interface mode,
-    /// motion, scale and direction. Built from the saved settings every frame, so a change
+    /// motion, scale, direction and the component set (WordCraft takes the productivity set). Built from the saved settings every frame, so a change
     /// applies at once.
     pub fn root_env(&self) -> RootEnv {
         let lang = i18n::Lang::from_pref(&self.ui.language);
@@ -204,7 +205,8 @@ impl WordApp {
             .direction(direction)
             .mode(self.ui.theme.mode())
             .wheel_speed(WheelSpeed::new(line, point))
-            .alt_code_pages(AltCodePages::new(ansi, oem));
+            .alt_code_pages(AltCodePages::new(ansi, oem))
+            .set(ComponentSet::Productivity);
         env.motion = self.ui.animations.motion();
         env.sizes = std::sync::Arc::clone(&APP_SIZES);
         env
