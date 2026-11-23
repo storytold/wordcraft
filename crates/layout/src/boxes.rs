@@ -7,7 +7,7 @@ use super::placed::Placed;
 use super::table_flow::below;
 use super::{
     Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
-    Wrap, WrapText, para, table,
+    Wrap, WrapText, display, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -188,6 +188,30 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     true
 }
 
+/// Whether `story` is a header in a document of Word 2010's layout or older (compatibility mode
+/// below 15), whose text keeps its place beside the header's own floating objects (#6805).
+fn is_legacy_header(ctx: &Ctx, story: StoryRef) -> bool {
+    ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
+        && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header))
+}
+
+/// Where a top and bottom object at `r` starts and ends for such a header.
+/// The distance below it counts (Word: 14.4 pt more for 14.4 pt); the one above neither moves it
+/// nor makes the header taller.
+fn legacy_reach_of(float: &wordcraft_doc::para::Float, r: Rect) -> Option<(f32, f32)> {
+    let below = if float.dist_bottom.is_finite() { float.dist_bottom.clamp(0.0, 1584.0) } else { 0.0 };
+    let bounds = float.spin().bounds(r);
+    (float.wrap == Wrap::TopAndBottom).then_some((bounds.y, bounds.bottom() + below))
+}
+
+/// The bottom of the lowest top and bottom object (`reach`) that starts above `text_bottom`, the
+/// end of the header's text with the space after its last paragraph (Word counts an object
+/// starting in it). Word also counts one starting a little further down (about 25 pt below one
+/// line of text), not modelled here. Zero when there is none.
+fn legacy_header_reach(text_bottom: f32, reach: &[(f32, f32)]) -> f32 {
+    reach.iter().filter(|(top, _)| *top < text_bottom).map(|(_, bottom)| *bottom).fold(0.0, f32::max)
+}
+
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
 /// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `frame`
 /// says where the box sits on its page, for floating objects positioned relative to the page or
@@ -217,6 +241,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // bottom edge (#3108). Behind-text and in-front-of-text objects don't: a page-anchored logo or
     // watermark behind a cell's text must not stretch its row (see `align_h` in table.rs).
     let mut float_objects_bottom = 0.0f32;
+    // A header in a document of Word 2010's layout or older (compatibility mode below 15): its
+    // text keeps its place beside its own objects, which wrap nothing, and only a top and bottom
+    // object reaching down from the text makes the header taller (#6805). Not in a table cell.
+    let legacy_header = !in_cell && is_legacy_header(ctx, story);
+    // Contour wraps were measured in mode 14; earlier modes keep using their existing rule.
+    let legacy_header_contours = legacy_header && ctx.doc.settings.compat_mode == 14;
+    // Top and bottom objects of such a header: where each starts and ends.
+    let mut legacy_reach: Vec<(f32, f32)> = Vec::new();
     let mut table_areas = Vec::new();
     let mut page_table_wraps = Vec::new();
     let mut y = 0.0f32;
@@ -307,8 +339,15 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    if (legacy_header && matches!(float.wrap, Wrap::TopAndBottom | Wrap::Square))
+                        || (legacy_header_contours && matches!(float.wrap, Wrap::Tight | Wrap::Through))
+                    {
+                        // These objects do not reflow the legacy header's own text in Word.
+                        legacy_reach.extend(legacy_reach_of(float, r));
+                    } else {
+                        let outline = ctx.wrap_outline(o);
+                        excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                    }
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
@@ -325,6 +364,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 if below {
                     edges.bottom = 0.0;
                 }
+                edges.joined = [above, below];
                 let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0)) + edges.top;
                 if above {
                     edges.up = (y + lead - prev_end).max(0.0);
@@ -402,6 +442,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
             }
         }
     }
+    y = y.max(legacy_header_reach(y, &legacy_reach));
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
@@ -638,19 +679,26 @@ fn border_room(b: Option<Border>) -> f32 {
 /// How a piece of a paragraph meets the paragraphs around it: the room taken by its top and
 /// bottom borders (0: none drawn there — the paragraph goes on from or into one of its border
 /// group, or it is split there) and how far its shading and side borders reach up to join the
-/// paragraph above in its group.
+/// paragraph above in its group, and whether it goes on from the paragraph above and into the one
+/// below in that group (its side lines don't run on past those ends).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Edges {
     pub(crate) top: f32,
     pub(crate) bottom: f32,
     pub(crate) up: f32,
+    pub(crate) joined: [bool; 2],
 }
 
 impl Edges {
     /// A paragraph on its own: its top and bottom borders at its ends.
     pub(crate) fn own(pl: &ParaLayout, l0: usize, l1: usize) -> Edges {
         let b = pl.rp.borders.unwrap_or_default();
-        Edges { top: if l0 == 0 { border_room(b.top) } else { 0.0 }, bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 }, up: 0.0 }
+        Edges {
+            top: if l0 == 0 { border_room(b.top) } else { 0.0 },
+            bottom: if l1 >= pl.lines.len() { border_room(b.bottom) } else { 0.0 },
+            up: 0.0,
+            joined: [false; 2],
+        }
     }
 }
 
@@ -685,23 +733,38 @@ pub(crate) fn push_para(
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
-        // All four lines lie beyond their distance from the text; top and bottom reach the corners.
-        if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
-            let ty = y - t.space - t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
-        }
-        if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
-            let by = y + h + t.space + t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
-        }
-        if let Some(t) = b.left.filter(Border::is_visible) {
-            let bx = lx + t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
-        }
-        if let Some(t) = b.right.filter(Border::is_visible) {
-            let bx = rx - t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
-        }
+        // All four lines lie beyond their distance from the text (`lx`, `rx`: the side lines'
+        // outer edges); `box_rules` runs the top and bottom over the side lines to those edges.
+        let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |t| t.width / 2.0);
+        let (cl, cr) = (lx + half(b.left), rx - half(b.right));
+        let tb = b.top.filter(|t| e.top > 0.0 && t.is_visible());
+        let bb = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible());
+        let ty = tb.map_or(top, |t| y - t.space - t.width / 2.0);
+        let by = bb.map_or(bottom, |t| y + h + t.space + t.width / 2.0);
+        box_rules(items, (cl, ty, cr, by), [tb, bb, b.left, b.right], e.joined);
     }
     y + h
+}
+
+/// The visible lines of a border box with corners `(x0, y0)` and `(x1, y1)` (`[top, bottom, left,
+/// right]`), ending square as Word draws them: a top or bottom line runs on over half the side
+/// line it meets, or half its own width where there is none, so single-line boxes close at the
+/// corners; a side line runs on to the outer edge of the top or bottom line it meets, or by half
+/// its own width where there is none, unless the box goes on there (`joined`: at the top, at the
+/// bottom).
+pub(crate) fn box_rules(items: &mut Vec<Placed>, (x0, y0, x1, y1): (f32, f32, f32, f32), sides: [Option<Border>; 4], joined: [bool; 2]) {
+    let [top, bottom, left, right] = sides.map(|b| b.filter(Border::is_visible));
+    let half = |t: &Border| display::rule_width(t) / 2.0;
+    for (t, y) in [(top, y0), (bottom, y1)] {
+        if let Some(t) = t {
+            let over = |side: Option<Border>| half(&side.unwrap_or(t));
+            items.push(Placed::Rule { x0: x0 - over(left), y0: y, x1: x1 + over(right), y1: y, border: t });
+        }
+    }
+    for (t, x) in [(left, x0), (right, x1)] {
+        if let Some(t) = t {
+            let end = |o: Option<Border>, joined: bool| if joined { 0.0 } else { half(&o.unwrap_or(t)) };
+            items.push(Placed::Rule { x0: x, y0: y0 - end(top, joined[0]), x1: x, y1: y1 + end(bottom, joined[1]), border: t });
+        }
+    }
 }
