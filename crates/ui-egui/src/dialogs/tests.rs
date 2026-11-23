@@ -1785,3 +1785,18 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
         assert!(present, "the translated field is {name}");
     }
 }
+
+/// #7446: the SmartArt picker renders compact layout tiles capped at three rows (PICKER_HEIGHT = 304),
+/// instead of expanding each thumbnail to default card dimensions (~132×132 pt) and overflowing.
+#[test]
+fn smartart_layout_cells_keep_productions_size() {
+    use egui::accesskit::Role;
+
+    let mut h = app_harness(app_with("Text"));
+    open_named(&mut h, "insertSmartArt", json!({}));
+    crate::test_harness::frames(&mut h, 4);
+    let cell = h.get_by_role_and_label(Role::ListItem, "Basic List").rect();
+    assert!(cell.width() <= 80.0 && cell.height() <= 102.0, "a layout cell is 75×93, got {:?}", cell.size());
+    let grid = h.get_by_role_and_label(Role::ListBox, "Layouts").rect();
+    assert!(grid.height() <= 304.0, "the picker is three 96 pt rows, got {:?}", grid.size());
+}
