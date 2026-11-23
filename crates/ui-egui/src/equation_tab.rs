@@ -4,14 +4,25 @@
 //! limits and logs, operators, matrices). Tiles and button pictures are rendered by the math
 //! engine itself.
 
-use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use craft::behavior::{DisplayOrder, IconId, ItemSource, Selection};
+use craft::keymap::CommandRef;
+use craft::menu::ribbon::{Gallery, GalleryFace, GalleryItem, GalleryMore, RibbonGroup, RibbonRow};
+use craft::ui::buttons::{Arrangement, Button, SplitButton, SplitMenu, ToggleButton};
+use craft::ui::contract::{
+    ActivateOn, Bind, BodyCx, CollectionEvent, Gap, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+};
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::menu::MenuItem;
+use craft::ui::runtime::env::Label;
+use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
+use egui::{Color32, Ui};
 use serde_json::json;
-use wordcraft_doc::math::parse_linear;
-use wordcraft_engine::math_gallery::{BUILT_INS, STRUCTURES, SYMBOL_SETS, Template};
+use wordcraft_doc::math::{MNode, MRun, parse_linear};
+use wordcraft_engine::math_gallery::{BUILT_INS, STRUCTURES, SYMBOL_SETS};
 
 use crate::WordApp;
-use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, LABEL_PITCH, group, small};
+use crate::previews::{MathSource, math_key, math_picture, math_thumbnails};
+use crate::ribbon::common::menu_button;
 
 /// What each structure button shows.
 pub(crate) fn button_picture(id: &str) -> &'static str {
@@ -31,38 +42,68 @@ pub(crate) fn button_picture(id: &str) -> &'static str {
     }
 }
 
-/// A rendered equation drawn into `r` (centred), or its linear text while it renders.
-struct MathPreview<'a> {
-    rect: Rect,
-    key: &'a str,
-    linear: &'a str,
-    nodes: Option<wordcraft_doc::math::Arg>,
-    display: bool,
-    points: f32,
+/// The ink math pictures are rendered in: the theme's text colour.
+fn ink(ui: &Ui) -> Color32 {
+    ui.visuals().text_color()
 }
 
-fn paint_math(app: &mut WordApp, ui: &Ui, preview: MathPreview<'_>) {
-    let MathPreview { rect: r, key, linear, nodes, display, points: pt } = preview;
-    let nodes = nodes.unwrap_or_else(|| parse_linear(linear));
-    match crate::previews::math_texture(app, ui.ctx(), key, &nodes, display, pt, r.size()) {
-        Some((tex, uv)) => {
-            ui.painter().image(tex, r, uv, Tokens::get(ui.ctx()).text);
-        }
-        None => {
-            let t = Tokens::get(ui.ctx());
-            // Math previews are asynchronous. Interface fonts need not cover the math font's
-            // repertoire, so use readable linear commands until the actual equation is ready.
-            let placeholder = math_placeholder(ui, linear);
-            ui.painter().with_clip_rect(r).text(r.center(), Align2::CENTER_CENTER, placeholder, regular(11.0), t.text_dim);
+/// The keys `0..n` as a collection source.
+pub(crate) struct Indexes(pub usize);
+
+impl DisplayOrder<usize> for Indexes {
+    fn len(&self) -> usize {
+        self.0
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        (*key < self.0).then_some(*key)
+    }
+}
+
+impl ItemSource<usize> for Indexes {}
+
+/// A grid of `count` tiles in `columns` columns, `current` marked; returns the tile the user activated this
+/// pass (a click or Enter). Arrow keys only move the lead, so a keyboard user can browse the grid without
+/// running a tile.
+pub(crate) fn pick_tile<'r>(
+    ui: &mut Ui,
+    label: &str,
+    columns: usize,
+    caption: CaptionPlace,
+    current: Option<usize>,
+    count: usize,
+    mut tile: impl FnMut(usize) -> Tile<'r> + 'r,
+) -> Option<usize> {
+    let selection = Selection::<usize>::new(current.into_iter().collect(), current, current);
+    let grid = TileGrid::<usize>::new(label.to_string())
+        .select(SelectMode::Single)
+        .selection(Bind::given(selection))
+        .activate(ActivateOn::Click)
+        .arrows_select(false)
+        .caption(caption)
+        .card_columns(columns)
+        // Shown in a menu whose body is the one scroll (production scrolls the whole menu, not each grid).
+        .natural_height(true);
+    let out = grid.show_items(ui, &Indexes(count), &mut |key, _| tile(*key));
+    let mut picked = None;
+    for event in out.response.events {
+        if let CollectionEvent::Activate(key) = event {
+            picked = Some(key);
         }
     }
+    picked
 }
 
 /// Builds a readable fallback for a math preview from the interface fonts' glyph coverage:
 /// covered characters and whitespace stay, while a missing glyph becomes its UnicodeMath name
 /// or a `U+XXXX` codepoint.
 fn math_placeholder(ui: &Ui, linear: &str) -> String {
-    let font = regular(11.0);
+    // Coverage depends on the family, not the size.
+    let font = egui::TextStyle::Body.resolve(ui.style());
     math_placeholder_with(linear, |c| ui.fonts_mut(|fonts| fonts.has_glyph(&font, c)))
 }
 
@@ -103,229 +144,121 @@ pub(crate) fn placeholder_linears() -> impl Iterator<Item = String> {
         .chain(symbols)
 }
 
-/// A big ribbon button whose picture is an equation; opens `menu`.
-fn math_menu_button(ui: &mut Ui, app: &mut WordApp, picture: &str, label: &str, menu: impl FnOnce(&mut Ui, &mut WordApp)) {
-    let label = tl!(label);
-    let t = Tokens::get(ui.ctx());
-    let galley_w =
-        label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
-    let w = (galley_w + 22.0).max(46.0);
-    let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(r, 4.0, t.hover);
-    }
-    let pic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(40.0, 32.0));
-    ui.painter().rect_filled(pic, 3.0, t.input);
-    paint_math(app, ui, MathPreview { rect: pic, key: &format!("btn:{picture}"), linear: picture, nodes: None, display: false, points: 12.0 });
-    let lines: Vec<&str> = label.split('\n').collect();
-    let mut y = r.min.y + BIG_LABEL_Y;
-    for (i, l) in lines.iter().enumerate() {
-        crate::widgets::label_line(ui, r.center().x, y, l, regular(11.5), t.text, i + 1 == lines.len());
-        y += LABEL_PITCH;
-    }
-    let resp = resp.on_hover_text(label.replace('\n', " "));
-    crate::rtl::menu(&resp).show(|ui| {
-        ui.set_min_width(260.0);
-        menu(ui, app);
-    });
+/// One button whose picture is an equation over its label; the button opens `body` as a menu.
+fn math_menu_button(ui: &mut Ui, picture: &str, label: &str, body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) {
+    let thumbs = math_thumbnails(ui.ctx());
+    let source = MathSource::new(parse_linear(picture), false, 12.0, [5, 4], ink(ui));
+    let face = Button::new(tl!(label).to_string())
+        .picture(source.thumb_aspect(), math_picture(tl!(label).to_string(), math_key(&format!("btn:{picture}")), &thumbs, &source))
+        .arrangement(Arrangement::Stacked);
+    let _ = menu_button(ui, face, tl!(label).to_string(), None, body);
 }
 
-/// One gallery tile: the template rendered, its name as a tooltip.
-fn tile(ui: &mut Ui, app: &mut WordApp, tpl: &Template, size: egui::Vec2) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    ui.painter().rect_filled(r, 2.0, t.input);
-    if resp.hovered() {
-        ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
-    }
-    let pt = if size.x > 120.0 { 13.0 } else { 14.0 };
-    paint_math(
-        app,
-        ui,
-        MathPreview { rect: r.shrink(2.0), key: &format!("tpl:{}", tpl.id), linear: tpl.linear, nodes: Some(tpl.nodes()), display: true, points: pt },
-    );
-    resp.on_hover_text(tl!(tpl.label)).clicked()
+/// The picture source of one symbol, as a literal run.
+fn symbol_source(c: char, ink: Color32) -> MathSource {
+    let nodes = vec![MNode::Run(MRun { text: c.to_string(), lit: true, ..Default::default() })];
+    MathSource::new(nodes, false, 11.0, [1, 1], ink)
 }
 
-fn section_heading(ui: &mut Ui, name: &str) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().max(240.0), 20.0), Sense::hover());
-    ui.painter().rect_filled(r, 0.0, t.hover);
-    ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, tl!(name), semibold(11.5), t.text);
+/// A grid of rendered math tiles, `(name, picture key)` each over its own source, shaped as the sources are;
+/// returns the tile picked.
+fn math_grid(ui: &mut Ui, label: &str, columns: usize, caption: CaptionPlace, tiles: &[(String, String)], sources: &[MathSource]) -> Option<usize> {
+    let aspect = sources.first().map(MathSource::thumb_aspect)?;
+    let thumbs = math_thumbnails(ui.ctx());
+    pick_tile(ui, label, columns, caption, None, tiles.len(), |at| match (tiles.get(at), sources.get(at)) {
+        (Some((name, key)), Some(source)) => Tile::new(name.clone()).picture(aspect, math_picture(name.clone(), math_key(key), &thumbs, source)),
+        _ => Tile::new(String::new()),
+    })
 }
 
-/// A structure gallery's menu.
-fn structure_menu(ui: &mut Ui, app: &mut WordApp, gallery_id: &str) {
+/// A structure gallery's menu: a heading and a grid of tiles per section.
+fn structure_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, gallery_id: &str) {
     let Some(g) = STRUCTURES.iter().find(|g| g.id == gallery_id) else { return };
-    egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
-        ui.set_width(330.0);
-        for (name, templates) in g.sections {
-            section_heading(ui, name);
-            let wide = name.starts_with("Common") || templates.iter().all(|t| !t.linear.contains('⬚')) && templates.len() <= 3;
-            let size = if wide { vec2(158.0, 60.0) } else { vec2(60.0, 56.0) };
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                for tpl in templates.iter() {
-                    if tile(ui, app, tpl, size) {
-                        let _ = app.run("equation.insertStructure", json!({"id": tpl.id}));
-                        app.canvas.want_focus = true;
-                        ui.close();
-                    }
-                }
-            });
-            ui.add_space(4.0);
+    let ink = ink(ui);
+    for (name, templates) in g.sections {
+        MenuItem::heading(tl!(name).to_string()).show(ui);
+        let wide = name.starts_with("Common") || templates.iter().all(|t| !t.linear.contains('⬚')) && templates.len() <= 3;
+        let (shape, columns, pt) = if wide { ([79, 30], 2, 13.0) } else { ([15, 14], 5, 14.0) };
+        let sources: Vec<MathSource> = templates.iter().map(|t| MathSource::new(t.nodes(), true, pt, shape, ink)).collect();
+        let tiles: Vec<(String, String)> = templates.iter().map(|t| (tl!(t.label).to_string(), format!("tpl:{}:{pt}", t.id))).collect();
+        if let Some(tpl) = math_grid(ui, name, columns, CaptionPlace::None, &tiles, &sources).and_then(|i| templates.get(i)) {
+            let _ = app.run("equation.insertStructure", json!({"id": tpl.id}));
+            app.canvas.focus_page(ui.ctx());
+            cx.request_close();
         }
-    });
+    }
 }
 
 /// The ready-made equations (Insert › Equation and Equation › Equation).
-pub fn builtin_menu(ui: &mut Ui, app: &mut WordApp) {
-    egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
-        ui.set_width(360.0);
-        section_heading(ui, "Built-In");
-        for (id, label, lin) in BUILT_INS {
-            let t = Tokens::get(ui.ctx());
-            ui.label(egui::RichText::new(tl!(label)).font(semibold(11.5)).color(t.text));
-            let (r, resp) = ui.allocate_exact_size(vec2(350.0, 64.0), Sense::click());
-            ui.painter().rect_filled(r, 2.0, t.input);
-            if resp.hovered() {
-                ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
-            }
-            paint_math(
-                app,
-                ui,
-                MathPreview { rect: r.shrink(2.0), key: &format!("builtin:{id}"), linear: lin, nodes: None, display: true, points: 11.0 },
-            );
-            if resp.clicked() {
-                let _ = app.run("insert.equation", json!({"builtin": id}));
-                app.canvas.want_focus = true;
-                ui.close();
-            }
-            ui.add_space(4.0);
-        }
-    });
-    ui.separator();
-    if ui.button(tl!("Insert New Equation")).clicked() {
-        let _ = app.run("insert.equation", json!({}));
-        app.canvas.want_focus = true;
-        ui.close();
+fn builtin_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
+    MenuItem::heading(tl!("Built-In").to_string()).show(ui);
+    let ink = ink(ui);
+    let sources: Vec<MathSource> = BUILT_INS.iter().map(|(_, _, lin)| MathSource::new(parse_linear(lin), true, 11.0, [175, 32], ink)).collect();
+    let tiles: Vec<(String, String)> = BUILT_INS.iter().map(|(id, label, _)| (tl!(label).to_string(), format!("builtin:{id}"))).collect();
+    if let Some((id, _, _)) = math_grid(ui, "Built-In", 1, CaptionPlace::Below, &tiles, &sources).and_then(|i| BUILT_INS.get(i)) {
+        let _ = app.run("insert.equation", json!({"builtin": id}));
+        app.canvas.focus_page(ui.ctx());
+        cx.request_close();
     }
+    craft::ui::display::Divider::horizontal().show(ui);
+    MenuItem::command(CommandRef::with_params("insert.equation", json!({}))).label(tl!("Insert New Equation").to_string()).show(ui);
 }
 
 /// Insert › Symbols › Equation: a split button (insert a new equation, or pick a ready-made one).
 pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
-    let t = Tokens::get(ui.ctx());
-    let label = tl!("Equation");
-    let w = (ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), regular(11.5), t.text).size().x) + 22.0).max(48.0);
-    let (r, _) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::hover());
-    let top = Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + BIG_LABEL_Y - 2.0));
-    let bottom = Rect::from_min_max(pos2(r.min.x, r.min.y + BIG_LABEL_Y - 2.0), r.max);
-    let rt = ui.interact(top, ui.scope_id().with("eq_insert_top"), Sense::click());
-    let rb = ui.interact(bottom, ui.scope_id().with("eq_insert_bottom"), Sense::click());
-    for (rr, resp) in [(top, &rt), (bottom, &rb)] {
-        if resp.hovered() {
-            ui.painter().rect_filled(rr, 4.0, t.hover);
-        }
-    }
-    crate::icons::paint(
-        ui.painter(),
-        Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)),
-        "equation",
-        t.icon,
-        t.accent,
-    );
-    crate::widgets::label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, label, regular(11.5), t.text, true);
-    if rt.on_hover_text(tl!("Insert a new equation (Alt+=)")).clicked() {
-        let _ = app.run("insert.equation", json!({}));
-        app.canvas.want_focus = true;
-    }
-    crate::rtl::menu(&rb).show(|ui| builtin_menu(ui, app));
+    SplitButton::<bool>::command("insert.equation", SplitMenu::Body(Box::new(|ui, cx| builtin_menu(ui, cx, app))))
+        .label(tl!("Equation").to_string())
+        .icon(IconId::new("equation"))
+        .arrangement(Arrangement::Stacked)
+        .show(ui);
 }
 
 /// The Symbols group: a strip of the current set's symbols, and a menu with every set.
 fn symbols(ui: &mut Ui, app: &mut WordApp) {
-    let id = egui::Id::unique("eq_symbol_set");
-    let set = ui.data(|d| d.get_temp::<usize>(id)).unwrap_or(0).min(SYMBOL_SETS.len().saturating_sub(1));
+    let set = app.equation_symbol_set.min(SYMBOL_SETS.len().saturating_sub(1));
     let Some((_, chars)) = SYMBOL_SETS.get(set) else { return };
-    let start_id = egui::Id::unique("eq_symbol_start");
-    let per_row = 10usize;
-    let rows = 3usize;
     let all: Vec<char> = chars.chars().collect();
-    let start = ui.data(|d| d.get_temp::<usize>(start_id)).unwrap_or(0).min(all.len().saturating_sub(1));
-    let t = Tokens::get(ui.ctx());
-    crate::rtl::vertical(ui, |ui| {
-        ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
-        for row in 0..rows {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
-                for col in 0..per_row {
-                    let k = start + row * per_row + col;
-                    let Some(c) = all.get(k) else {
-                        ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-                        continue;
-                    };
-                    if symbol_button(ui, app, *c, &t) {
-                        let _ = app.run("equation.insertSymbol", json!({"char": c.to_string()}));
-                        app.canvas.want_focus = true;
-                    }
+    let ink = ink(ui);
+    let thumbs = math_thumbnails(ui.ctx());
+    let sources: Vec<MathSource> = all.iter().map(|c| symbol_source(*c, ink)).collect();
+    let items: Vec<GalleryItem<'_, char>> = all
+        .iter()
+        .zip(&sources)
+        .map(|(c, source)| GalleryItem {
+            key: *c,
+            label: Label::from(symbol_tooltip(*c, &math_placeholder(ui, &c.to_string()))),
+            face: GalleryFace::rendered(math_key(&format!("sym:{c}")), &thumbs, source),
+        })
+        .collect();
+    let mut sets = |ui: &mut Ui| {
+        let mut chosen = None;
+        Row::new().wrap(true).show(ui, |ui, _| {
+            for (i, (name, _)) in SYMBOL_SETS.iter().enumerate() {
+                if ToggleButton::new(tl!(name).to_string(), Bind::given(i == set)).show(ui).response.clicked() {
+                    chosen = Some(i);
                 }
-            });
-        }
-    });
-    crate::rtl::vertical(ui, |ui| {
-        ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
-        let page = per_row * rows;
-        if ui.add_enabled(start > 0, egui::Button::new("▲").min_size(vec2(16.0, 22.0))).clicked() {
-            ui.data_mut(|d| d.insert_temp(start_id, start.saturating_sub(per_row)));
-        }
-        if ui.add_enabled(start + page < all.len(), egui::Button::new("▼").min_size(vec2(16.0, 22.0))).clicked() {
-            ui.data_mut(|d| d.insert_temp(start_id, start + per_row));
-        }
-        let resp = ui.add(egui::Button::new("…").min_size(vec2(16.0, 22.0))).on_hover_text(tl!("All symbol sets"));
-        crate::rtl::menu(&resp).show(|ui| {
-            ui.set_width(420.0);
-            ui.horizontal_wrapped(|ui| {
-                for (i, (name, _)) in SYMBOL_SETS.iter().enumerate() {
-                    if ui.selectable_label(i == set, tl!(name)).clicked() {
-                        ui.data_mut(|d| {
-                            d.insert_temp(id, i);
-                            d.insert_temp(start_id, 0usize);
-                        });
-                    }
-                }
-            });
-            ui.separator();
-            let set = ui.data(|d| d.get_temp::<usize>(id)).unwrap_or(0);
-            if let Some((_, chars)) = SYMBOL_SETS.get(set) {
-                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
-                        for c in chars.chars() {
-                            if symbol_button(ui, app, c, &t) {
-                                let _ = app.run("equation.insertSymbol", json!({"char": c.to_string()}));
-                                app.canvas.want_focus = true;
-                            }
-                        }
-                    });
-                });
             }
         });
-    });
-}
-
-/// Draws one equation-tab symbol button, paints its preview, shows the linear name and codepoint
-/// in a tooltip, and returns whether it was clicked.
-fn symbol_button(ui: &mut Ui, app: &mut WordApp, c: char, t: &Tokens) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-    ui.painter().rect_filled(r, 2.0, t.input);
-    if resp.hovered() {
-        ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        if let Some(i) = chosen {
+            app.equation_symbol_set = i;
+        }
+        craft::ui::display::Divider::horizontal().show(ui);
+        let shown = app.equation_symbol_set.min(SYMBOL_SETS.len().saturating_sub(1));
+        let Some((_, chars)) = SYMBOL_SETS.get(shown) else { return };
+        let chars: Vec<char> = chars.chars().collect();
+        let sources: Vec<MathSource> = chars.iter().map(|c| symbol_source(*c, ink)).collect();
+        let tiles: Vec<(String, String)> =
+            chars.iter().map(|c| (symbol_tooltip(*c, &math_placeholder(ui, &c.to_string())), format!("sym:{c}"))).collect();
+        if let Some(c) = math_grid(ui, "All symbol sets", 15, CaptionPlace::None, &tiles, &sources).and_then(|i| chars.get(i)) {
+            let _ = app.run("equation.insertSymbol", json!({"char": c.to_string()}));
+            app.canvas.focus_page(ui.ctx());
+        }
+    };
+    let out = Gallery::new(tl!("Symbols").to_string(), &items, None).tiles(30, 10).more(GalleryMore::Body(&mut sets)).show(ui);
+    if let Some(c) = out.picked {
+        let _ = app.run("equation.insertSymbol", json!({"char": c.to_string()}));
+        app.canvas.focus_page(ui.ctx());
     }
-    let s = c.to_string();
-    let nodes = vec![wordcraft_doc::math::MNode::Run(wordcraft_doc::math::MRun { text: s.clone(), lit: true, ..Default::default() })];
-    paint_math(app, ui, MathPreview { rect: r, key: &format!("sym:{s}"), linear: &s, nodes: Some(nodes), display: false, points: 11.0 });
-    let display = math_placeholder(ui, &s);
-    resp.on_hover_text(symbol_tooltip(c, &display)).clicked()
 }
 
 /// Append the symbol name or codepoint only when the display is the glyph itself.
@@ -338,130 +271,91 @@ fn symbol_tooltip(c: char, display: &str) -> String {
 }
 
 /// The Equation tab.
-pub fn show(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Tools", None, app, |ui, app| {
-        math_menu_button(ui, app, EQUATION_PICTURE, "Equation", builtin_menu);
-        crate::rtl::vertical(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
-            let latex = app.session.math_latex;
-            small(
-                ui,
-                app,
-                "equation",
-                Some("Unicode"),
-                "Type equations in the linear format (UnicodeMath)",
-                crate::widgets::ButtonAction::new("equation.inputFormat", json!({"format": "unicode"}), !latex),
-            );
-            small(
-                ui,
-                app,
-                "formula",
-                Some("LaTeX"),
-                "Type equations in LaTeX",
-                crate::widgets::ButtonAction::new("equation.inputFormat", json!({"format": "latex"}), latex),
-            );
-            crate::widgets::menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new(
-                    "replace",
-                    Some("Convert"),
-                    "Convert between built-up and linear form",
-                    false,
-                    "equation.convert",
-                ),
-                |ui, app| {
-                    for (label, to, all) in [
-                        ("Current - Professional", "professional", false),
-                        ("Current - Linear", "linear", false),
-                        ("All - Professional", "professional", true),
-                        ("All - Linear", "linear", true),
-                    ] {
-                        if ui.button(tl!(label)).clicked() {
-                            let _ = app.run("equation.convert", json!({"to": to, "all": all}));
-                            app.canvas.want_focus = true;
-                            ui.close();
-                        }
-                    }
-                },
-            );
+pub fn show(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    // The equation under the caret: its display mode and linear text give the Display, Inline and Number states.
+    // Read, not run: a command in every frame would consume an input method's pending replacement join.
+    let info = wordcraft_engine::cmd::equation::at_caret(&app.session);
+    let display = info.is_some_and(|(display, _)| display);
+    let numbered = info.is_some_and(|(_, linear)| linear.contains('#'));
+    let latex = app.session.math_latex;
+    let normal_text = app.session.math_normal_text;
+    row.group(RibbonGroup::new("tools", tl!("Tools").to_string(), IconId::new("equation").into()), |ui| {
+        math_menu_button(ui, EQUATION_PICTURE, "Equation", |ui, cx| builtin_menu(ui, cx, app));
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            ToggleButton::command(CommandRef::with_params("equation.inputFormat", json!({"format": "unicode"})))
+                .label(tl!("Unicode").to_string())
+                .icon(IconId::new("equation"))
+                .tooltip(tl!("Type equations in the linear format (UnicodeMath)").to_string())
+                .selected(!latex)
+                .show(ui);
+            ToggleButton::command(CommandRef::with_params("equation.inputFormat", json!({"format": "latex"})))
+                .label(tl!("LaTeX").to_string())
+                .icon(IconId::new("formula"))
+                .tooltip(tl!("Type equations in LaTeX").to_string())
+                .selected(latex)
+                .show(ui);
+            let face = Button::new(tl!("Convert").to_string()).icon(IconId::new("replace"));
+            let _ = menu_button(ui, face, tl!("Convert").to_string(), None, |ui, _| {
+                for (label, to, all) in [
+                    ("Current - Professional", "professional", false),
+                    ("Current - Linear", "linear", false),
+                    ("All - Professional", "professional", true),
+                    ("All - Linear", "linear", true),
+                ] {
+                    MenuItem::command(CommandRef::with_params("equation.convert", json!({"to": to, "all": all})))
+                        .label(tl!(label).to_string())
+                        .show(ui);
+                }
+            });
         });
-        crate::rtl::vertical(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
-            let normal = app.session.math_normal_text;
-            small(
-                ui,
-                app,
-                "case",
-                Some("Normal Text"),
-                "Type normal (non-math) text in the equation",
-                crate::widgets::ButtonAction::new("equation.normalText", json!({}), normal),
-            );
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            ToggleButton::command(CommandRef::new("equation.normalText"))
+                .label(tl!("Normal Text").to_string())
+                .icon(IconId::new("case"))
+                .tooltip(tl!("Type normal (non-math) text in the equation").to_string())
+                .selected(normal_text)
+                .show(ui);
         });
     });
-    group(ui, "Symbols", None, app, symbols);
-    group(ui, "Structures", None, app, |ui, app| {
+    row.group(RibbonGroup::new("symbols", tl!("Symbols").to_string(), IconId::new("symbol").into()), |ui| symbols(ui, app));
+    row.group(RibbonGroup::new("structures", tl!("Structures").to_string(), IconId::new("equation").into()), |ui| {
         for g in STRUCTURES {
             let id = g.id;
-            math_menu_button(ui, app, button_picture(id), g.label, |ui, app| structure_menu(ui, app, id));
+            math_menu_button(ui, button_picture(id), g.label, |ui, cx| structure_menu(ui, cx, app, id));
         }
     });
-    group(ui, "Equation Options", None, app, |ui, app| {
-        crate::rtl::vertical(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
-            let info = app.session.run("equation.get", &json!({})).ok();
-            let display = info.as_ref().and_then(|v| v.get("display")).and_then(|v| v.as_bool()).unwrap_or(false);
-            let numbered = info.as_ref().and_then(|v| v.get("linear")).and_then(|v| v.as_str()).is_some_and(|l| l.contains('#'));
-            small(
-                ui,
-                app,
-                "alignCenter",
-                Some("Display"),
-                "Show the equation on a line of its own",
-                crate::widgets::ButtonAction::new("equation.display", json!({"value": true}), display),
-            );
-            small(
-                ui,
-                app,
-                "alignLeft",
-                Some("Inline"),
-                "Show the equation in the line of text",
-                crate::widgets::ButtonAction::new("equation.display", json!({"value": false}), !display),
-            );
-            small(
-                ui,
-                app,
-                "numbering",
-                Some("Number"),
-                "Number the equation; the number sits at the right margin (or type # then the number)",
-                crate::widgets::ButtonAction::new("equation.number", json!({}), numbered),
-            );
+    row.group(RibbonGroup::new("equationOptions", tl!("Equation Options").to_string(), IconId::new("equation").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            ToggleButton::command(CommandRef::with_params("equation.display", json!({"value": true})))
+                .label(tl!("Display").to_string())
+                .icon(IconId::new("alignCenter"))
+                .tooltip(tl!("Show the equation on a line of its own").to_string())
+                .selected(display)
+                .show(ui);
+            ToggleButton::command(CommandRef::with_params("equation.display", json!({"value": false})))
+                .label(tl!("Inline").to_string())
+                .icon(IconId::new("alignLeft"))
+                .tooltip(tl!("Show the equation in the line of text").to_string())
+                .selected(!display)
+                .show(ui);
+            ToggleButton::command(CommandRef::new("equation.number"))
+                .label(tl!("Number").to_string())
+                .icon(IconId::new("numbering"))
+                .tooltip(tl!("Number the equation; the number sits at the right margin (or type # then the number)").to_string())
+                .selected(numbered)
+                .show(ui);
         });
-        crate::rtl::vertical(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
-            crate::widgets::menu_button(
-                ui,
-                app,
-                crate::widgets::MenuButtonOptions::new(
-                    "justify",
-                    Some("Justification"),
-                    "Justification of a display equation",
-                    false,
-                    "equation.justify",
-                ),
-                |ui, app| {
-                    for (label, jc) in [("Left", "left"), ("Right", "right"), ("Centered", "center"), ("Centered as Group", "centerGroup")] {
-                        if ui.button(tl!(label)).clicked() {
-                            let _ = app.run("equation.justify", json!({"jc": jc}));
-                            ui.close();
-                        }
-                    }
-                },
-            );
-            if ui.button(tl!("Close Equation")).on_hover_text(tl!("Leave the equation (Esc)")).clicked() {
-                let _ = app.run("equation.exit", json!({}));
-                app.canvas.want_focus = true;
-            }
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            let face = Button::new(tl!("Justification").to_string()).icon(IconId::new("justify"));
+            let _ = menu_button(ui, face, tl!("Justification").to_string(), None, |ui, _| {
+                for (label, jc) in [("Left", "left"), ("Right", "right"), ("Centered", "center"), ("Centered as Group", "centerGroup")] {
+                    MenuItem::command(CommandRef::with_params("equation.justify", json!({"jc": jc}))).label(tl!(label).to_string()).show(ui);
+                }
+            });
+            Button::command(CommandRef::new("equation.exit"))
+                .label(tl!("Close Equation").to_string())
+                .tooltip(tl!("Leave the equation (Esc)").to_string())
+                .show(ui);
         });
     });
 }
@@ -484,7 +378,8 @@ mod placeholder_tests {
     fn a_missing_math_glyph_has_a_readable_linear_placeholder() {
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            assert!(!ui.fonts_mut(|fonts| fonts.has_glyph(&super::regular(11.0), '∁')));
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            assert!(!ui.fonts_mut(|fonts| fonts.has_glyph(&font, '∁')));
             assert_eq!(super::math_placeholder(ui, "x+\u{2201}"), "x+\\complement");
             assert_eq!(super::math_placeholder(ui, "x+y"), "x+y");
         });
