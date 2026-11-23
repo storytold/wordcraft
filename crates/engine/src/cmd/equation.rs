@@ -774,6 +774,18 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     result(s)
 }
 
+/// The equation at the caret (the one being edited, else one beside the caret) as `(display, linear)`, read without
+/// running a command. A surface that shows the equation's state every frame reads this: a command, even a query,
+/// would consume the replacement an input method's deletion promised (`Session::join_next_equation_edit`), whose
+/// commit can arrive in a later frame.
+pub fn at_caret(s: &Session) -> Option<(bool, &str)> {
+    let at = equation_at_caret(s)?;
+    match s.doc.para_at(&at).and_then(|p| p.object_at(at.off)) {
+        Some(InlineObject::Equation { linear, display, .. }) => Some((*display, linear.as_str())),
+        _ => None,
+    }
+}
+
 fn get(s: &mut Session, _: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
     let Some(InlineObject::Equation { linear, display, math }) = s.doc.para_at(&at).and_then(|p| p.object_at(at.off)) else {
