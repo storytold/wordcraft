@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft::keymap::Overrides;
+use craft::ui::runtime::commands::CommandSet as _;
 use craft::ui::runtime::commands::{
     AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, CommandStates, FireSource, Scope, TypingRule,
 };
@@ -139,6 +140,13 @@ fn gate_registered(app: &WordApp, id: &str) -> (bool, Option<&'static str>) {
     (reason.is_none(), reason)
 }
 
+/// The framework edit commands the app's engine commands of the same id run through: the linked set owns their
+/// definition, the engine owns their chords.
+const LINKED_EDIT: [craft::ui::runtime::commands::EditCommands; 3] = {
+    use craft::ui::runtime::commands::EditCommands::{Copy, Cut, Paste};
+    [Cut, Copy, Paste]
+};
+
 impl WordApp {
     /// The app's commands as the keymap knows them: every engine command with its default
     /// chords, then the interface commands. The interface commands come last because a tie in the
@@ -171,7 +179,9 @@ impl WordApp {
                 }
                 defs.push(def);
             }
-            for spec in registry.all().iter().filter(|spec| seen.insert(spec.id)) {
+            // The framework's edit set defines Cut, Copy and Paste: a catalog def for them is shadowed (and warned
+            // about), so their chords go in as the set's replaced defaults (`with_word_chords`).
+            for spec in registry.all().iter().filter(|spec| seen.insert(spec.id) && !LINKED_EDIT.iter().any(|c| c.id() == spec.id)) {
                 let mut def = CommandDef::new(CommandRef::new(spec.id), tl!(spec.label), Scope::app());
                 for binding in default_bindings(spec.shortcut) {
                     def = def.with_default(binding);
@@ -206,6 +216,10 @@ impl WordApp {
             match AppCatalog::new(defs, generation) {
                 Ok(catalog) => {
                     let catalog = catalog.typing_rule(TypingRule::PlainKeysWait);
+                    let catalog = LINKED_EDIT.iter().fold(catalog, |catalog, command| {
+                        let chords = registry.get(command.id()).map(|spec| default_bindings(spec.shortcut).collect()).unwrap_or_default();
+                        catalog.replace_defaults(command.id(), chords)
+                    });
                     self.command_catalog = Some((registry, with_word_chords(catalog)));
                 }
                 Err(error) => {
