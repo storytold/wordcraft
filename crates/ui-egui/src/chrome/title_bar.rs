@@ -6,7 +6,10 @@ use craft::behavior::IconId;
 use craft::keymap::CommandRef;
 use craft::menu::RibbonMenuRequest;
 use craft::review::ui::Avatar;
-use craft::theme::ControlSize;
+use craft::theme::variant::Tone;
+use craft::theme::{ControlSize, CustomVariant, Emphasis, RadiusStep, Tokens, Variant, VariantLook};
+use craft::ui::buttons::button::ButtonStyleKey;
+use craft::ui::buttons::icon_button::IconButtonStyleKey;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::choice::Switch;
 use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowCollection as _, ShowContainer as _, TooltipSpec, Trigger};
@@ -232,6 +235,19 @@ fn qat_menu(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
     out.response.rect
 }
 
+/// Solid accent pill look for the full title bar Discord button (#656, #7311).
+fn discord_pill_look(tokens: &Tokens) -> VariantLook {
+    VariantLook::of(Emphasis::Solid, Tone::Accent, tokens).radius(RadiusStep::Pill)
+}
+
+/// Solid accent look for the compact icon-only Discord button when the title bar narrows (#5886, #7311).
+fn discord_icon_look(tokens: &Tokens) -> VariantLook {
+    VariantLook::of(Emphasis::Solid, Tone::Accent, tokens)
+}
+
+const DISCORD_PILL: CustomVariant = CustomVariant::new::<ButtonStyleKey>("wordcraft.discord-pill", discord_pill_look);
+const DISCORD_ICON: CustomVariant = CustomVariant::new::<IconButtonStyleKey>("wordcraft.discord-icon", discord_icon_look);
+
 /// Search, the community button and the account, at the end of the bar; returns the rect they took. In a narrow
 /// window they give way by `step` (#5886, as the old bar's fit): at 1 the Discord button drops its label, at 2 the
 /// search shows its magnifier alone as well.
@@ -240,11 +256,17 @@ fn trailing(app: &mut WordApp, ui: &mut Ui, step: usize) -> Option<egui::Rect> {
     if app.ui.show_discord {
         let tip = TooltipSpec::new(tl!("Join the ArtCraft community on Discord").to_string());
         let clicked = if step >= 1 {
-            let out = IconButton::new(IconId::new("discord")).label(tl!("Discord").to_string()).tooltip(tip).show(ui);
+            let out = IconButton::new(IconId::new("discordPill"))
+                .label(tl!("Discord").to_string())
+                .variant(Variant::Custom(DISCORD_ICON))
+                .glyphs(GlyphRole::Tool)
+                .tooltip(tip)
+                .show(ui);
             rects.push(out.response.rect);
             out.response.clicked()
         } else {
-            let out = Button::new(tl!("Discord").to_string()).icon(IconId::new("discord")).tooltip(tip).show(ui);
+            let out =
+                Button::new(tl!("Discord").to_string()).icon(IconId::new("discordPill")).variant(Variant::Custom(DISCORD_PILL)).tooltip(tip).show(ui);
             rects.push(out.response.rect);
             out.clicked()
         };

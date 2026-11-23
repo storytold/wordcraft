@@ -80,9 +80,11 @@ fn press_ctrl_f1(h: &mut egui_kittest::Harness<'static, WordApp>) {
 /// A harness over the app, as the tables below drive it.
 type Rig = egui_kittest::Harness<'static, WordApp>;
 
-/// One key press with `modifiers`, then a frame.
+/// One key press with `modifiers`, then two frames: the runtime fires the chord's command in the first, and the app
+/// runs it before the second (`raw_input_hook`), as on the desktop.
 fn press(h: &mut Rig, key: egui::Key, modifiers: egui::Modifiers) {
     h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.step();
     h.step();
 }
 
@@ -180,9 +182,6 @@ fn row_bound_ctrl_f1_runs_the_bound_command() {
     let mut h = canvas_harness();
     // PLAN(shell-w7): sh.A11 `Session::keymap_mut` over `Overrides::insert`.
     h.state_mut().session.keymap_mut().insert("view.focus", vec!["Mod+F1".into()]);
-    // The harness hands the app's input (with the user's bindings) to the runtime one frame behind (`driver_logic`),
-    // so the binding reaches the keymap in the frame after it is made, as in the row for Mod+Shift+0.
-    h.step();
     press_ctrl_f1(&mut h);
     assert!(h.state().session.view.focus_mode, "the bound command ran");
     assert!(!h.state().ui.ribbon_collapsed, "the ribbon is unchanged");
@@ -271,13 +270,14 @@ fn row_mod_shift_0_resets_the_interface_size_unless_bound() {
     assert_eq!(body_text(h.state()), "}", "AltGr+0 types the character");
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
     h.step();
+    h.step();
     assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
     // A binding the user made for the chord wins.
     h.state_mut().run("ui.interfaceSize", json!({"percent": 300})).unwrap();
     // PLAN(shell-w7): sh.A11 `Session::keymap_mut` over `Overrides::insert`.
     h.state_mut().session.keymap_mut().insert("view.focus", vec!["Mod+Shift+0".into()]);
-    h.step();
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.step();
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
     assert!(h.state().session.view.focus_mode, "the user's binding runs");
@@ -296,7 +296,7 @@ fn row_mod_shift_equals_stays_superscript() {
     let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
     h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
     h.step();
-    // The chord fires its command in that pass; the app runs it when the next pass begins (`driver_logic`).
+    // The chord fires its command in that pass; the app runs it before the next pass (`raw_input_hook`).
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
     let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
@@ -490,14 +490,7 @@ fn a_japanese_file_name_is_drawn_in_the_caption() {
 /// first frame fires that release builds and the components' own trials never reach.
 #[test]
 fn the_app_window_shows_for_a_few_frames() {
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        app(),
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app());
     h.run_steps(3);
     assert!(h.state().has_document(), "the window opened on a document");
     assert!(!h.state().quit_requested);
@@ -633,14 +626,7 @@ fn display_server_is_a_ui_command_and_survives_a_restart() {
 }
 
 fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    )
+    crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a)
 }
 
 /// #1908: with no document open the Home ribbon's split buttons grey out like the plain
@@ -1539,14 +1525,7 @@ fn every_cut_entry_point_publishes_to_the_clipboard() {
     assert!(copied(&ctx).contains(&text), "ribbon Cut published {text:?}: {:?}", copied(&ctx));
 
     // A real Cut key event through the app's key handling.
-    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        typed(),
-    );
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| typed());
     for _ in 0..6 {
         h.step();
     }
@@ -2009,14 +1988,7 @@ fn the_default_app_button_shows_only_with_the_hosts_hook() {
             }));
         }
         a.run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
-        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                crate::test_harness::driver_logic(&ctx, app);
-                app.ui(ui);
-            },
-            a,
-        );
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
         h.run_steps(4);
         assert!(h.query_by_label("Show the community button in the title bar").is_some(), "hook {hook}: the Options page rendered");
         // The row carries the label too (macOS shows it, with Finder's steps instead of a button): ask for the button.
@@ -2069,14 +2041,7 @@ fn the_host_hears_about_edits_made_while_drawing() {
     let mut a = app();
     let seen = reported.clone();
     a.services.on_dirty = Some(Box::new(move |d| seen.set(Some(d))));
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     for _ in 0..6 {
         h.step();
     }
@@ -2092,14 +2057,7 @@ fn the_host_hears_about_edits_made_while_drawing() {
 fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
     use wordcraft_doc::Align;
 
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        typed(),
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| typed());
     for _ in 0..6 {
         h.step();
     }
@@ -2108,7 +2066,7 @@ fn paragraph_alignment_keeps_the_canvas_focused_for_typing() {
         [("Align Left", Align::Left, " left"), ("Center", Align::Center, " center"), ("Align Right", Align::Right, " right")]
     {
         h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
-        // The click fires the button's command in that pass; the app runs it when the next pass begins (`driver_logic`).
+        // The click fires the button's command in that pass; the app runs it before the next pass (`raw_input_hook`).
         h.step();
         h.step();
 
@@ -2148,14 +2106,7 @@ fn type_after_click(h: &mut egui_kittest::Harness<'_, WordApp>, what: &str, text
 fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     use egui::accesskit::Role;
 
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        typed(),
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| typed());
     for _ in 0..6 {
         h.step();
     }
@@ -3354,21 +3305,14 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
     a.run("document.setText", json!({"text": "x"})).unwrap();
     a.run("select.all", json!({})).unwrap();
     a.run("ui.interfaceSize", json!({"percent": 300})).unwrap();
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     for _ in 0..6 {
         h.step();
     }
     let chord = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: true };
     h.event(egui::Event::Key { key: egui::Key::Equals, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
     h.step();
-    // The chord fires its command in that pass; the app runs it when the next pass begins (`driver_logic`).
+    // The chord fires its command in that pass; the app runs it before the next pass (`raw_input_hook`).
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "Ctrl+Shift+= doesn't reset");
     let pos = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
@@ -3381,14 +3325,7 @@ fn ctrl_shift_equals_on_the_zero_key_stays_superscript() {
 #[test]
 fn f11_and_escape_toggle_full_screen() {
     use egui::ViewportCommand::Fullscreen;
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        app(),
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app());
     for _ in 0..6 {
         h.step();
     }
@@ -3432,14 +3369,7 @@ fn f11_and_escape_toggle_full_screen() {
 #[test]
 fn escape_collapses_a_selection_before_leaving_full_screen() {
     use egui::ViewportCommand::Fullscreen;
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        app(),
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app());
     for _ in 0..6 {
         h.step();
     }
@@ -3578,14 +3508,7 @@ fn pasted_picture_inserts_only_when_the_page_is_the_edit_target() {
 fn paste_harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     use craft::platform::clipboard::Clipboard;
     let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(LatePaste::default()));
-    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     for _ in 0..6 {
         h.step();
     }
@@ -3847,14 +3770,7 @@ fn render_without_a_path_replies_with_the_png() {
 #[test]
 fn shift_f10_opens_the_context_menu_at_the_caret() {
     use egui_kittest::kittest::Queryable;
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        app(),
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app());
     for _ in 0..6 {
         h.step();
     }

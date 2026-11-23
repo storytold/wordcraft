@@ -1,6 +1,6 @@
 # Control protocol
 
-> **Last updated:** 2026-11-18 · The control channel authenticates once per connection with a token (`auth`), replacing the per-request key. Earlier: Correct the force-close request envelope and document the optional command search parameter; command behavior unchanged. #6146: scroll speed preferences (`ui.scrollSpeed`, `ui.touchpadScrollSpeed`); #6159: refuse ui.screenshot on secondary document windows and support root window selection with view.switchWindows.
+> **Last updated:** 2026-11-20 · `wordcraft-cli mcp --connect` is refused for now (#7124); the token section describes the bridge for when it returns. Earlier: The control channel authenticates once per connection with a token (`auth`), replacing the per-request key. Earlier: Correct the force-close request envelope and document the optional command search parameter; command behavior unchanged. #6146: scroll speed preferences (`ui.scrollSpeed`, `ui.touchpadScrollSpeed`); #6159: refuse ui.screenshot on secondary document windows and support root window selection with view.switchWindows.
 
 Start the app with a control port: `wordcraft --control 7981` (or `WORDCRAFT_CONTROL_PORT=7981`).
 A missing or invalid port after `--control` (not 1–65535) prints an error and exits with status 2.
@@ -52,7 +52,9 @@ exit.
   sends. After that the connection may stay idle.
 - At most 16 connections are served at once; the next one gets `connection limit reached`.
 
-`wordcraft-cli mcp --connect` takes the token from `WORDCRAFT_CONTROL_TOKEN`, or else from the
+`wordcraft-cli mcp --connect` is refused for now, until the app confines this channel to automation
+roots (#3695, #5819; see [docs/mcp.md](mcp.md)). When it returns, it takes the token from
+`WORDCRAFT_CONTROL_TOKEN`, or else from the
 token file for the port it connects to, and reads it again on every new connection (the app may
 have restarted). It sends the token only to the app's own address, `127.0.0.1` (`localhost`
 connects there too, never to `::1`): another loopback address such as `::1` or `127.0.0.2` is not
