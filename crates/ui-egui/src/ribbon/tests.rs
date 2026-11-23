@@ -698,9 +698,60 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(shown(a, "Chart Design"), before, "Chart Design shown, the chart untouched");
 }
 
+fn table_design_harness(language: &str, theme: egui::Theme) -> Harness {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app.run("ui.language", json!({"value": language})).unwrap();
+    app.run("ui.theme", json!({"value": if theme == egui::Theme::Dark { "dark" } else { "light" }})).unwrap();
+    app.run("ui.tab", json!({"tab": "Table Design"})).unwrap();
+    let h = crate::test_harness::builder().with_size(vec2(1600.0, 700.0)).with_theme(theme).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            assert_eq!(ctx.global_style().visuals.dark_mode, theme == egui::Theme::Dark, "the requested palette is active while drawing");
+            app.ui(ui);
+        },
+        app,
+    );
+    crate::test_harness::cjk_stand_in(&h.ctx);
+    h
+}
+
 /// The Shading arrow's name: "Shading options", in the interface language (#3172).
 fn shading_options() -> String {
     crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Shading"))])
+}
+
+#[test]
+fn table_shading_label_is_painted_beside_its_arrow() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    // Vietnamese and German labels need the embedded catalogs (CI has them); English always runs.
+    let languages: &[&str] = if crate::i18n::catalogs_embedded() { &["en", "vi", "de"] } else { &["en"] };
+    for &language in languages {
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let mut h = table_design_harness(language, theme);
+            h.run_steps(3);
+            let label = tl!("Shading");
+            let main = h.get_by_role_and_label(Role::Button, label).rect();
+            let arrow = h.get_by_role_and_label(Role::Button, &shading_options()).rect();
+            assert!((main.top() - arrow.top()).abs() < 0.01 && (main.bottom() - arrow.bottom()).abs() < 0.01);
+            assert!((main.right() - arrow.right()).abs() < 0.01 && arrow.left() > main.left(), "{language}: {main:?}, {arrow:?}");
+            let text = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == label => Some(t),
+                    _ => None,
+                })
+                .expect("Shading is drawn as text, not just a hover tip");
+            let text_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+            assert!(main.contains_rect(text_rect), "{language}: {text_rect:?} outside {main:?}");
+            assert!(text_rect.left() >= main.left() + 24.0, "the label starts after the icon");
+        }
+    }
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
 }
 
 fn first_cell_shading(app: &WordApp) -> Option<wordcraft_doc::Rgb> {
