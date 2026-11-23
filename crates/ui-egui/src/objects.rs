@@ -1181,13 +1181,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
         let turns = (deg - o.spin.deg + 540.0).rem_euclid(360.0) - 180.0;
         let turns = turns.abs() > 0.05;
         let pose = crate::object_motion::Pose { page: o.page, rect: to, deg };
-        app.canvas.frame_motion = Some(MotionDrag {
-            resize: !turns,
-            page: o.page,
-            key: o.pos(),
-            pixels: turns && app.canvas.turning.is_some(),
-            to: pose,
-        });
+        app.canvas.frame_motion = Some(MotionDrag { resize: !turns, page: o.page, key: o.pos(), pixels: turns && app.canvas.turning.is_some(), to: pose });
     }
     if let Some(after) = out.edit.events.committed() {
         commit_box(app, &o, pp, view, after);

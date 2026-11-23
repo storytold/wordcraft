@@ -519,9 +519,9 @@ mod tests {
         let expected = a.into_iter().zip(b).fold(egui::Vec2::ZERO, |sum, (p, q)| sum + (p + (q - p) * progress).to_vec2()) / 4.0;
 
         let carried = carried_from(&tween, end, bounds, at, &pages);
-        let actual = on_screen(pages[1].rect, pages[1].scale, corners(&end, bounds, &carried))
-            .into_iter()
-            .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2()) / 4.0;
+        let actual =
+            on_screen(pages[1].rect, pages[1].scale, corners(&end, bounds, &carried)).into_iter().fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2())
+                / 4.0;
         assert!((actual - expected).length() < 0.01, "retarget stays at its drawn position: {actual:?} vs {expected:?}");
     }
 }
