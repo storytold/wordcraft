@@ -328,6 +328,17 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     assert_eq!(pictures(h.state_mut()), 1);
 }
 
+#[test]
+fn alt_shortcuts_work_without_the_canvas_focused() {
+    let m = |command, alt, shift| egui::Modifiers { command, alt, shift, ..Default::default() };
+    assert!(is_global_shortcut(Key::Q, m(false, true, false)), "Alt+Q (#819)");
+    assert!(is_global_shortcut(Key::D, m(false, true, true)), "Alt+Shift+D");
+    assert!(is_global_shortcut(Key::B, m(true, false, false)), "Mod+B");
+    assert!(is_global_shortcut(Key::F7, m(false, false, false)), "F7");
+    assert!(!is_global_shortcut(Key::Q, m(false, false, false)), "a plain letter is typing");
+    assert!(!is_global_shortcut(Key::Q, m(false, false, true)), "Shift+letter is typing");
+}
+
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
 /// aren't, and keytips stay off (#961). Linux sends each digit's text too; Windows may send the
 /// composed character.
