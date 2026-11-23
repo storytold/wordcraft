@@ -128,6 +128,16 @@ pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
     }
 }
 
+/// The layout for the pages currently shown, including Insert › Table's preview copy.
+pub(crate) fn visible_layout(app: &WordApp) -> std::sync::Arc<DocLayout> {
+    app.canvas.table_preview_layout.as_ref().map_or_else(|| app.session.layout(), |(_, _, _, layout)| layout.clone())
+}
+
+/// Whether the current pages show the temporary Insert › Table preview.
+pub(crate) fn table_preview_active(app: &WordApp) -> bool {
+    app.canvas.table_preview_layout.is_some()
+}
+
 /// The document the pages of [`shown_layout`] are drawn from: the previewed copy while the page
 /// shows Insert › Table's preview, whose paragraph paths are the layout's (#3931).
 pub(crate) fn page_doc(app: &WordApp) -> &wordcraft_doc::Document {

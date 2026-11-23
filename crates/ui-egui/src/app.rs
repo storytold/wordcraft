@@ -291,6 +291,7 @@ impl WordApp {
             && self.has_document()
             && !self.ui.backstage
             && !self.session.view.read_mode
+            && self.session.md_source.is_none()
             && chrome::Screen::of(&self.session.view) == chrome::Screen::Normal
     }
 

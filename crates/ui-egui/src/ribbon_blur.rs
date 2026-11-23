@@ -225,8 +225,8 @@ pub fn update(app: &mut WordApp, ctx: &Context) {
     ctx.layer_painter(layer).with_clip_rect(ribbon).set(idx, shape);
 }
 
-/// Keep a thumbnail for each page in the band above the view's top, rendered again only when the document or the
-/// dark paper changed.
+/// Keep a thumbnail for each page in the band above the view's top, refreshed when the document, font or dark paper
+/// changes. Table previews use their matching layout and document and are not cached.
 fn refresh_thumbs(app: &mut WordApp, view_top: f32) {
     let wanted: Vec<usize> = app
         .canvas
@@ -241,11 +241,13 @@ fn refresh_thumbs(app: &mut WordApp, view_top: f32) {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         app.session.rev().hash(&mut h);
         app.session.view.dark_mode.hash(&mut h);
+        app.font_generation.hash(&mut h);
         h.finish()
     };
-    let layout = app.session.layout();
+    let preview = crate::canvas::table_preview_active(app);
+    let layout = crate::canvas::visible_layout(app);
     for i in wanted {
-        if app.canvas.blur.thumbs.get(&i).is_some_and(|(k, _)| *k == key) {
+        if !preview && app.canvas.blur.thumbs.get(&i).is_some_and(|(k, _)| *k == key) {
             continue;
         }
         let Some(page) = layout.pages.get(i) else { continue };
@@ -254,7 +256,9 @@ fn refresh_thumbs(app: &mut WordApp, view_top: f32) {
         let img = wordcraft_render::render_page(crate::canvas::page_doc(app), page, scale, &crate::canvas::screen_render_options());
         let ci = ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels);
         let thumb = Thumb::of(&ci, paper_of(app));
-        app.canvas.blur.thumbs.insert(i, (key, thumb));
+        if !preview {
+            app.canvas.blur.thumbs.insert(i, (key, thumb));
+        }
     }
 }
 
