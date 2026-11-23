@@ -777,6 +777,46 @@ mod tests {
         )
     }
 
+    /// Alignment choices expose their names and current selection, and can be toggled.
+    #[test]
+    fn alignment_buttons_expose_names_selection_and_clicks() {
+        use craft::behavior::Anchor9;
+        use craft::ui::pickers::{ReferencePoint, ReferencePointKind};
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::kittest::NodeT;
+
+        let mut h = crate::test_harness::builder().with_size(vec2(200.0, 120.0)).build_ui_state(
+            |ui, (selected, enabled): &mut (Option<Anchor9>, bool)| {
+                ui.add_enabled_ui(*enabled, |ui| {
+                    ReferencePoint::new("Alignment:", craft::ui::contract::Bind::bound(selected)).kind(ReferencePointKind::Alignment).show(ui);
+                });
+            },
+            (Some(Anchor9::TopLeft), true),
+        );
+        h.run_steps(2);
+        assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Top left").accesskit_node().toggled(), Some(Toggled::True));
+        assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Bottom right").accesskit_node().toggled(), Some(Toggled::False));
+        assert!(!h.get_by_role_and_label(Role::RadioButton, "Center").accesskit_node().is_disabled());
+
+        // When disabled, the options report disabled.
+        h.state_mut().1 = false;
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(Role::RadioButton, "Center").accesskit_node().is_disabled());
+
+        // Re-enable and test clicks
+        h.state_mut().1 = true;
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::RadioButton, "Bottom right").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0, Some(Anchor9::BottomRight));
+        assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Top left").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Bottom right").accesskit_node().toggled(), Some(Toggled::True));
+        h.get_by_role_and_label(Role::RadioButton, "Bottom right").click();
+        h.run_steps(2);
+        assert_eq!(h.state().0, None);
+        assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Bottom right").accesskit_node().toggled(), Some(Toggled::False));
+    }
+
     /// #714: picking a part under "Apply formatting to" and changing it edits that part (here the
     /// even banded rows) and no other.
     #[test]
