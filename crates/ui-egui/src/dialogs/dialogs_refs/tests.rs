@@ -1,19 +1,27 @@
+use egui::vec2;
 use serde_json::json;
 use wordcraft_doc::{InlineObject, StoryRef};
 use wordcraft_engine::Session;
 
 use super::*;
 use crate::Services;
+use crate::dialogs::host::{FormHost, WordForm, close_all, open_form};
 
 fn app(text: &str) -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::from_text(text)), Services::default())
 }
 
-fn form(a: &WordApp) -> RefsDialog {
-    match &a.dialog {
-        Some(Dialog::Refs(d)) => (**d).clone(),
-        d => panic!("no references dialog: {d:?}"),
-    }
+/// The form of the open dialog of type `F`.
+fn form<F: WordForm>(a: &WordApp) -> F {
+    a.dialog_host.get::<FormHost<F>>().map(|h| h.form().clone()).expect("the dialog is open")
+}
+
+fn is_open<F: WordForm>(a: &WordApp) -> bool {
+    a.dialog_host.is_open::<FormHost<F>>()
+}
+
+fn close(a: &mut WordApp) {
+    close_all(a, &egui::Context::default());
 }
 
 fn instrs(a: &WordApp) -> Vec<String> {
@@ -38,12 +46,11 @@ fn caption_dialog_numbers_with_chapters() {
     a.run("styles.apply", json!({"style": "Heading 1"})).unwrap();
     a.run("select.text", json!({"text": "A chart"})).unwrap();
     assert_eq!(a.run("references.caption", json!({})).unwrap(), json!({"pending": "caption"}));
-    let RefsDialog::Caption(mut f) = form(&a) else { panic!() };
+    let mut f = form::<CaptionForm>(&a);
     assert_eq!((f.label.as_str(), f.labels.len()), ("Figure", 3));
     // New Label…, then Numbering… with a chapter number.
-    f.new_label = "Plate".into();
-    a.dialog = None;
-    a.ui.caption_labels.push(f.new_label.clone());
+    close(&mut a);
+    a.ui.caption_labels.push("Plate".into());
     f.label = "Plate".into();
     f.format = "ALPHABETIC".into();
     f.chapter = true;
@@ -67,7 +74,7 @@ fn caption_dialog_remembers_the_last_label() {
     a.ui.caption_labels.push("Diagram".into());
     a.run("select.text", json!({"text": "A chart"})).unwrap();
     a.run("references.caption", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -82,7 +89,7 @@ fn caption_dialog_remembers_the_last_label() {
     h.run_steps(3);
     h.get_by_role_and_label(Role::Button, "OK").click();
     h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert!(!is_open::<CaptionForm>(h.state()), "OK closes the dialog");
     assert!(h.state().session.doc.plain_text(StoryRef::Body).contains("Diagram 1"));
     h.state_mut().run("select.text", json!({"text": "A photo"})).unwrap();
     h.state_mut().run("references.caption", json!({})).unwrap();
@@ -109,12 +116,12 @@ fn cross_reference_dialog_lists_targets_and_inserts_a_ref_field() {
     a.run("references.caption", json!({"label": "Equation", "text": "energy"})).unwrap();
     a.run("caret.docEnd", json!({})).unwrap();
     assert_eq!(a.run("insert.crossReference", json!({})).unwrap(), json!({"pending": "crossReference"}));
-    let RefsDialog::CrossRef(f) = form(&a) else { panic!() };
+    let f = form::<CrossRefForm>(&a);
     assert_eq!((f.targets.clone(), f.selected), (vec!["Kilns".to_string()], Some(0)));
     let mut f = CrossRefForm::read(&a, "equation");
     assert_eq!(f.targets, vec!["Equation 1: energy".to_string()]);
     f.show = "number".into();
-    a.dialog = None;
+    close(&mut a);
     a.run("insert.crossReference", f.params().unwrap()).unwrap();
     assert!(instrs(&a).iter().any(|i| i.starts_with("REF _Ref")), "{:?}", instrs(&a));
     assert!(a.session.doc.plain_text(StoryRef::Body).ends_with("See Equation 1"));
@@ -145,15 +152,14 @@ fn cross_reference_dialog_offers_custom_caption_labels() {
     let mut f = CrossRefForm::read(&a, "label:Specimen");
     assert_eq!(f.targets, vec!["Specimen 1: A rock".to_string()]);
     f.show = "number".into();
-    a.dialog = None;
+    close(&mut a);
     a.run("caret.docEnd", json!({})).unwrap();
     a.run("insert.crossReference", f.params().unwrap()).unwrap();
     assert!(a.session.doc.plain_text(StoryRef::Body).ends_with("Specimen 1"), "{}", a.session.doc.plain_text(StoryRef::Body));
 }
 
 /// #2940: through the window: the dialog open on a custom label lists its caption, and the
-/// Insert button puts a reference to it in the text. (The Reference type box and its items
-/// are not in the accessibility tree the test harness clicks, so the type is set on the form.)
+/// Insert button puts a reference to it in the text.
 #[test]
 fn cross_reference_dialog_inserts_a_reference_to_a_custom_label() {
     use egui::accesskit::Role;
@@ -165,8 +171,9 @@ fn cross_reference_dialog_inserts_a_reference_to_a_custom_label() {
     assert_eq!(a.run("insert.crossReference", json!({})).unwrap(), json!({"pending": "crossReference"}));
     let form = CrossRefForm::read(&a, "label:Specimen");
     assert_eq!(form.targets, vec!["Specimen I: A rock".to_string()]);
-    a.dialog = Some(Dialog::Refs(Box::new(RefsDialog::CrossRef(form))));
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    close(&mut a);
+    open_form(&mut a, None, form);
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -175,10 +182,10 @@ fn cross_reference_dialog_inserts_a_reference_to_a_custom_label() {
         a,
     );
     h.run_steps(4);
-    h.get_by_role_and_label(Role::Window, "Cross-reference");
+    h.get_by_role_and_label(Role::Dialog, "Cross-reference");
     h.get_all_by_role_and_label(Role::Button, "Insert").last().expect("the dialog's Insert button").click();
     h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "Insert closes the dialog");
+    assert!(!is_open::<CrossRefForm>(h.state()), "Insert closes the dialog");
     let text = h.state().session.doc.plain_text(StoryRef::Body);
     assert!(text.ends_with("See Specimen I: A rock"), "{text}");
     assert!(instrs(h.state()).iter().any(|i| i.starts_with("REF _Ref")), "{:?}", instrs(h.state()));
@@ -191,7 +198,7 @@ fn index_and_mark_entry_dialogs_write_switches() {
     let mut a = app("Kilns are hot.\nMore text.");
     a.run("select.text", json!({"text": "Kilns"})).unwrap();
     assert_eq!(a.run("references.markEntry", json!({})).unwrap(), json!({"pending": "markEntry"}));
-    let RefsDialog::MarkEntry(mut m) = form(&a) else { panic!() };
+    let mut m = form::<MarkForm>(&a);
     assert_eq!(m.entry, "Kilns");
     m.subentry = "firing".into();
     m.italic = true;
@@ -199,7 +206,7 @@ fn index_and_mark_entry_dialogs_write_switches() {
     assert!(instrs(&a).contains(&"XE \"Kilns:firing\" \\i".to_string()), "{:?}", instrs(&a));
     a.run("caret.docEnd", json!({})).unwrap();
     assert_eq!(a.run("references.index", json!({})).unwrap(), json!({"pending": "index"}));
-    let RefsDialog::Index(mut f) = form(&a) else { panic!() };
+    let mut f = form::<IndexForm>(&a);
     assert_eq!((f.columns, f.kind.as_str(), f.headings), (2, "indented", true));
     f.kind = "runIn".into();
     f.right_align = true;
@@ -219,7 +226,7 @@ fn custom_table_of_contents_dialog() {
     a.run("styles.apply", json!({"style": "Quote"})).unwrap();
     a.run("caret.docStart", json!({})).unwrap();
     a.run("ui.dialog", json!({"name": "toc"})).unwrap();
-    let RefsDialog::Toc(mut f) = form(&a) else { panic!() };
+    let mut f = form::<TocForm>(&a);
     assert_eq!((f.levels, f.hyperlinks, f.right_align, f.heading_styles, f.outline_levels), (3, true, true, true, true));
     f.levels = 2;
     f.hyperlinks = false;
@@ -246,13 +253,14 @@ fn table_of_figures_dialog_picks_the_caption_label() {
     }
     a.run("caret.docEnd", json!({})).unwrap();
     assert_eq!(a.run("references.tableOfFigures", json!({})).unwrap(), json!({"pending": "tableOfFigures"}));
-    let RefsDialog::Figures(mut f) = form(&a) else { panic!() };
+    let mut f = form::<FiguresForm>(&a);
     assert_eq!(f.label, "Figure");
     assert_eq!(f.labels, ["Equation", "Figure", "Table", "Specimen"]);
     f.label = "Table".into();
     f.leader = "underscore".into();
-    a.dialog = Some(Dialog::Refs(Box::new(RefsDialog::Figures(f))));
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    close(&mut a);
+    open_form(&mut a, None, f);
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -261,7 +269,8 @@ fn table_of_figures_dialog_picks_the_caption_label() {
         a,
     );
     h.run_steps(4);
-    h.get_by_role_and_label(Role::Window, "Table of Figures");
+    // A modal dialog is the framework's `Dialog` role.
+    h.get_by_role_and_label(Role::Dialog, "Table of Figures");
     // Without page numbers there is nothing to align: the margin choice is off until they are back.
     let margin = |h: &egui_kittest::Harness<'_, WordApp>| {
         h.get_by_role_and_label(Role::CheckBox, "Page numbers at the right margin").accesskit_node().is_disabled()
@@ -275,7 +284,7 @@ fn table_of_figures_dialog_picks_the_caption_label() {
     assert!(!margin(&h));
     h.get_all_by_role_and_label(Role::Button, "OK").last().expect("the dialog's OK button").click();
     h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert!(!is_open::<FiguresForm>(h.state()), "OK closes the dialog");
     let mut a = h.into_state();
     assert!(instrs(&a).contains(&r#"TOC \c "Table""#.to_string()), "{:?}", instrs(&a));
     let entries: Vec<(String, Option<wordcraft_doc::props::TabLeader>)> = a
@@ -290,7 +299,7 @@ fn table_of_figures_dialog_picks_the_caption_label() {
     assert_eq!(entries, [("Table 1: Press\t1".to_string(), Some(wordcraft_doc::props::TabLeader::Underscore))]);
     a.run("caret.docEnd", json!({})).unwrap();
     a.run("ui.dialog", json!({"name": "tableOfFigures"})).unwrap();
-    let RefsDialog::Figures(mut f) = form(&a) else { panic!() };
+    let mut f = form::<FiguresForm>(&a);
     f.label = "Specimen".into();
     f.include_label = false;
     f.right_align = false;
@@ -306,8 +315,8 @@ fn create_and_edit_source() {
     let mut a = app("Studios matter ");
     a.run("caret.docEnd", json!({})).unwrap();
     assert_eq!(a.run("references.citation", json!({})).unwrap(), json!({"pending": "createSource"}));
-    let RefsDialog::Source(mut f) = form(&a) else { panic!() };
-    let f = &mut *f;
+    let mut f = form::<SourceForm>(&a);
+    let f = &mut f;
     f.source.kind = "website".into();
     let shown = f.fields().len();
     assert!(f.fields().iter().any(|(k, l)| *k == "url" && *l == "URL"));
@@ -336,7 +345,7 @@ fn create_source_with_a_corporate_author() {
     let mut a = app("Hearing loss is common ");
     a.run("caret.docEnd", json!({})).unwrap();
     assert_eq!(a.run("references.citation", json!({})).unwrap(), json!({"pending": "createSource"}));
-    let RefsDialog::Source(mut f) = form(&a) else { panic!() };
+    let mut f = form::<SourceForm>(&a);
     *field_mut(&mut f.source, "author").unwrap() = "Rivera, Alex".into();
     f.corporate = true;
     *field_mut(&mut f.source, "corporate").unwrap() = "Harbor Guild, Inc.".into();
@@ -345,7 +354,7 @@ fn create_source_with_a_corporate_author() {
     let src = &a.session.doc.sources[0];
     assert_eq!((src.corporate.as_str(), src.author.as_str()), ("Harbor Guild, Inc.", ""));
     assert!(a.session.doc.plain_text(StoryRef::Body).contains("(Harbor Guild, Inc., 2024)"), "{}", a.session.doc.plain_text(StoryRef::Body));
-    let edit = SourceForm::of(src.clone(), true, false, true);
+    let edit = SourceForm::of(src.clone(), true, false);
     assert!(edit.corporate, "Edit Source shows the corporate author");
     let mut people = edit.clone();
     people.corporate = false;
@@ -353,9 +362,9 @@ fn create_source_with_a_corporate_author() {
     assert_eq!((people.finished().author.as_str(), people.finished().corporate.as_str()), ("Rivera, Alex", ""));
 
     // Drawn: the checkbox is there under Author, and checking it relabels the box.
-    a.dialog = None;
+    close(&mut a);
     a.run("ui.dialog", json!({"name": "createSource"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -383,6 +392,7 @@ fn create_source_with_a_corporate_author() {
 /// in the list at once.
 #[test]
 fn the_source_manager_imports_a_word_sources_file() {
+    use craft::host::{Picked, ScriptedFiles};
     use egui_kittest::kittest::Queryable;
 
     let dir = std::env::temp_dir().join(format!("wc-refs-import-sources-{}", std::process::id()));
@@ -398,15 +408,10 @@ fn the_source_manager_imports_a_word_sources_file() {
     )
     .unwrap();
 
-    let mut a = app("Studios matter ");
-    let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
-    let (seen, picked) = (asked.clone(), path.to_string_lossy().to_string());
-    a.services.pick_open = Some(Box::new(move |purpose| {
-        *seen.borrow_mut() = purpose.to_string();
-        Some(picked.clone())
-    }));
+    let files = std::sync::Arc::new(ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]));
+    let mut a = app("Studios matter ").with_host(std::sync::Arc::new(craft::host::Host::builder(crate::APP).files(files.clone()).build()));
     assert_eq!(a.run("references.sources", json!({})).unwrap(), json!({"pending": "sourceManager"}));
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -414,15 +419,14 @@ fn the_source_manager_imports_a_word_sources_file() {
         },
         a,
     );
-    for _ in 0..4 {
-        h.step();
-    }
+    // Frames as the app's driver runs them: a clicked control's command reaches the app through the frame hook.
+    crate::test_harness::frames(&mut h, 4);
     h.get_by_label("Import…").click();
-    for _ in 0..4 {
-        h.step();
-    }
-    assert_eq!(*asked.borrow(), "sources", "the host can offer Word sources files");
+    crate::test_harness::frames(&mut h, 4);
+    let asked: Vec<String> = files.requests().into_iter().map(|r| r.purpose).collect();
+    assert_eq!(asked, ["sources"], "the host can offer Word sources files");
     assert_eq!(h.state().session.doc.sources.len(), 2);
-    assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| m.contains("Imported 2 sources")), "{:?}", h.state().status_msg);
+    let status = h.state().status_message().map(|m| m.text.as_str().to_string()).unwrap_or_default();
+    assert!(status.contains("Imported 2 sources"), "{status:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

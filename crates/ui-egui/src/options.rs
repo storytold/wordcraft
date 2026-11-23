@@ -1,49 +1,39 @@
-//! File › Options (#485): a list of panes on the left (General, Display, Proofing, Save,
-//! Language, Accessibility, Advanced, Agents), the chosen pane's settings on the right. Only
-//! settings WordCraft carries out are shown. Each pane is one function below, so a new setting
-//! goes into its pane's function. Settings agents can change too go through `file.options`; the
-//! rest live in [`crate::UiState`] (saved in `ui.json`).
+//! File › Options (#485): a page list on the left (General, Display, Proofing, Save, Language,
+//! Accessibility, Advanced, Agents), the chosen page's settings on the right, shown through the
+//! framework's `PreferencesPage`. Only settings WordCraft carries out are shown. Every row applies
+//! at once through the command agents use (`file.options` and the `ui.*`/`view.*` commands), so a
+//! setting an agent changes and the same setting changed here take one path. Settings the app keeps
+//! outside the engine are written directly by [`OptionsModel::set`].
 
-use std::cell::Cell;
-
-use egui::{RichText, Ui, vec2};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::{Map, Value, json};
-use wordcraft_engine::cmd::options::{MAX_WORD_CHARS, PANES};
+use craft::behavior::{EditEvent, MotionMode, keyed};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Bind, Entry, Props as _, Show, ShowCollection, ShowContainer};
+use craft::ui::display::{Elide, Shade, Text};
+use craft::ui::layout_components::Row;
+use craft::ui::list::{List, ListRow};
+use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, RowKind, RowSpec};
+use craft::ui::runtime::env::{LengthUnits, UnitKind, Units};
+use craft::ui::runtime::memory::Remember;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::runtime::windows::WindowHost;
+use craft::ui::style::TypeRole;
+use craft::ui::text::TextField;
+use egui::Ui;
+use serde_json::{Value, json};
+use wordcraft_engine::cmd::options::{MAX_INITIALS_CHARS, MAX_WORD_CHARS, PANES};
 use wordcraft_geom::Unit;
 
 use crate::WordApp;
-use crate::theme::{Tokens, semibold};
 
-thread_local! {
-    // The unit dialogs and the ribbon show lengths in: File › Options › Advanced, copied from the
-    // session each frame so dialog code without the app can read it.
-    static UNIT: Cell<Unit> = const { Cell::new(Unit::Inches) };
-    // The region's decimal separator (#838).
-    static DECIMAL: Cell<char> = const { Cell::new('.') };
+/// `v` points in `unit`, written with `fmt`'s decimal separator (`2,54 cm`), with the unit named in
+/// the interface language (`2,54 см` in Russian).
+pub fn length(v: f32, unit: Unit, fmt: &craft::i18n::Format) -> String {
+    format!("{}{}", unit.number(v, fmt.separators().0), unit_suffix(unit))
 }
 
-/// The unit lengths are shown in (File › Options › Advanced › Measurement units, else the
-/// region's).
-pub fn unit() -> Unit {
-    UNIT.get()
-}
-
-/// The decimal separator lengths are written with (the region's: `,` in Poland).
-pub fn decimal() -> char {
-    DECIMAL.get()
-}
-
-/// `pt` in [`unit`], written the region's way (`2,54 cm`), with the unit in the interface
-/// language (`2,54 см` in Russian).
-pub fn length(pt: f32) -> String {
-    length_in(unit(), pt)
-}
-
-/// [`length`] in a given unit.
-pub fn length_in(unit: Unit, pt: f32) -> String {
-    format!("{}{}", unit.number(pt, decimal()), unit_suffix(unit))
+/// [`length`] under the name dialogs use for a length in a chosen unit.
+pub fn length_in(unit: Unit, v: f32, fmt: &craft::i18n::Format) -> String {
+    length(v, unit, fmt)
 }
 
 /// The unit's suffix as the interface shows it: ` cm`, ` mm`, ` pt` and ` pi` go through the
@@ -58,52 +48,28 @@ pub fn unit_suffix(unit: Unit) -> String {
     }
 }
 
+/// The framework's unit kind of an interface length unit: what a number field counts in.
+pub fn unit_kind(unit: Unit) -> UnitKind {
+    match unit {
+        Unit::Inches => UnitKind::Inches,
+        Unit::Centimeters => UnitKind::Centimetres,
+        Unit::Millimeters => UnitKind::Millimetres,
+        Unit::Points => UnitKind::Points,
+        Unit::Picas => UnitKind::Picas,
+    }
+}
+
+/// The one [`LengthUnits`] every length field reads: stored in points, shown in `unit`, at the
+/// document's 96 pixels per inch.
+pub fn lengths(unit: Unit) -> LengthUnits {
+    LengthUnits::new(UnitKind::Points, unit_kind(unit), 96.0)
+}
+
 /// A length typed into a field in `unit`, as a number of that unit: either decimal separator,
-/// another unit (`1 in` in a centimetre field), and the units' names in the interface language
-/// as well as in English (`3 см`).
-pub fn parse_length(text: &str, unit: Unit) -> Option<f64> {
-    let mut text: String = text.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
-    for (english, translated) in [("cm", tl!("cm")), ("mm", tl!("mm")), ("pt", tl!("pt")), ("pi", tl!("pi"))] {
-        let translated = translated.to_lowercase();
-        if translated != english
-            && let Some(number) = text.strip_suffix(translated.as_str())
-        {
-            text = format!("{number}{english}");
-            break;
-        }
-    }
-    wordcraft_geom::parse_measure(&text, unit).map(|pt| f64::from(pt / unit.pt_per_unit()))
-}
-
-/// Copy the session's settings the UI reads without the app.
-pub(crate) fn sync(app: &WordApp) {
-    UNIT.set(app.session.units());
-    DECIMAL.set(app.session.region().decimal());
-}
-
-/// A length field: the unit's suffix, and numbers written and read with the region's decimal
-/// separator (`2,54 cm`). Typing either separator works, and so does another unit (`1 in` in a
-/// centimetre field).
-pub trait MeasureExt {
-    fn measure(self, unit: Unit) -> Self;
-    /// The same field showing nothing, not even the unit, until a length is typed in: a value
-    /// the selected paragraphs differ in.
-    fn measure_blank(self, unit: Unit) -> Self;
-}
-
-impl MeasureExt for egui::DragValue<'_> {
-    fn measure(self, unit: Unit) -> Self {
-        let sep = decimal();
-        self.suffix(unit_suffix(unit))
-            .custom_formatter(move |n, decimals| {
-                let s = egui::emath::format_with_decimals_in_range(n, decimals);
-                if sep == '.' { s } else { s.replace('.', &sep.to_string()) }
-            })
-            .custom_parser(move |text| parse_length(text, unit))
-    }
-    fn measure_blank(self, unit: Unit) -> Self {
-        self.custom_formatter(|_, _| String::new()).custom_parser(move |text| parse_length(text, unit))
-    }
+/// another unit (`1 in` in a centimetre field), and the units' names in the interface language as
+/// well as in English (`3 см`). `units` is the scope's (`Env::of(ui).units()`).
+pub fn parse_length(text: &str, unit: Unit, units: &Units) -> Option<f32> {
+    units.reader(Some(unit_kind(unit))).read(text, None).ok().map(|v| v as f32)
 }
 
 /// Regions offered in File › Options › Advanced › Region (any locale tag works through
@@ -120,313 +86,746 @@ pub const UNITS: [(Unit, &str); 5] = [
     (Unit::Picas, "Picas"),
 ];
 
-/// The pane names, in [`PANES`] order.
-fn pane_label(id: &str) -> &'static str {
-    match id {
-        "display" => "Display",
-        "proofing" => "Proofing",
-        "save" => "Save",
-        "language" => "Language",
-        "accessibility" => "Accessibility",
-        "advanced" => "Advanced",
-        "agents" => "Agents",
-        _ => "General",
-    }
+/// The id a value has in a choice row: its serialized string (what the commands take back).
+fn id_of<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
 
-/// The Options page.
-pub fn page(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
-    ui.add_space(16.0);
-    let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
-    let rtl = crate::rtl::on();
-    let body = |ui: &mut Ui| {
-        crate::rtl::vertical(ui, |ui| {
-            ui.set_width(170.0);
-            for id in PANES {
-                let label = tl!(pane_label(id));
-                let active = current == id;
-                let (r, resp) = ui.allocate_exact_size(vec2(170.0, 30.0), egui::Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
-                if active {
-                    ui.painter().rect_filled(r, 4.0, t.checked);
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(r, 4.0, t.hover);
-                }
-                let font = if active { semibold(14.0) } else { crate::theme::regular(14.0) };
-                // Long translations stay inside the row; WidgetInfo above keeps the full name.
-                ui.painter().with_clip_rect(r).text(
-                    egui::pos2(crate::rtl::lead_x(rtl, r, 12.0), r.center().y),
-                    crate::rtl::lead_center(rtl),
-                    label,
-                    font,
-                    t.text,
-                );
-                if resp.clicked() {
-                    app.ui.options_pane = id.to_string();
-                }
-            }
-        });
-        ui.add_space(12.0);
-        let (line, _) = ui.allocate_exact_size(vec2(1.0, 420.0), egui::Sense::hover());
-        ui.painter().rect_filled(line, 0.0, t.border);
-        ui.add_space(20.0);
-        crate::rtl::vertical(ui, |ui| {
-            ui.set_max_width(640.0);
-            match current.as_str() {
-                "display" => display(app, ui),
-                "proofing" => proofing(app, ui),
-                "save" => save(app, ui),
-                "language" => language(app, ui),
-                "accessibility" => accessibility(app, ui),
-                "advanced" => advanced(app, ui),
-                "agents" => agents(ui),
-                _ => general(app, ui),
-            }
-        });
-    };
-    // Right to left the pane list is on the right and the settings fill in from it.
-    if rtl {
-        ui.with_layout(crate::rtl::row_layout(ui, egui::Align::Min), body)
-    } else {
-        crate::rtl::horizontal_top(ui, body)
-    };
+/// A value's default, found from a value of its type.
+fn default_of<T: Default>(_: &T) -> T {
+    T::default()
 }
 
-fn section(ui: &mut Ui, title: &str) {
-    ui.add_space(6.0);
-    ui.label(RichText::new(tl!(title)).font(semibold(15.0)));
-    ui.add_space(2.0);
+/// Choice entries from (id, label) pairs.
+fn entries<'a>(items: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<Entry<&'a str>> {
+    items.into_iter().map(|(id, label)| Entry::new(id, label.to_string())).collect()
 }
 
-fn note(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(tl!(text)).small().weak());
+/// Choice entries from owned pairs.
+fn owned(items: &[(String, String)]) -> Vec<Entry<&str>> {
+    entries(items.iter().map(|(id, label)| (id.as_str(), label.as_str())))
 }
 
-/// Change settings through `file.options` (the command agents use).
-fn set(app: &mut WordApp, params: Value) {
-    if let Err(e) = app.run("file.options", params) {
-        app.status(e);
-    }
+/// A page of titled groups.
+fn page_of<'a>(id: &'a str, title: &'a str, groups: Vec<GroupSpec<'a>>) -> PageSpec<'a> {
+    let mut page = PageSpec::new(id, title, Vec::new());
+    page.groups = groups;
+    page
 }
 
-/// A checkbox for a `file.options` on/off setting.
-fn flag(app: &mut WordApp, ui: &mut Ui, label: &str, key: &str, value: bool) {
-    let mut v = value;
-    if ui.checkbox(&mut v, tl!(label)).changed() {
-        set(app, json!({ key: v }));
-    }
+/// Labels and ids built from the session for one pass; a row borrows them.
+struct Strings {
+    sizes: Vec<(String, String)>,
+    size_id: String,
+    languages: Vec<(String, String)>,
+    units: Vec<(String, String)>,
+    unit_id: String,
+    regions: Vec<(String, String)>,
+    region_id: String,
+    paper: Vec<(String, String)>,
+    paper_id: String,
+    numerals: Vec<(String, String)>,
+    numeral_id: String,
+    proofing_language: String,
+    autosave_reason: String,
 }
 
-/// Draws General options: interface theme and size, mini toolbar, dark page, community button and
-/// default apps; the Start screen; and personalization such as user name and initials.
-fn general(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Interface");
-    theme_picker(app, ui);
-    interface_size_picker(app, ui);
-    ui.horizontal(|ui| {
+impl Strings {
+    fn build(app: &mut WordApp, native: f32) -> Strings {
+        use crate::i18n::{AUTO, Lang};
+        use crate::theme::InterfaceSize;
         use wordcraft_engine::cmd::view::PaperColor;
-        let label = ui.label(tl!("Screen paper color:"));
-        let selected = app.session.prefs.paper_color;
-        let combo = craft_ui::ComboBox::from_id_salt("screen_paper_color").selected_text(tl!(selected.label())).width(220.0).show_ui(ui, |ui| {
-            for color in PaperColor::ALL {
-                if ui.selectable_label(selected == color, tl!(color.label())).clicked() {
-                    let _ = app.run("view.paperColor", json!({"value": color}));
-                }
-            }
-        });
-        combo.response.labelled_by(label.id).on_hover_text(tl!(
-            "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
-        ));
-    });
-    ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
-    let mut dark_page = app.session.view.dark_mode;
-    if ui
-        .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))
-        .on_hover_text(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged."))
-        .changed()
-    {
-        let _ = app.run("view.darkMode", json!({"value": dark_page}));
+        use wordcraft_layout::NumeralMode;
+
+        let drawn = InterfaceSize::AUTO.drawn_percent_within(native, app.auto_scale_limit);
+        // The template keeps the percent sign outside its placeholder, so `fmt` isolates the number
+        // without it and a right-to-left line draws "(%200)": the sign goes inside the isolate.
+        let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &drawn.to_string())]).replace("\u{2069}%", "%\u{2069}");
+        let mut sizes = vec![("auto".to_string(), auto)];
+        sizes.extend(InterfaceSize::PRESETS.iter().map(|p| (p.to_string(), format!("{p}%"))));
+        let size_id = app.ui.interface_size.percent().map_or_else(|| "auto".to_string(), |p| p.to_string());
+
+        let system = crate::i18n::system_lang();
+        let mut languages = vec![(AUTO.to_string(), crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]))];
+        languages.extend(Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name().to_string())));
+
+        let units_now = app.session.units();
+        let auto_units = app.session.prefs.units.is_none();
+        let name_of = UNITS.iter().find(|(u, _)| *u == units_now).map_or("Inches", |(_, n)| n);
+        let mut units = vec![("auto".to_string(), format!("{} ({})", tl!("Automatic"), tl!(name_of)))];
+        units.extend(UNITS.iter().map(|(u, n)| (id_of(u), tl!(n).to_string())));
+        let unit_id = if auto_units { "auto".to_string() } else { id_of(&units_now) };
+
+        let system_region = &app.session.system_region;
+        let tag = if system_region.territory.is_empty() {
+            system_region.language.clone()
+        } else {
+            format!("{}-{}", system_region.language, system_region.territory)
+        };
+        let mut regions = vec![("auto".to_string(), crate::i18n::fmt(tl!("Automatic ({region})"), &[("region", tag.as_str())]))];
+        regions.extend(REGIONS.iter().map(|t| (t.to_string(), t.to_string())));
+        let region_id = app.session.prefs.region.clone().unwrap_or_else(|| "auto".to_string());
+
+        let paper = PaperColor::ALL.iter().map(|c| (id_of(c), tl!(c.label()).to_string())).collect();
+        let paper_id = id_of(&app.session.prefs.paper_color);
+        let numerals = [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context, NumeralMode::System]
+            .iter()
+            .map(|m| (id_of(m), tl!(m.label()).to_string()))
+            .collect();
+        let numeral_id = id_of(&app.session.view.numeral);
+
+        let lang = crate::ribbon::caret_language(app);
+        let proofing_language = if crate::ribbon::caret_no_proof(app) {
+            tl!("The text at the insertion point is marked Do not check spelling or grammar.").to_string()
+        } else if !crate::ribbon::caret_language_proofed(app) {
+            crate::i18n::fmt(tl!("{language}: WordCraft doesn't check spelling or grammar in this language yet."), &[("language", &lang)])
+        } else {
+            let unreadable = crate::ribbon::caret_unreadable_dictionary(app);
+            crate::chrome::dictionary_problem(&lang, &unreadable, crate::ribbon::caret_missing_dictionary(app))
+                .unwrap_or_else(|| crate::i18n::fmt(tl!("Spelling and grammar are checked in {language}."), &[("language", &lang)]))
+        };
+        Strings {
+            sizes,
+            size_id,
+            languages,
+            units,
+            unit_id,
+            regions,
+            region_id,
+            paper,
+            paper_id,
+            numerals,
+            numeral_id,
+            proofing_language,
+            autosave_reason: crate::AutoSaveBlock::Browser.reason().to_string(),
+        }
     }
-    ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
-    ui.checkbox(&mut app.ui.font_download_notice, tl!("Tell me when a document's missing fonts can be downloaded"));
-    default_app_button(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Start-up");
-    let mut start = app.ui.start_screen;
-    if ui
-        .checkbox(&mut start, tl!("Show the Start screen when WordCraft starts"))
-        .on_hover_text(tl!(
-            "On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document."
-        ))
-        .changed()
-    {
-        let _ = app.run("ui.startScreen", json!({"value": start}));
+}
+
+/// The Options page's side of the preferences page: the rows built from the app, and the commands
+/// each edit runs. Built and dropped within one pass.
+pub(crate) struct OptionsModel<'a> {
+    app: &'a mut WordApp,
+    strings: Strings,
+    /// Whether the runtime's resolved motion runs animations in full: what "Use system setting"
+    /// comes to while the app's choice is System.
+    motion_full: bool,
+}
+
+impl<'a> OptionsModel<'a> {
+    /// The model over `app`; `native` is the display's native pixels per point and `motion_full`
+    /// the runtime's resolved motion.
+    pub(crate) fn new(app: &'a mut WordApp, native: f32, motion_full: bool) -> Self {
+        let strings = Strings::build(app, native);
+        OptionsModel { app, strings, motion_full }
     }
-    ui.add_space(8.0);
-    section(ui, "Personalize");
-    crate::rtl::Table::new("options_user").columns(2).spacing(vec2(8.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            let user_label = r.cell(|ui| ui.label(tl!("User name:")));
-            r.cell(|ui| {
-                let mut n = app.session.author.clone();
-                let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
-                if ui.add_enabled(!protected, egui::TextEdit::singleline(&mut n).desired_width(260.0)).labelled_by(user_label.id).changed()
-                    && !protected
-                {
-                    app.session.author = n;
-                }
-            });
-        });
-        t.row(|r| {
-            let initials_label = r.cell(|ui| ui.label(tl!("Initials:")));
-            r.cell(|ui| {
-                let mut i = app.session.initials.clone();
-                let hint = app.session.user_initials();
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut i)
-                            .desired_width(80.0)
-                            .char_limit(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS)
-                            .hint_text(hint),
+
+    /// Runs a command; a refusal shows in the status bar.
+    fn run(&mut self, id: &str, params: Value) {
+        if let Err(e) = self.app.run(id, params) {
+            self.app.status(e);
+        }
+    }
+
+    fn options(&mut self, params: Value) {
+        self.run("file.options", params);
+    }
+
+    /// The values `reset_page` restores, as (row key, value).
+    fn defaults(&self, page: &str) -> Vec<(&'static str, PrefValue)> {
+        use PrefValue::{Bool, Choice, Float, Int, Text};
+        let ui = default_of(&self.app.ui);
+        let prefs = default_of(&self.app.session.prefs);
+        let view = default_of(&self.app.session.view);
+        let size = ui.interface_size.percent().map_or_else(|| "auto".to_string(), |p| p.to_string());
+        match page {
+            "general" => vec![
+                ("general.theme", Choice(ui.theme.code().to_string())),
+                ("general.interfaceSize", Choice(size)),
+                ("general.paperColor", Choice(id_of(&prefs.paper_color))),
+                ("general.miniToolbar", Bool(ui.mini_toolbar)),
+                ("general.darkPage", Bool(view.dark_mode)),
+                ("general.showCommunity", Bool(ui.show_discord)),
+                ("general.fontDownloadNotice", Bool(ui.font_download_notice)),
+                ("general.startScreen", Bool(ui.start_screen)),
+                ("general.initials", Text(String::new())),
+            ],
+            "display" => vec![
+                ("display.tabs", Bool(prefs.marks.tabs)),
+                ("display.spaces", Bool(prefs.marks.spaces)),
+                ("display.paragraphs", Bool(prefs.marks.paragraphs)),
+                ("display.hidden", Bool(prefs.marks.hidden)),
+                ("display.allMarks", Bool(view.marks)),
+                ("display.rulers", Bool(view.ruler)),
+                ("display.numerals", Choice(id_of(&view.numeral))),
+                ("display.statusCount", Choice(ui.status_count.code().to_string())),
+                ("display.printBackgrounds", Bool(ui.print_backgrounds)),
+                ("display.updateFieldsBeforePrint", Bool(ui.update_fields_before_print)),
+            ],
+            "proofing" => vec![
+                ("proofing.ignoreUppercase", Bool(prefs.ignore_uppercase)),
+                ("proofing.ignoreNumbers", Bool(prefs.ignore_numbers)),
+                ("proofing.ignoreInternet", Bool(prefs.ignore_internet)),
+                ("proofing.checkSpelling", Bool(view.proofing)),
+                ("proofing.markGrammar", Bool(prefs.mark_grammar)),
+                ("proofing.customDictionaryFile", Text(String::new())),
+            ],
+            "save" => vec![("save.removePersonalInfo", Bool(false)), ("save.removeDateTime", Bool(false))],
+            "language" => vec![("language.interface", Choice(crate::i18n::AUTO.to_string())), ("language.dictionariesFolder", Text(String::new()))],
+            "accessibility" => vec![
+                ("accessibility.animations", Choice(ui.animations.code().to_string())),
+                ("accessibility.readAloudSpeed", Float(f64::from(default_of(&self.app.session.read_aloud).rate()))),
+                ("accessibility.skipCitations", Bool(default_of(&self.app.session.read_aloud).skip_citations)),
+            ],
+            "advanced" => vec![
+                ("advanced.typingReplacesSelection", Bool(prefs.typing_replaces_selection)),
+                ("advanced.insertKeyOvertype", Bool(prefs.insert_key_overtype)),
+                ("advanced.overtype", Bool(prefs.overtype)),
+                ("advanced.alignmentGuides", Bool(ui.alignment_guides)),
+                ("advanced.recentCount", Int(ui.recent_shown() as i64)),
+                ("advanced.units", Choice("auto".to_string())),
+                ("advanced.region", Choice("auto".to_string())),
+                ("advanced.keytips", Bool(ui.keytips_enabled)),
+                ("advanced.caretAnimation", Bool(ui.caret_animation)),
+                ("advanced.displayServer", Choice(ui.display_server.code().to_string())),
+                ("advanced.templatesFolder", Text(String::new())),
+                ("advanced.scrollSpeed", Choice(ui.scroll_speed.code().to_string())),
+                ("advanced.touchpadScrollSpeed", Choice(ui.touchpad_scroll_speed.code().to_string())),
+            ],
+            _ => Vec::new(),
+        }
+    }
+}
+
+impl PreferencesModel for OptionsModel<'_> {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        use crate::StatusCount;
+        use crate::scroll::ScrollSpeed;
+        use crate::theme::{Animations, Appearance};
+        use wordcraft_engine::speech::{MAX_RATE, MIN_RATE};
+        let app = &*self.app;
+        let s = &self.strings;
+        let prefs = &app.session.prefs;
+        let marks = prefs.marks;
+        let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
+        let settings = &app.session.doc.settings;
+        let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
+        let b = |key, label, on| RowSpec::new(key, label, RowKind::Bool(on));
+        let custom = |key, label| RowSpec::new(key, label, RowKind::Custom);
+        #[cfg(not(target_arch = "wasm32"))]
+        let can_default = app.services.make_default_app.is_some() || cfg!(target_os = "macos");
+        #[cfg(target_arch = "wasm32")]
+        let can_default = false;
+
+        let general = page_of(
+            "general",
+            tl!("General"),
+            vec![
+                GroupSpec::new(
+                    Some(tl!("Interface")),
+                    vec![
+                        RowSpec::new(
+                            "general.theme",
+                            tl!("Interface theme:"),
+                            RowKind::choice(app.ui.theme.code(), entries(Appearance::ALL.iter().map(|a| (a.code(), tl!(a.label()))))),
+                        ),
+                        RowSpec::new("general.interfaceSize", tl!("Interface size:"), RowKind::choice(&s.size_id, owned(&s.sizes))).help(tl!(
+                            "Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate."
+                        )),
+                        RowSpec::new("general.paperColor", tl!("Screen paper color:"), RowKind::choice(&s.paper_id, owned(&s.paper))).help(tl!(
+                            "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
+                        )),
+                        b("general.miniToolbar", tl!("Show the mini toolbar when text is selected"), app.ui.mini_toolbar),
+                        b("general.darkPage", tl!("Dark page (white text on black)"), app.session.view.dark_mode)
+                            .help(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.")),
+                        b("general.showCommunity", tl!("Show the community button in the title bar"), app.ui.show_discord),
+                        b(
+                            "general.fontDownloadNotice",
+                            tl!("Tell me when a document's missing fonts can be downloaded"),
+                            app.ui.font_download_notice,
+                        ),
+                        custom("general.defaultApp", tl!("Make WordCraft the default for Word documents…")).visible(can_default),
+                    ],
+                ),
+                GroupSpec::new(
+                    Some(tl!("Start-up")),
+                    vec![b("general.startScreen", tl!("Show the Start screen when WordCraft starts"), app.ui.start_screen).help(tl!(
+                        "On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document."
+                    ))],
+                ),
+                GroupSpec::new(
+                    Some(tl!("Personalize")),
+                    vec![
+                        RowSpec::new("general.userName", tl!("User name:"), RowKind::Text(&app.session.author)).enabled(!protected),
+                        RowSpec::new("general.initials", tl!("Initials:"), RowKind::Text(&app.session.initials)),
+                    ],
+                ),
+            ],
+        )
+        .footnote(tl!("New comments and tracked changes are recorded under this name and these initials."));
+
+        let display = page_of(
+            "display",
+            tl!("Display"),
+            vec![
+                GroupSpec::new(
+                    Some(tl!("Formatting marks")),
+                    vec![
+                        b("display.tabs", tl!("Tab characters"), marks.tabs),
+                        b("display.spaces", tl!("Spaces"), marks.spaces),
+                        b("display.paragraphs", tl!("Paragraph marks"), marks.paragraphs),
+                        b("display.hidden", tl!("Hidden text"), marks.hidden),
+                        b("display.allMarks", tl!("Show all formatting marks"), app.session.view.marks),
+                    ],
+                ),
+                GroupSpec::new(
+                    Some(tl!("Page display")),
+                    vec![
+                        b("display.rulers", tl!("Show rulers"), app.session.view.ruler),
+                        RowSpec::new("display.numerals", tl!("Numerals:"), RowKind::choice(&s.numeral_id, owned(&s.numerals))),
+                    ],
+                ),
+                GroupSpec::new(
+                    Some(tl!("Status bar")),
+                    vec![
+                        RowSpec::new(
+                            "display.statusCount",
+                            tl!("Status bar count:"),
+                            RowKind::choice(app.ui.status_count.code(), entries(StatusCount::ALL.iter().map(|c| (c.code(), tl!(c.label()))))),
+                        )
+                        .help(tl!("You can also right-click the count in the status bar to change it.")),
+                    ],
+                ),
+                GroupSpec::new(
+                    Some(tl!("Printing")),
+                    vec![
+                        b("display.printBackgrounds", tl!("Print the page color"), app.ui.print_backgrounds),
+                        b("display.updateFieldsBeforePrint", tl!("Update fields before printing"), app.ui.update_fields_before_print),
+                    ],
+                ),
+            ],
+        )
+        .footnote(tl!("These marks show even when Show/Hide ¶ is off."));
+
+        let proofing = page_of(
+            "proofing",
+            tl!("Proofing"),
+            vec![
+                GroupSpec::new(Some(tl!("AutoCorrect")), vec![custom("proofing.autoCorrect", tl!("AutoCorrect Options"))]),
+                GroupSpec::new(
+                    Some(tl!("Spelling")),
+                    vec![
+                        b("proofing.ignoreUppercase", tl!("Ignore words in capitals"), prefs.ignore_uppercase),
+                        b("proofing.ignoreNumbers", tl!("Ignore words with numbers"), prefs.ignore_numbers),
+                        b("proofing.ignoreInternet", tl!("Ignore web and file addresses"), prefs.ignore_internet),
+                    ],
+                ),
+                GroupSpec::new(
+                    Some(tl!("As you type")),
+                    vec![
+                        b("proofing.checkSpelling", tl!("Check spelling as you type"), app.session.view.proofing),
+                        b("proofing.markGrammar", tl!("Mark grammar errors as you type"), prefs.mark_grammar).enabled(app.session.view.proofing),
+                    ],
+                ),
+                GroupSpec::new(
+                    Some(tl!("Custom dictionary")),
+                    vec![
+                        RowSpec::new("proofing.customDictionaryFile", tl!("Dictionary file:"), RowKind::Custom)
+                            .help(tl!("A custom-word dictionary file (.dic or plain text) used in conjunction with the main dictionary. Empty uses custom-dictionary.txt.")),
+                        custom("proofing.customDictionary", tl!("Custom dictionary")),
+                    ],
+                ),
+            ],
+        );
+
+        let save = page_of(
+            "save",
+            tl!("Save"),
+            vec![
+                GroupSpec::new(Some(tl!("Save documents")), {
+                    // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
+                    let row = b("save.autosave", tl!("AutoSave documents you have saved in WordCraft"), app.autosave && !browser).enabled(!browser);
+                    vec![if browser { row.help(&s.autosave_reason) } else { row }]
+                }),
+                // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
+                GroupSpec::new(
+                    Some(tl!("Privacy for this document")),
+                    vec![
+                        b(
+                            "save.removePersonalInfo",
+                            tl!("Remove my name from comments, changes and file properties when saving"),
+                            settings.remove_personal_info,
+                        ),
+                        b(
+                            "save.removeDateTime",
+                            tl!("Leave out the date and time of comments and tracked changes when saving"),
+                            settings.remove_date_time,
+                        ),
+                    ],
+                ),
+            ],
+        )
+        .footnote(tl!("AutoSave writes your changes to the file a moment after you stop typing."));
+
+        let language = page_of(
+            "language",
+            tl!("Language"),
+            vec![
+                GroupSpec::new(
+                    Some(tl!("Interface language")),
+                    vec![
+                        RowSpec::new("language.interface", tl!("Interface language:"), RowKind::choice(&app.ui.language, owned(&s.languages)))
+                            .help(tl!("Automatic follows your system's language. Menus and commands change; your documents don't.")),
+                    ],
+                ),
+                GroupSpec::new(
+                    Some(tl!("Proofing language")),
+                    vec![custom("language.proofingLanguage", tl!("Proofing language")).keywords(&s.proofing_language)],
+                ),
+                GroupSpec::new(Some(tl!("Your languages")), vec![custom("language.yourLanguages", tl!("Your languages"))]),
+                GroupSpec::new(
+                    Some(tl!("Dictionaries")),
+                    vec![
+                        RowSpec::new(
+                            "language.dictionariesFolder",
+                            tl!("Dictionaries folder:"),
+                            RowKind::Text(prefs.dictionaries_folder.as_deref().unwrap_or("")),
+                        )
+                        .help(tl!("Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.\nAn installed Language pack is used after this folder.")),
+                        custom("language.dictionaryFiles", tl!("Dictionary files")),
+                    ],
+                ),
+            ],
+        );
+
+        let animations_help = if app.ui.animations == Animations::System {
+            Some(if self.motion_full {
+                tl!("Your system has animation effects turned on.")
+            } else {
+                tl!("Your system has animation effects turned off.")
+            })
+        } else {
+            None
+        };
+        let mut animations = RowSpec::new(
+            "accessibility.animations",
+            tl!("Animation effects:"),
+            RowKind::choice(app.ui.animations.code(), entries(Animations::ALL.iter().map(|a| (a.code(), tl!(a.label()))))),
+        );
+        animations = animations.help(
+            animations_help.unwrap_or(tl!("Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.")),
+        );
+        let accessibility = page_of(
+            "accessibility",
+            tl!("Accessibility"),
+            vec![
+                GroupSpec::new(Some(tl!("Visual effects")), vec![animations]),
+                GroupSpec::new(
+                    Some(tl!("Read Aloud")),
+                    vec![
+                        RowSpec::new(
+                            "accessibility.readAloudSpeed",
+                            tl!("Speed"),
+                            RowKind::float(app.session.read_aloud.rate() as f64, (MIN_RATE as f64)..=(MAX_RATE as f64), 2),
+                        )
+                        .step(0.05),
+                        b("accessibility.skipCitations", tl!("Skip citations & bibliography"), app.session.read_aloud.skip_citations),
+                    ],
+                ),
+            ],
+        );
+
+        let display_group = vec![
+            RowSpec::new(
+                "advanced.recentCount",
+                tl!("Recent documents to show:"),
+                RowKind::int(app.ui.recent_shown() as i64, 0..=(crate::MAX_RECENT as i64)),
+            ),
+            RowSpec::new("advanced.units", tl!("Measurement units:"), RowKind::choice(&s.unit_id, owned(&s.units))),
+            RowSpec::new("advanced.region", tl!("Region:"), RowKind::choice(&s.region_id, owned(&s.regions))),
+            b("advanced.keytips", tl!("Show KeyTips (Alt or F10)"), app.ui.keytips_enabled),
+        ];
+
+        let mut groups = vec![
+            GroupSpec::new(
+                Some(tl!("Editing")),
+                vec![
+                    b("advanced.typingReplacesSelection", tl!("Typing replaces selected text"), prefs.typing_replaces_selection),
+                    b("advanced.insertKeyOvertype", tl!("Use the Insert key to switch overtype on and off"), prefs.insert_key_overtype),
+                    b("advanced.overtype", tl!("Overtype (typing replaces the characters after the caret)"), prefs.overtype),
+                    b("advanced.alignmentGuides", tl!("Show alignment guides when moving pictures and shapes"), app.ui.alignment_guides).help(tl!(
+                        "Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely."
+                    )),
+                ],
+            ),
+            GroupSpec::new(Some(tl!("Display")), display_group),
+            GroupSpec::new(
+                Some(tl!("Animation")),
+                vec![b("advanced.caretAnimation", tl!("Animate the caret (it glides and fades)"), app.ui.caret_animation).help(tl!(
+                    "On: the caret glides to its new place when you type or use the arrow keys, and its blink fades. Off: it jumps and blinks on and off."
+                ))],
+            ),
+        ];
+        if cfg!(all(unix, not(target_os = "macos"))) {
+            use crate::DisplayServer;
+            let name = |d: &DisplayServer| if *d == DisplayServer::Auto { tl!(d.label()) } else { d.label() };
+            groups.push(GroupSpec::new(
+                Some(tl!("Linux display server")),
+                vec![
+                    RowSpec::new(
+                        "advanced.displayServer",
+                        tl!("Display server:"),
+                        RowKind::choice(app.ui.display_server.code(), entries(DisplayServer::ALL.iter().map(|d| (d.code(), name(d))))),
                     )
-                    .labelled_by(initials_label.id)
-                    .changed()
-                {
-                    set(app, json!({"initials": i}));
-                }
-            });
-        });
-    });
-    note(ui, "New comments and tracked changes are recorded under this name and these initials.");
-}
-
-fn display(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Formatting marks");
-    note(ui, "These marks show even when Show/Hide ¶ is off.");
-    let m = app.session.prefs.marks;
-    for (label, key, on) in [
-        ("Tab characters", "tabs", m.tabs),
-        ("Spaces", "spaces", m.spaces),
-        ("Paragraph marks", "paragraphs", m.paragraphs),
-        ("Hidden text", "hidden", m.hidden),
-    ] {
-        let mut v = on;
-        if ui.checkbox(&mut v, tl!(label)).changed() {
-            set(app, json!({"marks": { key: v }}));
+                    .help(tl!("Applies the next time WordCraft starts.")),
+                ],
+            ));
         }
-    }
-    let mut marks = app.session.view.marks;
-    if ui.checkbox(&mut marks, tl!("Show all formatting marks")).changed() {
-        let _ = app.run("view.marks", json!({"value": marks}));
-    }
-    ui.add_space(8.0);
-    section(ui, "Page display");
-    let mut ruler = app.session.view.ruler;
-    if ui.checkbox(&mut ruler, tl!("Show rulers")).changed() {
-        let _ = app.run("view.ruler", json!({"value": ruler}));
-    }
-    numeral_picker(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Status bar");
-    status_count_picker(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Printing");
-    ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
-    ui.checkbox(&mut app.ui.update_fields_before_print, tl!("Update fields before printing"));
-}
+        // The web app has no folders to name.
+        if !cfg!(target_arch = "wasm32") {
+            groups.push(GroupSpec::new(
+                Some(tl!("File locations")),
+                vec![
+                    RowSpec::new(
+                        "advanced.templatesFolder",
+                        tl!("User templates:"),
+                        RowKind::Text(prefs.user_templates_folder.as_deref().unwrap_or("")),
+                    )
+                    .help(tl!("File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.")),
+                ],
+            ));
+        }
 
-fn proofing(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "AutoCorrect");
-    if ui.button(tl!("AutoCorrect Options")).clicked() {
-        let _ = app.run("tools.autocorrect", json!({}));
-    }
-    ui.add_space(8.0);
-    section(ui, "Spelling");
-    let pr = app.session.prefs.clone();
-    flag(app, ui, "Ignore words in capitals", "ignoreUppercase", pr.ignore_uppercase);
-    flag(app, ui, "Ignore words with numbers", "ignoreNumbers", pr.ignore_numbers);
-    flag(app, ui, "Ignore web and file addresses", "ignoreInternet", pr.ignore_internet);
-    ui.add_space(8.0);
-    section(ui, "As you type");
-    let spelling = app.session.view.proofing;
-    flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
-    ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
-    ui.add_space(8.0);
-    section(ui, "Custom dictionary");
-    custom_dictionary(app, ui);
-}
-
-/// Where the spelling dictionaries come from (#1063): a folder searched before the system's
-/// usual places, saved with the settings. An app started from Finder or the Dock doesn't see
-/// `WORDCRAFT_DICTIONARIES`, so this is how it finds a dictionary kept in a folder of the user's
-/// own. Each language's status ("Your own dictionary") is in Your languages above, and the file
-/// each language found is under Dictionary files.
-fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
-    let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
-    let id = egui::Id::unique("options_dictionaries_folder");
-    let mut folder = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| saved.clone());
-    let folder_label = ui.label(tl!("Dictionaries folder:")).id;
-    ui.horizontal(|ui| {
-        let r = ui
-            .add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(tl!("Not set: the system's usual places")))
-            .labelled_by(folder_label);
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let changed = folder.trim() != saved;
-        if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
-            let value = if folder.trim().is_empty() { "auto" } else { folder.trim() };
-            match app.run("file.options", json!({"dictionariesFolder": value})) {
-                // Shown as saved (`~/` expanded).
-                Ok(_) => folder = app.session.prefs.dictionaries_folder.clone().unwrap_or_default(),
-                Err(e) => app.status(e),
+        let mut scrolling = vec![RowSpec::new(
+            "advanced.scrollSpeed",
+            tl!("Mouse wheel scroll speed:"),
+            RowKind::choice(app.ui.scroll_speed.code(), entries(ScrollSpeed::ALL.iter().map(|s| (s.code(), tl!(s.label()))))),
+        )];
+        // Windows and browsers do not report touchpads in points.
+        if !cfg!(any(target_os = "windows", target_arch = "wasm32")) {
+            let mut row = RowSpec::new(
+                "advanced.touchpadScrollSpeed",
+                tl!("Touchpad scroll speed:"),
+                RowKind::choice(app.ui.touchpad_scroll_speed.code(), entries(ScrollSpeed::ALL.iter().map(|s| (s.code(), tl!(s.label()))))),
+            );
+            if !cfg!(target_os = "macos") {
+                row = row.help(tl!("On X11, the touchpad follows the mouse wheel speed."));
             }
+            scrolling.push(row);
         }
-        if ui.add_enabled(!saved.is_empty(), egui::Button::new(tl!("Clear"))).clicked()
-            && app.run("file.options", json!({"dictionariesFolder": "auto"})).is_ok()
-        {
-            folder.clear();
+        groups.push(GroupSpec::new(Some(tl!("Scrolling")), scrolling));
+        groups.push(GroupSpec::new(
+            Some(tl!("Customize")),
+            vec![
+                custom("advanced.customizeKeyboard", tl!("Keyboard shortcuts:")),
+                custom("advanced.customizeRibbon", tl!("Ribbon and Quick Access Toolbar:")),
+            ],
+        ));
+        let advanced = page_of("advanced", tl!("Advanced"), groups);
+
+        let agents = PageSpec::custom("agents", tl!("Agents"));
+        vec![general, display, proofing, save, language, accessibility, advanced, agents]
+    }
+
+    fn set(&mut self, key: &str, value: PrefValue) {
+        use PrefValue::{Bool, Choice, Float, Int, Text};
+        match (key, value) {
+            ("general.theme", Choice(c)) => self.run("ui.theme", json!({"value": c})),
+            ("general.interfaceSize", Choice(c)) => match c.parse::<u16>() {
+                Ok(percent) => self.run("ui.interfaceSize", json!({"percent": percent})),
+                Err(_) => self.run("ui.interfaceSize", json!({"value": "auto"})),
+            },
+            ("general.paperColor", Choice(c)) => self.run("view.paperColor", json!({"value": c})),
+            ("general.miniToolbar", Bool(v)) => self.app.ui.mini_toolbar = v,
+            ("general.showCommunity", Bool(v)) => self.app.ui.show_discord = v,
+            ("general.fontDownloadNotice", Bool(v)) => self.app.ui.font_download_notice = v,
+            ("general.darkPage", Bool(v)) => self.run("view.darkMode", json!({"value": v})),
+            ("general.startScreen", Bool(v)) => self.run("ui.startScreen", json!({"value": v})),
+            ("general.userName", Text(t)) => {
+                if !wordcraft_engine::cmd::protect::enforced(&self.app.session.doc) {
+                    self.app.session.author = t;
+                }
+            }
+            ("general.initials", Text(t)) => {
+                let t: String = t.chars().take(MAX_INITIALS_CHARS).collect();
+                self.options(json!({"initials": t}));
+            }
+            ("display.tabs", Bool(v)) => self.options(json!({"marks": {"tabs": v}})),
+            ("display.spaces", Bool(v)) => self.options(json!({"marks": {"spaces": v}})),
+            ("display.paragraphs", Bool(v)) => self.options(json!({"marks": {"paragraphs": v}})),
+            ("display.hidden", Bool(v)) => self.options(json!({"marks": {"hidden": v}})),
+            ("display.allMarks", Bool(v)) => self.run("view.marks", json!({"value": v})),
+            ("display.rulers", Bool(v)) => self.run("view.ruler", json!({"value": v})),
+            ("display.numerals", Choice(c)) => self.run("view.numeral", json!({"value": c})),
+            ("display.statusCount", Choice(c)) => self.run("ui.statusCount", json!({"value": c})),
+            ("display.printBackgrounds", Bool(v)) => self.app.ui.print_backgrounds = v,
+            ("display.updateFieldsBeforePrint", Bool(v)) => self.app.ui.update_fields_before_print = v,
+            ("proofing.ignoreUppercase", Bool(v)) => self.options(json!({"ignoreUppercase": v})),
+            ("proofing.ignoreNumbers", Bool(v)) => self.options(json!({"ignoreNumbers": v})),
+            ("proofing.ignoreInternet", Bool(v)) => self.options(json!({"ignoreInternet": v})),
+            ("proofing.checkSpelling", Bool(v)) => self.options(json!({"checkSpelling": v})),
+            ("proofing.markGrammar", Bool(v)) => self.options(json!({"markGrammar": v})),
+            ("save.autosave", Bool(v)) => {
+                if self.app.autosave_block() != Some(crate::AutoSaveBlock::Browser) {
+                    self.app.autosave = v;
+                    self.app.session.autosave = v;
+                }
+            }
+            ("save.removePersonalInfo", Bool(v)) => self.run("file.privacyOptions", json!({"removePersonalInfo": v})),
+            ("save.removeDateTime", Bool(v)) => self.run("file.privacyOptions", json!({"removeDateTime": v})),
+            ("language.interface", Choice(c)) => self.run("ui.language", json!({"value": c})),
+            ("proofing.customDictionaryFile", Text(t)) => {
+                let t = t.trim();
+                self.options(json!({"customDictionary": if t.is_empty() { "auto" } else { t }}));
+            }
+            ("language.dictionariesFolder", Text(t)) => {
+                let t = t.trim();
+                self.options(json!({"dictionariesFolder": if t.is_empty() { "auto" } else { t }}));
+            }
+            ("accessibility.animations", Choice(c)) => self.run("ui.animations", json!({"value": c})),
+            ("accessibility.readAloudSpeed", Float(v)) => self.run("readAloud.speed", json!({"value": v})),
+            ("accessibility.skipCitations", Bool(v)) => self.run("readAloud.skipCitations", json!({"value": v})),
+            ("advanced.typingReplacesSelection", Bool(v)) => self.options(json!({"typingReplacesSelection": v})),
+            ("advanced.insertKeyOvertype", Bool(v)) => self.options(json!({"insertKeyOvertype": v})),
+            ("advanced.overtype", Bool(v)) => self.options(json!({"overtype": v})),
+            ("advanced.alignmentGuides", Bool(v)) => self.run("ui.alignmentGuides", json!({"value": v})),
+            ("advanced.recentCount", Int(n)) => self.app.ui.recent_count = n.clamp(0, crate::MAX_RECENT as i64) as _,
+            ("advanced.units", Choice(c)) => self.options(json!({"units": c})),
+            ("advanced.region", Choice(c)) => self.options(json!({"region": c})),
+            ("advanced.keytips", Bool(v)) => self.run("ui.keytips", json!({"value": v})),
+            ("advanced.caretAnimation", Bool(v)) => self.run("ui.caretAnimation", json!({"value": v})),
+            ("advanced.displayServer", Choice(c)) => self.run("ui.displayServer", json!({"value": c})),
+            ("advanced.templatesFolder", Text(t)) => {
+                let t = t.trim();
+                self.options(json!({"userTemplatesFolder": if t.is_empty() { "auto" } else { t }}));
+            }
+            ("advanced.scrollSpeed", Choice(c)) => self.run("ui.scrollSpeed", json!({"value": c})),
+            ("advanced.touchpadScrollSpeed", Choice(c)) => self.run("ui.touchpadScrollSpeed", json!({"value": c})),
+            _ => {}
         }
-    });
-    ui.data_mut(|d| d.insert_temp(id, folder));
-    note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
-    note(ui, "An installed Language pack is used after this folder.");
-    ui.add_space(6.0);
-    ui.label(RichText::new(tl!("Dictionary files")).strong());
-    dictionary_files(ui);
+    }
+
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) {
+        match key {
+            "general.defaultApp" => default_app_row(self.app, ui),
+            "proofing.autoCorrect" => {
+                if Button::new(tl!("AutoCorrect Options")).show(ui).clicked() {
+                    self.run("tools.autocorrect", json!({}));
+                }
+            }
+            "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
+            "proofing.customDictionary" => self.custom_dictionary(ui),
+            "language.proofingLanguage" => {
+                Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+            }
+            // PLAN: assumed `your_languages(app: &mut WordApp, ui: &mut Ui)` (chrome-w12)
+            "language.yourLanguages" => crate::language_packs::your_languages(self.app, ui),
+            "language.dictionaryFiles" => dictionary_files(ui),
+            "advanced.customizeKeyboard" => {
+                if Button::new(tl!("Customize…")).show(ui).clicked() {
+                    self.run("tools.customizeKeyboard", json!({}));
+                }
+            }
+            "advanced.customizeRibbon" if Button::new(tl!("Customize…")).show(ui).clicked() => {
+                self.run("tools.customizeRibbon", json!({}));
+            }
+            _ => {}
+        }
+    }
+
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) {
+        if page == "agents" {
+            Text::new(tl!("Agents")).role(TypeRole::Heading).show(ui);
+            Text::new(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."))
+                .show(ui);
+        }
+    }
+
+    fn reset_page(&mut self, page: &str) {
+        for (key, value) in self.defaults(page) {
+            self.set(key, value);
+        }
+    }
+}
+
+/// Rows of the custom dictionary's list shown before it scrolls.
+const CUSTOM_WORDS_SHOWN: u16 = 8;
+
+/// The word being typed into the custom dictionary's new-word field, kept in the session tier of
+/// the row's container so an edit in progress survives passes.
+#[derive(Clone, Default)]
+struct NewWord(String);
+
+impl OptionsModel<'_> {
+    /// The Dictionary file field. A text row reports every typed draft, and each would bind (and
+    /// later write to) whatever file the half-typed path names, so the path is committed only on
+    /// Enter or focus loss. The field is given the saved path and never writes it: the framework
+    /// holds the draft while an edit is open and drops it when the saved path changes (an agent's
+    /// `file.options`) or the page is left, so no edit open always shows the saved path.
+    fn custom_dictionary_file(&mut self, ui: &mut Ui) {
+        let saved = self.app.session.prefs.custom_dictionary.clone().unwrap_or_default();
+        let out = TextField::new(tl!("Dictionary file:"), Bind::given(saved)).limit(None).show(ui);
+        let committed = out.events.into_iter().find_map(|event| match event {
+            EditEvent::Commit { after, .. } => Some(after),
+            _ => None,
+        });
+        if let Some(path) = committed {
+            self.set("proofing.customDictionaryFile", PrefValue::Text(path));
+        }
+    }
+
+    /// The custom dictionary: the words Add to Dictionary kept, each with a Remove button, and a
+    /// field to add one.
+    fn custom_dictionary(&mut self, ui: &mut Ui) {
+        let words = wordcraft_engine::proof::user_dictionary();
+        if words.is_empty() {
+            Text::new(tl!("No words yet. Add to Dictionary on a misspelled word puts it here.")).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        }
+        let removed = std::cell::Cell::new(None::<String>);
+        let removed_ref = &removed;
+        let source = keyed(&words, |w: &String| w.clone());
+        // A collection owns its scroll and the page scrolls, so the list caps its rows (the dictionary can hold any number).
+        List::new(tl!("Custom dictionary")).max_rows(CUSTOM_WORDS_SHOWN).show_items(ui, &source, &mut |word, _| {
+            let word = word.clone();
+            ListRow::new(word.clone()).trailing_field(Button::new(tl!("Remove")), move |out| {
+                if out.clicked() {
+                    removed_ref.set(Some(word));
+                }
+            })
+        });
+        if let Some(w) = removed.take() {
+            self.options(json!({"removeWords": [w]}));
+        }
+        // Enter or Add files the draft and clears it.
+        Row::new().show(ui, |ui, cx| {
+            let draft = &mut cx.keep::<NewWord>().0;
+            let out = TextField::new(tl!("New word"), Bind::bound(&mut *draft)).limit(MAX_WORD_CHARS).placeholder(tl!("New word")).submits().show(ui);
+            let word = draft.trim().to_string();
+            let ok = !word.is_empty() && !word.chars().any(char::is_whitespace);
+            let add = Button::new(tl!("Add")).enabled(ok).show(ui).clicked();
+            if ok && (add || out.submitted) {
+                self.options(json!({"addWords": [word]}));
+                draft.clear();
+            }
+        });
+    }
 }
 
 /// The dictionary each language found (#1063): its file, "no dictionary found", or why the file
-/// couldn't be read, looked up again after the folder changes.
+/// couldn't be read. The engine keeps the report until the dictionaries change.
 fn dictionary_files(ui: &mut Ui) {
-    // The dictionary each language found, looked up again after the folder changes.
-    let found_id = egui::Id::unique("options_dictionaries_found");
-    let generation = wordcraft_engine::proof::dictionary_generation();
-    let cached = ui.data(|d| d.get_temp::<(u64, Vec<(String, Option<String>, Option<String>)>)>(found_id)).filter(|(g, _)| *g == generation);
-    let found = match cached {
-        Some((_, f)) => f,
-        None => {
-            let f: Vec<(String, Option<String>, Option<String>)> = wordcraft_engine::proof::installed_dictionaries()
-                .into_iter()
-                .map(|(lang, dic)| {
-                    let error = wordcraft_engine::proof::dictionary_load_error(lang);
-                    (language_name(lang).to_string(), dic.map(|d| d.to_string_lossy().into_owned()), error)
-                })
-                .collect();
-            ui.data_mut(|d| d.insert_temp(found_id, (generation, f.clone())));
-            f
-        }
-    };
-    for (language, file, error) in found {
-        let line = match (file, error) {
-            (Some(f), Some(e)) => crate::i18n::fmt(
-                tl!("{language}: {file} (unreadable: {reason})"),
-                &[("language", &language), ("file", &crate::i18n::isolate_path(&f)), ("reason", &e)],
-            ),
-            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &crate::i18n::isolate_path(&f))]),
-            (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", &language)]),
+    let direction = if crate::i18n::current().rtl() { craft::i18n::Direction::Rtl } else { craft::i18n::Direction::Ltr };
+    for found in wordcraft_engine::packs::dictionaries_found().iter() {
+        let language = language_name(found.lang);
+        let file = found.file.as_ref().map(|f| craft::i18n::path(&f.to_string_lossy(), direction));
+        let line = match (file, found.error.as_deref()) {
+            (Some(f), Some(e)) => {
+                crate::i18n::fmt(tl!("{language}: {file} (unreadable: {reason})"), &[("language", language), ("file", &f), ("reason", e)])
+            }
+            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", language), ("file", &f)]),
+            (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", language)]),
         };
-        ui.add(egui::Label::new(RichText::new(line).small()).truncate());
+        Text::new(line).role(TypeRole::Caption).shade(Shade::Faint).elide(Elide::End).show(ui);
     }
 }
 
@@ -458,560 +857,55 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
     }
 }
 
-/// The custom dictionary: the words Add to Dictionary kept, each with a Remove button, and a
-/// field to add one.
-fn custom_dictionary(app: &mut WordApp, ui: &mut Ui) {
-    let words = wordcraft_engine::proof::user_dictionary();
-    if words.is_empty() {
-        note(ui, "No words yet. Add to Dictionary on a misspelled word puts it here.");
-    }
-    egui::ScrollArea::vertical().id_salt("options_dictionary").max_height(180.0).show(ui, |ui| {
-        for w in &words {
-            ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(vec2(220.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.set_min_width(220.0);
-                    ui.add(egui::Label::new(w.as_str()).truncate());
-                });
-                if ui.small_button(tl!("Remove")).clicked() {
-                    set(app, json!({"removeWords": [w]}));
-                }
-            });
-        }
-    });
-    let id = egui::Id::unique("options_dictionary_new");
-    let mut word = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
-    ui.horizontal(|ui| {
-        let r = ui
-            .add(egui::TextEdit::singleline(&mut word).desired_width(220.0).char_limit(MAX_WORD_CHARS).hint_text(tl!("New word")))
-            .accessible_name(tl!("New word"));
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let w = word.trim().to_string();
-        let ok = !w.is_empty() && !w.chars().any(char::is_whitespace);
-        if (ui.add_enabled(ok, egui::Button::new(tl!("Add"))).clicked() || (enter && ok)) && app.run("file.options", json!({"addWords": [w]})).is_ok()
-        {
-            word.clear();
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(id, word));
-}
-
-fn save(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Save documents");
-    // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
-    let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
-    let mut autosave = app.autosave && !browser;
-    let r = ui.add_enabled_ui(!browser, |ui| ui.checkbox(&mut autosave, tl!("AutoSave documents you have saved in WordCraft"))).inner;
-    if browser {
-        r.on_disabled_hover_text(crate::AutoSaveBlock::Browser.reason());
-    } else if r.changed() {
-        app.autosave = autosave;
-        app.session.autosave = autosave;
-    }
-    note(ui, "AutoSave writes your changes to the file a moment after you stop typing.");
-    ui.add_space(8.0);
-    // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
-    section(ui, "Privacy for this document");
-    let settings = &app.session.doc.settings;
-    let rows = [
-        ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", settings.remove_personal_info),
-        ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", settings.remove_date_time),
-    ];
-    for (label, key, value) in rows {
-        let mut v = value;
-        if ui.checkbox(&mut v, tl!(label)).changed()
-            && let Err(e) = app.run("file.privacyOptions", json!({ key: v }))
-        {
-            app.status(e);
-        }
-    }
-    note(ui, "The document you are editing keeps the names and dates; only the saved file leaves them out.");
-}
-
-fn language(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Interface language");
-    language_picker(app, ui);
-    // #414 (detect the document's language) goes here.
-    ui.add_space(8.0);
-    section(ui, "Proofing language");
-    let lang = crate::ribbon::caret_language(app);
-    let text = if crate::ribbon::caret_no_proof(app) {
-        tl!("The text at the insertion point is marked Do not check spelling or grammar.").to_string()
-    } else if !crate::ribbon::caret_language_proofed(app) {
-        crate::i18n::fmt(tl!("{language}: WordCraft doesn't check spelling or grammar in this language yet."), &[("language", &lang)])
-    } else {
-        let unreadable = crate::ribbon::caret_unreadable_dictionary(app);
-        crate::chrome::dictionary_problem(&lang, &unreadable, crate::ribbon::caret_missing_dictionary(app))
-            .unwrap_or_else(|| crate::i18n::fmt(tl!("Spelling and grammar are checked in {language}."), &[("language", &lang)]))
-    };
-    ui.label(RichText::new(text).small().weak());
-    ui.add_space(8.0);
-    crate::language_packs::your_languages_section(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Dictionaries");
-    dictionaries(app, ui);
-    crate::language_packs::add_language_window(app, &ui.ctx().clone());
-}
-
-/// Draws Accessibility options: the animation setting and Read Aloud speed and skip-citations.
-fn accessibility(app: &mut WordApp, ui: &mut Ui) {
-    use wordcraft_engine::speech::{MAX_RATE, MIN_RATE};
-    section(ui, "Visual effects");
-    animations_picker(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Read Aloud");
-    let mut rate = app.session.read_aloud.rate();
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Speed"));
-        let r =
-            ui.add(egui::Slider::new(&mut rate, MIN_RATE..=MAX_RATE).step_by(0.05).custom_formatter(|v, _| format!("{v:.2}×"))).labelled_by(label.id);
-        if r.changed() {
-            let _ = app.run("readAloud.speed", json!({"value": rate}));
-        }
-    });
-    let mut skip = app.session.read_aloud.skip_citations;
-    if ui.checkbox(&mut skip, tl!("Skip citations & bibliography")).changed() {
-        let _ = app.run("readAloud.skipCitations", json!({"value": skip}));
-    }
-}
-
-/// Draws Advanced options: typing and overtype behavior, alignment guides, recent-document count,
-/// measurement units, region, keytips, caret animation, file locations and customization.
-fn advanced(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Editing");
-    let pr = app.session.prefs.clone();
-    flag(app, ui, "Typing replaces selected text", "typingReplacesSelection", pr.typing_replaces_selection);
-    flag(app, ui, "Use the Insert key to switch overtype on and off", "insertKeyOvertype", pr.insert_key_overtype);
-    flag(app, ui, "Overtype (typing replaces the characters after the caret)", "overtype", pr.overtype);
-    let mut guides = app.ui.alignment_guides;
-    if ui
-        .checkbox(&mut guides, tl!("Show alignment guides when moving pictures and shapes"))
-        .on_hover_text(tl!("Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely."))
-        .changed()
-    {
-        let _ = app.run("ui.alignmentGuides", json!({"value": guides}));
-    }
-    ui.add_space(8.0);
-    section(ui, "Display");
-    crate::rtl::Table::new("options_display").columns(2).spacing(vec2(8.0, 6.0)).show(ui, |t| {
-        t.row(|r| {
-            let recent_label = r.cell(|ui| ui.label(tl!("Recent documents to show:")));
-            r.cell(|ui| {
-                let mut n = app.ui.recent_shown();
-                if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).labelled_by(recent_label.id).changed() {
-                    app.ui.recent_count = n;
-                }
-            });
-        });
-        t.row(|r| {
-            let units_label = r.cell(|ui| ui.label(tl!("Measurement units:")));
-            r.cell(|ui| {
-                // The user's choice, else the region's (#838): Automatic follows the region.
-                let units = app.session.units();
-                let auto = app.session.prefs.units.is_none();
-                let name = UNITS.iter().find(|(u, _)| *u == units).map_or("Inches", |(_, n)| n);
-                let shown = if auto { format!("{} ({})", tl!("Automatic"), tl!(name)) } else { tl!(name).to_string() };
-                let combo = craft_ui::ComboBox::from_id_salt("options_units").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(auto, tl!("Automatic")).clicked() {
-                        set(app, json!({"units": "auto"}));
-                    }
-                    for (u, label) in UNITS {
-                        if ui.selectable_label(!auto && units == u, tl!(label)).clicked() {
-                            set(app, json!({"units": u}));
-                        }
-                    }
-                });
-                combo.response.labelled_by(units_label.id);
-            });
-        });
-        // The region new documents, units and the decimal separator follow; Automatic is the
-        // system's (#838).
-        t.row(|r| {
-            let region_label = r.cell(|ui| ui.label(tl!("Region:")));
-            r.cell(|ui| {
-                let chosen = app.session.prefs.region.clone();
-                let system = &app.session.system_region;
-                let system_tag =
-                    if system.territory.is_empty() { system.language.clone() } else { format!("{}-{}", system.language, system.territory) };
-                let automatic = crate::i18n::fmt(tl!("Automatic ({region})"), &[("region", system_tag.as_str())]);
-                let shown = chosen.clone().unwrap_or_else(|| automatic.clone());
-                let combo = craft_ui::ComboBox::from_id_salt("options_region").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(chosen.is_none(), automatic.as_str()).clicked() {
-                        set(app, json!({"region": "auto"}));
-                    }
-                    for tag in REGIONS {
-                        if ui.selectable_label(chosen.as_deref() == Some(tag), tag).clicked() {
-                            set(app, json!({"region": tag}));
-                        }
-                    }
-                });
-                combo.response.labelled_by(region_label.id);
-            });
-        });
-    });
-    let mut keytips = app.ui.keytips_enabled;
-    if ui.checkbox(&mut keytips, tl!("Show KeyTips (Alt or F10)")).changed() {
-        let _ = app.run("ui.keytips", json!({"value": keytips}));
-    }
-    ui.add_space(8.0);
-    section(ui, "Animation");
-    let mut caret = app.ui.caret_animation;
-    if ui
-        .checkbox(&mut caret, tl!("Animate the caret (it glides and fades)"))
-        .on_hover_text(tl!(
-            "On: the caret glides to its new place when you type or use the arrow keys, and its blink fades. Off: it jumps and blinks on and off."
-        ))
-        .changed()
-    {
-        let _ = app.run("ui.caretAnimation", json!({"value": caret}));
-    }
-    if cfg!(all(unix, not(target_os = "macos"))) {
-        ui.add_space(8.0);
-        section(ui, "Linux display server");
-        display_server_picker(app, ui);
-    }
-    // The web app has no folders to name.
-    if !cfg!(target_arch = "wasm32") {
-        ui.add_space(8.0);
-        section(ui, "File locations");
-        templates_folder(app, ui);
-    }
-    ui.add_space(8.0);
-    section(ui, "Scrolling");
-    scroll_speed_picker(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Customize");
-    ui.horizontal(|ui| {
-        ui.label(tl!("Keyboard shortcuts:"));
-        if ui.button(tl!("Customize…")).clicked() {
-            let _ = app.run("tools.customizeKeyboard", json!({}));
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label(tl!("Ribbon and Quick Access Toolbar:"));
-        if ui.button(tl!("Customize…")).clicked() {
-            let _ = app.run("tools.customizeRibbon", json!({}));
-        }
-    });
-}
-
-/// The user templates folder (#2852): where File › New finds personal templates and Save as Word
-/// Template starts. Empty is the app's own folder, shown as the hint.
-fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
-    let saved = app.session.prefs.user_templates_folder.clone().unwrap_or_default();
-    let id = egui::Id::unique("options_user_templates_folder");
-    let mut folder = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| saved.clone());
-    let default = app.services.templates_dir.as_ref().map(|d| d.to_string_lossy().into_owned());
-    let templates_label = ui.label(tl!("User templates:")).id;
-    ui.horizontal(|ui| {
-        let hint = default.clone().unwrap_or_else(|| tl!("Not set").to_string());
-        let r = ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(hint)).labelled_by(templates_label);
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let changed = folder.trim() != saved;
-        if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
-            let value = if folder.trim().is_empty() { "auto" } else { folder.trim() };
-            match app.run("file.options", json!({"userTemplatesFolder": value})) {
-                Ok(_) => folder = app.session.prefs.user_templates_folder.clone().unwrap_or_default(),
-                Err(e) => app.status(e),
-            }
-        }
-        if ui.add_enabled(!saved.is_empty(), egui::Button::new(tl!("Clear"))).clicked()
-            && app.run("file.options", json!({"userTemplatesFolder": "auto"})).is_ok()
-        {
-            folder.clear();
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(id, folder));
-    note(ui, "File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.");
-}
-
-fn agents(ui: &mut Ui) {
-    section(ui, "Agents");
-    ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
-}
-
-/// Interface theme: Light, Dark, or follow the system's appearance (#115).
-fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
-    use crate::theme::Appearance;
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Interface theme:"));
-        let combo = craft_ui::ComboBox::from_id_salt("interface_theme").selected_text(tl!(app.ui.theme.label())).width(220.0).show_ui(ui, |ui| {
-            for a in Appearance::ALL {
-                if ui.selectable_label(app.ui.theme == a, tl!(a.label())).clicked() {
-                    let _ = app.run("ui.theme", json!({"value": a.code()}));
-                }
-            }
-        });
-        combo.response.labelled_by(label.id);
-    });
-}
-
-/// What the status bar's live count shows (#2797): words (as Word's status bar counts), characters
-/// with spaces, or characters without spaces. Right-clicking the count in the status bar offers
-/// the same choices.
-fn status_count_picker(app: &mut WordApp, ui: &mut Ui) {
-    use crate::StatusCount;
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Status bar count:"));
-        let combo = craft_ui::ComboBox::from_id_salt("status_count").selected_text(tl!(app.ui.status_count.label())).width(220.0).show_ui(ui, |ui| {
-            for c in StatusCount::ALL {
-                if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
-                    let _ = app.run("ui.statusCount", json!({"value": c.code()}));
-                }
-            }
-        });
-        combo.response.labelled_by(label.id);
-    });
-    note(ui, "You can also right-click the count in the status bar to change it.");
-}
-
-/// Interface size (#475, #822): Auto, which keeps the system's display scale and shows the size it
-/// draws at, or an absolute size, so "100%" means one screen pixel per point.
-fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
-    use crate::theme::InterfaceSize;
-    let size = app.ui.interface_size;
-    let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-    // The template keeps the percent sign outside its placeholder, so `fmt` isolates the number
-    // without it and a right-to-left line draws "(%200)": the sign goes inside the isolate.
-    let drawn = InterfaceSize::AUTO.drawn_percent_within(native, app.auto_scale_limit);
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &drawn.to_string())]).replace("\u{2069}%", "%\u{2069}");
-    let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Interface size:"));
-        let combo = craft_ui::ComboBox::from_id_salt("interface_size").selected_text(selected).width(220.0).show_ui(ui, |ui| {
-            if ui.selectable_label(size.is_auto(), auto).clicked() {
-                let _ = app.run("ui.interfaceSize", json!({"value": "auto"}));
-            }
-            for pct in InterfaceSize::PRESETS {
-                if ui.selectable_label(size.percent() == Some(pct), format!("{pct}%")).clicked() {
-                    let _ = app.run("ui.interfaceSize", json!({"percent": pct}));
-                }
-            }
-        });
-        combo.response.labelled_by(label.id);
-    });
-    ui.label(
-        RichText::new(tl!(
-            "Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate."
-        ))
-        .small()
-        .weak(),
-    );
-}
-
-/// Animation effects: on, off, or follow the system's setting (the default). Under "Use system
-/// setting" a line says what the system reports, so it is plain what the choice comes to here.
-fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
-    use crate::theme::Animations;
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Animation effects:"));
-        let combo =
-            craft_ui::ComboBox::from_id_salt("animation_effects").selected_text(tl!(app.ui.animations.label())).width(220.0).show_ui(ui, |ui| {
-                for a in Animations::ALL {
-                    if ui.selectable_label(app.ui.animations == a, tl!(a.label())).clicked() {
-                        let _ = app.run("ui.animations", json!({"value": a.code()}));
-                    }
-                }
-            });
-        combo.response.labelled_by(label.id);
-    });
-    note(ui, "Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.");
-    if app.ui.animations == Animations::System {
-        let reported = match app.system_animations() {
-            Some(true) => "Your system has animation effects turned on.",
-            Some(false) => "Your system has animation effects turned off.",
-            None => "Your system doesn't report an animation setting, so animation effects stay on.",
-        };
-        note(ui, reported);
-    }
-}
-
-/// Linux display server (#2184): Automatic, Wayland or X11 (XWayland). The desktop app reads it
-/// before the window opens, so a change applies at the next launch.
-fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
-    use crate::DisplayServer;
-    let name = |d: DisplayServer| if d == DisplayServer::Auto { tl!(d.label()) } else { d.label() };
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Display server:"));
-        let combo = craft_ui::ComboBox::from_id_salt("display_server").selected_text(name(app.ui.display_server)).width(220.0).show_ui(ui, |ui| {
-            for d in DisplayServer::ALL {
-                if ui.selectable_label(app.ui.display_server == d, name(d)).clicked() {
-                    let _ = app.run("ui.displayServer", json!({"value": d.code()}));
-                }
-            }
-        });
-        combo.response.labelled_by(label.id);
-    });
-    note(ui, "Applies the next time WordCraft starts.");
-}
-
-/// Scroll speed preferences (#6146): mouse wheel and touchpad (Wayland / macOS).
-fn scroll_speed_picker(app: &mut WordApp, ui: &mut Ui) {
-    use crate::scroll::ScrollSpeed;
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Mouse wheel scroll speed:"));
-        let combo = craft_ui::ComboBox::from_id_salt("scroll_speed").selected_text(tl!(app.ui.scroll_speed.label())).width(220.0).show_ui(ui, |ui| {
-            for s in ScrollSpeed::ALL {
-                if ui.selectable_label(app.ui.scroll_speed == s, tl!(s.label())).clicked() {
-                    let _ = app.run("ui.scrollSpeed", json!({"value": s.code()}));
-                }
-            }
-        });
-        combo.response.labelled_by(label.id);
-    });
-    // Windows and browsers do not report touchpads in points.
-    if !cfg!(any(target_os = "windows", target_arch = "wasm32")) {
-        let row = ui.horizontal(|ui| {
-            let label = ui.label(tl!("Touchpad scroll speed:"));
-            let combo = craft_ui::ComboBox::from_id_salt("touchpad_scroll_speed")
-                .selected_text(tl!(app.ui.touchpad_scroll_speed.label()))
-                .width(220.0)
-                .show_ui(ui, |ui| {
-                    for s in ScrollSpeed::ALL {
-                        if ui.selectable_label(app.ui.touchpad_scroll_speed == s, tl!(s.label())).clicked() {
-                            let _ = app.run("ui.touchpadScrollSpeed", json!({"value": s.code()}));
-                        }
-                    }
-                });
-            combo.response.labelled_by(label.id);
-        });
-        if !cfg!(target_os = "macos") {
-            row.response.on_hover_text(tl!("On X11, the touchpad follows the mouse wheel speed."));
-        }
-    }
-}
-
-/// Interface language: follow the system (the default) or pick one (#8).
-fn language_picker(app: &mut WordApp, ui: &mut Ui) {
-    use crate::i18n::{AUTO, Lang};
-    // The language names are in their own scripts: fonts for them load from the next frame.
-    app.want_system_cjk = true;
-    app.want_system_arabic = true;
-    let system = crate::i18n::system_lang();
-    let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
-    let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Interface language:"));
-        let combo = craft_ui::ComboBox::from_id_salt("interface_language").selected_text(current).width(220.0).show_ui(ui, |ui| {
-            if ui.selectable_label(app.ui.language == AUTO, auto_label.as_str()).clicked() {
-                let _ = app.run("ui.language", json!({"value": AUTO}));
-            }
-            for lang in Lang::for_picker() {
-                if ui.selectable_label(app.ui.language == lang.code(), lang.name()).clicked() {
-                    let _ = app.run("ui.language", json!({"value": lang.code()}));
-                }
-            }
-        });
-        combo.response.labelled_by(label.id);
-    });
-    ui.label(RichText::new(tl!("Automatic follows your system's language. Menus and commands change; your documents don't.")).small().weak());
-}
-
-/// Deserialize `input` over `T`'s defaults one setting at a time: a value of the wrong type is
-/// dropped (its default stays) instead of failing the whole read. Objects nest (`editing`).
-pub fn lenient<T: Serialize + DeserializeOwned + Default>(input: &Value) -> T {
-    let mut base = serde_json::to_value(T::default()).unwrap_or(Value::Null);
-    if base.is_object() {
-        let mut extra = Vec::new();
-        overlay::<T>(&mut base, &mut Vec::new(), input, 0, &mut extra);
-        // Keys with no slot in the defaults (write-only legacy settings, or unknown ones) are
-        // kept only after the loop, so `base` stays the size of `T` while each key is checked.
-        for (path, k, v) in extra {
-            if let Some(parent) = object_at(&mut base, &path) {
-                parent.insert(k, v);
-            }
-        }
-    }
-    serde_json::from_value(base).unwrap_or_default()
-}
-
-/// The object at `path` inside `root`.
-fn object_at<'a>(root: &'a mut Value, path: &[String]) -> Option<&'a mut Map<String, Value>> {
-    let mut v = root;
-    for k in path {
-        v = v.as_object_mut()?.get_mut(k)?;
-    }
-    v.as_object_mut()
-}
-
-fn overlay<T: DeserializeOwned>(
-    root: &mut Value,
-    path: &mut Vec<String>,
-    input: &Value,
-    depth: usize,
-    extra: &mut Vec<(Vec<String>, String, Value)>,
-) {
-    let Some(map) = input.as_object() else { return };
-    for (k, v) in map {
-        let Some(parent) = object_at(root, path) else { return };
-        let old = parent.get(k).cloned();
-        if depth < 4 && v.is_object() && old.as_ref().is_some_and(Value::is_object) {
-            path.push(k.clone());
-            overlay::<T>(root, path, v, depth + 1, extra);
-            path.pop();
-            continue;
-        }
-        parent.insert(k.clone(), v.clone());
-        if old.is_none() {
-            let ok = serde_json::from_value::<T>(root.clone()).is_ok();
-            if let Some(parent) = object_at(root, path) {
-                parent.remove(k);
-            }
-            if ok {
-                extra.push((path.clone(), k.clone(), v.clone()));
-            }
-            continue;
-        }
-        if serde_json::from_value::<T>(root.clone()).is_err()
-            && let Some(parent) = object_at(root, path)
-        {
-            match old {
-                Some(o) => parent.insert(k.clone(), o),
-                None => parent.remove(k),
-            };
-        }
-    }
-}
-
 /// File ▸ Options ▸ General: make WordCraft the default app for Word documents (#295). Only where
 /// the host can (`Services::make_default_app`: Windows opens Default apps, Linux and BSD use
 /// `xdg-mime`); macOS shows how to do it in Finder, the web shows nothing.
-fn default_app_button(app: &mut WordApp, ui: &mut Ui) {
+#[cfg(not(target_arch = "wasm32"))]
+fn default_app_row(app: &mut WordApp, ui: &mut Ui) {
     if app.services.make_default_app.is_some() {
         let hint = if cfg!(target_os = "windows") {
             tl!("Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.")
         } else {
             tl!("Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.")
         };
-        if ui.button(tl!("Make WordCraft the default for Word documents…")).on_hover_text(hint).clicked() {
-            // Straight to the hook, not through `run`: only a click may change system defaults.
+        let clicked = Button::new(tl!("Make WordCraft the default for Word documents…")).tooltip(hint).show(ui).clicked();
+        // Only a person's click changes system defaults: an automation client's pass does not.
+        if clicked && !WindowHost::of(ui.ctx()).injected_pass() {
             let _ = app.make_default_app();
         }
     } else if cfg!(target_os = "macos") {
-        ui.label(
-            egui::RichText::new(tl!("To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All."))
-                .small()
-                .weak(),
-        );
+        Text::new(tl!("To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All."))
+            .role(TypeRole::Caption)
+            .shade(Shade::Faint)
+            .show(ui);
     }
 }
 
-/// File ▸ Options ▸ Numerals: how digits look on screen (display only, like Word's
-/// File › Options › Advanced › Numeral).
-fn numeral_picker(app: &mut WordApp, ui: &mut Ui) {
-    use wordcraft_layout::NumeralMode;
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Numerals:"));
-        let mut sel = app.session.view.numeral;
-        let combo = craft_ui::ComboBox::from_id_salt("numerals").selected_text(tl!(sel.label())).width(220.0).show_ui(ui, |ui| {
-            for m in [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context, NumeralMode::System] {
-                ui.selectable_value(&mut sel, m, tl!(m.label()));
-            }
-        });
-        combo.response.labelled_by(label.id);
-        if sel != app.session.view.numeral {
-            let _ = app.run("view.numeral", json!({ "value": sel }));
-        }
-    });
+/// The web has no system default apps to change: nothing to show.
+#[cfg(target_arch = "wasm32")]
+fn default_app_row(_app: &mut WordApp, _ui: &mut Ui) {}
+
+/// The Options page.
+pub fn page(app: &mut WordApp, ui: &mut Ui) {
+    // The page title, as the other File pages' (production's 26 pt semibold).
+    Text::new(tl!("Options")).role(TypeRole::Display).show(ui);
+    let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
+    let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
+    // The page says what the system answered, so it reads the resolved choice: the env's own
+    // motion still holds `System` while that is followed.
+    let motion_full = app.resolved_root().motion == MotionMode::Full;
+    // The page list is the state's; a command that set `options_pane` since the last pass wins.
+    // PLAN: assumed field `options_state: PreferencesState` on WordApp (app-hub)
+    let mut state = std::mem::take(&mut app.options_state);
+    state.selected = current;
+    {
+        let mut model = OptionsModel::new(app, native, motion_full);
+        PreferencesPage::new(Bind::bound(&mut state)).show(ui, &mut model);
+    }
+    if PANES.contains(&state.selected.as_str()) {
+        app.ui.options_pane = state.selected.clone();
+    }
+    app.options_state = state;
 }
 
 #[cfg(test)]
