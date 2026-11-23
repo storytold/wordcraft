@@ -330,6 +330,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 > 2026-11-03 · Section `w:chapStyle` values preserve the full unsigned-byte range, including 10, while values above 255 are rejected.
 
+| 2026-11-15 | trivial | #4558: integrate distinct dashSmallGap through shared model and DOCX/RTF/DOC/ODF IO; retain app rendering/previews and qualification limits. |
 | 2026-10-30 | trivial | DOCX section metadata now preserves independent printer trays, section endnote suppression, chapter numbering settings, and footnote columns through native JSON and repeated save/reopen |
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).
 >
@@ -705,3 +706,23 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 | 2026-11-05 | trivial | DOCX: a block-level content control (including `w15:repeatingSection` / `w15:repeatingSectionItem` nested around one paragraph) followed by body-level bookmark, comment or permission markup (Word's `_GoBack` bookmark) is written back around its paragraph instead of inside it, so Word opens the saved file; the markers are kept at the end of that paragraph (P0069). |
 | 2026-11-04 | trivial | DOCX: paragraph and list-level indents (`w:ind`) and paragraph spacing (`w:spacing` before/after) written as plain twips beyond 16 bits keep their low 16 bits, as Word reads them (`w:left="66256"` is a 36 pt indent), instead of pushing the text off the page (`twips_wrap.rs`, P0059) |
 | 2026-11-12 | trivial | DOCX: `w:lnNumType` without a positive `w:countBy` leaves line numbering off, as Word does, instead of numbering every line on screen, in PDF export and on re-save; saving then omits the element (`section_line_numbering.rs`, #6209) |
+| 2026-11-05 | trivial | PR #4558: keep dashSmallGap distinct through DOC/DOCX/RTF import and document/PDF output; ODT degrades it to dashed rather than solid. Border preview patterns and synthetic round trips are covered; existing Word Mac observations are narrow and other platforms remain unqualified. Dotted table previews now use equal one-stroke-width on/off segments at every tested width. |
+
+### Shared border-style integration — 2026-11-15
+
+The active model and DOC/RTF/ODF readers/writers use [the supporting contribution](https://github.com/ro-legal-docx/craft-libs/commit/8fefcfbaf91f373d2401009ab689e1042ef27901)
+based on the existing shared pin. Same-revision dependencies move together;
+unrelated pins and package versions remain unchanged. The app retains rendering,
+PDF export, command descriptions and preview controls. The RTF test from the
+retired module now runs in the active formats suite, comparing the shared flow's
+OOXML token before testing the application document's distinct enum value. A
+consumer ODF export/reopen control covers the dashed fallback through the bridge.
+DOCX/RTF preserve the distinct style; legacy DOC supports import; ODF cannot
+retain the separate gap ratio. Removed legacy modules are not restored to IO.
+
+No local Cargo/build/test or new native Word measurement ran. Available library
+`doc.yml` omits the affected format unit tests, including the retained legacy
+BRC/BRC80 and ODF helper tests; full-library workspace coverage is not claimed.
+Normal consumer CI runs the active DOCX/RTF/ODF, PDF/rendering and preview controls.
+Existing measurement provenance and its platform/balloon limits remain unchanged;
+overlap with #5198 still requires a maintainer integration decision.

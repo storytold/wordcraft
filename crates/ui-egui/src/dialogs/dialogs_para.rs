@@ -236,10 +236,11 @@ const LEFT: usize = 2;
 const RIGHT: usize = 3;
 const BETWEEN: usize = 4;
 
-const STYLES: [(BorderStyle, &str); 8] = [
+const STYLES: [(BorderStyle, &str); 9] = [
     (BorderStyle::Single, "Single"),
     (BorderStyle::Dotted, "Dotted"),
     (BorderStyle::Dashed, "Dashed"),
+    (BorderStyle::DashSmallGap, "Dashed, small gaps"),
     (BorderStyle::DotDash, "Dot dash"),
     (BorderStyle::Double, "Double"),
     (BorderStyle::Triple, "Triple"),
@@ -480,6 +481,12 @@ fn lines(ui: &mut Ui, key: &'static str, l: &mut LineForm, area: SampleArea, fil
             if let Some((style, _)) = pick(ui, "style", word(tl!("Style:")), &names, current, true).and_then(|at| STYLES.get(at)) {
                 l.style = *style;
             }
+            // The shared edge picker selects sides. This swatch shows the selected document stroke.
+            let (swatch, _) = ui.allocate_exact_size(egui::vec2(96.0, 12.0), egui::Sense::hover());
+            let a = egui::pos2(swatch.left(), swatch.center().y);
+            let b = egui::pos2(swatch.right(), swatch.center().y);
+            let color = Rgb::parse(&l.color).map_or(egui::Color32::BLACK, |c| egui::Color32::from_rgb(c.0, c.1, c.2));
+            draw_line(ui.painter(), [a, b], l.style, l.width, color);
             let automatic = ColorFieldEmpty::Automatic { label: word(tl!("Automatic")), value: "", face: AutoFace::One(srgba(Rgb(0, 0, 0))) };
             color_row(ui, key, &word(tl!("Color:")), &mut l.color, &automatic, palette, asks);
             let names: Vec<Label> = WIDTHS.iter().map(|w| word(crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]))).collect();
@@ -564,6 +571,60 @@ impl WordForm for BordersForm {
                 "fill" => self.fill = hex,
                 _ => {}
             }
+        }
+    }
+}
+
+/// Preview the selected document border at the chosen width.
+fn draw_line(p: &egui::Painter, [a, b]: [egui::Pos2; 2], style: BorderStyle, width: f32, color: egui::Color32) {
+    let px = (width * 1.2).clamp(1.0, 6.0);
+    let normal = (b - a).normalized().rot90();
+    let stroke = egui::Stroke::new(px, color);
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Double | BorderStyle::Triple => {
+            let n = if style == BorderStyle::Double { 2 } else { 3 };
+            let thin = egui::Stroke::new(1.0, color);
+            for i in 0..n {
+                let off = normal * ((i as f32 - (n as f32 - 1.0) / 2.0) * 3.0);
+                p.line_segment([a + off, b + off], thin);
+            }
+        }
+        BorderStyle::Dotted => {
+            p.extend(egui::Shape::dashed_line(&[a, b], stroke, px, px * 1.5));
+        }
+        BorderStyle::Dashed => {
+            p.extend(egui::Shape::dashed_line(&[a, b], stroke, px * 4.0, px * 4.0));
+        }
+        BorderStyle::DashSmallGap => {
+            p.extend(egui::Shape::dashed_line(&[a, b], stroke, px * 4.0, px));
+        }
+        BorderStyle::DotDash => {
+            p.extend(egui::Shape::dashed_line_with_offset(&[a, b], stroke, &[px * 7.0, px * 3.0], &[px * 3.0, px * 3.0], 0.0));
+        }
+        BorderStyle::Wave => {
+            let len = (b - a).length();
+            let dir = (b - a).normalized();
+            let n = (len / 4.0).ceil().max(1.0) as usize;
+            let pts: Vec<egui::Pos2> =
+                (0..=n.min(400)).map(|i| a + dir * (len * i as f32 / n as f32) + normal * if i % 2 == 0 { -1.5 } else { 1.5 }).collect();
+            p.add(egui::Shape::line(pts, egui::Stroke::new(1.0, color)));
+        }
+        BorderStyle::Thick => {
+            p.line_segment([a, b], egui::Stroke::new((px * 1.5).min(6.0), color));
+        }
+        // A compound thin and thick line shows as one line of its width, as on the page.
+        BorderStyle::Single
+        | BorderStyle::ThinThickSmallGap
+        | BorderStyle::ThickThinSmallGap
+        | BorderStyle::ThinThickThinSmallGap
+        | BorderStyle::ThinThickMediumGap
+        | BorderStyle::ThickThinMediumGap
+        | BorderStyle::ThinThickThinMediumGap
+        | BorderStyle::ThinThickLargeGap
+        | BorderStyle::ThickThinLargeGap
+        | BorderStyle::ThinThickThinLargeGap => {
+            p.line_segment([a, b], stroke);
         }
     }
 }
@@ -672,5 +733,41 @@ mod tests {
         result.default_interval = 72.0;
         assert_eq!(tabs_params(&basis, 36.0, &result), Some(json!({"default": 72.0})));
         assert_eq!(tabs_params(&basis, 72.0, &result), None);
+    }
+    /// Painted paragraph previews use distinct document dash arrays at each preview stroke width.
+    #[test]
+    fn border_preview_paragraph_patterns_match_document_strokes() {
+        let ctx = egui::Context::default();
+        for width in [0.5, 1.0, 3.0] {
+            for (kind, ratios) in [
+                (BorderStyle::Dashed, [4.0, 4.0, 4.0, 4.0]),
+                (BorderStyle::DashSmallGap, [4.0, 1.0, 4.0, 1.0]),
+                (BorderStyle::DotDash, [7.0, 3.0, 3.0, 3.0]),
+            ] {
+                let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    draw_line(ui.painter(), [egui::pos2(10.0, 20.0), egui::pos2(250.0, 20.0)], kind, width, egui::Color32::BLACK);
+                });
+                let segments: Vec<_> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|s| if let egui::Shape::LineSegment { points, stroke } = &s.shape { Some((*points, stroke.width)) } else { None })
+                    .collect();
+                out.drop_without_applying_deltas();
+                assert!(segments.len() > 2);
+                let actual = [
+                    segments[0].0[1].x - segments[0].0[0].x,
+                    segments[1].0[0].x - segments[0].0[1].x,
+                    segments[1].0[1].x - segments[1].0[0].x,
+                    segments[2].0[0].x - segments[1].0[1].x,
+                ];
+                for (actual, ratio) in actual.into_iter().zip(ratios) {
+                    assert!(
+                        (actual - ratio * segments[0].1).abs() < 0.01,
+                        "{kind:?}, width {width}: expected {}, got {actual}",
+                        ratio * segments[0].1
+                    );
+                }
+            }
+        }
     }
 }
