@@ -3303,21 +3303,31 @@ fn baseline_is_the_most_shared_y() {
 /// as Word's export does, where the document stores "9" for both.
 #[test]
 fn exported_page_references_show_the_page_or_words_error() {
+    use hayro_syntax::object::{Array, Dict};
+
     let field =
         |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
-    let mut d = Document::from_text("See \nMissing \nTarget");
-    for (i, instr) in [(0, "PAGEREF Target"), (1, "PAGEREF NoSuchMark")] {
+    let mut d = Document::from_text("See \nUnlinked \nMissing \nTarget");
+    for (i, instr) in [(0, r"PAGEREF Target \h"), (1, "PAGEREF Target"), (2, r"PAGEREF NoSuchMark \h")] {
         let p = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).unwrap();
         let n = p.len();
         p.insert_object(n, field(instr), &CharProps::default()).unwrap();
     }
-    let target = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    let target = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(3)).unwrap();
     target.props.page_break_before = Some(true);
     target.insert_object(0, InlineObject::BookmarkStart { name: "Target".into() }, &CharProps::default()).unwrap();
-    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let text = extract_text(&bytes);
     let first = squash(&text[0]);
     assert!(first.contains("See 2"), "{first}");
+    assert!(first.contains("Unlinked 2"), "{first}");
     assert!(first.contains("Missing Error! Bookmark not defined."), "{first}");
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let annotations = pdf.pages()[0].raw().get::<Array>(b"Annots").expect("the linked page reference produces an annotation");
+    let destinations: Vec<_> = annotations.iter::<Dict>().filter_map(|a| a.get::<Array>(b"Dest")).collect();
+    assert_eq!(destinations.len(), 1, "only the linked, existing bookmark has a destination");
+    let linked_page = destinations[0].raw_iter().next().unwrap().as_obj_ref().map(Into::into);
+    assert_eq!(linked_page, pdf.pages()[1].raw().obj_id());
 }
 
 #[test]
