@@ -44,8 +44,15 @@ fn note_global_names() {
     });
 }
 
+/// Text egui itself draws over the app in debug builds, such as its warning that `request_discard`
+/// was called several frames in a row. The app does not draw it, so it is not interface text.
+fn egui_debug_text(text: &str) -> bool {
+    text.starts_with("egui PERF WARNING:")
+}
+
 fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
     match shape {
+        egui::Shape::Text(t) if egui_debug_text(t.galley.text()) => {}
         egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
         egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
         _ => {}
@@ -298,6 +305,31 @@ fn math_placeholders_are_exact_math_input_only() {
     assert!(set.contains("\\sum_(i=1)^n"), "the Equation button picture");
     assert!(set.contains("\\complement"), "a symbol tile's fallback");
     assert!(!set.contains("Translate"), "ordinary interface wording is not exempt");
+}
+
+#[test]
+fn egui_debug_warnings_are_not_interface_text() {
+    // A discard in every pass makes egui draw its PERF WARNING from the fourth frame on.
+    let ctx = egui::Context::default();
+    let mut shapes = Vec::new();
+    for _ in 0..5 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| ui.ctx().request_discard("test"));
+        out.textures_delta.clear();
+        shapes = out.shapes;
+    }
+    let raw: Vec<String> = shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert!(raw.iter().any(|t| t.starts_with("egui PERF WARNING:")), "egui draws its warning: {raw:?}");
+    let mut drawn = Vec::new();
+    for s in &shapes {
+        texts(&s.shape, &mut drawn);
+    }
+    assert!(drawn.is_empty(), "the audit reads no egui debug text: {drawn:?}");
 }
 
 /// Fails on interface text drawn without going through the catalog, listed per UI state, and
@@ -665,6 +697,7 @@ fn disabled_reasons() -> std::collections::BTreeSet<String> {
 fn frame_at(ctx: &egui::Context, app: &mut WordApp, width: f32) -> Vec<(String, f32)> {
     fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
         match shape {
+            egui::Shape::Text(t) if egui_debug_text(t.galley.text()) => {}
             egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos.x)),
             egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
             _ => {}
