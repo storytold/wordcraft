@@ -16,7 +16,7 @@ craft = { workspace = true, features = [
     "color", "color-ui", "control", "draw", "font-manager", "gpu", "menu", "pages", "print", "review", "table", "text",
     "text-find", "web-api", "web-host", "window",
 ] }
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38" }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
@@ -65,13 +65,18 @@ wordcraft-engine = { workspace = true, features = ["test-support"] }
 # kittest's own dev-dependencies do not propagate their font features. Declare the fonts the
 # interface tests lay out explicitly: default faces plus monochrome emoji fallbacks.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
-egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }
+# The app-window tests run `WordApp` as an `eframe::App` (`test_harness`), so the runtime gets the app's input before
+# every pass as on the desktop. The desktop app's feature set, so a workspace build shares one eframe.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
 craft-zip = { workspace = true }
 # The window tests' frame driver for child viewports; it is not part of the `craft` facade.
 craft-ui-test-kit = { workspace = true }
+# The interface tests' fixture and access tree (`craft::ui::testing`).
+craft = { workspace = true, features = ["ui-testing"] }
 
 [build-dependencies]
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "243d68e12d05e89122db6d154924bf1992e10d38", features = ["subset"] }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", features = ["subset"] }
 serde_json = { workspace = true }
 toml = "1"
 
