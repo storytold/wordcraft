@@ -37,20 +37,27 @@
 use std::cell::Cell;
 use std::sync::{LazyLock, OnceLock};
 
-use craft_i18n::I18n;
+use craft::i18n::I18n;
 
-pub use craft_i18n::{fmt, fmt_plain};
+pub use craft::i18n::{fmt, fmt_plain};
 
 include!(concat!(env!("OUT_DIR"), "/craft_i18n.rs"));
 
 /// The embedded catalogs, offering exactly the languages in [`LANGUAGES`]. Built on first use;
 /// a locale is parsed on its first lookup.
-static I18N: LazyLock<I18n> = LazyLock::new(|| {
+static I18N: LazyLock<std::sync::Arc<I18n>> = LazyLock::new(|| {
     let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
     let (i18n, problems) = I18n::new(CRAFT_I18N, &offered);
     problems.iter().for_each(|p| log::warn!("interface catalogs: {p}"));
-    i18n
+    std::sync::Arc::new(i18n)
 });
+
+/// The embedded catalogs as the Host carries them: the framework's own words (dialogs, menus, panes) are looked up
+/// in the Host's catalogs, so a Host without them shows every framework word in English whatever the language.
+/// The same catalogs [`Lang`] resolves in, so a language's [`Lang::craft_lang`] names the same language there.
+pub fn catalogs() -> std::sync::Arc<I18n> {
+    std::sync::Arc::clone(&I18N)
+}
 
 /// The `language` setting that follows the system.
 pub const AUTO: &str = "auto";
@@ -70,7 +77,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 28] = [
+pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -129,6 +136,9 @@ pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Bosnian, Latin script; `bs`, `bs-BA`, `bs_BA.UTF-8` and `bs-Latn-BA` resolve here. Cyrillic
+    // Bosnian (`bs-Cyrl-*`) has no catalog, so it stays in English.
+    LangInfo { code: "bs", prefer_hans: false, editing_lang: None },
 ];
 
 /// Interface languages written right to left. Their catalogs are written in typing order and
@@ -139,7 +149,7 @@ const RTL_LANGUAGES: [&str; 1] = ["ar"];
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
 #[derive(Clone, Copy)]
 pub struct Lang {
-    lang: craft_i18n::Lang,
+    lang: craft::i18n::Lang,
     /// The catalogs it is looked up in: the embedded ones ([`I18N`]), or a test fixture's.
     catalogs: Option<&'static I18n>,
 }
@@ -159,15 +169,25 @@ impl PartialEq for Lang {
 impl Eq for Lang {}
 
 impl Lang {
-    pub const EN: Lang = Lang { lang: craft_i18n::Lang::EN, catalogs: None };
+    pub const EN: Lang = Lang { lang: craft::i18n::Lang::EN, catalogs: None };
+
+    /// The pseudo locale: every looked-up string comes back marked `⟦…⟧`, so the audit can tell
+    /// text that skipped translation. It resolves in the embedded catalogs ([`I18N`]).
+    #[cfg(test)]
+    pub(crate) const PSEUDO: Lang = Lang { lang: craft::i18n::Lang::PSEUDO, catalogs: None };
 
     fn i18n(self) -> &'static I18n {
-        self.catalogs.unwrap_or_else(|| LazyLock::force(&I18N))
+        self.catalogs.unwrap_or_else(|| &**LazyLock::force(&I18N))
     }
 
     fn info(self) -> Option<&'static LangInfo> {
         let code = self.code();
         LANGUAGES.iter().find(|l| l.code == code)
+    }
+
+    /// The framework language this one is bound as, for the host.
+    pub fn craft_lang(self) -> craft::i18n::Lang {
+        self.lang
     }
 
     pub fn code(self) -> &'static str {
@@ -207,39 +227,6 @@ impl Lang {
         self.name().chars().any(|c| ('\u{2E80}'..='\u{9FFF}').contains(&c) || ('\u{AC00}'..='\u{D7AF}').contains(&c))
     }
 
-    /// The embedded catalogs (shared, then WordCraft's) this language reads; none for English.
-    fn catalog_texts(self) -> impl Iterator<Item = &'static str> {
-        let code = self.code();
-        CRAFT_I18N.iter().filter(move |(c, ..)| c.eq_ignore_ascii_case(code)).flat_map(|(_, shared, app)| [*shared, *app])
-    }
-
-    /// The CJK interface text the fonts must cover with the Chinese (`hans`) or other CJK fallback
-    /// order: the catalogs of the CJK languages using that order, and every language's own name (the
-    /// Options list). The interface fonts check the embedded faces against it (#486).
-    pub fn cjk_font_text(hans: bool) -> (Vec<&'static str>, String) {
-        let catalogs = Lang::all().filter(|l| l.uses_cjk() && l.prefers_hans() == hans).flat_map(Lang::catalog_texts).collect();
-        (catalogs, Lang::all().map(Lang::name).collect::<Vec<_>>().join(" "))
-    }
-
-    /// The CJK interface catalogs using the Korean or Chinese writing-system preference.
-    pub fn cjk_font_text_for(hans: bool, korean: bool) -> (Vec<&'static str>, String) {
-        let catalogs =
-            Lang::all().filter(|l| l.uses_cjk() && l.prefers_hans() == hans && l.prefers_korean() == korean).flat_map(Lang::catalog_texts).collect();
-        (catalogs, Lang::all().map(Lang::name).collect::<Vec<_>>().join(" "))
-    }
-
-    /// The CJK characters of the Traditional Chinese catalogs, which an installed Traditional
-    /// Chinese UI font must cover to be put first.
-    pub fn hant_font_chars() -> Vec<char> {
-        let chars: std::collections::BTreeSet<char> = Lang::all()
-            .filter(|l| l.prefers_hant())
-            .flat_map(Lang::catalog_texts)
-            .flat_map(str::chars)
-            .filter(|c| wordcraft_fonts::is_cjk(*c))
-            .collect();
-        chars.into_iter().collect()
-    }
-
     /// A language by its exact code (any case): one of [`LANGUAGES`] whose catalogs are embedded.
     pub fn from_code(code: &str) -> Option<Lang> {
         let info = LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code))?;
@@ -248,7 +235,14 @@ impl Lang {
 
     /// Resolve the `language` setting: a language code, or [`AUTO`] (and anything unknown, e.g. a
     /// code from a newer version) to follow the system.
+    ///
+    /// In tests `pseudo` selects the marking locale, so the audit drives it through the setting
+    /// like any other language; it is never a registered code ([`Lang::from_code`]).
     pub fn from_pref(pref: &str) -> Lang {
+        #[cfg(test)]
+        if pref == "pseudo" {
+            return Lang::PSEUDO;
+        }
         Lang::from_code(pref).unwrap_or_else(system_lang)
     }
 
@@ -329,9 +323,13 @@ pub fn system_region() -> wordcraft_engine::Region {
     if cfg!(test) {
         return wordcraft_engine::Region::default();
     }
-    // The environment's locale variables (Unix), else the platform's first preferred locale (on
-    // macOS it carries the region, as in `en-PL`; on the web it is the browser's language).
-    wordcraft_engine::Region::from_locale_vars(|name| std::env::var(name).ok(), sys_locale::get_locale)
+    // craft-i18n reads the platform's own settings (locale variables, the OS's region and
+    // paper); the engine's region carries the same answers.
+    let system = craft::i18n::Region::system();
+    let mut region = wordcraft_engine::Region::from_tag(&system.numbers);
+    region.letter = Some(system.paper == craft::i18n::Paper::Letter);
+    region.inches = Some(system.measurement == craft::i18n::Measurement::Us);
+    region
 }
 
 thread_local! {
@@ -339,8 +337,15 @@ thread_local! {
     static CURRENT: Cell<Lang> = const { Cell::new(Lang::EN) };
 }
 
-/// Set the language the UI is drawn in (the app does this every frame from its setting).
-pub fn set_current(lang: Lang) {
+/// Bind the language the UI is drawn in: the per-thread view that [`t`] and the other lookups
+/// read. The app calls it every frame from its setting and rebuilds its Host for the same
+/// language; a language already bound (same catalogs) changes nothing.
+pub fn apply_language(lang: Lang) {
+    let bound = CURRENT.get();
+    let catalogs = |l: Lang| l.catalogs.map(|c| c as *const I18n);
+    if bound.lang == lang.lang && catalogs(bound) == catalogs(lang) {
+        return;
+    }
     CURRENT.set(lang);
 }
 
@@ -349,8 +354,15 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+/// The contextual tab has an existing saved/control-channel identity. Keep it separate from
+/// the source text displayed to users, so saved layouts and ui.tab calls keep working.
+fn display_source(source: &str) -> &str {
+    if source == "SmartArt Design" { "Diagram Design" } else { source }
+}
+
 /// Does `lang` have a translation for this string? (English never does: it is the source.)
 pub fn has(lang: Lang, s: &str) -> bool {
+    let s = display_source(s);
     lang.i18n().get(lang.lang, "", s).is_some()
 }
 
@@ -363,10 +375,6 @@ pub fn t(s: &str) -> &str {
 /// for the count, and the key of the catalog's `@plural` row, which gives each form the language
 /// has (Russian's 2, 5 and 21 differ).
 pub fn tn(n: u64, one: &str, other: &str) -> String {
-    #[cfg(test)]
-    if pseudo::on() {
-        return I18N.trn(craft_i18n::Lang::PSEUDO, n, one, other);
-    }
     let lang = current();
     lang.i18n().trn(lang.lang, n, one, other)
 }
@@ -379,10 +387,7 @@ pub fn tc<'a>(context: &str, s: &'a str) -> &'a str {
 
 /// [`tc`] in a given language.
 pub fn trc<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
-    #[cfg(test)]
-    if pseudo::on() {
-        return I18N.tc(craft_i18n::Lang::PSEUDO, context, s);
-    }
+    let s = display_source(s);
     lang.i18n().tc(lang.lang, context, s)
 }
 
@@ -390,80 +395,15 @@ pub fn trc<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
 /// or English: for a word whose plain translation means something else here (the "Open"
 /// paragraph-spacing preset is not the file verb).
 pub fn get<'a>(context: &str, s: &'a str) -> Option<&'a str> {
-    #[cfg(test)]
-    if pseudo::on() {
-        return I18N.get(craft_i18n::Lang::PSEUDO, context, s);
-    }
+    let s = display_source(s);
     let lang = current();
     lang.i18n().get(lang.lang, context, s)
 }
 
-/// Lowercase translated interface labels and UI search queries in the current language.
-/// Turkish has two distinct I pairs: `İ`/`i` and `I`/`ı`. Unicode's default casing turns `İ`
-/// into `i` plus a combining dot, which would prevent `italik` from finding `İtalik`.
-/// Command IDs and document text keep their own existing casing semantics.
-pub fn lowercase(s: &str) -> String {
-    if current().code() != "tr" {
-        return s.to_lowercase();
-    }
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            'İ' => out.push('i'),
-            'I' => out.push('ı'),
-            _ => out.extend(c.to_lowercase()),
-        }
-    }
-    out
-}
-
 /// `s` in `lang`; strings without a translation come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    #[cfg(test)]
-    if pseudo::on() {
-        return I18N.t(craft_i18n::Lang::PSEUDO, s);
-    }
+    let s = display_source(s);
     lang.i18n().t(lang.lang, s)
-}
-
-/// Left-to-right mark: it keeps what it touches from joining a right-to-left run next to it.
-const LRM: char = '\u{200E}';
-
-/// `name` with a left-to-right mark before its extension (`ملف 2.docx`), which a right-to-left
-/// line would otherwise draw as `ملف docx.2`.
-fn mark_extension(name: &str) -> String {
-    match name.rfind('.') {
-        Some(dot)
-            if dot > 0 && name.get(dot + 1..).is_some_and(|e| !e.is_empty() && e.len() <= 8 && e.bytes().all(|b| b.is_ascii_alphanumeric())) =>
-        {
-            format!("{}{LRM}{}", &name[..dot], &name[dot..])
-        }
-        _ => name.to_string(),
-    }
-}
-
-/// `name` (a file or folder name, a document's name) set apart from the right-to-left text around
-/// it, so its own direction and its neutral marks (`(`, `.`, `-`) keep their places. Only in a
-/// right-to-left interface; elsewhere the text as it is. Display only: never for text that is saved.
-pub fn isolate(name: &str) -> String {
-    if current().rtl() { format!("\u{2068}{}\u{2069}", mark_extension(name)) } else { name.to_string() }
-}
-
-/// [`isolate`] for a path or a web address, which always reads left to right: its folders keep
-/// their order even where neighbouring ones are Arabic (a mark after every separator keeps two
-/// right-to-left names from joining into one run that swaps them).
-pub fn isolate_path(path: &str) -> String {
-    if !current().rtl() {
-        return path.to_string();
-    }
-    let mut out = String::with_capacity(path.len() + 8);
-    for c in mark_extension(path).chars() {
-        out.push(c);
-        if matches!(c, '/' | '\\') {
-            out.push(LRM);
-        }
-    }
-    format!("\u{2066}{out}\u{2069}")
 }
 
 /// A style's name as the interface shows it: built-in styles (`Normal`, `Heading 2`, `TOC 3`) in
@@ -512,11 +452,38 @@ pub fn prefixed(prefix: &str, rest: &str) -> String {
 /// Turkish casing.
 #[cfg(test)]
 pub(crate) fn fixture_lang(code: &'static str, source: &'static str) -> Lang {
-    let embedded: &'static craft_i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
+    let embedded: &'static craft::i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
     let (i18n, _) = I18n::new(embedded, &[code]);
     let i18n: &'static I18n = Box::leak(Box::new(i18n));
-    let lang = i18n.from_code(code).unwrap_or(craft_i18n::Lang::EN);
+    let lang = i18n.from_code(code).unwrap_or(craft::i18n::Lang::EN);
     Lang { lang, catalogs: Some(i18n) }
+}
+
+/// Installs a Host over a one-locale catalog whose WordCraft rows are `source`, binds that
+/// language, and returns it. A fixture's language index belongs to its own `I18n`, so the Host
+/// the framework reads must be built over that same catalog.
+#[cfg(test)]
+pub(crate) fn fixture_host(ctx: &egui::Context, code: &'static str, source: &'static str) -> Lang {
+    let embedded: &'static craft::i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
+    let (i18n, _) = I18n::new(embedded, &[code]);
+    let shared: &'static std::sync::Arc<I18n> = Box::leak(Box::new(std::sync::Arc::new(i18n)));
+    let lang = shared.from_code(code).unwrap_or(craft::i18n::Lang::EN);
+    install_test_host(ctx, std::sync::Arc::clone(shared), lang);
+    let lang = Lang { lang, catalogs: Some(&**shared) };
+    apply_language(lang);
+    lang
+}
+
+/// Installs a Host over the embedded catalogs, speaking English: the Host a test of
+/// [`Lang::EN`], [`Lang::PSEUDO`] or an embedded language binds its language on.
+#[cfg(test)]
+pub(crate) fn embedded_host(ctx: &egui::Context) {
+    install_test_host(ctx, catalogs(), craft::i18n::Lang::EN);
+}
+
+#[cfg(test)]
+fn install_test_host(ctx: &egui::Context, i18n: std::sync::Arc<I18n>, lang: craft::i18n::Lang) {
+    craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft", name: "WordCraft", version: "0" }).i18n(i18n).lang(lang).install(ctx);
 }
 
 /// For a test that needs the embedded catalogs: `false`, with a note, when none were embedded
@@ -531,8 +498,6 @@ pub(crate) fn catalogs_embedded() -> bool {
 
 #[cfg(test)]
 mod audit;
-#[cfg(test)]
-pub(crate) mod pseudo;
 #[cfg(test)]
 mod tests;
 
