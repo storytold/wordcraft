@@ -1,24 +1,45 @@
-//! Colour menus and the Colors dialog (More Colors…, #606).
+//! Colour drop-downs and the Colors dialog (More Colors…, #606).
 //!
 //! Every colour drop-down (Font Color, Shading, Page Color, Shape Fill/Outline, pen colours, and
-//! the colour fields inside dialogs) shows the theme and standard colours, a Recent Colors row and
-//! a More Colors… item. More Colors… opens the Colors dialog: a Standard tab (a honeycomb of
-//! colours and a row of greys) and a Custom tab (a hue × saturation field with a lightness
-//! slider, RGB or HSL numbers and a hex box). Everything is drawn in code.
+//! the colour fields inside dialogs) shows the theme colours, a Recent Colors row and a More
+//! Colors… row. More Colors… opens the framework's tabbed [`ColorPickerDialog`]: a Standard tab
+//! (a honeycomb of colours and a row of greys) and a Custom tab (the compact picker).
 //!
-//! What a pick does is a [`Target`]: run a command with the colour put into its params, or hand
-//! the colour back to a dialog's field. The colour a command takes is any `RRGGBB`, so a custom
-//! colour needs nothing new below the UI.
+//! What a pick does is a [`Target`]: run a command with the colour put into its params, or only
+//! report it. The colour a command takes is any `RRGGBB`, so a custom colour needs nothing new
+//! below the UI.
 
-use egui::{Color32, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use craft::color_ui::ui::{ColorPickerDialog, ColorPickerDialogLayout, ColorPickerResult, ColorPickerTab};
+use craft::keymap::CommandRef;
+use craft::theme::Srgba;
+use craft::ui::buttons::{SplitButton, SplitMenu};
+use craft::ui::choice::SwatchTable;
+use craft::ui::contract::{BodyCx, Hover, NoValue, Props as _, Show as _, clicked};
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::menu::{MenuItem, MenuItemOutput};
+use craft::ui::primitives::{IconMark, IconSpec};
+use craft::ui::runtime::env::Label;
+use craft::ui::style::DataColor;
+use egui::{Color32, Ui};
 use serde_json::{Value, json};
 use wordcraft_doc::Rgb;
 
 use crate::WordApp;
-use crate::theme::{Tokens, c32};
+use crate::dialogs::host::{DialogHooks, Settle};
 
 /// How many colours Recent Colors keeps.
 pub const RECENT_MAX: usize = 10;
+
+/// The dialog key More Colors… opens its dialog under, and the key of its entry in
+/// `WordApp::more_colors`. One More Colors dialog is open at a time, so one key serves every
+/// drop-down.
+const MORE_KEY: &str = "wordcraft.moreColors";
+
+/// Cells to a row of the theme colours.
+const THEME_PER_ROW: usize = 10;
+
+/// Rings of the Standard tab's honeycomb around its white centre.
+const HONEYCOMB_RINGS: i32 = 6;
 
 // ---------------------------------------------------------------------------------------------
 // Pure helpers
@@ -49,50 +70,6 @@ pub fn parse(s: &str) -> Option<Rgb> {
     Some(Rgb(n(0)?, n(1)?, n(2)?))
 }
 
-/// Hue (degrees, 0–360), saturation and lightness (0–1) of a colour.
-pub fn to_hsl(c: Rgb) -> (f32, f32, f32) {
-    let (r, g, b) = (c.0 as f32 / 255.0, c.1 as f32 / 255.0, c.2 as f32 / 255.0);
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let l = (max + min) / 2.0;
-    let d = max - min;
-    if d <= f32::EPSILON {
-        return (0.0, 0.0, l);
-    }
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
-    let h = if max == r {
-        (g - b) / d + if g < b { 6.0 } else { 0.0 }
-    } else if max == g {
-        (b - r) / d + 2.0
-    } else {
-        (r - g) / d + 4.0
-    };
-    ((h * 60.0).rem_euclid(360.0), s.clamp(0.0, 1.0), l.clamp(0.0, 1.0))
-}
-
-/// The colour with hue `h` (degrees, any value wraps), saturation `s` and lightness `l` (0–1,
-/// clamped). Non-finite input counts as 0.
-pub fn from_hsl(h: f32, s: f32, l: f32) -> Rgb {
-    let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
-    let h = fin(h).rem_euclid(360.0);
-    let s = fin(s).clamp(0.0, 1.0);
-    let l = fin(l).clamp(0.0, 1.0);
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let hp = h / 60.0;
-    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
-    let (r, g, b) = match hp as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = l - c / 2.0;
-    let q = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
-    Rgb(q(r), q(g), q(b))
-}
-
 /// Puts `hex` first in a Recent Colors list (no repeats, at most [`RECENT_MAX`]). Junk is ignored.
 pub fn push_recent(list: &mut Vec<String>, hex: &str) {
     let Some(c) = parse(hex) else { return };
@@ -117,12 +94,26 @@ pub fn recent(list: &[String]) -> Vec<Rgb> {
     out
 }
 
-/// Rings of the Standard tab's honeycomb around its white centre.
-pub const HONEYCOMB_RINGS: i32 = 6;
+/// The framework colour of a document colour.
+fn srgba(c: Rgb) -> Srgba {
+    Srgba::rgb(f32::from(c.0) / 255.0, f32::from(c.1) / 255.0, f32::from(c.2) / 255.0)
+}
 
-/// The Standard tab's honeycomb: axial cell coordinates `(q, r)` and their colours. The centre is
-/// white; going out, colours get more saturated and then darker; the hue follows the angle.
-pub fn honeycomb() -> Vec<(i32, i32, Rgb)> {
+/// The document colour nearest a framework colour.
+fn rgb_of(c: Srgba) -> Rgb {
+    let q = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    let [r, g, b] = c.to_rgb_array();
+    Rgb(q(r), q(g), q(b))
+}
+
+fn color32(c: Rgb) -> Color32 {
+    Color32::from_rgb(c.0, c.1, c.2)
+}
+
+/// The Standard tab's honeycomb: axial cell coordinates `(q, r)` and their colours, rows top first
+/// and each row from its start (`r` outer, `q` inner), so a row has 7, 8, … 13, … 8, 7 cells. The
+/// centre is white; going out, colours get more saturated and then darker; the hue follows the angle.
+fn honeycomb() -> Vec<(i32, i32, Rgb)> {
     let n = HONEYCOMB_RINGS;
     let mut cells = Vec::new();
     for r in -n..=n {
@@ -132,16 +123,17 @@ pub fn honeycomb() -> Vec<(i32, i32, Rgb)> {
                 continue;
             }
             let (x, y) = cell_xy(q, r);
-            let hue = (-y).atan2(x).to_degrees();
+            let hue = (-y).atan2(x).to_degrees().rem_euclid(360.0) / 360.0;
             let t = d as f32 / n as f32;
-            cells.push((q, r, from_hsl(hue, 1.0, 1.0 - 0.75 * t)));
+            let [cr, cg, cb] = craft::color::hsl_to_rgb(hue, 1.0, 1.0 - 0.75 * t);
+            cells.push((q, r, rgb_of(Srgba::rgb(cr, cg, cb))));
         }
     }
     cells
 }
 
 /// The greys under the honeycomb, white to black.
-pub fn greys() -> Vec<Rgb> {
+fn greys() -> Vec<Rgb> {
     (0..=14u32)
         .map(|i| {
             let v = (255 - (i * 255 / 14).min(255)) as u8;
@@ -150,9 +142,15 @@ pub fn greys() -> Vec<Rgb> {
         .collect()
 }
 
-/// A cell's centre in units of the cell radius (pointy-top hexagons).
+/// A cell's centre in units of the cell radius (pointy-top hexagons); the hue angle comes from it.
 fn cell_xy(q: i32, r: i32) -> (f32, f32) {
     (3f32.sqrt() * (q as f32 + r as f32 / 2.0), 1.5 * r as f32)
+}
+
+/// The Standard tab's cells and greys, each named by its `#RRGGBB` text.
+fn standard_cells() -> (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>) {
+    let named = |c: Rgb| (Label::from(format!("#{}", c.hex())), srgba(c));
+    (honeycomb().into_iter().map(|(_, _, c)| named(c)).collect(), greys().into_iter().map(named).collect())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -161,8 +159,11 @@ fn cell_xy(q: i32, r: i32) -> (f32, f32) {
 /// What a menu remembers as the split button's colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Remember {
+    /// Nothing.
     Nothing,
+    /// The font colour.
     FontColor,
+    /// The shading colour.
     Shading,
 }
 
@@ -170,9 +171,18 @@ pub enum Remember {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     /// Run `cmd` with the colour (`RRGGBB`) put into `params` at the JSON pointer `at`.
-    Run { cmd: String, params: Value, at: String, remember: Remember },
-    /// A dialog's colour field (see [`field_menu`]).
-    Field(Id),
+    Run {
+        /// The command id.
+        cmd: String,
+        /// The command's params, with a slot for the colour.
+        params: Value,
+        /// The JSON pointer of the colour's slot in `params`.
+        at: String,
+        /// What the pick is remembered as.
+        remember: Remember,
+    },
+    /// Run nothing: the pick is only reported in [`ColorPick::picked`] (a gradient stop's colour).
+    Pick,
 }
 
 impl Target {
@@ -186,6 +196,7 @@ impl Target {
         Target::Run { cmd: cmd.into(), params, at: at.into(), remember: Remember::Nothing }
     }
 
+    /// The same target remembering its picks as `r`.
     pub fn remember(self, r: Remember) -> Target {
         match self {
             Target::Run { cmd, params, at, .. } => Target::Run { cmd, params, at, remember: r },
@@ -193,7 +204,7 @@ impl Target {
         }
     }
 
-    /// The command and params a pick of `hex` runs (`None` for a field).
+    /// The command and params a pick of `hex` runs (`None` for a target that runs nothing).
     pub fn command(&self, hex: &str) -> Option<(String, Value)> {
         let Target::Run { cmd, params, at, .. } = self else { return None };
         let mut p = params.clone();
@@ -203,10 +214,18 @@ impl Target {
         }
         Some((cmd.clone(), p))
     }
+
+    /// The command id the target runs.
+    fn cmd_id(&self) -> Option<&str> {
+        match self {
+            Target::Run { cmd, .. } => Some(cmd),
+            Target::Pick => None,
+        }
+    }
 }
 
 /// Apply a picked colour to its target.
-pub fn apply(app: &mut WordApp, ctx: &egui::Context, target: &Target, hex: &str) {
+pub fn apply(app: &mut WordApp, target: &Target, hex: &str) {
     match target {
         Target::Run { remember, .. } => {
             match remember {
@@ -218,10 +237,7 @@ pub fn apply(app: &mut WordApp, ctx: &egui::Context, target: &Target, hex: &str)
                 let _ = app.run(&cmd, p);
             }
         }
-        Target::Field(id) => {
-            ctx.data_mut(|d| d.insert_temp(*id, FieldResult(hex.to_string())));
-            ctx.request_repaint();
-        }
+        Target::Pick => {}
     }
 }
 
@@ -230,520 +246,432 @@ fn current_of(app: &mut WordApp, target: &Target) -> Option<Rgb> {
     let Target::Run { cmd, .. } = target else { return None };
     match cmd.as_str() {
         "format.color" => {
-            let st = app.session.run("format.state", &json!({})).ok()?;
+            let st = wordcraft_engine::cmd::format::state(&app.session);
             st.get("color").and_then(Value::as_str).and_then(parse)
         }
         _ => None,
     }
 }
 
+/// The colour a split button's main part applies: what its target remembers, else what is in effect.
+fn remembered(app: &mut WordApp, target: &Target) -> Option<Rgb> {
+    match target {
+        Target::Run { remember: Remember::FontColor, .. } => parse(&app.canvas.last_font_color),
+        Target::Run { remember: Remember::Shading, .. } => parse(&app.canvas.last_shading),
+        _ => current_of(app, target),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
-// The drop-down
+// The palette
 
-/// A choice in a colour drop-down.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Pick {
-    Color(String),
-    More,
+/// The colours a palette offers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Palette {
+    /// The theme colours, in the document's order.
+    pub theme: Vec<Rgb>,
+    /// Recent Colors, newest first.
+    pub recent: Vec<Rgb>,
 }
 
-/// Stable storage id for the Recent Colors list.
-fn recent_id() -> Id {
-    Id::unique("wordcraft.recentColors")
+impl Palette {
+    /// The document's theme colours and the app's Recent Colors.
+    pub fn of(app: &WordApp) -> Palette {
+        Palette { theme: app.session.doc.settings.theme_colors.clone(), recent: recent(&app.ui.recent_colors) }
+    }
 }
 
-/// Stable storage id for the pending More Colors request.
-fn request_id() -> Id {
-    Id::unique("wordcraft.moreColorsRequest")
+/// What a drop-down reports for the pass.
+pub struct ColorPick {
+    /// The drop-down's response.
+    pub response: egui::Response,
+    /// The colour picked in this pass.
+    pub picked: Option<Rgb>,
+    /// What the pointer over a swatch did to the live preview: it shows while the pointer is over a
+    /// swatch and ends when it leaves.
+    pub preview: craft::behavior::Preview<Rgb>,
+    /// The main part's stay of a split button; `Hover::default()` for a body without one.
+    pub hover: Hover,
 }
 
-/// Stable storage id for the Colors dialog's open flag.
-fn open_flag_id() -> Id {
-    Id::unique("wordcraft.colorsDialogOpen")
+/// One swatch table's picks: a click's colour and the pass's preview.
+fn swatch_table(
+    ui: &mut Ui,
+    name: &str,
+    colors: &[Rgb],
+    per_row: usize,
+    current: Option<Rgb>,
+) -> (Option<Rgb>, craft::behavior::Preview<Rgb>, egui::Response) {
+    use craft::behavior::Preview;
+    let swatches: Vec<(Label, Srgba)> = colors.iter().map(|c| (Label::from(format!("#{}", c.hex())), srgba(*c))).collect();
+    let out = SwatchTable::new(name.to_string(), &swatches)
+        .per_row(per_row)
+        .tips(true)
+        .marked(|i: &usize| colors.get(*i).copied() == current && current.is_some())
+        .show_all(ui);
+    let picked = out.selected.and_then(|i| colors.get(i).copied());
+    let preview = match out.preview {
+        Preview::Shows(i) => colors.get(i).map_or(Preview::Unchanged, |c| Preview::Shows(*c)),
+        Preview::Ended => Preview::Ended,
+        _ => Preview::Unchanged,
+    };
+    (picked, preview, out.response)
 }
 
-/// Removes and returns a temporary value.
-fn take<T: Clone + Send + Sync + 'static>(d: &mut egui::util::IdTypeMap, id: Id) -> Option<T> {
-    let v = d.get_temp::<T>(id);
-    d.remove::<T>(id);
-    v
+/// Two previews of one pass: a start wins over an end, as the pointer moving from one table to
+/// the next ends one and starts the other.
+fn merge_preview(a: craft::behavior::Preview<Rgb>, b: craft::behavior::Preview<Rgb>) -> craft::behavior::Preview<Rgb> {
+    use craft::behavior::Preview;
+    match (a, b) {
+        (Preview::Shows(c), _) | (_, Preview::Shows(c)) => Preview::Shows(c),
+        (Preview::Ended, _) | (_, Preview::Ended) => Preview::Ended,
+        _ => Preview::Unchanged,
+    }
 }
 
-#[derive(Clone)]
-struct FieldRequest(Id, Option<Rgb>);
+/// The theme and recent swatches of `palette`; the colour in effect carries the selection mark.
+fn swatches(ui: &mut Ui, palette: &Palette, current: Option<Rgb>) -> (Option<Rgb>, craft::behavior::Preview<Rgb>) {
+    let (mut picked, mut preview, _) = swatch_table(ui, "Theme Colors", &palette.theme, THEME_PER_ROW, current);
+    if !palette.recent.is_empty() {
+        let (p, v, _) = swatch_table(ui, "Recent Colors", &palette.recent, RECENT_MAX, current);
+        picked = picked.or(p);
+        preview = merge_preview(preview, v);
+    }
+    (picked, preview)
+}
 
-#[derive(Clone)]
-struct FieldResult(String);
+/// The More Colors… row.
+fn more_row(ui: &mut Ui) -> MenuItemOutput {
+    MenuItem::new(tl!("More Colors…").to_string()).show(ui)
+}
 
-/// The drop-down's body: theme and standard colours, Recent Colors, More Colors….
-pub fn palette(ui: &mut Ui, theme: &[Rgb]) -> Option<Pick> {
-    let mut picked = crate::widgets::color_grid(ui, theme).map(Pick::Color);
-    let recent: Vec<String> = ui.data(|d| d.get_temp::<Vec<String>>(recent_id())).unwrap_or_default();
-    let recent = self::recent(&recent);
-    if !recent.is_empty() {
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!("Recent Colors")).small().weak());
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
-            for c in recent {
-                if crate::widgets::swatch(ui, c) {
-                    picked = Some(Pick::Color(c.hex()));
+/// The drop-down's body: theme colours, Recent Colors and More Colors…. A pick runs `target` and
+/// is remembered in Recent Colors; More Colors… opens the Colors dialog for `target`. The
+/// returned `response` is the More Colors… row's. The body's owner closes the drop-down when
+/// `picked` is set or the response is clicked (`BodyCx::request_close`).
+pub fn palette(ui: &mut Ui, app: &mut WordApp, target: Target) -> ColorPick {
+    let current = current_of(app, &target);
+    let theme = Palette::of(app);
+    let (picked, preview) = swatches(ui, &theme, current);
+    let more = more_row(ui);
+    if let Some(c) = picked {
+        apply(app, &target, &c.hex());
+    }
+    if more.ran {
+        open_for(app, &target, current, ColorPickerTab::Standard);
+    }
+    ColorPick { response: more.response, picked, preview, hover: Hover::default() }
+}
+
+/// A command colour drop-down's body: [`palette`]; the caller closes the drop-down.
+pub fn menu(ui: &mut Ui, app: &mut WordApp, target: Target) -> ColorPick {
+    palette(ui, app, target)
+}
+
+/// Closes the drop-down through its body after a pick or More Colors….
+fn close_after(pick: &ColorPick, cx: &mut BodyCx<'_>) {
+    if pick.picked.is_some() || clicked(&pick.response) {
+        cx.request_close();
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Split buttons
+
+/// What a split button's menu holds above the palette.
+enum Above {
+    /// The palette alone.
+    Nothing,
+    /// An Automatic row that runs `format.color {color: "auto"}`.
+    Automatic,
+    /// A No Color row that runs the target's own command with `{"color": null}`; it leaves the
+    /// remembered colour alone.
+    NoColor,
+}
+
+/// A split button whose main part runs `main` and whose arrow opens `body`.
+fn split_with(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    label: Label,
+    icon: IconSpec<'static>,
+    main: CommandRef,
+    mut body: impl FnMut(&mut Ui, &mut WordApp, &mut BodyCx<'_>) -> ColorPick,
+) -> ColorPick {
+    let mut inner: Option<(Option<Rgb>, craft::behavior::Preview<Rgb>)> = None;
+    // The arrow is its own button, named "<label> options" so it is told from the main part (#3172).
+    let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", label.as_str())]);
+    let out = SplitButton::<NoValue>::command(
+        main,
+        SplitMenu::Body(Box::new(|ui: &mut Ui, cx: &mut BodyCx<'_>| {
+            let pick = body(ui, app, cx);
+            inner = Some((pick.picked, pick.preview));
+        })),
+    )
+    .label(label)
+    .arrow_label(arrow_name)
+    .icon(icon)
+    .show(ui);
+    let (picked, preview) = inner.unwrap_or((None, craft::behavior::Preview::Unchanged));
+    ColorPick { response: out.response, picked, preview, hover: out.hover }
+}
+
+/// The split button of a colour `target`: the icon of its command with a bar of the remembered
+/// colour, and the palette under the arrow.
+fn color_split(ui: &mut Ui, app: &mut WordApp, label: Label, target: Target, above: Above) -> ColorPick {
+    let cmd = target.cmd_id().unwrap_or_default().to_string();
+    let colour = remembered(app, &target);
+    let mut icon = crate::icons::for_command(&cmd);
+    if let Some(c) = colour {
+        icon = icon.with_mark(IconMark::bar(DataColor::new(color32(c))));
+    }
+    let main = match (&target, colour) {
+        (Target::Run { .. }, Some(c)) => {
+            let (id, params) = target.command(&c.hex()).unwrap_or_else(|| (cmd.clone(), json!({})));
+            CommandRef::with_params(id, params)
+        }
+        _ => CommandRef::new(cmd.clone()),
+    };
+    split_with(ui, app, label, icon, main, |ui, app, cx| {
+        match above {
+            Above::Nothing => {}
+            Above::Automatic => {
+                let auto = CommandRef::with_params("format.color", json!({"color": "auto"}));
+                if MenuItem::new(tl!("Automatic").to_string()).command(auto).show(ui).ran {
+                    cx.request_close();
                 }
             }
-        });
-    }
-    ui.add_space(2.0);
-    ui.separator();
-    if more_item(ui).clicked() {
-        picked = Some(Pick::More);
-    }
-    picked
-}
-
-/// The More Colors… row: a small rainbow wheel and the label.
-fn more_item(ui: &mut Ui) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(180.0, 22.0), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(r, 2.0, t.hover);
-    }
-    let c = pos2(r.min.x + 10.0, r.center().y);
-    for i in 0..12 {
-        let a0 = (i as f32) * std::f32::consts::TAU / 12.0;
-        let a1 = a0 + std::f32::consts::TAU / 12.0;
-        let p = |a: f32| c + vec2(a.cos(), a.sin()) * 6.5;
-        let col = c32(from_hsl(i as f32 * 30.0, 1.0, 0.5));
-        ui.painter().add(egui::Shape::convex_polygon(vec![c, p(a0), p(a1)], col, Stroke::NONE));
-    }
-    ui.painter().circle_stroke(c, 6.5, Stroke::new(0.5, t.border_strong));
-    ui.painter().text(
-        pos2(r.min.x + 22.0, r.center().y),
-        egui::Align2::LEFT_CENTER,
-        tl!("More Colors…"),
-        egui::TextStyle::Button.resolve(ui.style()),
-        t.text,
-    );
-    resp
-}
-
-/// A command colour drop-down's body: picks run `target`, More Colors… opens the Colors dialog.
-pub fn menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb], target: Target) {
-    match palette(ui, theme) {
-        Some(Pick::Color(hex)) => {
-            let ctx = ui.ctx().clone();
-            apply(app, &ctx, &target, &hex);
-            ui.close();
+            Above::NoColor => {
+                let none = CommandRef::with_params(cmd.clone(), json!({"color": null}));
+                if MenuItem::new(tl!("No Color").to_string()).command(none).show(ui).ran {
+                    cx.request_close();
+                }
+            }
         }
-        Some(Pick::More) => {
-            let current = current_of(app, &target);
-            app.colors = Some(ColorsDialog::new(current, target));
-            ui.close();
-        }
-        None => {}
-    }
+        let pick = menu(ui, app, target.clone());
+        close_after(&pick, cx);
+        pick
+    })
 }
 
-/// A dialog field's drop-down body (the dialog has no access to the app): a pick sets `value`;
-/// More Colors… asks for the Colors dialog, whose answer [`take_field`] collects. `id` must be
-/// the same each frame.
-pub fn field_menu(ui: &mut Ui, theme: &[Rgb], id: Id, value: &mut String) {
-    match palette(ui, theme) {
-        Some(Pick::Color(hex)) => {
-            *value = hex;
-            ui.close();
-        }
-        Some(Pick::More) => {
-            let current = parse(value);
-            ui.data_mut(|d| d.insert_temp(request_id(), FieldRequest(id, current)));
-            ui.close();
-        }
-        None => {}
-    }
+/// Font Color: Automatic, the palette and More Colors…; picks are remembered as the button's colour.
+pub fn font_color_split(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>, target: Target) -> ColorPick {
+    color_split(ui, app, label.into(), target, Above::Automatic)
 }
 
-/// The Colors dialog's answer for the field `id`, if it just closed with OK.
-pub fn take_field(ctx: &egui::Context, id: Id, value: &mut String) {
-    if let Some(FieldResult(hex)) = ctx.data_mut(|d| take::<FieldResult>(d, id)) {
-        *value = hex;
-    }
+/// Shading: its own No Color row, then the palette.
+pub fn shading_split(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>, target: Target) -> ColorPick {
+    color_split(ui, app, label.into(), target, Above::NoColor)
 }
 
-/// Whether the Colors dialog was open last frame: dialogs under it leave Enter and Escape to it.
-pub fn is_open(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<bool>(open_flag_id())).unwrap_or(false)
+/// A fill or outline colour split button: the palette alone.
+pub fn fill_split(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>, target: Target) -> ColorPick {
+    color_split(ui, app, label.into(), target, Above::Nothing)
+}
+
+/// The split-button icon and colour bar for the remembered highlight choice. A remembered name
+/// that is not a highlight shows as No Color.
+pub(crate) fn highlight_button_appearance(name: &str) -> (&'static str, Option<Color32>, &'static str) {
+    let highlight = wordcraft_doc::props::Highlight::from_ooxml(name);
+    let icon = if highlight == wordcraft_doc::props::Highlight::None { "highlightNoColor" } else { "highlight" };
+    (icon, highlight.rgb().map(color32), highlight.ooxml())
+}
+
+/// The highlight drop-down: the highlight colours five to a row, then No Color. A pick, No Color
+/// too, becomes the split button's colour, as in Word: after No Color a click on the button
+/// removes highlighting (#2105).
+fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorPick {
+    use wordcraft_doc::props::Highlight;
+    let in_effect = Some(wordcraft_engine::cmd::format::state(&app.session))
+        .and_then(|st| st.get("highlight").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| "none".into());
+    let shown: Vec<(&Highlight, Rgb)> = Highlight::ALL.iter().skip(1).filter_map(|h| h.rgb().map(|c| (h, c))).collect();
+    let swatches: Vec<(Label, Srgba)> = shown.iter().map(|(h, c)| (Label::from(tl!(h.name()).to_string()), srgba(*c))).collect();
+    let out = SwatchTable::new("Highlight Colors".to_string(), &swatches)
+        .per_row(5)
+        .tips(true)
+        .marked(|i: &usize| shown.get(*i).is_some_and(|(h, _)| h.ooxml() == in_effect))
+        .show_all(ui);
+    let mut picked = None;
+    if let Some((h, c)) = out.selected.and_then(|i| shown.get(i)) {
+        app.canvas.last_highlight = h.ooxml().to_string();
+        let _ = app.run("format.highlight", json!({"color": h.ooxml()}));
+        picked = Some(*c);
+        cx.request_close();
+    }
+    let preview = match out.preview {
+        craft::behavior::Preview::Shows(i) => shown.get(i).map_or(craft::behavior::Preview::Unchanged, |(_, c)| craft::behavior::Preview::Shows(*c)),
+        craft::behavior::Preview::Ended => craft::behavior::Preview::Ended,
+        _ => craft::behavior::Preview::Unchanged,
+    };
+    let none = CommandRef::with_params("format.highlight", json!({"color": "none"}));
+    if MenuItem::new(tl!("No Color").to_string()).command(none).show(ui).ran {
+        app.canvas.last_highlight = "none".into();
+        cx.request_close();
+    }
+    ColorPick { response: out.response, picked, preview, hover: Hover::default() }
+}
+
+/// Text Highlight Color: the highlight grid under the arrow; the main part applies the remembered
+/// highlight.
+pub fn highlight_split(ui: &mut Ui, app: &mut WordApp, label: impl Into<Label>) -> ColorPick {
+    let (icon_name, bar, ooxml) = highlight_button_appearance(&app.canvas.last_highlight);
+    // PLAN: assumed `for_command("format.highlightNoColor")` names the No Color icon (ribbon-w13 icons).
+    let mut icon = crate::icons::for_command(if icon_name == "highlightNoColor" { "format.highlightNoColor" } else { "format.highlight" });
+    if let Some(c) = bar {
+        icon = icon.with_mark(IconMark::bar(DataColor::new(c)));
+    }
+    let main = CommandRef::with_params("format.highlight", json!({"color": ooxml}));
+    split_with(ui, app, label.into(), icon, main, highlight_body)
 }
 
 // ---------------------------------------------------------------------------------------------
-// The Colors dialog
+// More Colors…
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ColorsTab {
-    Standard,
-    Custom,
+/// The Colors dialog: Standard honeycomb and greys, Custom compact picker. `current` is the colour
+/// the target has now; `key` comes back in the result.
+pub fn more_colors(current: Option<Rgb>, key: String, tab: ColorPickerTab) -> ColorPickerDialog {
+    let (cells, greys) = standard_cells();
+    ColorPickerDialog::new(key, tl!("Colors").to_string(), current.map_or(Srgba::rgb(0.0, 0.0, 0.0), srgba))
+        .layout(ColorPickerDialogLayout::Tabbed)
+        .standard(cells, greys)
+        .compare(current.is_some())
+        .tab(tab)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Model {
-    Rgb,
-    Hsl,
+/// Opens the Colors dialog for `target`, remembering where its answer goes.
+fn open_for(app: &mut WordApp, target: &Target, current: Option<Rgb>, tab: ColorPickerTab) -> DialogId {
+    app.more_colors.insert(MORE_KEY.to_string(), target.clone());
+    crate::dialogs::host::open_with(app, None, more_colors(current, MORE_KEY.to_string(), tab), DialogHooks { prepare: None, settle: settle_more })
 }
 
-/// The Colors dialog's state.
-#[derive(Clone, Debug)]
-pub struct ColorsDialog {
-    pub tab: ColorsTab,
-    /// The new colour.
-    pub color: Rgb,
-    /// Hue, saturation, lightness of `color`; the hue is kept through greys so dragging the
-    /// lightness back out of black or white returns to it.
-    pub hsl: (f32, f32, f32),
-    /// The colour the target had when the dialog opened.
-    pub current: Option<Rgb>,
-    pub model: Model,
-    /// The hex box's text (may be mid-edit).
-    pub hex: String,
-    pub target: Target,
+/// The `ui.dialog colors` route: the font colour's More Colors…; `params.tab` is `standard` or
+/// `custom`. `None` for any other dialog name.
+pub fn open(app: &mut WordApp, name: &str, params: &Value) -> Option<DialogId> {
+    if name != "colors" {
+        return None;
+    }
+    let target = Target::cmd("format.color").remember(Remember::FontColor);
+    let current = current_of(app, &target);
+    let tab = if params.get("tab").and_then(Value::as_str) == Some("custom") { ColorPickerTab::Custom } else { ColorPickerTab::Standard };
+    Some(open_for(app, &target, current, tab))
 }
 
-impl ColorsDialog {
-    pub fn new(current: Option<Rgb>, target: Target) -> ColorsDialog {
-        let c = current.unwrap_or(Rgb::BLACK);
-        let mut d = ColorsDialog { tab: ColorsTab::Standard, color: c, hsl: (0.0, 0.0, 0.0), current, model: Model::Rgb, hex: String::new(), target };
-        d.set_rgb(c);
-        d
-    }
-
-    pub fn set_rgb(&mut self, c: Rgb) {
-        let (h, s, l) = to_hsl(c);
-        let h = if s > 0.0 && l > 0.0 && l < 1.0 { h } else { self.hsl.0 };
-        self.color = c;
-        self.hsl = (h, s, l);
-        self.hex = c.hex();
-    }
-
-    pub fn set_hsl(&mut self, h: f32, s: f32, l: f32) {
-        self.hsl = (h.rem_euclid(360.0), s.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
-        self.color = from_hsl(self.hsl.0, self.hsl.1, self.hsl.2);
-        self.hex = self.color.hex();
-    }
-
-    /// Sets the colour from typed text; returns whether it was a colour.
-    pub fn set_text(&mut self, s: &str) -> bool {
-        match parse(s) {
-            Some(c) => {
-                let (h, sat, l) = to_hsl(c);
-                let h = if sat > 0.0 { h } else { self.hsl.0 };
-                self.color = c;
-                self.hsl = (h, sat, l);
-                true
-            }
-            None => false,
+/// The settle hook of a More Colors dialog: `Done` once it took the finished result.
+fn settle_more(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> Settle {
+    match app.dialog_host.take_by_id::<ColorPickerDialog>(id) {
+        Some(DialogResult::Ok(result)) => {
+            picked(app, ctx, result);
+            Settle::Done
         }
+        Some(DialogResult::Cancel) => {
+            app.more_colors.remove(MORE_KEY);
+            Settle::Done
+        }
+        Some(_) | None => Settle::Keep,
     }
 }
 
-/// Draws the Colors dialog if it is open (and opens it for a dialog field that asked).
-pub fn show(app: &mut WordApp, ctx: &egui::Context) {
-    ctx.data_mut(|d| d.insert_temp(recent_id(), app.ui.recent_colors.clone()));
-    if let Some(FieldRequest(id, current)) = ctx.data_mut(|d| take::<FieldRequest>(d, request_id())) {
-        app.colors = Some(ColorsDialog::new(current, Target::Field(id)));
-    }
-    let Some(mut d) = app.colors.take() else {
-        ctx.data_mut(|m| m.insert_temp(open_flag_id(), false));
-        return;
-    };
-    let resp = egui::Modal::new(Id::unique("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
-    // egui's Modal blocks the window behind it, but not the document's keyboard.
-    crate::dialogs::release_keyboard(app, ctx);
-    let mut done = resp.inner;
-    if done.is_none() && resp.should_close() {
-        done = Some(false);
-    }
-    match done {
-        Some(ok) => {
-            ctx.data_mut(|m| m.insert_temp(open_flag_id(), false));
-            if ok {
-                finish(app, ctx, &d);
-            }
-            if matches!(d.target, Target::Run { .. }) && app.dialog.is_none() {
-                app.canvas.want_focus = true;
-            }
-        }
-        None => {
-            ctx.data_mut(|m| m.insert_temp(open_flag_id(), true));
-            app.colors = Some(d);
-        }
-    }
-}
-
-/// OK: the colour joins Recent Colors and goes to the target.
-pub fn finish(app: &mut WordApp, ctx: &egui::Context, d: &ColorsDialog) {
-    let hex = d.color.hex();
+/// OK: the colour joins Recent Colors and goes to the target the dialog was opened for. A key
+/// with no entry in `WordApp::more_colors` is not ours (a dialog field answers through its form)
+/// and does nothing.
+pub fn picked(app: &mut WordApp, ctx: &egui::Context, result: ColorPickerResult) {
+    let Some(target) = app.more_colors.remove(&result.key) else { return };
+    let hex = rgb_of(result.picked.color).hex();
     push_recent(&mut app.ui.recent_colors, &hex);
-    ctx.data_mut(|m| m.insert_temp(recent_id(), app.ui.recent_colors.clone()));
-    apply(app, ctx, &d.target, &hex);
-}
-
-/// The dialog's contents. `Some(true)` for OK, `Some(false)` for Cancel.
-fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
-    let t = Tokens::get(ui.ctx());
-    ui.set_width(430.0);
-    ui.label(egui::RichText::new(tl!("Colors")).font(crate::theme::semibold(14.0)));
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        for (tab, label) in [(ColorsTab::Standard, "Standard"), (ColorsTab::Custom, "Custom")] {
-            if ui.selectable_label(d.tab == tab, tl!(label)).clicked() {
-                d.tab = tab;
-            }
-        }
-    });
-    ui.separator();
-    ui.horizontal(|ui| {
-        crate::rtl::vertical(ui, |ui| {
-            ui.set_width(330.0);
-            match d.tab {
-                ColorsTab::Standard => standard(ui, d),
-                ColorsTab::Custom => custom(ui, d),
-            }
-        });
-        crate::rtl::vertical(ui, |ui| {
-            ui.add_space(110.0);
-            preview(ui, d, &t);
-        });
-    });
-    let mut out = None;
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            let (okb, cancelb) = crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!("OK"))), tl!("Cancel"));
-            if cancelb.clicked() {
-                out = Some(false);
-            }
-            let typing = ui.ctx().memory(|m| m.focused().is_some());
-            if okb.clicked() || (!typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                out = Some(true);
-            }
-        });
-    });
-    out
-}
-
-/// New over Current, as two halves of one swatch.
-fn preview(ui: &mut Ui, d: &ColorsDialog, t: &Tokens) {
-    ui.label(egui::RichText::new(tl!("New")).small());
-    let (r, _) = ui.allocate_exact_size(vec2(64.0, 72.0), Sense::hover());
-    let top = Rect::from_min_max(r.min, pos2(r.max.x, r.center().y));
-    let bottom = Rect::from_min_max(pos2(r.min.x, r.center().y), r.max);
-    ui.painter().rect_filled(top, 0.0, c32(d.color));
-    match d.current {
-        Some(c) => {
-            ui.painter().rect_filled(bottom, 0.0, c32(c));
-        }
-        None => {
-            ui.painter().rect_filled(bottom, 0.0, t.panel);
-            ui.painter().line_segment([bottom.left_bottom(), bottom.right_top()], Stroke::new(1.0, t.text_dim));
-        }
+    apply(app, &target, &hex);
+    if matches!(target, Target::Run { .. }) && app.dialog_host.is_empty() {
+        app.canvas.focus_page(ctx);
     }
-    ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-    ui.label(egui::RichText::new(tl!("Current")).small());
 }
 
-/// Pointy-top hexagon corners around `c` with radius `s`.
-fn hexagon(c: Pos2, s: f32) -> Vec<Pos2> {
-    (0..6)
-        .map(|i| {
-            let a = (60.0 * i as f32 - 30.0).to_radians();
-            c + vec2(a.cos(), a.sin()) * s
-        })
-        .collect()
+// ---------------------------------------------------------------------------------------------
+// Dialog colour fields
+
+/// What a colour field's empty choice is.
+#[derive(Clone, Debug)]
+pub enum ColorFieldEmpty {
+    /// "No Color": the field holds the empty string.
+    NoColor,
+    /// An automatic choice: `value` is what the field holds, `face` what its swatch shows.
+    Automatic {
+        /// The row's label.
+        label: Label,
+        /// What the field holds for it.
+        value: &'static str,
+        /// What its swatch shows.
+        face: AutoFace,
+    },
 }
 
-fn standard(ui: &mut Ui, d: &mut ColorsDialog) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(tl!("Colors:"));
-    let s = 11.0;
-    let n = HONEYCOMB_RINGS as f32;
-    let size = vec2(3f32.sqrt() * s * (2.0 * n + 1.0) + 2.0, s * (3.0 * n + 2.0) + 2.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), size.y), Sense::click());
-    let centre = rect.center();
-    let cells = honeycomb();
-    let at = |q: i32, r: i32| {
-        let (x, y) = cell_xy(q, r);
-        centre + vec2(x, y) * s
+/// The face of an Automatic choice's swatch.
+#[derive(Clone, Debug)]
+pub enum AutoFace {
+    /// One colour.
+    One(Srgba),
+    /// Several colours, side by side (By author).
+    Several(Vec<Srgba>),
+}
+
+/// What a colour field did in a pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ColorFieldResponse {
+    /// The value changed.
+    pub changed: bool,
+    /// More Colors… was chosen: the owner opens [`more_colors`] and puts the answer in the value.
+    pub more_colors: bool,
+}
+
+/// The one colour field of dialogs and panes: a swatch and drop-down holding the empty choice, the
+/// palette and More Colors…. `value` is hex, or the empty choice's value.
+pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &ColorFieldEmpty, palette: &Palette) -> ColorFieldResponse {
+    let mut resp = ColorFieldResponse::default();
+    let current = parse(value);
+    let (shown, text) = match (current, empty) {
+        (Some(c), _) => (Some(srgba(c)), Label::from(c.hex())),
+        (None, ColorFieldEmpty::NoColor) => (None, Label::from(tl!("No Color").to_string())),
+        // PLAN: framework gap: `IconSpec` has no multi-share swatch face, so `AutoFace::Several` shows its first colour until `IconSource` can paint `SwatchFace` shares (ribbon-w2).
+        (None, ColorFieldEmpty::Automatic { label, face, .. }) => (
+            match face {
+                AutoFace::One(c) => Some(*c),
+                AutoFace::Several(v) => v.first().copied(),
+            },
+            label.clone(),
+        ),
     };
-    let hit = |p: Pos2, centres: Vec<(Pos2, Rgb)>| centres.into_iter().find(|(c, _)| c.distance(p) < s * 0.9).map(|(_, col)| col);
-    let mut selected = None;
-    for &(q, r, col) in &cells {
-        let c = at(q, r);
-        ui.painter().add(egui::Shape::convex_polygon(hexagon(c, s), c32(col), Stroke::new(0.5, t.border_strong)));
-        if col == d.color {
-            selected = Some(c);
+    let icon = shown.map_or_else(IconSpec::empty_swatch, IconSpec::swatch);
+    let spoken_value = current.map_or_else(|| text.as_str().to_string(), |c| format!("#{}", c.hex()));
+    let spoken = format!("{} {spoken_value}", label.as_str());
+    let field = SplitButton::<NoValue>::body(text, |ui: &mut Ui, cx: &mut BodyCx<'_>| {
+        let empty_label = match empty {
+            ColorFieldEmpty::NoColor => Label::from(tl!("No Color").to_string()),
+            ColorFieldEmpty::Automatic { label, .. } => label.clone(),
+        };
+        if MenuItem::new(empty_label).show(ui).ran {
+            *value = match empty {
+                ColorFieldEmpty::NoColor => String::new(),
+                ColorFieldEmpty::Automatic { value, .. } => (*value).to_string(),
+            };
+            resp.changed = true;
+            cx.request_close();
         }
-    }
-    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.clicked())
-        && let Some(col) = hit(p, cells.iter().map(|&(q, r, col)| (at(q, r), col)).collect())
-    {
-        d.set_rgb(col);
-    }
-    // Greys: one row of hexagons under the honeycomb.
-    ui.add_space(6.0);
-    let greys = greys();
-    let w = 3f32.sqrt() * s;
-    let (row, gresp) = ui.allocate_exact_size(vec2(ui.available_width(), s * 2.0 + 2.0), Sense::click());
-    let x0 = row.center().x - w * (greys.len() as f32 - 1.0) / 2.0;
-    let gat = |i: usize| pos2(x0 + w * i as f32, row.center().y);
-    for (i, col) in greys.iter().enumerate() {
-        let c = gat(i);
-        ui.painter().add(egui::Shape::convex_polygon(hexagon(c, s), c32(*col), Stroke::new(0.5, t.border_strong)));
-        if *col == d.color {
-            selected = Some(c);
+        let (picked, _) = swatches(ui, palette, current);
+        if let Some(c) = picked {
+            *value = c.hex();
+            resp.changed = true;
+            cx.request_close();
         }
-    }
-    if let Some(p) = gresp.interact_pointer_pos().filter(|_| gresp.clicked())
-        && let Some(col) = hit(p, greys.iter().enumerate().map(|(i, col)| (gat(i), *col)).collect())
-    {
-        d.set_rgb(col);
-    }
-    if let Some(c) = selected {
-        ui.painter().add(egui::Shape::closed_line(hexagon(c, s), Stroke::new(2.5, Color32::WHITE)));
-        ui.painter().add(egui::Shape::closed_line(hexagon(c, s + 1.5), Stroke::new(1.0, Color32::BLACK)));
-    }
-}
-
-fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(tl!("Colors:"));
-    ui.horizontal(|ui| {
-        // Hue across, saturation up; drawn at the middle lightness.
-        let (field, fresp) = ui.allocate_exact_size(vec2(280.0, 170.0), Sense::click_and_drag());
-        let mut mesh = egui::Mesh::default();
-        let (cols, rows) = (36u32, 6u32);
-        for j in 0..=rows {
-            for i in 0..=cols {
-                let (u, v) = (i as f32 / cols as f32, j as f32 / rows as f32);
-                let p = pos2(field.min.x + u * field.width(), field.min.y + v * field.height());
-                mesh.colored_vertex(p, c32(from_hsl(u * 360.0, 1.0 - v, 0.5)));
-            }
+        if more_row(ui).ran {
+            resp.more_colors = true;
+            cx.request_close();
         }
-        for j in 0..rows {
-            for i in 0..cols {
-                let a = j * (cols + 1) + i;
-                mesh.add_triangle(a, a + 1, a + cols + 1);
-                mesh.add_triangle(a + 1, a + cols + 2, a + cols + 1);
-            }
-        }
-        ui.painter().add(egui::Shape::mesh(mesh));
-        ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Outside);
-        if let Some(p) = fresp.interact_pointer_pos().filter(|_| fresp.clicked() || fresp.dragged()) {
-            let u = ((p.x - field.min.x) / field.width()).clamp(0.0, 1.0);
-            let v = ((p.y - field.min.y) / field.height()).clamp(0.0, 1.0);
-            let l = if d.hsl.2 <= 0.0 || d.hsl.2 >= 1.0 { 0.5 } else { d.hsl.2 };
-            d.set_hsl(u * 359.9, 1.0 - v, l);
-        }
-        let m = pos2(field.min.x + d.hsl.0 / 360.0 * field.width(), field.min.y + (1.0 - d.hsl.1) * field.height());
-        ui.painter().circle_stroke(m, 5.0, Stroke::new(2.0, Color32::BLACK));
-        ui.painter().circle_stroke(m, 4.0, Stroke::new(1.0, Color32::WHITE));
-
-        // Lightness: white at the top, black at the bottom, through the picked hue and saturation.
-        let (bar, bresp) = ui.allocate_exact_size(vec2(16.0, 170.0), Sense::click_and_drag());
-        let mut mesh = egui::Mesh::default();
-        let steps = 16u32;
-        for k in 0..=steps {
-            let v = k as f32 / steps as f32;
-            let col = c32(from_hsl(d.hsl.0, d.hsl.1, 1.0 - v));
-            let y = bar.min.y + v * bar.height();
-            mesh.colored_vertex(pos2(bar.min.x, y), col);
-            mesh.colored_vertex(pos2(bar.max.x, y), col);
-        }
-        for k in 0..steps {
-            let a = k * 2;
-            mesh.add_triangle(a, a + 1, a + 2);
-            mesh.add_triangle(a + 1, a + 3, a + 2);
-        }
-        ui.painter().add(egui::Shape::mesh(mesh));
-        ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Outside);
-        if let Some(p) = bresp.interact_pointer_pos().filter(|_| bresp.clicked() || bresp.dragged()) {
-            let v = ((p.y - bar.min.y) / bar.height()).clamp(0.0, 1.0);
-            d.set_hsl(d.hsl.0, d.hsl.1, 1.0 - v);
-        }
-        let y = bar.min.y + (1.0 - d.hsl.2) * bar.height();
-        let tip = pos2(bar.max.x + 2.0, y);
-        ui.painter().add(egui::Shape::convex_polygon(vec![tip, tip + vec2(7.0, -5.0), tip + vec2(7.0, 5.0)], t.text, Stroke::NONE));
-        ui.add_space(8.0);
-    });
-    ui.add_space(8.0);
-    crate::rtl::Table::new("colors_custom").columns(2).spacing(vec2(10.0, 5.0)).show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Color model:")));
-            r.cell(|ui| {
-                craft_ui::ComboBox::from_id_salt("colors_model")
-                    .selected_text(match d.model {
-                        Model::Rgb => "RGB",
-                        Model::Hsl => "HSL",
-                    })
-                    .width(90.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut d.model, Model::Rgb, "RGB");
-                        ui.selectable_value(&mut d.model, Model::Hsl, "HSL");
-                    });
-            });
-        });
-        match d.model {
-            Model::Rgb => {
-                let mut c = [d.color.0, d.color.1, d.color.2];
-                let mut changed = false;
-                for (i, label) in ["Red:", "Green:", "Blue:"].into_iter().enumerate() {
-                    t.row(|r| {
-                        r.cell(|ui| ui.label(tl!(label)));
-                        r.cell(|ui| {
-                            if let Some(v) = c.get_mut(i) {
-                                changed |= ui.add(egui::DragValue::new(v).range(0..=255).speed(1.0)).changed();
-                            }
-                        });
-                    });
-                }
-                if changed {
-                    d.set_rgb(Rgb(c[0], c[1], c[2]));
-                }
-            }
-            Model::Hsl => {
-                // Word-style 0–255 scales for all three.
-                let to255 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
-                let mut v = [to255(d.hsl.0 / 360.0), to255(d.hsl.1), to255(d.hsl.2)];
-                let mut changed = false;
-                for (i, label) in ["Hue:", "Sat:", "Lum:"].into_iter().enumerate() {
-                    t.row(|r| {
-                        r.cell(|ui| ui.label(tl!(label)));
-                        r.cell(|ui| {
-                            if let Some(x) = v.get_mut(i) {
-                                changed |= ui.add(egui::DragValue::new(x).range(0..=255).speed(1.0)).changed();
-                            }
-                        });
-                    });
-                }
-                if changed {
-                    d.set_hsl(v[0] as f32 / 255.0 * 360.0, v[1] as f32 / 255.0, v[2] as f32 / 255.0);
-                }
-            }
-        }
-        t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Hex:")));
-            r.cell(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label("#");
-                    let mut text = d.hex.clone();
-                    let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0).char_limit(16));
-                    if edit.changed() {
-                        d.hex = text.clone();
-                        d.set_text(&text);
-                    }
-                    if edit.lost_focus() {
-                        d.hex = d.color.hex();
-                    }
-                });
-            });
-        });
-    });
+    })
+    .arrow_label(spoken.clone())
+    .icon(icon)
+    .show(ui);
+    // The framework keeps the short visible value; both parts say the field and its value.
+    ui.ctx().accesskit_node_builder(field.response.id, |node| node.set_label(spoken));
+    resp
 }
 
 #[cfg(test)]
@@ -764,74 +692,55 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hsl_round_trips_every_colour_channel_step() {
-        for r in (0..=255u8).step_by(15) {
-            for g in (0..=255u8).step_by(17) {
-                for b in (0..=255u8).step_by(51) {
-                    let c = Rgb(r, g, b);
-                    let (h, s, l) = to_hsl(c);
-                    assert!((0.0..360.0).contains(&h) && (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&l));
-                    assert_eq!(from_hsl(h, s, l), c);
-                }
-            }
-        }
-        assert_eq!(from_hsl(0.0, 1.0, 0.5), Rgb(255, 0, 0));
-        assert_eq!(from_hsl(120.0, 1.0, 0.5), Rgb(0, 255, 0));
-        assert_eq!(from_hsl(240.0, 1.0, 0.5), Rgb(0, 0, 255));
-        assert_eq!(from_hsl(-120.0, 1.0, 0.5), Rgb(0, 0, 255), "hue wraps");
-        assert_eq!(from_hsl(f32::NAN, f32::INFINITY, -3.0), Rgb(0, 0, 0), "junk input is clamped, never a panic");
-    }
-
-    #[test]
-    fn recent_colors_dedupe_and_cap() {
-        let mut list = vec!["junk".to_string()];
-        for i in 0..15u8 {
-            push_recent(&mut list, &Rgb(i, i, i).hex());
-        }
-        push_recent(&mut list, "#0e0e0e");
-        push_recent(&mut list, "not a colour");
-        assert_eq!(list.len(), RECENT_MAX);
-        assert_eq!(list.first().map(String::as_str), Some("0E0E0E"));
-        assert_eq!(list.iter().filter(|h| *h == "0E0E0E").count(), 1);
-        let saved = vec!["FF0000".to_string(), "ff0000".into(), "nope".into(), "00FF00".into()];
-        assert_eq!(recent(&saved), vec![Rgb(255, 0, 0), Rgb(0, 255, 0)]);
-    }
-
-    #[test]
-    fn honeycomb_is_white_in_the_middle_and_has_every_hue() {
-        let cells = honeycomb();
-        assert_eq!(cells.len(), 127, "6 rings around the centre");
-        assert_eq!(cells.iter().find(|(q, r, _)| (*q, *r) == (0, 0)).map(|c| c.2), Some(Rgb::WHITE));
-        let mid: Vec<Rgb> = cells.iter().filter(|(q, r, _)| q.abs().max(r.abs()).max((q + r).abs()) == 3).map(|c| c.2).collect();
-        assert!(mid.iter().any(|c| c.0 > 200 && c.1 < 100 && c.2 < 100), "a red");
-        assert!(mid.iter().any(|c| c.1 > 200 && c.0 < 100 && c.2 < 100), "a green");
-        assert!(mid.iter().any(|c| c.2 > 200 && c.0 < 100 && c.1 < 100), "a blue");
-        let g = greys();
-        assert_eq!((g.first().copied(), g.last().copied()), (Some(Rgb::WHITE), Some(Rgb::BLACK)));
-    }
-
     /// Assert that colour targets build the expected `format.color` or JSON-path command payload, and
-    /// that a field target has no command.
+    /// that a pick-only target has no command.
     #[test]
     fn targets_put_the_colour_where_the_command_wants_it() {
         assert_eq!(Target::cmd("format.color").command("1A2B3C"), Some(("format.color".into(), json!({"color": "1A2B3C"}))));
         let glow = Target::at("shape.effects", json!({"glow": {"color": null, "size": 8.0}}), "/glow/color");
         assert_eq!(glow.command("00FF00"), Some(("shape.effects".into(), json!({"glow": {"color": "00FF00", "size": 8.0}}))));
-        assert_eq!(Target::Field(Id::unique("x")).command("00FF00"), None);
+        assert_eq!(Target::Pick.command("00FF00"), None);
     }
 
+    /// The Standard tab's cells are the generator's, in the order the framework honeycomb places
+    /// them: 127 cells in rows of 7…13…7, white in the middle, every hue on the outer ring; the
+    /// greys run white to black.
     #[test]
-    fn dialog_keeps_hue_through_grey_and_reads_typed_colours() {
-        let mut d = ColorsDialog::new(Some(Rgb(255, 0, 0)), Target::cmd("format.color"));
-        d.set_hsl(200.0, 0.0, 0.5);
-        assert_eq!(d.hsl.0, 200.0, "grey keeps the hue");
-        d.set_hsl(d.hsl.0, 1.0, 0.5);
-        assert_eq!(d.color, from_hsl(200.0, 1.0, 0.5));
-        assert!(d.set_text("#123456"));
-        assert_eq!(d.color, Rgb(0x12, 0x34, 0x56));
-        assert!(!d.set_text("#12"), "an unfinished hex keeps the colour");
-        assert_eq!(d.color, Rgb(0x12, 0x34, 0x56));
+    fn honeycomb_is_white_in_the_middle_and_has_every_hue() {
+        let cells = honeycomb();
+        assert_eq!(cells.len(), 127);
+        let rows: Vec<usize> = (-6..=6).map(|r| cells.iter().filter(|c| c.1 == r).count()).collect();
+        assert_eq!(rows, [7, 8, 9, 10, 11, 12, 13, 12, 11, 10, 9, 8, 7]);
+        assert!(cells.windows(2).all(|w| (w[0].1, w[0].0) < (w[1].1, w[1].0)), "rows top first, each from its start");
+        let centre = cells.iter().find(|c| c.0 == 0 && c.1 == 0).map(|c| c.2);
+        assert_eq!(centre, Some(Rgb(255, 255, 255)));
+        let sector = |c: Rgb| {
+            let (r, g, b) = (f32::from(c.0), f32::from(c.1), f32::from(c.2));
+            let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+            let d = max - min;
+            let hue = if d == 0.0 {
+                0.0
+            } else if max == r {
+                ((g - b) / d).rem_euclid(6.0)
+            } else if max == g {
+                (b - r) / d + 2.0
+            } else {
+                (r - g) / d + 4.0
+            };
+            (hue.floor() as usize).min(5)
+        };
+        let mut seen = [false; 6];
+        for (q, r, c) in &cells {
+            if (*q).abs().max(r.abs()).max((q + r).abs()) == 6 {
+                seen[sector(*c)] = true;
+            }
+        }
+        assert_eq!(seen, [true; 6], "every hue sector appears on the outer ring");
+        let greys = greys();
+        assert_eq!(greys.len(), 15);
+        assert_eq!(greys.first(), Some(&Rgb(255, 255, 255)));
+        assert_eq!(greys.last(), Some(&Rgb(0, 0, 0)));
+        assert!(greys.windows(2).all(|w| w[0].0 > w[1].0));
     }
 
     /// #606: More Colors… for the font colour opens the Colors dialog with the selection's colour
@@ -843,24 +752,18 @@ mod tests {
         let _ = app.run("document.setText", json!({"text": "Custom colour"}));
         let _ = app.run("select.all", json!({}));
         let _ = app.run("format.color", json!({"color": "112233"}));
-        let r = app.run("ui.dialog", json!({"name": "colors"}));
-        assert_eq!(r.ok().and_then(|v| v.get("dialog").cloned()), Some(json!("colors")));
-        assert!(!crate::mini_toolbar::visible(&app), "the mini toolbar stays out of the Colors dialog's way");
-        let mut d = app.colors.take().unwrap_or_else(|| panic!("the Colors dialog opens"));
-        assert_eq!(d.current, Some(Rgb(0x11, 0x22, 0x33)));
-        assert!(d.set_text("#7A3EC8"));
+        let id = open(&mut app, "colors", &json!({}));
+        assert!(id.is_some(), "the Colors dialog opens");
+        let dialog = app.dialog_host.get_mut::<ColorPickerDialog>().unwrap();
+        assert_eq!(dialog.opening().map(|p| rgb_of(p.color)), Some(Rgb(0x11, 0x22, 0x33)));
+        dialog.set_color(craft::color_ui::ui::PickedColor::rgb(srgba(Rgb(0x7A, 0x3E, 0xC8))));
         let ctx = egui::Context::default();
-        finish(&mut app, &ctx, &d);
+        assert!(app.dialog_host.confirm::<ColorPickerDialog>(&ctx));
+        crate::dialogs::host::settle(&mut app, &ctx);
         let st = app.session.run("format.state", &json!({})).unwrap_or_default();
         assert_eq!(st.get("color"), Some(&json!("7A3EC8")));
         assert_eq!(app.canvas.last_font_color, "7A3EC8");
         assert_eq!(app.ui.recent_colors.first().map(String::as_str), Some("7A3EC8"));
-        // A dialog field gets the colour back instead.
-        let id = Id::unique("field");
-        d.target = Target::Field(id);
-        finish(&mut app, &ctx, &d);
-        let mut value = String::new();
-        take_field(&ctx, id, &mut value);
-        assert_eq!(value, "7A3EC8");
+        assert!(app.more_colors.is_empty(), "no entry outlives its dialog");
     }
 }
