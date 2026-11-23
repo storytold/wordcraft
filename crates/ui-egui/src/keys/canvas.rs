@@ -518,20 +518,14 @@ fn handle_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &Edi
             };
             let _ = app.run(id, json!({}));
         }
-        EditorInput::Newline => {
-            if !crate::objects::key(app, Key::Enter, Modifiers::NONE) {
-                let _ = app.run("text.newParagraph", json!({}));
-            }
+        EditorInput::Newline if !crate::objects::key(app, Key::Enter, Modifiers::NONE) => {
+            let _ = app.run("text.newParagraph", json!({}));
         }
-        EditorInput::Tab => {
-            if !crate::objects::key(app, Key::Tab, Modifiers::NONE) {
-                let _ = app.run("text.tab", json!({}));
-            }
+        EditorInput::Tab if !crate::objects::key(app, Key::Tab, Modifiers::NONE) => {
+            let _ = app.run("text.tab", json!({}));
         }
-        EditorInput::BackTab => {
-            if !crate::objects::key(app, Key::Tab, Modifiers { shift: true, ..Modifiers::NONE }) {
-                let _ = app.run("text.backTab", json!({}));
-            }
+        EditorInput::BackTab if !crate::objects::key(app, Key::Tab, Modifiers { shift: true, ..Modifiers::NONE }) => {
+            let _ = app.run("text.backTab", json!({}));
         }
         EditorInput::Cancel => cancel(app, ctx),
         EditorInput::Edit(cmd) => edit_command(app, ctx, *cmd),

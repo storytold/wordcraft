@@ -300,7 +300,7 @@ impl<'a, 'o> Walk<'a, 'o> {
             let first_run = runs == 0;
             flush(&mut cur, &mut pieces, &mut runs, first_run);
 
-            let horizontal = at.turn == TextDirection::Horizontal && !(line.rtl || !line.vis.is_empty());
+            let horizontal = at.turn == TextDirection::Horizontal && !line.rtl && line.vis.is_empty();
             let line_rect = at.rect(wordcraft_geom::Rect::new(line.left, top, 0.0, line.height));
             let mut nodes: Vec<(AccessNode, usize)> = Vec::new();
             for piece in pieces {

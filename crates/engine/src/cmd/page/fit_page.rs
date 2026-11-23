@@ -144,7 +144,7 @@ fn paragraph_has_visible_page_break(
     let style_id = p.props.style.as_deref();
     if p.runs.is_empty() {
         let mark = doc.styles.resolve_char_in(style_id, table_chr, &p.mark);
-        let visible = !(mark.hidden && !show_hidden) && !hides.hides(doc, p.mark.del);
+        let visible = (!mark.hidden || show_hidden) && !hides.hides(doc, p.mark.del);
         return visible && p.text.contains(wordcraft_doc::para::PAGE_BREAK);
     }
     let mut run_start = 0usize;

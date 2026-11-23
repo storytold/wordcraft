@@ -211,3 +211,6 @@ real_name = "Ashok Ram"
 
 [people.benandez]
 sync_github_name = true
+
+[people.kalmarr]
+sync_github_name = true

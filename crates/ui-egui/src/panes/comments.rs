@@ -235,7 +235,7 @@ fn reply_field(app: &mut WordApp, ui: &mut Ui, document: u64, id: u32) -> bool {
 pub(crate) fn commit_reply(app: &mut WordApp, id: u32) -> Result<(), String> {
     let thread = thread_of(app, id);
     let d = drafts(app);
-    if !d.selected.as_ref().is_some_and(|t| t.0 == thread.0) {
+    if d.selected.as_ref().is_none_or(|t| t.0 != thread.0) {
         return Ok(());
     }
     let text = d.reply.clone();
