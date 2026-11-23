@@ -1,97 +1,51 @@
-//! Review dialogs and the Restrict Editing pane (#412): Compare / Combine Documents (with the
-//! More >> comparison settings), AutoCorrect Options (AutoCorrect, AutoFormat As You Type and
-//! Math AutoCorrect) and the Restrict Editing side pane. Each ends by running a command
-//! (`review.compare`, `review.combine`, `tools.autocorrect`, `review.restrict`), so scripts and
-//! agents get the same result without them. Shown through [`crate::dialogs::Dialog::Review`] and
-//! [`crate::panes`].
+//! Review dialogs on the form host (#412): Compare / Combine Documents (with the More >>
+//! comparison settings) and AutoCorrect Options (AutoCorrect, AutoFormat As You Type and Math
+//! AutoCorrect). Each ends by running a command (`review.compare`, `review.combine`,
+//! `tools.autocorrect`), so scripts and agents get the same result without them. The Restrict
+//! Editing pane lives in `restrict_pane`.
 
-use egui::{Ui, vec2};
-use serde::Serialize;
+use craft::behavior::{ColumnKey, ColumnWidth, SelectionChange, keyed};
+use craft::host::PickRequest;
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, CollectionEvent, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft::ui::dialog::DialogId;
+use craft::ui::display::Text;
+use craft::ui::form::Field;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::ListRow;
+use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::patterns::form_dialogs::{FormCx, PathRow};
+use craft::ui::runtime::env::{Env, Label};
+use craft::ui::sections::GroupBox;
+use craft::ui::table::Table;
+use craft::ui::tabs::{Tab, TabKind, TabStrip};
+use craft::ui::text::TextField;
+use egui::Ui;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use wordcraft_engine::Password;
 use wordcraft_engine::cmd::tools::AutoCorrectPrefs;
 
 use crate::WordApp;
-use crate::theme::{Tokens, semibold};
+use crate::dialogs::host::{Asks, DialogHooks, Filed, FormHost, Settle, WordForm, open_form, open_form_with};
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "form", rename_all = "camelCase")]
-pub enum ReviewDialog {
-    Compare(CompareForm),
-    AutoCorrect(Box<AutoCorrectForm>),
-}
-
-impl ReviewDialog {
-    pub fn name(&self) -> &'static str {
-        match self {
-            ReviewDialog::Compare(f) if f.combine => "combine",
-            ReviewDialog::Compare(_) => "compare",
-            ReviewDialog::AutoCorrect(_) => "autoCorrect",
+/// The dialog `ui.dialog` opens by `name`: `compare`, `combine` or `autoCorrect` (its `tab`
+/// parameter picks the page). Other names open nothing here.
+pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    match name {
+        "compare" | "combine" => {
+            let form = CompareForm::new(app, name == "combine");
+            Some(open_form(app, parent, form))
         }
-    }
-
-    /// The window title (English; the caller translates it).
-    pub fn title(&self) -> &'static str {
-        match self {
-            ReviewDialog::Compare(f) if f.combine => "Combine Documents",
-            ReviewDialog::Compare(_) => "Compare Documents",
-            ReviewDialog::AutoCorrect(_) => "AutoCorrect",
-        }
-    }
-}
-
-/// The dialog `ui.dialog` opens by `name`: `compare`, `combine` or `autoCorrect`.
-/// `restrictEditing` opens the Restrict Editing pane instead (no dialog).
-pub fn open(name: &str, app: &mut WordApp) -> Option<ReviewDialog> {
-    Some(match name {
-        "compare" | "combine" => ReviewDialog::Compare(CompareForm::new(app, name == "combine")),
-        "autoCorrect" => ReviewDialog::AutoCorrect(Box::new(AutoCorrectForm::new(app))),
-        "restrictEditing" => {
-            app.restrict.open = true;
-            return None;
-        }
-        _ => return None,
-    })
-}
-
-/// Draws the dialog; returns true to close it.
-pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut ReviewDialog) -> bool {
-    match d {
-        ReviewDialog::Compare(f) => compare_ui(app, ui, f),
-        ReviewDialog::AutoCorrect(f) => autocorrect_ui(app, ui, f),
-    }
-}
-
-/// OK / Cancel; returns (ok, cancel). `ok_enabled` greys OK out.
-fn buttons(ui: &mut Ui, ok_enabled: bool) -> (bool, bool) {
-    let mut r = (false, false);
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            let (okb, cancelb) = crate::dialogs::ok_cancel_responses(
-                ui,
-                |ui| ui.add_enabled(ok_enabled, crate::widgets::primary_button(ui, tl!("OK"))),
-                tl!("Cancel"),
-            );
-            if cancelb.clicked() || crate::dialogs::cancel_key_pressed(ui) {
-                r.1 = true;
+        "autoCorrect" => {
+            let mut form = AutoCorrectForm::new(app);
+            if let Some(tab) = params.get("tab").and_then(Value::as_u64) {
+                form.tab = u8::try_from(tab).unwrap_or(0).min(2);
             }
-            if okb.clicked() {
-                r.0 = true;
-            }
-        });
-    });
-    r
-}
-
-fn heading(ui: &mut Ui, s: &str) {
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
-}
-
-fn error(ui: &mut Ui, message: &str) {
-    if !message.is_empty() {
-        ui.label(egui::RichText::new(message).small().color(ui.visuals().error_fg_color));
+            Some(open_form_with(app, parent, form, DialogHooks { prepare: None, settle: settle_lists }))
+        }
+        _ => None,
     }
 }
 
@@ -113,8 +67,9 @@ pub const COMPARE_SETTINGS: [(&str, &str); 10] = [
     ("fields", "Fields"),
 ];
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// The Compare / Combine Documents dialog's values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct CompareForm {
     pub combine: bool,
     /// The original is the open document (else the file `original`).
@@ -130,23 +85,27 @@ pub struct CompareForm {
     pub character_level: bool,
     /// Show changes in: `original`, `revised` or `new`.
     pub show_in: String,
-    pub message: String,
 }
 
-impl CompareForm {
-    pub fn new(app: &WordApp, combine: bool) -> CompareForm {
+impl Default for CompareForm {
+    fn default() -> Self {
         CompareForm {
-            combine,
+            combine: false,
             original_current: true,
             original: String::new(),
             revised: String::new(),
-            author: app.session.author.clone(),
+            author: String::new(),
             more: false,
             settings: [true; 10],
             character_level: false,
             show_in: "new".into(),
-            message: String::new(),
         }
+    }
+}
+
+impl CompareForm {
+    pub fn new(app: &WordApp, combine: bool) -> CompareForm {
+        CompareForm { combine, author: app.session.author.clone(), ..CompareForm::default() }
     }
 
     /// The `review.compare` / `review.combine` parameters; `None` until a revised document is
@@ -172,152 +131,142 @@ impl CompareForm {
     }
 }
 
-/// Can this front end pick files (desktop), rather than only receive them (web)?
-fn can_browse(app: &WordApp) -> bool {
-    app.services.file_dialog.is_some() || app.services.pick_open.is_some()
-}
+impl WordForm for CompareForm {
+    fn key(&self) -> &'static str {
+        if self.combine { "combine" } else { "compare" }
+    }
 
-/// Put a picked file into the open Compare dialog (`revised`: the revised document's box).
-pub(crate) fn set_compare_path(app: &mut WordApp, revised: bool, path: String) {
-    if let Some(crate::dialogs::Dialog::Review(d)) = app.dialog.as_mut()
-        && let ReviewDialog::Compare(f) = &mut **d
-    {
-        if revised {
-            f.revised = path;
-        } else {
-            f.original = path;
-            f.original_current = false;
-        }
+    fn title(&self) -> Label {
+        Label::from(if self.combine { tl!("Combine Documents").to_string() } else { tl!("Compare Documents").to_string() })
     }
-}
 
-fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
-    let browse = can_browse(app);
-    let mut pick: Option<bool> = None;
-    if !browse {
-        ui.label(egui::RichText::new(tl!("Comparing with another file needs the desktop app.")).small().weak());
-    }
-    crate::rtl::Table::new("compare_files").columns(2).spacing(vec2(16.0, 4.0)).top().show(ui, |t| {
-        t.row(|r| {
-            r.cell(|ui| {
-                crate::rtl::vertical(ui, |ui| {
-                    heading(ui, "Original document");
-                    ui.radio_value(&mut f.original_current, true, tl!("This document"));
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut f.original_current, false, "");
-                        ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.original).desired_width(170.0).hint_text(tl!("Another file")));
-                        if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
-                            pick = Some(false);
-                        }
-                    });
-                });
-            });
-            r.cell(|ui| {
-                crate::rtl::vertical(ui, |ui| {
-                    heading(ui, "Revised document");
-                    ui.horizontal(|ui| {
-                        ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.revised).desired_width(170.0));
-                        if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
-                            pick = Some(true);
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(tl!("Label changes with:"));
-                        ui.add(egui::TextEdit::singleline(&mut f.author).desired_width(120.0));
-                    });
-                });
-            });
-        });
-    });
-    ui.add_space(4.0);
-    if ui.button(crate::rtl::arrows(if f.more { tl!("<< Less") } else { tl!("More >>") })).clicked() {
-        f.more = !f.more;
-    }
-    if f.more {
-        heading(ui, "Comparison settings");
-        crate::rtl::Table::new("compare_settings").columns(2).spacing(vec2(16.0, 2.0)).show(ui, |t| {
-            for (pair, labels) in COMPARE_SETTINGS.chunks(2).enumerate() {
-                t.row(|r| {
-                    for (j, (_, label)) in labels.iter().enumerate() {
-                        r.cell(|ui| {
-                            if let Some(on) = f.settings.get_mut(pair * 2 + j) {
-                                ui.checkbox(on, tl!(label));
-                            }
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        let can = Env::of(ui).view().host().is_some_and(|h| h.files().can_pick());
+        let reason = (!can).then(|| Label::from(tl!("Comparing with another file needs the desktop app.").to_string()));
+        let another = !self.original_current;
+        let (mut original_pick, mut revised_pick): (Option<String>, Option<String>) = (None, None);
+        Stack::new().show(ui, |ui, _| {
+            if let Some(reason) = &reason {
+                Notice::new(Tone::Neutral, reason.clone()).layout(NoticeLayout::Inline).show(ui);
+            }
+            Row::new().show(ui, |ui, _| {
+                Field::new(Label::from(tl!("Original document").to_string())).show(ui, |ui, _| {
+                    RadioGroup::new(Label::from(tl!("Original document").to_string()), Bind::bound(&mut self.original_current)).show(ui, |ui, _| {
+                        Stack::new().show(ui, |ui, _| {
+                            Radio::new(true).label(Label::from(tl!("This document").to_string())).show(ui);
+                            Radio::new(false).label(Label::from(tl!("Another file").to_string())).show(ui);
                         });
+                    });
+                });
+                // The field greys the row while "This document" is chosen.
+                Field::new(Label::from(tl!("Another file").to_string())).enabled(another).show(ui, |ui, _| {
+                    let mut row = PathRow::new(Label::from(tl!("Another file").to_string()), Bind::bound(&mut self.original))
+                        .placeholder(Label::from(tl!("Another file").to_string()))
+                        .pick(PickRequest::open("document"));
+                    if let Some(r) = &reason {
+                        row = row.browse_reason(r.clone());
                     }
+                    original_pick = row.show(ui).picked;
                 });
-            }
-        });
-        ui.label(
-            egui::RichText::new(tl!("Formatting, case changes, white space and tables are compared; the other settings are kept for later."))
-                .small()
-                .weak(),
-        );
-        crate::rtl::Table::new("compare_show").columns(2).spacing(vec2(24.0, 2.0)).top().show(ui, |t| {
-            t.row(|r| {
-                r.cell(|ui| {
-                    crate::rtl::vertical(ui, |ui| {
-                        heading(ui, "Show changes at:");
-                        ui.radio_value(&mut f.character_level, false, tl!("Word level"));
-                        ui.radio_value(&mut f.character_level, true, tl!("Character level"));
-                    });
-                });
-                r.cell(|ui| {
-                    crate::rtl::vertical(ui, |ui| {
-                        heading(ui, "Show changes in:");
-                        for (v, l) in [("original", "Original document"), ("revised", "Revised document"), ("new", "New document")] {
-                            ui.radio_value(&mut f.show_in, v.to_string(), tl!(l));
-                        }
-                    });
+                Field::new(Label::from(tl!("Revised document").to_string())).show(ui, |ui, _| {
+                    let mut row = PathRow::new(Label::from(tl!("Revised document").to_string()), Bind::bound(&mut self.revised))
+                        .pick(PickRequest::open("document"));
+                    if let Some(r) = &reason {
+                        row = row.browse_reason(r.clone());
+                    }
+                    revised_pick = row.show(ui).picked;
                 });
             });
+            Field::new(Label::from(tl!("Label changes with:").to_string())).show(ui, |ui, _| {
+                TextField::new(Label::from(tl!("Label changes with:").to_string()), Bind::bound(&mut self.author)).show(ui);
+            });
+            let more = (if self.more { tl!("<< Less") } else { tl!("More >>") }).to_string();
+            if clicked(&Button::new(Label::from(more)).show(ui)) {
+                self.more = !self.more;
+            }
+            if self.more {
+                GroupBox::new(Label::from(tl!("Comparison settings").to_string()), None).show(ui, |ui, _| {
+                    Row::new().show(ui, |ui, _| {
+                        for column in 0..2 {
+                            Stack::new().show(ui, |ui, _| {
+                                for (at, (_, name)) in COMPARE_SETTINGS.iter().enumerate().filter(|(at, _)| at % 2 == column) {
+                                    if let Some(on) = self.settings.get_mut(at) {
+                                        Checkbox::new(Bind::bound(on)).label(Label::from(tl!(name).to_string())).show(ui);
+                                    }
+                                }
+                            });
+                        }
+                    });
+                    Text::new(Label::from(
+                        tl!("Formatting, case changes, white space and tables are compared; the other settings are kept for later.").to_string(),
+                    ))
+                    .show(ui);
+                });
+                Row::new().show(ui, |ui, _| {
+                    Field::new(Label::from(tl!("Show changes at:").to_string())).show(ui, |ui, _| {
+                        RadioGroup::new(Label::from(tl!("Show changes at:").to_string()), Bind::bound(&mut self.character_level)).show(
+                            ui,
+                            |ui, _| {
+                                Stack::new().show(ui, |ui, _| {
+                                    Radio::new(false).label(Label::from(tl!("Word level").to_string())).show(ui);
+                                    Radio::new(true).label(Label::from(tl!("Character level").to_string())).show(ui);
+                                });
+                            },
+                        );
+                    });
+                    Field::new(Label::from(tl!("Show changes in:").to_string())).show(ui, |ui, _| {
+                        RadioGroup::new(Label::from(tl!("Show changes in:").to_string()), Bind::bound(&mut self.show_in)).show(ui, |ui, _| {
+                            Stack::new().show(ui, |ui, _| {
+                                for (v, l) in [("original", "Original document"), ("revised", "Revised document"), ("new", "New document")] {
+                                    Radio::new(v.to_string()).label(Label::from(tl!(l).to_string())).show(ui);
+                                }
+                            });
+                        });
+                    });
+                });
+            }
         });
+        // A picked file replaces what the row shows, as a set.
+        if let Some(path) = original_pick {
+            self.original = path;
+            self.original_current = false;
+        }
+        if let Some(path) = revised_pick {
+            self.revised = path;
+        }
+        self.params().is_some()
     }
-    if let Some(revised) = pick {
-        // A blocking picker answers now, while this dialog is out of `app.dialog`: fill it here.
-        if app.services.file_dialog.is_none()
-            && let Some(pick_open) = &app.services.pick_open
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        let id = if self.combine { "review.combine" } else { "review.compare" };
+        self.params().map(|p| (id.to_string(), p)).into_iter().collect()
+    }
+
+    fn applied(&mut self, app: &mut WordApp, filed: Filed, outcome: Result<&[Value], &str>) {
+        if matches!(filed, Filed::Ok)
+            && let Ok(results) = outcome
+            && let Some(changes) = results.first().and_then(|r| r.get("changes")).and_then(Value::as_u64)
         {
-            if let Some(path) = pick_open("document") {
-                if revised {
-                    f.revised = path;
-                } else {
-                    f.original = path;
-                    f.original_current = false;
-                }
-            }
-        } else {
-            let _ = app.ask_file(
-                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
-                crate::file_dialogs::AfterPick::ComparePath { revised },
-            );
+            app.status(format!("Compared: {changes} changes"));
         }
     }
-    error(ui, &f.message);
-    let params = f.params();
-    let (ok, cancel) = buttons(ui, params.is_some());
-    if ok && let Some(params) = params {
-        let id = if f.combine { "review.combine" } else { "review.compare" };
-        match app.run(id, params) {
-            Ok(v) => {
-                let n = v.get("changes").and_then(Value::as_u64).unwrap_or(0).to_string();
-                app.status(crate::i18n::fmt(tl!("Compared: {changes} changes"), &[("changes", &n)]));
-                return true;
-            }
-            Err(e) => {
-                f.message = e;
-                return false;
-            }
-        }
-    }
-    cancel
 }
 
 // ---------------------------------------------------------------------------------------------
 // AutoCorrect Options
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// A change to one of the AutoCorrect lists, run at once (as in Word) by [`settle_lists`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum ListEdit {
+    /// An entry of the Replace / With list; success clears both boxes.
+    Entry(Value),
+    /// An exception; success clears its box.
+    Exception(Value),
+}
+
+/// The AutoCorrect Options dialog's values.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AutoCorrectForm {
     /// 0 AutoCorrect, 1 AutoFormat As You Type, 2 Math AutoCorrect.
     pub tab: u8,
@@ -332,20 +281,14 @@ pub struct AutoCorrectForm {
     /// Math AutoCorrect filter.
     pub math_filter: String,
     pub message: String,
+    /// List changes filed by the body, run by the dialog's settle step.
+    #[serde(skip)]
+    pub pending: Vec<ListEdit>,
 }
 
 impl AutoCorrectForm {
     pub fn new(app: &WordApp) -> AutoCorrectForm {
-        AutoCorrectForm {
-            tab: 0,
-            options: app.session.prefs.autocorrect.clone(),
-            from: String::new(),
-            to: String::new(),
-            show_exceptions: false,
-            exception: String::new(),
-            math_filter: String::new(),
-            message: String::new(),
-        }
+        AutoCorrectForm { options: app.session.prefs.autocorrect.clone(), ..AutoCorrectForm::default() }
     }
 
     /// The `tools.autocorrect` switches.
@@ -395,422 +338,254 @@ fn list_change(app: &mut WordApp, f: &mut AutoCorrectForm, params: Value) -> boo
     }
 }
 
-fn autocorrect_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) -> bool {
-    let names = [tl!("AutoCorrect").to_string(), tl!("AutoFormat As You Type").to_string(), tl!("Math AutoCorrect").to_string()];
-    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
-        f.tab = k as u8;
+/// Runs the list changes the body filed. The body never holds the app, so the changes run here,
+/// in the frame that filed them. Always `false`: the hook lives as long as the dialog, which may
+/// file again.
+fn settle_lists(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<AutoCorrectForm>>(id) else { return Settle::Keep };
+    let mut form = host.form().clone();
+    if form.pending.is_empty() {
+        return Settle::Keep;
     }
-    ui.add_space(6.0);
-    match f.tab {
-        0 => autocorrect_tab(app, ui, f),
-        1 => {
-            let o = &mut f.options;
-            heading(ui, "Replace as you type");
-            ui.checkbox(&mut o.smart_quotes, tl!("Smart quotes instead of straight quotes"));
-            ui.checkbox(&mut o.fractions, tl!("Fractions (1/2) as fraction characters (½)"));
-            ui.checkbox(&mut o.ordinals, tl!("Ordinals (1st) as superscript"));
-            ui.checkbox(&mut o.bold_italic, tl!("*Bold* and _italic_ as real formatting"));
-            ui.checkbox(&mut o.dashes, tl!("Hyphens (--) as dashes (—)"));
-            ui.checkbox(&mut o.links, tl!("Internet addresses as links"));
-            ui.checkbox(&mut o.double_space_period, tl!("Add a period with double-space"));
-            heading(ui, "Apply as you type");
-            ui.checkbox(&mut o.bullets, tl!("Automatic bulleted lists"));
-            ui.checkbox(&mut o.numbering, tl!("Automatic numbered lists"));
-            ui.checkbox(&mut o.border_lines, tl!("Border lines"));
-            ui.checkbox(&mut o.heading_styles, tl!("Built-in Heading styles"));
-            heading(ui, "Automatically as you type");
-            ui.checkbox(&mut o.tab_indent, tl!("Set left- and first-indent with tabs and backspaces"));
-        }
-        _ => math_tab(ui, f),
-    }
-    error(ui, &f.message);
-    let (ok, cancel) = buttons(ui, true);
-    if ok {
-        if let Err(e) = app.run("tools.autocorrect", f.params()) {
-            f.message = e;
-            return false;
-        }
-        return true;
-    }
-    cancel
-}
-
-/// Draws AutoCorrect's capitalization and replacement checkboxes, the replace list with its
-/// filter and add, replace and delete actions, and the exceptions editor.
-fn autocorrect_tab(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
-    let o = &mut f.options;
-    ui.checkbox(&mut o.two_initial_caps, tl!("Correct TWo INitial CApitals"));
-    ui.checkbox(&mut o.cap_sentences, tl!("Capitalize first letter of sentences"));
-    ui.horizontal(|ui| {
-        ui.add_space(18.0);
-        if ui.small_button(tl!("Exceptions…")).clicked() {
-            f.show_exceptions = !f.show_exceptions;
-        }
-    });
-    if f.show_exceptions {
-        exceptions(app, ui, f);
-    }
-    let o = &mut f.options;
-    ui.checkbox(&mut o.cap_cells, tl!("Capitalize first letter of table cells"));
-    ui.checkbox(&mut o.cap_days, tl!("Capitalize names of days"));
-    ui.checkbox(&mut o.caps_lock, tl!("Correct accidental usage of cAPS LOCK key"));
-    ui.checkbox(&mut o.replace_text, tl!("Replace text as you type"));
-    crate::rtl::Table::new("ac_boxes").columns(2).spacing(vec2(8.0, 2.0)).show(ui, |t| {
-        let (replace_label, with_label) = t.row(|r| (r.cell(|ui| ui.label(tl!("Replace:"))), r.cell(|ui| ui.label(tl!("With:")))));
-        t.row(|r| {
-            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.from).desired_width(110.0)).labelled_by(replace_label.id));
-            r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut f.to).desired_width(260.0)).labelled_by(with_label.id));
-        });
-    });
-    // The list, filtered to what's typed in Replace (as Word scrolls to it).
-    let list = f.options.list();
-    let typed = f.from.trim().to_lowercase();
-    let mut picked: Option<(String, String)> = None;
-    egui::ScrollArea::vertical().id_salt("ac_list").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
-        if !list.iter().any(|(a, _, _)| typed.is_empty() || a.to_lowercase().starts_with(&typed)) {
-            // #3036: the filter matches nothing — say so instead of showing an empty box.
-            ui.label(egui::RichText::new(tl!("(none)")).small().color(Tokens::get(ui.ctx()).text_dim));
-        }
-        crate::rtl::Table::new("ac_list_grid").columns(2).spacing(vec2(8.0, 1.0)).striped(true).show(ui, |t| {
-            for (a, b, _) in list.iter().filter(|(a, _, _)| typed.is_empty() || a.to_lowercase().starts_with(&typed)).take(500) {
-                let selected = f.from == *a;
-                t.row(|r| {
-                    r.cell(|ui| {
-                        if ui.add_sized(vec2(110.0, 16.0), egui::Button::selectable(selected, a.as_str())).clicked() {
-                            picked = Some((a.clone(), b.clone()));
-                        }
-                    });
-                    r.cell(|ui| ui.label(b.as_str()));
-                });
-            }
-        });
-    });
-    if let Some((a, b)) = picked {
-        f.from = a;
-        f.to = b;
-    }
-    let exists = list.iter().any(|(a, _, _)| *a == f.from);
-    let same = list.iter().any(|(a, b, _)| *a == f.from && *b == f.to);
-    ui.horizontal(|ui| {
-        let label = if exists { tl!("Replace") } else { tl!("Add") };
-        if ui.add_enabled(!f.from.trim().is_empty() && !same, egui::Button::new(label)).clicked() {
-            let p = json!({"add": {"from": f.from, "to": f.to}});
-            if list_change(app, f, p) {
-                f.from.clear();
-                f.to.clear();
-            }
-        }
-        if ui.add_enabled(exists, egui::Button::new(tl!("Delete"))).clicked() {
-            let p = json!({"delete": f.from});
-            if list_change(app, f, p) {
-                f.from.clear();
-                f.to.clear();
-            }
-        }
-    });
-}
-
-fn exceptions(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.checkbox(&mut f.options.auto_add_first_letter, tl!("Automatically add words to list (First Letter)"));
-        ui.checkbox(&mut f.options.auto_add_initial_caps, tl!("Automatically add words to list (INitial CAps)"));
-        ui.label(tl!("Don't capitalize after:"));
-        let list = f.options.exception_list();
-        let mut picked = None;
-        egui::ScrollArea::vertical().id_salt("ac_exceptions").max_height(90.0).auto_shrink([false, true]).show(ui, |ui| {
-            for e in &list {
-                if ui.add(egui::Button::selectable(f.exception == *e, e.as_str())).clicked() {
-                    picked = Some(e.clone());
+    for edit in std::mem::take(&mut form.pending) {
+        match edit {
+            ListEdit::Entry(params) => {
+                if list_change(app, &mut form, params) {
+                    form.from.clear();
+                    form.to.clear();
                 }
             }
-        });
-        if let Some(e) = picked {
-            f.exception = e;
+            ListEdit::Exception(params) => {
+                if list_change(app, &mut form, params) {
+                    form.exception.clear();
+                }
+            }
         }
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut f.exception).desired_width(110.0));
-            let known = list.contains(&f.exception.trim().to_lowercase());
-            if ui.add_enabled(!f.exception.trim().is_empty() && !known, egui::Button::new(tl!("Add"))).clicked() {
-                let p = json!({"addException": f.exception});
-                if list_change(app, f, p) {
-                    f.exception.clear();
-                }
-            }
-            if ui.add_enabled(known, egui::Button::new(tl!("Delete"))).clicked() {
-                let p = json!({"deleteException": f.exception});
-                if list_change(app, f, p) {
-                    f.exception.clear();
-                }
-            }
-        });
-    });
-}
-
-/// Filters the math-symbol table by the typed prefix and lists each `\name` with its character.
-fn math_tab(ui: &mut Ui, f: &mut AutoCorrectForm) {
-    ui.label(egui::RichText::new(tl!("In equations, typing a name after a backslash replaces it with its symbol.")).small().weak());
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Replace:"));
-        ui.add(egui::TextEdit::singleline(&mut f.math_filter).desired_width(140.0)).labelled_by(label.id);
-    });
-    let filter = f.math_filter.trim().trim_start_matches('\\').to_string();
-    egui::ScrollArea::vertical().id_salt("ac_math").max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
-        crate::rtl::Table::new("ac_math_grid").columns(2).spacing(vec2(16.0, 1.0)).striped(true).show(ui, |t| {
-            for (name, c) in wordcraft_doc::math_symbols::SYMBOLS.iter().filter(|(n, _)| filter.is_empty() || n.starts_with(filter.as_str())) {
-                t.row(|r| {
-                    r.cell(|ui| ui.label(format!("\\{name}")));
-                    r.cell(|ui| ui.label(c.to_string()));
-                });
-            }
-        });
-    });
-}
-
-// ---------------------------------------------------------------------------------------------
-// Restrict Editing pane
-
-/// The Restrict Editing pane's own state: what is being set up before protection starts, and
-/// the passwords being typed.
-#[derive(Clone, Debug, Default)]
-pub struct RestrictPane {
-    pub open: bool,
-    /// 1. Formatting restrictions: limit formatting to a selection of styles.
-    pub formatting: bool,
-    /// Its style list shown, and the styles allowed (by id); `None` until first shown (all).
-    pub show_styles: bool,
-    pub allowed: Option<Vec<String>>,
-    /// 2. Editing restrictions on, and which (index into [`EDIT_MODES`]).
-    pub editing: bool,
-    pub mode: usize,
-    /// 3. Asking for the password to start (or to stop) protection.
-    pub asking: bool,
-    pub password: Password,
-    pub confirm: Password,
-    pub message: String,
-}
-
-/// The editing restrictions, with their `review.restrict` modes.
-pub const EDIT_MODES: [(&str, &str); 4] =
-    [("readOnly", "No changes (read only)"), ("trackedChanges", "Tracked changes"), ("comments", "Comments"), ("forms", "Filling in forms")];
-
-/// The styles the formatting restriction lists: paragraph and character styles not hidden.
-fn listed_styles(app: &WordApp) -> Vec<(String, String)> {
-    use wordcraft_doc::StyleKind;
-    let mut v: Vec<(String, String)> = app
-        .session
-        .doc
-        .styles
-        .styles
-        .iter()
-        .filter(|s| matches!(s.kind, StyleKind::Paragraph | StyleKind::Character) && !s.hidden)
-        .map(|s| (s.id.clone(), if s.name.is_empty() { s.id.clone() } else { s.name.clone() }))
-        .collect();
-    v.sort_by_key(|a| a.1.to_lowercase());
-    v
-}
-
-pub fn restrict_pane(app: &mut WordApp, ui: &mut Ui) {
-    let mut st = std::mem::take(&mut app.restrict);
-    let enforced = app.session.doc.settings.protection.clone();
-    egui::ScrollArea::vertical().id_salt("restrict_pane").show(ui, |ui| match &enforced {
-        Some(mode) => enforced_ui(app, ui, &mut st, mode),
-        None => setup_ui(app, ui, &mut st),
-    });
-    app.restrict = st;
-}
-
-fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
-    heading(ui, "1. Formatting restrictions");
-    ui.checkbox(&mut st.formatting, tl!("Limit formatting to a selection of styles"));
-    if st.formatting && ui.small_button(tl!("Settings…")).clicked() {
-        st.show_styles = !st.show_styles;
     }
-    let styles = listed_styles(app);
-    if st.allowed.is_none() {
-        // Start from the document's own locked styles.
-        let doc = &app.session.doc.styles;
-        st.allowed = Some(styles.iter().filter(|(id, _)| !doc.get(id).is_some_and(|s| s.locked)).map(|(id, _)| id.clone()).collect());
+    if let Some(host) = app.dialog_host.get_mut_by_id::<FormHost<AutoCorrectForm>>(id) {
+        *host.form_mut() = form;
     }
-    if st.formatting && st.show_styles {
-        let allowed = st.allowed.get_or_insert_with(Vec::new);
-        ui.label(egui::RichText::new(tl!("Checked styles are allowed:")).small());
-        ui.horizontal_wrapped(|ui| {
-            if ui.small_button(tl!("All")).clicked() {
-                *allowed = styles.iter().map(|(id, _)| id.clone()).collect();
-            }
-            if ui.small_button(tl!("None")).clicked() {
-                allowed.clear();
-            }
+    Settle::Keep
+}
+
+const REPLACE: ColumnKey = ColumnKey::new("replace");
+const WITH: ColumnKey = ColumnKey::new("with");
+const TABS: [u8; 3] = [0, 1, 2];
+
+fn tab_name(tab: u8) -> Label {
+    match tab {
+        0 => Label::from(tl!("AutoCorrect").to_string()),
+        1 => Label::from(tl!("AutoFormat As You Type").to_string()),
+        _ => Label::from(tl!("Math AutoCorrect").to_string()),
+    }
+}
+
+/// A table of `(first, second)` rows keyed by the first column; the key of the row the user
+/// picked this pass. `second` adds the With column.
+fn list_table(ui: &mut Ui, name: &str, rows: &[(String, String)], second: bool, selectable: bool) -> Option<String> {
+    let mut columns = vec![ColumnSpec::new(REPLACE, Label::from(name.to_string()), ColumnWidth::Controls(12.0))];
+    if second {
+        columns.push(ColumnSpec::new(WITH, Label::from(tl!("With:").to_string()), ColumnWidth::Content));
+    }
+    let source = keyed(rows, |r: &(String, String)| r.0.clone());
+    let out = Table::<String>::new(Label::from(name.to_string()), columns)
+        .select(if selectable { SelectMode::Single } else { SelectMode::None })
+        .striped(true)
+        // The dialog's body scrolls, so the table caps its rows and scrolls the rest itself.
+        .max_rows(8)
+        .empty(Label::from(tl!("(none)").to_string()))
+        .show_items(ui, &source, &mut |key, icx| {
+            let with = rows.iter().find(|r| r.0 == *key).map(|r| r.1.clone()).unwrap_or_default();
+            let row = ListRow::new(key.clone()).cells(icx.cells());
+            if second { row.cell(WITH, with) } else { row }
         });
-        egui::ScrollArea::vertical().id_salt("restrict_styles").max_height(160.0).show(ui, |ui| {
-            for (id, name) in &styles {
-                let mut on = allowed.contains(id);
-                if ui.checkbox(&mut on, tl!(name.as_str())).changed() {
-                    if on {
-                        allowed.push(id.clone());
-                    } else {
-                        allowed.retain(|x| x != id);
-                    }
-                }
+    let mut picked = None;
+    for event in out.events {
+        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            && let Some(key) = keys.into_iter().last()
+        {
+            picked = Some(key);
+        }
+    }
+    picked
+}
+
+impl AutoCorrectForm {
+    /// The AutoCorrect page: capitalisation and replacement switches, the Exceptions editor and the
+    /// Replace / With list.
+    fn autocorrect_tab(&mut self, ui: &mut Ui) {
+        Checkbox::new(Bind::bound(&mut self.options.two_initial_caps)).label(Label::from(tl!("Correct TWo INitial CApitals").to_string())).show(ui);
+        Checkbox::new(Bind::bound(&mut self.options.cap_sentences))
+            .label(Label::from(tl!("Capitalize first letter of sentences").to_string()))
+            .show(ui);
+        if clicked(&Button::new(Label::from(tl!("Exceptions…").to_string())).show(ui)) {
+            self.show_exceptions = !self.show_exceptions;
+        }
+        if self.show_exceptions {
+            self.exceptions(ui);
+        }
+        Checkbox::new(Bind::bound(&mut self.options.cap_cells))
+            .label(Label::from(tl!("Capitalize first letter of table cells").to_string()))
+            .show(ui);
+        Checkbox::new(Bind::bound(&mut self.options.cap_days)).label(Label::from(tl!("Capitalize names of days").to_string())).show(ui);
+        Checkbox::new(Bind::bound(&mut self.options.caps_lock))
+            .label(Label::from(tl!("Correct accidental usage of cAPS LOCK key").to_string()))
+            .show(ui);
+        Checkbox::new(Bind::bound(&mut self.options.replace_text)).label(Label::from(tl!("Replace text as you type").to_string())).show(ui);
+        Row::new().show(ui, |ui, _| {
+            Field::new(Label::from(tl!("Replace:").to_string())).show(ui, |ui, _| {
+                TextField::new(Label::from(tl!("Replace:").to_string()), Bind::bound(&mut self.from)).show(ui);
+            });
+            Field::new(Label::from(tl!("With:").to_string())).show(ui, |ui, _| {
+                TextField::new(Label::from(tl!("With:").to_string()), Bind::bound(&mut self.to)).show(ui);
+            });
+        });
+        // The list, filtered to what's typed in Replace (as Word scrolls to it).
+        let list = self.options.list();
+        let typed = self.from.trim().to_lowercase();
+        let shown: Vec<(String, String)> = list
+            .iter()
+            .filter(|(a, _, _)| typed.is_empty() || a.to_lowercase().starts_with(&typed))
+            .take(500)
+            .map(|(a, b, _)| (a.clone(), b.clone()))
+            .collect();
+        if let Some(key) = list_table(ui, tl!("Replace:"), &shown, true, true)
+            && let Some((a, b)) = shown.iter().find(|(a, _)| *a == key)
+        {
+            self.from = a.clone();
+            self.to = b.clone();
+        }
+        let exists = list.iter().any(|(a, _, _)| *a == self.from);
+        let same = list.iter().any(|(a, b, _)| *a == self.from && *b == self.to);
+        let can_add = !self.from.trim().is_empty() && !same;
+        Row::new().show(ui, |ui, _| {
+            let name = if exists { tl!("Replace") } else { tl!("Add") };
+            if clicked(&Button::new(Label::from(name.to_string())).enabled(can_add).show(ui)) {
+                let edit = ListEdit::Entry(json!({"add": {"from": self.from, "to": self.to}}));
+                self.pending.push(edit);
+            }
+            if clicked(&Button::new(Label::from(tl!("Delete").to_string())).enabled(exists).show(ui)) {
+                let edit = ListEdit::Entry(json!({"delete": self.from}));
+                self.pending.push(edit);
             }
         });
     }
-    heading(ui, "2. Editing restrictions");
-    let editing = ui.checkbox(&mut st.editing, tl!("Only allow this kind of editing:"));
-    ui.add_enabled_ui(st.editing, |ui| {
-        let current = EDIT_MODES.get(st.mode).map(|m| m.1).unwrap_or("");
-        let combo =
-            craft_ui::ComboBox::from_id_salt("restrict_mode").selected_text(tl!(current)).width(ui.available_width().min(220.0)).show_ui(ui, |ui| {
-                for (i, (_, label)) in EDIT_MODES.iter().enumerate() {
-                    ui.selectable_value(&mut st.mode, i, tl!(label));
+
+    /// The exceptions editor under the Exceptions… button.
+    fn exceptions(&mut self, ui: &mut Ui) {
+        GroupBox::new(Label::from(tl!("Exceptions…").to_string()), None).show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut self.options.auto_add_first_letter))
+                .label(Label::from(tl!("Automatically add words to list (First Letter)").to_string()))
+                .show(ui);
+            Checkbox::new(Bind::bound(&mut self.options.auto_add_initial_caps))
+                .label(Label::from(tl!("Automatically add words to list (INitial CAps)").to_string()))
+                .show(ui);
+            let list = self.options.exception_list();
+            let rows: Vec<(String, String)> = list.iter().map(|e| (e.clone(), String::new())).collect();
+            if let Some(picked) = list_table(ui, tl!("Don't capitalize after:"), &rows, false, true) {
+                self.exception = picked;
+            }
+            TextField::new(Label::from(tl!("Don't capitalize after:").to_string()), Bind::bound(&mut self.exception)).show(ui);
+            let known = list.contains(&self.exception.trim().to_lowercase());
+            let can_add = !self.exception.trim().is_empty() && !known;
+            Row::new().show(ui, |ui, _| {
+                if clicked(&Button::new(Label::from(tl!("Add").to_string())).enabled(can_add).show(ui)) {
+                    let edit = ListEdit::Exception(json!({"addException": self.exception}));
+                    self.pending.push(edit);
+                }
+                if clicked(&Button::new(Label::from(tl!("Delete").to_string())).enabled(known).show(ui)) {
+                    let edit = ListEdit::Exception(json!({"deleteException": self.exception}));
+                    self.pending.push(edit);
                 }
             });
-        combo.response.labelled_by(editing.id);
-    });
-    let mode = EDIT_MODES.get(st.mode).map(|m| m.0).unwrap_or("readOnly");
-    if st.editing && matches!(mode, "readOnly" | "comments") {
-        heading(ui, "Exceptions (optional)");
-        ui.label(egui::RichText::new(tl!("Select text, then tick who can still edit it.")).small());
-        let (a, b) = app.session.sel.ordered();
-        let inside = app.session.doc.perm_ranges().iter().any(|r| r.everyone() && r.start <= a && b <= r.end && r.start.story == a.story);
-        let mut everyone = inside;
-        let can = inside || a != b;
-        if ui.add_enabled_ui(can, |ui| ui.checkbox(&mut everyone, tl!("Everyone"))).inner.changed() {
-            let p = if everyone { json!({"exception": "add"}) } else { json!({"exception": "remove"}) };
-            if let Err(e) = app.run("review.restrict", p) {
-                st.message = e;
-            }
-        }
+        });
     }
-    heading(ui, "3. Start enforcement");
-    let ready = st.formatting || st.editing;
-    if !st.asking {
-        if ui.add_enabled(ready, egui::Button::new(tl!("Start Enforcing Protection"))).clicked() {
-            st.asking = true;
-            st.message.clear();
-        }
-    } else {
-        ui.label(egui::RichText::new(tl!("The password is optional; without it anyone can stop the protection.")).small());
-        passwords(ui, st, true);
-        ui.horizontal_wrapped(|ui| {
-            // macOS puts Cancel before OK.
-            let mac = cfg!(target_os = "macos");
-            let mut cancel = mac && ui.button(tl!("Cancel")).clicked();
-            if ui.button(tl!("OK")).clicked() {
-                if st.password != st.confirm {
-                    st.message = tl!("The passwords don't match.").to_string();
-                    st.confirm.as_mut_string().clear();
-                } else {
-                    let mut p =
-                        json!({"mode": if st.editing { mode } else { "none" }, "formatting": st.formatting, "password": st.password.as_str()});
-                    if st.formatting {
-                        let allowed = st.allowed.clone().unwrap_or_default();
-                        p["lockedStyles"] =
-                            json!(styles.iter().filter(|(id, _)| !allowed.contains(id)).map(|(id, _)| id.clone()).collect::<Vec<_>>());
-                    }
-                    match app.run("review.restrict", p) {
-                        Ok(_) => {
-                            st.asking = false;
-                            st.message.clear();
-                        }
-                        Err(e) => st.message = e,
-                    }
-                    st.password = Password::default();
-                    st.confirm = Password::default();
+
+    /// The AutoFormat As You Type page.
+    fn autoformat_tab(&mut self, ui: &mut Ui) {
+        let o = &mut self.options;
+        GroupBox::new(Label::from(tl!("Replace as you type").to_string()), None).show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut o.smart_quotes)).label(Label::from(tl!("Smart quotes instead of straight quotes").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.fractions)).label(Label::from(tl!("Fractions (1/2) as fraction characters (½)").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.ordinals)).label(Label::from(tl!("Ordinals (1st) as superscript").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.bold_italic)).label(Label::from(tl!("*Bold* and _italic_ as real formatting").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.dashes)).label(Label::from(tl!("Hyphens (--) as dashes (—)").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.links)).label(Label::from(tl!("Internet addresses as links").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.double_space_period)).label(Label::from(tl!("Add a period with double-space").to_string())).show(ui);
+        });
+        GroupBox::new(Label::from(tl!("Apply as you type").to_string()), None).show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut o.bullets)).label(Label::from(tl!("Automatic bulleted lists").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.numbering)).label(Label::from(tl!("Automatic numbered lists").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.border_lines)).label(Label::from(tl!("Border lines").to_string())).show(ui);
+            Checkbox::new(Bind::bound(&mut o.heading_styles)).label(Label::from(tl!("Built-in Heading styles").to_string())).show(ui);
+        });
+        GroupBox::new(Label::from(tl!("Automatically as you type").to_string()), None).show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut o.tab_indent))
+                .label(Label::from(tl!("Set left- and first-indent with tabs and backspaces").to_string()))
+                .show(ui);
+        });
+    }
+
+    /// The Math AutoCorrect page: each `\name` with its character, filtered by the typed prefix.
+    fn math_tab(&mut self, ui: &mut Ui) {
+        Text::new(Label::from(tl!("In equations, typing a name after a backslash replaces it with its symbol.").to_string())).show(ui);
+        Field::new(Label::from(tl!("Replace:").to_string())).show(ui, |ui, _| {
+            TextField::new(Label::from(tl!("Replace:").to_string()), Bind::bound(&mut self.math_filter)).show(ui);
+        });
+        let filter = self.math_filter.trim().trim_start_matches('\\').to_string();
+        let rows: Vec<(String, String)> = wordcraft_doc::math_symbols::SYMBOLS
+            .iter()
+            .filter(|(n, _)| filter.is_empty() || n.starts_with(filter.as_str()))
+            .map(|(name, c)| (format!("\\{name}"), c.to_string()))
+            .collect();
+        list_table(ui, tl!("Replace:"), &rows, true, false);
+    }
+}
+
+impl WordForm for AutoCorrectForm {
+    fn key(&self) -> &'static str {
+        "autoCorrect"
+    }
+
+    fn title(&self) -> Label {
+        Label::from(tl!("AutoCorrect").to_string())
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        Stack::new().show(ui, |ui, _| {
+            let source = keyed(&TABS, |t: &u8| *t);
+            let strip = TabStrip::new(Label::from(tl!("AutoCorrect Options").to_string()))
+                .kind(TabKind::Text)
+                .shown(self.tab)
+                .natural_height(true)
+                .show_items(ui, &source, &mut |key, _| Tab::new(tab_name(*key)));
+            for event in strip.response.events {
+                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    && let Some(key) = keys.into_iter().last()
+                {
+                    self.tab = key.min(2);
                 }
             }
-            cancel |= !mac && ui.button(tl!("Cancel")).clicked();
-            if cancel {
-                st.asking = false;
-                st.password = Password::default();
-                st.confirm = Password::default();
+            match self.tab {
+                0 => self.autocorrect_tab(ui),
+                1 => self.autoformat_tab(ui),
+                _ => self.math_tab(ui),
+            }
+            if !self.message.is_empty() {
+                Notice::new(Tone::Bad, Label::from(self.message.clone())).layout(NoticeLayout::Inline).show(ui);
             }
         });
+        true
     }
-    error(ui, &st.message);
-}
 
-/// Each label above its field, so both fit the narrowest pane.
-fn passwords(ui: &mut Ui, st: &mut RestrictPane, confirm: bool) {
-    let width = ui.available_width().min(220.0);
-    let label = ui.label(tl!("Password:"));
-    ui.add(egui::TextEdit::singleline(st.password.as_mut_string()).password(true).desired_width(width)).labelled_by(label.id);
-    if confirm {
-        let label = ui.label(tl!("Confirm password:"));
-        ui.add(egui::TextEdit::singleline(st.confirm.as_mut_string()).password(true).desired_width(width)).labelled_by(label.id);
-    }
-}
-
-fn enforced_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane, mode: &str) {
-    ui.label(tl!("Editing in this document is restricted."));
-    ui.add_space(4.0);
-    let what = match mode {
-        "readOnly" => "The document is read only, except for regions marked editable.",
-        "comments" => "Only comments can be added, except in regions marked editable.",
-        "trackedChanges" => "Every change is recorded as a tracked change.",
-        "forms" => "Only form fields can be filled in.",
-        _ => "Only the allowed styles can be applied.",
-    };
-    ui.label(egui::RichText::new(tl!(what)).small());
-    let regions = app.session.doc.perm_ranges().iter().filter(|r| r.everyone() || r.editor.eq_ignore_ascii_case(&app.session.author)).count();
-    let fields = app.session.doc.fillable_controls() as u64;
-    if regions > 0 || fields > 0 {
-        ui.add_space(6.0);
-        if ui.button(tl!("Find Next Editable Region")).clicked() {
-            let from = app.session.sel.ordered().1;
-            if let Some((a, b)) = wordcraft_engine::cmd::protect::next_region(&app.session, &from) {
-                app.session.sel = wordcraft_engine::Selection { anchor: a, focus: b };
-                app.canvas.want_focus = true;
-            }
-        }
-    }
-    ui.add_space(10.0);
-    let has_password = !app.session.doc.settings.protect_hash.is_empty();
-    if !st.asking {
-        if ui.button(tl!("Stop Protection")).clicked() {
-            if has_password {
-                st.asking = true;
-                st.message.clear();
-            } else {
-                stop(app, st);
-            }
-        }
-    } else {
-        ui.label(egui::RichText::new(tl!("Type the password to stop the protection.")).small());
-        passwords(ui, st, false);
-        ui.horizontal_wrapped(|ui| {
-            // macOS puts Cancel before OK.
-            let mac = cfg!(target_os = "macos");
-            let cancel_first = mac && ui.button(tl!("Cancel")).clicked();
-            if ui.button(tl!("OK")).clicked() {
-                stop(app, st);
-            }
-            if cancel_first || (!mac && ui.button(tl!("Cancel")).clicked()) {
-                st.asking = false;
-                st.password = Password::default();
-            }
-        });
-    }
-    error(ui, &st.message);
-}
-
-fn stop(app: &mut WordApp, st: &mut RestrictPane) {
-    let r = app.run("review.restrict", json!({"stop": true, "password": st.password.as_str()}));
-    st.password = Password::default();
-    match r {
-        Ok(_) => {
-            st.asking = false;
-            st.message.clear();
-        }
-        Err(e) if e.contains(wordcraft_engine::cmd::protect::UNSUPPORTED_PASSWORD) => {
-            st.message = tl!("This password type isn't supported.").to_string();
-        }
-        Err(e) => st.message = e,
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("tools.autocorrect".to_string(), self.params())]
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use egui::vec2;
     use serde_json::json;
     use wordcraft_engine::Session;
 
@@ -850,72 +625,6 @@ mod tests {
         assert_eq!(d.session.prefs.autocorrect.entries, vec![("ok".to_string(), "fine".to_string())]);
     }
 
-    #[test]
-    fn dialogs_open_by_name_and_run_their_commands() {
-        let mut a = app("Original text.");
-        a.run("review.compare", json!({})).unwrap();
-        assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("compare"));
-        a.run("review.combine", json!({})).unwrap();
-        assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("combine"));
-        a.run("tools.autocorrect", json!({})).unwrap();
-        assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
-        a.dialog = None;
-        // Restrict Editing without settings opens the pane and protects nothing.
-        a.run("review.restrict", json!({})).unwrap();
-        assert!(a.restrict.open && a.dialog.is_none());
-        assert!(a.session.doc.settings.protection.is_none());
-        // The form's parameters carry every comparison setting.
-        let mut f = CompareForm::new(&a, false);
-        assert!(f.params().is_none());
-        f.revised = "/tmp/revised.docx".into();
-        f.settings[3] = false;
-        let p = f.params().unwrap();
-        assert_eq!(p["caseChanges"], false);
-        assert_eq!(p["showIn"], "new");
-        assert!(p.get("original").is_none());
-    }
-
-    /// #3036: the Replace list says so when the filter matches nothing instead of going blank.
-    #[test]
-    fn the_autocorrect_list_says_when_the_filter_matches_nothing() {
-        let mut app = app("");
-        app.session.prefs.autocorrect.entries.push(("brb".to_string(), "be right back".to_string()));
-        app.run("tools.autocorrect", json!({})).unwrap();
-        let texts = |h: &egui_kittest::Harness<'static, WordApp>| -> Vec<String> {
-            h.output()
-                .shapes
-                .iter()
-                .filter_map(|s| match &s.shape {
-                    egui::Shape::Text(t) => Some(t.galley.text().to_string()),
-                    _ => None,
-                })
-                .collect()
-        };
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
-        for _ in 0..4 {
-            h.step();
-        }
-        assert!(!texts(&h).iter().any(|t| t.contains("(none)")), "entries show, no hint");
-        match &mut h.state_mut().dialog {
-            Some(crate::dialogs::Dialog::Review(d)) => match &mut **d {
-                ReviewDialog::AutoCorrect(f) => f.from = "zzz".to_string(),
-                _ => panic!("the AutoCorrect form is open"),
-            },
-            _ => panic!("the AutoCorrect dialog is open"),
-        }
-        for _ in 0..2 {
-            h.step();
-        }
-        assert!(texts(&h).iter().any(|t| t.contains("(none)")), "no matches: the hint shows");
-    }
-
     /// #2848 through the real dialog: tick "Add a period with double-space" on the AutoFormat As
     /// You Type tab, press OK, and a double Space typed in the page makes a period.
     #[test]
@@ -923,7 +632,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = app("");
         app.run("tools.autocorrect", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -946,9 +655,10 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert!(h.state().dialog_host.stack().is_empty(), "OK closes the dialog");
         assert!(h.state().session.prefs.autocorrect.double_space_period, "the option is on");
-        h.state_mut().canvas.focused = true;
+        let ctx = h.ctx.clone();
+        h.state_mut().canvas.focus_page(&ctx);
         for t in ["Hello", " ", " ", "world"] {
             h.event(egui::Event::Text(t.to_string()));
             h.step();
