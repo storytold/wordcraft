@@ -11,6 +11,9 @@
   `headRefOid: 59e1eed7`, `updatedAt` 11:45:32Z — was true before `08f41b43`
   and `803e7341` were pushed (§5.54, §5.55).)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
+- 2026-11-23: PR #5834 is **closed as superseded by RFC-0020** (§5.60). The
+  branch is kept in the fork as the source of the app adapter, the desktop and
+  web wiring and the run books; contracts landed in `craft-libs#160`.
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
   authoritative sync server, document adapter, client core"
@@ -5470,6 +5473,32 @@ This page is **not** in that PR: it belongs to the collaboration branch, which
 `bash` policy still carried the Phase-0 blanket `git push` deny, so no fork push was possible
 until it was narrowed to the Phase-1 rule the sibling envoys use (fork allowed, `origin` and
 anything `storytold` denied); the config edit is outside the repository.
+
+### 5.60 PR cleanup on upstream `main` 700ce2f8 (2026-11-23)
+
+**#6947 is superseded, not rebasable.** Rebasing `chore/house-rules-sync-core16-wordcraft`
+(`17f99ece`) onto `origin/main` `700ce2f8` conflicts on the whole file: upstream replaced the
+`craft-house-rules` core/rust blocks with one `craft-agents` block
+(`source=5b1a2b1982fe7c77…`, `sha256=41dc0e35…`). Taking upstream's side leaves `git diff
+origin/main..HEAD` empty, so the rebased commit is dropped and the PR carries no change. The copy
+on `main` is the current canon: `sha256sum standards/app-agents.md` in `storytold/craft-contrib`
+`main` (`5b1a2b1982fe`) is `41dc0e35957946bfe7639237fbf1eca92093fe7f6bd76a778779c359c4e4a82a`,
+the same digest the marker records — zero drift, nothing to sync. The licence allowlist #6947
+extended now lives in `standards/licences.md` and is reached by agent rule 26; `AGENTS.md` no
+longer holds it. The PR is closed with that evidence (branch `17f99ece` stays in the fork).
+
+**#5834 is closed as superseded by RFC-0020.** The contract it predicted has landed:
+`storytold/craft-libs#160` merged 2026-11-17T18:36Z (`fd7232d7`), `craft-crdt` is
+`craft-libs#345` (open, head `cef9e963`), the web-host bridge is `craft-libs#2108` (open, head
+`503cd9fd`). RFC-0020 and house rule 16 put that code in shared libraries with per-app adapters
+of their own PRs, which is why the 139-commit app-local PR is not merged. The branch stays in
+`copoka/wordcraft` as the source of the adapter, the desktop/web wiring, the two-client host run
+(§5.1) and the run books; `docs/collab/README.md` and `production.md` still describe how to run
+it.
+
+**Checks.** Both PRs are documentation-only after the rebase result above; no Rust, manifest or
+workflow line is in either diff, so no `cargo xtask ci` was run and none is claimed. The branch
+tree at this commit is clean (`git status --short` empty) and matches the fork.
 
 ## 6. Where things live
 
