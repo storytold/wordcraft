@@ -377,6 +377,20 @@ fn a_refused_comment_edit_keeps_the_draft() {
     assert!(text.contains("Edited"), "the typed text survived the refusal: {text:?}");
 }
 
+/// #1348: Escape in a comment field throws the draft away and shows the comment's text again.
+#[test]
+fn escape_reverts_a_comment_draft() {
+    let (mut h, id) = comment_harness();
+    click_balloon(&mut h, id);
+    type_in(&mut h, "Discarded ");
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    steps(&mut h, 3);
+    assert_eq!(draft_text(h.state()), None, "the draft is gone");
+    assert_eq!(comment_text(h.state(), id), "Original", "nothing was written");
+    leave_field(&mut h);
+    assert_eq!(comment_text(h.state(), id), "Original", "and nothing is written later");
+}
+
 /// #3268: clicking a balloon's Reply button, typing a reply and clicking away posts it as a
 /// reply comment under the original, not a draft that silently disappears.
 #[test]
