@@ -248,7 +248,6 @@ fn restored_placeholder_end(s: &wordcraft_engine::Session, deleted_start: usize)
 struct ImeRollback {
     snapshot: Option<wordcraft_engine::EditSnapshot>,
     original: wordcraft_engine::Selection,
-    pending: Option<wordcraft_doc::props::CharProps>,
     goal_x: Option<f32>,
 }
 
@@ -258,8 +257,9 @@ impl ImeRollback {
             return;
         };
         app.session.restore(snapshot);
+        // The snapshot puts back the formatting waiting at the caret, with where Backspace
+        // carried it over (#6518).
         app.session.sel = self.original.clone();
-        app.session.pending = self.pending.clone();
         app.session.goal_x = self.goal_x;
         refuse_ime_request(app);
     }
@@ -387,7 +387,6 @@ fn delete_surrounding_common(
     let join = app.session.typing_open();
     let props = app.session.typing_props();
     let original = app.session.sel.clone();
-    let pending_before = app.session.pending.clone();
     let goal_x_before = app.session.goal_x;
     let before_stamp = ime_stamp(app);
     // Both sides are one IME request: if the second half is refused (Restrict Editing, a
@@ -397,7 +396,7 @@ fn delete_surrounding_common(
     // restored: `last_command`, macro recording, Go Back marks, `also_selected`, `typing`/
     // `autocap` and canvas preedit (a refusal clears it).
     let snapshot = app.session.edit_snapshot();
-    let mut rollback = ImeRollback { snapshot: Some(snapshot), original, pending: pending_before, goal_x: goal_x_before };
+    let mut rollback = ImeRollback { snapshot: Some(snapshot), original, goal_x: goal_x_before };
     // Stored offsets of the suffix (and of the original selection) move by the paragraph's
     // signed length change. A placeholder can make that positive; subtracting a removed-byte
     // count cannot describe that, and would leave the second range and the caret inside the
