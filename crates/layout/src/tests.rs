@@ -6603,6 +6603,7 @@ fn every_cell_of_a_row_keeps_clear_of_the_rows_widest_border() {
             t.rows[1].cells[0].props.borders = Some(Borders { top: border, ..Default::default() });
             t.rows[1].cells[1].props.borders = Some(Borders { top: none, ..Default::default() });
         });
+        assert_eq!(got.len(), plain.len(), "a {width} pt border over one cell: every line is laid out");
         let moved: Vec<f32> = got.iter().zip(&plain).map(|(a, b)| a - b).collect();
         let want = [0.0, 0.0, width, width, width, width, width];
         assert!(
@@ -6611,6 +6612,7 @@ fn every_cell_of_a_row_keeps_clear_of_the_rows_widest_border() {
         );
         // The same under the left cell of the last row: the text after the table moves, the row's doesn't.
         let got = tops(&|t| t.rows[2].cells[0].props.borders = Some(Borders { bottom: border, ..Default::default() }));
+        assert_eq!(got.len(), plain.len(), "a {width} pt border under one cell: every line is laid out");
         let moved: Vec<f32> = got.iter().zip(&plain).map(|(a, b)| a - b).collect();
         let want = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, width];
         assert!(
