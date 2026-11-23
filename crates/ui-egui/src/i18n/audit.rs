@@ -32,6 +32,9 @@ fn unmarked(text: &str) -> String {
 /// interface text, whatever second the audit compares it in (#7463).
 static CLOCK_START: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 
+/// Seconds of clock `clock_text` catches up in one check after the clock jumps forward.
+const CLOCK_CATCH_UP: u64 = 60;
+
 thread_local! {
     // Every date/time the preview list could show since `CLOCK_START`, up to the second last
     // looked at: (next second to add, strings).
@@ -48,7 +51,13 @@ fn clock_text(text: &str) -> bool {
     let start = *CLOCK_START.get_or_init(wordcraft_engine::cmd::now_unix);
     let now = wordcraft_engine::cmd::now_unix();
     CLOCK_TEXTS.with_borrow_mut(|(next, set)| {
-        for unix in (*next).max(start)..=now {
+        if *next == 0 {
+            *next = start;
+        }
+        // A clock stepped back still adds the current second; one stepped far forward catches up
+        // a minute at most, the longest a preview waits to be checked.
+        let from = (*next).min(now).max(now.saturating_sub(CLOCK_CATCH_UP));
+        for unix in from..=now {
             set.extend(crate::dialogs_insert::date_time_previews_at(unix));
         }
         *next = now + 1;
