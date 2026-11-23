@@ -101,6 +101,18 @@ pub(crate) fn page_rulers(app: &mut WordApp, ui: &mut Ui, out: &craft::pages::ui
         .mirrored_even(mirrored)
         .show_at(ui, canvas_rect);
 
+    if crate::table_resize::measuring(app, ui.ctx(), pi) {
+        let bar = output.ruler.edit.response.rect;
+        let painter = ui.painter_at(bar);
+        let t = ui.visuals();
+        for (mid, w) in crate::table_resize::widths(app, ui.ctx(), layout, pi) {
+            let at = egui::pos2(placed.rect.min.x + mid * placed.scale as f32, bar.center().y);
+            let text = painter.layout_no_wrap(app.session.format_length(w), egui::FontId::proportional(9.5), t.text_color());
+            painter.rect_filled(egui::Rect::from_center_size(at, text.size() + egui::vec2(4.0, 0.0)), 1.0, t.window_fill());
+            painter.galley(at - text.size() / 2.0, text, t.text_color());
+        }
+    }
+
     if let Some(k) = output.ruler.kind {
         app.canvas.tab_kind = doc_align(k);
     }

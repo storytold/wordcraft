@@ -378,3 +378,33 @@ fn double_clicking_a_column_border_fits_the_column() {
     assert!((b1.w - b.w).abs() < 1.0 && (b1.x - b.x - (a1.w - a.w)).abs() < 1.0, "the next column keeps its width and moves along");
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
 }
+
+/// Alt while a column border is dragged shows each column's width on the ruler, as it is
+/// going to be.
+#[test]
+fn alt_shows_the_column_widths_while_dragging() {
+    let mut h = table_window();
+    let (a, b) = (cell(&mut h, 0, 0), cell(&mut h, 0, 1));
+    let y = a.y + a.h / 2.0;
+    let (start, end) = (screen(&mut h, a.right(), y), screen(&mut h, a.right() + 18.0, y));
+    h.event(egui::Event::PointerMoved(start));
+    h.app_frame();
+    button(&h, start, true);
+    h.app_frame();
+    h.event(egui::Event::PointerMoved(end));
+    h.app_frame();
+    let widths = |h: &mut H| {
+        let layout = h.state_mut().session.layout();
+        crate::table_ruler::widths(h.state(), &h.ctx, &layout, 0)
+    };
+    assert!(widths(&mut h).is_empty(), "not without Alt");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.app_frame();
+    let w = widths(&mut h);
+    assert_eq!(w.len(), 3, "{w:?}");
+    assert!((w[0].1 - (a.w + 18.0)).abs() < 0.5 && (w[1].1 - (b.w - 18.0)).abs() < 0.5, "{w:?}");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    button(&h, end, false);
+    steps(&mut h, 3);
+    assert!(widths(&mut h).is_empty(), "gone with the drag");
+}

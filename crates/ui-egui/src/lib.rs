@@ -73,6 +73,7 @@ pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
 pub mod table_resize;
+pub(crate) mod table_ruler;
 pub mod theme;
 mod undo_marks;
 pub mod updates_ui;

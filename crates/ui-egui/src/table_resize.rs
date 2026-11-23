@@ -82,7 +82,7 @@ impl ResizeDrag {
     /// in progress, with the keys `mods` held; `None` when no such drag runs. The ruler's markers follow it: the
     /// framework ruler draws each marker where the app says its border is.
     pub(crate) fn ruler_line_x(&self, mods: Mods, line: usize) -> Option<f32> {
-        if !self.ruler || !matches!(self.target.edge, Edge::Column(_)) {
+        if !matches!(self.target.edge, Edge::Column(_)) {
             return None;
         }
         let plan = self.plan(mods);
@@ -93,6 +93,48 @@ impl ResizeDrag {
     fn moved(&self) -> bool {
         (self.to.0 - self.from.0).abs() >= 0.5 || (self.to.1 - self.from.1).abs() >= 0.5
     }
+}
+
+fn caret_drag(app: &WordApp, page: usize) -> Option<&ResizeDrag> {
+    let caret = app.session.sel.focus.path.cell().map(|(tp, _, _)| tp);
+    app.canvas
+        .table_resize
+        .as_ref()
+        .filter(|d| d.page == page && d.target.story == app.session.sel.focus.story && caret.as_ref() == Some(&d.target.table))
+}
+
+/// Whether the rulers show the caret's table's column widths: Alt is held while one of its
+/// column borders (or its left edge) is dragged on `page`, as in Word.
+pub(crate) fn measuring(app: &WordApp, ctx: &egui::Context, page: usize) -> bool {
+    ctx.input(|i| i.modifiers.alt) && caret_drag(app, page).is_some_and(|d| matches!(d.target.edge, Edge::Column(_)))
+}
+
+/// The column widths of the caret table row during an Alt drag.
+pub(crate) fn widths(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, page: usize) -> Vec<(f32, f32)> {
+    if !measuring(app, ctx, page) {
+        return Vec::new();
+    }
+    let caret = app.session.sel.focus.path.cell().map(|(tp, r, _)| (tp, r));
+    let Some((tp, r)) = caret else { return Vec::new() };
+    let mut row: Vec<wordcraft_geom::Rect> = layout.pages.get(page).map_or(Vec::new(), |p| {
+        p.items
+            .iter()
+            .filter_map(|it| match it {
+                wordcraft_layout::Placed::Cell { rect, table, row, .. } if *table == tp && *row == r => Some(*rect),
+                _ => None,
+            })
+            .collect()
+    });
+    row.sort_by(|a, b| a.x.total_cmp(&b.x));
+    let Some(first) = row.first() else { return Vec::new() };
+    let borders_page: Vec<f32> = std::iter::once(first.x).chain(row.iter().map(|b| b.right())).collect();
+    let mods = mods_now(ctx);
+    let borders: Vec<f32> = borders_page
+        .iter()
+        .enumerate()
+        .map(|(line, &x)| app.canvas.table_resize.as_ref().and_then(|d| d.ruler_line_x(mods, line)).unwrap_or(x))
+        .collect();
+    borders.windows(2).map(|w| ((w[0] + w[1]) / 2.0, w[1] - w[0])).collect()
 }
 
 /// Page y of the bottom of `tg`'s row `row` with `plan` applied (rows above it that change move
