@@ -233,3 +233,33 @@ fn only_so_many_documents_are_remembered() {
     assert_eq!(a.font_notice_seen.len(), REMEMBERED);
     assert_eq!(a.font_notice_seen.last(), Some(&(REMEMBERED as u64 + 49)));
 }
+
+/// Each missing font's names, substitute and Download button sit in one compact row, not one under another, and a
+/// narrow window keeps them inside the box.
+#[test]
+fn each_download_is_one_row() {
+    let row = |font: &str, shown: &str, url: &str| Row {
+        font: font.into(),
+        shown_as: vec![shown.into()],
+        download: font.into(),
+        publisher: "Microsoft".into(),
+        url: url.into(),
+        restricted: false,
+    };
+    for width in [1440.0, 520.0] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let fonts = vec![row("Aptos", "Carlito", "https://a"), row("Cascadia Code", "Liberation Mono", "https://c")];
+        open_with(&mut a, None, FontBox::new(fonts, false), DialogHooks { prepare: None, settle });
+        let h = harness_sized(a, egui::vec2(width, 900.0));
+        let buttons: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Download").collect();
+        assert_eq!(buttons.len(), 2);
+        for (button, shown) in buttons.iter().zip(["Shown as Carlito · Microsoft", "Shown as Liberation Mono · Microsoft"]) {
+            let shown = h.get_by_label(shown).rect();
+            let button = button.rect();
+            // The button is beside the text block, level with it, not under it.
+            assert!(button.min.x >= shown.max.x, "{width}: {button:?} {shown:?}");
+            assert!(button.center().y < shown.max.y, "{width}: button under the text: {button:?} {shown:?}");
+            assert!(button.max.x <= width, "{width}: clipped {button:?}");
+        }
+    }
+}

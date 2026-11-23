@@ -17,9 +17,11 @@ use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::{Badge, Icon, Shade, Text};
-use craft::ui::layout_components::Row as Line;
+use craft::ui::layout::RowAlign;
+use craft::ui::layout_components::{Row as Line, Stack};
 use craft::ui::primitives::IconSpec;
-use craft::ui::sections::{DialogRole, FooterButton, GroupBox};
+use craft::ui::sections::{DialogRole, FooterButton};
+use craft::ui::style::TypeRole;
 use egui::Ui;
 use serde::Serialize;
 
@@ -272,19 +274,23 @@ impl StackDialog for FontBox {
                 .shade(Shade::Faint)
                 .show(ui);
                 for (at, g) in groups(fonts).into_iter().enumerate() {
-                    // The names are the document's own words, not interface text.
-                    GroupBox::new(g.fonts.join(", "), None).id_salt(("download", at)).show(ui, |ui, _| {
-                        let shown_as =
-                            crate::i18n::fmt(tl!("Shown as {fonts} · {publisher}"), &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)]);
-                        Text::new(shown_as).shade(Shade::Faint).show(ui);
-                        if g.restricted {
-                            Text::new(tl!("Its licence limits who may use it: read the terms first.")).shade(Shade::Faint).show(ui);
-                        }
-                        Line::new().show(ui, |ui, _| {
-                            if clicked(&Button::new(tl!("Download")).variant(Variant::PRIMARY).id_salt(("download_button", at)).show(ui)) {
-                                asks.push(Ask::Download(g.url.to_string()));
+                    // One row per download, as before the craft port: the names, what they are shown as and the licence
+                    // note stacked at the start edge, the button at the end. The names are the document's own words.
+                    Line::new().fill_width().align(RowAlign::SpaceBetween).id_salt(("download", at)).show(ui, |ui, _| {
+                        Stack::new().show(ui, |ui, _| {
+                            Text::new(g.fonts.join(", ")).role(TypeRole::BodyStrong).show(ui);
+                            let shown_as = crate::i18n::fmt(
+                                tl!("Shown as {fonts} · {publisher}"),
+                                &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)],
+                            );
+                            Text::new(shown_as).shade(Shade::Faint).show(ui);
+                            if g.restricted {
+                                Text::new(tl!("Its licence limits who may use it: read the terms first.")).shade(Shade::Faint).show(ui);
                             }
                         });
+                        if clicked(&Button::new(tl!("Download")).variant(Variant::PRIMARY).id_salt(("download_button", at)).show(ui)) {
+                            asks.push(Ask::Download(g.url.to_string()));
+                        }
                     });
                 }
                 // Whose part the licence is: WordCraft only points at the publisher's page.
