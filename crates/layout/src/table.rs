@@ -378,7 +378,9 @@ struct TableFrame {
     x: f32,
 }
 
-// Nested measurement needs the same preferred weights as layout before sharing span minima.
+/// The table's column widths before autofit: its grid, or equal shares of `avail` without one,
+/// then the cells' absolute and percentage widths. Nested measurement needs the same preferred
+/// weights as layout before sharing span minima.
 fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     let ncols = grid_cols(t).max(1);
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
@@ -395,6 +397,7 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
         vec![avail / ncols as f32; ncols]
     };
     apply_cell_widths(t, &mut grid);
+    apply_pct_widths(t, &mut grid, avail);
     grid
 }
 
@@ -723,6 +726,9 @@ struct TableRows<'a> {
     total: f32,
 }
 
+/// Place the laid-out cells of every row: vertical alignment, turned text, borders and the cell
+/// rectangles, clipped where the row's exact height or a fixed table's column is too small for
+/// the cell's text.
 fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
     let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total } = input;
     // Grid columns holding a vertical-merge continuation, per row.
@@ -835,7 +841,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let (x0, x1, y0, y1) = (c.x, c.x + c.w, 0.0, rh);
             // Horizontal edges run on over half of each visible vertical edge, so the corners
             // close the way Word draws them instead of leaving a notch at thick borders.
-            let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| e.width / 2.0);
+            let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| crate::display::rule_width(&e) / 2.0);
             let (hx0, hx1) = (x0 - half(b.left), x1 + half(b.right));
             let top_vis = c.vmerge != VMerge::Continue;
             if top_vis && let Some(e) = b.top.filter(Border::is_visible) {
@@ -858,7 +864,9 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 row: ri,
                 cell: ci,
                 story,
-                clip: exact && c.h > span_h + 0.01,
+                // A fixed table's cell too narrow for any text (its lines are laid out 4 pt wide)
+                // clips them, as Word does, rather than letting them run past its edges.
+                clip: (exact && c.h > span_h + 0.01) || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end, align });
@@ -918,6 +926,18 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let own_depth = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
     // The first line of each paragraph that moves on (`l1` when all of them stay), by cell and
     // item.
+    // The top of a cell's text on this page decides which paragraph starts the cell's part of the
+    // page. Only text in the flow counts: a floating picture or shape anchored in the cell can sit
+    // above it without the text being any less the first.
+    let content_top = |it: &Placed| -> Option<f32> {
+        if background(it) {
+            return None;
+        }
+        if let Some((_, _, _, y)) = text_lines(it) {
+            return Some(y);
+        }
+        it.turned_bounds().map(|r| r.y)
+    };
     let splits: Vec<Vec<usize>> = cells
         .iter()
         .zip(&ends)
@@ -925,13 +945,18 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
             // Where the cell's text ends: the paragraph ending lowest is the cell's last.
             let lowest =
                 items.iter().filter_map(|it| text_lines(it).and_then(|(p, l0, l1, y)| crate::item_bottom(y, p, l0, l1))).fold(f32::MIN, f32::max);
+            // The top of what the cell holds on this page: a paragraph there starts the cell's
+            // part of the page, so a row that doesn't start below other content has nowhere to
+            // move it to (see `line_split`).
+            let cell_top = items.iter().filter_map(&content_top).fold(f32::MAX, f32::min);
             items
                 .iter()
                 .map(|it| {
                     let Some((para, l0, l1, y)) = text_lines(it) else { return 0 };
                     // The cell's last paragraph ends with the cell's content (its space after).
                     let last = l1 == para.lines.len() && crate::item_bottom(y, para, l0, l1).is_some_and(|b| b >= lowest - 0.01);
-                    line_split(para, (l0, l1), y, limit, end.filter(|_| last))
+                    let first = !whole_cells && y <= cell_top + 0.01;
+                    line_split(para, (l0, l1), y, limit, end.filter(|_| last), first)
                 })
                 .collect()
         })
@@ -1254,7 +1279,16 @@ fn text_lines(it: &Placed) -> Option<(&ParaLayout, usize, usize, f32)> {
 /// above `limit`: the last line of a cell's last paragraph needs room down to the cell's content
 /// `end`, its space after. Widow control keeps two lines on either side of the break, or moves
 /// the paragraph on whole.
-fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, end: Option<f32>) -> usize {
+///
+/// `first`: the paragraph is the topmost content of its cell on a page the row doesn't start
+/// below other content on (the row continues from the page before, or starts the page). Moving
+/// it whole would gain nothing, and Word then splits it where the lines fall (measured with
+/// synthetic documents, Word for Windows 16.0, compatibility mode 15): a lone first line stays,
+/// and a three-line paragraph with room for two splits two and one, not leaving the first line
+/// alone (a continuation's lone line stays too). A paragraph of four lines or more still takes
+/// one more line along with its widow.
+/// Without this, nothing was kept and the row ran off the bottom of the page (#6823).
+fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, end: Option<f32>, first: bool) -> usize {
     let n = para.lines.len();
     let mut k = l0;
     while k < l1 {
@@ -1268,12 +1302,16 @@ fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, e
     // The body's rule differs: there a widow takes a line along only when three or more lines are
     // on the page (`place_para_in_flow`).
     if para.rp.widow_control && k > l0 && k < l1 {
-        // A widow: take one more line along.
+        // A widow: take one more line along, unless that leaves nothing of a paragraph that
+        // starts the page on it, or its first line alone.
         if n - k == 1 {
-            k -= 1;
+            let taken = k - 1;
+            if !(first && (taken <= l0 || (l0 == 0 && taken == 1))) {
+                k = taken;
+            }
         }
         // An orphan (the first line alone): the paragraph moves on whole.
-        if l0 == 0 && k == 1 {
+        if l0 == 0 && k == 1 && !first {
             k = 0;
         }
     }
@@ -1535,6 +1573,121 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
     grid.copy_from_slice(&widths);
 }
 
+/// Word sizes each column by the percentage its cells ask for, whichever rows ask: cells without a
+/// preferred width take no part, so a header row of percentages sizes the automatic rows below it.
+/// The percentages are shares of the table's width, scaled up when they come short of 100%; past
+/// 100% the columns take their shares left to right until the width runs out
+/// (`overfull_shares`). A table without a
+/// width of its own takes `avail` when autofit and its grid's width when fixed. Where rows ask
+/// different percentages of a column it takes the largest. A merged cell's percentage is shared
+/// by the columns under it that ask none of their own, in their grid proportions (Word shares it
+/// by their content), and makes no column narrower than it asks. Measured in Word. Columns no cell
+/// sizes and absolute widths keep the grid.
+fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
+    let mut pcts: Vec<Option<f32>> = vec![None; grid.len()];
+    let mut merged: Vec<(usize, usize, f32)> = Vec::new();
+    for row in &t.rows {
+        let mut g = row.first_grid();
+        for cell in &row.cells {
+            if cell.props.width.is_some() {
+                return;
+            }
+            if let Some(p) = cell.props.width_pct {
+                if !p.is_finite() || p <= 0.0 {
+                    return;
+                }
+                if cell.span() == 1 {
+                    let Some(slot) = pcts.get_mut(g) else { return };
+                    *slot = Some(slot.map_or(p, |q| q.max(p)));
+                } else {
+                    merged.push((g, cell.span(), p));
+                }
+            }
+            g = g.saturating_add(cell.span());
+        }
+    }
+    for (g, span, p) in merged {
+        let Some(cols) = pcts.get_mut(g..g.saturating_add(span)) else { return };
+        let Some(weights) = grid.get(g..g.saturating_add(span)) else { return };
+        let own: f32 = cols.iter().flatten().sum();
+        let free: f32 = cols.iter().zip(weights).filter(|(c, _)| c.is_none()).map(|(_, w)| *w).sum();
+        let rest = (p - own).max(0.0);
+        if free > 0.0 {
+            for (c, w) in cols.iter_mut().zip(weights) {
+                if c.is_none() {
+                    *c = Some(rest * w / free);
+                }
+            }
+        } else if own > 0.0 && rest > 0.0 {
+            // Every column asks its own, short of the merged cell's: they grow to it together.
+            cols.iter_mut().flatten().for_each(|c| *c *= p / own);
+        }
+    }
+    let Some(pcts) = pcts.into_iter().collect::<Option<Vec<f32>>>() else { return };
+    if pcts.iter().any(|p| *p <= 0.0) {
+        return;
+    }
+    let sum: f32 = pcts.iter().sum();
+    let own_width = t.props.width_pct.is_some_and(|p| p > 0.0) || t.props.width.is_some_and(|w| w > 0.0);
+    // A table with its own width is scaled to it afterwards; any positive total will do. A fixed
+    // table without one keeps its grid's width.
+    let total = if own_width || t.props.fixed { grid.iter().sum() } else { avail };
+    if !sum.is_finite() || sum <= 0.0 || !total.is_finite() || total <= 0.0 {
+        return;
+    }
+    if sum <= 100.0 {
+        let shares: Vec<f32> = pcts.iter().map(|p| total * (p / sum)).collect();
+        // A grid Word wrote from these same percentages is within its rounding of them (whole
+        // twips, and percentages in fiftieths): it is kept exactly. Rebuilt, a column could come
+        // out a few hundredths of a point narrower and wrap its text differently (#6575).
+        let rounding = 0.05 + total * 0.0002;
+        if grid.iter().zip(&shares).all(|(g, s)| (g - s).abs() <= rounding) {
+            return;
+        }
+        grid.copy_from_slice(&shares);
+        return;
+    }
+    // A grid too narrow for the floor in every column shares its width out instead, so the table
+    // keeps it.
+    let floor = if t.props.fixed { FIXED_PCT_MIN_COLUMN.min(total / pcts.len() as f32) } else { 0.0 };
+    grid.copy_from_slice(&overfull_shares(&pcts, total, floor));
+}
+
+/// Over 100%, as Word lays it out: the columns take their shares left to right until the table's
+/// width runs out; the column it runs out in takes what is left, and those after it nothing. In an
+/// autofit table autofit then widens them to their longest words at the others' expense. In a
+/// fixed table they keep `floor` each, their text clipped, and the shares are of what is left
+/// once those are set aside.
+fn overfull_shares(pcts: &[f32], total: f32, floor: f32) -> Vec<f32> {
+    let mut starved = 0;
+    loop {
+        let room = (total - floor * starved as f32).max(0.0);
+        let mut used = 0.0;
+        let mut short = 0;
+        let widths: Vec<f32> = pcts
+            .iter()
+            .map(|p| {
+                let w = (room * p / 100.0).min(room - used);
+                if w < floor || w <= 0.0 {
+                    short += 1;
+                    return floor;
+                }
+                used += w;
+                w
+            })
+            .collect();
+        // More columns starved than were set aside for: set aside for them and share again.
+        if short <= starved || starved >= pcts.len() {
+            return widths;
+        }
+        starved = short;
+    }
+}
+
+/// The narrowest a fixed table's columns get when the percentages before them fill the table
+/// (measured in Word: 2 pt, with or without a table width).
+const FIXED_PCT_MIN_COLUMN: f32 = 2.0;
+
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
 /// - With no preferred width anywhere (the table's and every cell's automatic) the columns come
 ///   from their content alone: each its widest line if they all fit in `avail`, else shared out
@@ -1592,6 +1745,24 @@ mod width_tests {
         let content = [(28.0, 28.0), (40.0, 120.0), (40.0, 40.0), (30.0, 90.0)];
         autofit(&mut grid, &content, &table, 260.0);
         assert_eq!(grid, [28.0, 111.0, 40.0, 81.0]);
+    }
+
+    /// #5074 review (and #6575): a grid Word wrote from the cells' percentages is kept exactly,
+    /// while one that is off by more than Word's rounding is rebuilt from them.
+    #[test]
+    fn a_grid_matching_its_percentages_is_kept() {
+        let mut t = Table::new(1, 3, 300.0);
+        t.props.width = Some(300.0);
+        for (cell, p) in t.rows[0].cells.iter_mut().zip([33.32, 33.34, 33.34]) {
+            cell.props.width = None;
+            cell.props.width_pct = Some(p);
+        }
+        let mut grid = [99.95, 100.05, 100.0];
+        apply_pct_widths(&t, &mut grid, 468.0);
+        assert_eq!(grid, [99.95, 100.05, 100.0], "kept");
+        let mut stale = [90.0, 110.0, 100.0];
+        apply_pct_widths(&t, &mut stale, 468.0);
+        assert!(stale.iter().zip([99.96, 100.02, 100.02]).all(|(g, w)| (g - w).abs() < 0.01), "rebuilt: {stale:?}");
     }
 
     #[test]
