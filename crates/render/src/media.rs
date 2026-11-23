@@ -1,4 +1,8 @@
+use wordcraft_geom::picture::Refusal;
+
 use super::{Affine, Arc, Document, FontDb, HashMap, Item, Mutex, Page, Picture, Pixmap, PlacedItem, RenderContext, Seg, Shape, Weak, kurbo, peniko};
+use craft_metafile::{ClipPath, Tile};
+use std::collections::HashSet;
 
 /// Upper bound on the bytes the two decoded-media caches keep together (about 256 MB), half each;
 /// past its half a cache starts over.
@@ -49,8 +53,11 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn images() -> &'static Mutex<MediaCache<Option<Arc<Pixmap>>>> {
-    static C: std::sync::OnceLock<Mutex<MediaCache<Option<Arc<Pixmap>>>>> = std::sync::OnceLock::new();
+/// A decoded picture, or why it isn't drawn.
+pub(crate) type Decoded = Result<Arc<Pixmap>, Refusal>;
+
+fn images() -> &'static Mutex<MediaCache<Decoded>> {
+    static C: std::sync::OnceLock<Mutex<MediaCache<Decoded>>> = std::sync::OnceLock::new();
     C.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }))
 }
 
@@ -73,11 +80,17 @@ pub fn decode_pixmap(bytes: &[u8]) -> Option<Pixmap> {
 /// [`decode_pixmap`] with a picture's brightness and contrast applied (#1711, #1766), under the
 /// same decode limits.
 pub fn decode_pixmap_fx(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Option<Pixmap> {
+    decode_pixmap_checked(bytes, fx).ok()
+}
+
+/// [`decode_pixmap_fx`], with why a picture isn't decoded (#5637).
+fn decode_pixmap_checked(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Result<Pixmap, Refusal> {
     // The shared probe also charges what the decoder holds beside its output (#3644).
-    if !wordcraft_geom::picture::probe(bytes).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
-        return None;
+    let probe = wordcraft_geom::picture::probe(bytes)?;
+    if !probe.fits(wordcraft_geom::MAX_DECODED_BYTES) {
+        return Err(Refusal::TooLarge { width: probe.width, height: probe.height });
     }
-    decode_pixmap_within(bytes, fx, wordcraft_geom::MAX_DECODED_BYTES)
+    decode_pixmap_within(bytes, fx, wordcraft_geom::MAX_DECODED_BYTES).ok_or_else(|| Refusal::Broken("it could not be decoded".into()))
 }
 
 /// [`decode_pixmap_fx`] with an explicit RGBA byte budget (a small one in tests).
@@ -151,40 +164,59 @@ pub(crate) struct Vector {
 }
 
 impl Vector {
-    /// Approximate memory held: pixmaps, the pattern tiles' own pixels, path segments, dash
-    /// patterns, clip regions, clip lists, clip paths and text, each shared allocation once.
+    /// Approximate memory held: pixels (a tile shared by several fills once), path segments and the
+    /// per-item bookkeeping.
     pub(crate) fn bytes(&self) -> usize {
-        let mut seen = std::collections::HashSet::new();
-        let mut total = self.averages.len() * 4;
-        for p in self.pixmaps.iter().flatten() {
-            if seen.insert(Arc::as_ptr(p) as usize) {
-                total = total.saturating_add(p.width() as usize * p.height() as usize * 4);
-            }
-        }
-        let seg = std::mem::size_of::<Seg>();
-        for it in &self.pic.items {
-            let (own, region, clips) = match it {
-                Item::Path { segs, line, region, clips, .. } => ((segs.len() * seg).saturating_add(line.dash.len() * 4), region, clips),
-                Item::Pattern { segs, tile, region, clips, .. } => {
-                    let tile_bytes = if seen.insert(Arc::as_ptr(tile) as usize) { tile.rgba.len() } else { 0 };
-                    ((segs.len() * seg).saturating_add(tile_bytes), region, clips)
-                }
-                Item::Bitmap { region, clips, .. } => (0, region, clips),
-                Item::Text(t) => (t.text.len() + t.dx.len() * 4, &t.region, &t.clips),
-            };
-            // Each item holds its own copy of the clip region's rectangles and its own list of the
-            // clip paths it shares.
-            let region = region.as_ref().map_or(0, |r| r.len() * std::mem::size_of::<[f32; 4]>());
-            let list = clips.len() * std::mem::size_of::<Arc<craft_metafile::ClipPath>>();
-            total = total.saturating_add(own).saturating_add(region).saturating_add(list);
-            for c in clips {
-                if seen.insert(Arc::as_ptr(c) as usize) {
-                    total = total.saturating_add(c.segs.len() * seg);
-                }
-            }
-        }
-        total
+        let mut seen: HashSet<*const Pixmap> = HashSet::new();
+        let px: usize = self.pixmaps.iter().flatten().filter(|p| seen.insert(Arc::as_ptr(p))).map(|p| bitmap_bytes(p)).sum();
+        px.saturating_add(self.averages.capacity() * 4).saturating_add(geometry_bytes(&self.pic))
     }
+}
+
+/// Memory held by one decoded bitmap: its pixels plus the pixmap and its `Arc` header.
+fn bitmap_bytes(p: &Pixmap) -> usize {
+    usize::from(p.width()) * usize::from(p.height()) * 4 + std::mem::size_of::<Pixmap>() + 2 * std::mem::size_of::<usize>()
+}
+
+/// Approximate memory held by a picture's items: path segments and text (charged by capacity, as a
+/// parsed vector keeps its growth slack), the item itself (a bitmap
+/// item stays in the list after its pixels move out), a path's dash array, a text's boxed record and
+/// font name, the pixmap slot kept for it, a pattern's path
+/// and tile, and every item's clip rectangles and clip paths. Tiles and clip paths are shared between
+/// the items that use them, so each is charged once.
+pub(crate) fn geometry_bytes(pic: &Picture) -> usize {
+    let slot = std::mem::size_of::<Option<Arc<Pixmap>>>();
+    let seg = std::mem::size_of::<Seg>();
+    let mut tiles: HashSet<*const Tile> = HashSet::new();
+    let mut clip_paths: HashSet<*const ClipPath> = HashSet::new();
+    let mut total = 0usize;
+    for it in &pic.items {
+        let (region, clips): (&Option<Vec<[f32; 4]>>, &[Arc<ClipPath>]) = match it {
+            Item::Path { region, clips, .. } | Item::Bitmap { region, clips, .. } | Item::Pattern { region, clips, .. } => (region, clips),
+            Item::Text(t) => (&t.region, &t.clips),
+        };
+        let own = match it {
+            Item::Path { segs, line, .. } => (segs.capacity() * seg).saturating_add(line.dash.capacity() * std::mem::size_of::<f32>()),
+            Item::Bitmap { .. } => 0,
+            Item::Pattern { segs, tile, .. } => {
+                let tile_bytes = if tiles.insert(Arc::as_ptr(tile)) { tile.rgba.len().saturating_add(std::mem::size_of::<Tile>()) } else { 0 };
+                (segs.capacity() * seg).saturating_add(tile_bytes)
+            }
+            Item::Text(t) => {
+                std::mem::size_of::<craft_metafile::Text>() + t.text.len() + t.dx.len() * std::mem::size_of::<f32>() + t.font.family.len()
+            }
+        };
+        let region_bytes = region.as_ref().map_or(0, |r| r.len() * std::mem::size_of::<[f32; 4]>());
+        let clip_bytes: usize = clips
+            .iter()
+            .map(|c| {
+                let arc = std::mem::size_of::<usize>() * 2 + std::mem::size_of::<Arc<ClipPath>>();
+                if clip_paths.insert(Arc::as_ptr(c)) { arc + std::mem::size_of::<ClipPath>() + c.segs.capacity() * seg } else { arc }
+            })
+            .sum();
+        total = total.saturating_add(slot + std::mem::size_of::<Item>()).saturating_add(own).saturating_add(region_bytes).saturating_add(clip_bytes);
+    }
+    total
 }
 
 /// The metafile picture for a media key. None when the bytes are not a metafile or do not parse, so
@@ -214,22 +246,71 @@ pub(crate) fn build_vector(bytes: &[u8]) -> Option<Vector> {
         return None;
     }
     // The pixels move into the pixmaps; the picture keeps only the geometry. A tile shared by
-    // several fills is converted and averaged once.
+    // several fills is converted and averaged once. Only the bitmaps are fitted to the cache: a
+    // tile is small and stays as it is, but counts against the budget.
     let mut tiles: HashMap<usize, (Option<Arc<Pixmap>>, [u8; 4])> = HashMap::new();
-    let (pixmaps, averages) = pic
-        .items
-        .iter_mut()
-        .map(|it| match it {
-            Item::Pattern { tile, .. } => tiles
-                .entry(Arc::as_ptr(tile) as usize)
+    let mut tile_bytes = 0usize;
+    let mut bitmaps: Vec<Option<Pixmap>> = Vec::with_capacity(pic.items.len());
+    let mut averages: Vec<[u8; 4]> = Vec::with_capacity(pic.items.len());
+    let mut patterns: Vec<Option<Arc<Pixmap>>> = Vec::with_capacity(pic.items.len());
+    for it in pic.items.iter_mut() {
+        if let Item::Pattern { tile, .. } = it {
+            let key = Arc::as_ptr(tile) as usize;
+            let fresh = !tiles.contains_key(&key);
+            let (pm, avg) = tiles
+                .entry(key)
                 .or_insert_with(|| {
                     (premul_pixmap(tile.width, tile.height, &tile.rgba).map(Arc::new), wordcraft_layout::metafile_average_color(&tile.rgba))
                 })
-                .clone(),
-            _ => (it.take_pixels().and_then(|(w, h, px)| premul_pixmap(w, h, &px)).map(Arc::new), [0; 4]),
-        })
-        .unzip();
+                .clone();
+            if fresh {
+                tile_bytes = tile_bytes.saturating_add(pm.as_ref().map_or(0, |p| bitmap_bytes(p)));
+            }
+            bitmaps.push(None);
+            patterns.push(pm);
+            averages.push(avg);
+        } else {
+            bitmaps.push(it.take_pixels().and_then(|(w, h, px)| premul_pixmap(w, h, &px)));
+            patterns.push(None);
+            averages.push([0; 4]);
+        }
+    }
+    let bitmaps = fit_cache(bitmaps, geometry_bytes(&pic).saturating_add(tile_bytes));
+    let pixmaps = bitmaps.into_iter().zip(patterns).map(|(b, t)| b.map(Arc::new).or(t)).collect();
     Some(Vector { pic, pixmaps, averages })
+}
+
+/// The bitmaps of a metafile at a size its whole picture is kept in the cache. When geometry and
+/// bitmaps together are past the cache budget (a metafile with a 6000 x 6000 bitmap is 144 MB), the
+/// cache would refuse the picture and every repaint would parse and decode the file again, so the
+/// bitmaps are box-averaged down to an eighth of the budget between them, in proportion to their
+/// size, as large raster pictures are (#3665, which uses half). An eighth because the cache starts
+/// over when full: several huge pictures on screen together must fit side by side, and not clear
+/// the small ones with them. Geometry that is itself an eighth or more still leaves the bitmaps a
+/// sixteenth, as long as the whole budget has room for it. A picture that still cannot fit after shrinking stays uncached,
+/// as before. Pictures within the budget keep their full resolution. Printing (`render_page`) draws
+/// the shrunk bitmaps too, as it does large raster pictures; PDF export parses the metafile itself
+/// and is unaffected.
+pub(crate) fn fit_cache(mut pixmaps: Vec<Option<Pixmap>>, geometry: usize) -> Vec<Option<Pixmap>> {
+    let pixels = |p: &Pixmap| usize::from(p.width()) * usize::from(p.height()) * 4;
+    let total: usize = pixmaps.iter().flatten().map(pixels).sum();
+    let fixed: usize = pixmaps.iter().flatten().map(|p| bitmap_bytes(p) - pixels(p)).sum();
+    if total.saturating_add(fixed).saturating_add(geometry) <= CACHE_BYTES {
+        return pixmaps;
+    }
+    // The bitmaps get what is left of an eighth, but never less than a sixteenth (so the allowance does
+    // not drop to nothing as geometry reaches the eighth) and never more than the whole budget leaves.
+    let target = CACHE_BYTES / 8;
+    let allowance = target.saturating_sub(geometry).max(target / 2).min(CACHE_BYTES.saturating_sub(geometry));
+    let room = allowance.saturating_sub(fixed) / 4;
+    for pm in pixmaps.iter_mut().flatten() {
+        // This bitmap's share of the pixels that fit.
+        let share = (room as u128 * pixels(pm) as u128 / total.max(1) as u128) as u64;
+        if let Some(small) = shrink(pm, share) {
+            *pm = small;
+        }
+    }
+    pixmaps
 }
 
 fn rgba_color(c: [u8; 4]) -> peniko::Color {
@@ -464,7 +545,7 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
     let Some(pic) = &doc.settings.page_picture else { return };
     let Some(bytes) = doc.media.get(&pic.media) else { return };
     let Some((nw, nh)) = wordcraft_geom::picture::background_size(bytes).map(|(w, h)| (f64::from(w), f64::from(h))) else { return };
-    let Some(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
+    let Ok(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let (w, h) = (page.w as f64, (page.h as f64).min(1e6));
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
@@ -498,8 +579,8 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
     ctx.reset_paint_transform();
 }
 
-pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::PicFx) -> Option<Arc<Pixmap>> {
-    let bytes = doc.media.get(key)?;
+pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::PicFx) -> Decoded {
+    let Some(bytes) = doc.media.get(key) else { return Err(Refusal::NotAPicture) };
     // Corrected pixels are cached apart from the picture's own (the same picture can be shown
     // both ways).
     let fx = fx.clamped();
@@ -508,7 +589,7 @@ pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::Pi
     if let Some(v) = lock(images()).get(&cache_key, bytes) {
         return v;
     }
-    let pm = decode_pixmap_fx(bytes, fx).map(|p| Arc::new(cacheable(p)));
+    let pm = decode_pixmap_checked(bytes, fx).map(|p| Arc::new(cacheable(p)));
     let size = pm.as_ref().map_or(0, |p| p.width() as usize * p.height() as usize * 4);
     lock(images()).insert(&cache_key, bytes, pm.clone(), size);
     pm

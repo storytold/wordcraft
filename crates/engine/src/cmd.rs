@@ -376,6 +376,12 @@ pub fn type_text_with_lang(s: &mut Session, text: &str, language: Option<&str>) 
 /// right-to-left direction when its first strong letter is RTL, and returns whether content or state
 /// changed.
 fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>) -> Result<InsertEffect, CmdError> {
+    // Formatting Backspace carried over is for typing at the place it was deleted (#6518).
+    if enter {
+        s.drop_stale_carried();
+    } else {
+        s.forget_carried();
+    }
     let mut props = s.typing_props();
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
@@ -436,6 +442,10 @@ fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>)
                 p.touch();
             }
         }
+    }
+    // Formatting Backspace carried over goes on applying to the text typed after this (#6518).
+    if s.pending_at.is_some() {
+        s.pending_at = Some(at.clone());
     }
     s.sel = crate::Selection::caret(at);
     s.goal_x = None;
