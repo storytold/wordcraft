@@ -154,14 +154,7 @@ fn imported_epub_save_controls_ask_for_docx() {
     a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
     typed(&mut a);
     a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            crate::test_harness::driver_logic(&ctx, app);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| a);
     h.run_steps(4);
     h.get_by_label("Save").click();
     h.run_steps(3);
