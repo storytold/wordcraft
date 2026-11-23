@@ -1203,6 +1203,129 @@ fn composition_font(t: &egui::epaint::TextShape) -> Option<egui::FontId> {
     t.galley.job.sections.first().map(|s| s.format.font_id.clone())
 }
 
+/// The family a composition in `face` is drawn in: the face, then the interface fonts.
+fn face_family(face: wordcraft_fonts::FaceRef) -> egui::FontFamily {
+    egui::FontFamily::Name(format!("face+ui:{}", super::caret::face_key(face)).into())
+}
+
+/// How `text` typed at the caret of `h`'s window is drawn (`DocLayout::typing_at`), from the formatting typing takes.
+fn typing_here(h: &mut H, text: &str) -> (wordcraft_layout::para::TypingFace, f32) {
+    let layout = h.state_mut().session.layout();
+    let s = &h.state().session;
+    let (into, _) = s.sel.ordered();
+    let props = s.typing_props();
+    let typed = wordcraft_layout::hit::Typed { props: &props, into: &into, text };
+    layout.typing_at(&s.doc, &s.sel.focus, &typed, 0).expect("how text typed here is drawn")
+}
+
+/// The page's scale on screen, from the caret's IME rectangle, before a composition moves it.
+fn screen_scale(h: &mut H) -> f32 {
+    let caret = h.state_mut().session.layout().caret(&h.state().session.sel.focus).expect("a caret");
+    let ime = h.output().platform_output.ime.as_ref().map(|i| i.cursor_rect).expect("the caret's IME rectangle");
+    ime.height() / caret.height
+}
+
+/// `h` after composing `text`, a few frames on.
+fn compose(h: &mut H, text: &str) {
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+}
+
+/// The composition shows the formatting the text will have: a size picked with nothing selected is for the text typed
+/// next, not the text's before the caret (#4140).
+#[test]
+fn the_composition_takes_the_formatting_picked_at_the_caret() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Hello "})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.size", json!({"size": 20})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    app.run("format.size", json!({"size": 32})).unwrap();
+    assert_eq!(app.session.typing_props().size, Some(32.0), "picked for the text typed next");
+    let mut h = composing_harness(app);
+    let scale = screen_scale(&mut h);
+    compose(&mut h, "tottori");
+    let size = drawn_composition(&h, "tottori").and_then(|t| composition_font(&t)).map(|f| f.size / scale);
+    assert!(size.is_some_and(|s| (s - 32.0).abs() < 0.01), "{size:?}");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hello ");
+}
+
+/// Typing over a selection takes the first selected character's formatting, as in Word, so the composition does too,
+/// not the formatting of the character before the caret at the selection's end.
+#[test]
+fn the_composition_over_a_selection_takes_its_first_characters_formatting() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Hello"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.size", json!({"size": 20})).unwrap();
+    app.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 1) };
+    app.run("format.size", json!({"size": 30})).unwrap();
+    app.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 5) };
+    let mut h = composing_harness(app);
+    let scale = screen_scale(&mut h);
+    compose(&mut h, "tottori");
+    let size = drawn_composition(&h, "tottori").and_then(|t| composition_font(&t)).map(|f| f.size / scale);
+    assert!(size.is_some_and(|s| (s - 30.0).abs() < 0.01), "{size:?}");
+}
+
+/// Text typed after a footnote number is body text: the composition there isn't raised and made smaller like the
+/// number.
+#[test]
+fn the_composition_after_a_footnote_number_is_body_text() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), Default::default());
+    app.run("caret.docEnd", json!({})).unwrap();
+    app.run("references.footnote", json!({"text": "A note."})).unwrap();
+    app.session.sel = wordcraft_engine::Selection::caret(app.session.doc.end_of(StoryRef::Body));
+    let layout = app.session.layout();
+    let focus = app.session.sel.focus.clone();
+    let number_props = app.session.doc.para_at(&focus).map(|p| p.props_at(focus.off).clone()).unwrap_or_default();
+    let typed = wordcraft_layout::hit::Typed { props: &number_props, into: &focus, text: "tottori" };
+    let (number, _) = layout.typing_at(&app.session.doc, &focus, &typed, 0).expect("after the number");
+    assert!(number.shift > 0.0, "the number is raised: {}", number.shift);
+    let mut h = composing_harness(app);
+    let (body, base) = typing_here(&mut h, "tottori");
+    assert_eq!(body.shift, 0.0);
+    assert!(body.size > number.size, "body {} over number {}", body.size, number.size);
+    let caret = h.state_mut().session.layout().caret(&h.state().session.sel.focus).expect("a caret");
+    let ime = h.output().platform_output.ime.as_ref().map(|i| i.cursor_rect).expect("the caret's IME rectangle");
+    let scale = ime.height() / caret.height;
+    compose(&mut h, "tottori");
+    let drawn = drawn_composition(&h, "tottori").expect("the composition is drawn");
+    let size = composition_font(&drawn).map(|f| f.size / scale);
+    assert!(size.is_some_and(|s| (s - body.size).abs() < 0.01), "drawn at {size:?}, body {}", body.size);
+    let row = drawn.galley.rows.first().expect("a row");
+    let baseline = drawn.pos.y + row.pos.y + row.glyphs.first().expect("a glyph").pos.y;
+    let want = ime.min.y + (base - caret.top) * scale;
+    assert!((baseline - want).abs() < 0.5, "drawn baseline {baseline}, the line's {want}");
+}
+
+/// A composition's Chinese, Japanese and Korean characters are drawn in the text's East Asian font (`w:eastAsia`), as
+/// committed text is, also where the font has them; its other characters in the font (#4140). The composition is drawn
+/// a run a piece, each in the family of its face.
+#[test]
+fn the_composition_draws_east_asian_text_in_the_east_asian_font() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Hello"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("format.font", json!({"name": "Source Serif 4", "eastAsia": "JetBrains Mono"})).unwrap();
+    app.run("caret.docEnd", json!({})).unwrap();
+    let mut h = composing_harness(app);
+    kana_test_glyphs(&h.ctx);
+    let text = "A\u{306B}\u{307B}\u{3093} b";
+    let (typing, _) = typing_here(&mut h, text);
+    assert_eq!(typing.face.family, "Source Serif 4");
+    let east_asian = typing.east_asian.expect("the East Asian font's face");
+    assert_eq!(east_asian.family, "JetBrains Mono");
+    compose(&mut h, text);
+    let family = |piece: &str| drawn_composition(&h, piece).and_then(|t| composition_font(&t)).map(|f| f.family);
+    assert_eq!(family("A"), Some(face_family(typing.face)));
+    assert_eq!(family("\u{306B}\u{307B}\u{3093} "), Some(face_family(east_asian)), "a space stays with the kana before it");
+    assert_eq!(family("b"), Some(face_family(typing.face)));
+    assert!(drawn_composition(&h, text).is_none(), "drawn a piece at a time");
+}
+
 /// A Japanese, Chinese or Korean composition in Latin text is drawn in the text's face, whose
 /// chain goes on with the interface fonts, CJK included: the kana come from there. Production
 /// borrowed a document face for them instead, but only one of 16 MB or less, and on Windows
@@ -1214,9 +1337,8 @@ fn a_cjk_composition_uses_the_cjk_ui_font() {
     app.run("caret.docEnd", json!({})).unwrap();
     let mut h = composing_harness(app);
     assert!(h.state().canvas.focused(&h.ctx.clone()), "the canvas takes focus when the window opens");
-    let layout = h.state_mut().session.layout();
-    let (run, _) = layout.typing_style(&h.state().session.sel.focus, 0).expect("the run text typed here takes");
-    assert!(!run.requested_face.covers('に'), "the document's Latin face has no kana: {:?}", run.requested_face);
+    let (typing, _) = typing_here(&mut h, "にほん");
+    assert!(!typing.face.covers('に'), "the document's Latin face has no kana: {:?}", typing.face);
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほん".into(), active_range_chars: None }));
     for _ in 0..4 {
         h.app_frame();
@@ -1226,7 +1348,7 @@ fn a_cjk_composition_uses_the_cjk_ui_font() {
     let row = drawn.galley.rows.first().expect("a row");
     assert_eq!(row.glyphs.len(), 3, "one glyph per composed kana");
     let family = composition_font(&drawn).map(|f| f.family).expect("a font");
-    assert_eq!(family, egui::FontFamily::Name(format!("face+ui:{}", super::caret::face_key(run.requested_face)).into()), "in the text's face");
+    assert_eq!(family, face_family(typing.face), "in the text's face");
     let (chain, interface) = h.ctx.fonts(|f| {
         let families = &f.definitions().families;
         (families.get(&family).cloned().unwrap_or_default(), families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default())
@@ -1249,10 +1371,9 @@ fn the_composition_takes_the_documents_font_and_size() {
     app.run("format.size", json!({"size": 20})).unwrap();
     app.run("caret.docEnd", json!({})).unwrap();
     let mut h = composing_harness(app);
-    let layout = h.state_mut().session.layout();
-    let (run, base) = layout.typing_style(&h.state().session.sel.focus, 0).expect("the run text typed here takes");
-    assert_eq!(run.size, 20.0, "the size of the text before the caret");
-    let caret = layout.caret(&h.state().session.sel.focus).expect("a caret");
+    let (typing, base) = typing_here(&mut h, "tottori");
+    assert_eq!(typing.size, 20.0, "the size of the text before the caret");
+    let caret = h.state_mut().session.layout().caret(&h.state().session.sel.focus).expect("a caret");
     assert!(base > caret.top && base < caret.top + caret.height, "the baseline lies within the caret: {base} in {caret:?}");
     // The caret's IME rectangle gives the caret's top and the page's scale on screen, before the composition moves it.
     let ime = h.output().platform_output.ime.as_ref().map(|i| i.cursor_rect).expect("the caret's IME rectangle");
@@ -1263,7 +1384,7 @@ fn the_composition_takes_the_documents_font_and_size() {
     }
     let drawn = drawn_composition(&h, "tottori").expect("the composition is drawn");
     let font = composition_font(&drawn).expect("a font");
-    assert_eq!(font.family, egui::FontFamily::Name(format!("face+ui:{}", super::caret::face_key(run.requested_face)).into()), "the text's face");
+    assert_eq!(font.family, face_family(typing.face), "the text's face");
     assert!((font.size - 20.0 * scale).abs() < 0.01, "{} at scale {scale}", font.size);
     let row = drawn.galley.rows.first().expect("a row");
     let baseline = drawn.pos.y + row.pos.y + row.glyphs.first().expect("a glyph").pos.y;

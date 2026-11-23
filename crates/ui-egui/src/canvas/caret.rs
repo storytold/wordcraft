@@ -38,16 +38,19 @@ struct Placement {
     in_equation: bool,
     /// The selection is collapsed, so a caret is drawn.
     collapsed: bool,
-    /// The face, size and baseline on screen text typed at the caret takes, which a composition is drawn in. `None`
-    /// in an equation, in turned text and without a style run.
+    /// The faces, size and baseline on screen of the composition being typed at the caret. `None` without one, in
+    /// an equation, in turned text and without a style run.
     typing: Option<TypingFace>,
 }
 
-/// The face text typed at the caret asks for, its size and its baseline on screen (`DocLayout::typing_style`).
+/// The faces text typed at the caret asks for, its size and its baseline on screen (`DocLayout::typing_at`).
 #[derive(Clone, Copy)]
 struct TypingFace {
     /// The face the run's font resolves to, not a fallback face that drew the character before the caret.
     face: wordcraft_fonts::FaceRef,
+    /// The face of the run's East Asian font (`w:eastAsia`), which Chinese, Japanese and Korean characters are drawn
+    /// in, when it is another font and installed.
+    east_asian: Option<wordcraft_fonts::FaceRef>,
     /// The run's size times the page's scale on screen.
     size: f32,
     /// The run's baseline on screen.
@@ -105,14 +108,18 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
     } else {
         [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)]
     };
-    // Word draws a composition in the font and size of the text it goes into; not in turned text, whose lines aren't
-    // horizontal.
-    let typing = if c.width > 0.0 {
+    // Word draws a composition in the font and size the text will have: the formatting typing takes (picked at the
+    // caret, the first selected character's, body text after a note number), resolved in the paragraph the text goes
+    // into. Not in turned text, whose lines aren't horizontal.
+    let typing = if c.width > 0.0 || app.canvas.ime_preedit.is_empty() {
         None
     } else {
-        doc.typing_style(&sel.focus, app.session.page_hint)
-            .filter(|(run, base)| run.size.is_finite() && run.size > 0.0 && base.is_finite())
-            .map(|(run, base)| TypingFace { face: run.requested_face, size: run.size * scale, baseline: pr.rect.min.y + base * scale })
+        let (into, _) = sel.ordered();
+        let props = app.session.typing_props();
+        let typed = wordcraft_layout::hit::Typed { props: &props, into: &into, text: &app.canvas.ime_preedit };
+        doc.typing_at(&app.session.doc, &sel.focus, &typed, app.session.page_hint)
+            .filter(|(t, base)| t.size.is_finite() && t.size > 0.0 && base.is_finite())
+            .map(|(t, base)| TypingFace { face: t.face, east_asian: t.east_asian, size: t.size * scale, baseline: pr.rect.min.y + base * scale })
     };
     Some(Placement {
         bar,
@@ -293,6 +300,30 @@ pub(crate) fn face_key(face: wordcraft_fonts::FaceRef) -> String {
     format!("wordcraft-face:{}", face.id())
 }
 
+/// `text` in pieces by script, as committed text takes its faces: whether each piece is Chinese, Japanese or Korean
+/// (`wordcraft_layout::para::takes_east_asian_font`). Spaces, joiners and combining or variation marks stay with the
+/// piece before them.
+fn script_pieces(text: &str) -> Vec<(&str, bool)> {
+    let continues = |c: char| c.is_whitespace() || matches!(u32::from(c), 0x0300..=0x036F | 0x200C..=0x200D | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF);
+    let mut pieces = Vec::new();
+    let (mut start, mut cur) = (0, None);
+    for (i, c) in text.char_indices() {
+        let east_asian = wordcraft_layout::para::takes_east_asian_font(c);
+        match cur {
+            None => cur = Some(east_asian),
+            Some(prev) if prev != east_asian && !continues(c) => {
+                pieces.push((text.get(start..i).unwrap_or_default(), prev));
+                (start, cur) = (i, Some(east_asian));
+            }
+            Some(_) => {}
+        }
+    }
+    if let Some(prev) = cur {
+        pieces.push((text.get(start..).unwrap_or_default(), prev));
+    }
+    pieces
+}
+
 /// The bytes, index and variation setting of `face`, read the first time it is drawn. A file larger than the framework
 /// draws over the interface fonts is not copied: the composition stays in the interface font (a document's CJK
 /// fallback can be 19 MB).
@@ -331,25 +362,46 @@ impl Component for CaretMarks {
         }
         let Some(c) = &self.composition else { return };
         let color = DataColor::new(c.color);
-        let (layout, top, bottom) = match &c.typing {
-            // In the text's own face and size, its first baseline on the line's, as typed text would sit. Characters the
-            // face lacks (CJK in a Latin font) come from the interface fonts; a size past the font atlas is capped.
+        // The composition's width, top and bottom, and the caret's place in it from its left edge.
+        let (width, top, bottom, caret) = match &c.typing {
+            // In the text's own faces and size, its first baseline on the line's, as typed text would sit: Chinese,
+            // Japanese and Korean characters in the East Asian face, when there is one, the rest in the font's face,
+            // one run a piece along the baseline. Characters a face lacks (CJK in a Latin font) come from the
+            // interface fonts; a size past the font atlas is capped.
             Some(t) => {
-                let key = face_key(t.face);
-                let layout = draw.face_run(pos2(c.left, t.baseline), &FaceRun::new(c.text.as_str(), &key, t.size, color), || face_bytes(t.face));
-                let top = t.baseline - layout.first_baseline;
-                let bottom = top + layout.size().y;
-                (layout, top, bottom)
+                let pieces = match t.east_asian {
+                    Some(_) => script_pieces(&c.text),
+                    None => vec![(c.text.as_str(), false)],
+                };
+                let (mut x, mut chars, mut top, mut bottom, mut caret) = (c.left, 0, f32::INFINITY, f32::NEG_INFINITY, None);
+                for (piece, east_asian) in pieces {
+                    let face = if east_asian { t.east_asian.unwrap_or(t.face) } else { t.face };
+                    let key = face_key(face);
+                    let layout = draw.face_run(pos2(x, t.baseline), &FaceRun::new(piece, &key, t.size, color), || face_bytes(face));
+                    let n = piece.chars().count();
+                    if caret.is_none() && c.cursor < chars + n {
+                        caret = Some(x - c.left + layout.char_x(c.cursor - chars));
+                    }
+                    top = top.min(t.baseline - layout.first_baseline);
+                    bottom = bottom.max(t.baseline - layout.first_baseline + layout.size().y);
+                    x += layout.size().x;
+                    chars += n;
+                }
+                if !top.is_finite() || !bottom.is_finite() {
+                    (top, bottom) = (t.baseline, t.baseline);
+                }
+                let width = x - c.left;
+                (width, top, bottom, caret.unwrap_or(width))
             }
             None => {
                 let rect = Rect::from_min_size(pos2(c.left, c.bottom - c.height), vec2(c.room, c.height));
-                (draw.text(rect, &TextRun::new(c.text.as_str()).color(cx.style.ink)), c.bottom - c.height, c.bottom)
+                let layout = draw.text(rect, &TextRun::new(c.text.as_str()).color(cx.style.ink));
+                (layout.size().x, c.bottom - c.height, c.bottom, layout.char_x(c.cursor))
             }
         };
-        let width = layout.size().x;
         let underline: Vec<Pos2> = vec![pos2(c.left, bottom), pos2(c.left + width, bottom)];
         draw.stroke(&PaintShape::Path(underline), StrokeWidth::Thin, color);
-        let x = (c.left + layout.char_x(c.cursor)).round() + 0.5;
+        let x = (c.left + caret).round() + 0.5;
         draw.stroke(&PaintShape::Path(vec![pos2(x, top), pos2(x, bottom)]), StrokeWidth::Medium, color);
         self.composition_caret = Some(x);
     }

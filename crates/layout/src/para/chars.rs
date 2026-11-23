@@ -231,6 +231,48 @@ pub fn east_asian_substitute_face(doc: &Document, font_ea: &str, font: &str) -> 
     Some(fallback.map_or(primary, |f| FaceRef::of(&f)))
 }
 
+/// How text with some formatting is drawn, before it is typed: the faces its fonts ask for, its
+/// size and its baseline shift ([`typing_face`]).
+#[derive(Clone, Copy)]
+pub struct TypingFace {
+    /// The face the font asks for (`w:ascii`), or its substitute: not a fallback face for
+    /// characters it lacks, as the text isn't known yet.
+    pub face: FaceRef,
+    /// The East Asian font's face (`w:eastAsia`), when that font isn't the run's font and is
+    /// installed, as the paragraph builder draws Chinese, Japanese and Korean text in it.
+    pub east_asian: Option<FaceRef>,
+    /// Points, as drawn (superscript and subscript smaller).
+    pub size: f32,
+    /// Points the baseline is raised, or lowered when negative (superscript, `w:position`).
+    pub shift: f32,
+}
+
+/// [`TypingFace`] for `text` with the run formatting `props` in a paragraph of style `style`, in a
+/// table cell whose table style gives its text the run formatting `cell`: resolved and looked up
+/// as the paragraph builder does a run's. Complex-script text (Arabic, Hebrew, or any text of a
+/// right-to-left or `w:cs` run) takes the complex-script font and size, and no East Asian font;
+/// text that is partly complex script takes them all through.
+pub fn typing_face(
+    doc: &Document,
+    style: Option<&str>,
+    cell: Option<&wordcraft_doc::props::CharProps>,
+    props: &wordcraft_doc::props::CharProps,
+    text: &str,
+) -> TypingFace {
+    let rc = doc.styles.resolve_char_in(style, cell, props);
+    let complex = text.chars().any(|c| rc.uses_complex(c));
+    let rc = if complex { rc.complex() } else { rc };
+    let face = wordcraft_fonts::word::resolve(lookup_family(doc, &rc.font), rc.bold, rc.italic).face;
+    let east_asian = rc
+        .font_ea
+        .as_deref()
+        .filter(|f| !complex && !f.eq_ignore_ascii_case(&rc.font))
+        .map(|f| wordcraft_fonts::word::resolve(lookup_family(doc, f), rc.bold, rc.italic))
+        .filter(|r| !r.substituted)
+        .map(|r| r.face);
+    TypingFace { face, east_asian, size: rc.draw_size(), shift: rc.baseline_shift() }
+}
+
 /// `font` as [`ParaLayout::substituted`](super::ParaLayout::substituted) records it: a hostile
 /// file's font name can be megabytes long, so the first 256 characters. Look names up through
 /// this to match it.

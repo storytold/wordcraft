@@ -31,11 +31,17 @@ pub use bidi::{bidi_levels, visual_order};
 pub(crate) use builder::left_out;
 #[cfg(test)]
 use chars::{MISSING_ROMAN_FONT, lookup_family};
+pub use chars::{TypingFace, draws_something, east_asian_substitute_face, reported_font_name, substitute_face, typing_face};
 pub(crate) use chars::{caps_char, push_caps};
-pub use chars::{draws_something, east_asian_substitute_face, reported_font_name, substitute_face};
 #[cfg(test)]
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
+
+/// Whether `c` is drawn in its run's East Asian font (`w:eastAsia`) when that font has it, as the
+/// paragraph builder decides: Chinese, Japanese and Korean characters.
+pub fn takes_east_asian_font(c: char) -> bool {
+    grid::east_asian(c)
+}
 #[cfg(test)]
 use lines::break_lines;
 pub(crate) use lines::takes_room;
@@ -101,6 +107,10 @@ pub struct ParaLayout {
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// The run formatting the table style gives this paragraph's text in its cell
+    /// ([`CellText::chr`]), so text typed in it resolves as laid-out text does
+    /// ([`crate::DocLayout::typing_at`]). `None` outside tables.
+    pub cell_chr: Option<CharProps>,
 }
 
 impl ParaLayout {
