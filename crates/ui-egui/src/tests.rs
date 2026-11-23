@@ -3364,6 +3364,62 @@ fn f11_and_escape_toggle_full_screen() {
     assert!(h.state().session.view.full_screen, "and only that");
 }
 
+/// The Full Screen button tells assistive technology what the command can do: it is enabled
+/// exactly when the command is, so the browser build (which keeps full screen to itself)
+/// does not announce a control that cannot be activated.
+#[test]
+fn the_full_screen_button_reports_the_commands_own_enabled_state() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use wordcraft_engine::{CommandSpec, Registry};
+
+    // The browser build's reason for refusing full screen, forced here so the test says
+    /// something on every platform.
+    fn unavailable(_: &wordcraft_engine::Session) -> Option<&'static str> {
+        Some("Use the browser's full screen (F11)")
+    }
+
+    let mut a = app();
+    let specs: Vec<CommandSpec> = a
+        .session
+        .registry
+        .all()
+        .iter()
+        .map(|s| {
+            if s.id == "view.fullScreen" {
+                CommandSpec {
+                    id: s.id,
+                    label: s.label,
+                    location: s.location,
+                    shortcut: s.shortcut,
+                    params: s.params,
+                    mutates: s.mutates,
+                    enabled: unavailable,
+                    run: s.run,
+                }
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
+    a.session.registry = std::sync::Arc::new(Registry::new(specs));
+
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1920.0, 900.0)).build_eframe(|_| a);
+    for _ in 0..6 {
+        h.step();
+    }
+    h.state_mut().run("ui.tab", json!({ "tab": "View" })).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    let node = h
+        .query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button))
+        .into_iter()
+        .find(|n| n.accesskit_node().label().as_deref().is_some_and(|l| l.replace('\n', " ").contains("Full Screen")))
+        .expect("the Full Screen button is on the View tab");
+    assert!(!crate::app::command_board::command_enabled(h.state(), "view.fullScreen"), "the command is unavailable, as the test arranged it",);
+    assert!(node.accesskit_node().is_disabled(), "a control the command refuses is announced as disabled",);
+}
+
 /// #980: in full screen, Escape with text selected collapses the selection (as in a normal
 /// window) and leaves full screen alone; the next Escape, with nothing selected, leaves it.
 #[test]
