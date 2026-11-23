@@ -1,12 +1,24 @@
 //! Language-aware proofing task pane, laid out from black-box observation of Word on Windows.
 
-use egui::{Align, Align2, Sense, Stroke, Ui, vec2};
+use craft::behavior::IconId;
+use craft::behavior::{DisplayOrder, ItemSource};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::display::{Shade, Text};
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::{List, ListRow};
+use craft::ui::menu::Menu;
+use craft::ui::notices::Notice;
+use craft::ui::primitives::IconSpec;
+use craft::ui::style::{Span, TypeRole};
+use craft::ui::text::TextField;
+use egui::Ui;
 use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_engine::Selection;
 
 use crate::WordApp;
-use crate::theme::{Tokens, regular, semibold};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SpellingForm {
@@ -22,7 +34,33 @@ pub struct SpellingForm {
     epoch: u64,
     #[serde(skip)]
     selection: Selection,
+    /// The suggestion row whose more-options menu is open.
+    #[serde(skip)]
+    menu_row: Option<usize>,
 }
+
+/// The suggestions as the rows of a list, keyed by position.
+struct Suggestions<'a>(&'a [String]);
+
+impl DisplayOrder<usize> for Suggestions<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        (*key < self.0.len()).then_some(*key)
+    }
+
+    fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
+        self.0.get(at).map(|name| std::borrow::Cow::Borrowed(name.as_str()))
+    }
+}
+
+impl ItemSource<usize> for Suggestions<'_> {}
 
 impl SpellingForm {
     pub fn new(app: &WordApp, issue: Value) -> Self {
@@ -43,6 +81,7 @@ impl SpellingForm {
             document: app.session.document_id(),
             epoch: app.session.ime_body_epoch(),
             selection: app.session.sel.clone(),
+            menu_row: None,
         }
     }
 
@@ -88,162 +127,185 @@ impl SpellingForm {
     }
 }
 
+/// What the user asked for in one pass; it runs after the components are drawn, so the body never
+/// holds the form while a component does.
+enum Ask {
+    CheckAgain,
+    ReadAloud,
+    Change(String),
+    Manual(String),
+    AddToAutoCorrect(String),
+    AutoCorrectOptions,
+    IgnoreOnce,
+    IgnoreAll,
+    AddToDictionary,
+    ChangeTyped,
+}
+
+/// The more-options menu rows of a suggestion.
+const MORE_CHANGE: u8 = 0;
+const MORE_ADD: u8 = 1;
+const MORE_OPTIONS: u8 = 2;
+
 /// The shared task-pane host supplies the title, menu, Close button, docking and keyboard routing.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
+    // The form leaves the app while the body runs, so the body can call `app.run`.
     let Some(mut form) = app.spelling_review.take() else { return };
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 4, right: 16, top: 0, bottom: 0 }).show(ui, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| body(app, ui, &mut form));
-    });
+    Stack::new().show(ui, |ui, _| body(app, ui, &mut form));
     app.spelling_review = Some(form);
 }
 
-fn action_link(ui: &mut Ui, text: &str) -> bool {
-    ui.add(egui::Button::new(egui::RichText::new(tl!(text)).color(Tokens::get(ui.ctx()).text).underline()).frame(false)).clicked()
-}
-
-fn context(ui: &mut Ui, app: &mut WordApp, form: &mut SpellingForm, spelling: bool) {
-    let t = Tokens::get(ui.ctx());
-    let width = ui.available_width();
-    egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.input_border)).corner_radius(2.0).inner_margin(8).show(ui, |ui| {
-        ui.set_min_width((width - 18.0).max(0.0));
-        ui.horizontal(|ui| {
-            let mut job = egui::text::LayoutJob::default();
-            let format = egui::TextFormat { font_id: regular(12.0), color: t.text, ..Default::default() };
-            job.append(&form.context_before, 0.0, format.clone());
-            let marked = egui::TextFormat { underline: Stroke::new(1.0, if spelling { t.red } else { t.blue }), ..format.clone() };
-            job.append(form.issue.get("text").and_then(Value::as_str).unwrap_or(""), 0.0, marked);
-            job.append(&form.context_after, 0.0, format);
-            let text_width = (ui.available_width() - 36.0).max(20.0);
-            ui.allocate_ui_with_layout(vec2(text_width, 30.0), egui::Layout::top_down(Align::Min), |ui| {
-                ui.set_min_width(text_width);
-                ui.add(egui::Label::new(job).wrap());
-            });
-            let (rect, response) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Read Aloud")));
-            crate::icons::paint(ui.painter(), rect.shrink(4.0), "readAloud", t.icon, t.accent);
-            if response.on_hover_text(tl!("Read Aloud")).clicked() {
-                if form.current(app) {
-                    if let Err(e) = app.run("review.readAloud", json!({})) {
-                        form.message = e;
-                    }
-                } else {
-                    form.message = tl!("The document or selection changed. Check again to continue.").into();
-                }
-            }
-        });
-    });
-}
-
 fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
-    let t = Tokens::get(ui.ctx());
     if form.done() {
-        ui.label(tl!("The spelling and grammar check is complete."));
-        ui.add_space(8.0);
-        if action_link(ui, "Check Again") {
+        Notice::new(Tone::Good, tl!("The spelling and grammar check is complete.")).show(ui);
+        if Button::new(tl!("Check Again")).show(ui).clicked() {
             form.next(app, true);
         }
         return;
     }
     let spelling = form.issue.get("kind").and_then(Value::as_str) == Some("spelling");
-    ui.label(egui::RichText::new(tl!(if spelling { "Spelling" } else { "Grammar" })).font(regular(14.0)))
-        .on_hover_text(form.issue.get("lang").and_then(Value::as_str).unwrap_or(""));
+    let lang = form.issue.get("lang").and_then(Value::as_str).unwrap_or("").to_string();
+    let heading = Text::new(tl!(if spelling { "Spelling" } else { "Grammar" })).role(TypeRole::Heading);
+    if lang.is_empty() {
+        heading.show(ui);
+    } else {
+        heading.tooltip(lang).show(ui);
+    }
     let message = if spelling { tl!("Not in Dictionary") } else { tl!(form.issue.get("message").and_then(Value::as_str).unwrap_or("")) };
-    ui.label(egui::RichText::new(message).font(regular(11.0)).color(t.text_dim));
-    ui.add_space(8.0);
-    context(ui, app, form, spelling);
-    ui.add_space(12.0);
-    ui.label(egui::RichText::new(tl!("Suggestions")).font(regular(11.0)).color(t.text_dim));
+    Text::new(message.to_owned()).shade(Shade::Muted).show(ui);
+
+    let mut ask: Option<Ask> = None;
+    let flagged = form.issue.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+    let spans = vec![
+        Span::new(form.context_before.clone()),
+        Span::new(flagged.clone()).flag(if spelling { Tone::Bad } else { Tone::Info }),
+        Span::new(form.context_after.clone()),
+    ];
+    Row::new().show(ui, |ui, _| {
+        Text::styled(spans.clone()).show(ui);
+        // PLAN: assumed IconSpec::svg("readAloud") from WORDCRAFT_ICONS (rb.A7, ribbon-w13); the icon is registered by name
+        if IconButton::new(IconSpec::svg(IconId::new("readAloud"))).label(tl!("Read Aloud")).show(ui).clicked() {
+            ask = Some(Ask::ReadAloud);
+        }
+    });
+
+    Text::new(tl!("Suggestions")).shade(Shade::Muted).show(ui);
     let suggestions: Vec<String> =
         form.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
-    let mut change = None;
     if suggestions.is_empty() {
-        ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
+        Text::new(tl!("(no suggestions)")).italic().show(ui);
     } else {
-        egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.input_border)).corner_radius(2.0).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            egui::ScrollArea::vertical().id_salt("proofing_suggestions").max_height(210.0).show(ui, |ui| {
-                for (index, suggestion) in suggestions.iter().enumerate() {
-                    ui.push_id(index, |ui| {
-                        if index > 0 {
-                            ui.separator();
-                        }
-                        ui.horizontal(|ui| {
-                            let width = (ui.available_width() - 34.0).max(20.0);
-                            let (rect, response) = ui.allocate_exact_size(vec2(width, 64.0), Sense::click());
-                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, suggestion));
-                            if response.hovered() {
-                                ui.painter().rect_filled(rect, 0.0, t.hover);
-                            }
-                            ui.painter().with_clip_rect(rect.shrink2(vec2(10.0, 0.0))).text(
-                                rect.left_center() + vec2(12.0, 0.0),
-                                Align2::LEFT_CENTER,
-                                suggestion,
-                                semibold(12.5),
-                                t.text,
-                            );
-                            if response.clicked() {
-                                change = Some(suggestion.clone());
-                            }
-                            ui.menu_button("⌄", |ui| {
-                                if ui.button(tl!("Change…")).clicked() {
-                                    form.replacement.clone_from(suggestion);
-                                    form.manual = true;
-                                    ui.close();
-                                }
-                                if spelling && ui.button(tl!("Add to AutoCorrect")).clicked() {
-                                    let word = form.issue.get("text").and_then(Value::as_str).unwrap_or("");
-                                    let params = json!({"add": {"from": word, "to": suggestion}});
-                                    if form.current(app) {
-                                        if let Err(e) = app.run("tools.autocorrect", params) {
-                                            form.message = e;
-                                        }
-                                    } else {
-                                        form.message = tl!("The document or selection changed. Check again to continue.").into();
-                                    }
-                                    ui.close();
-                                }
-                                if ui.button(tl!("AutoCorrect Options…")).clicked() {
-                                    let _ = app.run("tools.autocorrect", json!({}));
-                                    ui.close();
-                                }
-                            })
-                            .response
-                            .on_hover_text(tl!("More options"));
-                        });
-                    });
+        // A click applies that suggestion; its more-options menu acts on that suggestion alone.
+        let source = Suggestions(&suggestions);
+        let listed = List::<usize>::new(tl!("Suggestions"))
+            .row_menu()
+            // One click applies a suggestion; a collection activates on a double-click or Enter unless told.
+            .select(SelectMode::None)
+            .activate(ActivateOn::Click)
+            // The pane scrolls, so the list takes its few rows' full height instead of owning a second scroll.
+            .natural_height(true)
+            .show_items(ui, &source, &mut |key, _| ListRow::new(suggestions.get(*key).cloned().unwrap_or_default()));
+        for event in &listed.events {
+            match event {
+                CollectionEvent::Activate(key) => {
+                    if let Some(suggestion) = suggestions.get(*key) {
+                        ask = Some(Ask::Change(suggestion.clone()));
+                    }
                 }
-            });
-        });
+                CollectionEvent::ContextMenu(request) => form.menu_row = Some(request.key),
+                _ => {}
+            }
+        }
+        if let Some(row) = form.menu_row {
+            let mut entries = vec![Entry::new(MORE_CHANGE, tl!("Change…"))];
+            if spelling {
+                entries.push(Entry::new(MORE_ADD, tl!("Add to AutoCorrect")));
+            }
+            entries.push(Entry::new(MORE_OPTIONS, tl!("AutoCorrect Options…")));
+            let target = suggestions.get(row).cloned().unwrap_or_default();
+            let menu = Menu::context(tl!("More options"), &listed.response).pick(ui, &entries);
+            match menu.picked {
+                Some(MORE_CHANGE) => ask = Some(Ask::Manual(target)),
+                Some(MORE_ADD) => ask = Some(Ask::AddToAutoCorrect(target)),
+                Some(MORE_OPTIONS) => ask = Some(Ask::AutoCorrectOptions),
+                _ => {}
+            }
+            if menu.closed.is_some() {
+                form.menu_row = None;
+            }
+        }
     }
-    if let Some(replacement) = change {
-        form.replacement = replacement;
-        form.act(app, Some("review.applySuggestion"));
-        return;
-    }
-    ui.add_space(6.0);
-    if action_link(ui, "Ignore Once") {
-        form.act(app, None);
-    } else if spelling && action_link(ui, "Ignore All") {
-        form.act(app, Some("review.ignoreAll"));
-    } else if spelling && action_link(ui, "Add to Dictionary") {
-        form.act(app, Some("review.addToDictionary"));
-    }
-    if suggestions.is_empty() && action_link(ui, "Change…") {
-        form.manual = true;
-    }
+
+    Row::new().show(ui, |ui, _| {
+        if Button::new(tl!("Ignore Once")).show(ui).clicked() {
+            ask = Some(Ask::IgnoreOnce);
+        }
+        if spelling && Button::new(tl!("Ignore All")).show(ui).clicked() {
+            ask = Some(Ask::IgnoreAll);
+        }
+        if spelling && Button::new(tl!("Add to Dictionary")).show(ui).clicked() {
+            ask = Some(Ask::AddToDictionary);
+        }
+        if suggestions.is_empty() && Button::new(tl!("Change…")).show(ui).clicked() {
+            ask = Some(Ask::Manual(String::new()));
+        }
+    });
+
     if form.manual {
-        ui.add_space(8.0);
-        let label = ui.label(tl!("Change to:"));
-        ui.add(egui::TextEdit::singleline(&mut form.replacement).char_limit(1024)).labelled_by(label.id);
-        if ui.button(tl!("Change")).clicked() {
-            form.act(app, Some("review.applySuggestion"));
+        let typed = TextField::new(tl!("Change to:"), Bind::given(form.replacement.clone())).limit(1024).show(ui);
+        if let Some(text) = typed.events.committed() {
+            form.replacement.clone_from(text);
+        }
+        if Button::new(tl!("Change")).show(ui).clicked() {
+            ask = Some(Ask::ChangeTyped);
         }
     }
     if !form.message.is_empty() {
-        ui.colored_label(ui.visuals().error_fg_color, &form.message);
-        if action_link(ui, "Check Again") {
-            form.next(app, true);
+        Notice::new(Tone::Bad, form.message.clone()).show(ui);
+        if Button::new(tl!("Check Again")).show(ui).clicked() {
+            ask = Some(Ask::CheckAgain);
         }
+    }
+
+    let Some(ask) = ask else { return };
+    match ask {
+        Ask::CheckAgain => form.next(app, true),
+        Ask::ReadAloud => {
+            if form.current(app) {
+                if let Err(e) = app.run("review.readAloud", json!({})) {
+                    form.message = e;
+                }
+            } else {
+                form.message = tl!("The document or selection changed. Check again to continue.").into();
+            }
+        }
+        Ask::Change(suggestion) => {
+            form.replacement = suggestion;
+            form.act(app, Some("review.applySuggestion"));
+        }
+        Ask::Manual(suggestion) => {
+            if !suggestion.is_empty() {
+                form.replacement = suggestion;
+            }
+            form.manual = true;
+        }
+        Ask::AddToAutoCorrect(suggestion) => {
+            let params = json!({"add": {"from": flagged, "to": suggestion}});
+            if form.current(app) {
+                if let Err(e) = app.run("tools.autocorrect", params) {
+                    form.message = e;
+                }
+            } else {
+                form.message = tl!("The document or selection changed. Check again to continue.").into();
+            }
+        }
+        Ask::AutoCorrectOptions => {
+            let _ = app.run("tools.autocorrect", json!({}));
+        }
+        Ask::IgnoreOnce => form.act(app, None),
+        Ask::IgnoreAll => form.act(app, Some("review.ignoreAll")),
+        Ask::AddToDictionary => form.act(app, Some("review.addToDictionary")),
+        Ask::ChangeTyped => form.act(app, Some("review.applySuggestion")),
     }
 }
 
@@ -269,7 +331,7 @@ mod tests {
     fn harness(text: &str) -> egui_kittest::Harness<'static, WordApp> {
         let mut app = app(text);
         app.run("review.spelling", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(frame, app);
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(frame, app);
         h.run_steps(6);
         h
     }
@@ -346,7 +408,7 @@ mod tests {
         for replace in [false, true] {
             let mut a = app("The brwn fox and brwn dog.");
             let issue = a.execute("review.spelling", json!({})).unwrap();
-            assert!(a.dialog.is_none() && a.spelling_review.is_none(), "programmatic calls never open a pane or window");
+            assert!(a.dialog_host.is_empty() && a.spelling_review.is_none(), "programmatic calls never open a pane or window");
             let mut f = SpellingForm::new(&a, issue);
             f.replacement = "brown".into();
             if replace {
@@ -365,23 +427,12 @@ mod tests {
     fn spelling_review_dialog_shows_completion_without_issues_and_close_returns_to_document() {
         let mut h = harness("The quick brown fox.");
         assert!(form(h.state()).done());
+        // A notice is named by its text on more than one node (the notice and its message), so ask for any.
+        let notice = egui_kittest::kittest::By::new().label("The spelling and grammar check is complete.");
+        assert!(h.query_all(notice).next().is_some(), "the completion notice shows");
         h.get_by_label("Close").click();
         h.run_steps(2);
         assert!(h.state().spelling_review.is_none());
-    }
-
-    #[test]
-    #[ignore = "offscreen visual review; requires a software or hardware graphics adapter"]
-    fn spelling_review_dialog_preview() {
-        let _gpu = crate::table_resize::tests::gpu_turn();
-        let mut a = app("The quick brwn fox.");
-        a.run("review.spelling", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).wgpu().build_ui_state(frame, a);
-        for (name, visuals) in [("light", egui::Visuals::light()), ("dark", egui::Visuals::dark())] {
-            h.ctx.set_visuals(visuals);
-            h.run_steps(6);
-            h.render().unwrap().save(format!("spelling-review-{name}.png")).unwrap();
-        }
     }
 
     #[test]
