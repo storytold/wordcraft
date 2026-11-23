@@ -10,6 +10,9 @@
 use serde_json::{Value, json};
 use wordcraft_engine::DocInfo;
 
+use craft::ui::contract::Show as _;
+use craft::ui::menu::MenuItem;
+
 use crate::{WordApp, panes};
 
 /// What the window keeps for an open document while another one is shown.
@@ -17,8 +20,9 @@ use crate::{WordApp, panes};
 pub(crate) struct Parked {
     /// [`WordApp`]'s `autosave_path`: the file AutoSave writes this document to.
     autosave_path: Option<std::path::PathBuf>,
-    /// Comment and reply text typed in this document and not yet written to it.
-    comment_drafts: panes::CommentDrafts,
+    /// The comment panel's selection and the comment and reply text typed in this document and not
+    /// yet written to it.
+    comments: craft::review::ui::CommentsPanelState,
 }
 
 impl WordApp {
@@ -58,25 +62,26 @@ impl WordApp {
         self.window_shows(id);
 
         self.canvas.show_other_document(seen);
-        self.controls = Default::default();
-        self.dialog = None;
+        // A Save Changes prompt asked about the document that left: it goes, and its answer with it. The
+        // operation stays (a quit closing documents one by one moves on), and an answer that arrives anyway
+        // is refused as being about a replaced document (`apply_close_answer`).
+        if let Some(id) = self.closing.as_mut().and_then(|c| c.prompt.take()) {
+            self.close_prompt(id);
+        }
+        if let Some(ctx) = self.ctx.clone() {
+            crate::dialogs::host::close_all(self, &ctx);
+        }
         self.spelling_review = None;
-        self.colors = None;
-        self.restrict = crate::dialogs_review::RestrictPane { open: self.restrict.open, ..Default::default() };
-        self.status_msg = None;
+        self.restrict = crate::restrict_pane::RestrictPane { open: self.restrict.open, ..Default::default() };
+        self.status = None;
         self.change_picture_target = None;
         self.recipient_list_pending = false;
-        self.dialog_pick = None;
-        self.focus_ribbon = false;
         self.nav_search_focus = false;
         self.smart_art_item = None;
-        self.smart_art_row_focused = false;
-        self.smart_art_typing = None;
         self.read_aloud_at = None;
         self.info_editing = None;
         // Caches keyed by the revision alone: another document's revision can be the same number.
-        self.word_count = crate::window_ui::NOT_COUNTED;
-        self.find_fonts_for = None;
+        self.status_counts = crate::window_ui::NOT_COUNTED;
         self.previews.document_changed();
         // The Start screen's placeholder (#1129) goes once a document is open beside it.
         if let Some(placeholder) = self.no_document
@@ -100,7 +105,7 @@ impl WordApp {
         if from == to {
             return false;
         }
-        let leaving = Parked { autosave_path: self.autosave_path.take(), comment_drafts: std::mem::take(&mut self.comment_drafts) };
+        let leaving = Parked { autosave_path: self.autosave_path.take(), comments: std::mem::take(&mut self.canvas.comments) };
         if self.session.is_open(from) {
             self.parked.insert(from, leaving);
         }
@@ -108,7 +113,7 @@ impl WordApp {
         let seen = back.is_some();
         let back = back.unwrap_or_default();
         self.autosave_path = back.autosave_path;
-        self.comment_drafts = back.comment_drafts;
+        self.canvas.comments = back.comments;
         let session = &self.session;
         self.parked.retain(|d, _| session.is_open(*d));
         seen
@@ -130,11 +135,51 @@ impl WordApp {
         self.run("file.open", json!({"path": path}))
     }
 
+    /// Open a file the platform hands the app: one named on the command line (a double-click in
+    /// the file manager, the shell's Open verb) or sent by the Finder. A Word template (`.dotx`,
+    /// `.dotm`, `.dot`) starts a new, untitled document based on it, as Word's default verb for a
+    /// template does (#3433): saving it asks where to write, and the template is never written
+    /// over. File › Open still opens a template itself, to edit it, as in Word. Anything else
+    /// opens as [`WordApp::open_file`] opens it. `data` holds the file's bytes (base64) when its
+    /// name can't be passed as text (#1440); `path` then only names it.
+    pub fn open_from_platform(&mut self, path: &str, data: Option<&str>) -> Result<Value, String> {
+        let mut params = json!({"path": path});
+        if let Some(data) = data {
+            params["data"] = json!(data);
+        }
+        if is_word_template(path) {
+            params["replaceBlank"] = json!(true);
+            return self.run("file.newFromTemplate", params);
+        }
+        match data {
+            Some(_) => self.run("file.open", params),
+            None => self.open_file(path, None),
+        }
+    }
+
     /// Show open document `id` in the window (View › Window › Switch Windows, quitting).
     pub(crate) fn show_document(&mut self, id: u64) -> Result<(), String> {
         self.session.activate(id).map_err(|e| e.to_string())?;
         self.sync_document();
         Ok(())
+    }
+
+    /// Whether the open document `id` has changes that aren't written to a file yet, or a save
+    /// the browser hasn't confirmed. The Save Changes prompt asks about the same work, so the
+    /// prompt and a programmatic refusal cannot drift apart (#1268, #3274).
+    pub(crate) fn document_unsaved_by_id(&self, id: u64) -> bool {
+        let dirty = self.session.document_dirty(id);
+        let unconfirmed = self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == id);
+        dirty || unconfirmed
+    }
+
+    /// Whether the open document `id` has comment or reply text typed but not yet written to
+    /// it (#1348): closing the document would drop that text.
+    pub(crate) fn document_has_comment_drafts(&self, id: u64) -> bool {
+        if id == self.session.document_id() {
+            return panes::has_comment_drafts(self);
+        }
+        self.parked.get(&id).is_some_and(|p| panes::state_has_drafts(&p.comments))
     }
 
     /// The open documents with work that would be lost on quitting: the shown one first, then
@@ -144,13 +189,11 @@ impl WordApp {
     fn unsaved_documents(&self) -> Vec<u64> {
         let active = self.session.document_id();
         let mut out = Vec::new();
-        if self.has_document() && (self.session.dirty || self.save_unconfirmed() || panes::has_comment_drafts(self)) {
+        if self.has_document() && (self.document_unsaved_by_id(active) || self.document_has_comment_drafts(active)) {
             out.push(active);
         }
         for d in self.session.documents() {
-            let unconfirmed = || self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == d.id);
-            let drafts = || self.parked.get(&d.id).is_some_and(|p| !p.comment_drafts.is_empty());
-            if d.id != active && Some(d.id) != self.no_document && (d.dirty || unconfirmed() || drafts()) {
+            if d.id != active && Some(d.id) != self.no_document && (self.document_unsaved_by_id(d.id) || self.document_has_comment_drafts(d.id)) {
                 out.push(d.id);
             }
         }
@@ -162,23 +205,33 @@ impl WordApp {
         !self.unsaved_documents().is_empty()
     }
 
-    /// Quitting: show the next document with unsaved work and ask Save / Don't Save / Cancel
-    /// about it (its answer goes on with [`WordApp::close_document`]'s `quit`). With none left,
-    /// the app quits.
+    /// Quitting: start the quit guard over the documents with unsaved work, which shows each in
+    /// turn and asks Save / Don't Save / Cancel about it. A guard already running keeps its open
+    /// prompt. With none left, the app quits.
     pub(crate) fn ask_before_quit(&mut self) -> Value {
-        let Some(&next) = self.unsaved_documents().first() else {
+        let documents = self.unsaved_documents();
+        if documents.is_empty() {
             self.quit_requested = true;
             return json!({"quit": true});
-        };
-        if next != self.session.document_id()
-            && let Err(e) = self.show_document(next)
-        {
-            log::error!("quitting: couldn't show document {next}: {e}");
+        }
+        if self.closing.is_some() {
             return json!({"quit": false});
         }
         self.ui.backstage = false;
-        self.run("file.close", json!({"quit": true})).unwrap_or_else(|e| json!({"quit": false, "error": e}))
+        match self.begin_closing(craft::quit::CloseScope::Quit, documents, "file.close".into(), json!({"quit": true})) {
+            Ok(_) => json!({"quit": self.quit_requested}),
+            Err(e) => json!({"quit": false, "error": e}),
+        }
     }
+}
+
+/// Is `path` a Word template by its extension (`.dotx`, `.dotm`, `.dot`, in any case)? These are
+/// the template types WordCraft registers with the platform.
+pub fn is_word_template(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|e| ["dotx", "dotm", "dot"].iter().any(|t| e.eq_ignore_ascii_case(t)))
 }
 
 /// The name an open document goes by in the window: the engine's title, with an untitled
@@ -216,13 +269,12 @@ pub(crate) fn switch_windows_menu(ui: &mut egui::Ui, app: &mut WordApp) {
         app.session.documents().into_iter().map(|d| (d.id, format!("{}{}", display_title(&d), if d.dirty { " •" } else { "" }), d.active)).collect()
     };
     for (key, label, current) in entries {
-        if ui.add(egui::Button::selectable(current, label).min_size(egui::vec2(220.0, 0.0))).clicked() {
+        if MenuItem::new(label).radio_mark(current).show(ui).ran {
             if native {
                 app.show_window(key);
             } else {
                 let _ = app.run("view.switchWindows", json!({"id": key}));
             }
-            ui.close();
         }
     }
 }
@@ -240,7 +292,7 @@ mod tests {
     }
 
     fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-        egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 900.0)).build_ui_state(
+        crate::test_harness::builder().with_size(egui::vec2(2560.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -254,8 +306,11 @@ mod tests {
         a.session.doc.plain_text(StoryRef::Body).trim().to_string()
     }
 
-    fn prompt(a: &WordApp) -> Option<&'static str> {
-        a.dialog.as_ref().map(|d| d.name())
+    /// The Save Changes prompt, when the close operation has one open. The framework's prompt has
+    /// no command key, so it is found by the id `closing` holds, among the open dialogs.
+    fn prompt(a: &WordApp) -> Option<craft::ui::dialog::DialogId> {
+        let id = a.closing.as_ref().and_then(|c| c.prompt)?;
+        a.dialog_host.open_dialogs().into_iter().find(|d| d.id == id).map(|d| d.id)
     }
 
     /// Mod+N with text typed opens a second document beside the first; Switch Windows lists both
@@ -267,27 +322,40 @@ mod tests {
         a.run("text.insert", json!({"text": "First draft"})).unwrap();
         let first = a.session.document_id();
         let mut h = harness(a);
-        h.run_steps(2);
+        // Each frame is given the app's command input, which the Mod+N chord resolves through.
+        crate::test_harness::frames(&mut h, 2);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::N);
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
         assert_ne!(h.state().session.document_id(), first, "Mod+N shows a new document");
         assert_eq!(text(h.state()), "");
-        assert!(h.state().sent_title.starts_with("Document2"), "{}", h.state().sent_title);
+        assert!(h.state().window_title().starts_with("Document2"), "{}", h.state().window_title());
 
         h.state_mut().run("ui.tab", json!({"tab": "View"})).unwrap();
-        h.run_steps(2);
-        h.get_by_label("Switch Windows").click();
-        h.run_steps(2);
-        use egui::accesskit::Role;
-        assert!(h.query_by_role_and_label(Role::Button, "Document1 •").is_some(), "the first document is listed, unsaved");
-        assert!(h.query_by_role_and_label(Role::Button, "Document2").is_some(), "the new one is listed");
-        h.get_by_role_and_label(Role::Button, "Document1 •").click();
-        h.run_steps(2);
+        crate::test_harness::frames(&mut h, 2);
+        // The ribbon's stacked label breaks the line after "Switch".
+        // A split button's main part runs its command; its arrow part, the inner node of the same name (the label
+        // and chevron), opens the menu.
+        let at = h.query_all_by_label("Switch\nWindows").last().expect("the Switch Windows arrow").rect().center();
+        // Pressed the way a person does, so the framework opens the menu: the pointer rests a frame over the arrow, and
+        // the press and the release are frames of their own (kittest's `click` sends all three in one).
+        h.event(egui::Event::PointerMoved(at));
+        crate::test_harness::frames(&mut h, 2);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            crate::test_harness::frames(&mut h, 1);
+        }
+        crate::test_harness::frames(&mut h, 6);
+        // The rows are radio menu items, the shown document marked.
+        use egui::accesskit::Role::MenuItemRadio as Row;
+        assert!(h.query_by_role_and_label(Row, "Document1 •").is_some(), "the first document is listed, unsaved");
+        assert!(h.query_by_role_and_label(Row, "Document2").is_some(), "the new one is listed");
+        h.get_by_role_and_label(Row, "Document1 •").click();
+        crate::test_harness::frames(&mut h, 2);
         let a = h.state();
         assert_eq!(a.session.document_id(), first);
         assert_eq!(text(a), "First draft");
         assert_eq!(a.session.documents().len(), 2);
-        assert!(a.sent_title.starts_with("Document1"), "{}", a.sent_title);
+        assert!(a.window_title().starts_with("Document1"), "{}", a.window_title());
     }
 
     /// Close with two documents open asks about the shown one's changes; after Don't Save the
@@ -301,7 +369,7 @@ mod tests {
         assert!(prompt(&a).is_none(), "New asks nothing: nothing is replaced");
         a.run("text.insert", json!({"text": "Dropped"})).unwrap();
         a.run("file.close", json!({})).unwrap();
-        assert_eq!(prompt(&a), Some("saveChanges"));
+        assert!(prompt(&a).is_some() && a.closing.is_some(), "the close asks about the unsaved document");
         a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
         assert_eq!(a.session.document_id(), kept);
         assert_eq!(text(&a), "Kept");
@@ -319,7 +387,7 @@ mod tests {
         a.run("file.new", json!({})).unwrap();
         assert!(!a.close_requested());
         assert_eq!(a.session.document_id(), behind, "the unsaved document is shown");
-        assert_eq!(prompt(&a), Some("saveChanges"));
+        assert!(prompt(&a).is_some() && a.closing.is_some(), "the quit guard asks about it");
         a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
         assert!(!a.quit_requested);
         assert_eq!(a.session.documents().len(), 2, "nothing closed");

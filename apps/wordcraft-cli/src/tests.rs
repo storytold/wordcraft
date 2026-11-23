@@ -76,6 +76,22 @@ fn unknown_options_are_rejected_before_file_access() {
 }
 
 #[test]
+fn convert_rejects_malformed_format_options_before_file_access() {
+    for (options, error) in [
+        (vec!["--format"], "convert: --format requires a value"),
+        (vec!["--format", "--markup"], "convert: --format requires a value"),
+        (vec!["--format", "flatopc", "--format", "wordml2003"], "convert: duplicate --format option"),
+    ] {
+        let mut argv = args(&["convert", "missing.docx", "out.xml"]);
+        argv.extend(args(&options));
+        assert_eq!(run(&argv), Err(error.into()), "{options:?}");
+    }
+    // A valid single value reaches file access, rather than a format-option error.
+    let error = run(&args(&["convert", "missing.docx", "out.xml", "--format", "flatopc"])).unwrap_err().to_string();
+    assert!(error.starts_with("missing.docx:"), "{error}");
+}
+
+#[test]
 fn help_or_h_after_a_subcommand_asks_for_the_usage() {
     for cmd in SUBCOMMANDS {
         assert!(wants_help(cmd, &args(&["in.docx", "--help"])), "{cmd}");
@@ -110,11 +126,6 @@ fn author_flag_names_the_headless_session() {
     assert_eq!(s.author, "Claude (copyedit)");
     assert!(set_author(&mut s, "   ").is_err_and(|e| e.starts_with("--author:")));
     assert!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])).is_ok());
-    // The app's user name is the person's own; a bridge flag must not rewrite it.
-    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"])).is_err_and(|e| e.to_string().contains("--author")));
-    // A malformed address fails at startup, not on every retried call.
-    assert!(run(&args(&["mcp", "--connect", "127.0.0.1:notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
-    assert!(run(&args(&["mcp", "--connect", "notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
     // The flag goes through the same protection check as the command.
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
@@ -195,6 +206,10 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     let ok = |raw: Vec<OsString>| text_args(&raw).unwrap().1;
     assert_eq!(ok(vec!["zotero".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["render".into(), latin1(), "out.png".into(), "--page".into(), "2".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["render".into(), "--page".into(), "2".into(), latin1(), "out.png".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["convert".into(), "--format".into(), "flatopc".into(), latin1(), "out.xml".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["info".into(), "--password".into(), "secret".into(), latin1()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["zotero".into(), "--port".into(), "23119".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["run".into(), "--print".into(), "--file".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["info".into(), "in.docx".into()]), None);
     // Every command that opens a file reaches the open with it (no such file here), so
@@ -212,6 +227,7 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     for (raw, n) in [
         (vec!["zotero".into(), latin1(), "in.docx".into()], 2),
         (vec!["render".into(), "in.docx".into(), latin1()], 3),
+        (vec!["render".into(), "--page".into(), latin1(), "in.docx".into(), "out.png".into()], 3),
         (vec!["run".into(), "--save".into(), latin1()], 3),
         (vec!["commands".into(), latin1()], 2),
     ] {
@@ -219,11 +235,113 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     }
 }
 
+/// An exclusively created scratch folder, removed on drop even when an assertion fails.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        loop {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("wc-cli-{tag}-{}-{n}", std::process::id()));
+            // `create_dir` fails when the path exists, so a leftover or a planted folder is never reused. Any
+            // other failure (no temp folder, no permission) fails every name: report it instead of looping.
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Self(dir),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("scratch folder {}: {e}", dir.display()),
+            }
+        }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Shared rule 18 (#7124): every agent entry point, a subcommand that serves a client's requests
+/// rather than running what the person typed and exiting, refuses to start without both
+/// automation roots. Each subcommand has a row, so a new one fails here until it is classified,
+/// and a new agent entry point fails until it refuses.
 #[test]
-fn automation_roots_are_an_error_with_connect() {
+fn every_agent_entry_point_refuses_to_start_without_both_roots() {
+    enum Kind {
+        Agent,
+        NotAgent(&'static str),
+    }
+    use Kind::{Agent, NotAgent};
+    let table = [
+        ("convert", NotAgent("converts the files named on its command line, then exits")),
+        ("info", NotAgent("reads the one file named on its command line, then exits")),
+        ("text", NotAgent("reads the one file named on its command line, then exits")),
+        ("inspect", NotAgent("reads the one file named on its command line, then exits")),
+        ("render", NotAgent("renders the file named on its command line, then exits")),
+        ("run", NotAgent("runs the commands and script named on its command line, then exits")),
+        ("commands", NotAgent("lists the commands; touches no file")),
+        ("parity", NotAgent("prints the feature catalog; touches no file")),
+        ("mcp", Agent),
+        ("zotero", NotAgent("runs one named Zotero command; Zotero's replies edit citations and name no file")),
+    ];
+    assert_eq!(table.iter().map(|(name, _)| *name).collect::<Vec<_>>(), SUBCOMMANDS);
+
+    let scratch = Scratch::new("entry");
+    let base = scratch.0.clone();
+    std::fs::create_dir_all(base.join("in")).unwrap();
+    std::fs::create_dir_all(base.join("out")).unwrap();
+    let read = format!("--automation-read-root={}", base.join("in").display());
+    let write = format!("--automation-write-root={}", base.join("out").display());
+    for (name, kind) in table {
+        if let NotAgent(why) = kind {
+            assert!(!why.is_empty(), "{name}: say why it is not an agent entry point");
+            continue;
+        }
+        for given in [vec![], vec![read.clone()], vec![write.clone()], vec!["--author".to_string(), "Claude".to_string()]] {
+            let line = [vec![name.to_string()], given].concat();
+            let e = run(&line).unwrap_err().to_string();
+            assert!(e.contains("--automation-read-root") && e.contains("--automation-write-root"), "{line:?}: {e}");
+        }
+    }
+}
+
+/// The desktop app doesn't confine its control channel to roots yet (#3695, #5819), so the bridge
+/// to it is refused, with roots or without, before anything connects.
+#[test]
+fn mcp_connect_is_refused_until_the_app_confines_its_control_channel() {
     let dir = std::env::temp_dir().to_string_lossy().into_owned();
-    let e = run(&args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir])).unwrap_err().to_string();
-    assert!(e.contains("--automation-read-root") && e.contains("headless"), "{e}");
+    for line in [
+        args(&["mcp", "--connect", "127.0.0.1:9"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"]),
+        args(&["mcp", "--connect", "127.0.0.1:9", "--automation-read-root", &dir, "--automation-write-root", &dir]),
+    ] {
+        let e = run(&line).unwrap_err().to_string();
+        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
+    }
+}
+
+/// `mcp`'s headless session takes `--author` as the session's author, and refuses a blank one as `run` does.
+#[test]
+fn mcp_headless_session_takes_the_author_flag() {
+    let scratch = Scratch::new("mcp-author");
+    let roots = wordcraft_engine::file_access::AutomationRoots::new(Some(&scratch.0), Some(&scratch.0)).unwrap().unwrap();
+    assert_eq!(headless_mcp(roots.clone(), Some("Claude (copyedit)")).unwrap().session.author, "Claude (copyedit)");
+    assert!(headless_mcp(roots.clone(), Some("   ")).is_err_and(|e| e.starts_with("--author:")));
+    let unnamed = headless_mcp(roots, None).unwrap();
+    assert_eq!(unnamed.session.author, wordcraft_mcp::Headless::default().session.author, "no flag keeps the default author");
+}
+
+/// `--connect` is refused whether or not it has a value, written apart or as `--connect=…`, even with both roots valid.
+#[test]
+fn mcp_connect_is_refused_without_a_value_too() {
+    let scratch = Scratch::new("connect-bare");
+    let dir = scratch.0.to_string_lossy().into_owned();
+    let roots = ["--automation-read-root", &dir, "--automation-write-root", &dir];
+    for tail in [vec!["--connect"], vec!["--connect", "--author", "Claude"], vec!["--connect=127.0.0.1:9"], vec!["--connect="]] {
+        let line = args(&[&["mcp"][..], &roots, &tail].concat());
+        let e = run(&line).unwrap_err().to_string();
+        assert!(e.contains("--connect") && e.contains("#3695") && e.contains("#5819"), "{line:?}: {e}");
+    }
 }
 
 #[test]
@@ -246,19 +364,19 @@ fn render_rejects_missing_or_invalid_page_and_scale() {
     assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--page", "-1"])), Err("render: invalid --page `-1`: not a valid integer".into()));
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "0"])),
-        Err("render: invalid --scale `0`: scale must be a positive number".into())
+        Err("render: invalid --scale `0`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "-2"])),
-        Err("render: invalid --scale `-2`: scale must be a positive number".into())
+        Err("render: invalid --scale `-2`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "NaN"])),
-        Err("render: invalid --scale `NaN`: scale must be a positive number".into())
+        Err("render: invalid --scale `NaN`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["render", "missing.docx", "out.png", "--scale", "inf"])),
-        Err("render: invalid --scale `inf`: scale must be a positive number".into())
+        Err("render: invalid --scale `inf`: scale must be a finite positive number".into())
     );
 
     // Duplicate options
@@ -301,19 +419,19 @@ fn run_rejects_missing_or_invalid_page_and_scale() {
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "0"])),
-        Err("run: invalid --scale `0`: scale must be a positive number".into())
+        Err("run: invalid --scale `0`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "-1"])),
-        Err("run: invalid --scale `-1`: scale must be a positive number".into())
+        Err("run: invalid --scale `-1`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "NaN"])),
-        Err("run: invalid --scale `NaN`: scale must be a positive number".into())
+        Err("run: invalid --scale `NaN`: scale must be a finite positive number".into())
     );
     assert_eq!(
         run(&args(&["run", "--template", "sample", "--save", "out.png", "--scale", "inf"])),
-        Err("run: invalid --scale `inf`: scale must be a positive number".into())
+        Err("run: invalid --scale `inf`: scale must be a finite positive number".into())
     );
 
     // Duplicate options
@@ -477,6 +595,27 @@ fn command_line_template_wins_over_the_scripts_file() {
 }
 
 #[test]
+fn cmd_value_missing_is_reported() {
+    let missing = std::env::temp_dir().join(format!(
+        "wc-cli-missing-cmd-{}-{}.docx",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    ));
+    assert!(!missing.exists());
+    let missing = missing.to_string_lossy();
+    for argv in [
+        vec!["run", "--cmd"],
+        vec!["run", "--cmd", "--save", "out.docx"],
+        vec!["run", "--cmd", "caret.docEnd", "--cmd", "--print"],
+        vec!["run", "--cmd", "--bogus"],
+        vec!["run", "--cmd", "--file", &missing],
+    ] {
+        assert_eq!(run(&args(&argv)), Err("--cmd needs a value".into()), "{argv:?}");
+    }
+    assert!(run(&args(&["run", "--cmd", "caret.docEnd", "--cmd", "caret.docStart"])).is_ok());
+}
+
+#[test]
 fn script_value_missing_is_reported() {
     let e = run(&args(&["run", "--script", "--cmd", "caret.docEnd"])).unwrap_err().to_string();
     assert!(e.contains("--script requires a value"), "{e}");
@@ -542,4 +681,20 @@ fn script_parse_resolves_paths_against_the_base() {
     let s = script::parse(r#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#, None).unwrap();
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
+}
+
+#[test]
+fn invisible_characters_are_escaped_and_json_lines_still_parse_back() {
+    let hidden = "a\u{ad}b\u{200b}c\u{200d}d\u{2060}e\u{2064}f\u{feff}g\u{e0041}h\u{e007f}i\u{85}j\u{202e}k";
+    let shown = escape_peer(hidden);
+    assert!(!shown.chars().any(is_unsafe_char), "{shown}");
+    assert!(shown.contains("\\u{e0041}") && shown.contains("\\u{ad}"), "{shown}");
+    // Errors keep a Windows path readable.
+    assert_eq!(escape_text("C:\\dir\\a.docx", false), "C:\\dir\\a.docx");
+
+    let value = json!({"part": hidden, "plain": "ünïcode ok"});
+    let line = json_line_safe(&value.to_string());
+    assert!(!line.chars().any(is_unsafe_char), "{line}");
+    assert!(line.contains("\\ud800") || line.contains("\\udb40"), "{line}");
+    assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), value);
 }

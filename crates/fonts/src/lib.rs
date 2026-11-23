@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod color;
+pub mod download;
 mod fontdb;
 pub mod math;
 mod script;
@@ -21,13 +22,10 @@ pub use fontdb::{
 pub use harfrust::Feature;
 use harfrust::{Direction, ShapeOptions, ShapePlan, ShapePlanKey, Shaper, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
-pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
+pub use script::{fallback_rank, is_emoji, joins_cursively, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-pub use ui_fallback::{
-    SystemUiFont, is_cjk, system_arabic_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk,
-    ui_uncovered_cjk,
-};
+pub use ui_fallback::is_cjk;
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).
@@ -52,65 +50,6 @@ pub fn japanese_document_fonts() -> Vec<&'static CraftFont> {
     let mut v: Vec<_> = japanese_fonts().collect();
     v.sort_by_key(|f| (!f.family.contains("Mincho"), f.style != "Regular"));
     v
-}
-
-/// Japanese faces in UI order: BIZ UDPGothic first (the UI face), then the others; `bold` puts
-/// bold styles before regular ones.
-pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
-    let mut v: Vec<_> = japanese_fonts().collect();
-    v.sort_by_key(|f| (f.family != "BIZ UDPGothic", (f.style == "Bold") != bold));
-    v
-}
-
-/// The craft-fonts faces for Simplified Chinese (`"Hans"`), in manifest order. Empty without
-/// craft-fonts.
-pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
-}
-
-/// The craft-fonts faces for Korean (`"Kore"`), in manifest order. Empty without craft-fonts.
-pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
-}
-
-/// The craft-fonts Georgian (`"Geor"`) Regular face for the interface. Empty without craft-fonts.
-pub fn georgian_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Geor") && f.style == "Regular")
-}
-
-/// The CJK interface faces, Regular styles only (the UI fakes no bold), with the Japanese UI,
-/// Chinese, and Korean faces ordered for the selected interface language. Mixing the faces within
-/// a line would mix glyph styles, so the first face should cover the interface language. Empty
-/// without craft-fonts.
-pub fn ui_cjk_fonts(prefer_hans: bool) -> Vec<&'static CraftFont> {
-    ui_cjk_fonts_for(prefer_hans, false)
-}
-
-/// The CJK interface faces in the preferred writing system's order.
-pub fn ui_cjk_fonts_for(prefer_hans: bool, prefer_korean: bool) -> Vec<&'static CraftFont> {
-    let regular = |f: &&CraftFont| f.style == "Regular";
-    let ja = japanese_ui_fonts(false).into_iter().filter(regular).take(1);
-    let zh = chinese_fonts().filter(regular).take(1);
-    let ko = korean_fonts().filter(regular).take(1);
-    if prefer_korean {
-        ko.chain(ja).chain(zh).collect()
-    } else if prefer_hans {
-        zh.chain(ja).chain(ko).collect()
-    } else {
-        ja.chain(zh).chain(ko).collect()
-    }
-}
-
-/// The craft-fonts faces for Arabic script (`"Arab"`), in manifest order: the document fallback
-/// for Arabic text. Empty without craft-fonts.
-pub fn arabic_fonts() -> impl Iterator<Item = &'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Arab"))
-}
-
-/// The craft-fonts faces for Arabic script (`"Arab"`), Regular styles only: the interface's
-/// fallback for an Arabic interface and for Arabic file names. Empty without craft-fonts.
-pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
-    arabic_fonts().filter(|f| f.style == "Regular").collect()
 }
 
 /// The bundled serif used when a document asks for nothing better.
@@ -185,13 +124,34 @@ fn direction_runs(text: &str) -> Vec<(std::ops::Range<usize>, bool)> {
 /// order: right-to-left runs are shaped right to left, then their clusters put back in text
 /// order (each cluster's glyphs keep the shaper's order); line layout reorders them visually.
 pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char) -> Vec<ShapedGlyph> {
+    shape_in(face, text, features, map, ShapeContext::default())
+}
+
+/// The text shown on either side of what is being shaped. Only a letter's form depends on it: the
+/// letters of an Arabic word join across a change of formatting, so each piece has to know what
+/// it continues (#4093). Nothing outside the shaped text is drawn or measured.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShapeContext<'a> {
+    pub before: &'a str,
+    pub after: &'a str,
+}
+
+impl<'a> ShapeContext<'a> {
+    /// This context for the part `r` of `text`: what's beyond `text` where `r` reaches its edge.
+    fn at_edges_of(self, text: &str, r: &std::ops::Range<usize>) -> ShapeContext<'a> {
+        ShapeContext { before: if r.start == 0 { self.before } else { "" }, after: if r.end == text.len() { self.after } else { "" } }
+    }
+}
+
+/// [`shape`] of a piece of longer text (see [`ShapeContext`]).
+pub fn shape_in(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, around: ShapeContext<'_>) -> Vec<ShapedGlyph> {
     if !text.chars().any(is_rtl) {
-        return shape_dir(face, text, features, &map, false);
+        return shape_dir(face, text, features, &map, false, around);
     }
     let mut out = Vec::with_capacity(text.len());
     for (r, rtl) in direction_runs(text) {
         let Some(sub) = text.get(r.clone()) else { continue };
-        let mut g = shape_run(face, sub, features, &map, rtl);
+        let mut g = shape_run_in(face, sub, features, &map, rtl, around.at_edges_of(text, &r));
         for x in &mut g {
             x.cluster += r.start;
         }
@@ -205,7 +165,19 @@ pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(cha
 /// mark positioning. Glyphs come back in logical order like [`shape`]: clusters in text order,
 /// each cluster's glyphs in the shaper's (visual) order.
 pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
-    let g = shape_dir(face, text, features, &map, rtl);
+    shape_run_in(face, text, features, map, rtl, ShapeContext::default())
+}
+
+/// [`shape_run`] of a piece of longer text (see [`ShapeContext`]).
+pub fn shape_run_in(
+    face: &FontFace,
+    text: &str,
+    features: &[Feature],
+    map: impl Fn(char) -> char,
+    rtl: bool,
+    around: ShapeContext<'_>,
+) -> Vec<ShapedGlyph> {
+    let g = shape_dir(face, text, features, &map, rtl, around);
     if !rtl {
         return g;
     }
@@ -221,7 +193,14 @@ pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn
     groups.into_iter().flatten().collect()
 }
 
-fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
+fn shape_dir(
+    face: &FontFace,
+    text: &str,
+    features: &[Feature],
+    map: &impl Fn(char) -> char,
+    rtl: bool,
+    around: ShapeContext<'_>,
+) -> Vec<ShapedGlyph> {
     let mut out = Vec::with_capacity(text.len());
     let shaped = face.hb().map(|hb| {
         let shaper = face.shaper.shaper(&hb).instance(face.instance.as_ref()).build();
@@ -234,6 +213,10 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
             for (i, c) in sub.char_indices() {
                 buf.add(map(c), (r.start + i) as u32);
             }
+            // After the text: adding to a buffer clears what follows it.
+            let around = around.at_edges_of(text, &r);
+            buf.set_pre_context(around.before);
+            buf.set_post_context(around.after);
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
             let plan = shape_plan(face, &shaper, &buf, features);
@@ -386,7 +369,10 @@ mod tests {
             gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, i.cluster, p.x_advance, p.x_offset, p.y_offset)).collect()
         };
         let kept = |face: &FontFace, text: &str, features: &[Feature], rtl: bool| -> Vec<(u32, u32, i32, i32, i32)> {
-            shape_dir(face, text, features, &|c| c, rtl).iter().map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset)).collect()
+            shape_dir(face, text, features, &|c| c, rtl, ShapeContext::default())
+                .iter()
+                .map(|g| (g.gid, g.cluster as u32, g.x_advance, g.x_offset, g.y_offset))
+                .collect()
         };
         let db = FontDb::global();
         let faces = [db.face(DEFAULT_FAMILY, "Regular"), db.face(DEFAULT_FAMILY, "Italic"), db.face("Source Sans 3", "Regular")];
@@ -421,7 +407,8 @@ mod tests {
         for n in 0..3 * MAX_SHAPE_PLANS as u32 {
             let features = [feature_value(b"kern", n % 2), feature_value(b"liga", n)];
             let rtl = n % 3 == 0;
-            let kept: Vec<(u32, i32)> = shape_dir(&face, "office", &features, &|c| c, rtl).iter().map(|g| (g.gid, g.x_advance)).collect();
+            let kept: Vec<(u32, i32)> =
+                shape_dir(&face, "office", &features, &|c| c, rtl, ShapeContext::default()).iter().map(|g| (g.gid, g.x_advance)).collect();
             assert_eq!(kept, fresh(&features, rtl), "{n}");
             assert!(kept_shape_plans() <= MAX_SHAPE_PLANS, "{}", kept_shape_plans());
         }
@@ -506,8 +493,7 @@ mod tests {
         let fonts = japanese_document_fonts();
         assert!(!fonts.is_empty(), "craft-fonts has Japanese fonts");
         assert!(fonts[0].family.contains("Mincho"), "documents fall back to a Mincho first");
-        assert_eq!(japanese_ui_fonts(false)[0].family, "BIZ UDPGothic");
-        assert_eq!(japanese_ui_fonts(true)[0].style, "Bold");
+
         let db = FontDb::with_font_dirs(Vec::new());
         db.set_system_fallback(false);
         for cf in fonts {
@@ -533,7 +519,7 @@ mod tests {
     /// fallback (the browser build has no other), and its letters join when shaped.
     #[test]
     fn craft_fonts_arabic_face_is_the_document_fallback_for_arabic() {
-        if arabic_fonts().next().is_none() {
+        if !CRAFT_FONTS.iter().any(|f| f.scripts.contains(&"Arab")) {
             eprintln!("skipped: built without a craft-fonts Arabic face (set CRAFT_FONTS_DIR to a checkout)");
             return;
         }
