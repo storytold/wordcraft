@@ -1,10 +1,10 @@
-//! One native window per open document. Each window is an egui viewport, driven by
-//! [`craft_window::Viewports`]: one window draws in the root viewport, every other one in an
-//! immediate viewport of its own, and each draws the whole interface (title bar, ribbon, page,
-//! status bar, dialogs) for its own document. [`WordApp`]'s fields hold the drawn window's state
-//! ([`crate::window_ui`]); the other windows keep theirs in their [`Window`]. Between frames the
-//! fields hold the active window's (the one focused last), so the control channel, the MCP
-//! bridge and the host's menus act on it.
+//! One native window per open document. The app's windows are a [`craft_window::WindowList`]: one
+//! entry is the root OS window (drawn by the app's own shell), every other entry is shown as a
+//! [`DocumentWindow`] in an OS window of its own. Each draws the whole interface (title bar,
+//! ribbon, page, status bar, dialogs) for its own document. [`WordApp`]'s fields hold the drawn
+//! window's state ([`crate::window_ui`]); the other windows keep theirs in their [`Window`].
+//! Between frames the fields hold the active window's (the one focused last), so the control
+//! channel, the MCP bridge and the host's menus act on it.
 //!
 //! A frame: [`WordApp::logic`] does the app-wide work once (the control channel, recovery,
 //! timers, printing). [`WordApp::ui`] then draws the windows in turn: for each it swaps the
@@ -27,15 +27,19 @@
 //! document's windows leaves the document open and asks nothing; closing its last window closes
 //! it.
 
-use std::collections::HashMap;
-
-use craft_window::{Document, Frame, Viewports, WindowEvent, WindowId, WindowList, WindowMenu};
-use egui::{ViewportCommand, ViewportId};
+use craft::ui::contract::{BodyCx, Props as _, ShowContainer as _, SizeLimits};
+// PLAN: assumed `craft::ui::runtime::env::WindowKey` is the facade path of ui-contract's `runtime/env/shell.rs` `WindowKey`.
+use craft::ui::runtime::env::WindowKey;
+use craft::ui::runtime::windows::{WindowAction, WindowHost};
+use craft::ui::shell::DocumentWindow;
+use craft::ui::style::StyleCx;
+use craft::window::{Document, WindowId, WindowList, WindowMenu};
+use egui::ViewportId;
 use serde_json::{Value, json};
 use wordcraft_engine::WindowView;
 use wordcraft_engine::cmd::view::OtherWindow;
 
-use crate::{WordApp, documents, window_ui::WindowUi};
+use crate::{WordApp, documents, window_geometry::MIN_SIZE, window_ui::WindowUi};
 
 pub(crate) mod arrange;
 
@@ -44,12 +48,13 @@ pub(crate) fn title(name: &str, dirty: bool) -> String {
     format!("{name}{} - WordCraft", if dirty { " •" } else { "" })
 }
 
+/// The id of the container that shows window `id`; the window host names its viewport by it.
+fn window_container_id(id: WindowId) -> egui::Id {
+    egui::Id::unique(("wordcraft.window", id.get()))
+}
+
 /// An open window.
 pub(crate) struct Window {
-    /// The app's key for the window. A window made while the windows are being drawn gets its
-    /// [`WindowId`] once the frame's drawing ends.
-    key: u64,
-    id: Option<WindowId>,
     /// The document it shows.
     doc: u64,
     /// Its state while another window's is in [`WordApp`]'s fields; `None` for that window.
@@ -57,69 +62,46 @@ pub(crate) struct Window {
     /// Requests commands made for its document while another window was drawn
     /// ([`WordApp::handle_request`]), handled when it draws next.
     requests: Vec<Value>,
-    /// The title it last drew, for its viewport.
-    title: String,
     /// Its view of the document (caret, zoom, view mode…) while another window on the same
     /// document is drawn. `None` while the session holds it: for the drawn window, and for the
     /// window on each other document whose view is parked with that document.
     view: Option<WindowView>,
+    /// Brings its OS window forward in the next pass that shows it; sent once.
+    raise: bool,
+    /// Its OS window opens cascaded from the window before it; used once, when it first shows.
+    place: bool,
+}
+
+impl Window {
+    /// A window on `doc`; `place` cascades its OS window from the others when it first shows.
+    fn new(doc: u64, ui: Option<Box<WindowUi>>, view: Option<WindowView>, place: bool) -> Window {
+        Window { doc, ui, requests: Vec::new(), view, raise: false, place }
+    }
 }
 
 /// The app's windows. See the module documentation.
 pub struct Windows {
     /// Separate native windows (desktop). Off, one window shows every document in turn (web).
     native: bool,
-    /// Every window, with its key, for the viewport driver: opening and focus order, positions.
-    /// Lent to the driver while the windows draw.
-    list: WindowList<u64>,
-    viewports: Option<Viewports>,
-    /// Open windows in opening order.
-    open: Vec<Window>,
+    /// Every window, in opening and focus order.
+    list: WindowList<Window>,
+    /// The entry the root OS window shows.
+    root: WindowId,
     /// The window whose state is in [`WordApp`]'s fields.
-    shown: u64,
-    next_key: u64,
-    /// The windows are being drawn: `list` is lent out, so windows opened or closed now join or
-    /// leave it when the drawing ends.
-    showing: bool,
-    /// Window keys, most recently focused first, as the drawing started.
-    recent: Vec<u64>,
-    /// A window to bring to the front when the drawing ends.
-    focus: Option<u64>,
-    /// View › Window › Switch Windows and the window titles, as the frame's drawing started.
-    menu: WindowMenu,
-    /// What a new window's viewport starts from: size, icon, app id ([`WordApp::set_window_builder`]).
-    builder: egui::ViewportBuilder,
-    /// [`ViewportInput`] is registered with egui.
-    input_plugin: bool,
-    /// The viewport driver draws the windows this frame, and titles them.
-    driven: bool,
+    shown: WindowId,
     /// View › Window: Side by Side and Synchronous Scrolling (#322).
     arranged: arrange::State,
+    /// Whether the root OS window had focus in the last pass; a [`DocumentWindow`] reports its own gain
+    /// (`focus_gained`), the root's is read from the window host's facts.
+    root_focused: bool,
 }
 
 impl Windows {
     /// One window, showing document `doc`.
     pub(crate) fn new(doc: u64) -> Windows {
         let mut list = WindowList::new();
-        let id = list.open(1);
-        let mut viewports = Viewports::new(Frame::Desktop);
-        viewports.set_root(Some(id));
-        Windows {
-            native: cfg!(not(target_arch = "wasm32")),
-            list,
-            viewports: Some(viewports),
-            open: vec![Window { key: 1, id: Some(id), doc, ui: None, requests: Vec::new(), title: String::new(), view: None }],
-            shown: 1,
-            next_key: 2,
-            showing: false,
-            recent: vec![1],
-            focus: None,
-            menu: WindowMenu::default(),
-            builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
-            input_plugin: false,
-            driven: false,
-            arranged: arrange::State::default(),
-        }
+        let id = list.open(Window::new(doc, None, None, false));
+        Windows { native: cfg!(not(target_arch = "wasm32")), list, root: id, shown: id, arranged: arrange::State::default(), root_focused: false }
     }
 
     /// Whether documents get native windows of their own.
@@ -133,42 +115,52 @@ impl Windows {
         self.native = false;
     }
 
-    /// Whether the viewport driver titles the windows (else the drawn window sends its title).
-    pub(crate) fn driven(&self) -> bool {
-        self.driven
-    }
-
     /// The key of the window whose state is in [`WordApp`]'s fields.
     pub(crate) fn shown(&self) -> u64 {
-        self.shown
+        self.shown.get()
+    }
+
+    /// The key of the entry the root OS window shows.
+    pub(crate) fn root_key(&self) -> u64 {
+        self.root.get()
+    }
+
+    /// The key of the window that has focus (the one focused last), if any.
+    pub(crate) fn active(&self) -> Option<u64> {
+        self.list.active().map(WindowId::get)
+    }
+
+    /// The key of the window drawn now: `main` for the root entry, else one of its own, so two
+    /// windows never share a placement or shell key.
+    pub(crate) fn window_key(&self) -> WindowKey {
+        if self.shown == self.root { WindowKey::main() } else { WindowKey::new(format!("window-{}", self.shown.get())) }
+    }
+
+    /// The viewports whose OS window is open: the root's and every other window's.
+    pub(crate) fn viewports(&self, ctx: &egui::Context) -> Vec<ViewportId> {
+        if !self.native {
+            return vec![ViewportId::ROOT];
+        }
+        self.list.ids().filter_map(|id| self.viewport_of(ctx, id)).collect()
+    }
+
+    /// The list entry with the app's key `key` (the number control and menu entries carry).
+    fn id_of(&self, key: u64) -> Option<WindowId> {
+        self.list.ids().find(|id| id.get() == key)
     }
 
     fn get(&self, key: u64) -> Option<&Window> {
-        self.open.iter().find(|w| w.key == key)
+        self.list.get(self.id_of(key)?)
     }
 
     fn get_mut(&mut self, key: u64) -> Option<&mut Window> {
-        self.open.iter_mut().find(|w| w.key == key)
+        let id = self.id_of(key)?;
+        self.list.get_mut(id)
     }
 
     /// The window showing document `doc`, the most recently focused if several do.
     fn of_doc(&self, doc: u64) -> Option<u64> {
-        self.recent_keys().into_iter().find(|&k| self.get(k).is_some_and(|w| w.doc == doc))
-    }
-
-    /// Open windows, most recently focused first; windows opened during this frame's drawing
-    /// come first.
-    fn recent_keys(&self) -> Vec<u64> {
-        let mut keys: Vec<u64> = self.open.iter().rev().filter(|w| w.id.is_none()).map(|w| w.key).collect();
-        let listed: Vec<u64> =
-            if self.showing { self.recent.clone() } else { self.list.recent().filter_map(|id| self.list.get(id).copied()).collect() };
-        keys.extend(listed.into_iter().filter(|&k| self.get(k).is_some()));
-        for w in &self.open {
-            if !keys.contains(&w.key) {
-                keys.push(w.key);
-            }
-        }
-        keys
+        self.list.recent().find(|&id| self.list.get(id).is_some_and(|w| w.doc == doc)).map(WindowId::get)
     }
 
     /// The document of the window focused last before `key`'s, if any.
@@ -176,181 +168,42 @@ impl Windows {
         if !self.native {
             return None;
         }
-        self.recent_keys().into_iter().find(|&k| k != key).and_then(|k| self.get(k)).map(|w| w.doc)
+        self.list.recent().find(|id| id.get() != key).and_then(|id| self.list.get(id)).map(|w| w.doc)
     }
 
-    /// The window's viewport.
-    fn viewport(&self, key: u64) -> ViewportId {
-        match (self.get(key).and_then(|w| w.id), &self.viewports) {
-            (Some(id), Some(v)) => v.viewport_id(id),
-            _ => ViewportId::ROOT,
+    /// The viewport window `id` draws in, while its OS window is open: the root's for the root
+    /// entry, else the one the window host names for the window's container.
+    fn viewport_of(&self, ctx: &egui::Context, id: WindowId) -> Option<ViewportId> {
+        if id == self.root {
+            return Some(ViewportId::ROOT);
         }
+        WindowHost::of(ctx).viewport_of(window_container_id(id))
     }
 
-    /// The viewports the open windows draw in, the root's included.
-    pub(crate) fn viewport_ids(&self) -> Vec<ViewportId> {
-        let mut ids = vec![ViewportId::ROOT];
-        for w in &self.open {
-            let v = self.viewport(w.key);
-            if !ids.contains(&v) {
-                ids.push(v);
-            }
-        }
-        ids
-    }
-
-    /// The title View › Window › Switch Windows gives the window, as the frame started.
-    fn menu_title(&self, key: u64) -> Option<&str> {
-        self.menu.title(self.get(key)?.id?)
-    }
-
-    /// Bring the list up to date with the windows opened, closed and focused since it was last
-    /// lent out, and give the root viewport a window when its own closed.
-    fn settle(&mut self, ctx: Option<&egui::Context>) {
-        if self.showing {
-            return;
-        }
-        let gone: Vec<WindowId> = self.list.ids().filter(|id| !self.open.iter().any(|w| w.id == Some(*id))).collect();
-        for id in gone {
-            self.list.close(id);
-        }
-        let active = self.list.active();
-        let mut opened = false;
-        for w in self.open.iter_mut().filter(|w| w.id.is_none()) {
-            w.id = Some(self.list.open(w.key));
-            opened = true;
-        }
-        let focus = self.focus.take().and_then(|k| self.get(k)).and_then(|w| w.id);
-        // A window opened behind the others (nothing asked to focus it) leaves the active one so.
-        if let Some(id) = focus.or(active.filter(|_| opened)) {
-            self.list.focus(id);
-        }
-        let Some(viewports) = self.viewports.as_mut() else { return };
-        if !viewports.root().is_some_and(|r| self.list.contains(r))
-            && let Some(next) = self.list.active()
-        {
-            match ctx {
-                Some(ctx) => viewports.adopt(ctx, &self.list, next),
-                None => viewports.set_root(Some(next)),
-            }
-        }
-        if let (Some(id), Some(ctx)) = (focus, ctx) {
-            viewports.focus(ctx, id);
-        }
-        if opened && let Some(ctx) = ctx {
-            ctx.request_repaint();
-        }
-    }
-}
-
-/// Control-channel input for a window in a viewport of its own: eframe's raw-input hook
-/// ([`WordApp::raw_input_hook`]) sees only the root viewport's input, and egui runs a plugin's
-/// input hook for every viewport. On macOS it also reads Control-click as the secondary button
-/// in those windows, as the raw-input hook does in the root's.
-#[derive(Default)]
-pub(crate) struct ViewportInput {
-    /// The viewport the queued events go to, on its next pass.
-    target: Option<ViewportId>,
-    events: Vec<egui::Event>,
-    /// A viewport whose pass got keyboard input this way, until its window has looked.
-    keys_for: Option<ViewportId>,
-    /// The viewport whose current pass got control input this way (any kind), until its next
-    /// pass: [`WordApp::input_from_control`].
-    pub(crate) injected: Option<ViewportId>,
-    control_click: HashMap<ViewportId, bool>,
-    /// Touchpad scroll speed multiplier for secondary viewports (#6146).
-    pub(crate) touchpad_speed: crate::scroll::ScrollSpeed,
-    /// Mouse-wheel scroll speed multiplier for secondary viewports (#6146).
-    pub(crate) wheel_speed: crate::scroll::ScrollSpeed,
-}
-
-impl egui::Plugin for ViewportInput {
-    /// Plugin debug name for egui's diagnostics.
-    fn debug_name(&self) -> &'static str {
-        "wordcraft_viewport_input"
-    }
-
-    /// Hooks raw input for non-root viewports, applying touchpad scroll speed and secondary clicks.
-    fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
-        let viewport = input.viewport_id;
-        if viewport == ViewportId::ROOT {
-            return;
-        }
-        self.touchpad_speed.apply_input_scroll(input, self.wheel_speed);
-        if cfg!(target_os = "macos") {
-            crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
-        }
-        if self.injected == Some(viewport) {
-            self.injected = None;
-        }
-        if self.target != Some(viewport) || self.events.is_empty() {
-            return;
-        }
-        self.target = None;
-        self.injected = Some(viewport);
-        let events = std::mem::take(&mut self.events);
-        if events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
-            input.focused = true;
-            self.keys_for = Some(viewport);
-        }
-        input.events.extend(events);
+    /// [`Windows::viewport_of`] for the window with the app's key `key`.
+    fn viewport(&self, ctx: &egui::Context, key: u64) -> Option<ViewportId> {
+        self.viewport_of(ctx, self.id_of(key)?)
     }
 }
 
 impl WordApp {
     /// How many windows are open.
     pub fn window_count(&self) -> usize {
-        if self.windows.native { self.windows.open.len() } else { 1 }
+        if self.windows.native { self.windows.list.len() } else { 1 }
     }
 
     /// The egui viewport of the active window, the one focused last: control input,
-    /// `ui.screenshot`, `ui.resize` and the saved window geometry are its. The root viewport
-    /// when the windows don't have viewports of their own (the web app, embedded viewports).
+    /// `ui.screenshot` and `ui.resize` are its. The root viewport when the windows don't have
+    /// viewports of their own (the web app, embedded viewports) or the window has none yet.
     pub fn active_viewport(&self) -> ViewportId {
-        if !self.windows.native || !self.windows.driven {
-            return ViewportId::ROOT;
-        }
-        let key = self.windows.recent_keys().first().copied().unwrap_or(self.windows.shown);
-        self.windows.viewport(key)
-    }
-
-    /// The active window's viewport and surface, for `ui.screenshot`: the root's from this
-    /// frame's raw input, another window's from the input it last drew with (the host's raw-input
-    /// hook sees only the root's).
-    pub(crate) fn active_surface_geometry(&self, ctx: &egui::Context) -> (ViewportId, Option<crate::control::SurfaceGeometry>) {
-        let viewport = self.active_viewport();
-        if viewport == ViewportId::ROOT {
-            return (viewport, self.surface_geometry);
-        }
-        let (info, screen_rect, max_texture_side) = ctx.input_for(viewport, |i| (i.viewport().clone(), i.raw.screen_rect, i.raw.max_texture_side));
-        (viewport, crate::control::SurfaceGeometry::from_viewport(&info, screen_rect, max_texture_side, ctx))
-    }
-
-    /// Returns the window key, document ID and display title of the window currently occupying
-    /// the root viewport, if one exists and native viewports are in use.
-    pub(crate) fn root_window_info(&self) -> Option<(u64, u64, String)> {
-        let viewports = self.windows.viewports.as_ref()?;
-        let root_id = viewports.root()?;
-        let root_win = self.windows.open.iter().find(|w| w.id == Some(root_id))?;
-        let doc_id = root_win.doc;
-        let title = self.session.documents().iter().find(|d| d.id == doc_id).map(documents::display_title).unwrap_or_default();
-        Some((root_win.key, doc_id, title))
-    }
-
-    /// The viewport new windows start from: the host's size, icon and app id. Their title and
-    /// place are the app's.
-    pub fn set_window_builder(&mut self, builder: egui::ViewportBuilder) {
-        self.windows.builder = builder;
-    }
-
-    /// The viewport builder that new windows start from.
-    pub fn window_builder(&self) -> &egui::ViewportBuilder {
-        &self.windows.builder
+        let Some(ctx) = self.ctx.as_ref().filter(|_| self.windows.native) else { return ViewportId::ROOT };
+        let id = self.windows.list.active().unwrap_or(self.windows.shown);
+        self.windows.viewport_of(ctx, id).unwrap_or(ViewportId::ROOT)
     }
 
     /// Whether a close request for the root viewport closes only the window drawn there: true
-    /// while other windows are open. [`WordApp::ui`] closes it (a [`WindowEvent::CloseRequested`]),
-    /// and the host keeps the app running.
+    /// while other windows are open. The root adopts another entry then, and the host keeps the
+    /// app running.
     pub fn closes_a_window(&self) -> bool {
         self.window_count() > 1 && !self.quit_requested
     }
@@ -370,19 +223,20 @@ impl WordApp {
     /// when there is no such window, or its document has closed ([`WordApp::prune_windows`]
     /// closes it then); the drawn window stays.
     pub(crate) fn enter_window(&mut self, key: u64) -> bool {
-        if key == self.windows.shown {
+        let Some(id) = self.windows.id_of(key) else { return false };
+        if id == self.windows.shown {
             return true;
         }
         let session = &self.session;
-        let Some(w) = self.windows.get_mut(key).filter(|w| w.ui.as_ref().is_some_and(|ui| session.is_open(ui.shown_document))) else {
+        let Some(w) = self.windows.list.get_mut(id).filter(|w| w.ui.as_ref().is_some_and(|ui| session.is_open(ui.shown_document))) else {
             return false;
         };
         let Some(mut state) = w.ui.take() else { return false };
         let view = w.view.take();
         let from = self.shown_document;
         self.swap_window(&mut state);
-        let left = std::mem::replace(&mut self.windows.shown, key);
-        if let Some(w) = self.windows.get_mut(left) {
+        let left = std::mem::replace(&mut self.windows.shown, id);
+        if let Some(w) = self.windows.list.get_mut(left) {
             w.doc = state.shown_document;
             w.ui = Some(state);
         }
@@ -399,7 +253,7 @@ impl WordApp {
     /// without a view of its own), and `view` takes its place, made valid for edits made since.
     fn swap_view_in(&mut self, key: u64, doc: u64, view: WindowView) {
         let held = self.session.take_view();
-        if let Some(owner) = self.windows.open.iter_mut().find(|w| w.key != key && w.doc == doc && w.view.is_none()) {
+        if let Some((_, owner)) = self.windows.list.iter_mut().find(|(id, w)| id.get() != key && w.doc == doc && w.view.is_none()) {
             owner.view = Some(held);
         }
         self.session.put_view(view);
@@ -408,17 +262,15 @@ impl WordApp {
     /// Open a new window for open document `doc`, focused, and draw it. The window that was drawn
     /// leaves the File page: whatever it was opening is open. `view` is the new window's view of
     /// a document another window shows (View › New Window); `None` for a document no window
-    /// shows yet.
+    /// shows yet. Its OS window shows from the next pass.
     fn open_window(&mut self, doc: u64, view: Option<WindowView>) {
-        let key = self.windows.next_key;
-        self.windows.next_key = self.windows.next_key.saturating_add(1);
-        let mut state = Box::new(WindowUi::new(doc));
-        // Faces borrowed for the interface (non-Latin file names) stay installed.
-        state.canvas.ime_faces = self.canvas.ime_faces.clone();
         self.ui.backstage = false;
-        self.windows.open.push(Window { key, id: None, doc, ui: Some(state), requests: Vec::new(), title: String::new(), view });
-        self.enter_window(key);
-        self.focus_window(key);
+        let id = self.windows.list.open(Window::new(doc, Some(Box::new(WindowUi::new(doc))), view, true));
+        self.enter_window(id.get());
+        self.focus_window(id.get());
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
     }
 
     /// View › New Window: another window on the drawn window's document, with the same caret,
@@ -438,11 +290,11 @@ impl WordApp {
     /// drawn window is its document's only one.
     pub(crate) fn other_window_on_document(&self) -> Option<u64> {
         let shown = self.windows.shown;
-        let doc = self.windows.get(shown)?.doc;
-        if !self.windows.native || !self.windows.open.iter().any(|w| w.key != shown && w.doc == doc) {
+        let doc = self.windows.list.get(shown)?.doc;
+        if !self.windows.native || !self.windows.list.iter().any(|(id, w)| id != shown && w.doc == doc) {
             return None;
         }
-        self.windows.recent_keys().into_iter().find(|&k| k != shown)
+        self.windows.list.recent().find(|&id| id != shown).map(WindowId::get)
     }
 
     /// Whether command `id` (File › Close) closes the drawn window alone, asking nothing: other
@@ -464,29 +316,28 @@ impl WordApp {
         if !self.enter_window(to) {
             return;
         }
-        self.windows.open.retain(|w| w.key != closing);
+        self.windows.list.close(closing);
         self.focus_window(to);
     }
 
-    /// Bring window `key` to the front (now, or once the frame's drawing ends) and make it the
-    /// active one.
+    /// Make window `key` the active one and bring it to the front in the next pass that shows it.
     pub(crate) fn focus_window(&mut self, key: u64) {
-        self.windows.focus = Some(key);
+        if let Some(id) = self.windows.id_of(key) {
+            self.windows.list.focus(id);
+            if let Some(w) = self.windows.list.get_mut(id) {
+                w.raise = true;
+            }
+        }
         self.settle_windows();
     }
 
-    /// [`Windows::settle`]; a window that moved into the root viewport keeps its place on the
-    /// page (the page's scroll state is the viewport's).
+    /// The root OS window shows an entry that is open: when its own closed, the active one moves
+    /// in. Each window's page state is its own, so the page keeps its place.
     fn settle_windows(&mut self) {
-        let root = |w: &Windows| w.viewports.as_ref().and_then(Viewports::root);
-        let before = root(&self.windows);
-        self.windows.settle(self.ctx.as_ref());
-        let Some(adopted) = root(&self.windows).filter(|r| before.is_some_and(|b| b != *r)) else { return };
-        let Some(key) = self.windows.list.get(adopted).copied() else { return };
-        if key == self.windows.shown {
-            self.canvas.scroll_request = Some(self.canvas.scroll_offset);
-        } else if let Some(w) = self.windows.get_mut(key).and_then(|w| w.ui.as_mut()) {
-            w.canvas.scroll_request = Some(w.canvas.scroll_offset);
+        if !self.windows.list.contains(self.windows.root)
+            && let Some(next) = self.windows.list.active()
+        {
+            self.windows.root = next;
         }
     }
 
@@ -496,23 +347,28 @@ impl WordApp {
     pub(crate) fn prune_windows(&mut self) {
         let shown = self.windows.shown;
         let session = &self.session;
-        let before = self.windows.open.len();
-        self.windows.open.retain(|w| w.key == shown || session.is_open(w.doc));
-        let mut changed = self.windows.open.len() != before;
+        let gone: Vec<WindowId> = self.windows.list.iter().filter(|(id, w)| *id != shown && !session.is_open(w.doc)).map(|(id, _)| id).collect();
+        let mut changed = !gone.is_empty();
+        for id in gone {
+            self.windows.list.close(id);
+        }
+        let behind = self.windows.list.active();
         let active = self.session.document_id();
         for d in self.session.documents() {
             if d.id == active || Some(d.id) == self.no_document || d.id == self.shown_document || self.windows.of_doc(d.id).is_some() {
                 continue;
             }
-            let key = self.windows.next_key;
-            self.windows.next_key = self.windows.next_key.saturating_add(1);
-            let mut state = Box::new(WindowUi::new(d.id));
-            state.canvas.ime_faces = self.canvas.ime_faces.clone();
-            self.windows.open.push(Window { key, id: None, doc: d.id, ui: Some(state), requests: Vec::new(), title: String::new(), view: None });
+            self.windows.list.open(Window::new(d.id, Some(Box::new(WindowUi::new(d.id))), None, true));
             changed = true;
+        }
+        if let Some(behind) = behind {
+            self.windows.list.focus(behind);
         }
         if changed {
             self.settle_windows();
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint();
+            }
         }
     }
 
@@ -525,7 +381,7 @@ impl WordApp {
     pub(crate) fn follow_in_windows(&mut self, id: u64) -> bool {
         let left = self.shown_document;
         let stand_in = self.no_document == Some(left);
-        let other = self.windows.of_doc(id).filter(|&k| k != self.windows.shown);
+        let other = self.windows.of_doc(id).filter(|&k| k != self.windows.shown());
         if self.session.is_open(left) {
             match other {
                 Some(key) if self.enter_window(key) => self.focus_window(key),
@@ -544,7 +400,7 @@ impl WordApp {
     /// The drawn window now shows document `id` (its own was replaced).
     pub(crate) fn window_shows(&mut self, id: u64) {
         let shown = self.windows.shown;
-        if let Some(w) = self.windows.get_mut(shown) {
+        if let Some(w) = self.windows.list.get_mut(shown) {
             w.doc = id;
         }
     }
@@ -554,7 +410,7 @@ impl WordApp {
     /// document when it was the last.
     pub(crate) fn close_shown_document(&mut self) -> Result<(), String> {
         let doc = self.session.document_id();
-        let next = self.windows.next_doc(self.windows.shown);
+        let next = self.windows.next_doc(self.windows.shown());
         self.session.close_document(doc).map_err(|e| e.to_string())?;
         if let Some(next) = next
             && self.session.is_open(next)
@@ -574,7 +430,7 @@ impl WordApp {
         if !self.windows.native {
             return false;
         }
-        let Some(key) = self.windows.of_doc(document).filter(|&k| k != self.windows.shown) else { return false };
+        let Some(key) = self.windows.of_doc(document).filter(|&k| k != self.windows.shown()) else { return false };
         if let Some(w) = self.windows.get_mut(key) {
             w.requests.push(req.clone());
         }
@@ -584,20 +440,23 @@ impl WordApp {
         true
     }
 
+    /// View › Window › Switch Windows' entries and the window titles, built from the windows as
+    /// they are now.
+    fn window_menu(&self) -> WindowMenu {
+        let docs = self.session.documents();
+        WindowMenu::new(&self.windows.list, |_, w| match docs.iter().find(|d| d.id == w.doc) {
+            Some(d) => Document { key: w.doc, name: documents::display_title(d), dirty: d.dirty },
+            None => Document { key: w.doc, name: String::new(), dirty: false },
+        })
+    }
+
     /// View › Window › Switch Windows with native windows: every window by its title (two
     /// windows on one document as `Name:1`, `Name:2`) with its key, the active one marked,
     /// unsaved ones with the title bar's dot. Choosing one brings it to the front
     /// ([`WordApp::show_window`]).
     pub(crate) fn switch_windows_entries(&self) -> Vec<(u64, String, bool)> {
-        self.windows
-            .menu
-            .entries()
-            .iter()
-            .filter_map(|e| {
-                let w = self.windows.open.iter().find(|w| w.id == Some(e.id))?;
-                Some((w.key, format!("{}{}", e.title, if e.dirty { " •" } else { "" }), w.key == self.windows.shown))
-            })
-            .collect()
+        let shown = self.windows.shown;
+        self.window_menu().entries().iter().map(|e| (e.id.get(), format!("{}{}", e.title, if e.dirty { " •" } else { "" }), e.id == shown)).collect()
     }
 
     /// Bring window `key` to the front and make it the active one, with its document.
@@ -612,87 +471,88 @@ impl WordApp {
         if !self.has_document() {
             return "WordCraft".to_string();
         }
-        let mut name = self.windows.menu_title(self.windows.shown).map(str::to_string).unwrap_or_else(|| self.title_stem());
-        // X11 converts window titles to C strings, which cannot contain NUL (#3634).
-        name.retain(|c| c != '\0');
+        let name = self.window_menu().title(self.windows.shown).map(str::to_string).unwrap_or_else(|| self.title_stem());
         title(&name, self.session.dirty)
     }
 
-    /// Draw every window, each in its viewport (see the module documentation).
+    /// The title of window `id` as `menu` gives it; `WordCraft` for a window with no document.
+    fn title_in(menu: &WindowMenu, id: WindowId) -> String {
+        match menu.get(id).filter(|e| !e.title.is_empty()) {
+            Some(e) => title(&e.title, e.dirty),
+            None => "WordCraft".to_string(),
+        }
+    }
+
+    /// Where a window opening now cascades from: the outer rect of the window focused before it
+    /// that has reported one, moved one step. `None` where no window reports its place (the web,
+    /// an embedded shell); the overlay places the window then.
+    fn cascade_from(&self, ui: &egui::Ui, new: WindowId, step: f32) -> Option<egui::Rect> {
+        let host = WindowHost::of(ui.ctx());
+        let previous =
+            self.windows.list.recent().filter(|&id| id != new).find_map(|id| host.facts(self.windows.viewport_of(ui.ctx(), id)?)?.outer)?;
+        Some(DocumentWindow::cascaded(ui, previous, previous.size(), step))
+    }
+
+    /// Draw every window (see the module documentation): the root entry in the root viewport,
+    /// every other one in its [`DocumentWindow`].
     pub(crate) fn windows_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.prune_windows();
         self.settle_windows();
-        self.windows.menu = self.window_menu(&self.windows.list);
-        // A backend that can't open native windows (egui embeds them in the root: tests,
-        // `ui_shot`) shows the active window alone. Embedded, every window would draw the same
-        // widgets in one viewport.
-        self.windows.driven = !ctx.embed_viewports() && self.windows.viewports.is_some();
-        if !self.windows.driven {
-            let active = self.windows.recent_keys().first().copied().unwrap_or(self.windows.shown);
-            self.draw_window(ui, active);
+        // Where OS windows can't open (egui embeds them in the root: tests, `ui_shot`; the web) the
+        // active window is shown alone: every window would draw the same widgets in one viewport.
+        if !WindowHost::of(&ctx).opens_windows() {
+            let active = self.windows.list.active().unwrap_or(self.windows.shown);
+            self.draw_entry(ui, active.get());
             self.after_windows();
             return;
         }
-        let Some(mut viewports) = self.windows.viewports.take() else { return };
-        let mut list = std::mem::take(&mut self.windows.list);
-        self.windows.recent = list.recent().filter_map(|id| list.get(id).copied()).collect();
-        let titles: HashMap<u64, String> = self.windows.open.iter().map(|w| (w.key, w.title.clone())).collect();
-        let target_monitor = list
-            .recent()
-            .find_map(|id| {
-                ctx.input_for(viewports.viewport_id(id), |i| {
-                    let m = i.viewport().monitor_size?;
-                    (m.is_finite() && m.x > 0.0 && m.y > 0.0).then_some(m)
-                })
-            })
-            .or_else(|| {
-                ctx.input(|i| {
-                    let m = i.viewport().monitor_size?;
-                    (m.is_finite() && m.x > 0.0 && m.y > 0.0).then_some(m)
-                })
-            });
-        let frame = list
-            .recent()
-            .find_map(|id| {
-                ctx.input_for(viewports.viewport_id(id), |i| {
-                    let v = i.viewport();
-                    let (outer, inner) = (v.outer_rect?, v.inner_rect?);
-                    if !outer.is_finite() || !inner.is_finite() {
-                        return None;
-                    }
-                    Some((outer.size() - inner.size()).max(egui::Vec2::ZERO))
-                })
-            })
-            .filter(|f| f.is_finite())
-            .unwrap_or_else(|| egui::vec2(16.0, 39.0));
-        let base = match target_monitor {
-            Some(mon) => crate::window_geometry::fit_builder_to_monitor(self.windows.builder.clone(), mon, frame),
-            None => self.windows.builder.clone(),
-        };
-        self.windows.showing = true;
-        let events = viewports.show(
-            ui,
-            &mut list,
-            |_, key| match titles.get(key).filter(|t| !t.is_empty()) {
-                Some(t) => base.clone().with_title(t.clone()),
-                None => base.clone().with_title("WordCraft"),
-            },
-            |ui, _, key| self.draw_window(ui, *key),
-        );
-        self.windows.showing = false;
-        self.windows.list = list;
-        self.windows.viewports = Some(viewports);
-        self.window_events(&ctx, &events);
+        let raise_root = self.windows.list.get_mut(self.windows.root).is_some_and(|w| std::mem::take(&mut w.raise));
+        if raise_root {
+            WindowHost::of(&ctx).act(ViewportId::ROOT, WindowAction::Focus);
+        }
+        self.draw_entry(ui, self.windows.root.get());
+        let root = self.windows.root;
+        // The root window gaining OS focus makes its entry the active one, as a child's `focus_gained` does.
+        let root_focused = WindowHost::of(&ctx).facts(ViewportId::ROOT).is_some_and(|facts| facts.focused);
+        if root_focused && !std::mem::replace(&mut self.windows.root_focused, root_focused) {
+            self.windows.list.focus(root);
+        }
+        self.windows.root_focused = root_focused;
+        let menu = self.window_menu();
+        let step = StyleCx::with_root(&ctx, |cx| cx.tokens.size.window.cascade);
+        let ids: Vec<WindowId> = self.windows.list.ids().filter(|&id| id != root).collect();
+        let mut closes = Vec::new();
+        for id in ids {
+            let Some(w) = self.windows.list.get_mut(id) else { continue };
+            let (raise, place) = (std::mem::take(&mut w.raise), std::mem::take(&mut w.place));
+            let mut window = DocumentWindow::new(Self::title_in(&menu, id))
+                .id(window_container_id(id))
+                .overlay(|overlay| overlay.size_limits(SizeLimits::at_least(MIN_SIZE)));
+            if raise {
+                window = window.raise();
+            }
+            if place && let Some(rect) = self.cascade_from(ui, id, step) {
+                window = window.first_placed(rect);
+            }
+            let out = window.show(ui, |ui, cx| self.draw_window(ui, cx, id)).output;
+            if out.focus_gained {
+                self.windows.list.focus(id);
+            }
+            if out.close_requested.is_some() {
+                closes.push(id);
+            }
+        }
+        self.window_events(&closes);
         self.after_windows();
     }
 
-    /// After the frame's drawing: windows opened, closed or focused meanwhile settle, and the
-    /// active window's state comes back.
+    /// After the frame's drawing: windows opened or closed meanwhile settle, and the active
+    /// window's state comes back.
     fn after_windows(&mut self) {
         self.prune_windows();
         self.settle_windows();
-        if let Some(&active) = self.windows.recent_keys().first() {
+        if let Some(active) = self.windows.list.active().map(WindowId::get) {
             self.enter_window(active);
             self.session.windows.current = Some(active);
             if self.session.windows.available {
@@ -706,21 +566,14 @@ impl WordApp {
         }
     }
 
-    /// View › Window › Switch Windows for the windows in `list`.
-    fn window_menu(&self, list: &WindowList<u64>) -> WindowMenu {
-        let docs = self.session.documents();
-        let doc_of: HashMap<u64, u64> = self.windows.open.iter().map(|w| (w.key, w.doc)).collect();
-        WindowMenu::new(list, |_, key| {
-            let doc = doc_of.get(key).copied().unwrap_or_default();
-            match docs.iter().find(|d| d.id == doc) {
-                Some(d) => Document { key: doc, name: documents::display_title(d), dirty: d.dirty },
-                None => Document { key: doc, name: String::new(), dirty: false },
-            }
-        })
+    /// Draw window `id` into its [`DocumentWindow`]'s body.
+    fn draw_window(&mut self, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>, id: WindowId) {
+        self.draw_entry(ui, id.get());
     }
 
-    /// Draw window `key` into its viewport's `ui`.
-    fn draw_window(&mut self, ui: &mut egui::Ui, key: u64) {
+    /// Draw window `key`: its state comes in, its queued requests run, then its own work, input
+    /// and interface.
+    fn draw_entry(&mut self, ui: &mut egui::Ui, key: u64) {
         if !self.enter_window(key) {
             return;
         }
@@ -729,38 +582,23 @@ impl WordApp {
         for req in queued {
             self.handle_request(&req);
         }
-        self.control_keys_arrived(&ctx);
         self.window_work(&ctx);
-        self.window_input(&ctx);
-        if self.windows.shown != key {
+        if self.windows.shown() != key {
             return;
         }
         self.window_ui(ui);
         arrange::forward_scroll(self, &ctx);
-        // Drawing can close the window or bring another forward: the fields then hold another
-        // window's state.
-        if self.windows.shown != key {
-            return;
-        }
-        let title = self.sent_title.clone();
-        if let Some(w) = self.windows.get_mut(key) {
-            w.title = title;
-        }
     }
 
-    /// The windows' focus changes and close requests from this frame.
-    fn window_events(&mut self, ctx: &egui::Context, events: &[WindowEvent]) {
-        for event in events {
-            let WindowEvent::CloseRequested(id) = *event else { continue };
-            let Some(key) = self.windows.list.get(id).copied() else { continue };
-            // The last window's close button quits: the host asks first ([`WordApp::close_requested`]).
-            if self.windows.open.len() <= 1 || self.quit_requested {
+    /// The close requests of the windows' close buttons from this frame: File › Close in that
+    /// window, which asks about unsaved changes first. The last window's close quits, which the
+    /// host asks about ([`WordApp::close_requested`]).
+    fn window_events(&mut self, closes: &[WindowId]) {
+        for &id in closes {
+            if self.quit_requested || self.windows.list.len() <= 1 || !self.windows.list.contains(id) {
                 continue;
             }
-            if self.windows.viewports.as_ref().and_then(Viewports::root) == Some(id) {
-                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
-            }
-            self.close_window(key);
+            self.close_window(id.get());
         }
     }
 
@@ -781,91 +619,10 @@ impl WordApp {
         }
     }
 
-    /// Ensures [`ViewportInput`] is registered and keeps its touchpad scroll speed in sync with
-    /// user settings for secondary viewports (#6146).
-    pub(crate) fn sync_viewport_input(&mut self, ctx: &egui::Context) {
-        if !self.windows.native {
-            return;
-        }
-        if !self.windows.input_plugin {
-            ctx.add_plugin(ViewportInput::default());
-            self.windows.input_plugin = true;
-        }
-        let touchpad_speed = self.ui.touchpad_scroll_speed;
-        let wheel_speed = self.ui.scroll_speed;
-        ctx.with_plugin(|p: &mut ViewportInput| {
-            p.touchpad_speed = touchpad_speed;
-            p.wheel_speed = wheel_speed;
-        });
-    }
-
-    /// The control channel's next input, for the active window when it has a viewport of its own:
-    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
-    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
-        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
-            return;
-        }
-        self.sync_viewport_input(ctx);
-        self.settle_windows();
-        let target = self.active_viewport();
-        // Input queued for a window that has closed since (or moved into the root viewport)
-        // would wait forever.
-        let live: Vec<ViewportId> = self.windows.open.iter().map(|w| self.windows.viewport(w.key)).filter(|&v| v != ViewportId::ROOT).collect();
-        ctx.with_plugin(|p: &mut ViewportInput| {
-            if p.target.is_some_and(|t| !live.contains(&t)) {
-                p.target = None;
-                p.events.clear();
-            }
-        });
-        let waiting = ctx.with_plugin(|p: &mut ViewportInput| !p.events.is_empty()).unwrap_or(true);
-        if waiting {
-            return;
-        }
-        let Some(events) = self.next_synthetic() else { return };
-        ctx.with_plugin(|p: &mut ViewportInput| {
-            p.target = Some(target);
-            p.events = events;
-        });
-        ctx.request_repaint_of(target);
-    }
-
-    /// Whether control input goes in through the root viewport's raw input: one window, the
-    /// active window drawn there, or viewports embedded in the root (tests).
-    pub(crate) fn control_input_is_roots(&self, ctx: &egui::Context) -> bool {
-        !self.windows.native || ctx.embed_viewports() || self.active_viewport() == ViewportId::ROOT
-    }
-
-    /// Keys from the control channel reached this window's viewport: the page counts as focused
-    /// when its widget has the keyboard, as [`WordApp::raw_input_hook`] does for the root.
-    fn control_keys_arrived(&mut self, ctx: &egui::Context) {
-        if !self.windows.input_plugin {
-            return;
-        }
-        let viewport = ctx.viewport_id();
-        let arrived = ctx
-            .with_plugin(|p: &mut ViewportInput| {
-                let hit = p.keys_for == Some(viewport);
-                if hit {
-                    p.keys_for = None;
-                }
-                hit
-            })
-            .unwrap_or(false);
-        if arrived && let Some((id, _)) = self.canvas.widget_id {
-            self.canvas.focused = ctx.memory(|m| m.has_focus(id));
-        }
-    }
-
     /// The id of the drawn window's own `name` in egui's memory, which every viewport shares: a
     /// search box's text, a gallery's first tile.
     pub(crate) fn window_id(&self, name: &'static str) -> egui::Id {
-        egui::Id::unique(name).with(self.windows.shown)
-    }
-
-    /// The windows other than the drawn one, for state every window contributes to (the faces
-    /// borrowed for the interface).
-    pub(crate) fn other_windows(&self) -> impl Iterator<Item = &WindowUi> {
-        self.windows.open.iter().filter_map(|w| w.ui.as_deref())
+        egui::Id::unique(name).with(self.windows.shown())
     }
 }
 
