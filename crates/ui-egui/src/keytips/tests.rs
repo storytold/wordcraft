@@ -56,10 +56,8 @@ fn every_keytip_command_is_registered() {
 fn the_format_background_badge_opens_the_pane() {
     let params = controls("Draw")
         .into_iter()
-        .find_map(|c| match c.target {
-            Target::Cmd { id: "view.formatBackgroundPane", params } => Some(params),
-            _ => None,
-        })
+        .find(|c| c.command.id == "view.formatBackgroundPane")
+        .map(|c| c.command.params)
         .expect("the badge is on the Draw tab");
     assert_eq!(params, serde_json::json!({"value": true}));
     let mut a = app();

@@ -4,7 +4,6 @@
 //! `design.pageFill` as one undo step; Reset takes the document's fill back and Close leaves it.
 
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 use craft::color_ui::ui::ColorPickerDialog;
 use craft::ui::buttons::Button;
@@ -18,7 +17,7 @@ use craft::ui::pickers::Select;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::NumberField;
 use egui::{Color32, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
-use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind};
+use wordcraft_doc::fill::GradientKind;
 use wordcraft_doc::wordart::GradStop;
 use wordcraft_doc::{PagePattern, Rgb};
 
@@ -251,8 +250,16 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
             if let Some(i) = picked {
                 *angle = DIRECTIONS[usize::from(i)].1;
             }
-            NumberField::new(Label::from(tl!("Angle")), Bind::bound(angle)).unit_kind(UnitKind::Degrees).range(0.0..=359.9).show(ui);
-            SliderField::new(tl!("Transparency"), Bind::bound(transparency), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
+            let mut a = Some(f64::from(*angle));
+            NumberField::new(Label::from(tl!("Angle")), Bind::bound(&mut a)).unit_kind(UnitKind::Degrees).range(0.0..=359.9).show(ui);
+            if let Some(v) = a
+                && v.is_finite()
+            {
+                *angle = (v as f32).clamp(0.0, 359.9);
+            }
+            let mut t = f64::from(*transparency);
+            SliderField::new(tl!("Transparency"), Bind::bound(&mut t), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
+            *transparency = (t as f32).clamp(0.0, 100.0);
         }
         DraftFill::Picture { path, media, data, tile, transparency, .. } => {
             let chosen = path.is_some() || media.is_some() || data.is_some();
@@ -261,13 +268,15 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
                 picking = true;
             }
             Checkbox::new(Bind::bound(tile)).label(Label::from(tl!("Tile picture as texture"))).show(ui);
-            SliderField::new(tl!("Transparency"), Bind::bound(transparency), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
+            let mut t = f64::from(*transparency);
+            SliderField::new(tl!("Transparency"), Bind::bound(&mut t), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
+            *transparency = (t as f32).clamp(0.0, 100.0);
         }
         DraftFill::Pattern { preset, fore, back, transparency } => {
             Text::new(Label::from(tl!("Pattern"))).show(ui);
             let mut chosen = preset.clone();
             egui::ScrollArea::vertical().max_height(96.0).show(ui, |ui| {
-                crate::rtl::grid(ui, egui::Grid::new("formatBackground.patterns").num_columns(4).spacing(vec2(4.0, 4.0)), |ui| {
+                egui::Grid::new("formatBackground.patterns").num_columns(4).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
                     for (i, p) in wordcraft_doc::PATTERN_PRESETS.iter().enumerate() {
                         let on = *preset == p.name;
                         if pattern_swatch(ui, p.name, *fore, *back, on).clicked() {
@@ -296,7 +305,9 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
             if out.more {
                 more = Some(DraftColor::Back);
             }
-            SliderField::new(tl!("Transparency"), Bind::bound(transparency), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
+            let mut t = f64::from(*transparency);
+            SliderField::new(tl!("Transparency"), Bind::bound(&mut t), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
+            *transparency = (t as f32).clamp(0.0, 100.0);
         }
     }
     if let Some(field) = more {
@@ -783,6 +794,8 @@ fn is_dark(f: &DraftFill) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     /// A new picture pick drops the cached thumbnail for its path — including a cached failed

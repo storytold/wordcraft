@@ -505,12 +505,12 @@ mod tests {
     #[test]
     fn the_sample_paper_is_the_visible_fill() {
         let mut a = app();
-        a.run("design.pageColor", &json!({"color": "#102040"})).unwrap();
+        a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
         assert_eq!(FontForm::read(&mut a).paper, Some(Rgb(0x10, 0x20, 0x40)), "a solid page colour is the paper");
 
         a.run(
             "design.pageFill",
-            &json!({"fill": "gradient", "stops": [
+            json!({"fill": "gradient", "stops": [
                 {"pos": 0, "color": "000000", "transparency": 50},
                 {"pos": 100, "color": "000000", "transparency": 50}
             ]}),
@@ -518,7 +518,7 @@ mod tests {
         .unwrap();
         assert_eq!(FontForm::read(&mut a).paper, Some(Rgb(128, 128, 128)), "half-transparent black over white, not the black fallback");
 
-        a.run("design.pageFill", &json!({"fill": "pattern", "preset": "pct10", "fore": "000000", "back": "000000", "transparency": 100}))
+        a.run("design.pageFill", json!({"fill": "pattern", "preset": "pct10", "fore": "000000", "back": "000000", "transparency": 100}))
             .unwrap();
         assert_eq!(FontForm::read(&mut a).paper, Some(Rgb::WHITE), "a fully transparent pattern leaves the white paper");
     }
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn the_sample_paper_is_not_inked_for_a_dark_page() {
         let mut a = app();
-        a.run("design.pageColor", &json!({"color": "#F0E0D0"})).unwrap();
+        a.run("design.pageColor", json!({"color": "#F0E0D0"})).unwrap();
         a.session.view.dark_mode = true;
         assert_eq!(FontForm::read(&mut a).paper, Some(Rgb(0xF0, 0xE0, 0xD0)));
     }
