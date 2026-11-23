@@ -20,6 +20,7 @@
 //! `animation_time` is 0 (the headless harness and `ui_shot`), or the picture of the object
 //! would not fit a GPU texture.
 
+use craft::pages::ui::PlacedPage;
 use egui::{Color32, Pos2};
 use wordcraft_doc::Pos;
 use wordcraft_geom::Rect;
@@ -145,6 +146,21 @@ struct Live {
     drawn: f64,
 }
 
+/// A page on screen as the last frame drew it.
+#[derive(Clone, Copy)]
+struct PageSpot {
+    page: usize,
+    rect: egui::Rect,
+    scale: f32,
+    band: (f32, f32),
+}
+
+impl PageSpot {
+    fn of(p: &PlacedPage) -> Self {
+        PageSpot { page: p.page, rect: p.rect, scale: p.scale as f32, band: p.band }
+    }
+}
+
 #[derive(Clone, Default)]
 struct State {
     document: u64,
@@ -152,6 +168,38 @@ struct State {
     live: Option<Live>,
     /// The object a drag has taken off its page: its original is drawn as a faint copy.
     dragged: Option<(usize, Pos)>,
+    /// The pages as the last frame drew them.
+    pages: Vec<PageSpot>,
+}
+
+/// The part of a page that shows: a copy is clipped to it (Hide White Space cuts the rest).
+fn band(p: &PageSpot) -> egui::Rect {
+    egui::Rect::from_min_max(egui::pos2(p.rect.left(), p.rect.top() + p.band.0), egui::pos2(p.rect.right(), p.rect.top() + p.band.1))
+}
+
+/// The page-local pose a motion cut short goes on from: the pose drawn at `at`. Across pages it
+/// is drawn between the two pages, so the pose is taken on the destination page, at the screen
+/// point it was drawn at (the old pose's page would put the start on the wrong page).
+fn carried_from(l: &Live, at: f64, pages: &[PageSpot]) -> Pose {
+    let drawn = l.tween.pose(at);
+    let spot = |i: usize| pages.iter().find(|p| p.page == i);
+    let (from, to) = match (spot(l.tween.from.page), spot(l.tween.to.page)) {
+        (Some(f), Some(t)) if l.tween.from.page != l.tween.to.page => (f, t),
+        _ => return drawn,
+    };
+    let k = l.tween.progress(at);
+    let a = on_screen(from.rect, from.scale, corners(&l.end, l.bounds, &l.tween.from));
+    let b = on_screen(to.rect, to.scale, corners(&l.end, l.bounds, &l.end));
+    let n = a.len() as f32;
+    let centre = a.into_iter().zip(b).fold(egui::Vec2::ZERO, |sum, (p, q)| sum + (p + (q - p) * k).to_vec2()) / n;
+    let want = (centre - to.rect.min.to_vec2()) / to.scale;
+    let here = corners(&l.end, l.bounds, &Pose { page: to.page, ..drawn });
+    let mean = here.iter().fold((0.0, 0.0), |s, c| (s.0 + c.0 / n, s.1 + c.1 / n));
+    Pose {
+        page: to.page,
+        rect: Rect::new(drawn.rect.x + want.x - mean.0, drawn.rect.y + want.y - mean.1, drawn.rect.w, drawn.rect.h),
+        deg: drawn.deg,
+    }
 }
 
 /// How strong the copy of the original is, while the object is dragged and on its way.
@@ -260,10 +308,10 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
                 if !seen.pose.same(&pose)
                     && fits(ctx, bounds, scale)
                     && let Some(o) = &subject
-                    && let Some(tex) = crate::objects::preview(app, ctx, layout, o, scale)
+                    && let Some(tex) = crate::objects::motion_preview(app, ctx, layout, o, scale)
                 {
                     // A motion cut short by another change goes on from where it was drawn.
-                    let from = old.map_or(seen.pose, |l| l.tween.pose(l.drawn.min(now)));
+                    let from = old.map_or(seen.pose, |l| carried_from(&l, l.drawn.min(now), &st.pages));
                     st.live = Some(Live {
                         page_hidden: (o.page, key.clone()),
                         tween: Tween { from, to: pose, start: now, secs: SECS },
@@ -292,60 +340,66 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
         && s.tex.is_none()
         && fits(ctx, s.bounds, scale)
     {
-        s.tex = crate::objects::preview(app, ctx, layout, o, scale);
+        s.tex = crate::objects::motion_preview(app, ctx, layout, o, scale);
     }
     ctx.data_mut(|d| d.insert_temp(id, st));
 }
 
 /// Called each frame by the canvas over the pages: draws the object on its way, and the faint
-/// picture of the size a handle drag leads to. `pages` are the pages' screen rects.
-pub fn paint(app: &WordApp, painter: &egui::Painter, pages: &[egui::Rect], scale: f32) {
+/// picture of the size a handle drag leads to. A copy on a page is clipped to that page's band.
+pub fn paint(app: &WordApp, painter: &egui::Painter, pages: &[PlacedPage]) {
     let ctx = painter.ctx();
     let id = state_id();
     let Some(mut st) = ctx.data(|d| d.get_temp::<State>(id)) else { return };
+    st.pages = pages.iter().map(PageSpot::of).collect();
     let now = ctx.input(|i| i.time);
+    let spot = |i: usize| st.pages.iter().find(|p| p.page == i).copied();
     if let Some(drag) = crate::objects::motion_drag(app) {
         // The original, faint where it was (the page is drawn without it).
         if let Some(s) = st.seen.as_ref().filter(|s| s.key == drag.key && (drag.pixels || drag.resize))
             && let Some(tex) = &s.tex
-            && let Some(page) = pages.get(s.pose.page)
+            && let Some(page) = spot(s.pose.page)
         {
-            painter.add(quad(tex, on_screen(*page, scale, corners(&s.pose, s.bounds, &s.pose)), WAS));
+            let copy = painter.with_clip_rect(band(&page));
+            copy.add(quad(tex, on_screen(page.rect, page.scale, corners(&s.pose, s.bounds, &s.pose)), WAS));
             // The target: a picture that is not turned already shows its pixels while dragging.
             if drag.resize
                 && !drag.pixels
-                && let Some(page) = pages.get(drag.to.page)
+                && let Some(page) = spot(drag.to.page)
             {
-                painter.add(quad(tex, on_screen(*page, scale, corners(&s.pose, s.bounds, &drag.to)), TARGET));
+                let target = painter.with_clip_rect(band(&page));
+                target.add(quad(tex, on_screen(page.rect, page.scale, corners(&s.pose, s.bounds, &drag.to)), TARGET));
             }
         }
-        return;
-    }
-    if let Some(l) = &st.live
+    } else if let Some(l) = st.live.clone()
         && !l.tween.done(now)
-        && let Some(page) = pages.get(l.tween.to.page)
+        && let Some(page) = spot(l.tween.to.page)
     {
         // Both copies stay faint until the original gets there, then the solid object takes over.
-        painter.add(quad(&l.tex, on_screen(*page, scale, corners(&l.end, l.bounds, &l.end)), TARGET));
+        let target = painter.with_clip_rect(band(&page));
+        target.add(quad(&l.tex, on_screen(page.rect, page.scale, corners(&l.end, l.bounds, &l.end)), TARGET));
         let at = l.tween.pose(now);
         let from = l.tween.from;
-        let pts = match pages.get(from.page) {
+        let pts = match spot(from.page) {
             // Text moved it to another page: the corners go across the screen between the two.
             Some(from_page) if from.page != l.tween.to.page => {
                 let t = l.tween.progress(now);
-                let a = on_screen(*from_page, scale, corners(&l.end, l.bounds, &from));
-                let b = on_screen(*page, scale, corners(&l.end, l.bounds, &l.end));
-                std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
+                let a = on_screen(from_page.rect, from_page.scale, corners(&l.end, l.bounds, &from));
+                let b = on_screen(page.rect, page.scale, corners(&l.end, l.bounds, &l.end));
+                painter.add(quad(&l.tex, std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t), WAS));
+                None
             }
-            _ => on_screen(*page, scale, corners(&l.end, l.bounds, &at)),
+            _ => Some(on_screen(page.rect, page.scale, corners(&l.end, l.bounds, &at))),
         };
-        painter.add(quad(&l.tex, pts, WAS));
+        if let Some(pts) = pts {
+            target.add(quad(&l.tex, pts, WAS));
+        }
         ctx.request_repaint();
         if let Some(l) = st.live.as_mut() {
             l.drawn = now;
         }
-        ctx.data_mut(|d| d.insert_temp(id, st));
     }
+    ctx.data_mut(|d| d.insert_temp(id, st));
 }
 
 #[cfg(test)]
