@@ -121,12 +121,13 @@ fn end_accent_on_raw_keys(app: &mut WordApp, ctx: &egui::Context) {
     if app.session.accent_waiting().is_none() {
         return;
     }
-    let ends = ctx.input(|i| {
-        i.events.iter().any(|e| match e {
-            egui::Event::Key { key, pressed: true, modifiers, .. } => ends_accent(ctx, *key, modifiers),
-            egui::Event::WindowFocused(false) => true,
-            _ => false,
-        })
+    // The events are copied out first: `ends_accent` reads the context, which can't be done
+    // while its input is locked.
+    let events = ctx.input(|i| i.events.clone());
+    let ends = events.iter().any(|e| match e {
+        egui::Event::Key { key, pressed: true, modifiers, .. } => ends_accent(ctx, *key, modifiers),
+        egui::Event::WindowFocused(false) => true,
+        _ => false,
     });
     if ends {
         app.session.cancel_accent();
