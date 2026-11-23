@@ -91,7 +91,7 @@ impl Exporter<'_> {
     fn vector(&mut self, key: &str) -> Option<Arc<Vector>> {
         let doc = self.doc;
         let bytes = doc.media.get(key)?;
-        if !wordcraft_metafile::is_metafile(bytes) {
+        if !craft_metafile::is_metafile(bytes) {
             return None;
         }
         if let Some(v) = self.vectors.get(key) {
@@ -221,6 +221,7 @@ impl Exporter<'_> {
         }
     }
 
+    /// Draws the content of a single page (background, watermark, headers, footers, body items, and comments) onto the surface.
     pub(crate) fn page(&mut self, s: &mut Surface, page: &Page, w: f32, h: f32) {
         // `page_color` is only the fallback older readers use for a gradient (its first stop) or
         // a pattern (its back colour). Painting it under the fill composites a translucent fill

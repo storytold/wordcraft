@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
-use wordcraft_engine::Session;
+use wordcraft_engine::{CmdError, Session};
 
 const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
@@ -19,7 +19,8 @@ wordcraft-cli — WordCraft from the command line
 USAGE:
   wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
-                                              xml); --update-fields refreshes unlocked fields before saving;
+                                              xml); --update-fields refreshes unlocked fields before saving
+                                              (if protection blocks updates, they are skipped with a warning);
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
@@ -34,10 +35,11 @@ USAGE:
                                               --strict writes nothing and exits 3 if a character on the
                                               page can't be drawn or a picture is missing or undecodable
                                               (report on stderr, as for convert --strict)
-  wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
-                    [--save OUT] [--print] [--author NAME]
+  wordcraft-cli run [--file F | --template T] [--script FILE|-] [--cmd 'id={json}' …]
+                    [--save OUT] [--page N] [--scale S] [--print] [--author NAME]
                                               run commands headlessly, then save (--author names
                                               who tracked changes and comments are by).
+                                              PNG saves use --page (1-based, default 1) and --scale (default 2).
                                               --script runs a JSON file (- is stdin) first:
                                               {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
                                               \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
@@ -49,14 +51,16 @@ USAGE:
                                               documents and with {\"id\": N} makes one active
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
-  wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
-                                              MCP server on stdio (headless, or bridged to the app).
-                                              --automation-read-root / --automation-write-root confine
-                                              the files the agent's commands read (open, insert text
-                                              or picture, mail-merge data, templates…) and write (save,
-                                              export, merge output…) to DIR, links followed; a root left
-                                              out grants none of its access. They apply to the headless
-                                              server and are an error with --connect.
+  wordcraft-cli mcp --automation-read-root DIR --automation-write-root DIR [--author NAME]
+                                              MCP server on stdio, with a headless session.
+                                              Both roots are required: the agent's commands read
+                                              files (open, insert text or picture, mail-merge data,
+                                              templates…) only inside the read root and write them
+                                              (save, export, merge output…) only inside the write
+                                              root, links followed; the same folder may be both.
+                                              --connect HOST:PORT (bridge to the running app) is
+                                              refused until the app confines its control channel
+                                              (#3695, #5819).
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -215,6 +219,19 @@ fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
     s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| escape_text(&format!("--author: {e}"), false))
 }
 
+/// `mcp`'s headless backend: a session confined to `roots`, its author `author` when given. The caller confines the
+/// process to the same roots first (`confine_process`), which a test must not do.
+fn headless_mcp(
+    roots: std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>,
+    author: Option<&str>,
+) -> Result<wordcraft_mcp::Headless, String> {
+    let mut headless = wordcraft_mcp::Headless::default().with_automation_roots(Some(roots));
+    if let Some(name) = author {
+        set_author(&mut headless.session, name)?;
+    }
+    Ok(headless)
+}
+
 fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
@@ -264,7 +281,7 @@ fn parse_scale_arg(command: &str, args: &[String]) -> Result<Option<f64>, String
         OptionArg::Value(val) => {
             let scale = val.parse::<f64>().map_err(|_| format!("{command}: invalid --scale `{val}`: not a number"))?;
             if !scale.is_finite() || scale <= 0.0 {
-                return Err(format!("{command}: invalid --scale `{val}`: scale must be a positive number"));
+                return Err(format!("{command}: invalid --scale `{val}`: scale must be a finite positive number"));
             }
             Ok(Some(scale))
         }
@@ -350,6 +367,16 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
+/// Why `mcp` won't start unconfined (shared rule 18, #7124).
+const MCP_NEEDS_ROOTS: &str = "mcp: give both --automation-read-root DIR and --automation-write-root DIR: an agent's \
+     commands may read only inside the read root and write only inside the write root (the same folder may be both)";
+
+/// Why `mcp --connect` is refused: the running app would not confine the agent's file access.
+// lean: refused outright; allow it once the app confines its control channel and reports both roots.
+const MCP_CONNECT_REFUSED: &str = "mcp: --connect is refused for now: the desktop app does not confine its control \
+     channel to automation roots yet (storytold/wordcraft#3695, #5819). Use the headless server: wordcraft-cli mcp \
+     --automation-read-root DIR --automation-write-root DIR";
+
 const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
@@ -414,14 +441,6 @@ fn script_operand<S: AsRef<OsStr>>(raw: &[S]) -> Option<PathBuf> {
     raw.get(at + 1).map(|a| PathBuf::from(a.as_ref()))
 }
 
-/// Whether `addr` (`HOST:PORT`, as `--connect` gives it) is at least shaped like an address: a
-/// host of some kind and a numeric port. Malformed addresses fail at startup — a lazy remote
-/// would otherwise retry one on every call and never say why nothing connects.
-fn valid_connect_addr(addr: &str) -> bool {
-    let Some((host, port)) = addr.rsplit_once(':') else { return false };
-    !host.is_empty() && port.parse::<u16>().is_ok()
-}
-
 /// A failed `--strict` export: a strict refusal becomes [`Failure::Strict`] carrying what stderr
 /// shows (each line of the report as `wordcraft-cli: …`, then its JSON on one line, from
 /// `file.strictReport` for `page` of a page image, else the PDF); any other error is an ordinary
@@ -451,6 +470,30 @@ fn report_lines(json: &Value) -> Vec<String> {
     wordcraft_engine::strict::lines_from_json(json)
 }
 
+/// Explicitly update unlocked fields in a session before saving the document.
+///
+/// If field updates are disabled by document protection (`CmdError::Disabled`), logs a warning to
+/// stderr and continues conversion rather than aborting. Other command failures are converted to
+/// [`Failure`] via [`engine_error`].
+///
+/// # Arguments
+///
+/// * `s` - The active document [`Session`] whose unlocked fields should be refreshed.
+///
+/// # Errors
+///
+/// Returns `Err(Failure)` if the command fails with an error other than `CmdError::Disabled`.
+fn update_fields(s: &mut Session) -> Result<(), Failure> {
+    if let Err(e) = s.run("references.updateFields", &json!({})) {
+        if matches!(e, CmdError::Disabled(_)) {
+            eprintln!("wordcraft-cli: warning: {e}");
+        } else {
+            return Err(engine_error(e));
+        }
+    }
+    Ok(())
+}
+
 /// `convert <in> <out>`: `rest` is the command line after `convert`, `open` opens the input.
 fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Session, Failure>) -> Result<(), Failure> {
     validate_options("convert", rest, CONVERT_OPTIONS)?;
@@ -473,7 +516,7 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
     let password = password_from(rest)?;
     let mut s = open(&i, password.as_deref())?;
     if rest.iter().any(|a| a == "--update-fields") {
-        s.run("references.updateFields", &json!({})).map_err(engine_error)?;
+        update_fields(&mut s)?;
     }
     let r = if to_png {
         s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup, "strict": strict}))
@@ -577,6 +620,11 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             write_stdout(|o| writeln!(o, "{r}"))
         }
         "run" => {
+            for (i, arg) in rest.iter().enumerate() {
+                if arg == "--cmd" && rest.get(i + 1).is_none_or(|value| value.starts_with("--")) {
+                    return Err("--cmd needs a value".into());
+                }
+            }
             validate_options("run", &rest, RUN_OPTIONS)?;
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
@@ -610,7 +658,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let mut i = 0;
             while i < rest.len() {
                 if rest.get(i).map(String::as_str) == Some("--cmd") {
-                    let spec = rest.get(i + 1).ok_or("--cmd needs a value")?;
+                    let spec = rest.get(i + 1).filter(|value| !value.starts_with("--")).ok_or("--cmd needs a value")?;
                     let (id, params) = match spec.split_once('=') {
                         Some((id, p)) => {
                             (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| engine_error(format!("{id}: bad JSON params: {e}")))?)
@@ -685,58 +733,21 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         }
         "mcp" => {
             let (roots, rest) = automation_roots("mcp", &rest)?;
-            validate_options("mcp", &rest, MCP_OPTIONS)?;
-            let author = arg_value(&rest, "--author");
-            let connect = arg_value(&rest, "--connect");
-            if roots.is_some() && connect.is_some() {
-                return Err(
-                    "mcp: --automation-read-root and --automation-write-root confine the headless server; a running app is not confined by them"
-                        .into(),
-                );
+            // Refused with or without a value, before the option check, so `--connect=…` gets this refusal rather than
+            // "unknown option": a bare trailing `--connect` must not slip past either.
+            if rest.iter().any(|a| a == "--connect" || a.starts_with("--connect=")) {
+                return Err(MCP_CONNECT_REFUSED.into());
             }
-            let backend: Box<dyn wordcraft_mcp::Backend> = match connect {
-                // The app's user name is the person's own setting; don't rewrite it from a flag.
-                Some(_) if author.is_some() => {
-                    return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
-                }
-                Some(addr) => {
-                    // A malformed address must fail at startup, not on every tool call the lazy
-                    // remote would retry it with.
-                    if !valid_connect_addr(&addr) {
-                        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
-                    }
-                    match wordcraft_mcp::Remote::connect(&addr) {
-                        Ok(remote) => {
-                            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
-                            if let Some(w) = remote.key_warning() {
-                                eprintln!("wordcraft-cli: {w}");
-                            }
-                            Box::new(remote)
-                        }
-                        // The app may start after the client does: serve anyway and connect on the
-                        // first call, or the client marks the server failed for its whole session
-                        // (#4078).
-                        Err(e) => {
-                            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
-                            Box::new(wordcraft_mcp::Remote::lazy(&addr))
-                        }
-                    }
-                }
-                None => {
-                    let mut headless = wordcraft_mcp::Headless::default();
-                    if let Some(roots) = roots {
-                        // Every thread of this process, not only the server's: nothing reaches past the roots.
-                        wordcraft_engine::file_access::confine_process(roots.clone());
-                        let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
-                        eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
-                        headless = headless.with_automation_roots(Some(roots));
-                    }
-                    if let Some(name) = author {
-                        set_author(&mut headless.session, &name)?;
-                    }
-                    Box::new(headless)
-                }
+            validate_options("mcp", &rest, MCP_OPTIONS)?;
+            // Shared rule 18 (#7124): an agent entry point never runs unconfined.
+            let Some(roots) = roots.filter(|r| r.read_root().is_some() && r.write_root().is_some()) else {
+                return Err(MCP_NEEDS_ROOTS.into());
             };
+            // Every thread of this process, not only the server's: nothing reaches past the roots.
+            wordcraft_engine::file_access::confine_process(roots.clone());
+            let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
+            eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
+            let backend: Box<dyn wordcraft_mcp::Backend> = Box::new(headless_mcp(roots, arg_value(&rest, "--author").as_deref())?);
             let mut server = wordcraft_mcp::Server::new(backend);
             let stdin = std::io::stdin();
             // A client that closes our stdout has hung up: `serve` returns BrokenPipe and we end cleanly.

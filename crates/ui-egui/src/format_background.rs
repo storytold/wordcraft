@@ -6,12 +6,25 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use egui::{Color32, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
+use craft::color_ui::ui::ColorPickerDialog;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::display::Text;
+use craft::ui::form::{Field, SliderField};
+use craft::ui::layout_components::Stack;
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::text::NumberField;
+use egui::{Color32, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind};
 use wordcraft_doc::wordart::GradStop;
 use wordcraft_doc::{PagePattern, Rgb};
 
 use crate::WordApp;
+use crate::colors::{ColorFieldEmpty, Palette, color_field};
+use crate::dialogs::host::{DialogHooks, Settle};
 use crate::theme::Tokens;
 /// The most picture bytes the preview reads: past it the pane shows a dashed frame, like the
 /// engine's thumbnail of an oversized picture. The read stops here, so a huge selection is
@@ -161,11 +174,9 @@ fn fill_fingerprint(doc: &wordcraft_doc::Document) -> u64 {
     h.finish()
 }
 
-/// The pane was closed: read the document's fill afresh next time it opens, and forget a picture
-/// picker it asked for (its result goes nowhere now).
+/// The pane was closed: read the document's fill afresh next time it opens.
 pub fn forget(app: &mut WordApp) {
     app.background.loaded = false;
-    app.background_picture_pending = false;
 }
 
 /// The pane, while open.
@@ -179,16 +190,19 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     let theme = app.session.doc.settings.theme_colors.clone();
     let accent = theme.get(4).copied().unwrap_or(Rgb(0x15, 0x60, 0x82));
 
-    ui.label(egui::RichText::new(tl!("Fill")).strong());
+    Text::new(Label::from(tl!("Fill"))).show(ui);
     ui.add_space(2.0);
     let kind = lang_kind(&app.background.fill);
-    let mut pick = kind;
-    ui.radio_value(&mut pick, 0, tl!("No fill"));
-    ui.radio_value(&mut pick, 1, tl!("Solid"));
-    ui.radio_value(&mut pick, 2, tl!("Gradient"));
-    ui.radio_value(&mut pick, 3, tl!("Picture or texture"));
-    ui.radio_value(&mut pick, 4, tl!("Pattern"));
-    if pick != kind {
+    let mut pick = kind as u8;
+    RadioGroup::new(Label::from(tl!("Fill type")), Bind::bound(&mut pick)).show(ui, |ui, _| {
+        Stack::new().show(ui, |ui, cx| {
+            for (i, label) in ["No fill", "Solid", "Gradient", "Picture or texture", "Pattern"].into_iter().enumerate() {
+                let side = SideLabel::new().layout(FieldLayout::After);
+                cx.labelled(ui, i, Label::from(tl!(label)), side, Radio::new(i as u8));
+            }
+        });
+    });
+    if usize::from(pick) != kind {
         app.background.fill = match pick {
             1 => DraftFill::Solid { color: accent },
             2 => DraftFill::Gradient { start: accent, end: Rgb::WHITE, angle: 90.0, transparency: 0.0, stops: Vec::new() },
@@ -199,62 +213,58 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(6.0);
 
+    let palette = Palette::of(app);
     let mut picking = false;
+    let mut more: Option<DraftColor> = None;
     match &mut app.background.fill {
         DraftFill::None => {
-            ui.label(egui::RichText::new(tl!("No page background.")).weak());
+            Text::new(Label::from(tl!("No page background."))).show(ui);
         }
         DraftFill::Solid { color } => {
-            if let Some(c) = color_button(ui, &theme, Id::unique("formatBackground.solid"), tl!("Color"), *color) {
+            let out = color_button(ui, &palette, tl!("Color"), *color);
+            if let Some(c) = out.picked {
                 *color = c;
             }
+            more = out.more.then_some(DraftColor::Solid);
         }
         DraftFill::Gradient { start, end, angle, transparency, .. } => {
-            if let Some(c) = color_button(ui, &theme, Id::unique("formatBackground.start"), tl!("Start"), *start) {
+            let out = color_button(ui, &palette, tl!("Start"), *start);
+            if let Some(c) = out.picked {
                 *start = c;
             }
-            if let Some(c) = color_button(ui, &theme, Id::unique("formatBackground.end"), tl!("End"), *end) {
+            if out.more {
+                more = Some(DraftColor::Start);
+            }
+            let out = color_button(ui, &palette, tl!("End"), *end);
+            if let Some(c) = out.picked {
                 *end = c;
             }
-            ui.horizontal(|ui| {
-                ui.label(tl!("Direction"));
-                let mut dir = direction_of(*angle);
-                craft_ui::ComboBox::from_id_salt("formatBackground.direction").selected_text(tl!(DIRECTIONS[dir].0)).show_ui(ui, |ui| {
-                    for (i, (label, _)) in DIRECTIONS.iter().enumerate() {
-                        ui.selectable_value(&mut dir, i, tl!(label));
-                    }
-                });
-                if dir != direction_of(*angle) {
-                    *angle = DIRECTIONS[dir].1;
-                }
+            if out.more {
+                more = Some(DraftColor::End);
+            }
+            let entries: Vec<Entry<u8>> =
+                DIRECTIONS.iter().enumerate().map(|(i, (label, _))| Entry::new(i as u8, tl!(label))).collect();
+            let mut picked = None;
+            Field::new(Label::from(tl!("Direction"))).show(ui, |ui, _| {
+                picked = Select::new(tl!("Direction"), Bind::given(direction_of(*angle) as u8), &entries).show(ui).events.committed().copied();
             });
-            let mut a = *angle;
-            let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.9).clamp_existing_to_range(false).suffix("°").speed(1.0));
-            if r.changed() {
-                *angle = a;
+            if let Some(i) = picked {
+                *angle = DIRECTIONS[usize::from(i)].1;
             }
-            let mut t = *transparency;
-            if percent(ui, tl!("Transparency"), &mut t).is_some() {
-                *transparency = t;
-            }
+            NumberField::new(Label::from(tl!("Angle")), Bind::bound(angle)).unit_kind(UnitKind::Degrees).range(0.0..=359.9).show(ui);
+            SliderField::new(tl!("Transparency"), Bind::bound(transparency), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
         }
         DraftFill::Picture { path, media, data, tile, transparency, .. } => {
             let chosen = path.is_some() || media.is_some() || data.is_some();
-            ui.label(egui::RichText::new(if chosen { tl!("Picture") } else { tl!("No picture chosen") }).weak());
-            if ui.button(tl!("Select Picture…")).clicked() {
+            Text::new(Label::from(if chosen { tl!("Picture") } else { tl!("No picture chosen") })).show(ui);
+            if Button::new(tl!("Select Picture…").to_string()).show(ui).clicked() {
                 picking = true;
             }
-            let mut t = *tile;
-            if ui.checkbox(&mut t, tl!("Tile picture as texture")).changed() {
-                *tile = t;
-            }
-            let mut tr = *transparency;
-            if percent(ui, tl!("Transparency"), &mut tr).is_some() {
-                *transparency = tr;
-            }
+            Checkbox::new(Bind::bound(tile)).label(Label::from(tl!("Tile picture as texture"))).show(ui);
+            SliderField::new(tl!("Transparency"), Bind::bound(transparency), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
         }
         DraftFill::Pattern { preset, fore, back, transparency } => {
-            ui.label(tl!("Pattern"));
+            Text::new(Label::from(tl!("Pattern"))).show(ui);
             let mut chosen = preset.clone();
             egui::ScrollArea::vertical().max_height(96.0).show(ui, |ui| {
                 crate::rtl::grid(ui, egui::Grid::new("formatBackground.patterns").num_columns(4).spacing(vec2(4.0, 4.0)), |ui| {
@@ -272,17 +282,25 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
             if chosen != *preset {
                 *preset = chosen;
             }
-            if let Some(c) = color_button(ui, &theme, Id::unique("formatBackground.fore"), tl!("Foreground"), *fore) {
+            let out = color_button(ui, &palette, tl!("Foreground"), *fore);
+            if let Some(c) = out.picked {
                 *fore = c;
             }
-            if let Some(c) = color_button(ui, &theme, Id::unique("formatBackground.back"), tl!("Background"), *back) {
+            if out.more {
+                more = Some(DraftColor::Fore);
+            }
+            let out = color_button(ui, &palette, tl!("Background"), *back);
+            if let Some(c) = out.picked {
                 *back = c;
             }
-            let mut tr = *transparency;
-            if percent(ui, tl!("Transparency"), &mut tr).is_some() {
-                *transparency = tr;
+            if out.more {
+                more = Some(DraftColor::Back);
             }
+            SliderField::new(tl!("Transparency"), Bind::bound(transparency), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
         }
+    }
+    if let Some(field) = more {
+        open_more_colors(app, field, field.current(&app.background.fill));
     }
     if picking {
         app.pick_background_picture();
@@ -292,18 +310,18 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     preview(app, ui);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        if ui.button(tl!("Apply")).clicked() {
+        if Button::new(tl!("Apply").to_string()).show(ui).clicked() {
             let params = app.background.params();
             if app.run("design.pageFill", params).is_ok() {
                 app.background = Draft::from_doc(&app.session.doc);
                 app.background.doc = app.session.document_id();
             }
         }
-        if ui.button(tl!("Reset")).clicked() {
+        if Button::new(tl!("Reset").to_string()).show(ui).clicked() {
             app.background = Draft::from_doc(&app.session.doc);
             app.background.doc = app.session.document_id();
         }
-        if ui.button(tl!("Close")).clicked() {
+        if Button::new(tl!("Close").to_string()).show(ui).clicked() {
             let _ = app.run("view.formatBackgroundPane", serde_json::json!({"value": false}));
         }
     });
@@ -336,35 +354,96 @@ fn direction_of(angle: f32) -> usize {
     DIRECTIONS.iter().position(|(_, a)| (a - angle.rem_euclid(360.0)).abs() < 0.01).unwrap_or(0)
 }
 
-/// A labelled 0–100% slider.
-fn percent(ui: &mut Ui, label: &str, v: &mut f32) -> Option<egui::Response> {
-    ui.horizontal(|ui| {
-        let l = ui.label(label);
-        let s = ui.add(egui::Slider::new(v, 0.0..=100.0).suffix("%").fixed_decimals(0)).labelled_by(l.id);
-        s.changed().then_some(s)
-    })
-    .inner
+/// One colour field of the pane: where More Colors… puts its answer.
+#[derive(Clone, Copy, Debug)]
+enum DraftColor {
+    Solid,
+    Start,
+    End,
+    Fore,
+    Back,
 }
 
-/// A colour swatch with the theme colours' drop-down; the colour picked.
-fn color_button(ui: &mut Ui, theme: &[Rgb], id: Id, label: &str, c: Rgb) -> Option<Rgb> {
-    let mut hex = c.hex();
-    crate::colors::take_field(ui.ctx(), id, &mut hex);
-    let mut picked = None;
-    ui.horizontal(|ui| {
-        let name = ui.label(label);
-        let t = Tokens::get(ui.ctx());
-        let (r, _) = ui.allocate_exact_size(vec2(18.0, 14.0), Sense::hover());
-        ui.painter().rect_filled(r, 2.0, crate::theme::c32(c));
-        ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-        let _ = ui.menu_button("▾", |ui| crate::colors::field_menu(ui, theme, id, &mut hex)).response.labelled_by(name.id);
-    });
-    if let Some(n) = Rgb::parse(&hex)
-        && n != c
-    {
-        picked = Some(n);
+impl DraftColor {
+    /// The dialog key that names the field, and what it maps back to.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Solid => "formatBackground.solid",
+            Self::Start => "formatBackground.start",
+            Self::End => "formatBackground.end",
+            Self::Fore => "formatBackground.fore",
+            Self::Back => "formatBackground.back",
+        }
     }
-    picked
+
+    fn from_key(key: &str) -> Option<Self> {
+        [Self::Solid, Self::Start, Self::End, Self::Fore, Self::Back].into_iter().find(|f| f.key() == key)
+    }
+
+    /// The colour the field holds now, if the draft is still the fill it belonged to.
+    fn current(self, fill: &DraftFill) -> Rgb {
+        match (self, fill) {
+            (Self::Solid, DraftFill::Solid { color }) => *color,
+            (Self::Start, DraftFill::Gradient { start, .. }) => *start,
+            (Self::End, DraftFill::Gradient { end, .. }) => *end,
+            (Self::Fore, DraftFill::Pattern { fore, .. }) => *fore,
+            (Self::Back, DraftFill::Pattern { back, .. }) => *back,
+            _ => Rgb::WHITE,
+        }
+    }
+
+    /// Puts the answer in the draft, if it is still the fill the field belonged to.
+    fn set(self, fill: &mut DraftFill, c: Rgb) {
+        match (self, fill) {
+            (Self::Solid, DraftFill::Solid { color }) => *color = c,
+            (Self::Start, DraftFill::Gradient { start, .. }) => *start = c,
+            (Self::End, DraftFill::Gradient { end, .. }) => *end = c,
+            (Self::Fore, DraftFill::Pattern { fore, .. }) => *fore = c,
+            (Self::Back, DraftFill::Pattern { back, .. }) => *back = c,
+            _ => {}
+        }
+    }
+}
+
+/// What a pane colour field did in this pass.
+struct ColorButtonOut {
+    /// The colour picked from the palette.
+    picked: Option<Rgb>,
+    /// More Colors… was chosen: the pane opens the Colors dialog for the field.
+    more: bool,
+}
+
+/// The pane's colour field: a swatch and drop-down holding the theme colours and More Colors….
+fn color_button(ui: &mut Ui, palette: &Palette, label: &str, c: Rgb) -> ColorButtonOut {
+    let mut value = c.hex();
+    let out = color_field(ui, &Label::from(label.to_string()), &mut value, &ColorFieldEmpty::NoColor, palette);
+    if out.more_colors {
+        return ColorButtonOut { picked: None, more: true };
+    }
+    ColorButtonOut { picked: out.changed.then(|| Rgb::parse(&value)).flatten().filter(|n| *n != c), more: false }
+}
+
+/// Opens the Colors dialog for a pane colour field; its answer goes into the draft.
+fn open_more_colors(app: &mut WordApp, field: DraftColor, current: Rgb) {
+    let dialog = crate::colors::more_colors(Some(current), field.key().to_string(), Default::default());
+    crate::dialogs::host::open_with(app, None, dialog, DialogHooks { prepare: None, settle: settle_more_colors });
+}
+
+/// The pane's More Colors… answer, into the draft field it was opened for; true once the dialog is gone.
+fn settle_more_colors(app: &mut WordApp, _ctx: &egui::Context, id: DialogId) -> Settle {
+    match app.dialog_host.take_by_id::<ColorPickerDialog>(id) {
+        Some(DialogResult::Ok(result)) => {
+            let c = result.picked.color;
+            let channel = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+            if let Some(field) = DraftColor::from_key(&result.key) {
+                field.set(&mut app.background.fill, Rgb(channel(c.r), channel(c.g), channel(c.b)));
+            }
+            Settle::Done
+        }
+        Some(_) => Settle::Done,
+        None if app.dialog_host.get_by_id::<ColorPickerDialog>(id).is_none() => Settle::Done,
+        None => Settle::Keep,
+    }
 }
 
 /// A pattern preset's marks, repeated over `rect` at `size` points and clipped to it: some presets
@@ -461,14 +540,7 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
         DraftFill::Gradient { start, end, angle, transparency, stops } => {
             // The preview draws the same stops Apply sends: endpoint pickers over the document's
             // own stops, not just the two endpoints.
-            let g = Gradient {
-                stops: Draft::gradient_stops(stops, *start, *end, *transparency),
-                kind: GradientKind::Linear { angle: *angle, scaled: false },
-                tile: None,
-                rot_with_shape: false,
-                flip: GradientFlip::None,
-            };
-            crate::format_shape::paint_fill(p, rect, &Fill::Gradient(Arc::new(g)));
+            paint_gradient(p, rect, &Draft::gradient_stops(stops, *start, *end, *transparency), *angle);
         }
         DraftFill::Pattern { preset, fore, back, transparency } => {
             let alpha = 1.0 - transparency.clamp(0.0, 100.0) / 100.0;
@@ -479,6 +551,73 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
         }
         DraftFill::Picture { .. } => paint_picture_preview(app, ui, p, rect),
     }
+}
+
+/// Paints a linear gradient over `rect`: `stops` (position 0–100, colour, transparency) run at
+/// `angle` (0° left to right, 90° top to bottom, clockwise), each stop's colour composited over the
+/// white page at its transparency. Bands perpendicular to the gradient are drawn past `rect` and
+/// clipped to it, so the preview matches the page's own shading.
+fn paint_gradient(p: &egui::Painter, rect: Rect, stops: &[GradStop], angle: f32) {
+    let Some(first) = stops.first() else { return };
+    if !(angle.is_finite() && rect.width() > 0.0 && rect.height() > 0.0) {
+        p.rect_filled(rect, 0.0, over_paper(*first));
+        return;
+    }
+    let a = angle.to_radians();
+    let d = vec2(a.cos(), a.sin());
+    let n = vec2(-d.y, d.x);
+    let c = rect.center();
+    let proj = |q: Pos2| (q.x - c.x) * d.x + (q.y - c.y) * d.y;
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for q in [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()] {
+        let t = proj(q);
+        lo = lo.min(t);
+        hi = hi.max(t);
+    }
+    let span = hi - lo;
+    if !(span.is_finite() && span > 0.5) {
+        p.rect_filled(rect, 0.0, over_paper(*first));
+        return;
+    }
+    let reach = rect.width().hypot(rect.height());
+    let steps = 64;
+    let colour_at = |t: f32| {
+        let at = ((t - lo) / span).clamp(0.0, 1.0) * 100.0;
+        let (mut left, mut right) = (stops[0], *stops.last().unwrap_or(&stops[0]));
+        for pair in stops.windows(2) {
+            if pair[0].pos <= at && at <= pair[1].pos {
+                (left, right) = (pair[0], pair[1]);
+                break;
+            }
+        }
+        let f = if right.pos > left.pos { (at - left.pos) / (right.pos - left.pos) } else { 1.0 };
+        let lerp = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * f).round().clamp(0.0, 255.0) as u8;
+        let alpha = (1.0 - (left.transparency + (right.transparency - left.transparency) * f).clamp(0.0, 100.0) / 100.0).clamp(0.0, 1.0);
+        let mix = |over: u8, under: u8| (f32::from(over) * alpha + f32::from(under) * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
+        let (r, g, b) = (lerp(left.color.0, right.color.0), lerp(left.color.1, right.color.1), lerp(left.color.2, right.color.2));
+        Color32::from_rgb(mix(r, 255), mix(g, 255), mix(b, 255))
+    };
+    let mut mesh = egui::Mesh::default();
+    for k in 0..=steps {
+        let t = lo + span * k as f32 / steps as f32;
+        let colour = colour_at(t);
+        let centre = c + d * t;
+        mesh.colored_vertex(centre + n * reach, colour);
+        mesh.colored_vertex(centre - n * reach, colour);
+    }
+    for k in 0..steps {
+        let (a, b, d, e) = (k * 2, k * 2 + 1, k * 2 + 2, k * 2 + 3);
+        mesh.add_triangle(a, b, d);
+        mesh.add_triangle(b, d, e);
+    }
+    p.with_clip_rect(rect.intersect(p.clip_rect())).add(egui::Shape::mesh(mesh));
+}
+
+/// A gradient stop's colour as the white page shows it at its transparency.
+fn over_paper(stop: GradStop) -> Color32 {
+    let alpha = (1.0 - stop.transparency.clamp(0.0, 100.0) / 100.0).clamp(0.0, 1.0);
+    let mix = |over: u8| (f32::from(over) * alpha + 255.0 * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(mix(stop.color.0), mix(stop.color.1), mix(stop.color.2))
 }
 
 /// The cache key of the chosen picture: its path, a fingerprint of its `data`, or its media key.

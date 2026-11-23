@@ -7,7 +7,9 @@ use serde_json::Value;
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::{Pos, StoryRef};
 
-use super::{DocLayout, Rect, Sense, Tokens, Ui, WordApp, json, pos2};
+use craft::text::ui::ruler::GapEdge;
+
+use super::{DocLayout, WordApp, json};
 
 /// Which edge of the space between two columns a drag grabs, in reading order: the end of the
 /// column before it or the start of the column after it.
@@ -15,6 +17,15 @@ use super::{DocLayout, Rect, Sense, Tokens, Ui, WordApp, json, pos2};
 pub(crate) enum GapGrip {
     End,
     Start,
+}
+
+impl From<GapEdge> for GapGrip {
+    fn from(edge: GapEdge) -> Self {
+        match edge {
+            GapEdge::End => GapGrip::End,
+            GapEdge::Start => GapGrip::Start,
+        }
+    }
 }
 
 /// The narrowest column a drag leaves: a quarter inch, as the Columns dialog allows.
@@ -26,11 +37,11 @@ const MAX_SPACE: f32 = 300.0;
 /// The caret section's columns on a page, for the ruler.
 pub(super) struct ColumnGaps {
     /// The caret's section.
-    sect: SectionProps,
+    pub(super) sect: SectionProps,
     /// The page x of the section's text area's left edge.
-    origin: f32,
+    pub(super) origin: f32,
     /// Each space between two neighbouring columns in reading order: its (left, right) page x.
-    gaps: Vec<(f32, f32)>,
+    pub(super) gaps: Vec<(f32, f32)>,
 }
 
 /// The spaces between the caret section's columns on page `pi`: none outside the main text or
@@ -46,7 +57,7 @@ pub(super) fn column_gaps(app: &WordApp, layout: &DocLayout, pi: usize) -> Optio
     if app.session.view.mode != wordcraft_layout::ViewMode::Print || app.session.view.read_mode {
         return None;
     }
-    if sel.focus.path.cell().is_some() || crate::table_ruler::text_area(app, layout, pi).is_some() {
+    if sel.focus.path.cell().is_some() || super::rulers::text_area(app, layout, pi).is_some() {
         return None;
     }
     let doc = &app.session.doc;
@@ -82,58 +93,6 @@ fn gaps_of(s: &SectionProps) -> Vec<(f32, f32)> {
             _ => None,
         })
         .collect()
-}
-
-/// Shades the spaces between the columns on the ruler `bar`, over the white text area.
-pub(super) fn draw(painter: &egui::Painter, cg: &ColumnGaps, bar: Rect, x0: f32, scale: f32, t: &Tokens) {
-    for (l, r) in &cg.gaps {
-        let (sl, sr) = (x0 + l * scale, x0 + r * scale);
-        if sr > sl {
-            painter.rect_filled(Rect::from_min_max(pos2(sl, bar.min.y), pos2(sr, bar.max.y)), 0.0, t.ruler_margin);
-        }
-    }
-}
-
-/// The drag zones of the spaces between the columns: each of their edges, none over a tab
-/// stop's marker (`tabs`), which keeps its own drag. Registered after the tab stops (whose
-/// set-a-stop zone spans the text area) and before the indent markers, which keep the pointer
-/// where they overlap. Columns the command wouldn't take back get no zones.
-pub(super) fn handles(app: &mut WordApp, ui: &Ui, cg: &ColumnGaps, bar: Rect, x0: f32, scale: f32, tabs: &[Rect]) {
-    if !draggable(&cg.sect) {
-        return;
-    }
-    let rtl = cg.sect.rtl;
-    for (gap, (l, r)) in cg.gaps.iter().enumerate() {
-        let (sl, sr) = (x0 + l * scale, x0 + r * scale);
-        // Left to right, the space's left edge ends the column before it; right to left, it
-        // starts the column after it.
-        let (left, right) = if rtl { (GapGrip::Start, GapGrip::End) } else { (GapGrip::End, GapGrip::Start) };
-        // A narrow space is split at its middle, so both edges can be grabbed.
-        let mid = (sl + sr) / 2.0;
-        let zones = [
-            (left, Rect::from_min_max(pos2(sl - 3.0, bar.min.y), pos2((sl + 3.0).min(mid), bar.max.y))),
-            (right, Rect::from_min_max(pos2((sr - 3.0).max(mid), bar.min.y), pos2(sr + 3.0, bar.max.y))),
-        ];
-        for (grip, zone) in zones {
-            if tabs.iter().any(|t| t.intersects(zone)) {
-                continue;
-            }
-            let r =
-                ui.interact(zone, ui.scope_id().with(("ruler_column", gap, grip)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
-            let r = if r.dragged() { r } else { r.on_hover_text(tl!("Column Edge")) };
-            if r.dragged()
-                && let Some(pp) = r.interact_pointer_pos()
-            {
-                let v = (pp.x - x0) / scale - cg.origin;
-                let at = if rtl { cg.sect.text_width() - v } else { v };
-                let Some(params) = column_drag(&cg.sect, gap, grip, at) else { continue };
-                if !r.drag_started() {
-                    app.session.join_next_undo();
-                }
-                let _ = app.run_keep_view("layout.columns", params);
-            }
-        }
-    }
 }
 
 /// The `layout.columns` parameters after dragging `grip` of the space after column `gap` (in
@@ -193,7 +152,7 @@ pub(crate) fn column_drag(s: &SectionProps, gap: usize, grip: GapGrip, at: f32) 
 /// ones each at least a quarter inch wide with 0–300 pt after it and no wider together than the
 /// text. A file can hold others (up to 45 columns, any widths); their spaces are shown, not
 /// dragged.
-fn draggable(s: &SectionProps) -> bool {
+pub(super) fn draggable(s: &SectionProps) -> bool {
     let n = s.columns.count as usize;
     let widths = &s.columns.widths;
     if !(2..=12).contains(&n) {

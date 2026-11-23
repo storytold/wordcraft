@@ -1,4 +1,12 @@
-use super::{BTreeMap, Edge, Pane, PaneLabels, PaneState, Place, StylesPaneDock, Value, WordApp};
+use std::collections::BTreeMap;
+
+use craft::ui::patterns::dock::{PanePlace, PaneState};
+use craft::ui::runtime::env::PaneEdge;
+use egui::{Rect, pos2, vec2};
+use serde_json::Value;
+use wordcraft_engine::StylesPaneDock;
+
+use super::{Pane, WordApp};
 
 /// Every pane in the order the user left them (`paneOrder` in `ui.json`), then the panes that
 /// list lacks in their default order. Each edge shows its panes in this order, the first outermost.
@@ -71,17 +79,52 @@ pub struct SavedPane {
     /// `[x, y, width, height]` of the floating pane, also kept while it is docked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub float: Option<[f32; 4]>,
+    /// A floating pane shows its title row only.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub minimized: bool,
     /// The docked width this run; like the Styles pane's, not kept between runs.
     #[serde(skip)]
     pub width: Option<f32>,
 }
 
+/// A saved place: `left` and `right` are the window's physical sides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SavedDock {
     Left,
     Right,
     Float,
+}
+
+impl SavedDock {
+    /// The word `ui.paneDock` and `view.stylesPaneDock` use for the place.
+    pub(super) fn word(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Float => "float",
+        }
+    }
+}
+
+/// The physical place a pane area place stands for: its `Start` edge is the window's left only in a left-to-right
+/// interface. `None` for a place no task pane takes (top, bottom).
+pub(super) fn saved_dock(place: PanePlace, rtl: bool) -> Option<SavedDock> {
+    match place {
+        PanePlace::Floating => Some(SavedDock::Float),
+        PanePlace::Docked(PaneEdge::Start) => Some(if rtl { SavedDock::Right } else { SavedDock::Left }),
+        PanePlace::Docked(PaneEdge::End) => Some(if rtl { SavedDock::Left } else { SavedDock::Right }),
+        _ => None,
+    }
+}
+
+/// The pane area place of a saved physical place.
+fn dock_place(dock: SavedDock, rtl: bool) -> PanePlace {
+    match (dock, rtl) {
+        (SavedDock::Left, false) | (SavedDock::Right, true) => PanePlace::Docked(PaneEdge::Start),
+        (SavedDock::Right, false) | (SavedDock::Left, true) => PanePlace::Docked(PaneEdge::End),
+        (SavedDock::Float, _) => PanePlace::Floating,
+    }
 }
 
 /// `panePlaces` as saved: unknown panes, places and rects are dropped, not the whole file.
@@ -99,13 +142,18 @@ pub(crate) fn lenient_places<'de, D: serde::Deserializer<'de>>(d: D) -> Result<B
         .filter(|pane| **pane != Pane::Styles)
         .filter_map(|pane| {
             let saved = map.get(pane.key())?;
-            let place = SavedPane { dock: saved.get("dock").and_then(dock), float: saved.get("float").and_then(float_rect), width: None };
+            let place = SavedPane {
+                dock: saved.get("dock").and_then(dock),
+                float: saved.get("float").and_then(float_rect),
+                minimized: saved.get("minimized").and_then(Value::as_bool).unwrap_or(false),
+                width: None,
+            };
             Some((pane.key().to_string(), place))
         })
         .collect())
 }
 
-/// Four finite numbers as `[x, y, width, height]`; `craft_ui::panes` brings a saved rect back
+/// Four finite numbers as `[x, y, width, height]`; the pane area brings a saved rect back
 /// inside the window.
 pub(crate) fn float_rect(v: &Value) -> Option<[f32; 4]> {
     let [x, y, w, h] = v.as_array().map(Vec::as_slice)? else { return None };
@@ -113,69 +161,47 @@ pub(crate) fn float_rect(v: &Value) -> Option<[f32; 4]> {
     n(x).zip(n(y)).zip(n(w)).zip(n(h)).map(|(((x, y), w), h)| [x, y, w, h])
 }
 
+/// A saved `[x, y, width, height]` as a rect.
+fn rect_of([x, y, w, h]: [f32; 4]) -> Rect {
+    Rect::from_min_size(pos2(x, y), vec2(w, h))
+}
+
+/// A rect as the saved `[x, y, width, height]`.
+pub(super) fn rect_to(rect: Rect) -> [f32; 4] {
+    [rect.min.x, rect.min.y, rect.width(), rect.height()]
+}
+
 /// A pane's place and size: Styles' from `view.stylesPaneDock` and its own preferences, the
 /// others' from `panePlaces`.
 ///
 /// `left` / `right` in the docking API and in saved prefs are **physical** window sides (and the
-/// Dock Left / Dock Right menus mean the same). Only an unset default place is mirrored in a
-/// right-to-left interface, so a pane that has never been docked still opens on the reading-start
-/// side.
-pub(super) fn pane_state(app: &WordApp, pane: Pane) -> PaneState {
-    let (mut state, explicit) = stored_state(app, pane);
-    if !explicit {
-        state.place = mirror_default(state.place);
+/// Dock Left / Dock Right menus mean the same); the pane area's edges are logical, so `rtl` maps one to the
+/// other. A pane that was never docked keeps its logical default, which mirrors by itself.
+pub(super) fn pane_state(app: &WordApp, pane: Pane, rtl: bool) -> PaneState {
+    if pane == Pane::Styles {
+        return styles_state(app, rtl);
     }
+    let mut state = pane.default_state();
+    let Some(saved) = app.ui.pane_places.get(pane.key()) else { return state };
+    if let Some(dock) = saved.dock {
+        state.place = dock_place(dock, rtl);
+    }
+    state.size = saved.width.or(state.size);
+    state.float_rect = saved.float.map(rect_of);
+    state.minimized = saved.minimized;
     state
 }
 
-/// Flip a default dock edge in a right-to-left interface so Start (reading start in LTR) opens on
-/// the physical right. Explicit and saved left/right are never flipped — see [`pane_state`].
-pub(super) fn mirror_default(place: Place) -> Place {
-    match place {
-        Place::Docked(Edge::Start) if crate::rtl::on() => Place::Docked(Edge::End),
-        Place::Docked(Edge::End) if crate::rtl::on() => Place::Docked(Edge::Start),
-        other => other,
-    }
-}
-
-/// Physical place from prefs, and whether that place was explicitly saved (`true`) or is still the
-/// pane's default (`false`).
-fn stored_state(app: &WordApp, pane: Pane) -> (PaneState, bool) {
-    if pane == Pane::Styles {
-        return (styles_state(app), true);
-    }
-    let default = pane.default_state();
-    let Some(saved) = app.ui.pane_places.get(pane.key()) else {
-        return (default, false);
-    };
-    let (place, explicit) = match saved.dock {
-        Some(SavedDock::Left) => (Place::Docked(Edge::Start), true),
-        Some(SavedDock::Right) => (Place::Docked(Edge::End), true),
-        Some(SavedDock::Float) => (Place::Floating, true),
-        None => (default.place, false),
-    };
-    (PaneState { place, size: saved.width.or(default.size), float_rect: saved.float }, explicit)
-}
-
 /// The Styles pane's place and size, from `view.stylesPaneDock` and the UI preferences (#1756).
-fn styles_state(app: &WordApp) -> PaneState {
-    let place = match app.session.view.styles_pane_dock {
-        StylesPaneDock::Right => Place::Docked(Edge::End),
-        StylesPaneDock::Left => Place::Docked(Edge::Start),
-        StylesPaneDock::Floating => Place::Floating,
+fn styles_state(app: &WordApp, rtl: bool) -> PaneState {
+    let dock = match app.session.view.styles_pane_dock {
+        StylesPaneDock::Right => SavedDock::Right,
+        StylesPaneDock::Left => SavedDock::Left,
+        StylesPaneDock::Floating => SavedDock::Float,
     };
-    PaneState { place, size: app.ui.styles_pane_width.or(Pane::Styles.default_state().size), float_rect: app.ui.styles_pane_float }
-}
-
-pub(super) fn labels() -> PaneLabels {
-    PaneLabels {
-        menu: tl!("Pane Options").into(),
-        move_start: tl!("Dock Left").into(),
-        move_end: tl!("Dock Right").into(),
-        float: tl!("Float").into(),
-        close: tl!("Close").into(),
-        move_pane: tl!("Move Pane: {title}").into(),
-        resize: tl!("Resize Pane").into(),
-        ..PaneLabels::default()
-    }
+    let mut state = Pane::Styles.default_state();
+    state.place = dock_place(dock, rtl);
+    state.size = app.ui.styles_pane_width.or(state.size);
+    state.float_rect = app.ui.styles_pane_float.map(rect_of);
+    state
 }
