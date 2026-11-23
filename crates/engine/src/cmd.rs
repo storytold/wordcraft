@@ -578,7 +578,18 @@ pub fn now_iso() -> String {
 /// from UTC (#6851). A comment keeps its UTC time beside its date (`w16cex:dateUtc`).
 pub fn revision_date() -> String {
     let now = now_unix();
+    #[cfg(test)]
+    if let Some(offset) = TEST_REVISION_OFFSET.with(std::cell::Cell::get) {
+        return revision_date_at(now, offset);
+    }
     revision_date_at(now, local_offset_secs(now))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The zone [`revision_date`] uses on this thread in place of the system's. CI runs on UTC,
+    /// where a UTC stamp is also the local one, so a test sets a zone that isn't to tell them apart.
+    pub static TEST_REVISION_OFFSET: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
 /// [`revision_date`] for `unix` seconds since the epoch in a zone `offset_secs` east of UTC.

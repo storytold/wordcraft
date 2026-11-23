@@ -4384,17 +4384,67 @@ fn new_comments_and_replies_carry_their_utc_time() {
 /// and reads it back (#6851); a UTC time showed in Word shifted by the user's offset.
 #[test]
 fn tracked_changes_carry_the_local_time() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    // UTC+8:45 on this thread, whatever the runner's zone: on a UTC runner a UTC stamp would also
+    // be the local time, so a command still stamping UTC would pass unnoticed.
+    const OFFSET: i64 = 8 * 3600 + 45 * 60;
+    struct Zone;
+    impl Drop for Zone {
+        fn drop(&mut self) {
+            cmd::TEST_REVISION_OFFSET.with(|o| o.set(None));
+        }
+    }
+    cmd::TEST_REVISION_OFFSET.with(|o| o.set(Some(OFFSET)));
+    let _zone = Zone;
+
+    // The revisions command `id` adds, each checked to be dated at UTC+8:45 at a second it ran in.
+    fn step(s: &mut Session, id: &str, v: serde_json::Value) -> Vec<Revision> {
+        let had = s.doc.revisions.len();
+        let before = cmd::now_unix();
+        run(s, id, v);
+        let after = cmd::now_unix();
+        let local: Vec<String> = (before..=after).map(|t| cmd::revision_date_at(t, OFFSET)).collect();
+        let added = s.doc.revisions.get(had..).unwrap_or_default().to_vec();
+        for r in &added {
+            assert!(local.contains(&r.date), "{id}: {} is not UTC+8:45 at a second in {local:?}", r.date);
+        }
+        added
+    }
+
     let mut s = s();
-    run(&mut s, "document.setText", json!({"text": "Some text"}));
+    run(&mut s, "document.setText", json!({"text": "   First line.\nThe second sentence moves.\nThird."}));
     run(&mut s, "review.trackChanges", json!({"value": true}));
-    let before = crate::cmd::now_unix();
-    run(&mut s, "text.insert", json!({"text": " more"}));
-    let after = crate::cmd::now_unix();
-    let rev = s.doc.revisions.iter().find(|r| r.kind == wordcraft_doc::RevisionKind::Insert).expect("a tracked insertion");
-    // Any second between the two UTC samples, as local time at that second: a daylight-saving
-    // change between them moves the local time back or forward, not the UTC clock.
-    let local: Vec<String> = (before..=after).map(|t| crate::cmd::revision_date_at(t, crate::cmd::local_offset_secs(t))).collect();
-    assert!(local.contains(&rev.date), "{} is not the local time of a second in {local:?}", rev.date);
+    // A paragraph tool that changes both the text and the indent, then typing (`new_revision`).
+    assert!(step(&mut s, "para.spacesToIndent", json!({"scope": "all"})).iter().any(|r| r.kind == RevisionKind::Format));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    assert!(step(&mut s, "text.insert", json!({"text": "New "})).iter().any(|r| r.kind == RevisionKind::Insert));
+    // Formatting a selection, on a document of its own: the author's formatting change above
+    // would take this one in rather than add a revision.
+    let mut f = self::s();
+    run(&mut f, "document.setText", json!({"text": "Bold me."}));
+    run(&mut f, "review.trackChanges", json!({"value": true}));
+    run(&mut f, "select.all", json!({}));
+    assert!(step(&mut f, "format.bold", json!({})).iter().any(|r| r.kind == RevisionKind::Format));
+    // AutoFormat's border line at the top of the document: Enter after "---" borders that
+    // paragraph as it splits it, which the comparison after the command doesn't see.
+    let mut b = self::s();
+    run(&mut b, "text.insert", json!({"text": "---"}));
+    run(&mut b, "review.trackChanges", json!({"value": true}));
+    assert!(step(&mut b, "text.newParagraph", json!({})).iter().any(|r| r.kind == RevisionKind::Format));
+    // A cut that becomes a move when pasted: the destination keeps the cut's date.
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 2, "off": 0}}));
+    let cut = step(&mut s, "edit.cut", json!({}));
+    let cut = cut.iter().find(|r| r.kind == RevisionKind::Delete).expect("the cut's deletion");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "edit.paste", json!({}));
+    let moved = s.doc.revisions.iter().find(|r| r.kind == RevisionKind::Insert && r.move_name.is_some()).expect("the paste is a move");
+    assert_eq!(moved.date, cut.date);
+
+    // Compare's result.
+    let mut c = self::s();
+    run(&mut c, "document.setText", json!({"text": "The dog sat."}));
+    let compared = step(&mut c, "review.compare", json!({"text": "The cat sat."}));
+    assert!(compared.iter().any(|r| r.kind == RevisionKind::Insert) && compared.iter().any(|r| r.kind == RevisionKind::Delete));
 }
 
 /// Update Table with nothing to change lays the document out at the revisions it touches, then
