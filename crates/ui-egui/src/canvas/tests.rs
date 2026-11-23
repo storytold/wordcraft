@@ -253,6 +253,24 @@ fn drawing_over_the_pages_follows_the_read_mode_page_color() {
     assert_eq!(blank(&a), Rgb::WHITE, "the paper under the raster, not the page color");
 }
 
+/// #299: the caret's colour is worked out only when the caret is drawn: with text selected
+/// there is no caret, so the page's draw list isn't built for it.
+#[test]
+fn caret_colour_is_not_worked_out_while_the_caret_is_hidden() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+    a.run("select.text", json!({"text": "Hello"})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.state().canvas.caret_bg.is_none(), "no caret, no colour lookup");
+}
+
 /// Show revisions in balloons: a document whose only revision is a deletion gets the markup
 /// area for its balloon; the other modes have nothing to show there, and neither does the view
 /// while the Comments pane is open.
