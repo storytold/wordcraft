@@ -103,6 +103,39 @@ fn undo_list_matches_the_session_and_undoes_up_to_the_clicked_row() {
     assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "the list closes");
 }
 
+/// #3040: clicking a row in the Undo History popover undoes the step and returns keyboard focus
+/// to the document so typing continues immediately.
+#[test]
+fn undo_list_row_returns_focus_to_the_document() {
+    use egui::accesskit::Role;
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    assert_eq!(a.session.undo_history().len(), 1);
+
+    let mut h = harness(a);
+    assert!(h.state().canvas.focused(&h.ctx), "canvas starts focused");
+
+    let arrow = h.get_by_label("Undo History").rect().center();
+    click_at(&mut h, arrow, egui::PointerButton::Primary);
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 1, "the arrow opens the Undo list");
+    assert!(!h.state().canvas.focused(&h.ctx), "the open Undo list holds the keyboard");
+
+    let row = h.get_by_role_and_label(Role::ListBoxOption, "Typing").rect().center();
+    click_at(&mut h, row, egui::PointerButton::Primary);
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "picking a row closes the Undo list");
+    assert!(h.state().session.undo_history().is_empty(), "the step was undone");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "the undone text is gone");
+    assert!(h.state().canvas.focused(&h.ctx), "the row click returns focus to the document");
+
+    h.event(egui::Event::Text("!".into()));
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!(
+        h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body),
+        "!",
+        "typing reaches the document immediately after picking an Undo list row"
+    );
+}
+
 /// #1975: the zoom percentage gains and loses digits (9% → 100% → 500%); the controls to its
 /// left must not shift with it.
 #[test]

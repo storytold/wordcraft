@@ -200,6 +200,11 @@ fn undo_arrow(app: &mut WordApp, ui: &mut Ui, enabled: bool) -> egui::Rect {
     app.chrome.undo_mark = if open { mark } else { UndoMark::default() };
     if let Some(count) = picked {
         let _ = app.run("edit.undoTo", json!({"count": count}));
+        // Picking a row closes the Undo History popover on its foreground layer; return keyboard
+        // focus to the document both now and after the pass's overlay-close focus hook (#3040).
+        app.canvas.focus_page(ui.ctx());
+        app.canvas.focus_page_after_pass();
+        ui.ctx().request_repaint();
     }
     out.response.rect
 }
