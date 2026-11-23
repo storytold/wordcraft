@@ -52,6 +52,10 @@ craft-ui-test-kit = { git = "https://github.com/storytold/craft-libs", rev = "75
 craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
 
+wordcraft-audit = { path = "crates/audit" }
+quick-xml = "0.41"
+zip = { version = "3", default-features = false, features = ["deflate"] }
+
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
