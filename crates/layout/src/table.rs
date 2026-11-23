@@ -1580,7 +1580,14 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
         return;
     }
     if sum <= 100.0 + MORE_THAN_THE_TABLE {
-        grid.copy_from_slice(&whole_twentieths(&pcts, sum, total));
+        let shares = whole_twentieths(&pcts, sum, total);
+        if own_width && shares.iter().any(|w| *w <= 0.0) {
+            // A grid of next to nothing rounds to columns of nothing, which `table_frame` could
+            // not share the table's own width out by: they keep their proportions until then.
+            grid.iter_mut().zip(&pcts).for_each(|(w, p)| *w = total * p / sum);
+        } else {
+            grid.copy_from_slice(&shares);
+        }
         return;
     }
     // A grid too narrow for the floor in every column shares its width out instead, so the table
@@ -1785,6 +1792,21 @@ mod width_tests {
             apply_pct_widths(&t, &mut got, 468.0);
             assert!((got[1] - 257.55).abs() < 1e-3 && (got[0] + got[1] - 495.25).abs() < 1e-3, "under {twips} twentieths: {got:?}");
         }
+    }
+
+    /// #6575 review: a table with its own width keeps a column for every share until
+    /// `table_frame` gives the grid that width, however small the grid in the file.
+    #[test]
+    fn shares_of_a_table_with_its_own_width_keep_their_columns_until_it_is_applied() {
+        let mut t = Table::new(1, 2, 400.0);
+        t.props.width = Some(400.0);
+        t.props.fixed = true;
+        t.rows[0].cells.truncate(1);
+        let cell = &mut t.rows[0].cells[0];
+        (cell.props.span, cell.props.width, cell.props.width_pct) = (2, None, Some(100.0));
+        let mut got = [0.001, 0.001];
+        apply_pct_widths(&t, &mut got, 468.0);
+        assert!(got.iter().all(|w| *w > 0.0) && (got[0] - got[1]).abs() < 1e-9, "{got:?}");
     }
 
     #[test]
