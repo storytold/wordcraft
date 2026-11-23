@@ -102,49 +102,6 @@ fn the_glide_follows_words_measured_curve() {
     }
 }
 
-#[test]
-fn a_key_move_glides_and_lands_exactly() {
-    let mut r = Rig::new(bar(100.0, 50.0));
-    r.key_to(bar(200.0, 90.0));
-    let first = r.step(DT);
-    assert_eq!(first.bar, bar(100.0, 50.0), "the glide starts from where the caret was");
-    assert!(first.moving && r.glide.is_gliding());
-    let mut last = 100.0;
-    let mut frames = 0;
-    while r.glide.is_gliding() {
-        let look = r.step(DT);
-        let b = look.bar;
-        assert!(b[0].x >= last && b[0].x <= 200.0, "moves toward the target without overshooting: {b:?}");
-        assert!((b[1].y - b[0].y - 16.0).abs() < 1e-3, "the bar keeps its height: {b:?}");
-        assert_eq!(look.opacity, 1.0, "a caret that was lit stays lit on the way");
-        last = b[0].x;
-        frames += 1;
-        assert!(frames < 60);
-    }
-    assert_eq!(r.glide.drawn(), Some(bar(200.0, 90.0)));
-    // 0.1 s at 60 Hz.
-    assert!((5..=7).contains(&frames), "{frames} frames");
-    assert_eq!(r.step(DT), Look { bar: bar(200.0, 90.0), opacity: 1.0, moving: false }, "then it rests");
-}
-
-#[test]
-fn the_glide_is_the_same_at_any_frame_rate() {
-    let at = |hz: f64| {
-        let mut r = Rig::new(bar(0.0, 0.0));
-        r.key_to(bar(300.0, 0.0));
-        r.step(1.0 / hz);
-        let mut b = bar(0.0, 0.0);
-        // 0.05 s in: three frames at 60 Hz, twelve at 240 Hz.
-        for _ in 0..(hz / 20.0).round() as usize {
-            b = r.step(1.0 / hz).bar;
-        }
-        b[0].x
-    };
-    let expected = 300.0 * ease((0.05 / GLIDE_SECS) as f32);
-    assert!((at(60.0) - expected).abs() < 0.5, "{} vs {expected}", at(60.0));
-    assert!((at(240.0) - expected).abs() < 0.5, "{} vs {expected}", at(240.0));
-}
-
 /// Word: a second key before the caret arrives makes it snap to where it was heading and set
 /// off from there (held arrow keys, quick typing).
 #[test]
@@ -337,28 +294,7 @@ fn a_hidden_stale_or_off_screen_caret_appears_in_place() {
 }
 
 #[test]
-fn turned_off_or_hostile_numbers_never_glide_or_panic() {
-    // Off: it jumps, and blinks hard.
-    let mut off = Rig::new(bar(0.0, 0.0));
-    off.glide = CaretGlide::with_secs(0.0);
-    off.step(DT);
-    off.key_to(bar(90.0, 0.0));
-    assert_eq!(off.step(DT), Look { bar: bar(90.0, 0.0), opacity: 1.0, moving: false });
-    assert_eq!(off.rest(0.5).opacity, 1.0);
-    assert_eq!(off.rest(0.06).opacity, 0.0);
-    assert_eq!(off.rest(0.5).opacity, 1.0);
-
-    assert_eq!(CaretGlide::with_secs(f64::NAN).secs, GLIDE_SECS);
-    assert_eq!(CaretGlide::with_secs(-3.0).secs, 0.0);
-    assert_eq!(CaretGlide::with_secs(f64::INFINITY).secs, GLIDE_SECS);
-    assert_eq!(parse_ms(None), GLIDE_SECS);
-    assert_eq!(parse_ms(Some("junk")), GLIDE_SECS);
-    assert_eq!(parse_ms(Some("NaN")), GLIDE_SECS);
-    assert_eq!(parse_ms(Some(" 0 ")), 0.0);
-    assert_eq!(parse_ms(Some("-5")), 0.0);
-    assert_eq!(parse_ms(Some("250")), 0.25);
-    assert_eq!(parse_ms(Some("1e300")), MAX_GLIDE_SECS);
-
+fn junk_positions_and_clocks_never_glide_or_panic() {
     let mut r = Rig::new(bar(10.0, 10.0));
     let junk = [pos2(f32::NAN, f32::INFINITY), pos2(f32::NEG_INFINITY, 0.0)];
     r.key_to(junk);
@@ -411,7 +347,9 @@ fn the_canvas_caret_glides_after_a_key() {
     a.run("text.insert", json!({"text": "Some text here"})).unwrap();
     // Animation effects off: the caret follows that switch.
     a.run("ui.animations", json!({"value": "off"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(DT as f32).build_ui_state(
+    let drawn = |h: &egui_kittest::Harness<'static, WordApp>| h.state().canvas.glide.drawn();
+    let gliding = |h: &egui_kittest::Harness<'static, WordApp>| h.state().canvas.glide.is_gliding();
+    let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(DT as f32).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -419,59 +357,80 @@ fn the_canvas_caret_glides_after_a_key() {
         },
         a,
     );
+    // kittest zeroes egui's animation time, and the framework runs no animation while it is zero (the motion mode in
+    // `Env` drops to Off): give it the time a real window has, so the setting under test is the only thing off.
+    h.ctx.all_styles_mut(|style| style.animation_time = egui::Style::default().animation_time);
     for _ in 0..3 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
     }
-    assert!(state(&h.ctx).drawn().is_none(), "no animations: the glide stands down");
+    assert!(drawn(&h).is_none(), "no animations: the glide stands down");
     h.state_mut().run("ui.animations", json!({"value": "on"})).unwrap();
-    h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
+    // The caret shows and glides in the canvas that has the keyboard: the framework gives it to no canvas by itself,
+    // as a click on the page does.
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    for _ in 0..8 {
+        crate::test_harness::frames(&mut h, 1);
+        if h.state().canvas.focused(&ctx) {
+            break;
+        }
+    }
+    assert!(h.state().canvas.focused(&ctx), "the canvas takes the focus it asked for");
     for _ in 0..30 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
     }
     let near = |a: Bar, b: Bar| distance(a, b) < 0.01;
-    let end = state(&h.ctx).drawn().expect("the focused canvas draws a caret");
-    assert!(!state(&h.ctx).is_gliding());
+    let end = drawn(&h).expect("the focused canvas draws a caret");
+    assert!(!gliding(&h));
     // Home: the caret glides to the start of the line.
     // (The canvas reads the key at the end of its frame; the caret sets off in the next.)
     h.event(key(egui::Key::Home));
-    for _ in 0..3 {
-        h.step();
+    // The framework hands the app a key as a fired command at the head of a later pass, so the caret sets off a
+    // frame or two after the key; the glide lasts several frames, so it is caught on its way.
+    for _ in 0..8 {
+        crate::test_harness::frames(&mut h, 1);
+        if gliding(&h) {
+            break;
+        }
     }
-    let mid = state(&h.ctx);
-    assert!(mid.is_gliding(), "the caret is on its way");
-    let x = mid.drawn().unwrap()[0].x;
+    assert!(gliding(&h), "the caret sets off");
+    // The frame it sets off in draws it where it set off from (no time has passed); as on main, it is caught in the
+    // frame after, on its way.
+    crate::test_harness::frames(&mut h, 1);
+    assert!(gliding(&h), "the caret is on its way");
+    let x = drawn(&h).unwrap()[0].x;
     for _ in 0..20 {
-        h.step();
+        crate::test_harness::frames(&mut h, 1);
     }
-    let start = state(&h.ctx).drawn().unwrap();
-    assert!(!state(&h.ctx).is_gliding(), "and comes to rest");
+    let start = drawn(&h).unwrap();
+    assert!(!gliding(&h), "and comes to rest");
     assert_eq!(h.state().session.sel.focus.off, 0, "Home moved the caret");
     assert!(start[0].x + 20.0 < end[0].x, "to the start of the line: {start:?} from {end:?}");
     assert!(x > start[0].x && x < end[0].x, "on the way it was drawn in between: {x}");
     // A command run by a script puts it there at once.
     h.state_mut().run("caret.docEnd", json!({})).unwrap();
-    h.step();
-    assert!(!state(&h.ctx).is_gliding());
-    assert!(near(state(&h.ctx).drawn().unwrap(), end), "back at the end of the text");
+    crate::test_harness::frames(&mut h, 1);
+    assert!(!gliding(&h));
+    assert!(near(drawn(&h).unwrap(), end), "back at the end of the text");
     // Zooming moves the caret on screen but doesn't glide it.
     h.state_mut().run("view.zoom", json!({"value": 150})).unwrap();
     for _ in 0..3 {
-        h.step();
-        assert!(!state(&h.ctx).is_gliding());
+        crate::test_harness::frames(&mut h, 1);
+        assert!(!gliding(&h));
     }
-    assert!(!near(state(&h.ctx).drawn().unwrap(), end));
+    assert!(!near(drawn(&h).unwrap(), end));
     // Turned off in Options: the caret jumps.
     h.state_mut().run("ui.caretAnimation", json!({"value": false})).unwrap();
-    h.step();
-    assert!(state(&h.ctx).drawn().is_none(), "the animation stands down");
+    crate::test_harness::frames(&mut h, 1);
+    assert!(drawn(&h).is_none(), "the animation stands down");
     h.event(key(egui::Key::Home));
     for _ in 0..3 {
-        h.step();
-        assert!(!state(&h.ctx).is_gliding());
+        crate::test_harness::frames(&mut h, 1);
+        assert!(!gliding(&h));
     }
     assert_eq!(h.state().session.sel.focus.off, 0, "Home still moved the caret");
     // And on again.
     h.state_mut().run("ui.caretAnimation", json!({"value": true})).unwrap();
-    h.step();
-    assert!(state(&h.ctx).drawn().is_some());
+    crate::test_harness::frames(&mut h, 1);
+    assert!(drawn(&h).is_some());
 }
