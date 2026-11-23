@@ -67,12 +67,11 @@ fn round9_settings_role_boundary() {
                     let missing = true;
                     assert_eq!(findings(&report, "NOTE-PR-LISTING"), usize::from(missing), "{report:?}");
                     if missing {
-                        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+                        assert_eq!(report.verdict, if mode == "complete" { Verdict::Pass } else { Verdict::Incomplete }, "{report:?}");
                         assert!(
-                            report
-                                .findings
-                                .iter()
-                                .any(|f| f.rule == "NOTE-PR-LISTING" && f.severity == Severity::Error && f.part.as_deref() == Some("word/notes.xml")),
+                            report.findings.iter().any(|f| f.rule == "NOTE-PR-LISTING"
+                                && f.severity == Severity::Warning
+                                && f.part.as_deref() == Some("word/notes.xml")),
                             "{report:?}"
                         );
                     } else {

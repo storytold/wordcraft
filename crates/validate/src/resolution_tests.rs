@@ -52,6 +52,7 @@ fn round18_entry_lookup_truth_table() {
         d.set_doc_rels(
             r#"<Relationship Id="h" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="Header.XML"/>"#,
         );
+        d.set_document(r#"<w:p/><w:sectPr><w:headerReference w:type="default" r:id="h"/></w:sectPr>"#);
         if reverse {
             d.entries.reverse();
         }
@@ -145,7 +146,7 @@ fn round18_content_availability_sites() {
             check_typed_image_refs(&pkg, &xml.references(), &mut acc);
             assert_eq!(acc.findings.iter().any(|f| f.rule == "REL-TYPED"), !skip, "2034/{state}");
             let mut acc = Acc::with_limits(Limits::default());
-            check_typed_targets(&pkg, &mut acc);
+            check_typed_targets(&pkg, &xml, &mut acc);
             assert_eq!(acc.findings.iter().any(|f| f.rule == "REL-TYPED"), !skip, "2097/{state}");
             // Site 3650's manifest-driven note belongs to the explicit no-owner fallback.
             pkg.main = Resolution::Absent;
@@ -190,7 +191,7 @@ fn round18_archive_prefix_permutations() {
     }
 }
 
-/// R18/2304: the name lookup only supplies display spelling to an independent typed finding.
+/// A mistyped consumed part requires established entry identity and uses the stored spelling.
 #[test]
 fn round18_typed_finding_display_polarity() {
     for state in ["found", "absent", "unknown"] {
@@ -199,6 +200,7 @@ fn round18_typed_finding_display_polarity() {
         d.set_doc_rels(
             r#"<Relationship Id="c" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="mixed.xml"/>"#,
         );
+        d.set_document(r#"<w:p><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="c"/></w:p>"#);
         let mut pkg = package::load(&d.build(), &mut Acc::with_limits(Limits::default())).unwrap();
         if state != "found" {
             pkg.entries.retain(|e| e.name != "word/Mixed.XML");
@@ -209,8 +211,8 @@ fn round18_typed_finding_display_polarity() {
         let mut acc = Acc::with_limits(Limits::default());
         check_typed_content(&pkg, &xml, &mut acc);
         let report = acc.finish();
-        let finding = report.findings.iter().find(|f| f.rule == "CT-MISMATCH").unwrap();
-        assert_eq!(finding.part.as_deref(), Some(if state == "found" { "word/Mixed.XML" } else { "word/mixed.xml" }), "{state}");
+        let part = report.findings.iter().find(|f| f.rule == "CT-MISMATCH").and_then(|f| f.part.as_deref());
+        assert_eq!(part, (state == "found").then_some("word/Mixed.XML"), "{state}");
     }
 }
 
@@ -250,7 +252,7 @@ fn rel_typed_preserves_proven_mismatches_under_unknown_unreadable() {
 
     let mut acc = Acc::with_limits(Limits::default());
     acc.set_unknown_unreadable();
-    check_typed_targets(&pkg, &mut acc);
+    check_typed_targets(&pkg, &xml, &mut acc);
     let image_refs: Vec<(String, Vec<RefFact>)> = xml.parts.values().map(|p| (p.name.clone(), p.references.prefix().to_vec())).collect();
     check_typed_image_refs(&pkg, &image_refs, &mut acc);
     let report = acc.finish();

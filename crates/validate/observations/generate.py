@@ -304,6 +304,13 @@ def unit_audit(name, func, header, body, semantic_json, fields, enum_variants,
         ('lib.rs', 'absence_suppressed', 'PACKAGE_ABSENCE_RULES'),
         ('lib.rs', 'check_note_pr', 'reverse_ok'),
         ('lib.rs', 'report_malformed', 'pkg.reachable'),
+        # Positive indices for custom XML and relationship use; the unused store verdict
+        # still requires CompleteSet::missing on the complete exclusion collection.
+        ('lib.rs', 'from_document', 'ids'),
+        ('lib.rs', 'bound_item', 'self.bound'),
+        ('lib.rs', 'bound_properties', 'self.bound_properties'),
+        ('lib.rs', 'unused_item', 'self.items'),
+        ('relationship_use.rs', 'uses', 'self.sites'),
         ('lib.rs', 'check_typed_content', 'non_main_owner_rels'),
         ('lib.rs', 'report_unreferenced_comments', 'incomplete_owners'),
         ('lib.rs', 'supporting_part', 'acc.coverage'),

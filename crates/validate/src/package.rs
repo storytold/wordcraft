@@ -159,6 +159,8 @@ pub(crate) struct Rel {
     /// Resolved package path for internal targets; `None` for external ones.
     pub target_abs: Option<String>,
     pub external: bool,
+    /// The original internal target names a location within its source part.
+    pub fragment_only: bool,
 }
 
 /// Bind lexical relationship IDs consistently: the first declaration in XML order wins.
@@ -1990,7 +1992,8 @@ fn parse_rel(dir: &str, e: &BytesStart) -> Option<(Rel, bool)> {
     let complete = !id.is_empty() && !kind.is_empty() && !target.is_empty();
     let external = attr_plain(e, b"TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
     let target_abs = (!external).then(|| resolve(dir, &target));
-    Some((Rel { id: id.into(), role: RelationKind::parse(&kind), kind, target_abs, external }, complete))
+    let fragment_only = !external && target.starts_with('#');
+    Some((Rel { id: id.into(), role: RelationKind::parse(&kind), kind, target_abs, external, fragment_only }, complete))
 }
 
 /// An unqualified OPC attribute; foreign qualified lookalikes never declare OPC metadata.

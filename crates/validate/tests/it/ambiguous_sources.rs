@@ -73,7 +73,7 @@ fn repeated_target_keeps_note_findings_in_both_orders() {
                 let report = validate_bytes(&note_case(kind, competing, reverse, true).build());
                 assert!(!report.coverage_notes.iter().any(|n| n.contains("ambiguous")), "{report:?}");
                 assert_eq!(findings(&report, &["NOTE-PR-LISTING", "NOTE-PR-DANGLING"]).len(), 2, "{report:?}");
-                assert_eq!(report.verdict, Verdict::Fail);
+                assert_eq!(report.verdict, Verdict::Pass);
             }
         }
     }
@@ -306,7 +306,7 @@ fn disjoint_owners_keep_clean_note_joins_in_both_directions_and_orders() {
             let notes = findings(&report, &["NOTE-PR-LISTING", "NOTE-PR-DANGLING"]);
             assert_eq!(notes.len(), 1, "{report:?}");
             assert!(notes[0].contains("clean-notes.xml"), "{report:?}");
-            assert_eq!(report.verdict, Verdict::Fail);
+            assert_eq!(report.verdict, Verdict::Incomplete);
         }
     }
 }
@@ -392,7 +392,7 @@ fn one_note_kind_ambiguity_keeps_the_other_kinds_findings_in_both_orders() {
         let notes = findings(&report, &["NOTE-PR-LISTING", "NOTE-PR-DANGLING"]);
         assert_eq!(notes.len(), 1, "{report:?}");
         assert!(notes[0].contains("endnotes.xml"), "{report:?}");
-        assert_eq!(report.verdict, Verdict::Fail);
+        assert_eq!(report.verdict, Verdict::Incomplete);
     }
 }
 
