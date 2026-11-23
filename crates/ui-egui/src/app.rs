@@ -1,7 +1,7 @@
 use super::services::Services;
 use super::state::{AutoSaveBlock, PromptSave, keeps_everything};
 use super::{
-    DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, canvas, chrome, crop, dialogs, documents,
+    DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, SaveInFlight, Session, Status, Value, WordApp, applied_font, chrome, crop, dialogs, documents,
     file_dialogs, i18n, json, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, split, system_clipboard,
     table_pen, theme, updates_ui, window_ui, windows, zotero,
 };

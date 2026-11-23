@@ -285,8 +285,10 @@ impl CanvasState {
     /// view's zoom, fit and offset) and what belongs to the window or the user (the colours last applied, the ruler's
     /// tab kind); nothing dragged, composed or shown yet. It asks for the keyboard once it shows.
     pub(crate) fn split_off(&self) -> CanvasState {
+        let mut view = self.view.clone();
+        view.go_to = None;
         CanvasState {
-            view: PageViewState { go_to: None, ..self.view.clone() },
+            view,
             last_highlight: self.last_highlight.clone(),
             last_font_color: self.last_font_color.clone(),
             last_shading: self.last_shading.clone(),
