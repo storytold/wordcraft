@@ -146,6 +146,9 @@ impl WordApp {
         updates_ui::run(self);
         crate::dialogs::host::prepare(self);
         self.dialog_host.run(ui);
+        // A dialog that asked for a window of its own (a utility panel on macOS) runs beside this
+        // window's pass; with none open this does nothing.
+        self.dialog_host.run_windowed(ctx);
         crate::dialogs::host::settle(self, ctx);
         if moved(self) {
             return;

@@ -64,7 +64,9 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         "phonetic" => phonetic::open(app, name, params, parent),
         "enclose" => enclose::open(app, name, params, parent),
         "defineBullet" => dialogs_bullet::open(app, name, params, parent),
+        // In a window of its own (macOS), Tabs is a page of the Paragraph dialog.
         "paragraph" | "asianTypography" => paragraph::open(app, name, params, parent),
+        "tabs" if app.services.paragraph_window => paragraph::open(app, name, params, parent),
         "tabs" | "borders" | "pageBorders" | "shading" => dialogs_para::open(app, name, params, parent),
         "defineList" | "trackChangesOptions" => dialogs_lists::open(app, name, params, parent),
         "dateTime" | "columns" | "symbol" | "specialCharacters" | "field" | "insertSmartArt" | "changeChartType" | "insertChart" | "chartData"

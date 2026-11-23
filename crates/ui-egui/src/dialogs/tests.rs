@@ -1786,6 +1786,91 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     }
 }
 
+/// `Services::paragraph_window`: the Paragraph dialog asks for a window of its own (a macOS
+/// utility panel), so `DialogHost::run` leaves it out of the document window's pass and
+/// `run_windowed` drives it; its OK still files through the windowed path and runs `para.set`.
+#[test]
+fn paragraph_in_its_own_window_runs_windowed_and_answers_ok() {
+    let mut app = app_with("one\ntwo");
+    app.services.paragraph_window = true;
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let id = open_named(&mut h, "paragraph", json!({}));
+    let windowed = h
+        .state()
+        .dialog_host
+        .get_by_id::<ParagraphHost>(id)
+        .map(craft::ui::dialog::StackDialog::windowed)
+        .unwrap_or_else(|| panic!("the paragraph dialog is on the host"));
+    assert!(windowed, "the dialog asked for a window of its own");
+    // The document window behind the panel is blocked while the panel is open.
+    assert!(h.ctx.memory(|m| m.top_modal_layer().is_some()), "the document is blocked behind the panel");
+    // An OK filed in the panel's window runs para.set, as in the document window.
+    let depth = h.state().session.undo_depth();
+    apply_paragraph(&mut h, |f| f.space_before = Some(6.0));
+    assert_eq!(props(h.state()).space_before, Some(6.0));
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+    assert!(!is_open(h.state(), "paragraph"), "the panel closed on OK");
+    assert!(h.ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
+}
+
+/// In its own window the Paragraph dialog has Tabs as a page: a stop set there and a format change both apply on OK,
+/// as one undo step.
+#[test]
+fn paragraph_in_its_own_window_applies_its_tabs_page_on_ok() {
+    let mut app = app_with("a\tb");
+    app.services.paragraph_window = true;
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let id = open_named(&mut h, "paragraph", json!({}));
+    let ctx = h.ctx.clone();
+    let host = h.state_mut().dialog_host.get_mut_by_id::<ParagraphHost>(id).expect("the dialog is hosted");
+    host.inner_mut().tabs_page_mut().expect("the dialog has a Tabs page").new_stop();
+    h.state_mut().dialog_host.set_json_field(&ctx, id, "space_before", json!(6.0)).expect("space_before is a field");
+    h.run_steps(2);
+    confirm(&mut h, id);
+    assert_eq!(props(h.state()).space_before, Some(6.0), "the format applied");
+    let s = &h.state().session;
+    let tabs = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).tabs.clone()).unwrap_or_default();
+    assert!(!tabs.is_empty(), "the stop set on the page applied");
+    assert!(!is_open(h.state(), "paragraph"), "OK closed the panel");
+    // OK is one undo step: one Undo takes back both the format and the stop.
+    h.state_mut().run("edit.undo", json!({})).expect("undo runs");
+    assert_ne!(props(h.state()).space_before, Some(6.0), "Undo took back the format");
+    let s = &h.state().session;
+    let tabs = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).tabs.clone()).unwrap_or_default();
+    assert!(tabs.is_empty(), "the same Undo took back the stop");
+}
+
+/// Without `Services::paragraph_window` the Paragraph dialog is an ordinary in-window one.
+#[test]
+fn paragraph_without_the_window_service_stays_in_the_document_window() {
+    let mut h = app_harness(app_with("one"));
+    h.run_steps(2);
+    let id = open_named(&mut h, "paragraph", json!({}));
+    let windowed = h.state().dialog_host.get_by_id::<ParagraphHost>(id).map(craft::ui::dialog::StackDialog::windowed).unwrap_or_default();
+    assert!(!windowed);
+    let ctx = h.ctx.clone();
+    h.state_mut().dialog_host.cancel_by_id(&ctx, id);
+    h.run_steps(2);
+    assert!(!is_open(h.state(), "paragraph"), "cancel closes it");
+}
+
+/// With `Services::paragraph_window`, Format › Tabs opens the Paragraph panel on its Tabs page.
+#[test]
+fn tabs_open_the_paragraph_panel_on_its_tabs_page_with_the_window_service() {
+    let mut app = app_with("one");
+    app.services.paragraph_window = true;
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    let id = open_named(&mut h, "tabs", json!({}));
+    let host = h.state_mut().dialog_host.get_mut_by_id::<ParagraphHost>(id).unwrap_or_else(|| panic!("the paragraph dialog is on the host"));
+    assert!(craft::ui::dialog::StackDialog::windowed(host), "in a window of its own");
+    assert!(host.inner_mut().tabs_page_mut().is_some(), "with its Tabs page");
+    let tab = craft::ui::dialog::StackDialog::json_fields(host).and_then(|fields| fields.get("tab").cloned());
+    assert_eq!(tab, serde_json::to_value(craft::text::ui::character::ParagraphTab::Tabs).ok(), "opened on it");
+}
+
 /// #7446: the SmartArt picker renders compact layout tiles capped at three rows (PICKER_HEIGHT = 304),
 /// instead of expanding each thumbnail to default card dimensions (~132×132 pt) and overflowing.
 #[test]
