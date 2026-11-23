@@ -2111,16 +2111,20 @@ fn pasted_formatted_paragraphs_without_alignment_take_the_destination_alignment(
         s.doc.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
     assert!(aligns.len() >= 2, "{aligns:?}");
     assert!(aligns.iter().all(|a| *a == Some(Align::Center)), "{aligns:?}");
-    // What a browser copies: every paragraph carries the computed `text-align: start`.
+    // What a browser copies: every paragraph carries the computed `text-align`. Keep Source follows
+    // it, as Word on the web does; Merge Formatting takes the destination's alignment.
     let mut s = self::s();
     run(&mut s, "document.setText", json!({"text": "x"}));
     run(&mut s, "para.align", json!({"value": "center"}));
     run(&mut s, "caret.docEnd", json!({}));
     let html = "<p style=\"margin:0 0 1em;text-align:start\">First.</p><p style=\"margin:0 0 1em;text-align: left\">Second.</p>";
     run(&mut s, "edit.paste", json!({"text": "First.\n\nSecond.", "html": html}));
-    let aligns: Vec<_> =
-        s.doc.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
-    assert!(aligns.iter().all(|a| *a == Some(Align::Center)), "browser-computed left is not a choice: {aligns:?}");
+    let aligns = |s: &Session| -> Vec<_> {
+        s.doc.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect()
+    };
+    assert_eq!(aligns(&s).last(), Some(&Some(Align::Left)), "Keep Source follows the browser: {:?}", aligns(&s));
+    run(&mut s, "edit.pasteChange", json!({"mode": "merge"}));
+    assert!(aligns(&s).iter().all(|a| *a == Some(Align::Center)), "Merge Formatting takes the destination's: {:?}", aligns(&s));
 }
 
 #[test]

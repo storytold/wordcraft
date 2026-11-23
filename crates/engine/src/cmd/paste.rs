@@ -183,9 +183,6 @@ fn import_html(html: &str) -> Document {
             }
         });
     }
-    // A browser's computed left alignment is not a choice, for Paste Special › HTML as for a plain
-    // paste: both read the HTML here.
-    drop_computed_left(&mut doc);
     doc
 }
 
@@ -272,19 +269,6 @@ pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
         }
     };
     Some(adopt(s, doc))
-}
-
-/// Browsers write the computed `text-align: left` (or `start`) on every paragraph they copy: that
-/// is the default, not a choice, so it must not override a centered destination for all but the
-/// first paragraph. Only HTML is treated so: in RTF `\ql` is a property the author set.
-fn drop_computed_left(doc: &mut Document) {
-    for b in &mut doc.body {
-        each_para(Arc::make_mut(b), 0, &mut |p| {
-            if p.props.align == Some(wordcraft_doc::Align::Left) {
-                p.props.align = None;
-            }
-        });
-    }
 }
 
 /// What a Paste brings in.
@@ -896,10 +880,11 @@ mod tests {
         assert!(first.runs.iter().any(|r| r.props.bold == Some(true)), "the source's bold is back: {:?}", first.runs);
     }
 
-    /// `\ql` in pasted RTF is a left alignment the author chose: it is kept in a centered
-    /// destination. Only a browser's computed `text-align: left` is dropped.
+    /// The alignment a source states (RTF `\ql`, a browser's `text-align: left`) is what Keep
+    /// Source keeps in a centered destination, as in Word on the web; Merge Formatting and Keep Text
+    /// Only take the destination's.
     #[test]
-    fn rtf_left_alignment_is_kept_in_a_centered_destination() {
+    fn the_alignment_a_source_states_is_kept_by_keep_source_only() {
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.run("para.alignCenter", &json!({})).unwrap();
         let rtf = "{\\rtf1\\ansi\\pard\\ql First\\par\\pard\\ql Second\\par}";
@@ -907,25 +892,35 @@ mod tests {
         let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
         // The first paragraph joins the destination's; the second keeps the \ql the source set.
         assert_eq!(aligns.last(), Some(&Some(wordcraft_doc::Align::Left)), "{aligns:?}");
-        // The same text from a browser (computed left) takes the destination's alignment.
+        // The same from a browser (its computed left): Keep Source follows it; Merge Formatting
+        // and Keep Text Only keep the destination's centered alignment.
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.run("para.alignCenter", &json!({})).unwrap();
         let html = "<p style=\"text-align:left\">First</p><p style=\"text-align:left\">Second</p>";
         s.run("edit.paste", &json!({"text": "First\nSecond", "html": html})).unwrap();
-        let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
-        assert!(aligns.iter().all(|a| *a == Some(wordcraft_doc::Align::Center)), "{aligns:?}");
+        let aligns = |s: &Session| -> Vec<_> {
+            s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect()
+        };
+        assert_eq!(aligns(&s).last(), Some(&Some(wordcraft_doc::Align::Left)), "Keep Source follows the browser: {:?}", aligns(&s));
+        assert!(!paste_options(&s).is_empty(), "the paste offers its options: {:?}", s.last_paste.as_ref().map(|lp| (lp.rev, lp.end.clone())));
+        for mode in ["merge", "text"] {
+            s.run("edit.pasteChange", &json!({"mode": mode})).unwrap_or_else(|e| panic!("{mode}: {e}"));
+            assert!(aligns(&s).iter().all(|a| *a == Some(wordcraft_doc::Align::Center)), "{mode} takes the destination's: {:?}", aligns(&s));
+        }
+        s.run("edit.pasteChange", &json!({"mode": "source"})).unwrap();
+        assert_eq!(aligns(&s).last(), Some(&Some(wordcraft_doc::Align::Left)), "and back to Keep Source: {:?}", aligns(&s));
     }
 
-    /// Paste Special › HTML drops a browser's computed left alignment as a plain paste does, and
-    /// inserting the Spike is not a paste, so it offers no Paste Options.
+    /// Paste Special › HTML follows the source's alignment as a plain paste does, and inserting the
+    /// Spike is not a paste, so it offers no Paste Options.
     #[test]
-    fn paste_special_html_drops_computed_left_and_the_spike_is_no_paste() {
+    fn paste_special_html_follows_the_source_alignment_and_the_spike_is_no_paste() {
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.run("para.alignCenter", &json!({})).unwrap();
         let html = "<p style=\"text-align:left\">First</p><p style=\"text-align:left\">Second</p>";
         s.run("edit.pasteSpecial", &json!({"as": "html", "html": html})).unwrap();
         let aligns: Vec<_> = s.doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
-        assert!(aligns.iter().all(|a| *a == Some(wordcraft_doc::Align::Center)), "{aligns:?}");
+        assert_eq!(aligns.last(), Some(&Some(wordcraft_doc::Align::Left)), "{aligns:?}");
 
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.run("text.insert", &json!({"text": "Spiked"})).unwrap();

@@ -321,10 +321,10 @@ impl Session {
     /// After a command that may edit: the paste it just made is valid for the revision it produced;
     /// a paste from before is over once the document has changed since, and its copy of the pasted
     /// content (kept for Paste Options) is freed with it.
-    fn settle_last_paste(&mut self, edited: bool) {
+    fn settle_last_paste(&mut self) {
         let rev = self.rev;
         match self.last_paste.as_mut() {
-            Some(lp) if lp.rev.is_none() && edited => lp.rev = Some(rev),
+            Some(lp) if lp.rev.is_none() => lp.rev = Some(rev),
             Some(lp) if lp.rev.is_some_and(|r| r != rev) => self.last_paste = None,
             _ => {}
         }
@@ -397,7 +397,6 @@ impl Session {
             if rerouted {
                 self.touch();
             }
-            self.settle_last_paste(changed || rerouted);
             // A command that changed nothing is not an edit (#23): it adds no undo
             // step, marks no unsaved changes, forces no relayout and leaves the redo
             // stack alone. What it left behind is compared with what it started from,
@@ -426,6 +425,8 @@ impl Session {
                     self.join_anchor = false;
                 }
             }
+            // After the no-op restore above, so the paste's revision is the one the document is at.
+            self.settle_last_paste();
         }
         self.clamp_selection();
         let mut ime_outcome = self.ime_edit_outcome;
