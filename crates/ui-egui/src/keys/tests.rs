@@ -309,6 +309,27 @@ fn the_ignored_paste_uses_up_its_paste_modifiers() {
     assert_eq!(state.get("italic").and_then(serde_json::Value::as_bool), Some(true), "a later menu-bar paste keeps clipboard formatting: {state}");
 }
 
+/// #5616: a pointer press ends the wait for the browser's paste event, so a later paste via
+/// `Mod+V` isn't swallowed.
+#[test]
+fn a_pointer_press_ends_the_wait_for_the_ignored_paste() {
+    let mut h = app_harness(copied_bold_app());
+    let chord = Modifiers { shift: true, ..mod_held() };
+    mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source target");
+    assert!(is_bold(&mut h));
+    let pos = egui::pos2(720.0, 450.0);
+    let press = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+    let release = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE };
+    mods_frame(&mut h, Modifiers::NONE, vec![press, release]);
+    run(&mut h, "select.text", json!({"text": "target"}));
+    offer(&h, bold_flavours("click"));
+    batch_frame(&mut h, vec![egui::Event::Paste("click".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(body(h.state()), "source click");
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
