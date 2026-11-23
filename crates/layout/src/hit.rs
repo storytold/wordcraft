@@ -7,7 +7,7 @@ use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
-use crate::para::{PARA_MARK_WIDTH, ParaLayout};
+use crate::para::{PARA_MARK_WIDTH, ParaLayout, StyleRun};
 use crate::{DocLayout, Page, Placed};
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
@@ -292,9 +292,13 @@ fn hf_text_at(p: &Page, id: u32, x: f32, y: f32) -> bool {
             _ => None,
         })
         .any(|(para, l0, l1, lx, ly)| {
-            let (Some(first), Some(last)) = (para.lines.get(*l0), para.lines.get(l1.checked_sub(1).unwrap_or(0))) else { return false };
-            let bottom = ly + last.top + last.height - first.top;
-            y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0
+            let Some(first) = para.lines.get(*l0) else { return false };
+            // Each line has its own band and extent: lines beside a float are shorter than the
+            // ones above them, and a click on a long line past a short one's end is still text.
+            (*l0..*l1).filter_map(|li| para.lines.get(li)).any(|l| {
+                let top = ly + l.top - first.top;
+                y >= top - 2.0 && y <= top + l.height + 2.0 && x >= lx + l.left - 40.0 && x <= lx + l.right + 40.0
+            })
         })
 }
 
@@ -719,6 +723,30 @@ impl DocLayout {
             let ctop = (base - asc).max(top);
             let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
             return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
+        }
+        None
+    }
+
+    /// The style run text typed at `pos` would take (the character's before it, or at the start
+    /// of a paragraph the first character's) and the baseline it sits on, on the page: `pos`'s
+    /// line's, raised or lowered by the run's shift (superscript, `w:position`). An input method's
+    /// composition is drawn with them, as Word draws it in the text's own font and size. `None` in
+    /// turned text, whose lines aren't horizontal.
+    pub fn typing_style(&self, pos: &Pos, page_hint: usize) -> Option<(StyleRun, f32)> {
+        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+            let Placed::Lines { para, l0, l1, y, turn, .. } = it else { continue };
+            let li = para.line_of(pos.off);
+            if li < *l0 || li >= *l1 {
+                continue;
+            }
+            if *turn != TextDirection::Horizontal {
+                return None;
+            }
+            let first = para.lines.get(*l0)?;
+            let line = para.lines.get(li)?;
+            let at = |off: usize| para.clusters.iter().find(|c| c.start <= off && off < c.end).and_then(|c| para.styles.get(c.style as usize));
+            let run = pos.off.checked_sub(1).and_then(at).or_else(|| at(pos.off)).or_else(|| para.styles.first())?;
+            return Some((run.clone(), y + line.baseline - first.top - run.shift));
         }
         None
     }

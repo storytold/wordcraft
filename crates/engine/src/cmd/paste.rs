@@ -281,6 +281,14 @@ pub enum Pasted {
 /// that knows another program owns the clipboard passes `privateClipboard: false`, which keeps
 /// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
+    let pasted = clipboard_content(s, v)?;
+    // Formatting Backspace carried over is for typing, not for what is pasted (#6518). An empty
+    // clipboard pastes nothing, so it stays.
+    s.forget_carried();
+    Ok(pasted)
+}
+
+fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     if owns_clipboard(v)
         && let Some(f) = &s.clipboard
@@ -330,11 +338,16 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.props = para.clone();
             for run in &mut p.runs {
                 let src = std::mem::replace(&mut run.props, base.clone());
-                if src.bold == Some(true) {
+                // Emphasis in either script is kept for both, as the Bold and Italic buttons set
+                // it: text pasted into a run marked `w:cs` (Thai from a WPS or Word file) is drawn
+                // with the complex-script bold and italic.
+                if src.bold == Some(true) || src.bold_cs == Some(true) {
                     run.props.bold = Some(true);
+                    run.props.bold_cs = Some(true);
                 }
-                if src.italic == Some(true) {
+                if src.italic == Some(true) || src.italic_cs == Some(true) {
                     run.props.italic = Some(true);
+                    run.props.italic_cs = Some(true);
                 }
                 if src.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None) {
                     run.props.underline = src.underline;
@@ -354,6 +367,8 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
 
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
 pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+    // The pasted text keeps its own formatting; what Backspace carried over is not for after it (#6518).
+    s.forget_carried();
     super::controls::prepare_edit(s)?;
     let at = delete_selection(s)?;
     let track = s.doc.settings.track_changes;
