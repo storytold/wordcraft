@@ -3,22 +3,22 @@
 //! (line style, width and colour, and which edges) and cell alignment, over a live preview. OK
 //! runs `table.newStyle` / `table.modifyStyle` with only what changed.
 
-use craft::behavior::Anchor9;
+use craft::behavior::{Anchor9, ColumnWidth};
 use craft::color_ui::ui::ColorPickerTab;
 use craft::font_manager::picker::FontPickerSettings;
-use craft::ui::buttons::{Button, ToggleButton};
-use craft::ui::contract::{Bind, Entry, Show as _, ShowContainer as _, Trigger};
+use craft::ui::buttons::{Button, ControlPlace, ToggleButton};
+use craft::ui::contract::{Bind, Entry, Gap, Props as _, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft::ui::dialog::DialogId;
-use craft::ui::display::Picture;
+use craft::ui::display::{Divider, Shade, Text};
 use craft::ui::form::{Field, FieldGroup};
-use craft::ui::list::ThumbAspect;
+use craft::ui::layout::{CellAlign, GridFit, empty_cell};
+use craft::ui::layout_components::{Grid, Row};
 use craft::ui::menu::Menu;
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::pickers::{ReferencePoint, ReferencePointKind, Select};
-use craft::ui::primitives::{ContentPainterCx, Glyph, IconSpec};
+use craft::ui::primitives::{Glyph, IconSpec};
 use craft::ui::runtime::env::Label;
-use craft::ui::sections::Section;
-use craft::ui::style::{UiTokens, rgba_color};
+use craft::ui::style::{TypeRole, UiTokens, rgba_color};
 use craft::ui::text::TextField;
 use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -167,7 +167,10 @@ fn region_of(st: &TableStyleProps, part: TablePart) -> TableRegion {
 /// The params `table.newStyle` / `table.modifyStyle` take for the dialog's state: only what
 /// changed from `basis`, part by part, so the rest stays inherited.
 pub fn table_style_params(id: Option<&str>, name: &str, based_on: &str, regions: &[TableRegion; 13], basis: &[TableRegion; 13]) -> Value {
-    let mut v = json!({"name": name.trim(), "basedOn": based_on});
+    let mut v = json!({"name": name.trim()});
+    if !based_on.trim().is_empty() {
+        v["basedOn"] = json!(based_on.trim());
+    }
     for (((part, _), r), b) in PARTS.iter().zip(regions.iter()).zip(basis.iter()) {
         let ch = region_changes(r, b);
         if ch.as_object().is_some_and(|o| !o.is_empty()) {
@@ -342,7 +345,7 @@ fn look_for(mut look: TableLook, part: TablePart) -> TableLook {
 
 /// A small sample table drawn with `style` (5 columns, a header, three body rows and a total
 /// row), showing the parts `look` turns on: the dialog's live preview.
-fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyleProps>, look: &TableLook) {
+fn paint_preview(ui: &mut Ui, rect: Rect, style: Option<&TableStyleProps>, look: &TableLook) {
     const COLS: usize = 5;
     const ROWS: usize = 5;
     const TEXT: [[&str; COLS]; ROWS] = [
@@ -352,12 +355,10 @@ fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyl
         ["West", "3", "8", "4", "15"],
         ["Total", "13", "16", "11", "40"],
     ];
-    // The page is white whatever the interface theme; the style's colours are data, so they go through
-    // `data_shapes` and dim with a disabled picture.
-    cx.data_shapes([Shape::rect_filled(rect, 2.0, Color32::WHITE)]);
-    cx.painter.rect_stroke(rect, 2.0, Stroke::new(cx.stroke_width(craft::ui::primitives::StrokeWidth::Thin), cx.ink()), egui::StrokeKind::Inside);
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, Color32::WHITE);
+    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, Color32::from_gray(212)), egui::StrokeKind::Inside);
     let Some(st) = style else { return };
-    let mut shapes: Vec<Shape> = Vec::new();
     let formats: Vec<PartFormat> = TablePart::ALL.iter().map(|p| st.part(*p)).collect();
     let table = rect.shrink2(vec2(14.0, 10.0));
     let (cw, rh) = (table.width() / COLS as f32, table.height() / ROWS as f32);
@@ -405,16 +406,16 @@ fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyl
                 }
             }
             if let Some(f) = fill {
-                shapes.push(Shape::rect_filled(cell, 0.0, rgb(f)));
+                painter.rect_filled(cell, 0.0, rgb(f));
             }
-            let mut edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
+            let edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
                 if let Some(e) = e.filter(Border::is_visible) {
                     let color = e.color.map_or(Color32::BLACK, rgb);
                     let stroke = Stroke::new(e.width.clamp(0.5, 3.0) * 1.3, color);
                     if matches!(e.style, BorderStyle::Dotted | BorderStyle::Dashed | BorderStyle::DotDash) {
-                        shapes.extend(Shape::dashed_line(&[from, to], stroke, 3.0, 2.0));
+                        painter.extend(Shape::dashed_line(&[from, to], stroke, 3.0, 2.0));
                     } else {
-                        shapes.push(Shape::line_segment([from, to], stroke));
+                        painter.line_segment([from, to], stroke);
                     }
                 }
             };
@@ -437,19 +438,17 @@ fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyl
                 Some(VAlign::Bottom) => (egui::Align::Max, cell.bottom() - 2.0),
                 _ => (egui::Align::Min, cell.top() + 2.0),
             };
-            let galley = cx.painter.layout_no_wrap(txt.to_string(), font, color);
-            let r = egui::Align2([ax, ay]).anchor_size(pos2(x, y), galley.size());
+            let pos = pos2(x, y);
+            let r = painter.text(pos, egui::Align2([ax, ay]), txt, font.clone(), color);
             if chr.bold.unwrap_or(false) {
                 // A second pass a hair to the right reads as bold at this size.
-                shapes.push(Shape::galley(r.min + vec2(0.6, 0.0), galley.clone(), color));
+                painter.text(pos + vec2(0.6, 0.0), egui::Align2([ax, ay]), txt, font, color);
             }
-            shapes.push(Shape::galley(r.min, galley, color));
             if chr.underline.is_some_and(|u| u != Underline::None) && !txt.is_empty() {
-                shapes.push(Shape::line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(0.8, color)));
+                painter.line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(0.8, color));
             }
         }
     }
-    cx.data_shapes(shapes);
 }
 
 /// A table style the form can be based on, with the parts it resolves to: a new style takes these
@@ -519,7 +518,7 @@ impl TableStyleForm {
         FieldGroup::new(lab("Table style")).show(ui, |ui, _| {
             let name_label = lab("Name:");
             Field::new(name_label.clone()).show(ui, |ui, _| {
-                TextField::new(name_label.clone(), Bind::bound(&mut self.name)).show(ui);
+                TextField::new(name_label.clone(), Bind::bound(&mut self.name)).width_chars(30).show(ui);
             });
             let entries: Vec<Entry<usize>> = self.bases.iter().enumerate().map(|(i, b)| Entry::new(i, b.name.clone())).collect();
             let current = self.bases.iter().position(|b| b.id == self.based_on).unwrap_or(usize::MAX);
@@ -542,76 +541,115 @@ impl TableStyleForm {
 
     /// The edited part's font, size, toggles, colours, borders and alignment.
     fn formatting(&mut self, ui: &mut Ui, asks: &mut Vec<Asks>) {
+        const ALIGN_ROW_COLS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::Fixed(12.0), ColumnWidth::Content, ColumnWidth::Content];
         let Self { region, regions, pen, palette, catalog, font_settings, .. } = self;
         let Some(r) = regions.get_mut(*region) else { return };
-        Section::fixed(lab("Formatting")).show(ui, |ui, _| {
-            FieldGroup::new(lab("Formatting")).show(ui, |ui, _| {
-                if let Some(catalog) = catalog.get() {
-                    let font_label = lab("Font:");
-                    Field::new(font_label.clone()).show(ui, |ui, _| {
-                        font_picker(font_label.clone(), Bind::bound(&mut r.font), catalog, Bind::bound(&mut *font_settings), &[], None).show(ui);
-                    });
-                }
-                // Text, so an empty box means the size is inherited.
-                let size_label = lab("Size:");
-                Field::new(size_label.clone()).show(ui, |ui, _| {
-                    TextField::new(size_label.clone(), Bind::bound(&mut r.size)).show(ui);
-                });
-                Field::new(lab("Font style:")).show(ui, |ui, _| {
-                    ui.horizontal(|ui| {
-                        ToggleButton::new(lab("Bold"), Bind::bound(&mut r.bold)).show(ui);
-                        ToggleButton::new(lab("Italic"), Bind::bound(&mut r.italic)).show(ui);
-                        ToggleButton::new(lab("Underline"), Bind::bound(&mut r.underline)).show(ui);
-                    });
-                });
-                if color_field(ui, &lab("Font color:"), &mut r.color, &ColorFieldEmpty::NoColor, palette).more_colors {
-                    asks.push(Asks::Color { field: "color", current: Rgb::parse(&r.color), tab: ColorPickerTab::Standard });
-                }
-                let styles: Vec<Entry<usize>> = LINE_STYLES.iter().enumerate().map(|(i, (_, n))| Entry::new(i, lab(n))).collect();
-                let current = LINE_STYLES.iter().position(|(s, _)| *s == pen.style).unwrap_or(0);
-                if let Some((s, _)) = pick_index(ui, "Style:", &styles, current).and_then(|i| LINE_STYLES.get(i)) {
-                    pen.style = *s;
-                }
-                let widths: Vec<Entry<usize>> =
-                    WIDTHS.iter().enumerate().map(|(i, w)| Entry::new(i, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]))).collect();
-                let current = WIDTHS.iter().position(|w| *w == pen.width).unwrap_or(usize::MAX);
-                if let Some(w) = pick_index(ui, "Width:", &widths, current).and_then(|i| WIDTHS.get(i)) {
-                    pen.width = *w;
-                }
-                if color_field(ui, &lab("Color:"), &mut pen.color, &ColorFieldEmpty::NoColor, palette).more_colors {
-                    asks.push(Asks::Color { field: "pen", current: Rgb::parse(&pen.color), tab: ColorPickerTab::Standard });
-                }
-                Field::new(lab("Borders:")).show(ui, |ui, _| {
-                    let button = Button::new(lab("Borders")).show(ui);
-                    let entries: Vec<Entry<usize>> = EDGES
-                        .iter()
-                        .zip(EDGE_GLYPHS.iter())
-                        .enumerate()
-                        .map(|(i, ((label, edges), glyph))| {
-                            Entry::new(i, lab(label)).icon(IconSpec::glyph(glyph)).checked(edges_on(&r.borders, edges))
-                        })
-                        .collect();
-                    let picked = Menu::new(lab("Borders")).opened_by(&button, Trigger::Press).pick(ui, &entries).picked;
-                    if let Some((_, edges)) = picked.and_then(|i| EDGES.get(i)) {
-                        pick_edges(&mut r.borders, edges, pen);
-                    }
-                });
+        Divider::horizontal().show(ui);
+        Text::new(lab("Formatting")).role(TypeRole::BodyStrong).show(ui);
+
+        // Row 1: Font, size, B, I, U, and Font color.
+        Row::new().gap(Gap::Inline).show(ui, |ui, _| {
+            if let Some(catalog) = catalog.get() {
+                craft::ui::runtime::env::with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::Ribbon);
+                    },
+                    |ui| {
+                        let font_label = lab("Font:");
+                        font_picker(font_label, Bind::bound(&mut r.font), catalog, Bind::bound(&mut *font_settings), &[], None).show(ui);
+                    },
+                );
+            }
+            const SIZE_COL: [ColumnWidth; 1] = [ColumnWidth::Fixed(44.0)];
+            let size_label = lab("Size:");
+            Grid::new(&SIZE_COL).fit(GridFit::Fixed).show(ui, |ui, _| {
+                TextField::new(size_label.clone(), Bind::bound(&mut r.size)).sizing(Sizing::FillWidth).show(ui);
+            });
+
+            Row::new().gap(Gap::None).show(ui, |ui, _| {
+                ToggleButton::new(lab("Bold"), Bind::bound(&mut r.bold)).icon(crate::icons::id("bold")).icon_only().show(ui);
+                ToggleButton::new(lab("Italic"), Bind::bound(&mut r.italic)).icon(crate::icons::id("italic")).icon_only().show(ui);
+                ToggleButton::new(lab("Underline"), Bind::bound(&mut r.underline)).icon(crate::icons::id("underline")).icon_only().show(ui);
+            });
+
+            Text::new(lab("Font color:")).show(ui);
+            if color_field(ui, &lab("Font color:"), &mut r.color, &ColorFieldEmpty::NoColor, palette).more_colors {
+                asks.push(Asks::Color { field: "color", current: Rgb::parse(&r.color), tab: ColorPickerTab::Standard });
+            }
+        });
+
+        // Row 2: Border pen style, width, color, and Borders button.
+        Row::new().gap(Gap::Inline).show(ui, |ui, _| {
+            let styles: Vec<Entry<usize>> = LINE_STYLES.iter().enumerate().map(|(i, (_, n))| Entry::new(i, lab(n))).collect();
+            let current = LINE_STYLES.iter().position(|(s, _)| *s == pen.style).unwrap_or(0);
+            Text::new(lab("Style:")).show(ui);
+            if let Some((s, _)) = Select::new(lab("Style:"), Bind::given(current), &styles)
+                .sizing(Sizing::Content)
+                .show(ui)
+                .value()
+                .copied()
+                .and_then(|i| LINE_STYLES.get(i))
+            {
+                pen.style = *s;
+            }
+
+            let widths: Vec<Entry<usize>> =
+                WIDTHS.iter().enumerate().map(|(i, w)| Entry::new(i, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]))).collect();
+            let current = WIDTHS.iter().position(|w| *w == pen.width).unwrap_or(usize::MAX);
+            Text::new(lab("Width:")).show(ui);
+            if let Some(w) = Select::new(lab("Width:"), Bind::given(current), &widths)
+                .sizing(Sizing::Content)
+                .show(ui)
+                .value()
+                .copied()
+                .and_then(|i| WIDTHS.get(i))
+            {
+                pen.width = *w;
+            }
+
+            Text::new(lab("Color:")).show(ui);
+            if color_field(ui, &lab("Color:"), &mut pen.color, &ColorFieldEmpty::NoColor, palette).more_colors {
+                asks.push(Asks::Color { field: "pen", current: Rgb::parse(&pen.color), tab: ColorPickerTab::Standard });
+            }
+
+            let button =
+                Button::new(lab("Borders:")).painted(lab("Borders")).trailing_icon(IconSpec::glyph(&crate::ribbon::common::MENU_ARROW)).show(ui);
+            let entries: Vec<Entry<usize>> = EDGES
+                .iter()
+                .zip(EDGE_GLYPHS.iter())
+                .enumerate()
+                .map(|(i, ((label, edges), glyph))| Entry::new(i, lab(label)).icon(IconSpec::glyph(glyph)).checked(edges_on(&r.borders, edges)))
+                .collect();
+            let picked = Menu::new(lab("Borders")).opened_by(&button, Trigger::Press).pick(ui, &entries).picked;
+            if let Some((_, edges)) = picked.and_then(|i| EDGES.get(i)) {
+                pick_edges(&mut r.borders, edges, pen);
+            }
+        });
+
+        // Row 3: Fill color + 12pt gap + Alignment grid (top-aligned with the 3x3 grid).
+        Grid::new(&ALIGN_ROW_COLS).fit(GridFit::Fixed).cells(CellAlign::Top).gap(Gap::Inline).show(ui, |ui, _| {
+            Row::new().gap(Gap::Inline).show(ui, |ui, _| {
+                Text::new(lab("Fill color:")).show(ui);
                 if color_field(ui, &lab("Fill color:"), &mut r.fill, &ColorFieldEmpty::NoColor, palette).more_colors {
                     asks.push(Asks::Color { field: "fill", current: Rgb::parse(&r.fill), tab: ColorPickerTab::Standard });
                 }
-                // The grid is row by row from the top left, as `CELL_ALIGNS` is.
-                let current = CELL_ALIGNS.iter().position(|(n, _, _)| *n == r.align).and_then(|i| ANCHORS.get(i)).copied();
-                let picked =
-                    ReferencePoint::new(lab("Alignment:"), Bind::given(current)).kind(ReferencePointKind::Alignment).show(ui).value().copied();
-                if let Some(anchor) = picked {
-                    // Picking the selected cell again clears the alignment.
-                    r.align = anchor
-                        .and_then(|a| ANCHORS.iter().position(|x| *x == a))
-                        .and_then(|i| CELL_ALIGNS.get(i))
-                        .map(|(n, _, _)| n.to_string())
-                        .unwrap_or_default();
-                }
             });
+            empty_cell(ui);
+            Row::new().least_height(22.0).show(ui, |ui, _| {
+                Text::new(lab("Alignment:")).show(ui);
+            });
+            // The grid is row by row from the top left, as `CELL_ALIGNS` is.
+            let current = CELL_ALIGNS.iter().position(|(n, _, _)| *n == r.align).and_then(|i| ANCHORS.get(i)).copied();
+            let picked = ReferencePoint::new(lab("Alignment:"), Bind::given(current)).kind(ReferencePointKind::Alignment).show(ui).value().copied();
+            if let Some(anchor) = picked {
+                // Picking the selected cell again clears the alignment.
+                r.align = anchor
+                    .and_then(|a| ANCHORS.iter().position(|x| *x == a))
+                    .and_then(|i| CELL_ALIGNS.get(i))
+                    .map(|(n, _, _)| n.to_string())
+                    .unwrap_or_default();
+            }
         });
     }
 }
@@ -651,9 +689,10 @@ impl WordForm for TableStyleForm {
         // part being edited turned on.
         let look = look_for(self.look, self.part());
         let preview = self.preview.as_ref();
-        Section::fixed(lab("Preview")).show(ui, |ui, _| {
-            Picture::painter(lab("Table style preview"), ThumbAspect::new(36, 13), |cx, rect| paint_preview(cx, rect, preview, &look)).show(ui);
-        });
+        ui.add_space(4.0);
+        Text::new(lab("Preview")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        let (rect, _) = ui.allocate_exact_size(vec2(360.0, 130.0), egui::Sense::hover());
+        paint_preview(ui, rect, preview, &look);
         true
     }
 
@@ -837,10 +876,14 @@ mod tests {
         steps(&mut h);
         for label in ["Bold", "Italic", "Underline"] {
             // An off toggle button reports no toggled state; only an on one says `True`.
-            assert_ne!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True), "{label} starts off");
-            h.get_by_label(label).click();
+            assert_ne!(
+                h.get_by_role_and_label(egui::accesskit::Role::Button, label).accesskit_node().toggled(),
+                Some(Toggled::True),
+                "{label} starts off"
+            );
+            h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
             steps(&mut h);
-            assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True));
+            assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::Button, label).accesskit_node().toggled(), Some(Toggled::True));
         }
         h.get_by_label("OK").click();
         steps(&mut h);
