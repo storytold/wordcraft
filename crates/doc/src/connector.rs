@@ -201,6 +201,8 @@ pub struct ShapeExtra {
     pub end_style: ArrowStyle,
     /// A rounded rectangle's corner radius (`roundRect`'s `adj`, ECMA-376 §20.1.10.56): in
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
+    /// A [`ShapeKind::Frame`]'s border width (`frame`'s `adj1`), in the same units; `None`
+    /// draws [`DEFAULT_FRAME`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corner: Option<u32>,
     /// The outline dash pattern; absent in older saved documents means solid.
@@ -270,8 +272,21 @@ impl ShapeExtra {
 /// The largest rounded-rectangle corner: half the shorter side, which makes its ends round.
 pub const MAX_CORNER: u32 = 50_000;
 
-/// A rounded rectangle's corner radius without its own: 16% of the shorter side.
-pub const DEFAULT_CORNER: f32 = 0.16;
+/// A rounded rectangle's corner radius without its own: a sixth of the shorter side, the preset's
+/// default `adj` of 16667 (ECMA-376 §20.1.10.56). Measured in Word for Windows: a 300 × 100 pt
+/// rounded rectangle without `adj` is drawn with corners of 16.67 pt, a 300 × 40 pt one of 6.67
+/// pt and a 60 × 150 pt one of 10 pt.
+pub const DEFAULT_CORNER: f32 = 16_667.0 / 100_000.0;
+
+/// A frame's border width without its own: `frame`'s default `adj1`, 12.5% of the shorter side.
+pub const DEFAULT_FRAME: f32 = 0.125;
+
+/// The border width, in points, of a `w` × `h` [`ShapeKind::Frame`] with `corner` (see
+/// [`ShapeExtra::corner`]): at most half the shorter side, which leaves no hole.
+pub fn frame_width(corner: Option<u32>, w: f32, h: f32) -> f32 {
+    let side = wordcraft_geom::finite(w).min(wordcraft_geom::finite(h)).max(0.0);
+    side * corner.map_or(DEFAULT_FRAME, |c| c.min(MAX_CORNER) as f32 / 100_000.0)
+}
 
 /// The corner radius, in points, of a `w` × `h` rounded rectangle with `corner` (see
 /// [`ShapeExtra::corner`]).
@@ -521,7 +536,10 @@ mod tests {
     #[test]
     fn corner_radius_follows_the_shorter_side() {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        assert!(near(corner_radius(None, 200.0, 100.0), 16.0));
+        assert!(near(corner_radius(None, 200.0, 100.0), 16.667));
+        assert!(near(corner_radius(None, 300.0, 40.0), 6.6668));
+        assert!(near(corner_radius(None, 60.0, 150.0), 10.0002));
+        assert!(near(corner_radius(None, 200.0, 100.0), corner_radius(Some(16_667), 200.0, 100.0)), "the preset's default");
         assert!(near(corner_radius(Some(0), 200.0, 100.0), 0.0));
         assert!(near(corner_radius(Some(3_565), 100.0, 200.0), 3.565));
         assert!(near(corner_radius(Some(MAX_CORNER), 200.0, 100.0), 50.0));
