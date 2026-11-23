@@ -1,4 +1,4 @@
-use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Rect, WordApp, json};
+use super::{DocLayout, Hash, Hasher, Page, Placed, Rect, WordApp, json};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, and media.
