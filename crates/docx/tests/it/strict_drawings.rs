@@ -4,8 +4,6 @@
 //! ECMA-376 Part 1, 5th edition (`dml-wordprocessingDrawing.xsd`, Strict and Transitional): each
 //! drawing is written once and filled in with either set of namespaces.
 
-use std::io::{Read, Write};
-
 use wordcraft_doc::{Document, InlineObject, PartKind};
 
 const STRICT_NS: &str = r#"xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main" xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships" xmlns:wp="http://purl.oclc.org/ooxml/drawingml/wordprocessingDrawing" xmlns:a="http://purl.oclc.org/ooxml/drawingml/main" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" w:conformance="strict""#;
@@ -33,19 +31,17 @@ const TRANSITIONAL: Names =
     Names { ns: TRANSITIONAL_NS, rels: TRANSITIONAL_RELS, shape: "wps", group: "wpg", canvas: "wpc", content: "w:txbxContent" };
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zw = craft_zip::Writer::new();
     for (name, bytes) in entries {
-        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(bytes).unwrap();
+        zw.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zw.finish().unwrap().into_inner()
+    zw.finish().unwrap()
 }
 
 fn document_xml(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
-    s
+    let mut z = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+
+    String::from_utf8(z.read("word/document.xml", 16 << 20).unwrap().unwrap()).unwrap()
 }
 
 fn solid(rgb: &str) -> String {

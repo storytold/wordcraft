@@ -1,5 +1,5 @@
 //! Original nested-picture controls. No native output or external assets are embedded.
-use std::{io::Write, sync::Arc};
+use std::sync::Arc;
 use wordcraft_doc::para::{Anchor, CanvasStyle, Float, GroupChild, ShapeKind, Wrap};
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::{Document, InlineObject, Paragraph, PartKind, Pos, StoryRef, TextBody, para_block};
@@ -71,7 +71,7 @@ fn check_box(doc: &Document) {
     assert_eq!(doc.media[media].as_slice(), BLUE_PNG);
 }
 fn package(xml: &str) -> Vec<u8> {
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let docrels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdIsolationRect" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/isolation-blue.png"/></Relationships>"#;
     let types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
@@ -82,10 +82,9 @@ fn package(xml: &str) -> Vec<u8> {
         ("word/_rels/document.xml.rels", docrels.as_slice()),
         ("word/media/isolation-blue.png", BLUE_PNG),
     ] {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(bytes).unwrap();
+        zip.add(name, bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 #[test]
 fn model_nested_picture_roundtrip() {
@@ -157,4 +156,27 @@ fn own_picture_fill_keeps_image() {
     assert_eq!((*w, *h), (180.0, 80.0));
     assert_eq!((float.wrap, float.x, float.y), (Wrap::InFrontOfText, 72.0, 100.0));
     assert_eq!(doc.media[media].as_slice(), BLUE_PNG);
+}
+/// A shape drawn with DrawingML's `frame` preset opens as a frame with its own border width
+/// (`adj1`), and saving writes it back as one.
+#[test]
+fn frame_preset_opens_and_saves_as_a_frame() {
+    let xml = INLINE_XML
+        .replacen(
+            r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill>"#,
+            r#"<a:prstGeom prst="frame"><a:avLst><a:gd name="adj1" fmla="val 10000"/></a:avLst></a:prstGeom><a:solidFill>"#,
+            1,
+        )
+        .replacen(r#"<wps:cNvSpPr txBox="1"/>"#, "<wps:cNvSpPr/>", 1);
+    let start = xml.find("<wps:txbx>").unwrap();
+    let end = xml.find("</wps:txbx>").unwrap() + "</wps:txbx>".len();
+    let xml = format!("{}{}", &xml[..start], &xml[end..]);
+    let check = |doc: &Document| {
+        let objects = &doc.body[0].as_para().unwrap().objects;
+        let [InlineObject::Shape { kind, w, h, extra, .. }] = objects.as_slice() else { panic!("{objects:?}") };
+        assert_eq!((*kind, *w, *h, extra.corner), (ShapeKind::Frame, 180.0, 80.0, Some(10_000)));
+    };
+    let doc = wordcraft_docx::read(&package(&xml)).unwrap();
+    check(&doc);
+    check(&wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap());
 }
