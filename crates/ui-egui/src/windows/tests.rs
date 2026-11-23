@@ -527,11 +527,12 @@ fn nul_in_the_document_title_never_reaches_an_os_window_title() {
         let mut rig = Rig::new();
         let mut a = app("x");
         a.run("file.properties", json!({"title": raw})).unwrap();
-        rig.frames(&mut a, 3);
-        a.run("view.newWindow", json!({})).unwrap();
-        assert_eq!(a.window_count(), 2);
         let mut sent = Vec::new();
-        for _ in 0..3 {
+        for i in 0..6 {
+            if i == 3 {
+                a.run("view.newWindow", json!({})).unwrap();
+                assert_eq!(a.window_count(), 2);
+            }
             rig.frame(&mut a);
             sent.extend(rig.commands.iter().filter_map(|(_, c)| if let ViewportCommand::Title(t) = c { Some(t.clone()) } else { None }));
         }
