@@ -262,6 +262,11 @@ pub fn submit(app: &mut crate::WordApp, params: &Value) -> Result<Value, String>
     let Some(spool) = app.services.print.clone() else {
         return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
     };
+    // Save as PDF is WordCraft's own route, not the spooler's.
+    if app.printing.settings.destination == Destination::File {
+        app.print_pdf_dialog();
+        return Ok(json!({"saveAsPdf": true}));
+    }
     let chooses = spool.chooses_printer();
     if chooses && !app.printing.ready() {
         return Err("Select an available printer in File > Print before submitting.".into());
