@@ -309,6 +309,24 @@ fn the_ignored_paste_uses_up_its_paste_modifiers() {
     assert_eq!(state.get("italic").and_then(serde_json::Value::as_bool), Some(true), "a later menu-bar paste keeps clipboard formatting: {state}");
 }
 
+/// #5616: on a desktop no paste event follows Mod+Shift+V's key, so none is swallowed: a later
+/// `Mod+V` paste with a clipboard offer pastes.
+#[test]
+fn a_desktop_paste_after_mod_shift_v_is_not_swallowed() {
+    let mut h = app_harness(copied_bold_app());
+    let chord = Modifiers { shift: true, ..mod_held() };
+    mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source target");
+    assert!(is_bold(&mut h));
+    run(&mut h, "select.text", json!({"text": "target"}));
+    offer(&h, bold_flavours("later"));
+    let ctrl = mod_held();
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source later");
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
