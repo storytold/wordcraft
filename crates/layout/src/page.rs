@@ -1,4 +1,4 @@
-use super::boxes::{BoxInput, layout_box};
+use super::boxes::{BoxInput, box_rules, layout_box};
 use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
@@ -9,6 +9,8 @@ use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, Sto
 pub(crate) struct PageBuilder<'a> {
     pub(crate) pages: Vec<Page>,
     pub(crate) sect: &'a SectionProps,
+    /// The current document section's numbering format, even when reflow uses first-section page geometry.
+    pub(crate) page_format: wordcraft_doc::section::NumFormat,
     pub(crate) sect_idx: usize,
     pub(crate) col: usize,
     pub(crate) cols: Vec<(f32, f32)>,
@@ -69,6 +71,9 @@ pub(crate) struct PageBuilder<'a> {
     /// Balancing columns: (page index, column height) — that page's columns end `height` below
     /// the top of the section on it.
     pub(crate) balance: Option<(usize, f32)>,
+    /// Balancing without the strict widow/orphan and keep rules of Word 2013's layout (#6821): the
+    /// last try when even the full column height does not hold the text with them.
+    pub(crate) relaxed: bool,
     /// The page with the last explicit column break.
     pub(crate) col_break_page: Option<usize>,
     /// The section's footnotes go right below its text, not at the page bottom ...
@@ -110,11 +115,7 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
     if let Some(b) = &s.page_borders {
         let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
         let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
-        for (e, a, bb) in [(b.top, (x0, y0), (x1, y0)), (b.bottom, (x0, y1), (x1, y1)), (b.left, (x0, y0), (x0, y1)), (b.right, (x1, y0), (x1, y1))] {
-            if let Some(e) = e.filter(Border::is_visible) {
-                v.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e });
-            }
-        }
+        box_rules(&mut v, (x0, y0, x1, y1), [b.top, b.bottom, b.left, b.right], [false; 2]);
     }
     v
 }

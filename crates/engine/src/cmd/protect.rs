@@ -22,7 +22,7 @@ const MODES: [&str; 5] = ["none", "readOnly", "comments", "trackedChanges", "for
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("review.restrict", "Restrict Editing", "Review › Protect", restrict).params(
-            r#"{"mode"?: "none|readOnly|comments|trackedChanges|forms" (start enforcing; "none" stops), "formatting"?: bool (limit formatting to unlocked styles), "lockedStyles"?: [style id or name] (the styles that can't be applied; every other style is unlocked), "password"?: string (set when enforcing; required to stop a password-protected document), "stop"?: bool, "exception"?: "add" (the selection stays editable for everyone) | "remove" (exceptions touching the selection) | "removeAll"} → state"#,
+            r#"{"mode"?: "none|readOnly|comments|trackedChanges|forms" (editing restriction; use "none" with "formatting": true for formatting-only protection), "formatting"?: bool (limit formatting to unlocked styles), "lockedStyles"?: [style id or name] (the styles that can't be applied; every other style is unlocked), "password"?: string (set when enforcing; required to stop a password-protected document), "stop"?: bool (true: stop protection), "exception"?: "add" (the selection stays editable for everyone) | "remove" (exceptions touching the selection) | "removeAll"} → state"#,
         ),
     ]
 }
@@ -395,6 +395,7 @@ fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdErro
         || matches!(
             id,
             "edit.pasteFormat"
+                | "layout.fitOnePage"
                 | "table.shading"
                 | "table.borders"
                 | "table.borderPainter"
@@ -430,7 +431,8 @@ enum HoleMode {
 /// run formatting and paragraph formatting outside the ranges `author` may edit, in every story,
 /// and the formatting of every table, row and cell that holds any of that protected content, and what
 /// reaches the whole document: page setup, the document defaults and the existing styles
-/// (applying a style may add one), the document's settings and its metadata.
+/// (applying a style may add one), the glossary's building blocks, the document's settings and
+/// its metadata.
 pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &str) -> bool {
     // Protection can't change mid-command (`protection_lifted` guards undo and redo).
     let mode = if Some("forms") == before.settings.protection.as_deref() { HoleMode::Controls } else { HoleMode::Perms(author.into()) };
@@ -443,6 +445,7 @@ pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &st
         && before.settings == after.settings
         && before.core == after.core
         && before.custom_props == after.custom_props
+        && before.glossary == after.glossary
         && comments_unchanged(before, after)
         && lists_unchanged(before, after)
         && sources_unchanged(before, after)
@@ -652,19 +655,33 @@ pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
     if para.objects.is_empty() {
         return p.clone();
     }
-    let editable: Vec<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
-    let is_start = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermStart { id, .. }) if editable.contains(id));
-    let is_end = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermEnd { id }) if editable.contains(id));
+    let Some(before) = para.text.get(..p.off) else { return p.clone() };
+    let Some(after) = para.text.get(p.off..) else { return p.clone() };
+    if !before.ends_with(OBJ) && !after.starts_with(OBJ) {
+        return p.clone();
+    }
+    let editable: HashSet<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
+    // Count the preceding objects once. Each adjacent marker can then use the matching
+    // object directly, forwards for starts and backwards for ends, even with short storage.
+    let index = before.chars().filter(|c| *c == OBJ).count();
     let w = OBJ.len_utf8();
     let mut off = p.off;
-    if is_start(off) {
-        while is_start(off) {
-            off += w;
+    for (ch, object) in after.chars().zip(para.objects.iter().skip(index)) {
+        if ch != OBJ || !matches!(object, InlineObject::PermStart { id, .. } if editable.contains(id)) {
+            break;
         }
+        off += w;
+    }
+    if off > p.off {
         return Pos { off, ..p.clone() };
     }
-    while off >= w && is_end(off - w) {
-        off -= w;
+    if let Some(objects) = para.objects.get(..index) {
+        for (ch, object) in before.chars().rev().zip(objects.iter().rev()) {
+            if ch != OBJ || !matches!(object, InlineObject::PermEnd { id } if editable.contains(id)) {
+                break;
+            }
+            off -= w;
+        }
     }
     Pos { off, ..p.clone() }
 }
