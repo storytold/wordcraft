@@ -1,6 +1,20 @@
 use super::*;
 use crate::table_resize::tests::{H, button, cell, screen, steps, table_window, table_window_stepping};
 use crate::test_harness::AppFrames as _;
+use egui::Color32;
+
+/// On the dark paper the column and cell arrows are drawn light, so they stay visible; on
+/// white paper they stay black, and the hollow row arrow is the same on both.
+#[test]
+fn the_selection_arrow_is_light_on_dark_paper() {
+    let dark_paper = Color32::from_gray(wordcraft_render::DARK_PAPER);
+    assert_eq!(arrow_colors(Spot::Column(0), false), (Color32::BLACK, Color32::WHITE));
+    assert_eq!(arrow_colors(Spot::Cell(0, 0), false), (Color32::BLACK, Color32::WHITE));
+    assert_eq!(arrow_colors(Spot::Column(0), true), (Color32::WHITE, dark_paper));
+    assert_eq!(arrow_colors(Spot::Cell(0, 0), true), (Color32::WHITE, dark_paper));
+    assert_eq!(arrow_colors(Spot::Row(0), false), (Color32::WHITE, Color32::BLACK));
+    assert_eq!(arrow_colors(Spot::Row(0), true), (Color32::WHITE, Color32::BLACK));
+}
 
 /// The direction of the painted selection arrow the last pass settled on, `None` for any other cursor.
 fn arrow_toward(h: &H) -> Option<Vec2> {

@@ -548,5 +548,16 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &Pa
     TableMouse::new(app, layout, body.pages, pointer).show_at(ui, body.rect);
 }
 
+/// The arrow's fill and edge: black on white over a column or cell (white on the dark paper's
+/// grey in dark mode, where black would vanish), white on black beside a row.
+#[cfg(test)]
+fn arrow_colors(spot: Spot, dark: bool) -> (egui::Color32, egui::Color32) {
+    match spot {
+        Spot::Column(_) | Spot::Cell(..) if dark => (egui::Color32::WHITE, egui::Color32::from_gray(wordcraft_render::DARK_PAPER)),
+        Spot::Column(_) | Spot::Cell(..) => (egui::Color32::BLACK, egui::Color32::WHITE),
+        _ => (egui::Color32::WHITE, egui::Color32::BLACK),
+    }
+}
+
 #[cfg(test)]
 mod tests;
