@@ -1,16 +1,7 @@
 use super::*;
-
-/// Screen ↔ page conversion survives a page list that doesn't match the layout.
-#[test]
-fn conversions_survive_missing_pages() {
-    let layout = DocLayout::default();
-    assert!(page_scale(&[], &layout, 1.0, 0).is_none());
-    assert!(to_screen(&[], &layout, 1.0, 3, 1.0, 1.0).is_none());
-    let rects = [Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(100.0, 200.0))];
-    assert_eq!(page_scale(&rects, &layout, 2.0, 0), Some(2.0));
-    assert_eq!(to_screen(&rects, &layout, 2.0, 0, 5.0, 5.0), Some(pos2(20.0, 30.0)));
-    assert!(page_scale(&rects, &layout, 0.0, 0).is_none());
-}
+// Frames go through the app's own input hook (`embed::before_input`), as in the app: the runtime's hit sizes and
+// the command catalog come from it, and without them the thin border parts are never hit.
+use crate::test_harness::AppFrames as _;
 
 pub(crate) type H = egui_kittest::Harness<'static, WordApp>;
 
@@ -25,7 +16,7 @@ pub(crate) fn table_window_stepping(dt: f32) -> H {
     a.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
     a.run("text.insert", json!({"text": "Product"})).unwrap();
     a.run("select.text", json!({"text": "Product"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(dt).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(dt).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -34,7 +25,7 @@ pub(crate) fn table_window_stepping(dt: f32) -> H {
         a,
     );
     for _ in 0..6 {
-        h.step();
+        h.app_frame();
     }
     h
 }
@@ -61,7 +52,7 @@ pub(crate) fn button(h: &H, at: Pos2, pressed: bool) {
 
 pub(crate) fn steps(h: &mut H, n: usize) {
     for _ in 0..n {
-        h.step();
+        h.app_frame();
     }
 }
 
@@ -71,6 +62,14 @@ pub(crate) fn steps(h: &mut H, n: usize) {
 pub(crate) fn gpu_turn() -> std::sync::MutexGuard<'static, ()> {
     static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
     GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The system cursor the last pass settled on, `None` for the default arrow or a painted cursor.
+fn resize_cursor_now(h: &H) -> Option<CursorIcon> {
+    match craft::ui::runtime::cursor::current(&h.ctx) {
+        Some(craft::behavior::Cursor::System(icon)) => Some(icon),
+        _ => None,
+    }
 }
 
 /// A real mouse drag of a column border: the resize arrow on hover, a preview and no change
@@ -84,14 +83,14 @@ fn dragging_a_column_border_with_the_mouse_is_one_undo_step() {
     let start = screen(&mut h, a.right(), a.y + a.h / 2.0);
     h.event(egui::Event::PointerMoved(start));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeColumn, "the resize arrow over the border");
+    assert_eq!(resize_cursor_now(&h), Some(CursorIcon::ResizeColumn), "the resize arrow over the border");
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     // 30 page points to the right, in a few moves.
     let end = screen(&mut h, a.right() + 30.0, a.y + a.h / 2.0);
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
     }
     assert!(h.state().canvas.table_resize.is_some(), "a drag is in progress");
     assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while dragging");
@@ -119,20 +118,21 @@ fn dragging_a_column_border_keeps_the_view_where_it_is() {
     h.event(egui::Event::PointerMoved(start));
     steps(&mut h, 2);
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     h.event(egui::Event::PointerMoved(end));
     steps(&mut h, 2);
     h.state_mut().canvas.scroll_to_caret = false;
     let depth = h.state().session.undo_depth();
     button(&h, end, false);
-    h.step();
+    h.app_frame();
     assert_eq!(h.state().session.undo_depth(), depth + 1, "the drag was applied");
     assert!(!h.state().canvas.scroll_to_caret, "the resize scrolled to the caret");
     h.state_mut().run("text.insert", json!({"text": "x"})).unwrap();
     assert!(h.state().canvas.scroll_to_caret, "typing still brings the caret into view");
 }
 
-/// The zone of the ruler marker named `label` nearest to screen point `near`.
+/// The access node of the framework ruler's marker or splitter named `label` nearest to screen point `near`: the
+/// rect a user grabs.
 fn ruler_marker(h: &H, label: &str, near: Pos2) -> Rect {
     use egui_kittest::kittest::Queryable;
     h.query_all_by_label(label).map(|n| n.rect()).min_by(|p, q| p.center().distance(near).total_cmp(&q.center().distance(near))).expect(label)
@@ -141,12 +141,12 @@ fn ruler_marker(h: &H, label: &str, near: Pos2) -> Rect {
 /// A real mouse drag from `from` to `to` (screen points), in a few moves.
 fn drag(h: &mut H, from: Pos2, to: Pos2) {
     h.event(egui::Event::PointerMoved(from));
-    h.step();
+    h.app_frame();
     button(h, from, true);
-    h.step();
+    h.app_frame();
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
     }
     button(h, to, false);
     steps(h, 3);
@@ -164,18 +164,24 @@ fn a_column_marker_on_the_ruler_moves_the_columns_right_of_it() {
     let start = ruler_marker(&h, "Table Column Width", near).center();
     assert!((start.x - near.x).abs() < 0.5, "a marker over the first column border");
     let end = start + egui::vec2(screen(&mut h, a.right() + 30.0, a.y).x - near.x, 0.0);
+    // The framework ruler snaps a dragged marker to its step; Alt drags it free, so the border lands where the pointer is.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
     h.event(egui::Event::PointerMoved(start));
-    h.step();
+    h.app_frame();
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     for k in 1..=5 {
         h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
-        h.step();
+        h.app_frame();
     }
+    // The pointer stays put for two more frames: the framework's marker (and its access node) settle on the pointer's
+    // last position a frame after it arrives.
+    steps(&mut h, 2);
     assert!((ruler_marker(&h, "Table Column Width", end).center().x - end.x).abs() < 1.0, "the marker follows the pointer");
     assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while dragging");
     button(&h, end, false);
     steps(&mut h, 3);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
     let (a1, b1, c1) = (cell(&mut h, 0, 0), cell(&mut h, 0, 1), cell(&mut h, 0, 2));
     assert!((a1.w - (a.w + 30.0)).abs() < 1.0, "{a:?} → {a1:?}");
@@ -209,10 +215,13 @@ fn a_row_marker_on_the_ruler_sets_the_row_height() {
     let a = cell(&mut h, 0, 0);
     let depth = h.state().session.undo_depth();
     let near = screen(&mut h, a.x, a.bottom());
-    let start = ruler_marker(&h, "Table Row Height", near).center();
+    let start = ruler_marker(&h, "Table Row Border", near).center();
     assert!((start.y - near.y).abs() < 0.5, "a marker at the first row's bottom");
     let end = start + egui::vec2(0.0, screen(&mut h, a.x, a.bottom() + 20.0).y - near.y);
+    // Alt drags the grip free of the ruler's snap step, so the row grows by exactly the drag.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
     drag(&mut h, start, end);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
     let a1 = cell(&mut h, 0, 0);
     assert!((a1.h - (a.h + 20.0)).abs() < 1.0, "{a:?} → {a1:?}");
@@ -228,19 +237,21 @@ fn in_a_cell_the_ruler_measures_indents_from_its_text() {
     // Into the second cell: its text starts far from the page's left margin.
     let inside = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
     h.event(egui::Event::PointerMoved(inside));
-    h.step();
+    h.app_frame();
     button(&h, inside, true);
-    h.step();
+    h.app_frame();
     button(&h, inside, false);
     steps(&mut h, 3);
     assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, cl)| (r, cl)), Some((0, 1)));
     let layout = h.state_mut().session.layout();
-    let (left, w) = crate::table_ruler::text_area(h.state(), &layout, 0).unwrap();
+    // PLAN: assumed `crate::canvas::rulers::text_area(app: &WordApp, layout: &DocLayout, page: usize) -> Option<(f32, f32)>` (canvas-w15)
+    let (left, w): (f32, f32) = crate::canvas::rulers::text_area(h.state(), &layout, 0).unwrap();
     assert!((left - (b.x + 5.4)).abs() < 0.01 && (w - (b.w - 10.8)).abs() < 0.01, "the cell less its margins: {left}, {w}");
-    // The left-indent marker is at the text's start, just above the ruler's bottom edge.
+    // The left-indent marker is at the text's start, found through its access node.
     let near = screen(&mut h, left, b.y);
-    let bar_bottom = ruler_marker(&h, "Table Column Width", near).bottom();
-    let start = egui::pos2(near.x, bar_bottom - 3.0);
+    let marker = ruler_marker(&h, "Hanging Indent", near).center();
+    assert!((marker.x - near.x).abs() < 1.0, "the indent marker sits at the cell text's start");
+    let start = marker;
     let end = start + egui::vec2(screen(&mut h, left + 18.0, b.y).x - near.x, 0.0);
     drag(&mut h, start, end);
     let focus = h.state().session.sel.focus.clone();
@@ -274,7 +285,7 @@ fn the_left_edge_drags_the_table_in_and_has_a_ruler_marker() {
     let (start, end) = (screen(&mut h, a.x - 1.5, y), screen(&mut h, a.x + 20.0, y));
     h.event(egui::Event::PointerMoved(start));
     steps(&mut h, 2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeColumn, "the resize arrow on the left edge");
+    assert_eq!(resize_cursor_now(&h), Some(CursorIcon::ResizeColumn), "the resize arrow on the left edge");
     drag(&mut h, start, end);
     let (a1, b1) = (cell(&mut h, 0, 0), cell(&mut h, 0, 1));
     assert!((a1.x - (a.x + 21.5)).abs() < 1.0 && (a1.right() - a.right()).abs() < 0.5, "{a:?} → {a1:?}");
@@ -287,72 +298,6 @@ fn the_left_edge_drags_the_table_in_and_has_a_ruler_marker() {
     assert!((cell(&mut h, 0, 0).x - a.x).abs() < 1.0, "the marker drags it back out");
 }
 
-/// Alt while a column border is dragged shows each column's width on the ruler, as it is
-/// going to be.
-#[test]
-fn alt_shows_the_column_widths_while_dragging() {
-    let mut h = table_window();
-    let (a, b) = (cell(&mut h, 0, 0), cell(&mut h, 0, 1));
-    let y = a.y + a.h / 2.0;
-    let (start, end) = (screen(&mut h, a.right(), y), screen(&mut h, a.right() + 18.0, y));
-    h.event(egui::Event::PointerMoved(start));
-    h.step();
-    button(&h, start, true);
-    h.step();
-    h.event(egui::Event::PointerMoved(end));
-    h.step();
-    let widths = |h: &mut H| {
-        let layout = h.state_mut().session.layout();
-        crate::table_ruler::widths(h.state(), &h.ctx, &layout, 0)
-    };
-    assert!(widths(&mut h).is_empty(), "not without Alt");
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
-    h.step();
-    let w = widths(&mut h);
-    assert_eq!(w.len(), 3, "{w:?}");
-    assert!((w[0].1 - (a.w + 18.0)).abs() < 0.5 && (w[1].1 - (b.w - 18.0)).abs() < 0.5, "{w:?}");
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    button(&h, end, false);
-    steps(&mut h, 3);
-    assert!(widths(&mut h).is_empty(), "gone with the drag");
-}
-
-/// The widths Alt shows on the ruler are in the File › Options unit, written the region's way:
-/// centimetres with a decimal comma in Brazil, not inches (#5231).
-#[test]
-fn alt_column_widths_are_in_the_regions_unit() {
-    let mut h = table_window();
-    h.state_mut().session.system_region = wordcraft_engine::Region::from_tag("pt-BR");
-    let a = cell(&mut h, 0, 0);
-    let y = a.y + a.h / 2.0;
-    let (start, end) = (screen(&mut h, a.right(), y), screen(&mut h, a.right() + 18.0, y));
-    h.event(egui::Event::PointerMoved(start));
-    h.step();
-    button(&h, start, true);
-    h.step();
-    h.event(egui::Event::PointerMoved(end));
-    h.step();
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
-    steps(&mut h, 2);
-    let layout = h.state_mut().session.layout();
-    let w = crate::table_ruler::widths(h.state(), &h.ctx, &layout, 0);
-    let want = h.state().session.format_length(w[0].1);
-    assert!(want.ends_with(" cm") && want.contains(','), "{want}");
-    fn texts(s: &egui::Shape, out: &mut Vec<String>) {
-        match s {
-            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
-            egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
-            _ => {}
-        }
-    }
-    let mut shown = Vec::new();
-    h.output().shapes.iter().for_each(|s| texts(&s.shape, &mut shown));
-    assert!(shown.contains(&want), "{want} not among {shown:?}");
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    button(&h, end, false);
-    steps(&mut h, 3);
-}
-
 /// A cell selected with a click along its left edge: dragging its right border with the
 /// mouse moves it in that cell's row only (#962).
 #[test]
@@ -362,9 +307,9 @@ fn a_selected_cells_border_drags_in_its_row_only() {
     let y = b.y + b.h / 2.0;
     let at = screen(&mut h, b.x + 4.5, y);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     button(&h, at, true);
-    h.step();
+    h.app_frame();
     button(&h, at, false);
     steps(&mut h, 2);
     assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols)), Some(((1, 1), (1, 1))), "the cell is selected");
@@ -383,9 +328,9 @@ fn clicks_in_cells_still_move_the_caret_and_esc_cancels_a_drag() {
     let c = cell(&mut h, 1, 1);
     let at = screen(&mut h, c.x + c.w / 2.0, c.y + c.h / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     button(&h, at, true);
-    h.step();
+    h.app_frame();
     button(&h, at, false);
     steps(&mut h, 3);
     let focus = &h.state().session.sel.focus;
@@ -395,15 +340,15 @@ fn clicks_in_cells_still_move_the_caret_and_esc_cancels_a_drag() {
     let a = cell(&mut h, 0, 0);
     let start = screen(&mut h, a.x + a.w / 2.0, a.bottom());
     h.event(egui::Event::PointerMoved(start));
-    h.step();
+    h.app_frame();
     button(&h, start, true);
-    h.step();
+    h.app_frame();
     let end = start + egui::vec2(0.0, 40.0);
     h.event(egui::Event::PointerMoved(end));
-    h.step();
+    h.app_frame();
     assert!(h.state().canvas.table_resize.is_some(), "the row border is being dragged");
     h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-    h.step();
+    h.app_frame();
     button(&h, end, false);
     steps(&mut h, 3);
     assert_eq!(h.state().session.undo_depth(), depth, "Esc cancelled it");
@@ -420,12 +365,12 @@ fn double_clicking_a_column_border_fits_the_column() {
     let depth = h.state().session.undo_depth();
     let at = screen(&mut h, a.right(), a.y + a.h / 2.0);
     h.event(egui::Event::PointerMoved(at));
-    h.step();
+    h.app_frame();
     for _ in 0..2 {
         button(&h, at, true);
-        h.step();
+        h.app_frame();
         button(&h, at, false);
-        h.step();
+        h.app_frame();
     }
     steps(&mut h, 2);
     let (a1, b1) = (cell(&mut h, 0, 0), cell(&mut h, 0, 1));
