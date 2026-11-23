@@ -507,9 +507,16 @@ fn backstage_controls() -> &'static [KeytipControl<'static>] {
 /// Shows the keytips after the shell and the regions they place badges on, and acts on what the keys chose.
 pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>, screen_bar: Option<Rect>) {
     let ctx = ui.ctx().clone();
+    let backstage_keytips_id = egui::Id::unique("wc_keytips_in_backstage");
+    let was_in_backstage: bool = ui.data(|d| d.get_temp(backstage_keytips_id)).unwrap_or(false);
     // Alt during an object drag is part of the drag (Alt moves an object freely), not a keytip tap.
     // PLAN: `CanvasState::object_gesture` is canvas-w9's (cv.A10).
-    let enabled = app.ui.keytips_enabled && app.canvas.object_gesture().is_none();
+    let mut enabled = app.ui.keytips_enabled && app.canvas.object_gesture().is_none();
+    if was_in_backstage && !app.ui.backstage {
+        // Backstage closed while its badges showed (back chevron, mouse Save): end keytips (#4981).
+        enabled = false;
+        ui.data_mut(|d| d.remove::<bool>(backstage_keytips_id));
+    }
 
     // A tab the ribbon shows has an element id this pass; one in the overflow menu has none and gets no badge.
     // PLAN: assumed `RibbonOutput::tab_ids: Vec<(T, egui::Id)>` (ribbon-w3, S-L361).
@@ -563,6 +570,11 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     app.keytips_active = out.active;
     if let Some(tab) = out.tab.as_deref().and_then(tab_of_badge) {
         let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
+    }
+    if app.ui.backstage && out.active {
+        ui.data_mut(|d| d.insert_temp(backstage_keytips_id, true));
+    } else if !out.active {
+        ui.data_mut(|d| d.remove::<bool>(backstage_keytips_id));
     }
     if let Some(pending) = &out.pending {
         // With no ribbon showing (Focus, Full Screen View) the hint hangs under the screen bar.
