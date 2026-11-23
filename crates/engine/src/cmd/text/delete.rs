@@ -87,22 +87,29 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     }
     if f.off > 0 {
         let a = Pos { off: para.backspace_from(f.off), ..f.clone() };
-        if let Some(c) = s.autocap.as_mut() {
-            c.note_backspace(&a, &f);
-        }
         let carried = deleted_char_props(s, &a, &f);
-        s.sel = Selection { anchor: a.clone(), focus: f };
-        let effect = delete_selection_effect(s)?;
-        s.set_ime_edit_outcome(crate::ImeEditOutcome {
-            classified: true,
-            content_changed: effect.content_changed,
-            state_changed: effect.state_changed,
-            transformed: false,
-            selection_changed: false,
-        });
+        let (content_changed, state_changed, transformed) = if let Some(start) =
+            s.autocap.as_ref().and_then(|c| c.pronoun_before_separator(&a, &f, s.undo_steps_so_far()))
+            && matches!(para.text.get(start.off..f.off), Some("I " | "I," | "I." | "I;" | "I:" | "I!" | "I?"))
+        {
+            s.sel = Selection { anchor: start.clone(), focus: f.clone() };
+            let effect = crate::cmd::type_text_effect(s, "i")?;
+            if let Some(c) = &mut s.autocap {
+                c.note_backspace(&start, &f);
+            }
+            (effect.content_changed, effect.state_changed, true)
+        } else {
+            if let Some(c) = s.autocap.as_mut() {
+                c.note_backspace(&a, &f);
+            }
+            s.sel = Selection { anchor: a.clone(), focus: f };
+            let effect = delete_selection_effect(s)?;
+            (effect.content_changed, effect.state_changed, false)
+        };
+        s.set_ime_edit_outcome(crate::ImeEditOutcome { classified: true, content_changed, state_changed, transformed, selection_changed: false });
         // As in Word, text typed next takes the deleted character's formatting until the caret
         // moves (#6518): it applies here only, so whatever puts the caret elsewhere drops it.
-        if effect.content_changed && s.sel.is_collapsed() && s.sel.focus == a {
+        if content_changed && s.sel.is_collapsed() && s.sel.focus == a {
             s.pending_at = carried.as_ref().map(|_| a.clone());
             s.pending = carried;
         }

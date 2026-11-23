@@ -2875,6 +2875,45 @@ fn undoing_a_replacement_adds_no_exception() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "So teh and the ");
 }
 
+#[test]
+fn backspacing_an_automatic_i_keeps_the_retyped_word_lowercase() {
+    let mut s = typed("so i ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So I ");
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So i");
+    typ(&mut s, " want this and i ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So i want this and I ");
+
+    let mut s = typed("so i ");
+    typ(&mut s, "\u{8}\u{8}i want this and i ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So i want this and I ");
+
+    let s = typed("i \u{8}\u{8}i ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "i ");
+
+    let s = typed("so I \u{8}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So I");
+}
+
+#[test]
+fn restoring_a_lowercase_i_preserves_the_deleted_separators_formatting_for_typing() {
+    let mut s = typed("so ");
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "i");
+    run(&mut s, "format.bold", json!({"value": false}));
+    typ(&mut s, " ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So I ");
+    assert!(bold_at(&s, 3) && !bold_at(&s, 4));
+
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So i");
+    assert!(bold_at(&s, 3));
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "x");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So ix");
+    assert!(!bold_at(&s, 4), "the deleted separator was plain");
+}
+
 /// Checked in Word for Mac: the same rule as First Letter.
 #[test]
 fn undoing_an_initial_caps_fix_adds_an_initial_caps_exception() {
