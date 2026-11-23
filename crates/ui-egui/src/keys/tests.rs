@@ -328,6 +328,16 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     assert_eq!(pictures(h.state_mut()), 1);
 }
 
+#[test]
+fn cmd_option_r_collapses_the_ribbon_on_macos() {
+    let m = |mac_cmd, alt, shift| egui::Modifiers { mac_cmd, command: mac_cmd, alt, shift, ..Default::default() };
+    let collapse = Some(("ui.collapseRibbon", json!({})));
+    assert_eq!(ui_shortcut(Key::R, m(true, true, false)), if cfg!(target_os = "macos") { collapse } else { None });
+    assert_eq!(ui_shortcut(Key::R, m(true, false, false)), None, "Mod+R aligns right");
+    assert_eq!(ui_shortcut(Key::R, m(false, true, false)), None, "Option+R types a character");
+    assert_eq!(ui_shortcut(Key::R, m(true, true, true)), None, "Mod+Alt+Shift+R");
+}
+
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
 /// aren't, and keytips stay off (#961). Linux sends each digit's text too; Windows may send the
 /// composed character.

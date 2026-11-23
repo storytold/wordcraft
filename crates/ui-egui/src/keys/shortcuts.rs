@@ -97,3 +97,19 @@ pub fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
     s.push_str(key);
     s
 }
+
+/// Shortcuts for interface commands (`ui.*`), which aren't in the engine's keymap: Alt+Q moves
+/// to "Tell me" command search, as in Word for Windows (#819). Not on macOS, where Option+Q types
+/// a character. On macOS ⌘⌥R collapses or expands the ribbon, as in Word for Mac.
+pub fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, serde_json::Value)> {
+    let alt_only = m.alt && !m.command && !m.ctrl && !m.mac_cmd && !m.shift;
+    let mac_cmd_alt = cfg!(target_os = "macos") && m.mac_cmd && m.alt && !m.ctrl && !m.shift;
+    match key {
+        Key::Q if alt_only && !cfg!(target_os = "macos") => Some(("ui.dialog", serde_json::json!({"name": "commands"}))),
+        Key::R if mac_cmd_alt => Some(("ui.collapseRibbon", serde_json::json!({}))),
+        // Ctrl+F1 collapses or expands the ribbon, as in Word for Windows (#1678). Not on macOS,
+        // where Ctrl+F1 is the system's keyboard-access switch.
+        Key::F1 if m.ctrl && !m.alt && !m.shift && !m.mac_cmd && !cfg!(target_os = "macos") => Some(("ui.collapseRibbon", serde_json::json!({}))),
+        _ => None,
+    }
+}
