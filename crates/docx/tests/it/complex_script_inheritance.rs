@@ -1,7 +1,6 @@
 //! Independent complex-script formatting through style inheritance and DOCX round trips.
 //! Synthetic packages, written here; no external documents or installed fonts are needed.
 
-use std::io::Write;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Paragraph, Run};
 
@@ -13,17 +12,16 @@ fn package(run: &str, defaults: &str, styles: &str, paragraph_style: &str) -> Ve
         r#"<w:document {ns}><w:body><w:p><w:pPr>{paragraph_style}<w:bidi/></w:pPr><w:r><w:rPr>{run}</w:rPr><w:t>שָׁלוֹם ABC 123</w:t></w:r></w:p></w:body></w:document>"#
     );
     let styles = format!("<w:styles {ns}><w:docDefaults><w:rPrDefault><w:rPr>{defaults}</w:rPr></w:rPrDefault></w:docDefaults>{styles}</w:styles>");
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [
         ("_rels/.rels", root),
         ("word/_rels/document.xml.rels", rels),
         ("word/document.xml", document.as_str()),
         ("word/styles.xml", styles.as_str()),
     ] {
-        z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 fn paragraph(d: &Document) -> &Paragraph {
@@ -145,6 +143,34 @@ fn complex_script_direct_properties_leave_latin_defaults_inherited() {
 }
 
 #[test]
+fn complex_script_runs_take_bold_and_italic_only_from_bcs_and_ics() {
+    // Word draws Thai marked `w:cs` with `<w:b/><w:i/>` and no `w:bCs`/`w:iCs` neither bold nor
+    // italic, through a style too; a run not marked `w:cs`, as older writers leave Hebrew, still
+    // borrows the Latin values (Word draws such Hebrew bold). The Latin text of every run keeps
+    // `w:b` and `w:i`. Measured in Word for Windows.
+    let styles = r#"
+<w:style w:type="paragraph" w:styleId="LatinBold"><w:name w:val="LatinBold"/><w:rPr><w:b/><w:i/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="BothBold"><w:name w:val="BothBold"/><w:rPr><w:bCs/><w:iCs/></w:rPr></w:style>"#;
+    let cases = [
+        (r#"<w:b/><w:i/><w:cs/>"#, "", false),
+        (r#"<w:cs/>"#, r#"<w:pStyle w:val="LatinBold"/>"#, false),
+        (r#"<w:b/><w:i/><w:cs/>"#, r#"<w:pStyle w:val="BothBold"/>"#, true),
+        (r#"<w:b/><w:bCs/><w:i/><w:iCs/><w:cs/>"#, "", true),
+        (r#"<w:b/><w:i/>"#, "", true),
+    ];
+    for (run, style, complex) in cases {
+        check_generations(&package(run, "", styles, style), |d| {
+            let p = paragraph(d);
+            let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+            let cs = c.complex();
+            assert_eq!((cs.bold, cs.italic), (complex, complex), "{run} {style}");
+            let latin = run.contains("<w:b/>") || style.contains("LatinBold");
+            assert_eq!((c.bold, c.italic), (latin, latin), "Latin text: {run} {style}");
+        });
+    }
+}
+
+#[test]
 fn tracked_formatting_keeps_independent_complex_script_values() {
     let defaults = r#"<w:szCs w:val="36"/><w:bCs/><w:iCs/>"#;
     let run = r#"<w:sz w:val="24"/><w:b w:val="0"/><w:i w:val="0"/><w:rPrChange w:id="7" w:author="Synthetic Author" w:date="2026-10-11T00:00:00Z"><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/><w:b w:val="0"/><w:bCs w:val="0"/><w:i w:val="0"/><w:iCs w:val="0"/></w:rPr></w:rPrChange>"#;
@@ -180,9 +206,14 @@ fn split_runs_add_no_phantom_tracked_formatting() {
     let run = r#"<w:sz w:val="24"/><w:rPrChange w:id="7" w:author="Synthetic Author" w:date="2026-10-11T00:00:00Z"><w:rPr><w:sz w:val="20"/></w:rPr></w:rPrChange>"#;
     let d = wordcraft_docx::read(&package(run, "", "", "")).unwrap();
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut xml = String::new();
-    std::io::Read::read_to_string(&mut zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("word/document.xml").unwrap(), &mut xml)
-        .unwrap();
+    let xml = String::from_utf8(
+        craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 })
+            .unwrap()
+            .read("word/document.xml", 16 << 20)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     let runs: Vec<&str> = xml.split("<w:r>").skip(1).map(|r| r.split("</w:r>").next().unwrap()).collect();
     assert!(runs.len() >= 2, "the mixed run is split: {xml}");
     assert!(runs.iter().any(|r| r.contains("<w:rtl/>")), "{xml}");
