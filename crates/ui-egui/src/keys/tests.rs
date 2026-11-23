@@ -1226,6 +1226,18 @@ fn oversized_ime_events_are_ignored() {
 }
 
 #[test]
+fn observe_ime_drops_a_preedit_without_focus() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.canvas.ime_preedit = "に".into();
+    a.canvas.ime_preedit_range = Some(0..1);
+    let r = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0));
+    observe_ime(&mut a, &ctx, Some((r, r)), false);
+    assert!(a.canvas.ime_preedit.is_empty(), "no composition is kept for an unfocused editor");
+    assert_eq!(a.canvas.ime_preedit_range, None);
+}
+
+#[test]
 fn typing_with_smart_art_selected_types_into_an_item() {
     let mut h = alt_frame_app();
     run(&mut h, "insert.smartArt", json!({"layout": "matrix", "items": ["Ada", "Bea"]}));

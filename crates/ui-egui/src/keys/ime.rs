@@ -38,6 +38,14 @@ fn ime_window(app: &mut WordApp) -> Option<wordcraft_doc::ime_text::ImeWindow> {
 /// the replacement epoch. A body replaced under the same document id (setText, version restore,
 /// compare, Undo/Redo) advances the epoch, so the platform clears the old composition. A pass
 /// without the keyboard on the page clears a pre-edit painted from the old focus.
+#[cfg(test)]
+pub(crate) fn observe_ime(app: &mut WordApp, ctx: &egui::Context, geometry: Option<(egui::Rect, egui::Rect)>, _interrupt: bool) {
+    if !app.canvas.focused(ctx) || geometry.is_none() {
+        app.canvas.ime_preedit.clear();
+        app.canvas.ime_preedit_range = None;
+    }
+}
+
 pub(crate) fn report_editor(app: &mut WordApp, pass: &ToolPass, ctx: &egui::Context, caret: egui::Rect) {
     let Some(handle) = pass.editor.as_ref() else { return };
     // An application-origin change survives later commands until here (or until a receipt
