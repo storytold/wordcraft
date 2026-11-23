@@ -1,57 +1,160 @@
 //! Insert › SmartArt (a picker of layouts by category, with previews drawn in code) and the
 //! SmartArt Text Pane (the selected graphic's items as an editable outline). Each change runs one
 //! command (`insert.smartArt`, `smartArt.items`, `smartArt.addShape`…), so agents get the same
-//! result without the UI. The picker is shown through [`crate::dialogs_insert::InsertDialog`];
-//! the pane through [`crate::panes`].
+//! result without the UI. The picker opens by name through [`open`]; the pane is shown through
+//! [`crate::panes`].
 
-use egui::{Color32, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
-use serde::Serialize;
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
+
+use craft::behavior::kurbo::Point;
+use craft::behavior::overlay::Side;
+use craft::behavior::{CancelReason, EditEvent, EditEvents, GestureId, IconId, Mixed, Selection, SelectionChange, keyed};
+use craft::pages::ui::PlacedPage;
+use craft::theme::Srgba;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::canvas::canvas_space;
+use craft::ui::canvas_controls::{TaskBar, TaskBarDismiss};
+use craft::ui::contract::{Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::display::{Picture, PictureSize, Text};
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::{List, ListRow, ThumbAspect, ThumbSize};
+// PLAN: assumed `FormCx::accept` (dialogs-w5, S-L285)
+use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::primitives::{ContentPainterCx, DataWidth, Draw, PaintShape};
+use craft::ui::runtime::edit::next_gesture_id;
+use craft::ui::runtime::env::{Env, Label};
+use craft::ui::runtime::focus::{self, FocusTarget};
+// PLAN: assumed `RuleKind` re-exported from `craft::ui::style`
+use craft::ui::style::{DataColor, RuleKind};
+use craft::ui::text::TextField;
+use craft::ui::tile_grid::{Tile, TileGrid};
+use egui::{Color32, CornerRadius, Pos2, Rect, Ui, pos2, vec2};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::smart_art::{MAX_ITEMS, SmartArtColors, SmartArtLayout, SmartArtSpec};
 
 use crate::WordApp;
-use crate::theme::{Tokens, c32, regular, semibold};
-use crate::widgets;
+// PLAN: assumed dg.A5 `colors::{color_field, ColorFieldEmpty, AutoFace, Palette}` as the contract row gives them (ribbon-w11)
+use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
+use crate::dialogs::host::{Asks, DialogHooks, Settle, WordForm, open_form, open_with};
 
 /// The picker's categories (`All` first), in the order shown.
 pub const CATEGORIES: [&str; 8] = ["All", "List", "Process", "Cycle", "Hierarchy", "Relationship", "Matrix", "Pyramid"];
 
 /// Insert › SmartArt: the category shown and the layout picked.
-#[derive(Clone, Debug, Serialize)]
+// PLAN: assumed `SmartArtLayout: Deserialize` (wordcraft-doc)
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SmartArtForm {
     pub category: String,
     pub layout: SmartArtLayout,
+    /// The document's theme colours for the previews; filled from the app by `prepare` each pass.
+    #[serde(skip)]
+    theme: Vec<Rgb>,
+}
+
+impl Default for SmartArtForm {
+    fn default() -> Self {
+        SmartArtForm { category: "All".into(), layout: SmartArtLayout::default(), theme: Vec::new() }
+    }
+}
+
+impl WordForm for SmartArtForm {
+    fn key(&self) -> &'static str {
+        "insertSmartArt"
+    }
+
+    fn title(&self) -> Label {
+        Label::from(tl!("Insert Diagram").to_string())
+    }
+
+    fn prepare(&mut self, app: &WordApp) {
+        self.theme = app.session.doc.settings.theme_colors.clone();
+    }
+
+    fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        let theme = self.theme.clone();
+        // A double click or Enter on a layout is the OK press.
+        if picker(ui, &theme, self) {
+            cx.accept();
+        }
+        true
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        vec![("insert.smartArt".to_string(), json!({"layout": self.layout.id()}))]
+    }
 }
 
 impl SmartArtForm {
     pub fn new(_app: &WordApp) -> SmartArtForm {
-        SmartArtForm { category: "All".into(), layout: SmartArtLayout::default() }
+        SmartArtForm::default()
     }
 
     /// The layouts the current category shows.
     pub fn shown(&self) -> Vec<SmartArtLayout> {
         SmartArtLayout::ALL.into_iter().filter(|l| self.category == "All" || l.category() == self.category).collect()
     }
+
+    /// Shows `category`; a layout it does not list gives way to its first.
+    fn pick_category(&mut self, category: &str) {
+        self.category = category.to_string();
+        if !self.shown().contains(&self.layout)
+            && let Some(first) = self.shown().first()
+        {
+            self.layout = *first;
+        }
+    }
 }
 
 /// Theme accent `n` (1–6) of the document.
-pub fn accent(theme: &[Rgb], n: usize) -> Color32 {
-    theme.get(3 + n.clamp(1, 6)).map(|c| c32(*c)).unwrap_or(Color32::from_rgb(0x15, 0x60, 0x82))
+fn accent_rgb(theme: &[Rgb], n: usize) -> Rgb {
+    theme.get(3 + n.clamp(1, 6)).copied().unwrap_or(Rgb(0x15, 0x60, 0x82))
+}
+
+/// Theme accent `n` (1–6) of the document, as the colour a painter takes.
+pub fn accent(theme: &[Rgb], n: usize) -> DataColor {
+    DataColor::new(color32(accent_rgb(theme, n)))
+}
+
+/// A document colour as the colour a painter takes.
+fn color32(c: Rgb) -> Color32 {
+    Color32::from_rgb(c.0, c.1, c.2)
+}
+
+/// A document colour as the theme library's colour.
+fn srgba(c: Rgb) -> Srgba {
+    Srgba::rgb(f32::from(c.0) / 255.0, f32::from(c.1) / 255.0, f32::from(c.2) / 255.0)
+}
+
+/// Theme accent `n` at `share` of its opacity.
+fn faded(theme: &[Rgb], n: usize, share: f32) -> DataColor {
+    DataColor::new(color32(accent_rgb(theme, n)).gamma_multiply(share))
 }
 
 /// A small picture of `layout` in `r`, in the colours `colors` takes from `theme`; connector
 /// lines in `line`.
-pub fn preview(p: &Painter, r: Rect, layout: SmartArtLayout, colors: SmartArtColors, theme: &[Rgb], line: Color32) {
+pub fn preview(cx: &ContentPainterCx, r: Rect, layout: SmartArtLayout, colors: SmartArtColors, theme: &[Rgb], line: Color32) {
+    cx.with_draw(|d| paint_preview(d, r, layout, colors, theme, line));
+}
+
+/// [`preview`] through a `Draw`.
+fn paint_preview(d: &Draw<'_>, r: Rect, layout: SmartArtLayout, colors: SmartArtColors, theme: &[Rgb], line: Color32) {
     let r = r.shrink(r.width().min(r.height()) * 0.08);
     let s = r.width().min(r.height());
     let c = r.center();
     let col = |i: usize| accent(theme, colors.accent(i));
     // Unit-square coordinates (of the square in the middle of `r`) to screen.
     let at = |x: f32, y: f32| pos2(c.x + (x - 0.5) * s, c.y + (y - 0.5) * s);
-    let block = |x0: f32, y0: f32, x1: f32, y1: f32, k: usize, round: f32| p.rect_filled(Rect::from_min_max(at(x0, y0), at(x1, y1)), round, col(k));
-    let thin = Stroke::new(1.0, line);
+    let block = |x0: f32, y0: f32, x1: f32, y1: f32, k: usize, round: f32| {
+        let corners = CornerRadius::same(round.round().clamp(0.0, 255.0) as u8);
+        d.data_fill(&PaintShape::Rect(Rect::from_min_max(at(x0, y0), at(x1, y1)), corners), col(k));
+    };
+    let thin = DataWidth::points(1.0);
+    let segment = |a: Pos2, b: Pos2| d.stroke(&PaintShape::Path(vec![a, b]), thin, DataColor::new(line));
     match layout {
         SmartArtLayout::BasicList => {
             for (k, (x, y)) in [(0.0, 0.18), (0.35, 0.18), (0.7, 0.18), (0.175, 0.55), (0.525, 0.55)].into_iter().enumerate() {
@@ -64,26 +167,22 @@ pub fn preview(p: &Painter, r: Rect, layout: SmartArtLayout, colors: SmartArtCol
                 block(x, 0.36, x + 0.26, 0.64, k, 3.0);
                 if k < 2 {
                     let ax = x + 0.285;
-                    p.add(egui::Shape::convex_polygon(
-                        vec![at(ax, 0.45), at(ax + 0.06, 0.5), at(ax, 0.55)],
-                        col(k).gamma_multiply(0.6),
-                        Stroke::NONE,
-                    ));
+                    d.data_fill(&PaintShape::Polygon(vec![at(ax, 0.45), at(ax + 0.06, 0.5), at(ax, 0.55)]), faded(theme, colors.accent(k), 0.6));
                 }
             }
         }
         SmartArtLayout::Cycle => {
-            p.circle_stroke(c, s * 0.34, thin);
+            d.stroke(&PaintShape::Circle(c, s * 0.34), thin, DataColor::new(line));
             for k in 0..5 {
                 let a = (-90.0 + 72.0 * k as f32).to_radians();
-                p.circle_filled(c + vec2(a.cos(), a.sin()) * s * 0.34, s * 0.12, col(k));
+                d.data_fill(&PaintShape::Circle(c + vec2(a.cos(), a.sin()) * s * 0.34, s * 0.12), col(k));
             }
         }
         SmartArtLayout::Hierarchy => {
-            p.line_segment([at(0.5, 0.3), at(0.5, 0.45)], thin);
-            p.line_segment([at(0.17, 0.45), at(0.83, 0.45)], thin);
+            segment(at(0.5, 0.3), at(0.5, 0.45));
+            segment(at(0.17, 0.45), at(0.83, 0.45));
             for x in [0.17, 0.5, 0.83] {
-                p.line_segment([at(x, 0.45), at(x, 0.6)], thin);
+                segment(at(x, 0.45), at(x, 0.6));
             }
             block(0.33, 0.08, 0.67, 0.3, 0, 3.0);
             for (k, x) in [0.02, 0.35, 0.68].into_iter().enumerate() {
@@ -99,22 +198,24 @@ pub fn preview(p: &Painter, r: Rect, layout: SmartArtLayout, colors: SmartArtCol
                 } else {
                     vec![at(0.5 - hw(y0), y0), at(0.5 + hw(y0), y0), at(0.5 + hw(y1), y1), at(0.5 - hw(y1), y1)]
                 };
-                p.add(egui::Shape::convex_polygon(pts, col(k), Stroke::new(1.0, line)));
+                let shape = PaintShape::Polygon(pts);
+                d.data_fill(&shape, col(k));
+                d.stroke(&shape, thin, DataColor::new(line));
             }
         }
         SmartArtLayout::Radial => {
-            let spokes: Vec<egui::Pos2> = (0..4)
+            let spokes: Vec<Pos2> = (0..4)
                 .map(|k| {
                     let a = (-90.0 + 90.0 * k as f32).to_radians();
                     c + vec2(a.cos(), a.sin()) * s * 0.36
                 })
                 .collect();
             for q in &spokes {
-                p.line_segment([c, *q], thin);
+                segment(c, *q);
             }
-            p.circle_filled(c, s * 0.17, col(0));
+            d.data_fill(&PaintShape::Circle(c, s * 0.17), col(0));
             for (k, q) in spokes.into_iter().enumerate() {
-                p.circle_filled(q, s * 0.12, col(k + 1));
+                d.data_fill(&PaintShape::Circle(q, s * 0.12), col(k + 1));
             }
         }
         SmartArtLayout::Matrix => {
@@ -127,8 +228,8 @@ pub fn preview(p: &Painter, r: Rect, layout: SmartArtLayout, colors: SmartArtCol
             for k in 0..3 {
                 let a = (-90.0 + 120.0 * k as f32).to_radians();
                 let q = c + vec2(a.cos(), a.sin()) * s * 0.15;
-                p.circle_filled(q, s * 0.3, col(k).gamma_multiply(0.5));
-                p.circle_stroke(q, s * 0.3, Stroke::new(1.0, col(k)));
+                d.data_fill(&PaintShape::Circle(q, s * 0.3), faded(theme, colors.accent(k), 0.5));
+                d.stroke(&PaintShape::Circle(q, s * 0.3), thin, col(k));
             }
         }
     }
@@ -143,137 +244,134 @@ pub fn colors_label(c: SmartArtColors) -> String {
 }
 
 /// Swatches of a colour variant in `r`: the accents its shapes take.
-pub fn swatches(p: &Painter, r: Rect, colors: SmartArtColors, theme: &[Rgb]) {
+pub fn swatches(cx: &ContentPainterCx, r: Rect, colors: SmartArtColors, theme: &[Rgb]) {
     let n = if colors == SmartArtColors::Colorful { 5 } else { 3 };
-    let w = r.width() / n as f32;
-    for k in 0..n {
-        let cell = Rect::from_min_size(pos2(r.left() + k as f32 * w, r.top()), vec2(w - 2.0, r.height()));
-        p.rect_filled(cell, 2.0, accent(theme, colors.accent(k)));
-    }
+    let cells: Vec<DataColor> = (0..n).map(|k| accent(theme, colors.accent(k))).collect();
+    paint_strip(cx, r, cells);
 }
 
 /// Swatches in `r` of the colours the items of `g` have now: their own or the style's.
-pub fn custom_swatches(p: &Painter, r: Rect, g: &SmartArtSpec, theme: &[Rgb]) {
-    let shown: Vec<Color32> = (0..g.items.len())
+pub fn custom_swatches(cx: &ContentPainterCx, r: Rect, g: &SmartArtSpec, theme: &[Rgb]) {
+    let shown: Vec<DataColor> = (0..g.items.len())
         .filter_map(|i| match g.items.get(i)?.color {
-            Some(c) => Some(c32(c)),
+            Some(c) => Some(DataColor::new(color32(c))),
             None => Some(accent(theme, g.style_accent(i)?)),
         })
         .take(5)
         .collect();
-    let w = r.width() / shown.len().max(1) as f32;
-    for (k, c) in shown.into_iter().enumerate() {
-        p.rect_filled(Rect::from_min_size(pos2(r.left() + k as f32 * w, r.top()), vec2(w - 2.0, r.height())), 2.0, c);
+    paint_strip(cx, r, shown);
+}
+
+/// `cells` side by side across `r`, a gap between them.
+fn paint_strip(cx: &ContentPainterCx, r: Rect, cells: Vec<DataColor>) {
+    let w = r.width() / cells.len().max(1) as f32;
+    cx.with_draw(|d| {
+        for (k, color) in cells.into_iter().enumerate() {
+            let x = r.left() + k as f32 * w;
+            let cell = Rect::from_min_size(pos2(x, r.top()), vec2(w, r.height()));
+            d.data_fill(&PaintShape::Rect(cell, CornerRadius::ZERO), color);
+            // The theme's divider separates neighbours, so no spacing literal is needed.
+            if k > 0 {
+                d.rule(RuleKind::Divider, pos2(x, r.top()), pos2(x, r.bottom()));
+            }
+        }
+    });
+}
+
+/// The picker's three columns: categories, the layouts of the category and the picked layout's preview. True when a
+/// layout was activated (double click or Enter).
+fn picker(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
+    let mut activated = false;
+    Row::new().show(ui, |ui, _| {
+        Stack::new().show(ui, |ui, _| category_list(ui, form));
+        Stack::new().show(ui, |ui, _| activated |= layout_tiles(ui, theme, form));
+        Stack::new().show(ui, |ui, _| layout_detail(ui, theme, form));
+    });
+    activated
+}
+
+fn category_list(ui: &mut Ui, form: &mut SmartArtForm) {
+    let positions: Vec<usize> = (0..CATEGORIES.len()).collect();
+    let current = CATEGORIES.iter().position(|c| *c == form.category).unwrap_or(0);
+    let out = List::<usize>::new(tl!("Categories").to_string())
+        .select(SelectMode::Single)
+        .natural_height(true)
+        .selection(Bind::given(Selection::single(current)))
+        .show_items(ui, &keyed(&positions, |i| *i), &mut |key, _| ListRow::new(tl!(CATEGORIES.get(*key).copied().unwrap_or("All")).to_string()));
+    for event in out.events {
+        let picked = match event {
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.last().copied(),
+            CollectionEvent::Selection(SelectionChange::Toggle(key)) => Some(key),
+            _ => None,
+        };
+        if let Some(category) = picked.and_then(|k| CATEGORIES.get(k)) {
+            form.pick_category(category);
+        }
     }
 }
 
-/// Height of the picker's three columns, points: three rows of 96 pt tiles and the gaps between them.
-const PICKER_HEIGHT: f32 = 3.0 * 96.0 + 2.0 * 8.0;
-
-/// The picker's columns side by side. A separator in a row takes all the height it is offered,
-/// which for a dialog is the whole window, so the row is offered only [`PICKER_HEIGHT`].
-fn picker_row(ui: &mut Ui, columns: impl FnOnce(&mut Ui)) {
-    ui.scope(|ui| {
-        ui.set_max_height(PICKER_HEIGHT);
-        crate::rtl::horizontal_top(ui, columns);
-    });
-}
-
-/// The picker; returns true to close.
-pub fn picker_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SmartArtForm) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let theme = app.session.doc.settings.theme_colors.clone();
-    let mut chosen = None;
-    picker_row(ui, |ui| {
-        crate::rtl::vertical(ui, |ui| {
-            ui.set_width(120.0);
-            for cat in CATEGORIES {
-                if ui.selectable_label(f.category == cat, tl!(cat)).clicked() {
-                    f.category = cat.to_string();
-                    if !f.shown().contains(&f.layout)
-                        && let Some(first) = f.shown().first()
-                    {
-                        f.layout = *first;
-                    }
+fn layout_tiles(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
+    let shown = form.shown();
+    let positions: Vec<usize> = (0..shown.len()).collect();
+    let current = shown.iter().position(|l| *l == form.layout).unwrap_or(0);
+    let out = TileGrid::<usize>::new(tl!("Layouts").to_string())
+        .thumb_size(ThumbSize::Large)
+        .zoom(1.4)
+        .select(SelectMode::Single)
+        .card_columns(3)
+        // Production's picker is three tile rows high and scrolls the rest; the cap also makes the grid the one owner
+        // of its scroll inside the dialog's scrolling body.
+        .max_rows(3)
+        .selection(Bind::given(Selection::single(current)))
+        .show_items(ui, &keyed(&positions, |i| *i), &mut |key, _| {
+            let layout = shown.get(*key).copied().unwrap_or_default();
+            Tile::new(tl!(layout.label()).to_string()).thumb(ThumbAspect::SQUARE, move |cx, rect| {
+                // PLAN: `ContentPainterCx` has no muted-ink accessor; the plain ink until it gains one
+                preview(cx, rect, layout, SmartArtColors::default(), theme, cx.ink());
+            })
+        });
+    let mut activated = false;
+    for event in out.response.events {
+        match event {
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                if let Some(layout) = keys.last().and_then(|k| shown.get(*k)) {
+                    form.layout = *layout;
                 }
             }
-        });
-        ui.separator();
-        crate::rtl::vertical(ui, |ui| {
-            ui.set_width(3.0 * 96.0 + 16.0);
-            ui.set_min_height(2.0 * 96.0 + 8.0);
-            let shown = f.shown();
-            crate::rtl::Table::new("smart_art_layouts").columns(0).spacing(vec2(8.0, 8.0)).show(ui, |table| {
-                for layouts in shown.chunks(3) {
-                    table.row(|r| {
-                        for layout in layouts.iter().copied() {
-                            r.cell(|ui| {
-                                let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 96.0), Sense::click());
-                                let on = f.layout == layout;
-                                let fill = if on {
-                                    t.checked
-                                } else if resp.hovered() {
-                                    t.hover
-                                } else {
-                                    t.input
-                                };
-                                ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
-                                preview(
-                                    ui.painter(),
-                                    Rect::from_min_size(rect.min + vec2(14.0, 4.0), vec2(68.0, 62.0)),
-                                    layout,
-                                    SmartArtColors::default(),
-                                    &theme,
-                                    t.text_dim,
-                                );
-                                // A label wider than the tile (a long translation) breaks at its middle space.
-                                let label = tl!(layout.label());
-                                let width = |text: &str| ui.ctx().fonts_mut(|f| f.layout_no_wrap(text.to_string(), regular(10.5), t.text).size().x);
-                                let lines = if width(label) <= rect.width() - 6.0 {
-                                    vec![label.to_string()]
-                                } else {
-                                    let split = label
-                                        .match_indices(' ')
-                                        .map(|(i, _)| (label[..i].to_string(), label[i + 1..].to_string()))
-                                        .min_by(|a, b| width(&a.0).max(width(&a.1)).total_cmp(&width(&b.0).max(width(&b.1))));
-                                    split.map_or_else(|| vec![label.to_string()], |(a, b)| vec![a, b])
-                                };
-                                for (n, line) in lines.iter().rev().enumerate() {
-                                    ui.painter().text(
-                                        pos2(rect.center().x, rect.bottom() - 11.0 - 12.5 * n as f32),
-                                        egui::Align2::CENTER_CENTER,
-                                        line,
-                                        regular(10.5),
-                                        t.text,
-                                    );
-                                }
-                                let resp = resp.on_hover_text(label);
-                                if resp.clicked() {
-                                    f.layout = layout;
-                                }
-                                if resp.double_clicked() {
-                                    chosen = Some(layout);
-                                }
-                            });
-                        }
-                    });
+            CollectionEvent::Selection(SelectionChange::Toggle(key)) => {
+                if let Some(layout) = shown.get(key) {
+                    form.layout = *layout;
                 }
-            });
-        });
-        ui.separator();
-        crate::rtl::vertical(ui, |ui| {
-            ui.set_width(200.0);
-            let (rect, _) = ui.allocate_exact_size(vec2(200.0, 150.0), Sense::hover());
-            ui.painter().rect(rect, 4.0, t.input, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-            preview(ui.painter(), rect.shrink(10.0), f.layout, SmartArtColors::default(), &theme, t.text_dim);
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new(tl!(f.layout.label())).font(semibold(13.0)));
-            ui.add(egui::Label::new(tl!(f.layout.description())).wrap());
-        });
-    });
-    let (ok, cancel) = crate::dialogs_insert::buttons(ui, "OK", "Cancel", true);
-    let Some(layout) = chosen.or(ok.then_some(f.layout)) else { return cancel };
-    app.run("insert.smartArt", json!({"layout": layout.id()})).is_ok() || cancel
+            }
+            CollectionEvent::Activate(key) => {
+                if let Some(layout) = shown.get(key) {
+                    form.layout = *layout;
+                }
+                activated = true;
+            }
+            _ => {}
+        }
+    }
+    activated
+}
+
+fn layout_detail(ui: &mut Ui, theme: &[Rgb], form: &SmartArtForm) {
+    let layout = form.layout;
+    Picture::painter(tl!(layout.label()).to_string(), ThumbAspect::new(4, 3), move |cx, rect| {
+        preview(cx, rect, layout, SmartArtColors::default(), theme, cx.ink());
+    })
+    .extent(PictureSize::Sample(ThumbSize::Large))
+    .show(ui);
+    Text::new(tl!(layout.label()).to_string()).show(ui);
+    Text::new(tl!(layout.description()).to_string()).show(ui);
+}
+
+/// Opens the SmartArt picker for the name `insertSmartArt`; `None` for another name.
+pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    if name != "insertSmartArt" {
+        return None;
+    }
+    Some(open_form(app, parent, SmartArtForm::new(app)))
 }
 
 /// The `smartArt.items` params for `g` with item `i`'s text replaced by `text`.
@@ -302,9 +400,15 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
     json!({"items": items})
 }
 
+/// Sets item `i` of the selected graphic to `text`: the one way typing, in the pane or on the canvas, changes an item.
+fn set_item_text(app: &mut WordApp, i: usize, text: &str) -> Result<(), String> {
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).ok_or_else(|| "no graphic is selected".to_string())?;
+    app.run("smartArt.items", items_with(&g, i, text)).map(|_| ())
+}
+
 /// The Text Pane button on the left edge of the selected graphic's frame, as in Word, while
 /// the pane is closed.
-pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32, clip: Rect) {
+pub fn frame_button(app: &mut WordApp, ui: &mut Ui, pages: &[PlacedPage], layout: &wordcraft_layout::DocLayout) {
     // The pane goes with the graphic: it opens again only on request.
     if wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_none() {
         app.session.view.smart_art_pane = false;
@@ -314,22 +418,23 @@ pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_l
         return;
     }
     let Some((hit, _)) = crate::objects::active(app, layout) else { return };
-    let Some(page) = pages.get(hit.page) else { return };
-    let frame = crate::frame::to_screen(*page, scale, hit.rect);
-    let at = pos2(frame.min.x - 28.0, frame.center().y - 14.0);
-    if !clip.contains(at) {
-        return;
+    // `pages` is placed by the page view this body runs in, so its index is the layout's page index.
+    let Some(page) = pages.iter().find(|p| p.page == hit.page) else { return };
+    // The bar anchors in the canvas's document points: page points go through the page to that view.
+    let Some(space) = canvas_space(&Env::of(ui).view()) else { return };
+    let r = hit.rect;
+    let corners = [
+        page.to_doc(&space.view, Point::new(f64::from(r.x), f64::from(r.y))),
+        page.to_doc(&space.view, Point::new(f64::from(r.x), f64::from(r.bottom()))),
+    ];
+    let area = ui.max_rect();
+    let shown = TaskBar::selection(tl!("Text Pane").to_string(), &corners)
+        .side(Side::Start)
+        .dismiss(TaskBarDismiss::Keep)
+        .show(ui, area, |ui, _| IconButton::new(IconId::new("textPane")).label(tl!("Text Pane").to_string()).show(ui).clicked());
+    if shown.inner == Some(true) {
+        let _ = app.run("smartArt.textPane", json!({"value": true}));
     }
-    let t = Tokens::get(ctx);
-    let area =
-        egui::Area::new(egui::Id::unique("smart_art_frame_button")).order(egui::Order::Foreground).interactable(!app.modal_open()).fixed_pos(at);
-    area.show(ctx, |ui| {
-        egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(2).show(ui, |ui| {
-            if crate::widgets::icon_button(ui, "textPane", tl!("Text Pane")).clicked() {
-                let _ = app.run("smartArt.textPane", json!({"value": true}));
-            }
-        });
-    });
 }
 
 /// Text typed with a SmartArt graphic selected goes at the end of its current item (the first,
@@ -349,73 +454,128 @@ pub(crate) enum SmartArtTypeResult {
     Changed,
 }
 
-/// Appends typing to the selected SmartArt item, joining an active typing undo, and returns
-/// whether the input was unhandled, consumed without a change, or changed an item.
-pub(crate) fn type_into(app: &mut WordApp, typed: &str) -> SmartArtTypeResult {
+/// A run of typing into one item: one undo step from the first keystroke until the caret leaves the item.
+// PLAN: assumed `CanvasState::smart_art_run: Option<TypingRun>` (canvas-w9); canvas-w10 calls `end_typing_run` once per canvas pass
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TypingRun {
+    /// The gesture the run's edits belong to.
+    id: GestureId,
+    /// The item typed into.
+    item: usize,
+    /// The item's text when the run began.
+    before: String,
+}
+
+/// The item typing and the pane's buttons act on: the one picked, else the first.
+fn current_item(app: &WordApp, g: &SmartArtSpec) -> Option<usize> {
+    app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0))
+}
+
+/// Appends typing to the selected SmartArt item, as one typing run, and returns whether the input was unhandled,
+/// consumed without a change, or changed an item.
+// PLAN: `type_into` takes the context the run's gesture id comes from (`next_gesture_id`); canvas-w10 passes it at `keys/canvas.rs:439,540`
+pub(crate) fn type_into(app: &mut WordApp, ctx: &egui::Context, typed: &str) -> SmartArtTypeResult {
     let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else {
         return SmartArtTypeResult::NotHandled;
     };
-    let Some(i) = app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0)) else {
+    let Some(i) = current_item(app, &g) else {
         // Selected but empty: consume, never insert into the body, never claim an edit.
         return SmartArtTypeResult::ConsumedNoChange;
     };
-    let text = g.items.get(i).map_or(String::new(), |it| it.text.clone()) + typed;
-    if app.smart_art_typing == Some(i) {
-        app.session.join_next_undo();
+    // Typing in another item ends the run of the first.
+    if app.canvas.smart_art_run.as_ref().is_some_and(|run| run.item != i) {
+        close_typing_run(app);
     }
-    if app.run("smartArt.items", items_with(&g, i, &text)).is_err() {
+    let before = g.items.get(i).map_or(String::new(), |it| it.text.clone());
+    let text = before.clone() + typed;
+    let mut events = EditEvents::new();
+    let id = match &app.canvas.smart_art_run {
+        Some(run) => run.id,
+        None => {
+            let id = next_gesture_id(ctx);
+            events.push(EditEvent::begin(id, Mixed::Same(before.clone()), Arc::from(tl!("Typing")), None));
+            app.canvas.smart_art_run = Some(TypingRun { id, item: i, before: before.clone() });
+            id
+        }
+    };
+    events.push(EditEvent::update(id, text));
+    let refused = Cell::new(false);
+    crate::undo_marks::apply_edits(app, events, |app, text: String| {
+        if set_item_text(app, i, &text).is_err() {
+            refused.set(true);
+        }
+    });
+    if refused.get() {
         // A selected graphic that refuses the edit still consumes the event; an IME composition
         // must start afresh rather than be applied to the body.
+        let mut cancel = EditEvents::new();
+        cancel.push(EditEvent::cancel(id, CancelReason::Refused, Some(Mixed::Same(before))));
+        crate::undo_marks::apply_edits(app, cancel, |_, _: String| {});
+        app.canvas.smart_art_run = None;
         app.canvas.ime_interrupt_now = true;
         return SmartArtTypeResult::ConsumedNoChange;
     }
     app.smart_art_item = Some(i);
-    app.smart_art_typing = Some(i);
     let _ = app.run("smartArt.textPane", json!({"value": true}));
     SmartArtTypeResult::Changed
 }
 
-/// Side of an item's colour button, points.
-const SWATCH: f32 = 18.0;
-
-/// Id of item `i`'s colour button.
-fn color_button_id(i: usize) -> egui::Id {
-    egui::Id::unique(("smart_art_color_button", i))
+/// Ends the open typing run when the caret has left its item (another item is current or no graphic is selected) or
+/// the canvas lost focus. Called once per canvas pass with that pass's canvas focus.
+pub(crate) fn end_typing_run(app: &mut WordApp, canvas_focused: bool) {
+    let Some(run) = &app.canvas.smart_art_run else { return };
+    let item = run.item;
+    let inside =
+        canvas_focused && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some_and(|g| current_item(app, &g) == Some(item));
+    if !inside {
+        close_typing_run(app);
+    }
 }
 
-/// The button at the right of item `i`'s row: its shape's colour (the style's until changed).
-/// A click offers the colour grid; the style's colour is offered back.
-fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
-    let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::hover());
-    let resp = ui.interact(rect, color_button_id(i), Sense::click());
-    let label = g
-        .items
+/// Ends the open typing run now, committing the item's text as one undo step.
+pub(crate) fn close_typing_run(app: &mut WordApp) {
+    let Some(run) = app.canvas.smart_art_run.take() else { return };
+    let item = run.item;
+    let now = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).and_then(|g| g.items.get(item).map(|it| it.text.clone()));
+    let mut events = EditEvents::new();
+    match now {
+        Some(text) => events.push(EditEvent::commit(run.id, Mixed::Same(run.before), text)),
+        None => events.push(EditEvent::cancel(run.id, CancelReason::Removed, Some(Mixed::Same(run.before)))),
+    }
+    crate::undo_marks::apply_edits(app, events, move |app, text: String| {
+        let _ = set_item_text(app, item, &text);
+    });
+}
+
+/// What a Text Pane row reported in one pass.
+struct RowReport {
+    index: usize,
+    events: EditEvents<String>,
+    /// Tab (`Some(true)`) or Shift+Tab (`Some(false)`) pressed in the field.
+    tab: Option<bool>,
+    submitted: bool,
+    focused: bool,
+    color: Option<ColorPick>,
+}
+
+/// A pick on an item's colour field.
+enum ColorPick {
+    Set(String),
+    Style,
+    More,
+}
+
+/// The id of item `i`'s text row, stable across passes so a focus request can name a row before it exists.
+fn row_id(i: usize) -> egui::Id {
+    egui::Id::unique(("smart_art_pane_row", i))
+}
+
+/// The name of item `i`'s colour field: its shape's colour.
+fn color_name(g: &SmartArtSpec, i: usize) -> String {
+    g.items
         .get(i)
         .filter(|it| !it.text.is_empty())
-        .map_or_else(|| format!("{} ({})", tl!("Shape color"), i + 1), |it| format!("{}: {}", tl!("Shape color"), it.text));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label.as_str()));
-    let Some(accent_n) = g.style_accent(i) else { return };
-    let theme = app.session.doc.settings.theme_colors.clone();
-    let own = g.items.get(i).and_then(|it| it.color);
-    let fill = own.map_or_else(|| accent(&theme, accent_n), c32);
-    ui.painter().rect_filled(rect, 3.0, fill);
-    let line = if resp.hovered() { t.accent } else { t.border_strong };
-    ui.painter().rect_stroke(rect, 3.0, Stroke::new(1.0, line), egui::StrokeKind::Inside);
-    let resp = resp.on_hover_text(tl!("Shape color"));
-    egui::Popup::menu(&resp).show(|ui| {
-        let mut pick = widgets::color_grid(ui, &theme).map(|hex| json!({"index": i, "color": hex}));
-        ui.add_space(2.0);
-        ui.separator();
-        if ui.add_enabled(own.is_some(), egui::Button::new(tl!("Style Color")).frame(false)).clicked() {
-            pick = Some(json!({"index": i}));
-        }
-        if let Some(params) = pick {
-            app.smart_art_typing = None;
-            let _ = app.run("smartArt.itemColor", params);
-            ui.close();
-        }
-    });
+        .map_or_else(|| format!("{} ({})", tl!("Shape color"), i + 1), |it| format!("{}: {}", tl!("Shape color"), it.text))
 }
 
 /// The Text Pane: a row per item, indented by level. Typing changes the graphic as you go (one
@@ -423,101 +583,148 @@ fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
 /// focused item and Shift+Tab promotes it, as Word's Text Pane does.
 pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return };
-    let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!("One line per item. Enter adds an item.")).color(t.text_dim));
-    ui.add_space(4.0);
-    let focus_id = egui::Id::unique("smart_art_focus");
-    let want_focus: Option<usize> = ui.data_mut(|d| d.remove_temp(focus_id));
-    let mut typed = false;
-    app.smart_art_row_focused = false;
-    egui::ScrollArea::vertical().id_salt("smart_art_items").max_height((ui.available_height() - 40.0).max(60.0)).show(ui, |ui| {
+    let theme = app.session.doc.settings.theme_colors.clone();
+    // PLAN: assumed Palette::of (ribbon-w11, S-L284)
+    let palette = Palette::of(app);
+    let reports = RefCell::new(Vec::<RowReport>::new());
+    Text::new(tl!("One line per item. Enter adds an item.").to_string()).show(ui);
+    Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
+        // The body may run twice in a pass; the last run's reports are the pass's.
+        reports.borrow_mut().clear();
         for (i, it) in g.items.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.add_space(f32::from(it.level) * 16.0);
-                ui.label(egui::RichText::new("•").color(t.text_dim));
-                let mut text = it.text.clone();
-                let item_name = format!("{} {}", tl!("Text Pane"), i + 1);
-                let width = (ui.available_width() - SWATCH - ui.spacing().item_spacing.x).max(40.0);
-                let r = ui.add(egui::TextEdit::singleline(&mut text).id_salt(("smart_art_item", i)).desired_width(width)).accessible_name(item_name);
-                color_button(app, ui, &g, i);
-                if want_focus == Some(i) {
-                    r.request_focus();
-                }
-                if r.has_focus() || r.gained_focus() {
-                    app.smart_art_item = Some(i);
-                    app.smart_art_row_focused = true;
-                }
-                if r.changed() {
-                    typed = true;
-                    if app.smart_art_typing == Some(i) {
-                        app.session.join_next_undo();
+            Row::new().indent(it.level).show(ui, |ui, _| {
+                let field = TextField::new(format!("{} {}", tl!("Text Pane"), i + 1), Bind::given(it.text.clone()))
+                    .id(row_id(i))
+                    .tab_reports()
+                    .submits()
+                    .show(ui);
+                let color = g.style_accent(i).and_then(|n| {
+                    let own = it.color.map(|c| c.hex()).unwrap_or_default();
+                    let mut value = own.clone();
+                    let empty = ColorFieldEmpty::Automatic {
+                        label: Label::from(tl!("Style Color").to_string()),
+                        value: "",
+                        face: AutoFace::One(srgba(accent_rgb(&theme, n))),
+                    };
+                    let picked = color_field(ui, &Label::from(color_name(&g, i)), &mut value, &empty, &palette);
+                    if picked.more_colors {
+                        Some(ColorPick::More)
+                    } else if picked.changed && value.is_empty() {
+                        Some(ColorPick::Style)
+                    } else if picked.changed && value != own {
+                        Some(ColorPick::Set(value))
+                    } else {
+                        None
                     }
-                    if app.run("smartArt.items", items_with(&g, i, &text)).is_ok() {
-                        app.smart_art_typing = Some(i);
-                    }
-                }
-                if r.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter)) && g.items.len() < MAX_ITEMS {
-                    app.smart_art_typing = None;
-                    if app.run("smartArt.addShape", json!({"after": i})).is_ok() {
-                        // The new item comes after this one and the items under it.
-                        let next = g.descendants(i).end;
-                        app.smart_art_item = Some(next);
-                        ui.data_mut(|d| d.insert_temp(focus_id, next));
-                    }
-                }
+                });
+                reports.borrow_mut().push(RowReport {
+                    index: i,
+                    tab: field.tab,
+                    submitted: field.submitted,
+                    // A text part's egui widget is not its component's id, so the response's own focus flag stays
+                    // false: ask the framework's focus which stop holds the keyboard.
+                    focused: field.response.has_focus()
+                        || field.response.gained_focus()
+                        || focus::focused_rec(ui.ctx()).is_some_and(|rec| rec.stop.id == row_id(i)),
+                    events: field.events,
+                    color,
+                });
             });
         }
     });
-    if !typed && !ui.ctx().memory(|m| m.focused().is_some()) {
-        app.smart_art_typing = None;
-    }
-    ui.separator();
-    let current = app.smart_art_item.filter(|i| *i < g.items.len());
-    ui.horizontal_wrapped(|ui| {
-        let at = current.map_or(json!({}), |i| json!({"after": i}));
-        if ui.add_enabled(g.items.len() < MAX_ITEMS, egui::Button::new(tl!("Add"))).clicked() {
-            app.smart_art_typing = None;
-            let _ = app.run("smartArt.addShape", at);
+
+    let mut add_after = None;
+    for report in reports.into_inner() {
+        let i = report.index;
+        if report.focused {
+            app.smart_art_item = Some(i);
         }
-        let idx = current.map_or(json!({}), |i| json!({"index": i}));
-        if ui.button(tl!("Promote")).clicked() {
-            app.smart_art_typing = None;
-            let _ = app.run("smartArt.promote", idx.clone());
-        }
-        if ui.button(tl!("Demote")).clicked() {
-            app.smart_art_typing = None;
-            let _ = app.run("smartArt.demote", idx);
-        }
-        if ui.add_enabled(current.is_some() && g.items.len() > 1, egui::Button::new(tl!("Remove"))).clicked()
-            && let Some(i) = current
-        {
-            app.smart_art_typing = None;
-            if app.run("smartArt.items", items_without(&g, i)).is_ok() {
-                app.smart_art_item = i.checked_sub(1);
+        crate::undo_marks::apply_edits(app, report.events, move |app, text: String| {
+            let _ = set_item_text(app, i, &text);
+        });
+        match report.tab {
+            Some(true) => {
+                let _ = app.run("smartArt.demote", json!({"index": i}));
             }
+            Some(false) => {
+                let _ = app.run("smartArt.promote", json!({"index": i}));
+            }
+            None => {}
         }
+        if report.submitted && g.items.len() < MAX_ITEMS {
+            add_after = Some(i);
+        }
+        match report.color {
+            Some(ColorPick::Set(hex)) => {
+                let _ = app.run("smartArt.itemColor", json!({"index": i, "color": hex}));
+            }
+            Some(ColorPick::Style) => {
+                let _ = app.run("smartArt.itemColor", json!({"index": i}));
+            }
+            Some(ColorPick::More) => more_colors(app, i, g.items.get(i).and_then(|it| it.color)),
+            None => {}
+        }
+    }
+    if let Some(i) = add_after
+        && app.run("smartArt.addShape", json!({"after": i})).is_ok()
+    {
+        // The new item comes after this one and the items under it.
+        let next = g.descendants(i).end;
+        app.smart_art_item = Some(next);
+        focus::request(ui.ctx(), FocusTarget::Id(row_id(next)));
+    }
+
+    let current = app.smart_art_item.filter(|i| *i < g.items.len());
+    let (mut add, mut promote, mut demote, mut remove) = (false, false, false, false);
+    Row::new().show(ui, |ui, _| {
+        add = Button::new(tl!("Add").to_string()).enabled(g.items.len() < MAX_ITEMS).show(ui).clicked();
+        promote = Button::new(tl!("Promote").to_string()).show(ui).clicked();
+        demote = Button::new(tl!("Demote").to_string()).show(ui).clicked();
+        remove = Button::new(tl!("Remove").to_string()).enabled(current.is_some() && g.items.len() > 1).show(ui).clicked();
     });
+    let index = current.map_or(json!({}), |i| json!({"index": i}));
+    if add {
+        let _ = app.run("smartArt.addShape", current.map_or(json!({}), |i| json!({"after": i})));
+    }
+    if promote {
+        let _ = app.run("smartArt.promote", index.clone());
+    }
+    if demote {
+        let _ = app.run("smartArt.demote", index);
+    }
+    if remove
+        && let Some(i) = current
+        && app.run("smartArt.items", items_without(&g, i)).is_ok()
+    {
+        app.smart_art_item = i.checked_sub(1);
+    }
+}
+
+/// Opens More Colors for item `i`'s shape colour; the pick runs `smartArt.itemColor` for that item.
+// PLAN: assumed `WordApp::more_colors: HashMap<String, colors::Target>` and `colors::more_colors(current, key, tab) -> ColorPickerDialog` (ribbon-w11, rb.A4)
+fn more_colors(app: &mut WordApp, i: usize, current: Option<Rgb>) {
+    let key = format!("smartart-item-{i}");
+    app.more_colors.insert(key.clone(), crate::colors::Target::at("smartArt.itemColor", json!({"index": i, "color": null}), "/color"));
+    let dialog = crate::colors::more_colors(current, key, Default::default());
+    open_with(app, None, dialog, DialogHooks { prepare: None, settle: settle_more_colors });
+}
+
+/// Routes a finished More Colors dialog to its target; true once the dialog is gone.
+fn settle_more_colors(app: &mut WordApp, ctx: &egui::Context, id: DialogId) -> Settle {
+    match app.dialog_host.take_by_id::<craft::color_ui::ui::ColorPickerDialog>(id) {
+        Some(DialogResult::Ok(result)) => {
+            crate::colors::picked(app, ctx, result);
+            Settle::Done
+        }
+        Some(_) => Settle::Done,
+        None if app.dialog_host.get_by_id::<craft::color_ui::ui::ColorPickerDialog>(id).is_none() => Settle::Done,
+        None => Settle::Keep,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn color_buttons_expose_item_names_and_empty_row_indices() {
-        use egui_kittest::kittest::Queryable;
-        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-        let mut spec = SmartArtSpec::sample(SmartArtLayout::Process);
-        spec.items[0].text = "Named".into();
-        spec.items[1].text.clear();
-        let mut h = egui_kittest::Harness::builder().build_ui(move |ui| {
-            color_button(&mut app, ui, &spec, 0);
-            color_button(&mut app, ui, &spec, 1);
-        });
-        h.run_steps(2);
-        h.get_by_label("Shape color: Named");
-        h.get_by_label("Shape color (2)");
-    }
 
     #[test]
     fn removing_an_item_lifts_the_items_under_it() {
@@ -526,62 +733,5 @@ mod tests {
         let levels: Vec<u64> = v["items"].as_array().unwrap().iter().map(|i| i["level"].as_u64().unwrap()).collect();
         assert_eq!(levels, [0, 1, 1, 2, 2]);
         assert_eq!(items_with(&g, 0, "Boss")["items"][0]["text"], "Boss");
-    }
-
-    /// The colour button opens a grid: a swatch sets the item's own colour and Style Color clears it.
-    #[test]
-    fn the_color_button_sets_and_clears_an_items_colour() {
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
-        a.run("insert.smartArt", json!({"layout": "process"})).unwrap();
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
-        let mut n = 0u32;
-        let mut frame = |ctx: &egui::Context, events: Vec<egui::Event>, a: &mut WordApp| {
-            n += 1;
-            let input = egui::RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
-            ctx.run_ui(input, |ui| text_pane(a, ui)).drop_without_applying_deltas();
-        };
-        let click = |ctx: &egui::Context, pos: egui::Pos2, a: &mut WordApp, frame: &mut dyn FnMut(&egui::Context, Vec<egui::Event>, &mut WordApp)| {
-            let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-            frame(ctx, vec![egui::Event::PointerMoved(pos), button(true)], a);
-            frame(ctx, vec![button(false)], a);
-            frame(ctx, vec![], a);
-        };
-        let colour =
-            |a: &WordApp| wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).and_then(|g| g.items.get(1).and_then(|i| i.color));
-        frame(&ctx, vec![], &mut a);
-        let button = ctx.read_response(color_button_id(1)).expect("item 1 has a colour button");
-        let popup = egui::Popup::default_response_id(&button);
-        click(&ctx, button.rect.center(), &mut a, &mut frame);
-        assert!(egui::Popup::is_id_open(&ctx, popup), "the button opens the colour grid");
-        let area = ctx.memory(|m| m.area_rect(popup)).expect("the grid is drawn");
-        // The first theme swatch: under the "Theme Colors" label at the popup's top left.
-        click(&ctx, area.min + vec2(14.0, 38.0), &mut a, &mut frame);
-        assert!(colour(&a).is_some(), "a swatch gives the item its own colour");
-        let button = ctx.read_response(color_button_id(1)).unwrap();
-        click(&ctx, button.rect.center(), &mut a, &mut frame);
-        let area = ctx.memory(|m| m.area_rect(popup)).expect("the grid is drawn again");
-        click(&ctx, pos2(area.min.x + 30.0, area.max.y - 14.0), &mut a, &mut frame);
-        assert_eq!(colour(&a), None, "Style Color clears it");
-    }
-
-    /// #2832: the separators between the picker's columns made the dialog as tall as the window.
-    #[test]
-    fn the_picker_row_stays_within_its_height() {
-        let ctx = egui::Context::default();
-        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))), ..Default::default() };
-        let mut height = f32::MAX;
-        ctx.run_ui(input, |ui| {
-            let top = ui.cursor().top();
-            picker_row(ui, |ui| {
-                ui.label("a");
-                ui.separator();
-                ui.label("b");
-            });
-            height = ui.min_rect().bottom() - top;
-        })
-        .drop_without_applying_deltas();
-        assert!(height <= PICKER_HEIGHT + 1.0, "the row is {height} pt tall");
     }
 }
