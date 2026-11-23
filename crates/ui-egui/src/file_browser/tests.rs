@@ -45,3 +45,22 @@ fn a_dialog_closing_into_the_browser_leaves_it_the_keyboard() {
     let after_doc = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert_eq!(after_doc, before_doc, "typing does not leak into the document behind the browser");
 }
+
+/// #3859: no keytips behind the browser.
+#[test]
+fn no_keytips_behind_the_browser() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    assert!(!a.modal_open());
+    assert!(!a.dialog_host.shows_modal());
+
+    let folders = FolderCache::new(
+        Arc::new(FakeDirectories::new().folder("/d/drafts")),
+        Arc::new(ManualJobs::new()),
+        Wake::none(),
+    );
+    let req = PickRequest::open("document").directory("/d").fallback(true);
+    a.dialog_host.open(FileChooser::new(req, None, folders));
+
+    assert!(a.modal_open(), "the browser is modal");
+    assert!(a.dialog_host.shows_modal(), "the browser shows modal");
+}
