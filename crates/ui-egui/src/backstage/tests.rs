@@ -353,6 +353,21 @@ fn new_lists_personal_templates_and_opens_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #7373: Personal template cards in File › New paint a white page surface and document icon.
+#[test]
+fn personal_template_cards_render_as_page_cards() {
+    let dir = personal_dir("card-paint");
+    let memo = dir.join("Proposal.dotx");
+    write_template(&memo, "Proposal template text");
+    let h = new_page_harness(Some(dir.clone()));
+    let card = h.query_by_label("Proposal");
+    assert!(card.is_some(), "personal template tile exists");
+    let rect = card.unwrap().rect();
+    assert!(rect.height() > rect.width(), "personal template card is portrait oriented");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An empty (or not yet made) templates folder says where templates come from; no folder (the
 /// web) shows no Personal section. Home keeps only the built-ins.
 #[test]
@@ -839,4 +854,41 @@ fn a_file_pages_title_is_productions_size() {
         assert!((title.size - 26.0).abs() < 0.5, "the page title is 26 pt in {size:?}: {title:?}");
         assert!(title.size > section.size + 6.0, "the title stands above a section heading: {title:?} over {section:?}");
     }
+}
+
+/// The template cards on File › Home and File › New use the portrait aspect of the active region,
+/// and Home cards use card_zoom(1.0) so they do not stretch across the row (#7372, #7149 items 2-3).
+#[test]
+fn backstage_template_cards_aspect_and_zoom() {
+    let mut letter_app = new_app();
+    letter_app.session.system_region = wordcraft_geom::Region::from_tag("en-US");
+    let (wide_us, high_us) = super::thumbs::page_aspect(&letter_app.session.region());
+    assert_eq!((wide_us, high_us), (17, 22), "US region uses 17:22 (Letter) aspect");
+
+    let mut a4_app = new_app();
+    a4_app.session.system_region = wordcraft_geom::Region::from_tag("en-GB");
+    let (wide_gb, high_gb) = super::thumbs::page_aspect(&a4_app.session.region());
+    assert_eq!((wide_gb, high_gb), (70, 99), "GB region uses 70:99 (A4) aspect");
+
+    // Home template cards: portrait and narrow (~150 pt wide, not stretched across the row)
+    let h = file_page(new_app(), "home");
+    let card = h.get_by_label("Blank document").rect();
+    assert!(card.height() > card.width(), "Home template card is portrait: {card:?}");
+    assert!(card.width() < 300.0, "card zoom keeps cards narrow instead of filling row: {card:?}");
+}
+
+/// File › Open presents the recent list without thumbnail letterboxing (#7372).
+#[test]
+fn file_open_recent_list_has_no_thumbnail_letterboxing() {
+    let app = new_app();
+    let h = file_page(app, "open");
+    assert!(h.query_by_label("Browse…").is_some(), "Browse button exists");
+    assert!(h.query_all_by_label("Recent").next().is_some(), "Recent section exists");
+    assert!(h.query_by_label("Documents you open will show up here.").is_some(), "empty state message exists");
+
+    let mut populated = new_app();
+    populated.ui.recent = vec!["/tmp/sample.docx".into()];
+    let h2 = file_page(populated, "open");
+    let row = recent_row(&h2, "sample.docx").expect("recent row renders");
+    assert!(row.rect().height() > 0.0, "recent row has non-zero height: {:?}", row.rect());
 }

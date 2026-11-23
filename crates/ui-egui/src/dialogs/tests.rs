@@ -374,25 +374,28 @@ fn shortcut_text_is_swallowed_once() {
         frames(&mut h, 4);
         h
     };
-    // The shortcut and its text in one frame.
-    let mut h = fresh();
-    h.event(key(egui::Key::Q, true));
-    h.event(egui::Event::Text("q".into()));
-    frames(&mut h, 3);
-    // The app is in Focus, where the title bar's Search box is hidden, so the dialog takes the request (#5398).
-    assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
-    assert_eq!(query(&h), "", "Alt+Q's q, same frame");
-    // The text a frame late; then typing.
-    let mut h = fresh();
-    h.event(key(egui::Key::Q, true));
-    frames(&mut h, 1);
-    h.event(egui::Event::Text("q".into()));
-    frames(&mut h, 1);
-    assert_eq!(query(&h), "", "the q a frame late");
-    h.event(key(egui::Key::B, false));
-    h.event(egui::Event::Text("b".into()));
-    frames(&mut h, 2);
-    assert_eq!(query(&h), "b", "then typing lands");
+    // Alt+Q is the command search off macOS only (Option+Q types a character there; `tools.search` has no key).
+    if !cfg!(target_os = "macos") {
+        // The shortcut and its text in one frame.
+        let mut h = fresh();
+        h.event(key(egui::Key::Q, true));
+        h.event(egui::Event::Text("q".into()));
+        frames(&mut h, 3);
+        // The app is in Focus, where the title bar's Search box is hidden, so the dialog takes the request (#5398).
+        assert!(is_open(h.state(), "commands"), "Alt+Q opens the palette");
+        assert_eq!(query(&h), "", "Alt+Q's q, same frame");
+        // The text a frame late; then typing.
+        let mut h = fresh();
+        h.event(key(egui::Key::Q, true));
+        frames(&mut h, 1);
+        h.event(egui::Event::Text("q".into()));
+        frames(&mut h, 1);
+        assert_eq!(query(&h), "", "the q a frame late");
+        h.event(key(egui::Key::B, false));
+        h.event(egui::Event::Text("b".into()));
+        frames(&mut h, 2);
+        assert_eq!(query(&h), "b", "then typing lands");
+    }
     // A palette opened by a click takes typing.
     let mut h = fresh();
     open_named(&mut h, "commands", json!({}));
@@ -1781,4 +1784,19 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     for (name, present) in found {
         assert!(present, "the translated field is {name}");
     }
+}
+
+/// #7446: the SmartArt picker renders compact layout tiles capped at three rows (PICKER_HEIGHT = 304),
+/// instead of expanding each thumbnail to default card dimensions (~132×132 pt) and overflowing.
+#[test]
+fn smartart_layout_cells_keep_productions_size() {
+    use egui::accesskit::Role;
+
+    let mut h = app_harness(app_with("Text"));
+    open_named(&mut h, "insertSmartArt", json!({}));
+    crate::test_harness::frames(&mut h, 4);
+    let cell = h.get_by_role_and_label(Role::ListItem, "Basic List").rect();
+    assert!(cell.width() <= 80.0 && cell.height() <= 102.0, "a layout cell is 75×93, got {:?}", cell.size());
+    let grid = h.get_by_role_and_label(Role::ListBox, "Layouts").rect();
+    assert!(grid.height() <= 304.0, "the picker is three 96 pt rows, got {:?}", grid.size());
 }
