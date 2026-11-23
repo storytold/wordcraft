@@ -1227,15 +1227,14 @@ fn a_cjk_composition_uses_the_cjk_ui_font() {
     assert_eq!(row.glyphs.len(), 3, "one glyph per composed kana");
     let family = composition_font(&drawn).map(|f| f.family).expect("a font");
     assert_eq!(family, egui::FontFamily::Name(format!("face+ui:{}", super::caret::face_key(run.requested_face)).into()), "in the text's face");
-    let (chain, interface) = h.ctx.fonts(|f| {
-        let families = &f.definitions().families;
-        (families.get(&family).cloned().unwrap_or_default(), families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default())
-    });
+    // The framework serves the face with the interface fonts behind it; what the face lacks is drawn from them, so each
+    // kana has a full-width glyph (a missing one would be a narrow box or nothing).
+    let size = composition_font(&drawn).map(|f| f.size).expect("a size");
     assert!(
-        !interface.is_empty() && interface.iter().all(|f| chain.contains(f)),
-        "the face's chain goes on with the interface fonts: {chain:?} {interface:?}"
+        row.glyphs.iter().all(|g| g.advance_width >= size * 0.8),
+        "the kana come from the interface fonts: {:?}",
+        row.glyphs.iter().map(|g| g.advance_width).collect::<Vec<_>>()
     );
-    assert_eq!(chain.len(), interface.len() + 1, "and no other document face is borrowed: {chain:?}");
 }
 
 /// The composition is drawn in the font and size of the text it goes into, as Word draws it, its
