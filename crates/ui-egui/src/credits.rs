@@ -163,3 +163,117 @@ mod nightly_about_tests {
         assert_eq!(name, "WordCraft");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use craft::ui::contract::{Bind, Role};
+    use craft::ui::dialog::DialogHost;
+    use craft::ui::patterns::form_dialogs::AboutDialog;
+    use craft::ui::testing::Fixture;
+
+    use super::*;
+
+    fn column_header(fixture: &Fixture, label: &str) -> egui::Rect {
+        fixture
+            .by_role(Role::COLUMN_HEADER)
+            .into_iter()
+            .find(|cell| fixture.tree().name_of(cell.node) == Some(label))
+            .unwrap_or_else(|| panic!("missing column header {label:?}"))
+            .rect
+    }
+
+    fn table_rect(fixture: &Fixture) -> egui::Rect {
+        fixture.by_role(Role::TABLE).first().expect("the credits table shows").rect
+    }
+
+    #[test]
+    fn a_changed_fit_replaces_the_column_widths() {
+        let wide = egui::vec2(1400.0, 800.0);
+        let narrow = egui::vec2(660.0, 800.0);
+
+        // 1. Content-width refit at constant window width, through the production AboutDialog table.
+        let baseline = Credits::new(Vec::new(), vec![ModelCredit::new("Acme", "M1", "1.0").work(4, 100, 20)], 4);
+        let with_wide_cell = Credits::new(
+            Vec::new(),
+            vec![
+                ModelCredit::new("Acme", "M1", "1.0").work(4, 100, 20),
+                ModelCredit::new("Acme", "A Much Longer Model Name For Refit", "1.0").work(4, 100, 20),
+            ],
+            8,
+        );
+        let info = about_info();
+        let credits_state = Rc::new(RefCell::new(baseline.clone()));
+        let shown_credits = Rc::clone(&credits_state);
+        let mut fixture = Fixture::new(move |ui| {
+            let credits = shown_credits.borrow();
+            let _ = AboutDialog::new(&info, &credits).tab(Bind::given(AboutTab::Models)).layout(AboutLayout::Listed).show(ui);
+        });
+        fixture.room(wide).settle();
+
+        let opened_table = table_rect(&fixture);
+        let opened_company = column_header(&fixture, "Company");
+        let opened_model = column_header(&fixture, "Model");
+        let opened_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(opened_last.right() <= opened_table.right() + 1.0, "the table opens fitted to the dialog: {opened_last:?} in {opened_table:?}");
+
+        // Change only the table's row content (same window width): the content column widens and
+        // the fill column gives way so the table still fits the dialog.
+        *credits_state.borrow_mut() = with_wide_cell;
+        fixture.settle();
+        let wider_table = table_rect(&fixture);
+        let wider_company = column_header(&fixture, "Company");
+        let wider_model = column_header(&fixture, "Model");
+        let wider_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(wider_model.width() > opened_model.width() + 1.0, "a longer cell widens its column: {wider_model:?} vs {opened_model:?}");
+        assert!(wider_company.width() < opened_company.width() - 1.0, "the growing column gives way: {wider_company:?} vs {opened_company:?}");
+        assert!(wider_last.right() <= wider_table.right() + 1.0, "the table still fits the dialog: {wider_last:?} in {wider_table:?}");
+
+        // Restore the baseline content at the original window width before resizing the window,
+        // so the next step changes ONLY the window width.
+        *credits_state.borrow_mut() = baseline;
+        fixture.settle();
+        let restored_company = column_header(&fixture, "Company");
+        let restored_model = column_header(&fixture, "Model");
+        assert!(
+            (restored_model.width() - opened_model.width()).abs() < 1.0,
+            "restoring content refits Model: {restored_model:?} vs {opened_model:?}"
+        );
+        assert!(
+            (restored_company.width() - opened_company.width()).abs() < 1.0,
+            "restoring content refits Company: {restored_company:?} vs {opened_company:?}"
+        );
+
+        // 2. Window-width refit isolated from content changes (same credits, narrower room).
+        fixture.room(narrow).settle();
+        let narrower_table = table_rect(&fixture);
+        let narrower_company = column_header(&fixture, "Company");
+        let narrower_last = column_header(&fixture, "Lines +/\u{2212}");
+        assert!(narrower_table.width() < opened_table.width() - 1.0, "a narrower window shrinks the table: {narrower_table:?} vs {opened_table:?}");
+        assert!(
+            narrower_company.width() < restored_company.width() - 1.0,
+            "a narrower window refits the growing column: {narrower_company:?} vs {restored_company:?}"
+        );
+        assert!(
+            narrower_last.right() <= narrower_table.right() + 1.0,
+            "the narrower table still fits its last column: {narrower_last:?} in {narrower_table:?}"
+        );
+
+        // 3. Also verify WordCraft's own `about(AboutTab::Models)` entry point refits on window resize.
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown_host = Rc::clone(&host);
+        let mut hosted = Fixture::new(move |ui| shown_host.borrow_mut().run(ui));
+        hosted.room(wide);
+        host.borrow_mut().open(about(AboutTab::Models));
+        hosted.settle();
+        let wide_table = table_rect(&hosted);
+        let wide_company = column_header(&hosted, "Company");
+        hosted.room(narrow).settle();
+        let slim_table = table_rect(&hosted);
+        let slim_company = column_header(&hosted, "Company");
+        assert!(slim_table.width() < wide_table.width() - 1.0, "hosted About shrinks with window: {slim_table:?} vs {wide_table:?}");
+        assert!(slim_company.width() < wide_company.width() - 1.0, "hosted About refits its Company column: {slim_company:?} vs {wide_company:?}");
+    }
+}
