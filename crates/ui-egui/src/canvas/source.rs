@@ -57,7 +57,7 @@ impl ThumbSource<usize> for WordPages {
     fn revision(&self, page: &usize, request: &ThumbRequest) -> Revision {
         let mut h = DefaultHasher::new();
         page_shows(&mut self.keys.borrow_mut(), &self.layout, *page, self.view).hash(&mut h);
-        let tile = request.region.map_or([0.0, 0.0, 1.0, 1.0], |r| [r.min.x as f32, r.min.y as f32, r.max.x as f32, r.max.y as f32]);
+        let tile = request.region.map_or([0.0, 0.0, 1.0, 1.0], |r| [r.min.x, r.min.y, r.max.x, r.max.y]);
         hidden_for_tile(&self.layout, *page, self.hidden.as_ref(), tile).hash(&mut h);
         Revision::new(h.finish())
     }
