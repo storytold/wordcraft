@@ -16,7 +16,7 @@ use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Pad, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use craft::ui::display::{Badge, Icon, Shade, Text};
+use craft::ui::display::{Badge, Elide, Icon, Shade, Text};
 use craft::ui::layout::RowAlign;
 use craft::ui::layout_components::{Row as Line, Stack};
 use craft::ui::primitives::IconSpec;
@@ -279,7 +279,8 @@ impl StackDialog for FontBox {
                     Stack::new().surface(SurfaceKind::Frame).pad(Pad::Regular).fill_width().id_salt(("download_group", at)).show(ui, |ui, _| {
                         Line::new().fill_width().align(RowAlign::SpaceBetween).id_salt(("download", at)).show(ui, |ui, _| {
                             Stack::new().show(ui, |ui, _| {
-                                Text::new(g.fonts.join(", ")).role(TypeRole::BodyStrong).show(ui);
+                                // One line cut at the end, whole in a tooltip: one unbroken name must not push the button out.
+                                Text::new(g.fonts.join(", ")).role(TypeRole::BodyStrong).elide(Elide::End).show(ui);
                                 let shown_as = crate::i18n::fmt(
                                     tl!("Shown as {fonts} · {publisher}"),
                                     &[("fonts", &g.shown_as.join(", ")), ("publisher", g.publisher)],

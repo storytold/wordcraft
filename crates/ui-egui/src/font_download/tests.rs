@@ -263,3 +263,26 @@ fn each_download_is_one_row() {
         }
     }
 }
+
+/// One very long unbroken family name is cut inside its card and leaves the Download button inside the card too.
+#[test]
+fn a_long_unbroken_name_stays_inside_its_card() {
+    let long = format!("Aptos {}", "W".repeat(200));
+    let row = Row {
+        font: long.clone(),
+        shown_as: vec!["Carlito".into()],
+        download: "Aptos".into(),
+        publisher: "Microsoft".into(),
+        url: "https://a".into(),
+        restricted: false,
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    open_with(&mut a, None, FontBox::new(vec![row], false), DialogHooks { prepare: None, settle });
+    let h = harness_sized(a, egui::vec2(700.0, 900.0));
+    let button = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Download").next().expect("button").rect();
+    let name = h.get_by_label(&long).rect();
+    let shown = h.get_by_label("Shown as Carlito · Microsoft").rect();
+    assert!(name.max.x <= button.min.x, "name runs under the button: {name:?} {button:?}");
+    assert!(button.max.x <= 700.0, "button clipped: {button:?}");
+    assert!(name.min.x >= shown.min.x - 1.0 && name.width() > 0.0, "{name:?} {shown:?}");
+}
