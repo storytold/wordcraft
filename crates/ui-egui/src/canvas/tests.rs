@@ -657,7 +657,6 @@ fn the_text_pointer_stays_off_the_grey_around_the_page() {
     assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "press and move in one frame keep the text pointer");
     h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     h.step();
-
 }
 
 /// #4410: with the Format Painter armed, a double-click on a word paints that word, and the
