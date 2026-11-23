@@ -15,7 +15,7 @@ use egui::Ui;
 use serde_json::Value;
 
 use crate::WordApp;
-use crate::dialogs::host::{DialogHooks, open_form, open_form_with};
+use crate::dialogs::host::{DialogHooks, open_form, open_form_panel_with, open_form_with};
 
 mod page;
 pub(crate) mod print;
@@ -77,7 +77,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
         "pictureSize" => {
             let form = SizeForm::read(app)?;
             // PLAN: assumed `DialogHooks::prepare_only(prepare: fn(&mut WordApp, DialogId)) -> DialogHooks` (dialogs-w13)
-            open_form_with(app, parent, form, DialogHooks::prepare_only(page::prepare_size))
+            open_form_panel_with(app, parent, form, DialogHooks::prepare_only(page::prepare_size))
         }
         "pageNumbers" => {
             let form = PageNumbersForm::read(app);

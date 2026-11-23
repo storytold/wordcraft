@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::WordApp;
-use crate::dialogs::host::{Asks, WordForm, open_form};
+use crate::dialogs::host::{Asks, WordForm, open_form_panel};
 
 /// Number formats notes offer: OOXML name and a sample (not translated). The Format Page Numbers
 /// dialog offers the same list (#1113).
@@ -108,7 +108,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
     }
     let mut form = NoteForm::read(app);
     form.endnote = params.get("kind").and_then(Value::as_str) == Some("endnote");
-    Some(open_form(app, parent, form))
+    Some(open_form_panel(app, parent, form))
 }
 
 impl WordForm for NoteForm {

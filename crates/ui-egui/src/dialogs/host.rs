@@ -297,6 +297,8 @@ pub(crate) struct FormHost<F: WordForm> {
     pending: Vec<Pending>,
     asks: Vec<Asks>,
     children: Vec<Child>,
+    /// The title of the window of its own the form shows in (a macOS utility panel), when it has one.
+    window: Option<String>,
 }
 
 impl<F: WordForm> FormHost<F> {
@@ -310,6 +312,7 @@ impl<F: WordForm> FormHost<F> {
             pending: Vec::new(),
             asks: Vec::new(),
             children: Vec::new(),
+            window: None,
         }
     }
 
@@ -335,6 +338,14 @@ impl<F: WordForm> StackDialog for FormHost<F> {
         self.form.modeless()
     }
 
+    fn windowed(&self) -> bool {
+        self.window.is_some()
+    }
+
+    fn window_title(&self) -> Option<String> {
+        self.window.clone()
+    }
+
     fn key(&self) -> Option<&str> {
         Some(self.form.key())
     }
@@ -347,8 +358,9 @@ impl<F: WordForm> StackDialog for FormHost<F> {
         let buttons = self.form.extra_buttons();
         let collection = self.form.collection_body();
         let waiting = self.held.is_waiting();
+        let bare = self.window.is_some();
         let FormHost { form, held, parent, accepts, pending, asks, .. } = self;
-        let mut dialog = FormDialog::new(title, Bind::bound(&mut *form)).held(held).buttons(buttons_kind).collection_body(collection);
+        let mut dialog = FormDialog::new(title, Bind::bound(&mut *form)).held(held).buttons(buttons_kind).collection_body(collection).bare(bare);
         if let Some(label) = ok_label {
             dialog = dialog.ok_label(label);
         }
@@ -415,6 +427,30 @@ pub(crate) fn open_form<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>
     let id = open_node(app, parent, FormHost::new(form, parent));
     register(app, id, &[form_hooks::<F>()]);
     id
+}
+
+/// [`open_form`] in a window of its own (a macOS utility panel, `Services::paragraph_window`) titled as the form,
+/// showing its content alone; elsewhere as [`open_form`].
+pub(crate) fn open_form_panel<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>, form: F) -> DialogId {
+    let id = open_node(app, parent, panel_host(app, parent, form));
+    register(app, id, &[form_hooks::<F>()]);
+    id
+}
+
+/// [`open_form_panel`] with the caller's hooks, as [`open_form_with`].
+pub(crate) fn open_form_panel_with<F: WordForm>(app: &mut WordApp, parent: Option<DialogId>, form: F, hooks: DialogHooks) -> DialogId {
+    let id = open_node(app, parent, panel_host(app, parent, form));
+    register(app, id, &[hooks, form_hooks::<F>()]);
+    id
+}
+
+/// A form's host, in a window of its own titled as the form when the app shows panels.
+fn panel_host<F: WordForm>(app: &WordApp, parent: Option<DialogId>, form: F) -> FormHost<F> {
+    let mut host = FormHost::new(form, parent);
+    if app.services.paragraph_window {
+        host.window = Some(host.form.title().as_str().to_owned());
+    }
+    host
 }
 
 /// [`open_form`] with the caller's hooks: `hooks.prepare` runs before every host run, and the form's own settle runs
@@ -613,13 +649,23 @@ fn form_settle<F: WordForm>(app: &mut WordApp, ctx: &Context, id: DialogId) -> S
 pub(crate) struct Keyed<D: StackDialog> {
     key: &'static str,
     id: DialogId,
+    windowed: bool,
+    window_title: Option<String>,
     dialog: D,
 }
 
 impl<D: StackDialog> Keyed<D> {
     /// Wraps `dialog`, whose id becomes `dialog_id(key)`.
     pub(crate) fn new(key: &'static str, dialog: D) -> Self {
-        Keyed { key, id: dialog_id(key), dialog }
+        Keyed { key, id: dialog_id(key), windowed: false, window_title: None, dialog }
+    }
+
+    /// Shows the dialog in a window of its own — a utility panel on macOS — titled `title`, when
+    /// the host also runs [`craft::ui::dialog::DialogHost::run_windowed`].
+    pub(crate) fn in_own_window(mut self, title: impl Into<String>) -> Self {
+        self.windowed = true;
+        self.window_title = Some(title.into());
+        self
     }
 
     /// The wrapped dialog.
@@ -643,6 +689,14 @@ impl<D: StackDialog> StackDialog for Keyed<D> {
 
     fn modeless(&self) -> bool {
         self.dialog.modeless()
+    }
+
+    fn windowed(&self) -> bool {
+        self.windowed || self.dialog.windowed()
+    }
+
+    fn window_title(&self) -> Option<String> {
+        self.window_title.clone().or_else(|| self.dialog.window_title())
     }
 
     fn show(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<DialogResult<D::Result>> {

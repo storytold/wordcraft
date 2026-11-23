@@ -55,6 +55,13 @@ winresource = "0.1"
 # Finder double-click, Open With, Dock drops and `open -a WordCraft letter.docx` arrive as a
 # kAEOpenDocuments Apple event, which winit doesn't handle (#27).
 craft = { workspace = true, features = ["platform-apple-events"] }
+# The app's utility-panel windows (the Paragraph dialog in its own window) tied to the document
+# windows they were opened from: NSWindow's addChildWindow:ordered: is the only way to, and it is
+# unsafe — AGENTS.md names apps/wordcraft/src/panels.rs as the workspace's one exception. Already in
+# the build through eframe, at these versions.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSWindow", "NSApplicationScripting"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2 = "0.6"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }

@@ -23,7 +23,7 @@ use wordcraft_doc::section::NumFormat;
 use wordcraft_engine::cmd::lists::{LEVELS, caret_list, level_json, levels_of};
 
 use super::dialogs_para::{color_row, pick, radios, srgba, word};
-use super::host::{Asks, ChildAnswer, WordForm, open_form};
+use super::host::{Asks, ChildAnswer, WordForm, open_form, open_form_panel};
 use crate::WordApp;
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette};
 use crate::options::lengths;
@@ -56,7 +56,7 @@ const POSITION_RANGE: std::ops::RangeInclusive<f64> = -720.0..=1584.0;
 pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     match name {
         "defineList" => Some(open_form(app, parent, ListForm::read(app))),
-        "trackChangesOptions" => Some(open_form(app, parent, TrackForm::read(app))),
+        "trackChangesOptions" => Some(open_form_panel(app, parent, TrackForm::read(app))),
         _ => None,
     }
 }

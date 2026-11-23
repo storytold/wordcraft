@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, Rgb, TabAlign, TabLeader, TabStop};
 
-use super::host::{Asks, ChildAnswer, DialogHooks, Keyed, Settle, WordForm, open_form, open_with};
+use super::host::{Asks, ChildAnswer, DialogHooks, Keyed, Settle, WordForm, open_form_panel, open_with};
 use crate::WordApp;
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
 use crate::options::unit_kind;
@@ -98,12 +98,12 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
         _ => return None,
     };
     let form = BordersForm::read(app, tab)?;
-    Some(open_form(app, parent, form))
+    Some(open_form_panel(app, parent, form))
 }
 
 /// The caret paragraph's stops, those a dialog can edit (finite, not the `Clear` marks, at most [`MAX_STOPS`]), and
 /// the document's default interval, points.
-fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
+pub(super) fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
     let s = &app.session;
     let rp = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props))?;
     let stops = rp.tabs.iter().copied().filter(|t| t.align != TabAlign::Clear && t.pos.is_finite()).take(MAX_STOPS).collect();
@@ -113,11 +113,7 @@ fn caret_tabs(app: &WordApp) -> Option<(Vec<TabStop>, f32)> {
 /// The Tabs dialog over the caret paragraph's stops, its OK held until `para.tabs` has run. The alignment names
 /// and the leader fills are the framework dialog's.
 pub(crate) fn tabs_dialog(app: &WordApp) -> Option<TabStopsHost> {
-    let (stops, default) = caret_tabs(app)?;
-    let stops = stops.iter().map(|t| UiStop::new(t.pos, ui_align(t.align), ui_leader(t.leader))).collect();
-    // Only pixel units read the resolution, and WordCraft never shows pixels.
-    let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
-    Some(Keyed::new("tabs", TabStopsDialog::new(stops, default).unit(unit).held_ok()))
+    Some(Keyed::new("tabs", tab_stops(app)?.held_ok()))
 }
 
 fn ui_align(a: TabAlign) -> UiAlign {
@@ -158,6 +154,15 @@ fn doc_leader(l: UiLeader) -> TabLeader {
         UiLeader::MiddleDot => TabLeader::MiddleDot,
         _ => TabLeader::None,
     }
+}
+
+/// The Tabs dialog's content over the caret paragraph's stops: the Tabs dialog, or the Paragraph dialog's Tabs page.
+pub(super) fn tab_stops(app: &WordApp) -> Option<TabStopsDialog> {
+    let (stops, default) = caret_tabs(app)?;
+    let stops = stops.iter().map(|t| UiStop::new(t.pos, ui_align(t.align), ui_leader(t.leader))).collect();
+    // Only pixel units read the resolution, and WordCraft never shows pixels.
+    let unit = DocUnit::new(unit_kind(app.session.units()), 96.0);
+    Some(TabStopsDialog::new(stops, default).unit(unit))
 }
 
 /// `para.tabs` parameters for what the Tabs dialog changed (`None` when nothing did). `basis` and `default_basis`
