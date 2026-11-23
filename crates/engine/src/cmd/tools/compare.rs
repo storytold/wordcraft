@@ -6,6 +6,7 @@ use wordcraft_doc::{
     PARA_WALK_DEPTH, Row, Table,
     para::OBJ,
     props::{CellProps, RowProps, TableFloat, TableProps},
+    section::SectionProps,
     table::MAX_ROWS,
 };
 
@@ -93,6 +94,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     } else {
         revised.body.clone()
     };
+    let orig_revs = s.doc.revisions.len() as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
@@ -105,6 +107,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
             doc: &mut s.doc,
             ins,
             del,
+            orig_revs,
             opts: &opts,
             budget: &mut budget,
             char_fallbacks: &mut char_fallbacks,
@@ -149,6 +152,7 @@ struct CompareCtx<'a> {
     doc: &'a mut Document,
     ins: u32,
     del: u32,
+    orig_revs: u32,
     opts: &'a CompareOptions,
     budget: &'a mut u64,
     char_fallbacks: &'a mut usize,
@@ -202,14 +206,23 @@ fn diff_blocks(ctx: &mut CompareCtx<'_>, old: &[Arc<Block>], new: &[Arc<Block>],
                         k += 1;
                         continue;
                     }
-                    let stripped = strip_para_revs(pb);
-                    let mut p = stripped.clone();
-                    if ctx.opts.formatting && pa.text == pb.text {
-                        let before = ctx.doc.revisions.len();
-                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut ctx.doc.revisions, ctx.author, ctx.date);
-                        if ctx.doc.revisions.len() > before || p != stripped {
-                            *ctx.changes += 1;
+                    let mut p = strip_para_revs(pb, 0);
+                    if pa.text == pb.text {
+                        restore_orig_para_fmt_changes(pa, &mut p, ctx.orig_revs);
+                        if ctx.opts.formatting {
+                            let pa_clean = if para_has_foreign_revs(pa, ctx.orig_revs) {
+                                std::borrow::Cow::Owned(strip_para_revs(pa, ctx.orig_revs))
+                            } else {
+                                std::borrow::Cow::Borrowed(pa)
+                            };
+                            let before = ctx.doc.revisions.len();
+                            let before_p = p.clone();
+                            crate::cmd::fmt_revisions::compare_formatting(&pa_clean, &mut p, &mut ctx.doc.revisions, ctx.author, ctx.date);
+                            if ctx.doc.revisions.len() > before || p != before_p {
+                                *ctx.changes += 1;
+                            }
                         }
+                        restore_orig_para_marks(pa, &mut p, ctx.orig_revs);
                     }
                     out.push(para_block(p));
                 } else if let (Some(ab), Some(bb)) = (a, b)
@@ -275,14 +288,119 @@ fn diff_blocks(ctx: &mut CompareCtx<'_>, old: &[Arc<Block>], new: &[Arc<Block>],
     out
 }
 
+/// Restore valid original formatting revisions (< `orig_revs`) from `pa` onto `p` wherever `p`
+/// still carries the same formatting properties as `pa`. Called before `compare_formatting` so
+/// unchanged properties keep their original `fmt_change` without counting as new changes, while
+/// changed properties are never falsely attributed to an older formatting revision.
+fn restore_orig_para_fmt_changes(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
+    let strip_sec = |s: &SectionProps| SectionProps { fmt_change: None, headers: Default::default(), footers: Default::default(), ..s.clone() };
+    if pa.mark.formatting() == p.mark.formatting()
+        && let Some(fmt) = pa.mark.fmt_change.as_ref().filter(|c| c.rev < orig_revs)
+    {
+        p.mark.fmt_change = Some(fmt.clone());
+    }
+    if pa.props.formatting() == p.props.formatting()
+        && let Some(fmt) = pa.props.fmt_change.as_ref().filter(|c| c.rev < orig_revs)
+    {
+        p.props.fmt_change = Some(fmt.clone());
+    }
+    if let (Some(sec_a), Some(sec_p)) = (pa.section.as_deref(), p.section.as_deref_mut())
+        && strip_sec(sec_a) == strip_sec(sec_p)
+        && let Some(fmt) = sec_a.fmt_change.as_ref().filter(|c| c.rev < orig_revs)
+    {
+        sec_p.fmt_change = Some(fmt.clone());
+    }
+    let mut new_runs = Vec::with_capacity(p.runs.len() + pa.runs.len());
+    let (mut ia, mut ip) = (0, 0);
+    let mut rem_a = pa.runs.first().map_or(0, |r| r.len);
+    let mut rem_p = p.runs.first().map_or(0, |r| r.len);
+    while let (Some(ra), Some(rp)) = (pa.runs.get(ia), p.runs.get(ip)) {
+        let step = rem_a.min(rem_p);
+        if step > 0 {
+            let mut props = rp.props.clone();
+            if props.fmt_change.is_none()
+                && ra.props.formatting() == rp.props.formatting()
+                && let Some(fmt) = ra.props.fmt_change.as_ref().filter(|c| c.rev < orig_revs)
+            {
+                props.fmt_change = Some(fmt.clone());
+            }
+            new_runs.push(wordcraft_doc::para::Run { len: step, props });
+            rem_a -= step;
+            rem_p -= step;
+        }
+        if rem_a == 0 {
+            ia += 1;
+            rem_a = pa.runs.get(ia).map_or(0, |r| r.len);
+        }
+        if rem_p == 0 {
+            ip += 1;
+            rem_p = p.runs.get(ip).map_or(0, |r| r.len);
+        }
+    }
+    p.runs = new_runs;
+    p.normalize();
+    p.touch();
+}
+
+/// Restore valid original insertion, deletion and numbering-change marks (< `orig_revs`) from `pa`
+/// onto `p` for paragraphs with matching text. Called after `compare_formatting` so an existing
+/// insertion by `ctx.author` does not suppress tracking a revised formatting change.
+fn restore_orig_para_marks(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
+    if let Some(ins) = pa.mark.ins.filter(|&r| r < orig_revs) {
+        p.mark.ins = Some(ins);
+    }
+    if let Some(del) = pa.mark.del.filter(|&r| r < orig_revs) {
+        p.mark.del = Some(del);
+    }
+    if pa.props.numbering == p.props.numbering
+        && let Some(num) = pa.props.num_change.as_ref().filter(|c| c.rev < orig_revs)
+    {
+        p.props.num_change = Some(num.clone());
+    }
+    let mut new_runs = Vec::with_capacity(p.runs.len() + pa.runs.len());
+    let (mut ia, mut ip) = (0, 0);
+    let mut rem_a = pa.runs.first().map_or(0, |r| r.len);
+    let mut rem_p = p.runs.first().map_or(0, |r| r.len);
+    while let (Some(ra), Some(rp)) = (pa.runs.get(ia), p.runs.get(ip)) {
+        let step = rem_a.min(rem_p);
+        if step > 0 {
+            let mut props = rp.props.clone();
+            if let Some(ins) = ra.props.ins.filter(|&r| r < orig_revs) {
+                props.ins = Some(ins);
+            }
+            if let Some(del) = ra.props.del.filter(|&r| r < orig_revs) {
+                props.del = Some(del);
+            }
+            new_runs.push(wordcraft_doc::para::Run { len: step, props });
+            rem_a -= step;
+            rem_p -= step;
+        }
+        if rem_a == 0 {
+            ia += 1;
+            rem_a = pa.runs.get(ia).map_or(0, |r| r.len);
+        }
+        if rem_p == 0 {
+            ip += 1;
+            rem_p = p.runs.get(ip).map_or(0, |r| r.len);
+        }
+    }
+    p.runs = new_runs;
+    p.normalize();
+    p.touch();
+}
+
 /// Compare two paired table blocks: keep equal tables untouched, diff matching-row tables cell by
 /// cell via [`table_diff`], and fall back to whole-table replacement when grid, size, nesting
 /// depth, row structure or container properties prevent a lossless in-place cell diff.
 fn diff_tables(ctx: &mut CompareCtx<'_>, out: &mut Vec<Arc<Block>>, a: &Arc<Block>, ta: &Table, b: &Arc<Block>, tb: &Table, depth: usize) {
+    if ta == tb {
+        out.push(clean_block(a, ctx.orig_revs));
+        return;
+    }
     // Cells inside a table at `PARA_WALK_DEPTH` or deeper sit beyond `Document::para_paths`, so
     // `mark_block` leaves them unmarked and `Accept All` / `Reject All` never visit them; keep the
     // stripped revised table once rather than emitting two unmarked copies.
-    if ta == tb || depth >= PARA_WALK_DEPTH {
+    if depth >= PARA_WALK_DEPTH {
         out.push(clean_revised_block(b));
         return;
     }
@@ -299,35 +417,55 @@ fn diff_tables(ctx: &mut CompareCtx<'_>, out: &mut Vec<Arc<Block>>, a: &Arc<Bloc
     *ctx.changes += 1;
 }
 
-/// Whether `p` carries any revision bookkeeping (`ins`, `del`, `fmt_change`, `num_change`).
-fn para_has_revs(p: &Paragraph) -> bool {
-    p.props.fmt_change.is_some()
-        || p.props.num_change.is_some()
-        || p.mark.ins.is_some()
-        || p.mark.del.is_some()
-        || p.mark.fmt_change.is_some()
-        || p.section.as_ref().is_some_and(|s| s.fmt_change.is_some())
-        || p.runs.iter().any(|run| run.props.ins.is_some() || run.props.del.is_some() || run.props.fmt_change.is_some())
+/// Whether `p` carries any revision bookkeeping (`ins`, `del`, `fmt_change`, `num_change`) that
+/// is foreign or out of bounds (index >= `orig_revs`). When `orig_revs == 0`, checks for any revision.
+fn para_has_foreign_revs(p: &Paragraph, orig_revs: u32) -> bool {
+    p.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs)
+        || p.props.num_change.as_ref().is_some_and(|c| c.rev >= orig_revs)
+        || p.mark.ins.is_some_and(|r| r >= orig_revs)
+        || p.mark.del.is_some_and(|r| r >= orig_revs)
+        || p.mark.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs)
+        || p.section.as_ref().and_then(|s| s.fmt_change.as_ref()).is_some_and(|c| c.rev >= orig_revs)
+        || p.runs.iter().any(|run| {
+            run.props.ins.is_some_and(|r| r >= orig_revs)
+                || run.props.del.is_some_and(|r| r >= orig_revs)
+                || run.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs)
+        })
 }
 
-/// A copy of `pb` with source-document revision indices cleared across its properties, mark, runs
-/// and section break so foreign indices never leak into `ctx.doc.revisions`.
-fn strip_para_revs(pb: &Paragraph) -> Paragraph {
-    if !para_has_revs(pb) {
+/// A copy of `pb` with foreign or out-of-bounds revision indices (index >= `orig_revs`) cleared
+/// across its properties, mark, runs and section break so foreign indices never leak into
+/// `ctx.doc.revisions`. When `orig_revs == 0`, all revision indices are stripped.
+fn strip_para_revs(pb: &Paragraph, orig_revs: u32) -> Paragraph {
+    if !para_has_foreign_revs(pb, orig_revs) {
         return pb.clone();
     }
     let mut p = pb.clone();
-    p.props = p.props.formatting();
-    p.mark = CharProps { ins: None, del: None, fmt_change: None, ..p.mark };
-    for r in &mut p.runs {
-        r.props.ins = None;
-        r.props.del = None;
-        r.props.fmt_change = None;
+    if p.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
+        p.props.fmt_change = None;
     }
-    if let Some(sec) = p.section.as_deref_mut() {
+    if p.props.num_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
+        p.props.num_change = None;
+    }
+    p.mark.ins = p.mark.ins.filter(|&r| r < orig_revs);
+    p.mark.del = p.mark.del.filter(|&r| r < orig_revs);
+    if p.mark.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
+        p.mark.fmt_change = None;
+    }
+    for r in &mut p.runs {
+        r.props.ins = r.props.ins.filter(|&idx| idx < orig_revs);
+        r.props.del = r.props.del.filter(|&idx| idx < orig_revs);
+        if r.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
+            r.props.fmt_change = None;
+        }
+    }
+    if let Some(sec) = p.section.as_deref_mut()
+        && sec.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs)
+    {
         sec.fmt_change = None;
     }
     p.normalize();
+    p.touch();
     p
 }
 
@@ -336,27 +474,29 @@ fn strip_para_revs(pb: &Paragraph) -> Paragraph {
 /// foreign revision indices can never survive into the result document.
 const MAX_STRIP_DEPTH: usize = 128;
 
-/// Whether `b` (or any nested block at any depth) carries revision indices from its source
-/// document, checked iteratively so deep tables never blow the stack.
-fn block_has_revs(b: &Block) -> bool {
+/// Whether `b` (or any nested block at any depth) carries foreign or out-of-bounds revision indices
+/// (index >= `orig_revs`), checked iteratively so deep tables never blow the stack.
+fn block_has_foreign_revs(b: &Block, orig_revs: u32) -> bool {
     let mut stack = vec![b];
     while let Some(cur) = stack.pop() {
         match cur {
             Block::Para(p) => {
-                if para_has_revs(p) {
+                if para_has_foreign_revs(p, orig_revs) {
                     return true;
                 }
             }
             Block::Table(t) => {
-                if t.props.fmt_change.is_some() {
+                if t.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
                     return true;
                 }
                 for r in &t.rows {
-                    if r.props.fmt_change.is_some() || r.props.exceptions.as_ref().is_some_and(|e| e.fmt_change.is_some()) {
+                    if r.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs)
+                        || r.props.exceptions.as_ref().and_then(|e| e.fmt_change.as_ref()).is_some_and(|c| c.rev >= orig_revs)
+                    {
                         return true;
                     }
                     for c in &r.cells {
-                        if c.props.fmt_change.is_some() {
+                        if c.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
                             return true;
                         }
                         stack.extend(c.blocks.iter().map(|x| &**x));
@@ -368,10 +508,54 @@ fn block_has_revs(b: &Block) -> bool {
     false
 }
 
+/// Returns `b` with foreign or out-of-bounds revision indices (index >= `orig_revs`) stripped across
+/// paragraphs and tables, preserving valid original-owned marks (`< orig_revs`).
+fn strip_block_revs(b: &Block, orig_revs: u32, depth: usize) -> Block {
+    match b {
+        Block::Para(p) => Block::Para(strip_para_revs(p, orig_revs)),
+        Block::Table(t) => {
+            if !block_has_foreign_revs(b, orig_revs) {
+                return Block::Table(t.clone());
+            }
+            let mut t = t.clone();
+            if t.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
+                t.props.fmt_change = None;
+            }
+            for r in &mut t.rows {
+                if r.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
+                    r.props.fmt_change = None;
+                }
+                if let Some(ex) = r.props.exceptions.as_deref_mut()
+                    && ex.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs)
+                {
+                    ex.fmt_change = None;
+                }
+                for c in &mut r.cells {
+                    if c.props.fmt_change.as_ref().is_some_and(|c| c.rev >= orig_revs) {
+                        c.props.fmt_change = None;
+                    }
+                    if depth < MAX_STRIP_DEPTH {
+                        c.blocks = c.blocks.iter().map(|x| Arc::new(strip_block_revs(x, orig_revs, depth + 1))).collect();
+                    } else {
+                        c.blocks = vec![para_block(Paragraph::new())];
+                    }
+                }
+            }
+            Block::Table(t)
+        }
+    }
+}
+
+/// Returns `b` with foreign or out-of-bounds revision indices (index >= `orig_revs`) stripped across
+/// all supported table depths, sharing the `Arc` unchanged when `b` carries none.
+fn clean_block(b: &Arc<Block>, orig_revs: u32) -> Arc<Block> {
+    if block_has_foreign_revs(b, orig_revs) { Arc::new(strip_block_revs(b, orig_revs, 0)) } else { b.clone() }
+}
+
 /// Returns `b` with source-document revision indices stripped across all supported table depths,
 /// sharing the `Arc` unchanged when `b` carries none.
 fn clean_revised_block(b: &Arc<Block>) -> Arc<Block> {
-    if block_has_revs(b) { Arc::new(strip_block_revs(b, 0)) } else { b.clone() }
+    clean_block(b, 0)
 }
 
 /// Diff two tables row by row when every row pairs 1-to-1 with matching cell structure and
@@ -383,6 +567,9 @@ fn clean_revised_block(b: &Arc<Block>) -> Arc<Block> {
 /// table, row or cell properties differ (unless `formatting` is off and no text/structural edit
 /// occurred), returns `None` so Reject All can still restore the original properties.
 fn table_diff(ctx: &mut CompareCtx<'_>, ta: &Table, tb: &Table, depth: usize) -> Option<Table> {
+    if ta.controls != tb.controls {
+        return None;
+    }
     let props_match = same_table_props(ta, tb) && ta.rows.iter().zip(&tb.rows).all(|(ra, rb)| same_row_props(ra, rb));
     if !props_match && ctx.opts.formatting {
         return None;
@@ -436,7 +623,13 @@ fn table_diff(ctx: &mut CompareCtx<'_>, ta: &Table, tb: &Table, depth: usize) ->
         *ctx.char_fallbacks = before_fallbacks;
         return None;
     }
-    Some(Table { props: strip_table_props(&tb.props), grid: tb.grid.clone(), rows: out_rows, controls: tb.controls.clone() })
+    let mut props = strip_table_props(&tb.props);
+    if norm_table_props(&ta.props) == norm_table_props(&tb.props)
+        && let Some(fmt) = ta.props.fmt_change.as_ref().filter(|c| c.rev < ctx.orig_revs)
+    {
+        props.fmt_change = Some(fmt.clone());
+    }
+    Some(Table { props, grid: tb.grid.clone(), rows: out_rows, controls: tb.controls.clone() })
 }
 
 /// Diff two shape-matched rows cell by cell, stripping any source `fmt_change` indices from the
@@ -444,13 +637,28 @@ fn table_diff(ctx: &mut CompareCtx<'_>, ta: &Table, tb: &Table, depth: usize) ->
 fn diff_row(ctx: &mut CompareCtx<'_>, ra: &Row, rb: &Row, depth: usize) -> Row {
     let mut cells = Vec::with_capacity(rb.cells.len());
     for (ca, cb) in ra.cells.iter().zip(&rb.cells) {
+        let fmt_change = (norm_cell_props(&ca.props) == norm_cell_props(&cb.props))
+            .then(|| ca.props.fmt_change.as_ref().filter(|c| c.rev < ctx.orig_revs).cloned())
+            .flatten();
         cells.push(wordcraft_doc::table::Cell {
-            props: CellProps { fmt_change: None, ..cb.props.clone() },
+            props: CellProps { fmt_change, ..cb.props.clone() },
             blocks: diff_blocks(ctx, &ca.blocks, &cb.blocks, depth + 1),
             controls: cb.controls.clone(),
         });
     }
-    Row { props: strip_row_props(&rb.props), cells, controls: rb.controls.clone() }
+    let mut props = strip_row_props(&rb.props);
+    if norm_row_props(&ra.props) == norm_row_props(&rb.props)
+        && let Some(fmt) = ra.props.fmt_change.as_ref().filter(|c| c.rev < ctx.orig_revs)
+    {
+        props.fmt_change = Some(fmt.clone());
+    }
+    if let (Some(ex_a), Some(ex_out)) = (ra.props.exceptions.as_deref(), props.exceptions.as_deref_mut())
+        && norm_table_props(ex_a) == norm_table_props(ex_out)
+        && let Some(fmt) = ex_a.fmt_change.as_ref().filter(|c| c.rev < ctx.orig_revs)
+    {
+        ex_out.fmt_change = Some(fmt.clone());
+    }
+    Row { props, cells, controls: rb.controls.clone() }
 }
 
 fn strip_table_props(t: &TableProps) -> TableProps {
@@ -548,26 +756,27 @@ fn norm_cell_props(c: &CellProps) -> CellProps {
 }
 
 fn same_table_props(ta: &Table, tb: &Table) -> bool {
-    ta.controls == tb.controls && norm_table_props(&ta.props) == norm_table_props(&tb.props)
+    norm_table_props(&ta.props) == norm_table_props(&tb.props)
 }
 
 fn same_row_props(ra: &Row, rb: &Row) -> bool {
-    ra.controls == rb.controls
-        && ra.cells.len() == rb.cells.len()
+    ra.cells.len() == rb.cells.len()
         && norm_row_props(&ra.props) == norm_row_props(&rb.props)
-        && ra.cells.iter().zip(&rb.cells).all(|(ca, cb)| ca.controls == cb.controls && norm_cell_props(&ca.props) == norm_cell_props(&cb.props))
+        && ra.cells.iter().zip(&rb.cells).all(|(ca, cb)| norm_cell_props(&ca.props) == norm_cell_props(&cb.props))
 }
 
-/// Whether two rows share the same column/cell geometry (cell count, grid gaps, cell widths,
-/// horizontal spans and vertical merge modes).
+/// Whether two rows share the same column/cell geometry and content controls (cell count, grid
+/// gaps, cell widths, horizontal spans, vertical merge modes and `w:sdt` wrappers).
 fn same_shape(ra: &Row, rb: &Row) -> bool {
-    ra.cells.len() == rb.cells.len()
+    ra.controls == rb.controls
+        && ra.cells.len() == rb.cells.len()
         && ra.first_grid() == rb.first_grid()
         && same_opt_twips(ra.props.w_before, rb.props.w_before)
         && ra.grid_after() == rb.grid_after()
         && same_opt_twips(ra.props.w_after, rb.props.w_after)
         && ra.cells.iter().zip(&rb.cells).all(|(ca, cb)| {
-            ca.span() == cb.span()
+            ca.controls == cb.controls
+                && ca.span() == cb.span()
                 && ca.props.vmerge == cb.props.vmerge
                 && same_opt_twips(ca.props.width, cb.props.width)
                 && same_opt_pct(ca.props.width_pct, cb.props.width_pct)
@@ -593,36 +802,10 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// Returns a copy of `b` with source revision indices stripped across paragraphs and tables.
-fn strip_block_revs(b: &Block, depth: usize) -> Block {
-    match b {
-        Block::Para(p) => Block::Para(strip_para_revs(p)),
-        Block::Table(t) => {
-            if !block_has_revs(b) {
-                return Block::Table(t.clone());
-            }
-            let mut t = t.clone();
-            t.props = strip_table_props(&t.props);
-            for r in &mut t.rows {
-                r.props = strip_row_props(&r.props);
-                for c in &mut r.cells {
-                    c.props.fmt_change = None;
-                    if depth < MAX_STRIP_DEPTH {
-                        c.blocks = c.blocks.iter().map(|x| Arc::new(strip_block_revs(x, depth + 1))).collect();
-                    } else {
-                        c.blocks = vec![para_block(Paragraph::new())];
-                    }
-                }
-            }
-            Block::Table(t)
-        }
-    }
-}
-
 /// Returns a copy of `b` (from the revised document) stripped of foreign revision indices and
 /// marked inserted with `ins`.
 fn mark_inserted_block(b: &Block, ins: u32, depth: usize) -> Block {
-    let clean = strip_block_revs(b, 0);
+    let clean = strip_block_revs(b, 0, 0);
     mark_block(&clean, &|c| c.ins = Some(ins), depth)
 }
 
@@ -634,6 +817,7 @@ fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
             let len = p.len();
             let _ = p.format(0, len, f);
             f(&mut p.mark);
+            p.touch();
             Block::Para(p)
         }
         Block::Table(t) => {
