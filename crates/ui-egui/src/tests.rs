@@ -27,6 +27,27 @@ fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
 }
 
+/// #5793: a name from a paragraph's first words, as Word suggests one: up to the first sentence or
+/// clause end, without what a file name can't hold, at most 50 characters at a word's end.
+#[test]
+fn a_suggested_name_is_the_first_words_of_the_text() {
+    use crate::app::suggested_stem as stem;
+    assert_eq!(stem("Quarterly report for the board. More follows here.").as_deref(), Some("Quarterly report for the board"));
+    assert_eq!(stem("Minutes of the meeting, 6 November").as_deref(), Some("Minutes of the meeting, 6 November"));
+    assert_eq!(stem("What happened? Nobody knows").as_deref(), Some("What happened"));
+    assert_eq!(stem("Plan: phase one").as_deref(), Some("Plan"));
+    assert_eq!(stem("Q3 / Q4 \"draft\" <final> *v2* | a\\b").as_deref(), Some("Q3 Q4 draft final v2 a b"));
+    assert_eq!(stem("  Leading   and   inner   spaces  ").as_deref(), Some("Leading and inner spaces"));
+    assert_eq!(stem("日本語の文書\u{3002}続きの文").as_deref(), Some("日本語の文書"));
+    let long = "Annual report of the regional committee on transport and infrastructure planning";
+    let got = stem(long).unwrap();
+    assert!(got.chars().count() <= 50 && long.starts_with(&got) && long[got.len()..].starts_with(' '), "{got:?}");
+    assert_eq!(stem(&"x".repeat(80)).map(|s| s.chars().count()), Some(50), "one long word is cut at 50");
+    for nothing in ["", "   ", "...", "?", "/ * |", "\u{1}"] {
+        assert_eq!(stem(nothing), None, "{nothing:?}");
+    }
+}
+
 /// #5793: Save As suggests the first words for a document that was never saved and has no title
 /// of its own (the first paragraph with text, past empty ones); a title, a file name or a path
 /// still name it.

@@ -17,6 +17,8 @@ mod commands;
 mod control;
 mod files;
 pub(crate) use files::Closing;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 pub(crate) mod fonts;
 mod frame;
 mod input;
