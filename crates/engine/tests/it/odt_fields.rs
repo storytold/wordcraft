@@ -2,8 +2,6 @@
 //! the bookmarked text (a bookmark over text, `text:bookmark-start`…`-end`, not a point). The
 //! ODT is original and synthetic, shaped like LibreOffice's.
 
-use std::io::Write;
-
 use serde_json::json;
 use wordcraft_engine::{Session, io};
 
@@ -11,13 +9,11 @@ const NS: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1
 
 fn odt(body: &str) -> Vec<u8> {
     let content = format!(r#"<office:document-content {NS}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
-        z.start_file(name, o).unwrap();
-        z.write_all(data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 fn text(s: &Session) -> Vec<String> {
@@ -87,13 +83,11 @@ fn a_flat_document_opens_and_saves_by_its_extension() {
 fn a_user_field_updates_from_its_property() {
     // An ODT user field opens as `DOCPROPERTY`: updating fields shows the property's value.
     let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text><text:user-field-decls><text:user-field-decl text:name="Owner" office:value-type="string" office:string-value="Ada"/></text:user-field-decls><text:p>By <text:user-field-get text:name="Owner">stale</text:user-field-get>.</text:p></office:text></office:body></office:document-content>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut z = craft_zip::Writer::new();
     for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content)] {
-        z.start_file(name, o).unwrap();
-        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
     }
-    let mut s = Session::new(io::open_bytes("user.odt", &z.finish().unwrap().into_inner()).unwrap());
+    let mut s = Session::new(io::open_bytes("user.odt", &z.finish().unwrap()).unwrap());
     s.run("references.updateFields", &json!({"all": true})).unwrap();
     assert_eq!(results(&s), ["Ada"]);
 }
