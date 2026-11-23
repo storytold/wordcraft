@@ -1539,7 +1539,7 @@ dependencies = [
 [[package]]
 name = "craft-font-subset"
 version = "0.1.0"
-source = "git+https://github.com/mocenigo/craft-libs-mine?branch=windowed-dialogs#7b37495449c142c7f1c2b66668ea4e15736e488d"
+source = "git+https://github.com/mocenigo/craft-libs-mine?branch=panel-windows-wordcraft#ebd2fe38bb92ecd174e35b46a68c64223d872785"
 dependencies = [
  "brotli 9.1.3",
  "harfbuzz-subset-sys",
@@ -1553,11 +1553,6 @@ dependencies = [
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/mocenigo/craft-libs-mine?branch=panel-windows-wordcraft#ebd2fe38bb92ecd174e35b46a68c64223d872785"
-
-[[package]]
-name = "craft-fonts-build"
-version = "0.1.0"
-source = "git+https://github.com/mocenigo/craft-libs-mine?branch=windowed-dialogs#7b37495449c142c7f1c2b66668ea4e15736e488d"
 dependencies = [
  "craft-font-subset",
 ]
@@ -2175,7 +2170,7 @@ dependencies = [
  "craft-behavior",
  "craft-codepage",
  "craft-font-catalog",
- "craft-fonts-build 0.1.0 (git+https://github.com/mocenigo/craft-libs-mine?branch=panel-windows-wordcraft)",
+ "craft-fonts-build",
  "craft-host",
  "craft-i18n",
  "craft-keymap",
@@ -9308,7 +9303,7 @@ dependencies = [
  "cfb",
  "chrono",
  "craft",
- "craft-fonts-build 0.1.0 (git+https://github.com/mocenigo/craft-libs-mine?branch=windowed-dialogs)",
+ "craft-fonts-build",
  "craft-ui-test-kit",
  "craft-zip",
  "eframe",
