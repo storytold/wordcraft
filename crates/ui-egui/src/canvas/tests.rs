@@ -1174,6 +1174,51 @@ fn the_caret_follows_the_input_method_cursor_in_the_composition() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
 }
 
+/// #1169: Space and Enter count as `Response::clicked` on the focused canvas, and
+/// `request_focus` always interrupts IME. On X11 that recreates the XIM context and
+/// fcitx drops every later key. Those keys still type, and they must not set
+/// `should_interrupt_composition`.
+#[test]
+fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "The"})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.app_frame();
+    }
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "the canvas takes focus when the window opens");
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let ime_interrupted = |h: &H| h.output().platform_output.ime.as_ref().map(|ime| ime.should_interrupt_composition);
+    h.event(key(egui::Key::Space));
+    h.event(egui::Event::Text(" ".into()));
+    h.app_frame();
+    assert_eq!(ime_interrupted(&h), Some(false), "space must not recreate the XIM context");
+    let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("The") && text.contains(' '), "the space is still inserted: {text:?}");
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "the canvas keeps the keyboard");
+    h.event(key(egui::Key::Enter));
+    h.app_frame();
+    assert_eq!(ime_interrupted(&h), Some(false), "enter must not recreate the XIM context");
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "enter leaves the canvas focused");
+
+    let at = h.state().canvas.page_rects().next().map(|(_, r)| r.center()).expect("a page");
+    h.event(egui::Event::PointerMoved(at));
+    h.app_frame();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.app_frame();
+        assert_eq!(ime_interrupted(&h), Some(false), "clicking the focused canvas does not recreate the XIM context");
+    }
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "canvas remains focused after click");
+}
+
 /// A harness of `app` for the composition tests, past the frames the canvas needs to take focus.
 fn composing_harness(app: WordApp) -> H {
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
