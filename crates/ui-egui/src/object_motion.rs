@@ -180,20 +180,20 @@ fn band(p: &PageSpot) -> egui::Rect {
 /// The page-local pose a motion cut short goes on from: the pose drawn at `at`. Across pages it
 /// is drawn between the two pages, so the pose is taken on the destination page, at the screen
 /// point it was drawn at (the old pose's page would put the start on the wrong page).
-fn carried_from(l: &Live, at: f64, pages: &[PageSpot]) -> Pose {
-    let drawn = l.tween.pose(at);
+fn carried_from(tween: &Tween, end: Pose, bounds: Rect, at: f64, pages: &[PageSpot]) -> Pose {
+    let drawn = tween.pose(at);
     let spot = |i: usize| pages.iter().find(|p| p.page == i);
-    let (from, to) = match (spot(l.tween.from.page), spot(l.tween.to.page)) {
-        (Some(f), Some(t)) if l.tween.from.page != l.tween.to.page => (f, t),
+    let (from, to) = match (spot(tween.from.page), spot(tween.to.page)) {
+        (Some(f), Some(t)) if tween.from.page != tween.to.page => (f, t),
         _ => return drawn,
     };
-    let k = l.tween.progress(at);
-    let a = on_screen(from.rect, from.scale, corners(&l.end, l.bounds, &l.tween.from));
-    let b = on_screen(to.rect, to.scale, corners(&l.end, l.bounds, &l.end));
+    let k = tween.progress(at);
+    let a = on_screen(from.rect, from.scale, corners(&end, bounds, &tween.from));
+    let b = on_screen(to.rect, to.scale, corners(&end, bounds, &end));
     let n = a.len() as f32;
     let centre = a.into_iter().zip(b).fold(egui::Vec2::ZERO, |sum, (p, q)| sum + (p + (q - p) * k).to_vec2()) / n;
     let want = (centre - to.rect.min.to_vec2()) / to.scale;
-    let here = corners(&l.end, l.bounds, &Pose { page: to.page, ..drawn });
+    let here = corners(&end, bounds, &Pose { page: to.page, ..drawn });
     let mean = here.iter().fold((0.0, 0.0), |s, c| (s.0 + c.0 / n, s.1 + c.1 / n));
     Pose {
         page: to.page,
@@ -311,7 +311,7 @@ pub fn begin(app: &WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocL
                     && let Some(tex) = crate::objects::motion_preview(app, ctx, layout, o, scale)
                 {
                     // A motion cut short by another change goes on from where it was drawn.
-                    let from = old.map_or(seen.pose, |l| carried_from(&l, l.drawn.min(now), &st.pages));
+                    let from = old.map_or(seen.pose, |l| carried_from(&l.tween, l.end, l.bounds, l.drawn.min(now), &st.pages));
                     st.live = Some(Live {
                         page_hidden: (o.page, key.clone()),
                         tween: Tween { from, to: pose, start: now, secs: SECS },
@@ -499,5 +499,29 @@ mod tests {
         let base = pose(0.0, 0.0, 0.0, 0.0, 0.0);
         let c = corners(&base, Rect::new(0.0, 0.0, 0.0, 0.0), &pose(f32::NAN, 0.0, f32::INFINITY, 1.0, 0.0));
         assert_eq!(c.len(), 4);
+    }
+
+    #[test]
+    fn cross_page_retarget_keeps_the_rendered_offset() {
+        let from = Pose { page: 0, rect: Rect::new(20.0, 30.0, 40.0, 20.0), deg: 0.0 };
+        let to = Pose { page: 1, rect: Rect::new(20.0, 30.0, 40.0, 20.0), deg: 0.0 };
+        let end = to;
+        let bounds = from.rect;
+        let tween = Tween { from, to, start: 0.0, secs: 1.0 };
+        let pages = [
+            PageSpot { page: 0, rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 800.0)), scale: 1.0, band: (0.0, 800.0) },
+            PageSpot { page: 1, rect: egui::Rect::from_min_size(egui::pos2(0.0, 900.0), egui::vec2(600.0, 800.0)), scale: 1.0, band: (0.0, 800.0) },
+        ];
+        let at = 0.5;
+        let progress = tween.progress(at);
+        let a = on_screen(pages[0].rect, pages[0].scale, corners(&end, bounds, &from));
+        let b = on_screen(pages[1].rect, pages[1].scale, corners(&end, bounds, &end));
+        let expected = a.into_iter().zip(b).fold(egui::Vec2::ZERO, |sum, (p, q)| sum + (p + (q - p) * progress).to_vec2()) / 4.0;
+
+        let carried = carried_from(&tween, end, bounds, at, &pages);
+        let actual = on_screen(pages[1].rect, pages[1].scale, corners(&end, bounds, &carried))
+            .into_iter()
+            .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2()) / 4.0;
+        assert!((actual - expected).length() < 0.01, "retarget stays at its drawn position: {actual:?} vs {expected:?}");
     }
 }
