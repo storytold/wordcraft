@@ -87,7 +87,7 @@ impl WordApp {
 fn refused_check() -> craft::update::updater::CheckSource {
     let why = tl!("Updates are off in this window: WordCraft was started with another program's AppImage settings. Start WordCraft from its own menu entry to update it.")
         .to_string();
-    std::sync::Arc::new(move || Err(why.clone()))
+    std::sync::Arc::new(move || Err(why.clone().into()))
 }
 
 /// Help ▸ Check for Updates. The result dialog opens from [`run`] while the updater has a status.

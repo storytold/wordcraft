@@ -427,7 +427,7 @@ fn selection_bar_clicks_select_lines() {
         page_to_screen(h.state_mut(), c.page, 30.0, c.top + c.height * (li + 0.5)).expect("on screen")
     };
     let line_start = |h: &mut H, at: Pos2| {
-        let placed = *h.state().canvas.shown.pages.iter().find(|p| p.rect.contains(at)).expect("page");
+        let placed = h.state().canvas.shown.pages.iter().find(|p| p.rect.contains(at)).expect("page").clone();
         let p = placed.to_page(at);
         let layout = h.state_mut().session.layout();
         layout.selection_bar_at(placed.page, p.x as f32, p.y as f32).expect("in the selection bar")

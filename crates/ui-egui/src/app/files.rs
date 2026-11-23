@@ -649,6 +649,11 @@ impl WordApp {
                 Intake::Quit => {
                     self.quit();
                 }
+                // WordCraft has no app-specific open actions.
+                Intake::OpenFor { .. } => {}
+                Intake::Bytes { name, bytes } => {
+                    self.open_dropped(&[DroppedFile { path: None, name, bytes: Some(bytes) }], DropTarget::Elsewhere);
+                }
             }
         }
     }

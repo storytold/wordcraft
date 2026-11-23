@@ -705,7 +705,7 @@ impl PreferencesModel for OptionsModel<'_> {
         }
     }
 
-    fn custom_row(&mut self, ui: &mut Ui, key: &str) {
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
         match key {
             "general.defaultApp" => default_app_row(self.app, ui),
             "proofing.autoCorrect" => {
@@ -730,15 +730,17 @@ impl PreferencesModel for OptionsModel<'_> {
                 self.run("tools.customizeRibbon", json!({}));
             }
             _ => {}
-        }
+        };
+        false
     }
 
-    fn custom_page(&mut self, ui: &mut Ui, page: &str) {
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool {
         if page == "agents" {
             Text::new(tl!("Agents")).role(TypeRole::Heading).show(ui);
             Text::new(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."))
                 .show(ui);
         }
+        false
     }
 
     fn reset_page(&mut self, page: &str) {
