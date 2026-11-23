@@ -37,7 +37,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 # reads the ca-valencia pack), #589 (French elision suggestions first), #497 (flag-based
 # compounding), #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font
 # store's `language-pack` kind is #486 (CP4.1).
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/ro-legal-docx/craft-libs", rev = "a49395f31f070d9efa8115e1f9a99433542bd275", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
 craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
