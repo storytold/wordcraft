@@ -12,6 +12,7 @@ use craft::ui::text::TextField;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::Block;
+use wordcraft_engine::Selection;
 
 use super::labels::{BUILT_IN_LABELS, NUMBER_FORMATS, SEPARATORS, own_labels};
 use crate::WordApp;
@@ -39,6 +40,17 @@ pub struct CaptionForm {
     /// Heading level that starts a chapter (1–9).
     pub chapter_level: u8,
     pub separator: String,
+    #[serde(skip)]
+    preview: Option<CaptionPreview>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CaptionPreview {
+    document: u64,
+    revision: u64,
+    selection: Selection,
+    number_options: Value,
+    prefix: String,
 }
 
 impl CaptionForm {
@@ -65,11 +77,15 @@ impl CaptionForm {
             chapter: false,
             chapter_level: 1,
             separator: "-".into(),
+            preview: None,
         }
     }
 
     /// The number as it will show (`Figure 1-A`).
     pub fn preview(&self) -> String {
+        if let Some(preview) = &self.preview {
+            return preview.prefix.clone();
+        }
         let n = match self.format.as_str() {
             "alphabetic" => "a",
             "ALPHABETIC" => "A",
@@ -82,11 +98,9 @@ impl CaptionForm {
         format!("{label}{chapter}{n}")
     }
 
-    /// `references.caption` parameters.
-    pub fn params(&self) -> Value {
+    fn number_options(&self) -> Value {
         let mut v = json!({
             "label": self.label,
-            "text": self.text.trim(),
             "position": self.position,
             "excludeLabel": self.exclude_label,
             "format": self.format,
@@ -96,6 +110,13 @@ impl CaptionForm {
             v["separator"] = json!(self.separator);
         }
         v
+    }
+
+    /// `references.caption` parameters.
+    pub fn params(&self) -> Value {
+        let mut options = self.number_options();
+        options["text"] = json!(self.text.trim());
+        options
     }
 }
 
@@ -110,6 +131,20 @@ impl WordForm for CaptionForm {
 
     fn commands(&self) -> Vec<(String, Value)> {
         vec![("references.caption".to_string(), self.params())]
+    }
+
+    fn prepare(&mut self, app: &WordApp) {
+        let session = &app.session;
+        let options = self.number_options();
+        let document = session.document_id();
+        let revision = session.rev();
+        if self.preview.as_ref().is_some_and(|cached| {
+            cached.document == document && cached.revision == revision && cached.selection == session.sel && cached.number_options == options
+        }) {
+            return;
+        }
+        let prefix = wordcraft_engine::cmd::references::caption_preview(session, &options).unwrap_or_default();
+        self.preview = Some(CaptionPreview { document, revision, selection: session.sel.clone(), number_options: options, prefix });
     }
 
     fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
@@ -134,8 +169,10 @@ impl WordForm for CaptionForm {
             .show(ui, |ui, _| Select::new(label_title.clone(), Bind::given(Mixed::Same(self.label.clone())), &labels).show(ui).value().cloned())
             .inner
             .flatten()
+            && label != self.label
         {
             self.label = label;
+            ui.ctx().request_repaint();
         }
         let position_title = Label::from(tl!("Position:").to_string());
         let positions = [
@@ -148,12 +185,17 @@ impl WordForm for CaptionForm {
             })
             .inner
             .flatten()
+            && position != self.position
         {
             self.position = position;
+            ui.ctx().request_repaint();
         }
         let exclude = Label::from(tl!("Leave the label out of the caption").to_string());
-        if let Some(on) = Checkbox::new(Bind::given(self.exclude_label)).label(exclude).show(ui).value().copied() {
+        if let Some(on) = Checkbox::new(Bind::given(self.exclude_label)).label(exclude).show(ui).value().copied()
+            && on != self.exclude_label
+        {
             self.exclude_label = on;
+            ui.ctx().request_repaint();
         }
         if Button::new(Label::from(tl!("New Label…").to_string())).show(ui).clicked() {
             asks.push(Asks::Open("newLabel".to_string(), Value::Null));

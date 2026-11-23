@@ -65,6 +65,37 @@ fn caption_dialog_numbers_with_chapters() {
     assert_eq!(a.prefs().caption_labels, vec!["Plate".to_string()]);
 }
 
+#[test]
+fn caption_preview_matches_the_inserted_sequence_after_changing_label() {
+    let mut a = app("Results\nA chart\nAnother chart");
+    a.ui.caption_labels.push("Plate".into());
+    a.run("select.text", json!({"text": "Results"})).unwrap();
+    a.run("styles.apply", json!({"style": "Heading 1"})).unwrap();
+    a.run("select.text", json!({"text": "A chart"})).unwrap();
+    a.run("references.caption", json!({"label": "Plate", "text": "First chart", "chapter": 1, "separator": ".", "format": "ALPHABETIC"})).unwrap();
+    a.run("select.text", json!({"text": "Another chart"})).unwrap();
+
+    let mut f = CaptionForm::read(&a);
+    f.label = "Figure".into();
+    f.format = "ALPHABETIC".into();
+    f.chapter = true;
+    f.separator = ".".into();
+    f.prepare(&a);
+    assert_eq!(f.preview(), "Figure 1.A");
+
+    f.label = "Plate".into();
+    f.text = "Second chart".into();
+    let before = a.session.doc.plain_text(StoryRef::Body);
+    let selection = a.session.sel.clone();
+    f.prepare(&a);
+    let prefix = f.preview();
+    assert_eq!(prefix, "Plate 1.B");
+    assert_eq!(a.session.doc.plain_text(StoryRef::Body), before);
+    assert_eq!(a.session.sel, selection);
+    a.run("references.caption", f.params()).unwrap();
+    assert!(a.session.doc.plain_text(StoryRef::Body).contains(&format!("{prefix}: Second chart")));
+}
+
 /// #3120: Insert Caption picks the label used last, and saves it with the preferences.
 #[test]
 fn caption_dialog_remembers_the_last_label() {
