@@ -11,9 +11,9 @@ impl Session {
         self.layout_with(typing)
     }
 
-    /// Most recently computed layout, if any.
+    /// Most recently computed layout for the current document revision, if any.
     pub(crate) fn cached_layout(&self) -> Option<&DocLayout> {
-        self.layout[0].as_ref().or(self.layout[1].as_ref()).map(|e| &*e.5)
+        self.layout.iter().flatten().find(|e| e.0.0 == self.rev).map(|e| &*e.5)
     }
 
     /// [`Session::layout`] with `typing` as the word being typed.

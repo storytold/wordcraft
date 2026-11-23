@@ -741,16 +741,18 @@ fn take_view_put_view_tracks_hf_section_across_revisions_and_section_breaks() {
     assert_eq!(section_index_of_focus(&s), 1, "unchanged section breaks preserve hf_section across revision bump");
 
     // Revision changed with a section break added: stale `hf_section` is cleared and resolution
-    // falls back to `page_hint` (page 1 -> section 0).
+    // falls back to `page_hint` (page 1 -> section 0) once layout is refreshed.
     let view_before_added_break = s.take_view();
     s.run("caret.docEnd", &json!({})).unwrap();
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
     s.put_view(view_before_added_break);
+    assert_eq!(s.hf_section, None);
+    let _ = s.layout();
     assert_eq!(section_index_of_focus(&s), 0, "adding a section break clears stale hf_section");
 
     // Revision changed with a section break removed in a 3-section document: stale `hf_section`
-    // (`Some(2)`) is cleared rather than clamping onto section 1.
+    // (`Some(2)`) is cleared rather than clamping onto section 1, both before and after relayout.
     let mut s3 = Session::new(wordcraft_doc::Document::from_text("s0\ns1\ns2"));
     s3.run("select.text", &json!({"text": "s0"})).unwrap();
     s3.run("caret.end", &json!({})).unwrap();
@@ -772,6 +774,8 @@ fn take_view_put_view_tracks_hf_section_across_revisions_and_section_breaks() {
     s3.run("text.insert", &json!({"text": "b"})).unwrap();
     s3.put_view(view3);
     assert_eq!(s3.hf_section, None);
+    assert_eq!(section_index_of_focus(&s3), 0, "stale cached layout does not clamp onto section 1");
+    let _ = s3.layout();
     assert_eq!(section_index_of_focus(&s3), 0, "removing a section break clears stale hf_section");
 }
 
