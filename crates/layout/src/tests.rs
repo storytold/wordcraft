@@ -15479,21 +15479,39 @@ fn combine_sets_a_run_on_two_half_size_lines_inside_one_line() {
 
 #[test]
 fn combine_brackets_are_round_by_default_square_or_none() {
-    let glyphs = |brackets: Option<CombineBrackets>| -> Vec<(u32, f32)> {
+    // The setting reaches the layout as `ResolvedChar::combine`, and the run draws two bracket
+    // glyphs beside its two sub-lines (or none).
+    let run = |brackets: Option<CombineBrackets>| -> (Option<CombineBrackets>, Vec<(u32, f32)>) {
         let l = lay(&warichu_doc("abc", 20.0, brackets));
         let c = only_para(&l);
-        c.glyphs.iter().map(|g| (g.gid, g.dy)).collect()
+        let style = c.styles.get(c.clusters[0].style as usize).expect("a style for the combined cluster");
+        (style.rc.combine, c.glyphs.iter().map(|g| (g.gid, g.dy)).collect())
     };
-    let round = glyphs(Some(CombineBrackets::Round));
-    let square = glyphs(Some(CombineBrackets::Square));
-    let none = glyphs(Some(CombineBrackets::None));
+    let (round_kind, round) = run(Some(CombineBrackets::Round));
+    let (square_kind, square) = run(Some(CombineBrackets::Square));
+    let (none_kind, none) = run(Some(CombineBrackets::None));
+    assert_eq!((round_kind, square_kind, none_kind), (Some(CombineBrackets::Round), Some(CombineBrackets::Square), Some(CombineBrackets::None)));
     assert_eq!((round.len(), square.len(), none.len()), (5, 5, 3), "two brackets, or none");
-    assert_ne!(round[0].0, square[0].0, "round and square brackets are different glyphs");
+    // The fixed layout test fonts (docs/testing.md) map no round or square full-width bracket
+    // (U+FF08/U+FF3B), so both settings draw the run face's `.notdef` (glyph id 0) and the glyph
+    // ids alone cannot tell the two apart. That the setting reaches shaping is shown by the curly
+    // pair, which JetBrains Mono, in the fixed set, does map (U+FF5B/U+FF5D): a mapped bracket is a
+    // real glyph of the face, and the two brackets are different glyphs.
+    let (curly_kind, curly) = run(Some(CombineBrackets::Curly));
+    assert_eq!(curly_kind, Some(CombineBrackets::Curly));
+    assert_eq!(curly.len(), 5, "two brackets, or none: {curly:?}");
+    assert_ne!(curly[0].0, 0, "the opening bracket is drawn from the face, not .notdef: {curly:?}");
+    assert_ne!(curly[4].0, 0, "the closing bracket is drawn from the face, not .notdef: {curly:?}");
+    assert_ne!(curly[0].0, curly[4].0, "the opening and closing brackets are different glyphs: {curly:?}");
+    // Each setting puts a bracket above the upper sub-line and one below the lower.
+    for brackets in [&round, &square, &curly] {
+        assert!(brackets[0].1 > 0.0 && brackets[4].1 < 0.0, "the brackets stand above and below: {brackets:?}");
+    }
     assert!(none.iter().all(|(_, dy)| *dy != 0.0), "without brackets the letters still take two lines");
     // Round is what a combine without a bracket setting gets, as Word's dialog defaults.
-    let default = east_asian_doc("abc", 20.0, Some(true), None);
-    let l = lay(&default);
-    assert_eq!(only_para(&l).glyphs.len(), 5, "a combine with no bracket setting gets round brackets");
+    let (default_kind, default_glyphs) = run(None);
+    assert_eq!(default_kind, Some(CombineBrackets::Round), "a combine with no bracket setting is round");
+    assert_eq!(default_glyphs, round, "a combine with no bracket setting gets round brackets");
 }
 
 #[test]
@@ -15643,38 +15661,31 @@ fn combine_halves_the_complex_script_size_too() {
 
 #[test]
 fn combine_uses_ordinary_text_when_its_pieces_would_mix_faces() {
-    // A combined cluster draws all its glyphs with one face. Here the run's East Asian font puts
-    // the upper letter in a different face from the Latin lower letter. The same happens when no
-    // fallback face covers a script mix: the pieces fall into different faces. The run must then
-    // stay ordinary text, each character in its own face, instead of drawing the lower line with
-    // the upper line's face and glyph ids.
-    let db = wordcraft_fonts::FontDb::global();
-    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false);
-    let mut fonts: Vec<(String, wordcraft_fonts::FaceRef)> = db
-        .east_asian_families()
-        .into_iter()
-        .map(|f| (f.clone(), resolve(&f)))
-        .filter(|(_, r)| !r.substituted && r.face.covers('日') && r.face.covers('a'))
-        .map(|(f, r)| (f, r.face))
-        .collect();
-    fonts.sort_by_key(|(_, f)| f.id());
-    fonts.dedup_by_key(|(_, f)| f.id());
-    let (Some((latin_family, latin)), Some((asian_family, asian))) = (fonts.first(), fonts.get(1)) else {
-        eprintln!("skipped: needs two installed East Asian families covering Latin too");
-        return;
-    };
-    let chr = wordcraft_doc::CharProps {
-        font: Some(latin_family.clone()),
-        font_ea: Some(asian_family.clone()),
+    // A combined cluster draws all its glyphs with one face. The layout unit tests use only the
+    // pinned fonts (docs/testing.md): Source Sans 3 draws the Latin letter, and the run names
+    // Inter for complex scripts, so no one face draws both. The pieces would take two faces; the
+    // run must then stay ordinary text, each character keeping its own face, instead of drawing
+    // the lower line with the upper line's face and glyph ids.
+    crate::test_fonts();
+    let ss3 = wordcraft_fonts::word::resolve("Source Sans 3", false, false);
+    let inter = wordcraft_fonts::word::resolve("Inter", false, false);
+    assert!(!ss3.substituted && !inter.substituted, "the pinned faces resolve without substitution");
+    let chr = |font_cs: Option<&str>| wordcraft_doc::CharProps {
+        font: Some("Source Sans 3".into()),
+        font_cs: font_cs.map(str::to_string),
         size: Some(20.0),
+        size_cs: Some(20.0),
         east_asian_layout: Some(EastAsianLayout { combine: Some(true), combine_brackets: Some(CombineBrackets::None), ..Default::default() }),
         ..Default::default()
     };
-    let text = "日a";
-    let mut d = Document::new();
-    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
-    let l = lay(&d);
-    let c = only_para(&l);
+    let text = "aא";
+    let layout = |font_cs: Option<&str>| {
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr(font_cs)))];
+        lay(&d)
+    };
+    let mixed = layout(Some("Inter"));
+    let c = only_para(&mixed);
     assert!(
         c.clusters.iter().all(|cl| !cl.warichu),
         "ordinary text, not one cluster drawn in the upper letter's face: {:?}",
@@ -15685,27 +15696,26 @@ fn combine_uses_ordinary_text_when_its_pieces_would_mix_faces() {
             c.clusters.iter().find(|cl| text.get(cl.start..cl.end).and_then(|t| t.chars().next()) == Some(ch)).expect("a cluster for the letter");
         c.styles[cl.style as usize].face
     };
-    assert_eq!(face('日').id(), asian.id(), "the Japanese letter keeps the East Asian face");
-    assert_eq!(face('a').id(), latin.id(), "the Latin letter keeps the run's own face");
+    assert_eq!(face('a').id(), ss3.face.id(), "the Latin letter keeps the run's own face");
+    assert_eq!(face('א').id(), inter.face.id(), "the Hebrew letter keeps the complex-script face");
+    // One face draws both (no other complex-script font named): the run still combines.
+    let same = layout(None);
+    let c = only_para(&same);
+    assert_eq!(c.clusters.len(), 1, "{:?}", c.clusters.iter().map(|cl| (cl.start, cl.end, cl.warichu)).collect::<Vec<_>>());
+    assert!(c.clusters[0].warichu, "the run combines when one face draws every piece");
 }
 
 /// A combined cluster keeps the upper piece's style, so its pieces must also draw at one size: a
 /// Latin piece is shaped at `size` and a complex-script one at `size_cs`, and if those differ,
 /// drawing the lower sub-line with the upper piece's style would draw it at the wrong size. Such a
 /// run stays ordinary text, each letter keeping its own size; with `size_cs` equal to `size` it
-/// combines.
+/// combines. The pinned test fonts need not map the Hebrew letter: what the layout compares is the
+/// style a piece draws with, and its glyph is `.notdef` in either case.
 #[test]
 fn combine_uses_ordinary_text_when_its_pieces_draw_at_different_sizes() {
-    let Some(family) = ["DejaVu Sans", "Liberation Sans", "Open Sans", "Noto Sans Hebrew", "Arial", "Tahoma"].into_iter().find(|f| {
-        let r = wordcraft_fonts::word::resolve(f, false, false);
-        !r.substituted && r.face.covers('a') && r.face.covers('א')
-    }) else {
-        eprintln!("skipped: needs an installed font covering Latin and Hebrew");
-        return;
-    };
+    crate::test_fonts();
     let chr = |size_cs: f32| wordcraft_doc::CharProps {
-        font: Some(family.into()),
-        font_cs: Some(family.into()),
+        font: Some("Source Sans 3".into()),
         size: Some(20.0),
         size_cs: Some(size_cs),
         east_asian_layout: Some(EastAsianLayout { combine: Some(true), combine_brackets: Some(CombineBrackets::None), ..Default::default() }),
