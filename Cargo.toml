@@ -3,6 +3,15 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
+[workspace.metadata.cl]
+# Port build loop (craft-ui-port-kit): every member but xtask, so the baseline covers the
+# non-UI crates whose framework dependencies the next pin moves too.
+selection = ["wordcraft", "wordcraft-ui-egui", "wordcraft-web", "wordcraft-cli", "wordcraft-control-key", "wordcraft-doc", "wordcraft-docbin", "wordcraft-docx", "wordcraft-engine", "wordcraft-fonts", "wordcraft-formats", "wordcraft-geom", "wordcraft-layout", "wordcraft-mcp", "wordcraft-pdf", "wordcraft-render", "wordcraft-zotero"]
+tracked = ["egui", "eframe", "wordcraft-ui-egui"]
+unset_env = ["CARGO_INCREMENTAL", "WORDCRAFT_REQUIRE_WINRES", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_REQUIRED", "CRAFT_PROOF_EMBED"]
+run_slots = 3
+test_threads = 4
+
 [workspace.package]
 version = "0.18.1"
 edition = "2024"
@@ -24,19 +33,24 @@ wordcraft-pdf = { path = "crates/pdf" }
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
-# craft-proof is storytold/craft-libs main at the merge of #590 (ca-ES-valencia reads the ca-valencia
-# pack), after #589 (French elision suggestions first) and #497 (flag-based compounding), which also
-# has #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font store's
-# `language-pack` kind is #486 (CP4.1).
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "01315d9c92b5b0e69082d35ca56099461a1efd45", version = "=0.1.0" }
-craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
-craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
+# craft-proof is storytold/craft-libs main at 93dac78c. That tree has #590 (ca-ES-valencia
+# reads the ca-valencia pack), #589 (French elision suggestions first), #497 (flag-based
+# compounding), #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font
+# store's `language-pack` kind is #486 (CP4.1).
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
-wordcraft-metafile = { path = "crates/metafile" }
+craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0", default-features = false }
+craft-ui-test-kit = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
@@ -66,19 +80,37 @@ wuff = "0.2.9"
 # `forbid(unsafe_code)` in its default build, no_std-capable (builds for wasm), BSD-3-Clause/MIT.
 brotli-decompressor = "5"
 vello_cpu = "0.2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
-craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", version = "=0.1.0", default-features = false, features = ["write"] }
-# craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
-quick-xml = "0.41"
-zip = { version = "3", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0", default-features = false, features = ["write"] }
+
+craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-rtf = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0", features = ["doc"] }
+craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-flow = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-odf = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0", features = ["text"] }
+craft-markdown = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-html = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0", features = ["flow"] }
+craft-latex = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-math = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-mime = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0", features = ["detect"] }
+craft-sheet = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
+craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a", version = "=0.1.0" }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
 miniz_oxide = "0.9"
 cfb = "0.15"
 # Legacy text encodings (GBK/GB18030, Big5, Shift_JIS, EUC-KR, single-byte code pages) for plain
-# text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause) and its
-# detector chardetng (Apache-2.0 OR MIT), both pure Rust (Firefox's).
+# text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause), pure
+# Rust (Firefox's). Detection is craft-mime's `detect` feature.
 encoding_rs = "0.8"
+# chardetng (Apache-2.0 OR MIT): only the formats test oracle for the old detector uses it directly.
 chardetng = "1"
 # Password-protected (agile-encrypted) Word documents: pure-Rust RustCrypto primitives.
 aes = "0.9"
@@ -106,6 +138,8 @@ arboard = { version = "3.7", default-features = false, features = ["wayland-data
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# cargo llvm-cov sets `--cfg coverage`; timing tests skip themselves under its instrumentation.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
@@ -133,20 +167,30 @@ codegen-units = 16
 debug = 0
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
+# The framework's patches, which Cargo does not carry over to dependents: its vendored crates from craft-libs,
+# and the egui and winit forks it builds with.
 [patch.crates-io]
-krilla = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "750a9bdd575b494055d7fb65b91f978b8eff651a" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
