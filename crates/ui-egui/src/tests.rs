@@ -23,6 +23,15 @@ mod dialogs_tests;
 #[path = "tests/ribbon.rs"]
 mod ribbon_tests;
 
+/// The native caption uses the compiled application name with and without a document.
+#[test]
+fn native_window_title_uses_the_compiled_application_name() {
+    let app = app();
+    assert!(app.window_title().ends_with(crate::build_config::app_name()));
+    assert_eq!(crate::windows::title("Synthetic", false), format!("Synthetic - {}", crate::build_config::app_name()));
+    assert_eq!(crate::windows::title("Synthetic", true), format!("Synthetic • - {}", crate::build_config::app_name()));
+}
+
 fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
 }
@@ -517,6 +526,124 @@ fn script_pick(files: &ScriptedFiles, picked: Option<String>) {
         Some(p) => Picked::Paths(vec![std::path::PathBuf::from(p)]),
         None => Picked::Cancelled,
     });
+}
+
+/// A fitted label survives long names and the exact-width boundary without overflowing.
+#[test]
+fn title_elision_retains_a_fitting_build_label() {
+    let width = |text: &str| text.chars().count() as f32;
+    let title = "Document sintetic șțăîâ ".repeat(20);
+    let shown = chrome::fitted_title(&title, " (Preview)", 24.0, width);
+    assert!(shown.ends_with("… (Preview)"));
+    assert!(width(&shown) <= 24.0);
+    for available in [10.0, 10.5] {
+        let shown = chrome::fitted_title(&title, " (Preview)", available, width);
+        assert_eq!(shown, " (Preview)", "omit the ellipsis when only the label fits");
+        assert!(width(&shown) <= available);
+    }
+    assert_eq!(chrome::fitted_title(&title, " (Preview)", 0.0, width), "");
+    assert_eq!(chrome::fitted_title("Notes", "", 24.0, width), "Notes");
+    assert_eq!(chrome::fitted_title("Document1 — Not saved", "", 12.0, width), "Document1 —…");
+    let narrow = chrome::fitted_title(&title, " (A very long build label)", 12.0, width);
+    assert_eq!(narrow, "(A very lon…");
+    assert!(width(&narrow) <= 12.0);
+}
+
+/// Saving state and the distribution label survive a long name, including Unicode names.
+#[test]
+fn title_elision_preserves_save_state_before_the_document_name() {
+    let width = |text: &str| text.chars().count() as f32;
+    let name = "Note sintetice șțăîâ ".repeat(30);
+    for state in [" — Saved", " — Edited", " — Not saved", " — Salvat"] {
+        for label in ["", " (Preview)"] {
+            let suffix = format!("{state}{label}");
+            let available = width(&suffix) + 8.0;
+            let shown = chrome::fitted_document_title(&name, state, label, available, width);
+            assert!(shown.ends_with(&suffix), "{shown:?}");
+            assert!(shown.contains('…'));
+            assert!(width(&shown) <= available);
+            assert_eq!(chrome::fitted_document_title("Note", state, label, 100.0, width), format!("Note{suffix}"));
+        }
+    }
+}
+
+/// An empty-window title protects the same label, even when only the label fits.
+#[test]
+fn title_elision_keeps_the_empty_window_distribution_label() {
+    let width = |text: &str| text.chars().count() as f32;
+    for available in [10.0, 12.0, 15.0] {
+        let shown = chrome::fitted_document_title("WordCraft", "", " (Preview)", available, width);
+        assert!(shown.ends_with(" (Preview)"), "{shown:?}");
+        assert!(width(&shown) <= available);
+    }
+    let narrow = chrome::fitted_document_title("Document", " — Not saved", " (Preview)", 12.0, width);
+    assert!(narrow.ends_with(" (Preview)"));
+    assert!(width(&narrow) <= 12.0);
+    assert_eq!(chrome::fitted_document_title("Document", " — Not saved", " (Preview)", 0.0, width), "");
+}
+
+/// All title-bar inputs have accessible names. Clicking the title opens Rename Document, the
+/// Rename button saves a new name, Escape cancels, a long name stays clickable, and rename
+/// leaves the document clean.
+#[test]
+fn title_and_account_buttons_work() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    let suffix = if build_config::BUILD_LABEL.is_empty() { String::new() } else { format!(" ({})", build_config::BUILD_LABEL) };
+    let mut h = harness(app());
+    h.run_steps(6);
+    assert!(h.unnamed_widgets().is_empty(), "chrome inputs have accessible names: {:?}", h.unnamed_widgets());
+    h.check_accessibility();
+    h.get_by_role_and_label(Role::Button, &format!("Document1 — Not saved{suffix}")).click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().dialog_host.open_dialogs().iter().find_map(|d| d.key.as_deref().filter(|key| *key == "renameDocument")),
+        Some("renameDocument")
+    );
+    assert!(h.unnamed_widgets().is_empty(), "the document-name field is labelled: {:?}", h.unnamed_widgets());
+    h.get_by_role_and_label(Role::Button, "Rename").click();
+    h.run_steps(2);
+    assert!(!h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("renameDocument")));
+    assert!(h.state().session.file_name.is_none());
+    assert!(!h.state().session.dirty);
+    h.get_by_role_and_label(Role::Button, &format!("Document1 — Not saved{suffix}")).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Document name").click();
+    h.run_steps(1);
+    h.event(egui::Event::Key {
+        key: egui::Key::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers { command: true, ..Default::default() },
+    });
+    h.event(egui::Event::Text("Project notes".into()));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Rename").click();
+    h.run_steps(2);
+    assert!(!h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("renameDocument")));
+    assert_eq!(h.state().title_stem(), "Project notes");
+    assert_eq!(h.state().default_save_name(), "Project notes.docx");
+    assert!(h.state().session.doc.core.title.is_empty());
+    assert!(!h.state().session.dirty);
+    // A long name remains clickable, and Escape leaves it unchanged.
+    let long_name = "Notes ".repeat(25);
+    h.state_mut().run("file.rename", json!({"name": long_name})).unwrap();
+    h.run_steps(2);
+    h.get(By::new().role(Role::Button).label_contains("Notes Notes")).click();
+    h.run_steps(2);
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("renameDocument")));
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert!(!h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("renameDocument")));
+    assert_eq!(h.state().title_stem(), long_name.trim());
+    let account_name = h.state().session.author.clone();
+    h.get_by_role_and_label(Role::Button, &account_name).click();
+    h.run_steps(2);
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.backstage_page, "options");
+    assert_eq!(h.state().ui.options_pane, "general");
+    assert!(h.query_by_label("User name:").is_some());
 }
 
 /// The status bar's text, while it shows (sh.A3).

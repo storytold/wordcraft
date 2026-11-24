@@ -29,6 +29,7 @@ macro_rules! tl {
 pub mod a11y;
 pub mod a11y_pane;
 pub mod backstage;
+pub mod build_config;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;

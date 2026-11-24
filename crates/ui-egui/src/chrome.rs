@@ -22,6 +22,8 @@ pub(crate) struct ChromeOpen {
     pub(crate) search: bool,
     /// How the title bar's controls at the end fit the room the leading controls leave them.
     pub(crate) title_fit: Fit,
+    /// Free title width measured after the bar lays out its controls.
+    pub(crate) title_room: Option<f32>,
     /// How the status bar's controls fit the room the page leaves them.
     pub(crate) status_fit: Fit,
 }
@@ -128,6 +130,48 @@ pub(crate) fn qat_enabled(ctx: &egui::Context, app: &WordApp, id: &str) -> bool 
 /// The Undo list's rows, newest first: each step named as the Undo button's tooltip names it.
 pub(crate) fn undo_list_rows(app: &WordApp) -> Vec<String> {
     app.session.undo_history().into_iter().map(|l| tl!(l).to_string()).collect()
+}
+
+/// Elide the document title before sacrificing the compiled distribution label.
+/// If the label alone does not fit, show an elided label instead of painting into controls.
+pub(crate) fn fitted_title(title: &str, suffix: &str, available: f32, width: impl Fn(&str) -> f32) -> String {
+    let (title, suffix) = if width(suffix) > available { (suffix.trim_start(), "") } else { (title, suffix) };
+    let mut shown: String = title.chars().take(240).collect();
+    if width(&format!("{shown}{suffix}")) > available {
+        if width(&format!("…{suffix}")) > available {
+            return suffix.to_string();
+        }
+        while !shown.is_empty() && width(&format!("{shown}…{suffix}")) > available {
+            shown.pop();
+        }
+        shown.push('…');
+    }
+    shown.push_str(suffix);
+    shown
+}
+
+/// Shorten the document name first, retaining the save state and distribution label when they
+/// fit. If those alone exceed the space, shorten the state before the label.
+pub(crate) fn fitted_document_title(name: &str, state: &str, label: &str, available: f32, width: impl Fn(&str) -> f32) -> String {
+    let suffix = format!("{state}{label}");
+    if width(&suffix) <= available {
+        // Shorten raw text first: removing the closing PDI of an already isolated name would
+        // accidentally put the status and label inside its bidi isolate.
+        let display = |text: &str| format!("{}{suffix}", craft::i18n::file_name(text, interface_direction()));
+        let mut shown: String = name.chars().take(240).collect();
+        if width(&display(&shown)) > available {
+            if width(&display("…")) > available {
+                return suffix;
+            }
+            while !shown.is_empty() && width(&display(&format!("{shown}…"))) > available {
+                shown.pop();
+            }
+            shown.push('…');
+        }
+        display(&shown)
+    } else {
+        fitted_title(state.trim_start(), label, available, width)
+    }
 }
 
 /// What fills the screen (#1678): the usual window, Focus (the document on black, a slim bar to

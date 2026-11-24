@@ -1044,6 +1044,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: an empty paragraph after a document's leading floating table takes no space before |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | #5196 title follow-up: A long document name is shortened before its save state and distribution label. An empty-window title protects the label too. If the state and label cannot both fit, the state is shortened before the label. Synthetic width boundaries and native headless title checks cover this policy; full Windows/Linux GUI qualification remains open. |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
@@ -1501,3 +1502,5 @@ MATH glyphs that reference the same construction now share its immutable variant
 ### Format Painter integration refresh, 2026-10-30
 
 Single-click release applies the armed painter to the target word without trailing spaces and disarms it. Explicit selections retain their scope (#1455, partial). Source and UI regressions are retained after the canvas/input module split. Earlier Windows pointer and browser qualification are historical; current-head hosted validation is pending, and native shortcut/Mint qualification is not newly claimed.
+
+> 2026-11-15 · #5196 integration: preserve cancellable file dialogs, updater lifecycle methods and both translation/title regression paths; enforce startup build policy once in its setter. No new native qualification or readiness change.
