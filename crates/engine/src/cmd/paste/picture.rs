@@ -64,9 +64,9 @@ pub(super) fn draw(s: &Session, frag: &Fragment, dpi: f32) -> Result<CopyPicture
         [] => return Err(nothing_to_draw()),
         _ => return Err(CmdError::Failed("the copy is too long to paste as a picture; copy less of it".into())),
     };
-    // Drawn as a page image draws (no proofing marks, tracked changes as Track Changes Options
-    // show them), on white paper.
-    let opts = crate::io_ext::page_image_options(&crate::cmd::file::export_options(s, &json!({"markup": false})));
+    // Drawn as a page image draws (no proofing marks, tracked changes marked as Track Changes
+    // Options mark them on screen), on white paper.
+    let opts = crate::io_ext::page_image_options(&crate::cmd::file::export_options(s, &json!({})));
     let paper = opts.paper_of(&doc);
     // Where the copy is drawn, found coarsely over the whole page…
     let whole = Rect::new(0.0, 0.0, page.w, page.h);

@@ -154,8 +154,9 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             let dpi = picture::dpi(v)?;
             let frag = s.clipboard.clone().ok_or_else(|| CmdError::Failed("the clipboard is empty".into()))?;
             let pic = picture::draw(s, &frag, dpi)?;
-            let data = super::insert::base64_encode(&pic.png);
-            let mut r = super::insert::picture(s, &json!({"data": data, "width": pic.width}))?;
+            // Drawn for the caret's column: fitted to it, not to the first section's.
+            let column = super::page::sect(s).text_width();
+            let mut r = super::insert::place_picture_within(s, pic.png, Some(pic.width), "", column)?;
             r["pastedAs"] = json!(fmt);
             r["dpi"] = json!(dpi);
             return Ok(r);

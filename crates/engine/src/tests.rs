@@ -2198,6 +2198,30 @@ fn paste_special_pastes_our_own_copy_as_a_picture_at_a_dpi() {
     );
 }
 
+/// #7743: a picture of the copy is fitted to the column it was drawn for, the caret's section,
+/// even when the first section is narrower.
+#[test]
+fn a_picture_of_the_copy_keeps_its_size_in_a_wider_section() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Narrow"}));
+    run(&mut s, "layout.margins", json!({"left": 200.0, "right": 200.0}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "layout.break", json!({"kind": "nextPage"}));
+    run(&mut s, "layout.margins", json!({"left": 36.0, "right": 36.0}));
+    run(&mut s, "text.insert", json!({"text": "Wide"}));
+    let narrow = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap();
+    let wide = crate::cmd::page::sect(&s).text_width();
+    assert!(wide > narrow + 100.0, "{wide} vs {narrow}");
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Mon"}));
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let r = run(&mut s, "edit.pasteSpecial", json!({"as": "picture"}));
+    let width = r["width"].as_f64().unwrap() as f32;
+    assert!(width > narrow, "{width} pt, fitted to the caret's {wide} pt column, not the first section's {narrow} pt");
+}
+
 /// #7743: the resolution changes the picture's pixels, not its size on the page.
 #[test]
 fn a_picture_of_the_copy_keeps_its_size_at_any_dpi() {
