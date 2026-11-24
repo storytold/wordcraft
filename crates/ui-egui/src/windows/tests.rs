@@ -544,3 +544,58 @@ fn nul_in_the_document_title_never_reaches_an_os_window_title() {
         }
     }
 }
+
+/// Issue #117: a viewport command schedules a repaint, so resending an unchanged window title every
+/// frame would keep the app redrawing at the monitor's refresh rate while idle. The window host
+/// deduplicates `SetTitle` per viewport so idle frames emit no `ViewportCommand::Title`.
+#[test]
+fn window_title_is_sent_only_when_it_changes() {
+    let mut rig = Rig::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    let titles = |rig: &mut Rig, a: &mut WordApp| {
+        rig.frame(a);
+        rig.commands.iter().filter(|(_, c)| matches!(c, ViewportCommand::Title(_))).count()
+    };
+    // The title goes out on the first frame that sets it.
+    assert_eq!(titles(&mut rig, &mut a), 1, "first frame sends the window title");
+    assert_eq!(titles(&mut rig, &mut a), 0, "subsequent idle frame sends no title");
+    assert_eq!(titles(&mut rig, &mut a), 0, "steady idle sends no title");
+    a.run("text.insert", json!({"text": "edit"})).unwrap();
+    assert_eq!(titles(&mut rig, &mut a), 1, "dirty document changes the title stem, sending it once");
+    assert_eq!(titles(&mut rig, &mut a), 0, "steady state after edit sends no title");
+}
+
+/// When the root window closes and another open window is promoted into the root viewport, the
+/// root viewport receives the promoted window's title (per-viewport deduplication, not per-window)
+/// and sends no further title commands while idle.
+#[test]
+fn root_viewport_receives_promoted_windows_title_after_root_closes() {
+    let mut rig = Rig::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    rig.frames(&mut a, 2);
+    assert_eq!(a.window_title(), super::title("Document1", false));
+
+    a.run("file.new", json!({})).unwrap();
+    let promoted = a.windows.shown();
+    let promoted_title = a.window_title();
+    assert_eq!(promoted_title, super::title("Document2", false));
+    rig.frames(&mut a, 2);
+    assert_eq!(a.window_count(), 2);
+
+    rig.close(ViewportId::ROOT);
+    rig.frame(&mut a);
+    assert_eq!((a.window_count(), a.windows.root.get()), (1, promoted), "the remaining window moves into the root viewport");
+    let root_titles: Vec<&str> = rig
+        .commands
+        .iter()
+        .filter_map(|(v, c)| match c {
+            ViewportCommand::Title(t) if *v == ViewportId::ROOT => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(root_titles, [promoted_title.as_str()], "root viewport receives the promoted window's title");
+
+    rig.frame(&mut a);
+    let idle_titles = rig.commands.iter().filter(|(v, c)| *v == ViewportId::ROOT && matches!(c, ViewportCommand::Title(_))).count();
+    assert_eq!(idle_titles, 0, "idle frame after promotion sends no duplicate title");
+}
