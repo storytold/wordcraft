@@ -1691,13 +1691,60 @@ mod tests {
             let tree = settled(&mut a, &ctx);
             let shown = bounds_of(&tree, row).expect("the row stays listed");
             // The row's bounds stop at the list's visible edge, and the reason may run past it, so the reason starts
-            // inside the row.
-            let says_why = tree.nodes.iter().any(|(_, n)| {
+            // inside the row. It is at least as wide as the row's Install, so it has room to be read.
+            let reason = tree.nodes.iter().find(|(_, n)| {
                 n.label().is_some_and(|l| l.contains("Only you"))
-                    && n.bounds().is_some_and(|b| b.x1 > b.x0 && b.x0 >= shown.x0 && b.x1 <= shown.x1 && b.y0 >= shown.y0 && b.y0 < shown.y1)
+                    && n.bounds()
+                        .is_some_and(|b| b.width() >= install.width() && b.x0 >= shown.x0 && b.x1 <= shown.x1 && b.y0 >= shown.y0 && b.y0 < shown.y1)
             });
             let why: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.label().is_some_and(|l| l.contains("Only you"))).map(|(_, n)| n.bounds()).collect();
-            assert!(says_why, "{row}'s row ({shown:?}) says why: {why:?}");
+            let reason =
+                reason.map(|(id, _)| *id).unwrap_or_else(|| panic!("{row}'s row ({shown:?}) says why, as wide as Install ({install:?}): {why:?}"));
+            // Scrolled into view, the whole reason fits inside the list's visible area: the list's bounds cut to the
+            // picker's, below the Search field and above the Close footer (the list's own bounds run on past the
+            // picker when it scrolls, and the picker's bounds take in its footer).
+            let visible = |tree: &egui::accesskit::TreeUpdate| {
+                let find = |role: egui::accesskit::Role, label: &str| {
+                    tree.nodes.iter().find(|(_, n)| n.role() == role && n.label() == Some(label)).and_then(|(_, n)| n.bounds())
+                };
+                let list = find(egui::accesskit::Role::List, "Languages").expect("the list");
+                let picker = find(egui::accesskit::Role::Dialog, "Add a language").expect("the picker");
+                let in_picker = |label: &str| {
+                    tree.nodes
+                        .iter()
+                        .filter(|(_, n)| n.label() == Some(label))
+                        .filter_map(|(_, n)| n.bounds())
+                        .find(|b| b.x0 >= picker.x0 && b.x1 <= picker.x1 && b.y0 >= picker.y0 && b.y1 <= picker.y1)
+                };
+                let search = in_picker("Search").expect("the picker's Search field");
+                let close = in_picker("Close").expect("the picker's Close button");
+                (list.y0.max(picker.y0).max(search.y1), list.y1.min(picker.y1).min(close.y0), list)
+            };
+            let mut tree = tree;
+            let mut seen = None;
+            for _ in 0..20 {
+                let (top, bottom, list) = visible(&tree);
+                let b = tree.nodes.iter().find(|(id, _)| *id == reason).and_then(|(_, n)| n.bounds()).expect("the reason stays shown");
+                seen = Some((b, top, bottom));
+                if b.y0 >= top && b.y1 <= bottom {
+                    break;
+                }
+                let delta = if b.y1 > bottom { bottom - b.y1 } else { top - b.y0 };
+                let center = egui::pos2(((list.x0 + list.x1) / 2.0) as f32, ((top + bottom) / 2.0) as f32);
+                let wheel = egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, delta as f32),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Default::default(),
+                };
+                frame(&mut a, &ctx, vec![egui::Event::PointerMoved(center), wheel]);
+                tree = settled(&mut a, &ctx);
+            }
+            assert!(
+                seen.is_some_and(|(b, top, bottom)| b.y0 >= top && b.y1 <= bottom),
+                "{row}'s reason fits inside the list's visible area (reason, top, bottom): {seen:?}"
+            );
         }
     }
 
