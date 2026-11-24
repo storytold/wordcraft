@@ -120,8 +120,9 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, allowed: bool) {
     // views have it.
     if out.output.activated.is_some_and(|pane| pane != active) && app.session.document_id() == document {
         switch(app, &mut split);
-        // The press focused the pane's own stop at the pass's end: the page takes the keyboard after it.
-        app.canvas.focus_page_after_pass();
+        // The page takes the keyboard from its next pass, once it shows as the pane worked in (`take_window_state`
+        // asked for it): its editor is a focus stop only then. A request made before that pass would focus the page
+        // as it was registered last, without its editor, and typed text would reach nothing.
     }
     // A command run on the page may have shown another document (its state started afresh): the other pane goes
     // with it.
