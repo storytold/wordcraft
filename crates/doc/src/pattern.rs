@@ -95,12 +95,16 @@ impl PagePattern {
         let mut t = PatternTile::default();
         let preset = self.safe_preset();
         if let Some(pct) = preset.strip_prefix("pct").and_then(|p| p.parse::<u32>().ok()) {
-            // 16 slots, filled in a scattered order so a scan line doesn't come out first.
-            let count = ((pct.min(100) * 16 + 50) / 100) as usize;
+            // Cells of a twentieth of the tile, four across and five down, each filled whole so
+            // the marks' area is the preset's own percentage. (Dots in a lattice top out at the
+            // 78% a circle-in-square packing reaches, and the fixed radius covered only 30% at
+            // pct50.) Filled in a scattered order, stepping 7 of the 20 cells from the fifth:
+            // a scan line doesn't come out first, and pct5's one cell sits inside the tile
+            // rather than in a corner.
+            let count = ((pct.min(100) * 20 + 50) / 100) as usize;
             for k in 0..count {
-                let i = (k * 5) % 16;
-                let (x, y) = ((i % 4) as f32, (i / 4) as f32);
-                t.dots.push([(x + 0.5) / 4.0, (y + 0.5) / 4.0, 0.11]);
+                let i = (k * 7 + 5) % 20;
+                t.rects.push([(i % 4) as f32 * 0.25, (i / 4) as f32 * 0.2, 0.25, 0.2]);
             }
             return t;
         }
@@ -125,15 +129,17 @@ impl PagePattern {
                 t.strokes.push([0.0, 1.0, 1.0, 0.0, 0.12]);
                 t.strokes.push([0.0, 0.0, 1.0, -1.0, 0.12]);
             }
+            // Small grid's cells are half Large grid's: lines at 0.25 and 0.75 of the tile make
+            // four cells, one line through the middle makes one. Thinner ink as the cells tighten.
             "smGrid" => {
-                t.strokes.push([0.5, 0.0, 0.5, 1.0, 0.06]);
-                t.strokes.push([0.0, 0.5, 1.0, 0.5, 0.06]);
+                t.strokes.push([0.25, 0.0, 0.25, 1.0, 0.06]);
+                t.strokes.push([0.75, 0.0, 0.75, 1.0, 0.06]);
+                t.strokes.push([0.0, 0.25, 1.0, 0.25, 0.06]);
+                t.strokes.push([0.0, 0.75, 1.0, 0.75, 0.06]);
             }
             "lgGrid" => {
-                t.strokes.push([0.25, 0.0, 0.25, 1.0, 0.08]);
-                t.strokes.push([0.75, 0.0, 0.75, 1.0, 0.08]);
-                t.strokes.push([0.0, 0.25, 1.0, 0.25, 0.08]);
-                t.strokes.push([0.0, 0.75, 1.0, 0.75, 0.08]);
+                t.strokes.push([0.5, 0.0, 0.5, 1.0, 0.08]);
+                t.strokes.push([0.0, 0.5, 1.0, 0.5, 0.08]);
             }
             "dotGrid" => {
                 for (x, y) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
@@ -207,5 +213,44 @@ mod tests {
                 assert_eq!(d, (r + c) % 2 == 0, "row {r} col {c} alternates");
             }
         }
+    }
+
+    /// The share of a unit tile a tile's marks ink: rects by w×h, dots by πr², strokes by their
+    /// length times width. It adds each mark's area without subtracting one laid over another,
+    /// so it is exact only for tiles whose marks don't overlap; the presets the tests below ask
+    /// about are like that.
+    fn coverage(t: &PatternTile) -> f32 {
+        let rects: f32 = t.rects.iter().map(|r| r[2] * r[3]).sum();
+        let dots: f32 = t.dots.iter().map(|d| std::f32::consts::PI * d[2] * d[2]).sum();
+        let strokes: f32 = t.strokes.iter().map(|s| (s[2] - s[0]).hypot(s[3] - s[1]) * s[4]).sum();
+        rects + dots + strokes
+    }
+
+    /// A percentage preset inks its own share of the tile. The old fixed-radius dots covered
+    /// 30.4% at pct50 and 53.2% at pct90, so every fill from the pane came out lighter than its
+    /// label. The tolerance is five percentage points either way: the PDF and the screen repeat
+    /// this tile, and Word's own dithered presets don't land on their label either.
+    #[test]
+    fn percentage_presets_ink_their_share_of_the_tile() {
+        for (preset, want) in [("pct5", 5.0), ("pct10", 10.0), ("pct25", 25.0), ("pct50", 50.0), ("pct75", 75.0), ("pct90", 90.0)] {
+            let ink = coverage(&PagePattern { preset: preset.into(), ..Default::default() }.tile()) * 100.0;
+            assert!((ink - want).abs() <= 5.0, "{preset} inks {ink:.1}% of the tile, not {want}%");
+        }
+    }
+
+    /// Small grid's cells are half Large grid's: four cells a tile against one. The two
+    /// geometries used to be swapped, so Large grid drew the smaller cells.
+    #[test]
+    fn small_grid_has_more_cells_than_large_grid() {
+        let cells = |preset: &str| {
+            let t = PagePattern { preset: preset.into(), ..Default::default() }.tile();
+            // One stroke per grid line, so the lines of each axis are that axis's cell count.
+            let columns = t.strokes.iter().filter(|s| s[0] == s[2]).count();
+            let rows = t.strokes.iter().filter(|s| s[1] == s[3]).count();
+            columns * rows
+        };
+        assert_eq!(cells("smGrid"), 4, "Small grid is four cells a tile");
+        assert_eq!(cells("lgGrid"), 1, "Large grid is one cell a tile");
+        assert!(cells("smGrid") > cells("lgGrid"), "Small grid's cells are the tighter ones");
     }
 }
