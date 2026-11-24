@@ -43,8 +43,16 @@ pub enum DraftFill {
         end: Rgb,
         angle: f32,
         transparency: f32,
+        /// Whether the user moved the transparency slider: only then does Apply replace every
+        /// stop's own transparency. Moving it and moving it back still counts as an edit, so a
+        /// multi-stop gradient is not silently restored to its old values.
+        transparency_touched: bool,
         /// The document's own stops, so Apply keeps interior colours and per-stop transparencies.
         stops: Vec<GradStop>,
+        /// The document's gradient geometry (linear at an angle, or a path). Apply keeps it, so
+        /// editing a colour does not turn a path gradient into a linear one or drop its tile and
+        /// flip; the direction controls appear only for a linear gradient.
+        kind: GradientKind,
     },
     Picture {
         path: Option<String>,
@@ -96,7 +104,7 @@ impl Draft {
                 _ => 90.0,
             };
             let transparency = stops.iter().map(|s| s.transparency).sum::<f32>() / stops.len().max(1) as f32;
-            DraftFill::Gradient { start, end, angle, transparency, stops }
+            DraftFill::Gradient { start, end, angle, transparency, transparency_touched: false, stops, kind: g.kind }
         } else if let Some(p) = &s.page_pattern {
             DraftFill::Pattern { preset: p.preset.clone(), fore: p.fore, back: p.back, transparency: p.transparency }
         } else if let Some(c) = s.page_color {
@@ -111,17 +119,16 @@ impl Draft {
     /// else the media key already in the document).
     /// The gradient's stops as the page draws them: the document's own stops (2 to 8), with the
     /// endpoint colours from the start/end pickers; fewer or more stops fall back to the two
-    /// endpoints. The one transparency slider moves every stop only once the user changes it, so
-    /// an untouched multi-stop gradient keeps its own values.
-    pub(crate) fn gradient_stops(stops: &[GradStop], start: Rgb, end: Rgb, transparency: f32) -> Vec<GradStop> {
+    /// endpoints. The one transparency slider moves every stop only once the user has moved it, so
+    /// an untouched multi-stop gradient keeps its own per-stop values.
+    pub(crate) fn gradient_stops(stops: &[GradStop], start: Rgb, end: Rgb, transparency: f32, touched: bool) -> Vec<GradStop> {
         if (2..=8).contains(&stops.len()) {
-            let mean = stops.iter().map(|s| s.transparency).sum::<f32>() / stops.len() as f32;
             let mut kept: Vec<GradStop> = stops.to_vec();
             kept[0].color = start;
             if let Some(last) = kept.last_mut() {
                 last.color = end;
             }
-            if (transparency - mean).abs() > 0.01 {
+            if touched {
                 for s in &mut kept {
                     s.transparency = transparency;
                 }
@@ -136,12 +143,17 @@ impl Draft {
         match &self.fill {
             DraftFill::None => json!({"fill": "none"}),
             DraftFill::Solid { color } => json!({"fill": "solid", "color": color.hex()}),
-            DraftFill::Gradient { start, end, angle, transparency, stops } => {
-                let list: Vec<serde_json::Value> = Self::gradient_stops(stops, *start, *end, *transparency)
+            DraftFill::Gradient { start, end, angle: _, transparency, transparency_touched, stops, kind } => {
+                let list: Vec<serde_json::Value> = Self::gradient_stops(stops, *start, *end, *transparency, *transparency_touched)
                     .iter()
                     .map(|s| json!({"pos": s.pos, "color": s.color.hex(), "transparency": s.transparency}))
                     .collect();
-                json!({"fill": "gradient", "angle": angle, "stops": list})
+                // A path gradient has no angle: sending none keeps the document's path, tile and
+                // flip (the engine carries them over), where an angle would make it linear.
+                match kind {
+                    GradientKind::Linear { angle: a, .. } => json!({"fill": "gradient", "angle": a, "stops": list}),
+                    GradientKind::Path { .. } => json!({"fill": "gradient", "stops": list}),
+                }
             }
             DraftFill::Picture { path, media, data, tile, transparency, .. } => {
                 let mut p = json!({"fill": "picture", "tile": tile, "transparency": transparency});
@@ -173,9 +185,10 @@ fn fill_fingerprint(doc: &wordcraft_doc::Document) -> u64 {
     h.finish()
 }
 
-/// The pane was closed: read the document's fill afresh next time it opens.
+/// The pane was closed: drop the draft, including any unsaved picture bytes a browser selection
+/// put in it, and read the document's fill afresh next time it opens.
 pub fn forget(app: &mut WordApp) {
-    app.background.loaded = false;
+    app.background = Draft::default();
 }
 
 /// The pane, while open.
@@ -204,7 +217,15 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     if usize::from(pick) != kind {
         app.background.fill = match pick {
             1 => DraftFill::Solid { color: accent },
-            2 => DraftFill::Gradient { start: accent, end: Rgb::WHITE, angle: 90.0, transparency: 0.0, stops: Vec::new() },
+            2 => DraftFill::Gradient {
+                start: accent,
+                end: Rgb::WHITE,
+                angle: 90.0,
+                transparency: 0.0,
+                transparency_touched: false,
+                stops: Vec::new(),
+                kind: GradientKind::Linear { angle: 90.0, scaled: false },
+            },
             3 => DraftFill::Picture { path: None, media: None, data: None, data_key: None, tile: false, transparency: 0.0 },
             4 => DraftFill::Pattern { preset: "ltDnDiag".into(), fore: Rgb::BLACK, back: Rgb::WHITE, transparency: 0.0 },
             _ => DraftFill::None,
@@ -215,50 +236,65 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     let palette = Palette::of(app);
     let mut picking = false;
     let mut more: Option<DraftColor> = None;
+    // "No Color" in the solid field means no fill; the other fields require a colour.
+    let mut clear_fill = false;
     match &mut app.background.fill {
         DraftFill::None => {
             Text::new(Label::from(tl!("No page background."))).show(ui);
         }
         DraftFill::Solid { color } => {
-            let out = color_button(ui, &palette, tl!("Color"), *color);
+            let out = color_button(ui, &palette, tl!("Color"), *color, &ColorFieldEmpty::NoColor);
             if let Some(c) = out.picked {
                 *color = c;
             }
+            clear_fill = out.cleared;
             more = out.more.then_some(DraftColor::Solid);
         }
-        DraftFill::Gradient { start, end, angle, transparency, .. } => {
-            let out = color_button(ui, &palette, tl!("Start"), *start);
+        DraftFill::Gradient { start, end, angle, transparency, transparency_touched, kind, .. } => {
+            let out = color_button(ui, &palette, tl!("Start"), *start, &ColorFieldEmpty::Required);
             if let Some(c) = out.picked {
                 *start = c;
             }
             if out.more {
                 more = Some(DraftColor::Start);
             }
-            let out = color_button(ui, &palette, tl!("End"), *end);
+            let out = color_button(ui, &palette, tl!("End"), *end, &ColorFieldEmpty::Required);
             if let Some(c) = out.picked {
                 *end = c;
             }
             if out.more {
                 more = Some(DraftColor::End);
             }
-            let entries: Vec<Entry<u8>> = DIRECTIONS.iter().enumerate().map(|(i, (label, _))| Entry::new(i as u8, tl!(label))).collect();
-            let mut picked = None;
-            Field::new(Label::from(tl!("Direction"))).show(ui, |ui, _| {
-                picked = Select::new(tl!("Direction"), Bind::given(direction_of(*angle) as u8), &entries).show(ui).events.committed().copied();
-            });
-            if let Some(i) = picked {
-                *angle = DIRECTIONS[usize::from(i)].1;
+            // A path gradient has no direction: showing the controls would silently turn it into
+            // a linear one on the next Apply.
+            if let GradientKind::Linear { scaled, .. } = *kind {
+                let entries: Vec<Entry<u8>> = DIRECTIONS.iter().enumerate().map(|(i, (label, _))| Entry::new(i as u8, tl!(label))).collect();
+                let mut picked = None;
+                Field::new(Label::from(tl!("Direction"))).show(ui, |ui, _| {
+                    picked = Select::new(tl!("Direction"), Bind::given(direction_of(*angle) as u8), &entries).show(ui).events.committed().copied();
+                });
+                if let Some(i) = picked {
+                    *angle = DIRECTIONS[usize::from(i)].1;
+                }
+                let mut a = Some(f64::from(*angle));
+                NumberField::new(Label::from(tl!("Angle")), Bind::bound(&mut a)).unit_kind(UnitKind::Degrees).range(0.0..=359.9).show(ui);
+                if let Some(v) = a
+                    && v.is_finite()
+                {
+                    *angle = (v as f32).clamp(0.0, 359.9);
+                }
+                *kind = GradientKind::Linear { angle: *angle, scaled };
             }
-            let mut a = Some(f64::from(*angle));
-            NumberField::new(Label::from(tl!("Angle")), Bind::bound(&mut a)).unit_kind(UnitKind::Degrees).range(0.0..=359.9).show(ui);
-            if let Some(v) = a
-                && v.is_finite()
-            {
-                *angle = (v as f32).clamp(0.0, 359.9);
-            }
-            let mut t = f64::from(*transparency);
+            let before = *transparency;
+            let mut t = f64::from(before);
             SliderField::new(tl!("Transparency"), Bind::bound(&mut t), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
-            *transparency = (t as f32).clamp(0.0, 100.0);
+            let now = (t as f32).clamp(0.0, 100.0);
+            // Moving the slider and moving it back is still an edit: only an untouched slider
+            // leaves a multi-stop gradient's own per-stop transparencies alone.
+            if (now - before).abs() > 0.01 {
+                *transparency_touched = true;
+            }
+            *transparency = now;
         }
         DraftFill::Picture { path, media, data, tile, transparency, .. } => {
             let chosen = path.is_some() || media.is_some() || data.is_some();
@@ -286,14 +322,14 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
             if chosen != *preset {
                 *preset = chosen;
             }
-            let out = color_button(ui, &palette, tl!("Foreground"), *fore);
+            let out = color_button(ui, &palette, tl!("Foreground"), *fore, &ColorFieldEmpty::Required);
             if let Some(c) = out.picked {
                 *fore = c;
             }
             if out.more {
                 more = Some(DraftColor::Fore);
             }
-            let out = color_button(ui, &palette, tl!("Background"), *back);
+            let out = color_button(ui, &palette, tl!("Background"), *back, &ColorFieldEmpty::Required);
             if let Some(c) = out.picked {
                 *back = c;
             }
@@ -304,6 +340,9 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
             SliderField::new(tl!("Transparency"), Bind::bound(&mut t), 0.0..=100.0).unit_kind(UnitKind::Percent).show(ui);
             *transparency = (t as f32).clamp(0.0, 100.0);
         }
+    }
+    if clear_fill {
+        app.background.fill = DraftFill::None;
     }
     if let Some(field) = more {
         open_more_colors(app, field, field.current(&app.background.fill));
@@ -418,16 +457,21 @@ struct ColorButtonOut {
     picked: Option<Rgb>,
     /// More Colors… was chosen: the pane opens the Colors dialog for the field.
     more: bool,
+    /// "No Color" was chosen: the field emptied.
+    cleared: bool,
 }
 
 /// The pane's colour field: a swatch and drop-down holding the theme colours and More Colors….
-fn color_button(ui: &mut Ui, palette: &Palette, label: &str, c: Rgb) -> ColorButtonOut {
+/// `empty` is the field's empty choice: a solid fill offers "No Color" (it means no fill); a
+/// start, end, pattern foreground or background needs a colour and offers none.
+fn color_button(ui: &mut Ui, palette: &Palette, label: &str, c: Rgb, empty: &ColorFieldEmpty) -> ColorButtonOut {
     let mut value = c.hex();
-    let out = color_field(ui, &Label::from(label.to_string()), &mut value, &ColorFieldEmpty::NoColor, palette);
+    let out = color_field(ui, &Label::from(label.to_string()), &mut value, empty, palette);
     if out.more_colors {
-        return ColorButtonOut { picked: None, more: true };
+        return ColorButtonOut { picked: None, more: true, cleared: false };
     }
-    ColorButtonOut { picked: out.changed.then(|| Rgb::parse(&value)).flatten().filter(|n| *n != c), more: false }
+    let cleared = out.changed && value.is_empty();
+    ColorButtonOut { picked: out.changed.then(|| Rgb::parse(&value)).flatten().filter(|n| *n != c), more: false, cleared }
 }
 
 /// Opens the Colors dialog for a pane colour field; its answer goes into the draft.
@@ -496,7 +540,9 @@ fn pattern_swatch(ui: &mut Ui, preset: &str, fore: Rgb, back: Rgb, on: bool) -> 
         Stroke::new(if on { 2.0 } else { 1.0 }, if on { t.accent } else { t.border }),
         egui::StrokeKind::Inside,
     );
-    let name = wordcraft_doc::PATTERN_PRESETS.iter().find(|p| p.name == preset).map_or(preset, |p| p.label);
+    // One translation serves the screen reader and the hover text, so a non-English interface
+    // does not announce English preset names.
+    let name = tl!(wordcraft_doc::PATTERN_PRESETS.iter().find(|p| p.name == preset).map_or(preset, |p| p.label));
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, name));
     resp.on_hover_text(name)
 }
@@ -544,17 +590,23 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
         DraftFill::Solid { color } => {
             p.rect_filled(rect, 0.0, crate::theme::c32(*color));
         }
-        DraftFill::Gradient { start, end, angle, transparency, stops } => {
+        DraftFill::Gradient { start, end, angle, transparency, transparency_touched, stops, .. } => {
             // The preview draws the same stops Apply sends: endpoint pickers over the document's
             // own stops, not just the two endpoints.
-            paint_gradient(p, rect, &Draft::gradient_stops(stops, *start, *end, *transparency), *angle);
+            paint_gradient(p, rect, &Draft::gradient_stops(stops, *start, *end, *transparency, *transparency_touched), *angle);
         }
         DraftFill::Pattern { preset, fore, back, transparency } => {
+            // The page applies transparency once, to the whole opaque pattern; compositing the
+            // background and then the marks separately would darken every mark that sits on the
+            // background. Mix each colour with the white page at this alpha instead.
             let alpha = 1.0 - transparency.clamp(0.0, 100.0) / 100.0;
-            p.rect_filled(rect, 0.0, crate::theme::c32(*back).gamma_multiply(alpha));
+            let over_white = |c: Rgb| {
+                let mix = |v: u8| (f32::from(v) * alpha + 255.0 * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
+                Color32::from_rgb(mix(c.0), mix(c.1), mix(c.2))
+            };
+            p.rect_filled(rect, 0.0, over_white(*back));
             let src = PagePattern { preset: preset.clone(), fore: *fore, back: *back, transparency: 0.0 }.tile();
-            let ink = crate::theme::c32(*fore).gamma_multiply(alpha);
-            paint_pattern_marks(p, rect, &src, 10.0, ink);
+            paint_pattern_marks(p, rect, &src, 10.0, over_white(*fore));
         }
         DraftFill::Picture { .. } => paint_picture_preview(app, ui, p, rect),
     }
@@ -597,7 +649,9 @@ fn paint_gradient(p: &egui::Painter, rect: Rect, stops: &[GradStop], angle: f32)
                 break;
             }
         }
-        let f = if right.pos > left.pos { (at - left.pos) / (right.pos - left.pos) } else { 1.0 };
+        // The engine pads outside the endpoint stops with their own colour, so interpolation must
+        // not extrapolate past them either.
+        let f = if right.pos > left.pos { ((at - left.pos) / (right.pos - left.pos)).clamp(0.0, 1.0) } else { 1.0 };
         let lerp = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * f).round().clamp(0.0, 255.0) as u8;
         let alpha = (1.0 - (left.transparency + (right.transparency - left.transparency) * f).clamp(0.0, 100.0) / 100.0).clamp(0.0, 1.0);
         let mix = |over: u8, under: u8| (f32::from(over) * alpha + f32::from(under) * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;

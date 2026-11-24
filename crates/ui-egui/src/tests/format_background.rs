@@ -147,12 +147,54 @@ fn apply_keeps_a_multi_stop_gradient() {
     let params = edited.params();
     assert_eq!(params["stops"][0]["color"].as_str(), Some("010203"));
     assert_eq!(params["stops"][1]["color"].as_str(), Some("00FF00"), "the middle stop is untouched");
-    // Moving the transparency slider moves every stop.
-    if let crate::format_background::DraftFill::Gradient { transparency, .. } = &mut edited.fill {
+    // An untouched slider leaves every stop's own transparency alone.
+    assert_eq!(params["stops"][1]["transparency"].as_f64(), Some(20.0), "the mean is shown, not applied");
+    // Moving the slider moves every stop, and moving it back again still counts as an edit: the
+    // draft is not silently restored to the document's old values.
+    if let crate::format_background::DraftFill::Gradient { transparency, transparency_touched, .. } = &mut edited.fill {
         *transparency = 60.0;
+        *transparency_touched = true;
     }
     let params = edited.params();
     assert!(params["stops"].as_array().is_some_and(|s| s.iter().all(|s| s["transparency"].as_f64() == Some(60.0))), "{params}");
+    if let crate::format_background::DraftFill::Gradient { transparency, .. } = &mut edited.fill {
+        *transparency = 20.0;
+    }
+    let params = edited.params();
+    assert!(
+        params["stops"].as_array().is_some_and(|s| s.iter().all(|s| s["transparency"].as_f64() == Some(20.0))),
+        "back to 20 applies 20 everywhere: {params}"
+    );
+}
+
+/// A path gradient keeps its kind, tile, flip and rotation on Apply: the pane sends no angle for
+/// it, so editing a colour cannot turn it into a linear gradient or drop its geometry.
+#[test]
+fn apply_keeps_a_path_gradients_geometry() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind, PathShape};
+    use wordcraft_doc::wordart::GradStop;
+    let mut d = wordcraft_doc::Document::new();
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: wordcraft_doc::Rgb(255, 0, 0), transparency: 0.0 },
+            GradStop { pos: 100.0, color: wordcraft_doc::Rgb(0, 0, 255), transparency: 0.0 },
+        ],
+        kind: GradientKind::Path { shape: PathShape::Circle, focus: [40.0, 40.0, 40.0, 40.0] },
+        tile: Some([5.0, 5.0, 90.0, 90.0]),
+        rot_with_shape: true,
+        flip: GradientFlip::X,
+    });
+    let draft = crate::format_background::Draft::from_doc(&d);
+    let params = draft.params();
+    assert!(params.get("angle").is_none(), "a path gradient has no angle to send: {params}");
+    assert_eq!(params["fill"].as_str(), Some("gradient"));
+    // A linear gradient still sends its angle.
+    let mut linear = d.clone();
+    if let Some(g) = &mut linear.settings.page_gradient {
+        g.kind = GradientKind::Linear { angle: 270.0, scaled: true };
+    }
+    let params = crate::format_background::Draft::from_doc(&linear).params();
+    assert_eq!(params["angle"].as_f64(), Some(270.0));
 }
 
 /// The draft preview paints the stops Apply sends: the document's interior stops with the
@@ -165,14 +207,14 @@ fn preview_paints_the_multi_stop_gradient_apply_sends() {
         GradStop { pos: 50.0, color: wordcraft_doc::Rgb(0, 255, 0), transparency: 0.0 },
         GradStop { pos: 100.0, color: wordcraft_doc::Rgb(0, 0, 255), transparency: 0.0 },
     ];
-    let painted = crate::format_background::Draft::gradient_stops(&stops, wordcraft_doc::Rgb(1, 2, 3), wordcraft_doc::Rgb(4, 5, 6), 0.0);
+    let painted = crate::format_background::Draft::gradient_stops(&stops, wordcraft_doc::Rgb(1, 2, 3), wordcraft_doc::Rgb(4, 5, 6), 0.0, false);
     assert_eq!(painted.len(), 3, "the interior stop survives");
     assert_eq!(
         (painted[0].color, painted[1].color, painted[2].color),
         (wordcraft_doc::Rgb(1, 2, 3), wordcraft_doc::Rgb(0, 255, 0), wordcraft_doc::Rgb(4, 5, 6))
     );
     // Fewer than two document stops fall back to the two endpoints.
-    let fallback = crate::format_background::Draft::gradient_stops(&[], wordcraft_doc::Rgb::BLACK, wordcraft_doc::Rgb::WHITE, 25.0);
+    let fallback = crate::format_background::Draft::gradient_stops(&[], wordcraft_doc::Rgb::BLACK, wordcraft_doc::Rgb::WHITE, 25.0, false);
     assert_eq!(fallback.iter().map(|s| s.pos).collect::<Vec<_>>(), [0.0, 100.0]);
 }
 

@@ -290,9 +290,17 @@ fn page_fill(s: &mut Session, v: &Value) -> CmdResult {
         }
         "gradient" => {
             let stops = gradient_stops(s, v)?;
-            let angle = p::f32(v, "angle").unwrap_or(90.0).rem_euclid(360.0);
-            let g =
-                Gradient { stops, kind: GradientKind::Linear { angle, scaled: false }, tile: None, rot_with_shape: false, flip: GradientFlip::None };
+            // A request that names no angle keeps the document's gradient geometry: the pane sends
+            // one only for a linear gradient, so applying a colour to a path gradient (or one with
+            // a tile or flip) leaves its kind, tile, flip and rotation alone.
+            let previous = s.doc.settings.page_gradient.clone();
+            let scaled = previous.as_ref().is_some_and(|g| matches!(g.kind, GradientKind::Linear { scaled: true, .. }));
+            let kind = match p::f32(v, "angle") {
+                Some(angle) => GradientKind::Linear { angle: angle.rem_euclid(360.0), scaled },
+                None => previous.as_ref().map_or(GradientKind::Linear { angle: 90.0, scaled: false }, |g| g.kind),
+            };
+            let (tile, rot_with_shape, flip) = previous.as_ref().map_or((None, false, GradientFlip::None), |g| (g.tile, g.rot_with_shape, g.flip));
+            let g = Gradient { stops, kind, tile, rot_with_shape, flip };
             // A gradient with one colour is that colour: Word writes a solid fill then.
             if g.stops.len() < 2 {
                 let color = g.stops.first().map_or(Rgb::WHITE, |s| s.color);

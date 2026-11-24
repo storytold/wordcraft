@@ -82,6 +82,47 @@ fn multi_stop_gradients_are_sorted_and_keep_their_own_transparency() {
     assert!(matches!(g.kind, wordcraft_doc::fill::GradientKind::Linear { angle, .. } if (angle - 40.0).abs() < 0.01));
 }
 
+/// A gradient fill that names no angle keeps the document's gradient geometry: the pane sends an
+/// angle only for a linear gradient, so applying a colour to a path gradient (or one with a tile,
+/// flip or rotation) does not turn it into a plain linear one.
+#[test]
+fn a_gradient_without_an_angle_keeps_the_documents_geometry() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind, PathShape};
+    let mut s = s();
+    s.doc.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            wordcraft_doc::wordart::GradStop { pos: 0.0, color: wordcraft_doc::Rgb(255, 0, 0), transparency: 0.0 },
+            wordcraft_doc::wordart::GradStop { pos: 100.0, color: wordcraft_doc::Rgb(0, 0, 255), transparency: 10.0 },
+        ],
+        kind: GradientKind::Path { shape: PathShape::Circle, focus: [40.0, 40.0, 40.0, 40.0] },
+        tile: Some([5.0, 5.0, 90.0, 90.0]),
+        rot_with_shape: true,
+        flip: GradientFlip::X,
+    });
+    run(
+        &mut s,
+        "design.pageFill",
+        json!({"fill": "gradient", "stops": [
+            {"pos": 0, "color": "00FF00"},
+            {"pos": 100, "color": "FF00FF"},
+        ]}),
+    );
+    let g = s.doc.settings.page_gradient.as_ref().expect("gradient");
+    assert_eq!(g.kind, GradientKind::Path { shape: PathShape::Circle, focus: [40.0, 40.0, 40.0, 40.0] }, "the path is kept");
+    assert_eq!((g.tile, g.rot_with_shape, g.flip), (Some([5.0, 5.0, 90.0, 90.0]), true, GradientFlip::X), "tile, rotation and flip are kept");
+    // Naming an angle is the user choosing a direction: it becomes linear at that angle.
+    run(
+        &mut s,
+        "design.pageFill",
+        json!({"fill": "gradient", "angle": 270, "stops": [
+            {"pos": 0, "color": "00FF00"},
+            {"pos": 100, "color": "FF00FF"},
+        ]}),
+    );
+    let g = s.doc.settings.page_gradient.as_ref().expect("gradient");
+    assert!(matches!(g.kind, GradientKind::Linear { angle, .. } if (angle - 270.0).abs() < 0.01), "{:?}", g.kind);
+}
+
 /// A picture fill from an existing `media` entry checks that the bytes are a picture: a DOCX
 /// picture relationship can hold anything, and a refusal must leave the old fill in place.
 #[test]
