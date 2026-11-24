@@ -188,8 +188,12 @@ mod tests {
         fixture.by_role(Role::TABLE).first().expect("the credits table shows").rect
     }
 
+    /// Verifies that WordCraft's `about(AboutTab::Models)` (`AboutLayout::Listed` with the baked
+    /// `MODELS` table) fits within the dialog and refits its `Company` column when narrowed.
+    /// The original drag-then-content-change refit check (#5588) belongs in `craft-libs` and is
+    /// tracked in `storytold/craft-libs#3372`.
     #[test]
-    fn a_changed_fit_replaces_the_column_widths() {
+    fn models_table_refits_to_narrower_window() {
         let wide = egui::vec2(1400.0, 800.0);
         let narrow = egui::vec2(660.0, 800.0);
 
