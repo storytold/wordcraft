@@ -207,6 +207,27 @@ mod tests {
     }
 
     #[test]
+    fn single_image_offer_with_rtf_prefers_readable_pixels() {
+        use craft::platform::clipboard::{HTML, RGBA8, RTF};
+
+        let url = "https://example.test/picture.png";
+        let html = Flavor::new(HTML, format!(r#"<img src="{url}">"#).into_bytes());
+        let rtf = Flavor::new(RTF, br"{\rtf1\ansi Image fallback}".to_vec());
+        let malformed = Flavor::new(RGBA8, vec![1, 0, 0, 0, 1, 0, 0, 0]);
+        let paste = |bitmap| {
+            let mut app = app_holding(&[Flavor::text(url), html.clone(), rtf.clone(), bitmap]);
+            app.run("edit.paste", json!({})).unwrap();
+            app
+        };
+
+        assert_eq!(pictures(&mut paste(rgba8(4, 4, 200))), 1);
+
+        let mut app = paste(malformed);
+        assert_eq!(pictures(&mut app), 0);
+        assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Image fallback");
+    }
+
+    #[test]
     fn ordinary_paste_preserves_urls_rich_selections_and_unreadable_images() {
         use craft::platform::clipboard::{HTML, RGBA8};
 

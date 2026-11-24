@@ -125,10 +125,10 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     if let Some(rtf) = read_markup(&clip, RTF) {
         o.insert("rtf".into(), Value::String(rtf));
     }
-    if ordinary && o.get("rtf").is_none() {
+    if ordinary {
         let text = o.get("text").and_then(Value::as_str);
         let html = o.get("html").and_then(Value::as_str);
-        if text.is_none() && html.is_none() {
+        if text.is_none() && html.is_none() && !o.contains_key("rtf") {
             return paste_picture::paste(app);
         }
         if app.session.math.is_none()
