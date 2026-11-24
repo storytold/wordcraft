@@ -274,18 +274,14 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         DraftFill::Pattern { preset, fore, back, transparency } => {
             Text::new(Label::from(tl!("Pattern"))).show(ui);
             let mut chosen = preset.clone();
-            egui::ScrollArea::vertical().max_height(96.0).show(ui, |ui| {
-                egui::Grid::new("formatBackground.patterns").num_columns(4).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
-                    for (i, p) in wordcraft_doc::PATTERN_PRESETS.iter().enumerate() {
-                        let on = *preset == p.name;
-                        if pattern_swatch(ui, p.name, *fore, *back, on).clicked() {
-                            chosen = p.name.to_string();
-                        }
-                        if i % 4 == 3 {
-                            ui.end_row();
-                        }
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                for p in wordcraft_doc::PATTERN_PRESETS.iter() {
+                    let on = *preset == p.name;
+                    if pattern_swatch(ui, p.name, *fore, *back, on).clicked() {
+                        chosen = p.name.to_string();
                     }
-                });
+                }
             });
             if chosen != *preset {
                 *preset = chosen;
@@ -319,7 +315,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     preview(app, ui);
     ui.add_space(8.0);
-    ui.horizontal(|ui| {
+    Stack::new().show(ui, |ui, _| {
         if Button::new(tl!("Apply").to_string()).show(ui).clicked() {
             let params = app.background.params();
             if app.run("design.pageFill", params).is_ok() {
@@ -349,15 +345,16 @@ fn lang_kind(f: &DraftFill) -> usize {
 }
 
 /// Word's gradient directions, as the angle they run at (0° left to right, 90° top to bottom).
+/// The names stay short so the drop-down fits the narrowest task pane.
 const DIRECTIONS: [(&str, f32); 8] = [
-    ("Linear Down", 90.0),
-    ("Linear Up", 270.0),
-    ("Linear Right", 0.0),
-    ("Linear Left", 180.0),
-    ("Diagonal down-right", 45.0),
-    ("Diagonal up-right", 315.0),
-    ("Diagonal down-left", 135.0),
-    ("Diagonal up-left", 225.0),
+    ("Down", 90.0),
+    ("Up", 270.0),
+    ("Right", 0.0),
+    ("Left", 180.0),
+    ("Down-right", 45.0),
+    ("Up-right", 315.0),
+    ("Down-left", 135.0),
+    ("Up-left", 225.0),
 ];
 
 fn direction_of(angle: f32) -> usize {
