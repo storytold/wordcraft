@@ -485,7 +485,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
         let multi_para = a.path != b.path;
         let props_fmt = (!navigated_any && ranged && (multi_para || to > from)) || caret_props.as_ref() == Some(&path);
-        let props_num = (!navigated_any && ranged && (whole_body || path != b.path || to > from) && (path != a.path || from == 0))
+        let props_num = (!navigated_any && ranged && (whole_body || (multi_para && (path != b.path || to > from))) && (path != a.path || from == 0))
             || caret_num.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), mark, (props_num, props_fmt), accept)?;
         if !navigated_any && ranged {
