@@ -226,4 +226,57 @@ mod tests {
 
         control.shut_down();
     }
+
+    /// Post-#7101 adaptation of `params_key_is_only_a_secret_for_auth` (#124, tracked under #7317 / #7729):
+    /// `craft::automation::server` replaced legacy `"key"` / `params.key` secrets with one-time
+    /// per-connection `auth` using `params.token` (`docs/control-protocol.md`, Token).
+    #[test]
+    fn params_token_is_only_a_secret_for_auth() {
+        let (port, rx, control) = boot();
+
+        // `params.token` does not authenticate non-`auth` methods; the connection is refused and closed.
+        let mut c = Conn::open(port);
+        let resp = c.call(&format!(r#"{{"id":1,"method":"document.inspect","params":{{"token":"{TOKEN}"}}}}"#));
+        assert_eq!(resp, serde_json::json!({"id": 1, "ok": false, "error": "authentication required"}));
+        assert!(c.closed());
+        assert!(rx.try_recv().is_err(), "unauthenticated request with params.token must not reach the UI");
+        drop(c);
+
+        // Legacy `params.key` does not authenticate non-`auth` methods either.
+        let mut c = Conn::open(port);
+        let resp = c.call(&format!(r#"{{"id":2,"method":"document.inspect","params":{{"key":"{TOKEN}"}}}}"#));
+        assert_eq!(resp, serde_json::json!({"id": 2, "ok": false, "error": "authentication required"}));
+        assert!(c.closed());
+        assert!(rx.try_recv().is_err(), "unauthenticated request with params.key must not reach the UI");
+        drop(c);
+
+        // Legacy `params.key` is no longer accepted by `auth` either (requires `params.token` or challenge `proof`).
+        let mut c = Conn::open(port);
+        let resp = c.call(&format!(r#"{{"id":3,"method":"auth","params":{{"key":"{TOKEN}"}}}}"#));
+        assert_eq!(resp, serde_json::json!({"id": 3, "ok": false, "error": "authentication required"}));
+        assert!(c.closed());
+        assert!(rx.try_recv().is_err(), "failed auth with legacy params.key must not reach the UI");
+        drop(c);
+
+        // Authenticate once with `params.token`; `params.key` and `params.token` on subsequent
+        // non-`auth` methods are forwarded untouched as ordinary parameters.
+        let mut c = Conn::open(port);
+        let auth_resp = c.call(&format!(r#"{{"id":1,"method":"auth","params":{{"token":"{TOKEN}"}}}}"#));
+        assert_eq!(auth_resp, serde_json::json!({"id": 1, "ok": true, "result": {"authenticated": true}}));
+
+        c.send(r#"{"id":2,"method":"ui.key","params":{"key":"Enter"}}"#);
+        let req = answer(&rx);
+        assert_eq!((req.method.as_str(), &req.params), ("ui.key", &serde_json::json!({"key": "Enter"})));
+        let r = c.recv();
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(2)));
+
+        c.send(r#"{"id":3,"method":"document.inspect","params":{"token":"ordinary"}}"#);
+        let req = answer(&rx);
+        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &serde_json::json!({"token": "ordinary"})));
+        let r = c.recv();
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(3)));
+        drop(c);
+
+        control.shut_down();
+    }
 }
