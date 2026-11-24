@@ -114,7 +114,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui) {
                 run = Some(("readAloud.previous", json!({})));
             }
             let (icon, tip) = if state == State::Playing { ("pause", tl!("Pause")) } else { ("play", tl!("Play")) };
-            if IconButton::new(crate::icons::id(icon)).label(tip).tooltip(tip).show(ui).clicked() {
+            if IconButton::new(crate::icons::spec(icon)).label(tip).tooltip(tip).show(ui).clicked() {
                 run = Some(("readAloud.playPause", json!({})));
             }
             let next = IconButton::new(IconId::new("step_forward"))

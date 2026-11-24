@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use craft::behavior::{IconId, keyed};
+use craft::behavior::keyed;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::contract::{
@@ -12,7 +12,7 @@ use craft::ui::contract::{
 use craft::ui::layout_components::Stack;
 use craft::ui::list::ThumbAspect;
 use craft::ui::notices::Notice;
-use craft::ui::primitives::{ContentPainterCx, IconSpec};
+use craft::ui::primitives::ContentPainterCx;
 use craft::ui::runtime::env::Label;
 use craft::ui::shell::{Template, ThumbKey};
 use craft::ui::style::DataColor;
@@ -64,7 +64,7 @@ fn read_listing(app: &WordApp) -> PersonalListing {
 pub(super) fn paint_personal_card(cx: &ContentPainterCx, rect: Rect) {
     cx.data_shapes([Shape::rect_filled(rect, 2.0, Color32::WHITE)]);
     let icon_rect = Rect::from_center_size(rect.center(), vec2(44.0, 44.0));
-    cx.icon(icon_rect, &IconSpec::svg(IconId::new("documentTemplate")).data_color(DataColor::new(Color32::from_gray(150))));
+    cx.icon(icon_rect, &crate::icons::spec("documentTemplate").data_color(DataColor::new(Color32::from_gray(150))));
 }
 
 /// New: the whole template gallery with a search box, then the personal templates (#2852); no
