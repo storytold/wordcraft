@@ -38,6 +38,8 @@ nightly_init() {
 # the built binary answers `--version` with `build_flavor::version`, i.e. "WordCraft <version>
 # (nightly-v1)". A stable compile here would print the Cargo version and fail the check below.
 nightly_compile_gui() {
+  # The guard sits here as well as in the entrypoints: no caller may compile with signing material.
+  nightly_refuse_signing_env
   (cd "$ROOT" && WORDCRAFT_BUILD_CHANNEL=nightly-v1 WORDCRAFT_VERSION="$VERSION" \
     cargo build --release --locked -p wordcraft --target "$NIGHTLY_RUST_TARGET")
   NIGHTLY_GUI="$CARGO_TARGET_DIR/$NIGHTLY_RUST_TARGET/release/wordcraft"
