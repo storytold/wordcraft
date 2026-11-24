@@ -22,7 +22,7 @@ use craft::ui::runtime::env::Label;
 use craft::ui::style::DataColor;
 use craft::ui::table::Table;
 use craft::ui::text::TextField;
-use craft::ui::tile_grid::{Tile, TileGrid};
+use craft::ui::tile_grid::{GridZoom, Tile, TileGrid};
 use egui::{Color32, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -273,7 +273,7 @@ fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bo
     let source = keyed(&positions, |i| *i);
     let out = TileGrid::<usize>::new(tl!("Chart types").to_string())
         .thumb_size(ThumbSize::Large)
-        .zoom(1.6)
+        .zoom(GridZoom::Fixed(1.6))
         .aspect(19.0 / 15.0)
         .select(SelectMode::Single)
         .card_columns(3)
