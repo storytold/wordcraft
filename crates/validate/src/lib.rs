@@ -838,16 +838,17 @@ fn check_document(pkg: &Package, acc: &mut Acc) {
 fn check_doctypes(pkg: &Package, acc: &mut Acc) {
     observation_contract! {
         rules: "XML-DOCTYPE";
-        collections: "field.bytes*1,field.content_types*1,field.entries*1";
-        scope: "original prolog of every XML and relationships part, independent of ownership and profile; canonical footnotes relationships paths use existing story classification, diagram layout/colors/quickStyle paths use part identity, and XHTML altChunk targets use existing relationship and content-type evidence";
+        collections: "field.bytes*1,field.content_types*3,field.entries*1";
+        scope: "original prolog of every XML and relationships part, independent of ownership and profile; canonical footnotes relationships paths use existing story classification, diagram layout/colors/quickStyle paths use part identity, XHTML altChunk uses relationship and content-type evidence, custom XML uses relationship targets, and other probed roles use part or relationships-owner content types";
         loss: "unavailable part bytes, undecidable or unsupported encoding, or unreadable prolog";
-        fallback: "The probed matrix contains 40 part-role and declaration-form combinations, 34 with an adverse outcome and six tolerated (corpus/EVIDENCE.md). The tolerated combinations are footnotes relationships in the internal entity and ATTLIST forms, diagram layout, colors, and quickStyle parts in internal entity form, and XHTML altChunk in external identifier form without an internal subset. Canonical footnotes relationships declarations and the tolerated diagram and XHTML altChunk forms receive a structural Warning. Other observed declarations receive an Error. Error grading for unmeasured declaration forms in probed parts and for part roles outside the probed set is an expedient interim pending measurement in a follow-up issue. Existing coverage checks handle unavailable evidence";
+        fallback: "The probed matrix contains 56 part-role and declaration-form combinations, 47 with an adverse outcome and 9 tolerated (corpus/EVIDENCE.md). The tolerated combinations are footnotes relationships and diagram layout, colors, and quickStyle parts in the internal entity and ATTLIST forms, and XHTML altChunk in external identifier form without an internal subset. These combinations receive a structural Warning with ByConstruction evidence. Measured adverse combinations receive an Error with Observed evidence. Error grading with ByConstruction evidence for unmeasured declaration forms in probed parts (for example, the external form in diagram parts) and for part roles outside the probed set is an expedient interim pending measurement in issue #7735. Existing coverage checks handle unavailable evidence";
         package_loss: "independent";
     }
 
     acc.ran("XML-DOCTYPE");
     let mut roles = None;
     let mut alt_chunk_targets = None;
+    let mut custom_xml_targets = None;
     for entry in pkg.entries.iter().filter(|entry| !entry.is_dir && package::is_xml_part(pkg, &entry.name)) {
         let declared = match entry.decoded.as_deref() {
             Some(text) => scan::doctype_in_prolog(text),
@@ -857,27 +858,95 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
             None => None,
         };
         if let Some(form) = declared {
-            let is_footnotes_rels = rels_owner_name(&entry.name).is_some_and(|owner| {
-                entry.name.eq_ignore_ascii_case(&rels_part_name(&owner))
-                    && roles.get_or_insert_with(|| story_roles(pkg)).get(&owner) == Some(&scan::PartRole::Footnotes)
-            });
-            let is_tolerated_form = match form {
-                scan::DoctypeForm::InternalEntity => is_diagram_definition_path(&entry.name),
-                scan::DoctypeForm::ExternalOnly => {
-                    pkg.content_types.of(&entry.name) == Some("application/xhtml+xml")
-                        && alt_chunk_targets
-                            .get_or_insert_with(|| relationship_targets(pkg, "aFChunk"))
-                            .contains(entry.name.to_ascii_lowercase().as_str())
-                }
-                scan::DoctypeForm::Other => false,
-            };
+            use scan::DoctypeForm::{ExternalOnly, InternalAttlist, InternalEntity, Other};
+
+            let rels_owner = rels_owner_name(&entry.name).filter(|owner| entry.name.eq_ignore_ascii_case(&rels_part_name(owner)));
+            let internal_form = matches!(form, InternalEntity | InternalAttlist);
+            let is_tolerated = (internal_form
+                && (is_diagram_definition_path(&entry.name)
+                    || rels_owner
+                        .as_ref()
+                        .is_some_and(|owner| roles.get_or_insert_with(|| story_roles(pkg)).get(owner) == Some(&scan::PartRole::Footnotes))))
+                || (form == ExternalOnly
+                    && pkg.content_types.of(&entry.name) == Some("application/xhtml+xml")
+                    && alt_chunk_targets
+                        .get_or_insert_with(|| relationship_targets(pkg, "aFChunk"))
+                        .contains(entry.name.to_ascii_lowercase().as_str()));
             let message = format!("{} contains a DOCTYPE declaration", entry.name);
-            if is_footnotes_rels || is_tolerated_form {
+            if is_tolerated {
                 acc.add_graded("XML-DOCTYPE", Severity::Warning, Evidence::ByConstruction, Some(entry.name.clone()), message);
-            } else {
+                continue;
+            }
+
+            let is_measured_adverse = match (form, rels_owner.as_deref()) {
+                (Other, _) => false,
+                (InternalEntity | InternalAttlist, _) if entry.name.eq_ignore_ascii_case("_rels/.rels") => true,
+                (InternalEntity | InternalAttlist, Some(owner)) => {
+                    let content_type = pkg.content_types.of(owner);
+                    content_type.is_some_and(package::is_main_content_type)
+                        || content_type == Some(package::CHART_CONTENT_TYPE)
+                        || custom_xml_targets.get_or_insert_with(|| relationship_targets(pkg, "customXml")).contains(owner)
+                        || (form == InternalEntity
+                            && matches!(
+                                content_type,
+                                Some(
+                                    package::HEADER_CONTENT_TYPE
+                                        | package::FOOTER_CONTENT_TYPE
+                                        | package::ENDNOTES_CONTENT_TYPE
+                                        | package::COMMENTS_CONTENT_TYPE
+                                )
+                            ))
+                }
+                (ExternalOnly, Some(_)) => false,
+                (_, None) => {
+                    let content_type = pkg.content_types.of(&entry.name);
+                    is_measured_adverse_doctype(form, content_type)
+                        || (form == InternalEntity
+                            && custom_xml_targets
+                                .get_or_insert_with(|| relationship_targets(pkg, "customXml"))
+                                .contains(entry.name.to_ascii_lowercase().as_str()))
+                }
+            };
+            if is_measured_adverse {
                 acc.add("XML-DOCTYPE", Some(entry.name.clone()), format!("{message}; see corpus/EVIDENCE.md for measured outcomes"));
+            } else {
+                acc.add_graded("XML-DOCTYPE", Severity::Error, Evidence::ByConstruction, Some(entry.name.clone()), message);
             }
         }
+    }
+}
+
+/// The adverse non-relationships roles in the isolated, closure, and forms probe series.
+fn is_measured_adverse_doctype(form: scan::DoctypeForm, content_type: Option<&str>) -> bool {
+    if content_type.is_some_and(package::is_main_content_type) {
+        return true;
+    }
+    match content_type {
+        Some(
+            package::STYLES_CONTENT_TYPE
+            | package::SETTINGS_CONTENT_TYPE
+            | package::FONT_TABLE_CONTENT_TYPE
+            | package::THEME_CONTENT_TYPE
+            | package::NUMBERING_CONTENT_TYPE
+            | "application/vnd.ms-word.stylesWithEffects+xml",
+        ) => true,
+        Some(
+            package::HEADER_CONTENT_TYPE
+            | package::FOOTER_CONTENT_TYPE
+            | package::FOOTNOTES_CONTENT_TYPE
+            | package::ENDNOTES_CONTENT_TYPE
+            | package::COMMENTS_CONTENT_TYPE
+            | package::GLOSSARY_CONTENT_TYPE
+            | package::CHART_CONTENT_TYPE
+            | package::COMMENTS_EXTENDED_CONTENT_TYPE
+            | package::COMMENTS_IDS_CONTENT_TYPE
+            | package::PEOPLE_CONTENT_TYPE
+            | "application/vnd.openxmlformats-package.core-properties+xml"
+            | "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml"
+            | "application/vnd.ms-office.classificationlabels+xml"
+            | "application/vnd.ms-office.webextension+xml",
+        ) => form == scan::DoctypeForm::InternalEntity,
+        _ => false,
     }
 }
 

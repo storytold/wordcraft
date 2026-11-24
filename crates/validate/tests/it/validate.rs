@@ -365,25 +365,27 @@ fn with_doctype(xml: Vec<u8>, declaration: &str) -> String {
 }
 
 #[test]
-fn xml_doctype_is_a_refusal_in_the_main_part() {
+fn xml_doctype_main_part_distinguishes_measured_forms() {
     let internal = r#"<!DOCTYPE w:document [<!ENTITY greeting "hello">]>"#;
     let mut doc = Doc::minimal();
-    for (declaration, text) in [
-        (internal, "&greeting;"),
-        (internal, "hello"),
-        (r#"<!DOCTYPE w:document SYSTEM 'wordcraft-test.dtd'>"#, "hello"),
-        ("<!DOCTYPE\tw:document>", "hello"),
+    for (declaration, text, evidence) in [
+        (internal, "&greeting;", Evidence::Observed),
+        (internal, "hello", Evidence::Observed),
+        (r#"<!DOCTYPE w:document [<!ATTLIST w:document probe CDATA #IMPLIED>]>"#, "hello", Evidence::Observed),
+        (r#"<!DOCTYPE w:document SYSTEM 'wordcraft-test.dtd'>"#, "hello", Evidence::Observed),
+        ("<!DOCTYPE\tw:document>", "hello", Evidence::ByConstruction),
     ] {
         let body = format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
         doc.set("word/document.xml", with_doctype(document_xml(&body), declaration));
         let report = validate(&doc);
         assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
-        assert_eq!(assert_finding(&report, "XML-DOCTYPE", Some("word/document.xml")).severity, Severity::Error);
+        let finding = assert_finding(&report, "XML-DOCTYPE", Some("word/document.xml"));
+        assert_eq!((finding.severity, finding.evidence), (Severity::Error, evidence));
     }
 }
 
 #[test]
-fn xml_doctype_is_a_refusal_in_relationships_and_other_xml_parts() {
+fn xml_doctype_relationships_and_other_xml_parts_distinguish_evidence() {
     let mut doc = Doc::minimal();
     let rel =
         r#"<Relationship Id="rLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="other.docx"/>"#;
@@ -392,8 +394,9 @@ fn xml_doctype_is_a_refusal_in_relationships_and_other_xml_parts() {
     doc.add_with_override("customXml/data.dat", "application/xml", "<!DOCTYPE data><data/>");
     let report = validate(&doc);
     assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
-    for part in ["word/_rels/document.xml.rels", "customXml/data.dat"] {
-        assert_eq!(assert_finding(&report, "XML-DOCTYPE", Some(part)).severity, Severity::Error);
+    for (part, evidence) in [("word/_rels/document.xml.rels", Evidence::Observed), ("customXml/data.dat", Evidence::ByConstruction)] {
+        let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
+        assert_eq!((finding.severity, finding.evidence), (Severity::Error, evidence));
     }
 }
 
@@ -446,7 +449,7 @@ fn xml_doctype_internal_entity_in_diagram_definitions_warns() {
 }
 
 #[test]
-fn xml_doctype_attlist_in_diagram_layout_is_an_error() {
+fn xml_doctype_attlist_in_diagram_layout_warns() {
     let mut doc = Doc::minimal();
     let part = "word/diagrams/layout1.xml";
     doc.add_with_override(
@@ -455,10 +458,26 @@ fn xml_doctype_attlist_in_diagram_layout_is_an_error() {
         r#"<!DOCTYPE dgm:layoutDef [<!ATTLIST dgm:layoutDef name CDATA "sample">]><dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"/>"#,
     );
     let report = validate(&doc);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
+    assert_eq!((finding.severity, finding.evidence), (Severity::Warning, Evidence::ByConstruction));
+    assert_eq!(report.findings.len(), 1, "{report:?}");
+}
+
+#[test]
+fn xml_doctype_external_identifier_in_diagram_layout_has_structural_error_evidence() {
+    let mut doc = Doc::minimal();
+    let part = "word/diagrams/layout1.xml";
+    doc.add_with_override(
+        part,
+        "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
+        r#"<!DOCTYPE dgm:layoutDef SYSTEM "test.dtd"><dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"/>"#,
+    );
+    let report = validate(&doc);
     assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
     let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
-    assert_eq!((finding.severity, finding.evidence), (Severity::Error, Evidence::Observed));
-    assert_eq!(report.findings.len(), 1, "{report:?}");
+    assert_eq!((finding.severity, finding.evidence), (Severity::Error, Evidence::ByConstruction));
+    assert_eq!(serde_json::to_value(finding).unwrap()["evidence"], "ByConstruction");
 }
 
 #[test]

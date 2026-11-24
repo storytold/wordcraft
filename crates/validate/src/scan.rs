@@ -862,8 +862,10 @@ pub(crate) fn decoded_prefix(bytes: &[u8]) -> Option<Cow<'_, str>> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DoctypeForm {
     InternalEntity,
+    InternalAttlist,
     ExternalOnly,
     Other,
 }
@@ -901,7 +903,7 @@ fn doctype_form(decl: &str) -> DoctypeForm {
     }
     let tail = decl[root_end..].trim_start_matches(xml_space);
     if let Some(subset) = tail.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        if subset_has_internal_entity(subset) { DoctypeForm::InternalEntity } else { DoctypeForm::Other }
+        internal_subset_form(subset)
     } else if external_id_only(tail) {
         DoctypeForm::ExternalOnly
     } else {
@@ -926,27 +928,37 @@ fn external_id_only(tail: &str) -> bool {
     split_quoted_literal(system_literal).is_some_and(|(_, rest)| rest.trim_matches(xml_space).is_empty())
 }
 
-/// Look only at top-level declarations so comments and quoted text cannot supply an ENTITY.
-fn subset_has_internal_entity(mut subset: &str) -> bool {
-    while !subset.is_empty() {
+/// Recognize the measured forms from top-level declarations, skipping comments and PIs.
+fn internal_subset_form(mut subset: &str) -> DoctypeForm {
+    let mut form = DoctypeForm::Other;
+    loop {
         subset = subset.trim_start_matches(xml_space);
+        if subset.is_empty() {
+            return form;
+        }
         if let Some(rest) = subset.strip_prefix("<!--") {
-            let Some((_, after)) = rest.split_once("-->") else { return false };
+            let Some((_, after)) = rest.split_once("-->") else { return DoctypeForm::Other };
             subset = after;
         } else if let Some(rest) = subset.strip_prefix("<?") {
-            let Some((_, after)) = rest.split_once("?>") else { return false };
+            let Some((_, after)) = rest.split_once("?>") else { return DoctypeForm::Other };
             subset = after;
         } else if let Some(rest) = subset.strip_prefix("<!") {
-            let Some(end) = find_decl_end(rest.as_bytes(), 0) else { return false };
-            if rest[..end].strip_prefix("ENTITY").filter(|tail| tail.starts_with(xml_space)).and_then(internal_general_entity).is_some() {
-                return true;
+            let Some(end) = find_decl_end(rest.as_bytes(), 0) else { return DoctypeForm::Other };
+            let Some((keyword, tail)) = rest[..end].split_once(xml_space) else { return DoctypeForm::Other };
+            let declaration = match keyword {
+                "ENTITY" if internal_general_entity(tail).is_some() => DoctypeForm::InternalEntity,
+                "ATTLIST" if !tail.trim_matches(xml_space).is_empty() => DoctypeForm::InternalAttlist,
+                _ => return DoctypeForm::Other,
+            };
+            if form != DoctypeForm::Other && form != declaration {
+                return DoctypeForm::Other;
             }
+            form = declaration;
             subset = &rest[end + 1..];
         } else {
-            return false;
+            return DoctypeForm::Other;
         }
     }
-    false
 }
 
 /// The result of scanning the XML declaration for an encoding.
