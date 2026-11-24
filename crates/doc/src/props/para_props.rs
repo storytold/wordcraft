@@ -296,17 +296,21 @@ pub struct Borders {
     pub between: Option<Border>,
     /// Inside vertical (tables).
     pub inside_v: Option<Border>,
+    /// Top-left to bottom-right diagonal (table cells).
+    pub tl2br: Option<Border>,
+    /// Top-right to bottom-left diagonal (table cells).
+    pub tr2bl: Option<Border>,
 }
 
 impl Borders {
     pub fn all(b: Border) -> Borders {
-        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b) }
+        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: Some(b), inside_v: Some(b), tl2br: None, tr2bl: None }
     }
     pub fn box_(b: Border) -> Borders {
-        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: None, inside_v: None }
+        Borders { top: Some(b), left: Some(b), bottom: Some(b), right: Some(b), between: None, inside_v: None, tl2br: None, tr2bl: None }
     }
     pub fn any_visible(&self) -> bool {
-        [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
+        [self.top, self.left, self.bottom, self.right, self.between, self.inside_v, self.tl2br, self.tr2bl].iter().flatten().any(Border::is_visible)
     }
     /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
     /// its room in LibreOffice's layout).
@@ -332,6 +336,12 @@ impl Borders {
         }
         if patch.inside_v.is_some() {
             self.inside_v = patch.inside_v;
+        }
+        if patch.tl2br.is_some() {
+            self.tl2br = patch.tl2br;
+        }
+        if patch.tr2bl.is_some() {
+            self.tr2bl = patch.tr2bl;
         }
     }
 }
