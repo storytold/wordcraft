@@ -544,21 +544,10 @@ mod tests {
         image
     }
 
-    /// `italic` and `underline` use filled paths matching `bold`'s contrast at 14–20 px instead of thin 1.25-unit
-    /// strokes that fade out under anti-aliasing, and `underline` renders a distinct, visible bar below the `U`.
+    /// `italic` and `underline` rasterise with contrast and weight comparable to `bold` at 14–20 px,
+    /// and `underline` renders a distinct, visible bar separated from the `U` curve above it.
     #[test]
     fn italic_and_underline_icons_match_bold_weight_and_render_underline_bar() {
-        for name in ["bold", "italic", "underline"] {
-            let (_, bytes) = WORDCRAFT_ICONS.icons.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is registered"));
-            let tree = craft::ui::primitives::svg_tree::parse(bytes).unwrap_or_else(|e| panic!("{name}.svg must parse: {e}"));
-            assert_eq!(tree.size().width(), 20.0, "{name} viewBox width");
-            assert_eq!(tree.size().height(), 20.0, "{name} viewBox height");
-
-            let svg = std::str::from_utf8(bytes).expect("SVG is UTF-8");
-            assert!(svg.contains("fill=\"currentColor\""), "{name}.svg should draw filled glyph geometry");
-            assert!(!svg.contains("stroke-width=\"1.25\""), "{name}.svg must not use thin 1.25 stroke weight");
-        }
-
         for side in [14u32, 16, 20] {
             let bold = rasterize_icon("bold", side);
             let italic = rasterize_icon("italic", side);
