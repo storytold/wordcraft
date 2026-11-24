@@ -729,6 +729,57 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     assert_eq!(first_cell_shading(h.state()), Some(red), "No Color is undone in one step");
 }
 
+#[test]
+fn table_styles_gallery_uses_large_landscape_thumbnails() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let mut h = tab_harness(app, "Design");
+    let style_set_height = h
+        .query_all(By::new().role(Role::RadioButton).label_contains("Style set:"))
+        .next()
+        .expect("Design › Style Sets renders its large gallery tiles")
+        .rect()
+        .height();
+
+    h.state_mut().run("ui.tab", json!({"tab": "Table Design"})).unwrap();
+    crate::test_harness::frames(&mut h, 3);
+
+    let mut styles: Vec<(bool, String)> = h
+        .state()
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
+        .map(|s| (s.builtin, crate::i18n::style_name(s)))
+        .collect();
+    styles.sort_by_key(|(builtin, _)| *builtin);
+    let expected: Vec<String> = styles.into_iter().take(7).map(|(_, name)| name).collect();
+    assert_eq!(expected.len(), 7, "built-in document has at least seven table styles");
+
+    let tiles: Vec<(String, egui::Rect)> = expected
+        .iter()
+        .filter_map(|name| h.query_all(By::new().role(Role::RadioButton).label(name)).next().map(|node| (name.clone(), node.rect())))
+        .collect();
+    assert_eq!(tiles.len(), expected.len(), "all seven Table Styles tiles render at full ribbon width: {tiles:?}");
+
+    for (name, rect) in &tiles {
+        assert!(
+            rect.height() >= style_set_height - 1.0,
+            "Table Styles tile `{name}` height should be at least Design › Style Sets' Large thumbnail height ({style_set_height}), got {rect:?}"
+        );
+        let ratio = rect.width() / rect.height();
+        assert!(
+            (1.25..=1.75).contains(&ratio),
+            "Table Styles tile `{name}` should use a landscape aspect ratio matching its 3:2 table preview, got {ratio:.2} ({rect:?})"
+        );
+    }
+    assert!(tiles.windows(2).all(|w| w[0].1.max.x <= w[1].1.min.x + 0.01), "Table Styles tiles sit side by side without overlapping: {tiles:?}");
+}
+
 /// #7308: the compact menu and split buttons of Home › Font and Home › Paragraph show their icons
 /// alone (keeping their names for access and tooltips) even in a wide window, leaving room for all
 /// six tiles of the Styles gallery at 1920 pt.
@@ -830,7 +881,7 @@ fn unimplemented_stub_ribbon_buttons_are_disabled() {
     }
 }
 
-/// #7324: Table ribbon menu buttons (Styles, Borders, Delete, AutoFit) bind their command IDs
+/// #7324, #7457: Table ribbon menu buttons (Styles, Borders, Select, Delete, AutoFit) bind their command IDs
 /// so they disable when editing is protected or when no table is active.
 #[test]
 fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
@@ -871,8 +922,13 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
 
     let app_no_table2 = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
     let h_layout_empty = tab_harness(app_no_table2, "Table Layout");
+    assert!(is_disabled(&h_layout_empty, "Select"), "Select button should be disabled when not in table");
     assert!(is_disabled(&h_layout_empty, "Delete"), "Delete button should be disabled when not in table");
     assert!(is_disabled(&h_layout_empty, "AutoFit"), "AutoFit button should be disabled when not in table");
+    assert!(
+        description(&h_layout_empty, "Select").as_deref().unwrap_or("").to_ascii_lowercase().contains("the cursor isn't in a table"),
+        "Select should indicate outside table in disabled hint"
+    );
 
     // 2. With an active table and no protection: buttons are enabled:
     let mut app_table = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
@@ -884,10 +940,11 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
     let mut app_table2 = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     app_table2.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     let h_layout = tab_harness(app_table2, "Table Layout");
+    assert!(!is_disabled(&h_layout, "Select"), "Select button should be enabled in table");
     assert!(!is_disabled(&h_layout, "Delete"), "Delete button should be enabled in table");
     assert!(!is_disabled(&h_layout, "AutoFit"), "AutoFit button should be enabled in table");
 
-    // 3. With an active table under document protection (read-only): buttons are disabled:
+    // 3. With an active table under document protection (read-only): mutating buttons are disabled:
     let mut app_protected_design = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     app_protected_design.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     app_protected_design.session.doc.settings.protection = Some("readOnly".into());
@@ -903,6 +960,7 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
     app_protected_layout.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     app_protected_layout.session.doc.settings.protection = Some("readOnly".into());
     let h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
+    assert!(!is_disabled(&h_prot_layout, "Select"), "Select button should remain enabled under protection");
     assert!(is_disabled(&h_prot_layout, "Delete"), "Delete button should be disabled under protection");
     assert!(is_disabled(&h_prot_layout, "AutoFit"), "AutoFit button should be disabled under protection");
     assert!(
@@ -935,4 +993,67 @@ fn decorative_text_dropdown_renders_compact_wordart_tiles() {
         rect.height(),
         rect.height()
     );
+}
+
+/// #7691: Table Design › Table Style Options aligns its six checkboxes in two columns with a gap
+/// between them and keeps all three rows above the group caption.
+#[test]
+fn table_style_options_align_in_two_columns() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h = tab_harness(app, "Table Design");
+    let rect = |label: &str| h.get_by_role_and_label(Role::CheckBox, label).rect();
+    let header = rect("Header Row");
+    let first_col = rect("First Column");
+    let total = rect("Total Row");
+    let last_col = rect("Last Column");
+    let banded = rect("Banded Rows");
+    let banded_col = rect("Banded Columns");
+    // Left column checkboxes share one left edge, and right column checkboxes share another.
+    assert!(
+        (header.left() - total.left()).abs() < 0.5 && (header.left() - banded.left()).abs() < 0.5,
+        "left column misaligned: {header:?}, {total:?}, {banded:?}"
+    );
+    assert!(
+        (first_col.left() - last_col.left()).abs() < 0.5 && (first_col.left() - banded_col.left()).abs() < 0.5,
+        "right column misaligned: {first_col:?}, {last_col:?}, {banded_col:?}"
+    );
+    // Each row's pair shares the same top edge and stacks vertically with tight spacing.
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let tight_gap = env.tokens.space.gap.tight;
+    let min_col_gap = env.tokens.space.gap.stack;
+    assert!((header.top() - first_col.top()).abs() < 0.5, "row 1 misaligned: {header:?}, {first_col:?}");
+    assert!((total.top() - last_col.top()).abs() < 0.5, "row 2 misaligned: {total:?}, {last_col:?}");
+    assert!((banded.top() - banded_col.top()).abs() < 0.5, "row 3 misaligned: {banded:?}, {banded_col:?}");
+    assert!(header.bottom() <= total.top() && total.bottom() <= banded.top(), "rows overlap: {header:?}, {total:?}, {banded:?}");
+    let row_gap_1 = total.top() - header.bottom();
+    let row_gap_2 = banded.top() - total.bottom();
+    assert!(
+        (row_gap_1 - tight_gap).abs() <= 0.5 && (row_gap_2 - tight_gap).abs() <= 0.5,
+        "rows should remain Gap::Tight ({tight_gap} pt) apart, got {row_gap_1} and {row_gap_2}"
+    );
+    // A horizontal gap at least `space.gap.stack` separates the widest left-column label from the second column.
+    let text_rect = |label: &str| {
+        h.output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("painted text for {label:?}"))
+    };
+    let left_label_max_right =
+        ["Header Row", "Total Row", "Banded Rows"].into_iter().map(|label| text_rect(label).right()).fold(f32::NEG_INFINITY, f32::max);
+    let col_gap = first_col.left() - left_label_max_right;
+    assert!(
+        col_gap >= min_col_gap,
+        "column gap between widest left label and right column too narrow: got {col_gap:.2} pt, expected >= {min_col_gap:.2} pt (left_label_max_right={left_label_max_right}, first_col={first_col:?})"
+    );
+    // All three rows stay above the group's caption.
+    let caption = text_rect("Table Style Options");
+    assert!(banded.bottom() <= caption.top(), "checkboxes collide with group caption: {banded:?} vs {caption:?}");
 }
