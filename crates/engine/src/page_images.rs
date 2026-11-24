@@ -13,9 +13,15 @@ use wordcraft_layout::DocLayout;
 
 use crate::{CmdError, Session, p};
 
-/// The parameters that choose the pages and their resolution: what a request for the save dialog
-/// carries over to the export after it.
-pub const CHOICES: [&str; 4] = ["dpi", "range", "pages", "parity"];
+/// The parameters that choose what a page image is: the pages, the resolution, Print Markup and
+/// strictness. A request for the save dialog carries them over to the export after it, and the
+/// app asks for them in its own dialog only when none is given.
+pub const CHOICES: [&str; 8] = ["dpi", "scale", "page", "range", "pages", "parity", "markup", "strict"];
+
+/// Whether `v` makes any of the [`CHOICES`] (a `null` is no choice).
+pub fn has_choices(v: &Value) -> bool {
+    CHOICES.iter().any(|k| v.get(*k).is_some_and(|x| !x.is_null()))
+}
 /// The resolutions File › Export › Page images offers, DPI.
 pub const DPI_CHOICES: [u32; 6] = [96, 150, 300, 600, 1200, 1500];
 /// The resolution a page image has when none is given, DPI (2 pixels a point).

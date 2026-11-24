@@ -144,7 +144,12 @@ impl WordApp {
         }
         // Web: a page image downloads at once below, so the resolution and pages are asked
         // first here, as the desktop asks through the request (#7743).
-        if self.browser_saves() && id == "file.exportPng" && self.user_origin && params.get("dpi").is_none() && params.get("path").is_none() {
+        if self.browser_saves()
+            && id == "file.exportPng"
+            && self.user_origin
+            && params.get("path").is_none()
+            && !wordcraft_engine::page_images::has_choices(&params)
+        {
             let _ = dialogs::open(self, "exportImages", &json!({}));
             return Ok(json!({"exported": false}));
         }
@@ -505,8 +510,9 @@ impl WordApp {
                 }
                 "exportPdf" => self.export_dialog("pdf"),
                 // File › Export › Page images asks for the resolution and pages first (#7743); a
-                // request that carries them (that dialog's OK, or a script's choice) asks where.
-                "exportPng" if self.user_origin && req.get("dpi").is_none() => {
+                // request that makes any choice of its own (that dialog's OK, a script's page,
+                // scale or strictness) asks only where, and keeps every choice it made.
+                "exportPng" if self.user_origin && !wordcraft_engine::page_images::has_choices(req) => {
                     let _ = dialogs::open(self, "exportImages", &json!({}));
                 }
                 "exportPng" => {

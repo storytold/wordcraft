@@ -2352,6 +2352,12 @@ fn web_page_images_ask_first_then_download_one_page() {
     let width = image::load_from_memory(bytes).unwrap().width();
     assert_eq!(width as f32, (a.session.doc.last_section.page_w * 96.0 / 72.0).ceil(), "96 DPI");
     assert!(a.run("file.exportPng", json!({"dpi": 96, "range": "all"})).is_err(), "two pages, one download");
+    // A page and scale chosen by the caller download as asked, without the dialog.
+    a.run("file.exportPng", json!({"page": 2, "scale": 1.0})).unwrap();
+    let saves = saved(&got.0);
+    let (_, bytes) = saves.last().unwrap();
+    assert_eq!(image::load_from_memory(bytes).unwrap().width() as f32, a.session.doc.last_section.page_w.ceil(), "one pixel a point");
+    assert!(!a.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some("exportImages")));
 }
 
 /// Save hands the opened file back under its own name and format; Save As says so and

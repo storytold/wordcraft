@@ -13979,6 +13979,11 @@ fn export_png_without_a_path_keeps_the_choices_for_the_dialog() {
     let r = s.run("file.exportPng", &json!({"dpi": 600, "range": "all", "pages": null})).unwrap();
     assert_eq!(r["exported"], false);
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "exportPng", "dpi": 600, "range": "all"})));
+    // Every choice that shapes the image goes with it: a page, a scale, strictness, Print Markup.
+    s.run("file.exportPng", &json!({"page": 1, "scale": 1.5, "strict": true, "markup": false})).unwrap();
+    assert_eq!(s.ui_requests.last(), Some(&json!({"open": "exportPng", "page": 1, "scale": 1.5, "strict": true, "markup": false})));
+    assert!(crate::page_images::has_choices(&json!({"page": 2})));
+    assert!(!crate::page_images::has_choices(&json!({"dpi": null, "open": "exportPng"})));
 }
 
 #[test]

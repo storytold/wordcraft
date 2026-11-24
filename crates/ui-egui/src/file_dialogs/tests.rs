@@ -952,3 +952,22 @@ fn many_failed_fonts_end_with_a_count() {
     a.add_fonts(fonts).unwrap();
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// #7743 review: a request that makes its own page-image choices (a page, a scale) asks only
+/// where, and the export keeps those choices; the Export as Images dialog, which would start
+/// over, isn't shown.
+#[test]
+fn page_image_choices_made_by_the_caller_are_kept() {
+    let dir = scratch("page-image-choices");
+    let (mut a, files) = async_app();
+    a.run("text.insert", json!({"text": "One"})).unwrap();
+    a.run("insert.pageBreak", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Two"})).unwrap();
+    a.run("file.exportPng", json!({"page": 2, "scale": 1.0})).unwrap();
+    assert!(!a.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some("exportImages")), "no dialog starting over");
+    assert_eq!(request(&files, 0).kind, PickKind::Save);
+    answer(&files, Some(&dir.join("second.png").to_string_lossy()));
+    let done = a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!(done["page"], 2, "the page asked for");
+    assert_eq!(done["width"].as_f64(), Some(f64::from(a.session.doc.last_section.page_w.ceil())), "one pixel a point");
+}
