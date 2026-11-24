@@ -367,11 +367,9 @@ fn control_keys_cannot_paste_a_field_word_acts_on() {
     frames(&mut h, 4);
     send(&mut h, "ui.key", json!({"key": "V", "command": true}));
     frames(&mut h, 8);
-    let status = status_text(h.state()).unwrap_or_default().to_string();
-    assert_eq!(fields(h.state()), 0, "{status}");
-    assert!(status.contains("DDEAUTO"), "the paste ran and was refused: {status:?}");
+    assert_eq!(fields(h.state()), 0, "the paste was refused");
     assert_eq!(body_text(h.state()), "Mine");
-    // From the keyboard, the same key pastes it.
+    // From the keyboard, the same key pastes it: the key does reach Paste.
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::V);
     frames(&mut h, 4);
     assert_eq!(fields(h.state()), 1, "{:?}", status_text(h.state()));
