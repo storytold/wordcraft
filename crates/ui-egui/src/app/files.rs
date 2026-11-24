@@ -633,7 +633,7 @@ impl WordApp {
         for item in intake.take() {
             match item {
                 Intake::Dropped { files, target } => self.open_dropped(&files, target),
-                Intake::Open(paths) => {
+                Intake::Open(paths) | Intake::OpenFor { paths, .. } => {
                     for p in paths {
                         // A path that is not Unicode cannot be passed on as text: skipped.
                         if let Some(path) = p.to_str()
@@ -648,6 +648,14 @@ impl WordApp {
                 // `logic_pass` closes the root window once `quit_requested` is set.
                 Intake::Quit => {
                     self.quit();
+                }
+                // An OS open request that arrived as bytes, with no path.
+                Intake::Bytes { name, bytes } => {
+                    let data = wordcraft_engine::cmd::insert::base64_encode(bytes.as_ref());
+                    if let Err(e) = self.run("file.open", json!({"path": name, "data": data})) {
+                        self.report_open_failure(&name, &e);
+                    }
+                    self.ui.backstage = false;
                 }
             }
         }

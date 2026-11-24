@@ -37,7 +37,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use craft::host::{FileError, Files, PickId, PickRequest, Picked};
+use craft::host::{FileError, Files, PickId, PickRequest, Picked, WriteIntent};
 use craft::platform::browser_files::BrowserFiles;
 use craft::platform::open::{DropTarget, DroppedFile, IntakeSender};
 use craft::web_host::web::{FileData, Host, Message};
@@ -175,8 +175,8 @@ impl Files for HostedFiles {
         self.inner.read(path)
     }
 
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-        self.inner.write(path, bytes)
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        self.inner.write(path, bytes, intent)
     }
 
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
