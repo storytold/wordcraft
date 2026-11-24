@@ -86,7 +86,8 @@ jobs:
           [ -x "$work/wordcraft" ] && [ ! -L "$work/wordcraft" ]
           [ "$(stat -c %a "$work/wordcraft")" = 755 ]
           [ -x "$work/wordcraft-bin" ] && [ ! -L "$work/wordcraft-bin" ]
-          mkdir -m 700 -p "$work/home" "$work/profile"
+          mkdir -p "$work/home" "$work/profile"
+          chmod 700 "$work/home" "$work/profile"
           out="$(env -i HOME="$work/home" PATH=/usr/bin:/bin "$work/wordcraft" --version 2>"$work/stderr")" \
             || { cat "$work/stderr"; exit 1; }
           [ ! -s "$work/stderr" ]
