@@ -165,6 +165,16 @@ mod tests {
         assert!(!names_picture_files("see /tmp/b.png") && !names_picture_files("notes.txt") && !names_picture_files(""));
     }
 
+    #[test]
+    fn bitmap_only_paste_inserts_a_picture_during_equation_editing() {
+        let mut app = app_holding(&[rgba8(4, 4, 200)]);
+        app.run("insert.equation", json!({"linear": "abc"})).unwrap();
+        assert!(app.session.math.is_some());
+        app.run("edit.paste", json!({})).unwrap();
+        let objects = app.session.run("arrange.selectionPane", &json!({})).unwrap();
+        assert!(objects.as_array().is_some_and(|objects| objects.iter().any(|object| object["kind"] == "picture")));
+    }
+
     /// Text on the clipboard wins over a picture beside it (#584).
     #[test]
     fn paste_without_text_reads_the_system_clipboard() {

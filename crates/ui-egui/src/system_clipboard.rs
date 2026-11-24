@@ -101,11 +101,12 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         o.insert("privateClipboard".into(), Value::Bool(own));
     }
     let owned = app.session.clipboard.is_some() && o.get("privateClipboard").and_then(Value::as_bool) == Some(true);
-    let ordinary = id == "edit.paste" && !explicit && !owned && app.session.math.is_none();
+    let ordinary = id == "edit.paste" && !explicit && !owned;
     if !o.contains_key("text")
         && let Some(text) = clip.read_text().ok().flatten().filter(|t| !t.is_empty())
     {
         if ordinary
+            && app.session.math.is_none()
             && paste_picture::names_picture_files(&text)
             && let Some(r) = paste_picture::paste(app)
         {
@@ -130,7 +131,8 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         if text.is_none() && html.is_none() {
             return paste_picture::paste(app);
         }
-        if !cfg!(target_arch = "wasm32")
+        if app.session.math.is_none()
+            && !cfg!(target_arch = "wasm32")
             && html.is_some_and(|html| single_image_offer(html, text))
             && let Ok(Some(png)) = paste_picture::bitmap_png(&clip)
         {

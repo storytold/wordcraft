@@ -318,6 +318,7 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     assert!(is_bold(&mut h), "Mod+V keeps the HTML's formatting");
 
     let mut h = alt_frame_app();
+    let before = h.state().session.doc.clone();
     let url = "https://example.test/picture.png";
     offer(
         &h,
@@ -331,10 +332,13 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::ControlLeft, false, Modifiers::NONE)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
     assert_eq!(pictures(h.state_mut()), 1);
+    run(&mut h, "edit.undo", json!({}));
+    assert!(before.same_content(&h.state().session.doc), "one Undo restores the document before paste");
+    assert_eq!(pictures(h.state_mut()), 0);
     // A plain V afterwards is not a paste.
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, true, Modifiers::NONE)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
-    assert_eq!(pictures(h.state_mut()), 1);
+    assert_eq!(pictures(h.state_mut()), 0);
 }
 
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
