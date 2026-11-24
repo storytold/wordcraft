@@ -98,6 +98,10 @@ pub(crate) enum AfterSave {
 pub(crate) struct PendingDialog {
     id: PickId,
     after: AfterPick,
+    /// The Format Background pane's document when the picker opened. The draft is per window
+    /// and reloads for the document it shows, so a picture picked for one document must not
+    /// become another's draft after a switch; the answer is dropped when they differ.
+    background_document: Option<u64>,
 }
 
 /// How asking for a file went.
@@ -133,7 +137,8 @@ impl WordApp {
         }
         let fallback = req.fallback || self.fallback_chooser;
         let id = self.host.files().pick(req.fallback(fallback));
-        self.file_dialog = Some(PendingDialog { id, after });
+        let background_document = matches!(after, AfterPick::BackgroundPicture).then_some(self.session.document_id());
+        self.file_dialog = Some(PendingDialog { id, after, background_document });
         // A service that answered at once is handled right away.
         self.poll_file_dialog().map_or(Asked::Pending, Asked::Done)
     }
@@ -146,6 +151,12 @@ impl WordApp {
         let d = self.file_dialog.take()?;
         if matches!(d.after, AfterPick::Recipients) {
             self.recipient_list_pending = false;
+        }
+        // The window may show another document than the one the Format Background picker was
+        // opened for. Its draft now belongs to that document, so the stale answer is dropped
+        // rather than written into it.
+        if d.background_document.is_some_and(|document| document != self.session.document_id()) {
+            return Some(self.finish_pick(d.after, None));
         }
         match picked {
             Picked::Cancelled => Some(self.finish_pick(d.after, None)),
@@ -209,6 +220,13 @@ impl WordApp {
                 let fonts = files.into_iter().map(|(name, bytes)| (name.clone(), json!({"name": name, "data": base64_encode(&bytes)}))).collect();
                 self.add_fonts(fonts)
             }
+            // The background picture's size limit must see the raw bytes: its own check runs
+            // before any encoding, so an oversized selection allocates nothing and an accepted
+            // one is encoded once, inside `background_picture_contents`.
+            AfterPick::BackgroundPicture => {
+                let (_, bytes) = files.swap_remove(0);
+                self.background_picture_contents(&bytes)
+            }
             after => {
                 let (name, bytes) = files.swap_remove(0);
                 let data = base64_encode(&bytes);
@@ -219,7 +237,6 @@ impl WordApp {
                         r
                     }
                     AfterPick::Picture => self.insert_or_change_picture(json!({"data": data})),
-                    AfterPick::BackgroundPicture => self.background_picture_contents(&bytes),
                     AfterPick::Recipients => self.load_recipients(json!({"path": name, "data": data})),
                     _ => Err("this kind of pick answers with a path".into()),
                 }
@@ -629,5 +646,47 @@ mod picture_dispatch_tests {
             assert!(crate::paste_picture::names_picture_files(&format!("file:///tmp/scan.{ext}")));
         }
         assert!(!is_picture_name("notes.txt"));
+    }
+
+    /// An app over a file service that holds every pick until the test answers it.
+    fn held_app() -> (WordApp, Arc<ScriptedFiles>) {
+        let files = Arc::new(ScriptedFiles::held());
+        let host = Host::builder(AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+        let session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        (WordApp::new(session, crate::Services::default()).with_host(Arc::new(host)), files)
+    }
+
+    /// The Format Background draft reloads for the document the window shows, so a picture the
+    /// picker was opened for in one document must not land in another's draft after a switch.
+    #[test]
+    fn a_background_picture_picked_for_another_document_is_dropped() {
+        let (mut app, files) = held_app();
+        let picked_for = app.session.document_id();
+        app.pick_background_picture();
+        // The answer is in the service's hands when the window moves to another document (the
+        // backstage switches documents without touching the window's open dialog).
+        let id = files.answer(Picked::Contents(vec![("picked.png".into(), b"not encoded".to_vec())])).expect("the picker is open");
+        app.session.add_document(wordcraft_doc::Document::new());
+        assert_ne!(app.session.document_id(), picked_for, "the window shows another document while the picker is open");
+        assert_eq!(app.file_dialog.as_ref().map(|d| d.id), Some(id), "the background picker is still the window's dialog");
+        let before = app.background.fill.clone();
+        let result = app.poll_file_dialog().expect("the answer is handled");
+        assert!(result.is_ok(), "the stale answer is finished cleanly: {result:?}");
+        assert_eq!(app.background.fill, before, "the stale pick did not become the shown document's draft");
+    }
+
+    /// The same pick on the document it was opened for still lands: the guard only drops a
+    /// result from a document the window no longer shows.
+    #[test]
+    fn a_background_picture_picked_for_the_shown_document_lands_in_the_draft() {
+        let (mut app, files) = held_app();
+        app.pick_background_picture();
+        let png = crate::paste_picture::png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap();
+        files.answer(Picked::Contents(vec![("picked.png".into(), png)]));
+        app.poll_file_dialog().unwrap().unwrap();
+        assert!(
+            matches!(app.background.fill, crate::format_background::DraftFill::Picture { ref data, .. } if data.is_some()),
+            "the picked picture is the draft"
+        );
     }
 }
