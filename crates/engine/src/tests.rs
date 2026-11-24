@@ -11496,6 +11496,32 @@ fn outline_hidden_text_is_not_given_to_the_heading_that_replaces_a_deleted_one()
     assert_eq!(outline_shown(&mut s), vec![0, 1]);
 }
 
+#[test]
+fn outline_hidden_text_stays_with_an_edited_duplicate_heading() {
+    let mut s = outline_levels_doc();
+    let rename = |s: &mut Session, block, len, title: &str| {
+        s.close_typing();
+        s.sel = crate::Selection { anchor: Pos::body(block, 0), focus: Pos::body(block, len) };
+        run(s, "text.insert", json!({"text": title}));
+    };
+    rename(&mut s, 0, 1, "Overview");
+    rename(&mut s, 8, 1, "Overview");
+    run(&mut s, "outline.collapse", json!({"block": 0}));
+    let shown = vec![0, 2, 4, 6, 8, 9];
+    assert_eq!(outline_shown(&mut s), shown);
+
+    rename(&mut s, 0, "Overview".len(), "Introduction");
+    assert_eq!(s.doc.body[0].as_para().unwrap().text, "Introduction");
+    assert_eq!(s.doc.body[8].as_para().unwrap().text, "Overview");
+    assert_eq!(outline_shown(&mut s), shown, "renaming must leave each heading's body visibility in place");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.body[0].as_para().unwrap().text, "Overview");
+    assert_eq!(outline_shown(&mut s), shown);
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.body[0].as_para().unwrap().text, "Introduction");
+    assert_eq!(outline_shown(&mut s), shown);
+}
+
 /// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)
 /// finds them again without scanning the document once per heading, and a caret move doesn't
 /// redo the matching.

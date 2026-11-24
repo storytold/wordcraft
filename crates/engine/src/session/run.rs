@@ -440,7 +440,19 @@ impl Session {
             self.note_edit();
         }
         // Outline view: collapsed headings follow edits; the caret stays where it shows.
-        crate::cmd::outline::after_command(self, sel_before, self.rev != rev_before);
+        let changed = self.rev != rev_before;
+        // Undo and Redo put the document they replaced on the opposite stack.
+        let outline_history = if changed && !self.view.outline.text_hidden.is_empty() {
+            match id {
+                "edit.undo" => self.redo.last().cloned(),
+                "edit.redo" => self.history.last().cloned(),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let outline_before = before_doc.as_ref().map(|b| &b.0).or_else(|| outline_history.as_ref().map(|u| &u.doc));
+        crate::cmd::outline::after_command(self, sel_before, changed, outline_before);
         // Extra selected objects last until something else is edited or selected; formatting
         // them keeps them selected, as in Word.
         if !matches!(id, "select.addObject" | "arrange.ungroup" | "shape.fill" | "shape.effects") && (spec.mutates || self.sel != *sel_before) {

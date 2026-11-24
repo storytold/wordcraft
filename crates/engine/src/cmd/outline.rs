@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,8 +28,7 @@ pub struct OutlineState {
     /// Word does.
     pub text_hidden: Vec<(usize, u64)>,
     /// How many body blocks the document had when `collapsed`/`text_hidden` were last set or
-    /// matched again: an unchanged count means a heading's text changed in place rather than
-    /// headings being deleted.
+    /// matched again, used to limit index fallback after an edit.
     #[serde(skip)]
     pub blocks: usize,
     /// Show Level: 1–9, or 0 for all levels.
@@ -541,7 +541,7 @@ pub(crate) fn move_shown(s: &mut Session, up: bool) -> Option<CmdResult> {
 }
 
 /// Keeps collapsed headings collapsed (and hidden body text hidden) after an edit.
-fn remap_collapsed_headings(s: &mut Session) {
+fn remap_collapsed_headings(s: &mut Session, before: Option<&Document>) {
     let hashes: Vec<Option<u64>> = (0..s.doc.body.len()).map(|i| text_hash(&s.doc, i)).collect();
     let levels = ol::levels(&s.doc);
     // The headings by text hash.
@@ -555,16 +555,27 @@ fn remap_collapsed_headings(s: &mut Session) {
     }
     let collapsed = std::mem::take(&mut s.view.outline.collapsed);
     let text_hidden = std::mem::take(&mut s.view.outline.text_hidden);
-    s.view.outline.collapsed = remap_list(collapsed, &hashes, &levels, by_hash.clone(), true);
+    s.view.outline.collapsed = remap_list(collapsed, &hashes, &levels, by_hash.clone(), true, None);
     // Hidden text is state of one heading: when blocks were added or removed, a heading with
     // changed text is more likely another heading that shifted into the index of a deleted one
     // than an edit in place, so the index fallback applies only to an unchanged block count.
     let edited_in_place = s.view.outline.blocks == hashes.len();
-    s.view.outline.text_hidden = remap_list(text_hidden, &hashes, &levels, by_hash, edited_in_place);
+    let edited_heading = before.filter(|doc| edited_in_place && !text_hidden.is_empty() && doc.body.len() == s.doc.body.len()).and_then(|doc| {
+        // The command snapshot shares every untouched block. One changed block can be
+        // matched in place even if another heading still has its old title.
+        let mut changed = doc.body.iter().zip(&s.doc.body).enumerate().filter(|(_, (old, new))| !Arc::ptr_eq(old, new));
+        let (i, _) = changed.next()?;
+        if changed.next().is_some() {
+            return None;
+        }
+        Some((i, text_hash(doc, i)?))
+    });
+    s.view.outline.text_hidden = remap_list(text_hidden, &hashes, &levels, by_hash, edited_in_place, edited_heading);
     s.view.outline.blocks = hashes.len();
 }
 
-/// Each heading in `list` moves to the nearest heading with the same text that is still free.
+/// Keep the heading known to have changed in place. Match other headings by the nearest free
+/// heading with the same text.
 /// With `keep_index`, one whose text is gone stays at its index if a heading is there (an edit in
 /// place); without it, it is dropped.
 fn remap_list(
@@ -573,13 +584,14 @@ fn remap_list(
     levels: &[u8],
     mut by_hash: HashMap<u64, BTreeSet<usize>>,
     keep_index: bool,
+    edited_heading: Option<(usize, u64)>,
 ) -> Vec<(usize, u64)> {
     let mut used = BTreeSet::new();
     let mut out = Vec::new();
     for (i, h) in list {
         let free = |j: usize, used: &BTreeSet<usize>| levels.get(j).is_some_and(|l| *l < BODY) && !used.contains(&j);
         let same = |j: usize| hashes.get(j).copied().flatten() == Some(h);
-        let found = if free(i, &used) && same(i) {
+        let found = if free(i, &used) && (same(i) || edited_heading == Some((i, h))) {
             Some(i)
         } else {
             // The nearest free heading with the same text (the earlier one on a tie).
@@ -610,9 +622,9 @@ fn remap_list(
 /// outline doesn't show (in collapsed text, or past a body paragraph's first line) moves on to
 /// the nearest place it does, in the direction it was going.
 /// `changed` says whether the document changed (its revision moved); if not, nothing moved.
-pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) {
+pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool, before_doc: Option<&Document>) {
     if changed && !(s.view.outline.collapsed.is_empty() && s.view.outline.text_hidden.is_empty()) {
-        remap_collapsed_headings(s);
+        remap_collapsed_headings(s, before_doc);
     }
     if s.view.mode != ViewMode::Outline || !s.sel.is_collapsed() || s.sel.focus.story != StoryRef::Body {
         return;
