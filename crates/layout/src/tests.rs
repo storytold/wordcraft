@@ -5318,6 +5318,88 @@ fn measuring_a_kept_table_ahead_counts_its_list_items_once() {
     assert_eq!(labels(&lay(&d)), ["1.", "2.", "3."]);
 }
 
+/// A 288 pt high body holding a `filler` pt line, a heading and list item 9, each kept with the
+/// next, then a table `width` pt wide: a repeated header row, a row holding list item 10 kept with
+/// the next row, and the last row (header and last rows 20 pt high). The list's labels are followed
+/// by a space, so the item in the table breaks its lines after its label's width.
+fn numbered_kept_table_doc(filler: f32, width: f32) -> Document {
+    use wordcraft_doc::numbering::LevelSuffix;
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(LineSpacing::Exactly(12.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    };
+    let kept = ParaProps { keep_next: Some(true), ..plain.clone() };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    (d.last_section.page_w, d.last_section.page_h) = (400.0, 360.0);
+    (d.last_section.margin_top, d.last_section.margin_bottom) = (36.0, 36.0);
+    let mut items = numbered(&mut d, &["Kept item", "The item in the table"], kept.clone()).into_iter();
+    let (Some(before), Some(inside)) = (items.next(), items.next()) else { panic!("two items") };
+    let Some(list) = Arc::make_mut(&mut d.numbering).abstracts.last_mut() else { panic!("no list") };
+    let level = &mut list.levels[0];
+    (level.start, level.suffix, level.indent, level.hanging) = (9, LevelSuffix::Space, 0.0, 0.0);
+    let mut t = Table::new(3, 1, width);
+    t.props.style = None;
+    t.props.cell_margins = Some([0.0; 4]);
+    for (ri, row) in t.rows.iter_mut().enumerate() {
+        row.props.header = ri == 0;
+        if ri != 1 {
+            row.props.height = Some(20.0);
+            row.props.height_rule = HeightRule::Exact;
+        }
+    }
+    t.rows[0].cells[0].blocks = vec![para("Header", plain.clone())];
+    t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(inside)];
+    t.rows[2].cells[0].blocks = vec![para("Last", plain.clone())];
+    d.body = vec![
+        para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(filler)), ..plain }),
+        para("Heading", kept),
+        wordcraft_doc::para_block(before),
+        Arc::new(Block::Table(t)),
+    ];
+    d
+}
+
+#[test]
+fn a_heading_measures_a_kept_table_with_the_list_items_kept_between_them() {
+    crate::test_fonts();
+    // The label and line count of the list item in the table (body block 3).
+    let item = |d: &Document| {
+        lay(d).pages.iter().flat_map(|p| &p.items).find_map(|i| match i {
+            Placed::Lines { path, para, l0: 0, .. } if path.0.first() == Some(&3) && para.label.is_some() => {
+                Some((para.label.as_ref().map(|l| l.text.clone()), para.lines.len()))
+            }
+            _ => None,
+        })
+    };
+    // At 118 pt "10. The item in the table" takes more lines than "9. The item in the table".
+    let d = numbered_kept_table_doc(0.0, 118.0);
+    let (Some((Some(ten), ten_lines)), Some((Some(nine), nine_lines))) = (item(&d), {
+        let mut earlier = d.clone();
+        Arc::make_mut(&mut earlier.numbering).abstracts.last_mut().expect("the list").levels[0].start = 8;
+        item(&earlier)
+    }) else {
+        panic!("no list item in the table")
+    };
+    assert_eq!((ten.as_str(), nine.as_str()), ("10.", "9."));
+    assert!(ten_lines > nine_lines, "the label's width breaks the item's lines: {ten_lines} against {nine_lines}");
+    // 82 pt left under the filler: the heading, item 9, the header row, item 10's two lines and the
+    // last row need 88. The heading measures the table with item 9 counted, as item 9 then does,
+    // so it goes on with them instead of staying alone at the bottom of the page.
+    let l = lay(&numbered_kept_table_doc(206.0, 118.0));
+    let page_of = |block: u32| l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { path, .. } if path.0 == [block])));
+    assert!(page_of(1) > page_of(0), "the heading goes on to the next page: {:?}", (page_of(0), page_of(1)));
+    assert_eq!(page_of(1), page_of(2), "the heading stays with the item kept with it");
+}
+
 #[test]
 fn a_repeated_header_is_never_left_alone_when_the_table_starts_mid_page() {
     // #1704: a table whose repeated header row fits at the bottom of a page while a body row

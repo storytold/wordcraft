@@ -6,7 +6,7 @@ use super::headers::{header_items_cap, header_table_areas, placed_cost};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
-use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
+use super::{Anchor, Arc, Counters, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
 
 /// Footer page tables wrap only the intersecting body lines, which resume below them.
 pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
@@ -104,9 +104,10 @@ pub(crate) const FIRST_ROW_START: f32 = 24.0;
 /// rows it is kept with and the start of the row ending that chain (#2494). Without that, a
 /// caption stays alone at the bottom of a page while its table moves on. `None` for a floating
 /// table, or one whose first row is neither a header row nor kept with the next: the caller's
-/// [`FIRST_ROW_START`] applies. The table is laid out ahead from the layout's counters, which are
-/// given back, so its numbered paragraphs aren't counted twice.
-pub(crate) fn kept_start_height(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: usize, width: f32) -> Option<f32> {
+/// [`FIRST_ROW_START`] applies. The table is laid out ahead from `counters`, the layout's as they
+/// stand after the kept paragraphs measured before it, and the layout's own are given back, so
+/// its numbered paragraphs aren't counted twice.
+pub(crate) fn kept_start_height(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: usize, width: f32, counters: &Counters) -> Option<f32> {
     if t.props.float.is_some() {
         return None;
     }
@@ -127,7 +128,7 @@ pub(crate) fn kept_start_height(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: 
     }
     // Without the layout's linked text box flows and text box budget too: a flow worked out here
     // would be reused later without counting its numbered paragraphs again.
-    let (counters, fields, grid, eq_start) = (ctx.counters.clone(), ctx.fields.clone(), ctx.grid, ctx.eq_count);
+    let (counters, fields, grid, eq_start) = (std::mem::replace(&mut ctx.counters, counters.clone()), ctx.fields.clone(), ctx.grid, ctx.eq_count);
     let (boxes, chains) = (std::mem::take(&mut ctx.boxes), std::mem::take(&mut ctx.chains));
     let tl = again(ctx, eq_start, |ctx| table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1));
     (ctx.counters, ctx.fields, ctx.grid, ctx.boxes, ctx.chains) = (counters, fields, grid, boxes, chains);
