@@ -4006,3 +4006,37 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     assert_eq!(restored.ui.touchpad_scroll_speed, ScrollSpeed::Fast);
     assert_eq!(restored.ui.scroll_speed, ScrollSpeed::Fast);
 }
+
+/// With the system's font panel, every Font entry point opens it: `ui.dialog` "font" and the
+/// engine's `{"open": "font"}` request (the ribbon launcher, the context menu) run `ui.showFonts`
+/// instead of the built-in Font dialog.
+#[test]
+fn every_font_entry_point_opens_the_system_panel_when_there_is_one() {
+    let mut a = typed();
+    let open = |a: &WordApp| a.dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("font"));
+    let shown = std::rc::Rc::new(std::cell::Cell::new(0));
+    let seen = shown.clone();
+    a.services.show_fonts = Some(Box::new(move |_, _, _, _| seen.set(seen.get() + 1)));
+    a.run("ui.dialog", json!({"name": "font"})).unwrap();
+    assert!(!open(&a) && shown.get() == 1, "ui.dialog opens the panel, not the dialog");
+    a.session.push_ui_request(json!({"open": "font"}));
+    a.run("format.state", json!({})).unwrap(); // any command drains the UI requests
+    assert!(!open(&a) && shown.get() == 2, "the open request opens the panel, not the dialog");
+}
+
+/// ⌘D (`ui.showFonts`) opens the host's font panel on the selection's font, and says where it
+/// isn't available.
+#[test]
+fn show_fonts_opens_the_hosts_panel_on_the_selections_font() {
+    let mut a = typed();
+    assert!(a.run("ui.showFonts", json!({})).is_err(), "no font panel without the host's");
+    let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let log = shown.clone();
+    a.services.show_fonts = Some(Box::new(move |family, size, bold, _| *log.borrow_mut() = Some((family.to_string(), size, bold))));
+    a.run("select.all", json!({})).unwrap();
+    a.run("format.bold", json!({"value": true})).unwrap();
+    a.run("format.size", json!({"size": 15})).unwrap();
+    a.run("ui.showFonts", json!({})).unwrap();
+    let st = a.session.run("format.state", &json!({})).unwrap();
+    assert_eq!(*shown.borrow(), Some((st["font"].as_str().unwrap_or("").to_string(), 15.0, true)));
+}
