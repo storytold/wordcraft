@@ -749,6 +749,7 @@ fn table_shading_label_is_painted_beside_its_arrow() {
             let text_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
             assert!(main.contains_rect(text_rect), "{language}: {text_rect:?} outside {main:?}");
             assert!(text_rect.left() >= main.left() + 24.0, "the label starts after the icon");
+            assert!(text_rect.right() <= arrow.left(), "{language}: label {text_rect:?} overlaps arrow {arrow:?}");
         }
     }
     crate::i18n::apply_language(crate::i18n::Lang::EN);
