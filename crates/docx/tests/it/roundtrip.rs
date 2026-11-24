@@ -2922,7 +2922,8 @@ fn page_background_picture_round_trips() {
     let mut d = Document::new();
     d.settings.page_color = Some(Rgb(0xFF, 0xFF, 0xCC));
     d.media.insert("paper.png".into(), Arc::new(png.clone()));
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "paper.png".into(), fill_type: "tile".into(), title: "Paper".into() });
+    d.settings.page_picture =
+        Some(wordcraft_doc::PagePicture { media: "paper.png".into(), fill_type: "tile".into(), title: "Paper".into(), transparency: 0.0 });
     let r = rt(&d);
     let pic = r.settings.page_picture.as_ref().expect("picture kept");
     assert_eq!((pic.fill_type.as_str(), pic.title.as_str()), ("tile", "Paper"));
