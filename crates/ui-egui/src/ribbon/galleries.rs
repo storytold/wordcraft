@@ -15,7 +15,7 @@ use craft::ui::primitives::IconSpec;
 use craft::ui::primitives::textures::Revision;
 use craft::ui::runtime::commands::resolve;
 use craft::ui::runtime::env::Env;
-use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
+use craft::ui::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid};
 use egui::{Color32, ColorImage, Pos2, Ui};
 use serde_json::json;
 use wordcraft_doc::props::CharProps;
@@ -302,7 +302,7 @@ pub(crate) fn wordart(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, comma
         .activate(ActivateOn::Click)
         .card_columns(WORDART_COLUMNS)
         .thumb_size(ThumbSize::Small)
-        .zoom(2.0)
+        .zoom(GridZoom::Fixed(2.0))
         // Every style shows, as in production; the menu's body is the one scroll.
         .natural_height(true)
         .caption(CaptionPlace::None)
