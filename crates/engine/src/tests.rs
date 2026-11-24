@@ -5240,8 +5240,10 @@ fn output_shows_toc_page_numbers_where_the_headings_are() {
     assert_eq!(toc_numbers(&s.export_layout()), ["3", "4"]);
     assert!(text(&s).contains("Alpha\t2"), "the document keeps the stored numbers");
     // A page image is laid out as the print job is: it shows the same numbers.
-    let png = crate::io_ext::render_png(&s.doc, 0, 1.0, &Default::default()).unwrap();
-    let printed = wordcraft_render::render_page(&s.doc, &s.export_layout().pages[0], 1.0, &Default::default()).to_png();
+    // Compared as pixels: the page image's encoder isn't the one `Rendered::to_png` uses.
+    let pixels = |png: &[u8]| wordcraft_geom::picture::decode_memory(png).unwrap().to_rgba8().into_raw();
+    let png = pixels(&crate::io_ext::render_png(&s.doc, 0, 1.0, &Default::default()).unwrap());
+    let printed = pixels(&wordcraft_render::render_page(&s.doc, &s.export_layout().pages[0], 1.0, &Default::default()).to_png());
     assert!(png == printed, "the page image and the printed page differ");
 }
 
@@ -13832,6 +13834,128 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(matches!(r, Err(crate::CmdError::Params(_))), "page u64::MAX: {r:?}");
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A three-page session: "One", "Two" and "Three", each on its own page.
+#[cfg(not(target_arch = "wasm32"))]
+fn three_pages() -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One"));
+    for word in ["Two", "Three"] {
+        run(&mut s, "insert.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": word}));
+    }
+    assert_eq!(s.export_layout().pages.len(), 3);
+    s
+}
+
+/// The pixels per metre a PNG records (`pHYs`), if it records them.
+#[cfg(not(target_arch = "wasm32"))]
+fn png_pixels_per_metre(png: &[u8]) -> Option<u32> {
+    let at = png.windows(4).position(|w| w == b"pHYs")?;
+    let x = png.get(at + 4..at + 8)?;
+    Some(u32::from_be_bytes([x[0], x[1], x[2], x[3]]))
+}
+
+/// #7743: File › Export writes pages as images at a chosen resolution: every page, each to its own
+/// numbered file, at the full size the DPI asks for, with that DPI recorded in the file.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_png_writes_every_page_at_a_dpi() {
+    let dir = scratch_dir("export-png-pages");
+    let mut s = three_pages();
+    let page_w = s.doc.last_section.page_w;
+    let r = s.run("file.exportPng", &json!({"path": dir.join("timetable.png").to_string_lossy(), "range": "all", "dpi": 300})).unwrap();
+    assert_eq!(r["dpi"], 300.0);
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), 3);
+    let want_w = (page_w * 300.0 / 72.0).ceil() as u64;
+    for (n, f) in files.iter().enumerate() {
+        let path = dir.join(format!("timetable-{}.png", n + 1));
+        assert_eq!(f["path"], json!(path.to_string_lossy()), "{f}");
+        assert_eq!(f["page"], n as u64 + 1);
+        assert_eq!(f["width"], want_w);
+        let png = std::fs::read(&path).unwrap();
+        assert_eq!(png_pixels_per_metre(&png), Some(11_811), "300 DPI recorded");
+        assert_eq!(image::load_from_memory(&png).unwrap().width() as u64, want_w);
+    }
+    assert!(!dir.join("timetable.png").exists(), "several pages don't write the name itself");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7743: a page range (as File › Print takes it) writes just those pages; one page keeps the name
+/// given; with no page or range the first page is written at 144 DPI, as before.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_png_writes_the_pages_chosen() {
+    let dir = scratch_dir("export-png-range");
+    let mut s = three_pages();
+    let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    let r = s.run("file.exportPng", &json!({"path": at("t.png"), "pages": "2-3"})).unwrap();
+    let pages: Vec<u64> = r["files"].as_array().unwrap().iter().map(|f| f["page"].as_u64().unwrap()).collect();
+    assert_eq!(pages, [2, 3]);
+    assert!(dir.join("t-2.png").exists() && dir.join("t-3.png").exists() && !dir.join("t-1.png").exists());
+    let r = s.run("file.exportPng", &json!({"path": at("even.png"), "range": "all", "parity": "even"})).unwrap();
+    assert_eq!(r["path"], json!(at("even.png")), "one page chosen: the name as given");
+    assert_eq!(r["page"], 2);
+    let r = s.run("file.exportPng", &json!({"path": at("first.png")})).unwrap();
+    assert_eq!((r["page"].as_u64(), r["dpi"].as_f64()), (Some(1), Some(144.0)));
+    assert_eq!(png_pixels_per_metre(&std::fs::read(dir.join("first.png")).unwrap()), Some(5_669), "144 DPI recorded");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7743: a bad resolution or page choice is a parameter error and writes nothing.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_png_refuses_bad_choices_and_writes_nothing() {
+    let dir = scratch_dir("export-png-bad");
+    let mut s = three_pages();
+    let path = dir.join("x.png").to_string_lossy().into_owned();
+    for bad in [
+        json!({"dpi": 10}),
+        json!({"dpi": 9000}),
+        json!({"dpi": "high"}),
+        json!({"dpi": 300, "scale": 2}),
+        json!({"page": 2, "range": "all"}),
+        json!({"range": "custom"}),
+        json!({"range": "custom", "pages": " "}),
+        json!({"pages": "4"}),
+        json!({"pages": "3-1"}),
+        json!({"range": "most"}),
+    ] {
+        let mut v = bad.clone();
+        v["path"] = json!(path);
+        let r = s.run("file.exportPng", &v);
+        assert!(matches!(r, Err(crate::CmdError::Params(_))), "{bad}: {r:?}");
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing written");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7743: the browser saves one download at a time: its page image is the one page chosen, at the
+/// resolution chosen, and a choice of several pages is refused rather than cut to the first.
+#[test]
+fn a_single_page_image_for_the_browser() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One"));
+    for word in ["Two", "Three"] {
+        run(&mut s, "insert.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": word}));
+    }
+    let png = crate::page_images::single_png(&s, &json!({"pages": "2", "dpi": 96})).unwrap();
+    let img = image::load_from_memory(&png).unwrap();
+    assert_eq!(img.width(), (s.doc.last_section.page_w * 96.0 / 72.0).ceil() as u32);
+    let r = crate::page_images::single_png(&s, &json!({"range": "all"}));
+    assert!(matches!(r, Err(crate::CmdError::Params(ref m)) if m.contains("one page")), "{r:?}");
+}
+
+/// #7743: with no path the app asks where to save, and the resolution and pages chosen go with
+/// the request so the export after the dialog keeps them.
+#[test]
+fn export_png_without_a_path_keeps_the_choices_for_the_dialog() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One"));
+    s.ui_requests.clear();
+    let r = s.run("file.exportPng", &json!({"dpi": 600, "range": "all", "pages": null})).unwrap();
+    assert_eq!(r["exported"], false);
+    assert_eq!(s.ui_requests.last(), Some(&json!({"open": "exportPng", "dpi": 600, "range": "all"})));
 }
 
 #[test]

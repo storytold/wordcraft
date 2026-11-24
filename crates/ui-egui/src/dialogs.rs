@@ -11,6 +11,7 @@ use crate::WordApp;
 mod bookmarks;
 mod customize_keyboard;
 mod enclose;
+mod export_images;
 mod find;
 mod find_replace;
 mod font;
@@ -73,6 +74,7 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         "link" => link::open(app, name, params, parent),
         "bookmark" | "icons" => bookmarks::open(app, name, params, parent),
         "pasteSpecial" => paste_special::open(app, name, params, parent),
+        "exportImages" => export_images::open(app, name, params, parent),
         "renameDocument" | "insertTable" | "watermark" | "fieldCode" | "editFieldCode" | "tableCellMargins" => {
             simple_forms::open(app, name, params, parent)
         }

@@ -25,6 +25,8 @@ use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vec
 
 mod color_glyph;
 pub mod icon_lib;
+mod page_image;
+pub use page_image::{MAX_PAGE_IMAGE_PIXELS, MAX_PAGE_IMAGE_SIDE, page_image_size, page_png};
 
 /// Worker threads for rasterising (0 on the web, where there are no threads).
 pub fn default_threads() -> u16 {
