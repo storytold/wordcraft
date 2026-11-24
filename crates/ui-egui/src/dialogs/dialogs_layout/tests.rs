@@ -960,8 +960,8 @@ fn page_numbers_dialog_edits_start_at_and_updates_footer() {
     assert_eq!(h.state().session.doc.last_section.page_num_start, None, "focus alone preserves continue");
     assert_eq!(footer_shown(h.state_mut(), 1), "2");
 
-    // Pressing Escape while typing "5" into "Start at:" discards the draft and restores
-    // "Continue from previous section".
+    // Pressing Escape while typing "5" into "Start at:" cancels both the typed draft and the
+    // modal dialog in one step, leaving numbering continuous.
     h.state_mut().run("layout.pageNumberFormat", json!({"format": "decimal", "start": null})).unwrap();
     assert_eq!(footer_shown(h.state_mut(), 1), "2");
     h.state_mut().run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
@@ -969,9 +969,8 @@ fn page_numbers_dialog_edits_start_at_and_updates_footer() {
     type_start_at(&mut h, "5");
     h.key_press(egui::Key::Escape);
     crate::test_harness::frames(&mut h, 2);
-    click_ok(&mut h);
     assert!(h.state().dialog_host.open_dialogs().is_empty());
-    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "Escape cancels typed Start at and restores continue");
+    assert_eq!(h.state().session.doc.last_section.page_num_start, None, "Escape cancels typed Start at and closes the dialog");
     assert_eq!(footer_shown(h.state_mut(), 1), "2");
 
     // Clicking "Continue from previous section" while "Start at:" is focused keeps "Continue"
