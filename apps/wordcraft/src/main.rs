@@ -440,10 +440,7 @@ fn main() -> eframe::Result {
             None => logger.stderr_only(),
         }
     }
-    let app_id = std::env::var("FLATPAK_ID")
-        .ok()
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| "ai.storyteller.wordcraft".to_string());
+    let app_id = std::env::var("FLATPAK_ID").ok().filter(|id| !id.is_empty()).unwrap_or_else(|| "ai.storyteller.wordcraft".to_string());
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("WordCraft")
