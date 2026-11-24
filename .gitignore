@@ -8,3 +8,4 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+packaging/aur/*/*.tar.gz
