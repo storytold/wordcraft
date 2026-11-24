@@ -307,7 +307,8 @@ fn control_keyboard_reaches_the_background_document_once() {
     assert_eq!(body_text(h.state()), "Seed", "one Undo reverses the one text input");
 }
 
-/// Control text and keys target the focused widget of a dialog, not the document, and Escape closes it.
+/// Control text and keys target the focused widget of a dialog, not the document. The Find dialog is modeless, so the
+/// first Escape reverts the field's typing and the second closes the dialog.
 #[test]
 fn control_keyboard_keeps_the_background_widget_target() {
     let mut a = app();
@@ -325,7 +326,10 @@ fn control_keyboard_keeps_the_background_widget_target() {
     assert_eq!(body_text(h.state()), "Seed", "the Find field, not the document, owns the input");
     send(&mut h, "ui.key", json!({"key": "Escape"}));
     frames(&mut h, 6);
-    assert_eq!(open(&mut h), 0, "Escape closes the dialog");
+    assert!(open(&mut h) > 0, "the first Escape reverts the field and leaves the dialog open");
+    send(&mut h, "ui.key", json!({"key": "Escape"}));
+    frames(&mut h, 6);
+    assert_eq!(open(&mut h), 0, "the second Escape closes the dialog");
     assert_eq!(body_text(h.state()), "Seed");
 }
 

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use craft::behavior::kurbo::{Point, Size};
 use craft::pages::layout::{Fit, LayoutOptions, PageDisplay, SCREEN_POINTS_PER_POINT};
 use craft::pages::ui::reading::{ReadingMetrics, reading_size};
-use craft::pages::ui::{MarkArea, MarkKind, PageBody, PageView, PageViewState, PlacedPage, ReadingNav, ReadingState, ReadingView, TextMarks};
+use craft::pages::ui::{GoTo, MarkArea, MarkKind, PageBody, PageView, PageViewState, PlacedPage, ReadingNav, ReadingState, ReadingView, TextMarks};
 use craft::ui::canvas::{Autoscroll, ContextSource, MiddleButton, NavigationOptions, ToolHost, ToolHostResponse, ToolPass, WheelScheme};
 use craft::ui::contract::Show as _;
 
@@ -408,7 +408,7 @@ impl CanvasState {
 
     /// The comment whose balloon is selected, as the document's comment id.
     pub fn selected_balloon(&self) -> Option<u32> {
-        self.comments.selected.and_then(|id| u32::try_from(id.0).ok())
+        self.comments.selected.lead.and_then(|id| u32::try_from(id.0).ok())
     }
 }
 
@@ -647,7 +647,7 @@ fn mark_areas(app: &mut WordApp, layout: &DocLayout, selected: &[(usize, wordcra
 fn navigation_options() -> NavigationOptions {
     let mut options = NavigationOptions::default();
     options.middle_button =
-        if cfg!(any(target_os = "macos", target_os = "ios", target_arch = "wasm32")) { MiddleButton::Pan } else { MiddleButton::Autoscroll };
+        if cfg!(any(target_os = "macos", target_os = "ios", target_arch = "wasm32")) { MiddleButton::Pan } else { MiddleButton::AutoScroll };
     options.wheel = WheelScheme::Document;
     options
 }
@@ -828,7 +828,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         if let Some(c) = c
             && let Some(page) = layout.pages.get(c.page)
         {
-            state.go_to = Some((c.page, f64::from(c.top / page.h.max(1.0))));
+            state.go_to = Some(GoTo::Top { page: c.page, fraction: f64::from(c.top / page.h.max(1.0)) });
             state.current = c.page;
         }
     }
@@ -992,7 +992,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         ui.ctx().request_repaint();
     }
     if let Some(go) = fix.go_to {
-        state.go_to = Some(go);
+        state.go_to = Some(GoTo::Top { page: go.0, fraction: go.1 });
         ui.ctx().request_repaint();
     }
     // Dragging a selection past the view's edge scrolls on.
@@ -1004,7 +1004,9 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         let per_unit = v.zoom.max(f64::EPSILON);
         let size = Size::new(out.layout.size.width / per_unit, out.layout.size.height / per_unit);
         if Autoscroll::scroll(&mut v, step, size).is_some() {
-            out.adopt(&mut state, &v);
+            // The view moved in document units; the state keeps screen points.
+            state.offset.0 += (v.center.x - view.center.x) * view.zoom;
+            state.offset.1 += (v.center.y - view.center.y) * view.zoom;
             ui.ctx().request_repaint();
         }
     }
