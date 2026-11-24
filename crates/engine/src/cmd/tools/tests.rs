@@ -2013,6 +2013,147 @@ fn compare_strips_source_revisions_from_adopted_notes() {
     assert!(inserted_para.runs.iter().all(|r| r.props.ins.is_some()), "adopted inserted note carries Compare's ins mark");
 }
 
+/// #5842: Adopting or comparing revised note blocks copies and remaps media referenced directly
+/// and inside nested text-box stories, preserving distinct images under colliding source keys
+/// across DOCX save and reopen.
+#[test]
+fn compare_adopts_and_remaps_note_media_across_docx_roundtrip() {
+    let solid_png = |rgba: [u8; 4]| {
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba(rgba));
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img), image::ImageFormat::Png).unwrap()
+    };
+    let red_png = solid_png([220, 20, 20, 255]);
+    let blue_png = solid_png([20, 40, 220, 255]);
+    let green_png = solid_png([20, 180, 40, 255]);
+
+    let image_obj = |key: &str| InlineObject::Image {
+        media: key.into(),
+        w: 24.0,
+        h: 24.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    let tb_obj = |story_id: u32| InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 50.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: Some(story_id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let append_obj = |doc: &mut Document, part_id: u32, obj: InlineObject| {
+        if let Some(part) = doc.parts.get_mut(&part_id)
+            && let Some(Block::Para(p)) = part.blocks.first_mut().map(Arc::make_mut)
+        {
+            let at = p.len();
+            let _ = p.insert_object(at, obj, &CharProps::default());
+        }
+    };
+
+    // Original: body + paired footnote 1 with red image under key "image1.png".
+    let mut orig = Session::new(Document::from_text("Para one.\nPara two."));
+    orig.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    orig.run("references.footnote", &json!({"text": "Shared note "})).unwrap();
+    let orig_fn1_id = orig.doc.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).unwrap();
+    orig.doc.media.insert("image1.png".into(), Arc::new(red_png.clone()));
+    append_obj(&mut orig.doc, orig_fn1_id, image_obj("image1.png"));
+
+    // Revised: paired footnote 1 has blue image under the SAME key "image1.png";
+    // inserted footnote 2 has a direct image ("image1.png" = blue) and a nested text box
+    // ("image2.png" = green, absent from original).
+    let mut rev = Session::new(Document::from_text("Para one.\nPara two."));
+    rev.run("caret.set", &json!({"pos": Pos::body(0, "Para one.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Shared note "})).unwrap();
+    rev.run("caret.set", &json!({"pos": Pos::body(1, "Para two.".len())})).unwrap();
+    rev.run("references.footnote", &json!({"text": "Adopted note "})).unwrap();
+
+    let rev_fn_ids: Vec<u32> = rev.doc.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(&id, _)| id).collect();
+    assert_eq!(rev_fn_ids.len(), 2);
+    let rev_fn1_id = rev_fn_ids[0];
+    let rev_fn2_id = rev_fn_ids[1];
+
+    rev.doc.media.insert("image1.png".into(), Arc::new(blue_png.clone()));
+    rev.doc.media.insert("image2.png".into(), Arc::new(green_png.clone()));
+    append_obj(&mut rev.doc, rev_fn1_id, image_obj("image1.png"));
+
+    let nested_tb_id = rev.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Nested ", CharProps::default()))]);
+    append_obj(&mut rev.doc, nested_tb_id, image_obj("image2.png"));
+    let outer_tb_id = rev.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Outer ", CharProps::default()))]);
+    append_obj(&mut rev.doc, outer_tb_id, tb_obj(nested_tb_id));
+    append_obj(&mut rev.doc, rev_fn2_id, image_obj("image1.png"));
+    append_obj(&mut rev.doc, rev_fn2_id, tb_obj(outer_tb_id));
+
+    let pid = std::process::id();
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-note-media-{pid}.docx"));
+    let out_path = std::env::temp_dir().join(format!("wc-out-note-media-{pid}.docx"));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+    let reopened_rev = crate::io::open_path(&rev_path).unwrap();
+    assert!(reopened_rev.media.contains_key("image1.png"), "reopened revised DOCX uses colliding source key image1.png");
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+    assert!(r["changes"].as_u64().unwrap() >= 1);
+
+    // Save comparison result to DOCX and reopen to verify media keys and bytes survive roundtrip.
+    crate::io::save_path(&out_path, &s.doc).unwrap();
+    let loaded = crate::io::open_path(&out_path).unwrap();
+    let _ = std::fs::remove_file(&out_path);
+
+    let mut loaded_fns: Vec<&wordcraft_doc::Part> = loaded.parts.values().filter(|p| p.kind == wordcraft_doc::PartKind::Footnote).collect();
+    assert_eq!(loaded_fns.len(), 2);
+    loaded_fns.sort_by_key(|p| p.blocks[0].as_para().map(Paragraph::plain_text).unwrap_or_default());
+    let (adopted_fn, paired_fn) = if loaded_fns[0].blocks[0].as_para().unwrap().plain_text().contains("Adopted note") {
+        (loaded_fns[0], loaded_fns[1])
+    } else {
+        (loaded_fns[1], loaded_fns[0])
+    };
+
+    // Paired note keeps original red image (deleted) and remapped blue image (inserted).
+    let paired_imgs: Vec<&str> = paired_fn.blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None })
+        .collect();
+    assert_eq!(paired_imgs.len(), 2, "paired note retains original and revised images: {paired_imgs:?}");
+    let paired_bytes: Vec<&[u8]> = paired_imgs.iter().map(|k| loaded.media.get(*k).expect("paired image bytes present").as_slice()).collect();
+    assert!(paired_bytes.contains(&red_png.as_slice()), "paired note kept original red image");
+    assert!(paired_bytes.contains(&blue_png.as_slice()), "paired note kept revised blue image");
+
+    // Adopted note keeps its blue image and its nested text box's green image.
+    let adopted_para = adopted_fn.blocks[0].as_para().unwrap();
+    let adopted_img_key =
+        adopted_para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
+    assert_eq!(loaded.media.get(adopted_img_key).expect("adopted note image").as_slice(), blue_png.as_slice());
+
+    let loaded_outer_tb_id = adopted_para.objects.iter().find_map(InlineObject::text_box).expect("adopted outer text box");
+    let loaded_nested_tb_id = loaded.parts[&loaded_outer_tb_id].blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(InlineObject::text_box)
+        .expect("adopted nested text box");
+    let nested_img_key = loaded.parts[&loaded_nested_tb_id].blocks[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None })
+        .unwrap();
+    assert_eq!(loaded.media.get(nested_img_key).expect("nested text box image").as_slice(), green_png.as_slice());
+}
+
 /// #3518: every run and paragraph mark of a story, as (story, path, lang, noProof) rows.
 fn proofing_rows(s: &Session) -> Vec<(StoryRef, Option<String>, Option<bool>)> {
     let stories = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k)));

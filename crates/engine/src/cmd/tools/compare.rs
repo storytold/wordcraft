@@ -308,17 +308,18 @@ fn reachable_text_boxes(revised: &Document, blocks: &[Arc<Block>]) -> std::colle
 }
 
 /// Adopts revised blocks into `doc`, stripping source revision metadata and copying any reachable
-/// text-box stories from `revised`.
+/// text-box stories and referenced media from `revised`.
 fn adopt_revised_blocks(doc: &mut Document, revised: &Document, blocks: &[Arc<Block>]) -> Vec<Arc<Block>> {
     let mut frag_blocks: Vec<Block> = blocks.iter().map(|b| (**b).clone()).collect();
     for b in &mut frag_blocks {
         strip_block_revisions(b);
     }
     let parts = reachable_text_boxes(revised, blocks);
-    if parts.is_empty() {
+    let media = revised.media_of_blocks(&frag_blocks);
+    if parts.is_empty() && media.is_empty() {
         return frag_blocks.into_iter().map(Arc::new).collect();
     }
-    let frag = wordcraft_doc::edit::Fragment { parts, media: Default::default(), blocks: frag_blocks };
+    let frag = wordcraft_doc::edit::Fragment { parts, media, blocks: frag_blocks };
     doc.adopt_fragment(&frag).into_iter().map(Arc::new).collect()
 }
 
