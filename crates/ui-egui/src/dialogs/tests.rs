@@ -1674,6 +1674,54 @@ fn word_count_shows_label_and_count_on_a_line_over_close_and_cancel() {
     assert!(!is_open(h.state(), "wordCount"), "Cancel closes Word Count");
 }
 
+/// #1885: the close control is at the title bar's right end; a click in the close box
+/// closes the dialog; one just under the title bar leaves it open; a drag that starts on the box
+/// doesn't move the dialog.
+#[test]
+fn the_title_bar_close_box_is_the_whole_corner() {
+    use egui::accesskit::Role;
+    fn press(h: &mut egui_kittest::Harness<'_, WordApp>, from: egui::Pos2, to: egui::Pos2) {
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(button(from, true));
+        h.step();
+        if to != from {
+            h.event(egui::Event::PointerMoved(to));
+            h.step();
+        }
+        h.event(button(to, false));
+        for _ in 0..4 {
+            h.step();
+        }
+    }
+    let mut app = app_with("Some text");
+    super::open(&mut app, "wordCount", &json!({})).expect("word count opens");
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    assert!(is_open(h.state(), "wordCount"), "dialog is open");
+    let before = h.get_by_role_and_label(Role::Dialog, "Word Count").rect();
+    let closes: Vec<_> = h.query_all_by_role_and_label(Role::Button, "Close").filter(|n| !n.accesskit_node().is_hidden()).collect();
+    let close_box = closes.into_iter().min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("title bar close");
+    let bx = close_box.rect();
+    assert!((bx.top() - before.top()).abs() <= 10.0, "box {bx:?} is in the title bar area of {before:?}");
+    assert!(
+        bx.right() <= before.right() && before.right() - bx.right() <= 10.0 && bx.left() > before.center().x,
+        "close button sits at the right: {bx:?} in {before:?}"
+    );
+    let under = egui::pos2(bx.center().x, bx.bottom() + 4.0);
+    press(&mut h, under, under);
+    assert!(is_open(h.state(), "wordCount"), "a click under the title bar keeps the dialog");
+    let at = bx.center();
+    press(&mut h, at, at + egui::vec2(-150.0, 90.0));
+    assert!(is_open(h.state(), "wordCount"), "a drag from the box isn't a click");
+    let after = h.get_by_role_and_label(Role::Dialog, "Word Count").rect();
+    assert!((after.min - before.min).length() <= 1.0, "the box isn't a drag handle: {before:?} -> {after:?}");
+    press(&mut h, at, at);
+    assert!(!is_open(h.state(), "wordCount"), "a click in the box closes the dialog");
+}
+
 // ---------------------------------------------------------------- Font layout
 
 /// The Font dialog stands as the old one did: the Effects check boxes two to a line (Bold beside Italic, Underline
