@@ -470,6 +470,96 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
 
+/// Finds the painted track and knob rects inside a rendered `craft::ui::choice::Switch`.
+/// `Switch` sets `PARTS = false` and exposes only its `Role::Switch` node and toggled state, so
+/// the thumb position is read from the unblurred filled shapes painted inside the switch rect.
+fn switch_track_and_knob(shapes: &[egui::epaint::ClippedShape], switch_rect: egui::Rect) -> (egui::Rect, egui::Rect) {
+    fn filled_rects(shape: &egui::Shape, inside: egui::Rect, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Vec(children) => children.iter().for_each(|c| filled_rects(c, inside, out)),
+            egui::Shape::Rect(r) if r.blur_width == 0.0 && r.fill != egui::Color32::TRANSPARENT && inside.contains_rect(r.rect) => {
+                out.push(r.rect);
+            }
+            _ => {}
+        }
+    }
+    let mut rects = Vec::new();
+    for clipped in shapes {
+        filled_rects(&clipped.shape, switch_rect.expand(1.0), &mut rects);
+    }
+    let track = rects
+        .iter()
+        .copied()
+        .filter(|r| r.width() > r.height())
+        .max_by(|a, b| a.area().total_cmp(&b.area()))
+        .unwrap_or_else(|| panic!("expected painted switch track inside {switch_rect:?}: {rects:?}"));
+    let knob = rects
+        .iter()
+        .copied()
+        .filter(|r| track.contains_rect(*r) && r.width() < track.width())
+        .max_by(|a, b| a.area().total_cmp(&b.area()))
+        .unwrap_or_else(|| panic!("expected painted switch knob inside track {track:?}: {rects:?}"));
+    (track, knob)
+}
+
+/// The AutoSave switch renders its knob on the right when on and on the left when off in a
+/// left-to-right interface, and mirrors through `WordApp::root_env()` for an Arabic interface.
+#[test]
+fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
+    use craft::i18n::Direction;
+    use egui::accesskit::{Role, Toggled};
+
+    struct ResetLang;
+    impl Drop for ResetLang {
+        fn drop(&mut self) {
+            crate::i18n::apply_language(crate::i18n::Lang::EN);
+        }
+    }
+    let _reset = ResetLang;
+
+    let mut a = new_app();
+    a.ui.animations = crate::theme::Animations::Off;
+    a.ui.language = "en".into();
+    // Mark the document as saved here without touching disk (`session.dirty` stays false).
+    let path = std::path::PathBuf::from("draft.docx");
+    a.session.path = Some(path.clone());
+    a.autosave_path = Some(path);
+
+    let mut h = harness(a);
+    // Arabic UI labels draw even when built without `CRAFT_FONTS_DIR` (embedded Arabic faces).
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+    let mut measure = |lang: crate::i18n::Lang, on: bool| -> (egui::Rect, egui::Rect) {
+        h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
+        h.state_mut().run("file.autosave", json!({"value": on})).unwrap();
+        let want_dir = if lang.rtl() { Direction::Rtl } else { Direction::Ltr };
+        assert_eq!(h.state().root_env().direction, want_dir, "root_env supplies direction for {}", lang.code());
+        assert_eq!(h.state().autosaves(), on);
+        crate::test_harness::frames(&mut h, 4);
+
+        let label = crate::i18n::tr(lang, "AutoSave");
+        let node = h.get_by_role_and_label(Role::Switch, label);
+        assert_eq!(node.accesskit_node().toggled(), Some(if on { Toggled::True } else { Toggled::False }));
+        switch_track_and_knob(&h.output().shapes, node.rect())
+    };
+
+    let (ltr_on_track, ltr_on_knob) = measure(crate::i18n::Lang::EN, true);
+    let (ltr_off_track, ltr_off_knob) = measure(crate::i18n::Lang::EN, false);
+    assert!(ltr_on_knob.center().x > ltr_on_track.center().x, "left to right, on: knob sits right ({ltr_on_knob:?} in {ltr_on_track:?})");
+    assert!(ltr_off_knob.center().x < ltr_off_track.center().x, "left to right, off: knob sits left ({ltr_off_knob:?} in {ltr_off_track:?})");
+
+    let Some(ar) = crate::i18n::Lang::from_code("ar") else {
+        eprintln!("skipped RTL check: built without the craft-i18n Arabic catalog (set CRAFT_I18N_DIR to a checkout)");
+        return;
+    };
+    let (rtl_on_track, rtl_on_knob) = measure(ar, true);
+    let (rtl_off_track, rtl_off_knob) = measure(ar, false);
+    assert!(rtl_on_knob.center().x < rtl_on_track.center().x, "right to left, on: knob sits left ({rtl_on_knob:?} in {rtl_on_track:?})");
+    assert!(rtl_off_knob.center().x > rtl_off_track.center().x, "right to left, off: knob sits right ({rtl_off_knob:?} in {rtl_off_track:?})");
+    assert!(rtl_on_track.center().x > ltr_on_track.center().x, "right to left mirrors the AutoSave switch toward the start (right) edge");
+    assert!(((ltr_on_knob.center().x - ltr_on_track.min.x) - (rtl_on_track.max.x - rtl_on_knob.center().x)).abs() <= 0.5);
+    assert!(((ltr_off_knob.center().x - ltr_off_track.min.x) - (rtl_off_track.max.x - rtl_off_knob.center().x)).abs() <= 0.5);
+}
+
 /// #7311: the title bar's Discord community button keeps its solid accent fill and contrasting
 /// `on_strong` icon/label in both wide (pill with label) and narrow (compact icon-only) windows,
 /// across Light and Dark themes, and still dispatches `ui.discord` when clicked.
