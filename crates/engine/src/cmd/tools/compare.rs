@@ -38,6 +38,7 @@ struct DiffCtx<'a> {
     date: &'a str,
     budget: &'a mut u64,
     char_fallbacks: &'a mut usize,
+    table_fallbacks: &'a mut usize,
     changes: usize,
     plain_revised: bool,
 }
@@ -52,7 +53,9 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// headers and footers, footnotes, text boxes, fields) are accepted and listed in the result.
 /// When character-level comparison is requested (`"level": "character"`) but any paragraph exceeds
 /// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
-/// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
+/// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`. When a
+/// same-text table has media changes but an incompatible layout or exceeds [`wordcraft_doc::table::MAX_TABLE_DEPTH`],
+/// structural table replacement is deferred and `"tables"` is listed in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     // A revised side given as plain text carries no real runs or properties; one opened from a
     // path does. The diff takes the revised formatting only in the latter case.
@@ -119,6 +122,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let del = (s.doc.revisions.len() - 1) as u32;
     let mut budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
+    let mut table_fallbacks = 0usize;
     let (out, changes) = {
         let mut ctx = DiffCtx {
             ins,
@@ -128,6 +132,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
             date: &date,
             budget: &mut budget,
             char_fallbacks: &mut char_fallbacks,
+            table_fallbacks: &mut table_fallbacks,
             changes: 0,
             plain_revised,
         };
@@ -152,6 +157,14 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         );
         if !not_honoured.contains(&"level") {
             not_honoured.push("level");
+        }
+    }
+    if table_fallbacks > 0 {
+        log::warn!(
+            "compare: {table_fallbacks} table(s) with media changes could not be compared cell by cell due to incompatible layout or nesting depth"
+        );
+        if !not_honoured.contains(&"tables") {
+            not_honoured.push("tables");
         }
     }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
@@ -235,8 +248,10 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
     out
 }
 
-/// Emit a matched (`Op::Same`) table pair into `out`, recursing cell by cell when compatible or
-/// falling back to tracked whole-table deletion and insertion.
+/// Emit a matched (`Op::Same`) table pair into `out`. Layout-only or media-identical matches keep
+/// the revised table as on `main`; tables with media differences are diffed cell by cell when
+/// compatible and within [`wordcraft_doc::table::MAX_TABLE_DEPTH`], or otherwise keep the revised
+/// table and record a `"tables"` fallback in `notHonoured` without emitting duplicate table shells.
 fn diff_matched_table(
     doc: &mut Document,
     (a, ta): (Option<&Arc<Block>>, &wordcraft_doc::table::Table),
@@ -245,20 +260,17 @@ fn diff_matched_table(
     depth: usize,
     out: &mut Vec<Arc<Block>>,
 ) {
-    if ta == tb {
-        if let Some(x) = b {
+    if ta == tb || table_media_keys(ta) == table_media_keys(tb) {
+        if let Some(x) = b.or(a) {
             out.push(x.clone());
         }
     } else if depth < wordcraft_doc::table::MAX_TABLE_DEPTH && same_table_cells(ta, tb, ctx) {
         out.push(Arc::new(Block::Table(diff_table(doc, ta, tb, ctx, depth))));
     } else {
-        if let Some(x) = a {
-            out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del))));
+        if let Some(x) = b.or(a) {
+            out.push(x.clone());
         }
-        if let Some(x) = b {
-            out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ctx.ins))));
-        }
-        ctx.changes = ctx.changes.saturating_add(1);
+        *ctx.table_fallbacks = ctx.table_fallbacks.saturating_add(1);
     }
 }
 
@@ -465,6 +477,65 @@ fn remap_block_media(b: &mut Block, map: &mut dyn FnMut(&str) -> Option<String>)
             }
         }
     }
+}
+
+/// Collects media keys referenced by `root` and any nested graphic/group children iteratively.
+fn collect_object_media<'a>(root: &'a InlineObject, out: &mut Vec<&'a str>) {
+    let mut todo = vec![root];
+    while let Some(o) = todo.pop() {
+        match o {
+            InlineObject::Image { media, .. } => out.push(media.as_str()),
+            InlineObject::Graphic { graphic, .. } => {
+                for item in &graphic.items {
+                    if let wordcraft_doc::graphic::GraphicItem::Image { media, .. } = item {
+                        out.push(media.as_str());
+                    }
+                }
+            }
+            InlineObject::Group { children, .. } => {
+                for child in children.iter().rev() {
+                    todo.push(&child.obj);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collects media keys referenced by `table` across all cell pictures, paragraphs, and nested
+/// tables in document order without recursion.
+fn table_media_keys(table: &wordcraft_doc::table::Table) -> Vec<&str> {
+    enum Item<'a> {
+        Table(&'a wordcraft_doc::table::Table),
+        Block(&'a Block),
+    }
+    let mut keys = Vec::new();
+    let mut todo = vec![Item::Table(table)];
+    while let Some(item) = todo.pop() {
+        match item {
+            Item::Table(t) => {
+                for row in t.rows.iter().rev() {
+                    for cell in row.cells.iter().rev() {
+                        for block in cell.blocks.iter().rev() {
+                            todo.push(Item::Block(block));
+                        }
+                        if let Some(pic) = &cell.props.picture {
+                            keys.push(pic.media.as_str());
+                        }
+                    }
+                }
+            }
+            Item::Block(Block::Para(p)) => {
+                for o in &p.objects {
+                    collect_object_media(o, &mut keys);
+                }
+            }
+            Item::Block(Block::Table(nested)) => {
+                todo.push(Item::Table(nested));
+            }
+        }
+    }
+    keys
 }
 
 /// A block's text (a table's cells in order), for matching blocks.

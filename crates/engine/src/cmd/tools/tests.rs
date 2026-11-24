@@ -952,29 +952,26 @@ fn compare_detects_replaced_image_bytes_inside_unchanged_text_table() {
     assert_eq!(cell_para(&s_same.doc).objects.len(), 1);
 }
 
-/// #6086: Incompatible table layouts (reshaped dimensions, changed cell spans) and tables beyond
-/// `MAX_TABLE_DEPTH` fall back to tracked whole-table deletion + insertion with marked leaf
-/// contents, while tables up to `MAX_TABLE_DEPTH` recurse cell by cell.
+/// #6086: Same-text tables up to `MAX_TABLE_DEPTH` recurse cell by cell for replaced media;
+/// layout-only matches keep a single table as on `main`, while incompatible layouts or nesting
+/// beyond `MAX_TABLE_DEPTH` with replaced media defer structural table changes and report `"tables"`
+/// in `notHonoured` without leaving duplicate table shells.
 #[test]
 fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
     let tmp = TempTestDir::new("wc-compare-tbl-depth");
     let base_png = vec![0x89, b'P', b'N', b'G', 10, 20, 30, 40];
     let rev_png = vec![0x89, b'P', b'N', b'G', 50, 60, 70, 80];
 
-    let assert_whole_table_leaf_image = |doc: &Document, tbl_idx: usize, want_del: bool, want_bytes: &[u8]| {
+    let assert_single_table = |doc: &Document, want_rows: usize, want_cols: usize, label: &str| {
         let tables: Vec<&wordcraft_doc::table::Table> = doc.body.iter().filter_map(|b| b.as_table()).collect();
-        let p = tables[tbl_idx].rows[0].cells[0].blocks[0].as_para().expect("leaf cell holds paragraph");
-        let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
-        assert_eq!(objs.len(), 1, "whole-table replacement leaf holds one image");
-        let (off, InlineObject::Image { media, .. }) = objs[0] else { panic!("expected leaf image") };
-        let c = p.props_of_char(off);
-        assert_eq!(c.del.is_some(), want_del, "leaf image del mark mismatch");
-        assert_eq!(c.ins.is_some(), !want_del, "leaf image ins mark mismatch");
-        assert_eq!(doc.media.get(media).map(|b| &***b), Some(want_bytes));
+        assert_eq!(tables.len(), 1, "{label}: must keep a single table");
+        assert_eq!(tables[0].rows.len(), want_rows, "{label}: row count");
+        assert_eq!(tables[0].rows[0].cells.len(), want_cols, "{label}: col count");
     };
 
     // Reshaped tables (1x2 vs 2x1) with identical joined cell text and replaced image bytes:
-    // cannot diff 1-to-1 by cell, so falls back to tracked whole-table delete + insert.
+    // cannot diff 1-to-1 by cell, so structural table replacement is deferred with a single table
+    // and `"tables"` is reported in `notHonoured`.
     let mut base_1x2 = Document::new();
     let k1 = base_1x2.add_media(base_png.clone(), "png");
     let mut p_c0 = Paragraph::with_text("Logo", CharProps::default());
@@ -1027,12 +1024,21 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
     crate::io::save_path(&reshaped_path, &rev_2x1).unwrap();
     let mut s_reshaped = Session::new(base_1x2);
     let r_reshaped = s_reshaped.run("review.compare", &json!({"path": reshaped_path.to_string_lossy(), "showIn": "new"})).unwrap();
-    assert_eq!(r_reshaped["changes"], 1, "reshaped table with replaced image must emit a tracked change");
-    assert_eq!(s_reshaped.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2, "reshaped table fallback emits deleted and inserted tables");
-    assert_whole_table_leaf_image(&s_reshaped.doc, 0, true, &base_png);
-    assert_whole_table_leaf_image(&s_reshaped.doc, 1, false, &rev_png);
+    assert_eq!(r_reshaped["changes"], 0);
+    assert!(
+        r_reshaped["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"),
+        "incompatible reshaped table with replaced media must report `tables` in notHonoured"
+    );
+    assert_single_table(&s_reshaped.doc, 2, 1, "reshaped table compare");
+    for cmd in ["review.acceptAll", "review.rejectAll"] {
+        let mut s_res = Session::new(s_reshaped.doc.clone());
+        s_res.run(cmd, &json!({})).unwrap();
+        assert_single_table(&s_res.doc, 2, 1, cmd);
+    }
 
-    // Equal cell count but changed spans ([1, 2] vs [2, 1]): tracked whole-table replacement.
+    // Equal cell count but changed spans ([1, 2] vs [2, 1]):
+    // - with identical image (layout-only match): keeps single table with 0 changes and no fallback flag;
+    // - with replaced image: defers structural replacement and reports `tables` in notHonoured.
     let make_span_doc = |spans: [u32; 2], bytes: Vec<u8>| -> Document {
         let mut d = Document::new();
         let k = d.add_media(bytes, "png");
@@ -1062,14 +1068,21 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
         d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Para(Paragraph::new()))];
         d
     };
-    let span_path = tmp.path("tbl-span.docx");
-    crate::io::save_path(&span_path, &make_span_doc([2, 1], base_png.clone())).unwrap();
-    let mut s_span = Session::new(make_span_doc([1, 2], base_png.clone()));
-    let r_span = s_span.run("review.compare", &json!({"path": span_path.to_string_lossy(), "showIn": "new"})).unwrap();
-    assert_eq!(r_span["changes"], 1, "changed cell spans must emit a tracked table change");
-    assert_eq!(s_span.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 2);
-    assert_whole_table_leaf_image(&s_span.doc, 0, true, &base_png);
-    assert_whole_table_leaf_image(&s_span.doc, 1, false, &base_png);
+    let span_same_path = tmp.path("tbl-span-same.docx");
+    crate::io::save_path(&span_same_path, &make_span_doc([2, 1], base_png.clone())).unwrap();
+    let mut s_span_same = Session::new(make_span_doc([1, 2], base_png.clone()));
+    let r_span_same = s_span_same.run("review.compare", &json!({"path": span_same_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_span_same["changes"], 0, "layout-only span match keeps old single-table behavior");
+    assert!(!r_span_same["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_single_table(&s_span_same.doc, 1, 2, "layout-only span match");
+
+    let span_diff_path = tmp.path("tbl-span-diff.docx");
+    crate::io::save_path(&span_diff_path, &make_span_doc([2, 1], rev_png.clone())).unwrap();
+    let mut s_span_diff = Session::new(make_span_doc([1, 2], base_png.clone()));
+    let r_span_diff = s_span_diff.run("review.compare", &json!({"path": span_diff_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_span_diff["changes"], 0);
+    assert!(r_span_diff["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_single_table(&s_span_diff.doc, 1, 2, "incompatible span with replaced media");
 
     // Nested tables up to MAX_TABLE_DEPTH (18 levels, leaf at depth 17) recursively retain one
     // table per nesting level and track replaced image bytes at the leaf.
@@ -1108,6 +1121,7 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
     let mut s_deep = Session::new(make_nested_table_doc(wordcraft_doc::table::MAX_TABLE_DEPTH, base_png.clone()));
     let r_deep = s_deep.run("review.compare", &json!({"path": deep_path.to_string_lossy(), "showIn": "new"})).unwrap();
     assert_eq!(r_deep["changes"], 1, "replaced image at MAX_TABLE_DEPTH must still be tracked");
+    assert!(!r_deep["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
     let mut cur_blocks = &s_deep.doc.body;
     for level in 0..wordcraft_doc::table::MAX_TABLE_DEPTH {
         let lvl_tables: Vec<&wordcraft_doc::table::Table> = cur_blocks.iter().filter_map(|b| b.as_table()).collect();
@@ -1125,13 +1139,17 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
     assert_eq!(s_deep.doc.media.get(md).map(|b| &**b), Some(&base_png));
     assert_eq!(s_deep.doc.media.get(mi).map(|b| &**b), Some(&rev_png));
 
-    // Beyond MAX_TABLE_DEPTH (19 nested tables, reaching depth == MAX_TABLE_DEPTH): the fallback
-    // whole-table replacement at the depth limit must still mark every descendant run, mark, and image.
+    // Beyond MAX_TABLE_DEPTH (19 nested tables, reaching depth == MAX_TABLE_DEPTH): defers structural
+    // replacement (single table, no duplicate empty shell) and reports `tables` in notHonoured.
     let over_depth_path = tmp.path("tbl-over-depth.docx");
     crate::io::save_path(&over_depth_path, &make_nested_table_doc(wordcraft_doc::table::MAX_TABLE_DEPTH + 1, rev_png.clone())).unwrap();
     let mut s_over = Session::new(make_nested_table_doc(wordcraft_doc::table::MAX_TABLE_DEPTH + 1, base_png.clone()));
     let r_over = s_over.run("review.compare", &json!({"path": over_depth_path.to_string_lossy(), "showIn": "new"})).unwrap();
-    assert_eq!(r_over["changes"], 1, "depth-limit table fallback must emit a tracked change");
+    assert_eq!(r_over["changes"], 0);
+    assert!(
+        r_over["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"),
+        "tables beyond MAX_TABLE_DEPTH with replaced media must report `tables` in notHonoured"
+    );
     let mut over_blocks = &s_over.doc.body;
     for _ in 0..wordcraft_doc::table::MAX_TABLE_DEPTH {
         let lvl_tables: Vec<&wordcraft_doc::table::Table> = over_blocks.iter().filter_map(|b| b.as_table()).collect();
@@ -1139,32 +1157,21 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
         over_blocks = &lvl_tables[0].rows[0].cells[0].blocks;
     }
     let cap_tables: Vec<&wordcraft_doc::table::Table> = over_blocks.iter().filter_map(|b| b.as_table()).collect();
-    assert_eq!(cap_tables.len(), 2, "at depth == MAX_TABLE_DEPTH, fallback emits deleted and inserted tables");
-    let del_leaf = cap_tables[0].rows[0].cells[0].blocks[0].as_para().expect("deleted fallback leaf");
-    assert!(del_leaf.runs.iter().all(|r| r.props.del.is_some()) && del_leaf.mark.del.is_some(), "deleted fallback table must mark all descendants");
-    let del_objs: Vec<(usize, &InlineObject)> = del_leaf.objects_with_offsets().collect();
-    assert_eq!(del_objs.len(), 1);
-    let InlineObject::Image { media: m_over_del, .. } = del_objs[0].1 else { panic!("expected deleted image") };
-    assert_eq!(s_over.doc.media.get(m_over_del).map(|b| &**b), Some(&base_png));
-
-    let ins_leaf = cap_tables[1].rows[0].cells[0].blocks[0].as_para().expect("inserted fallback leaf");
-    assert!(ins_leaf.runs.iter().all(|r| r.props.ins.is_some()) && ins_leaf.mark.ins.is_some(), "inserted fallback table must mark all descendants");
-    let ins_objs: Vec<(usize, &InlineObject)> = ins_leaf.objects_with_offsets().collect();
-    assert_eq!(ins_objs.len(), 1);
-    let InlineObject::Image { media: m_over_ins, .. } = ins_objs[0].1 else { panic!("expected inserted image") };
-    assert_eq!(s_over.doc.media.get(m_over_ins).map(|b| &**b), Some(&rev_png));
+    assert_eq!(cap_tables.len(), 1, "at depth == MAX_TABLE_DEPTH, keeps single table without duplicate shell");
 }
 
-/// #6086: Formatting-enabled table comparison must track table, row, and cell property differences
-/// via undoable `fmt_change` revisions, and fall back to tracked whole-table replacement when
-/// column grid widths differ so Reject All never silently loses original widths or properties.
+/// #6086: Compatible tables with replaced media track table, row, and cell property differences
+/// via undoable `fmt_change` revisions; image-free layout-only grid differences keep the old
+/// single-table behavior without emitting two tables, and changed grid widths combined with
+/// replaced media defer structural replacement when `formatting` is enabled (reporting `"tables"`
+/// in `notHonoured`) while tracking the replaced media when `formatting` is false.
 #[test]
 fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
     let tmp = TempTestDir::new("wc-compare-tbl-props");
     let base_png = vec![0x89, b'P', b'N', b'G', 11, 22, 33, 44];
     let rev_png = vec![0x89, b'P', b'N', b'G', 55, 66, 77, 88];
 
-    let make_styled_table_doc = |bytes: Vec<u8>, styled: bool| -> Document {
+    let make_styled_table_doc = |bytes: Vec<u8>, styled: bool, width: f32| -> Document {
         let mut d = Document::new();
         let k = d.add_media(bytes, "png");
         let mut p = Paragraph::with_text("Logo", CharProps::default());
@@ -1184,7 +1191,7 @@ fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
             &CharProps::default(),
         )
         .unwrap();
-        let mut t = wordcraft_doc::table::Table::new(1, 1, 200.0);
+        let mut t = wordcraft_doc::table::Table::new(1, 1, width);
         if styled {
             t.props.align = Some(wordcraft_doc::props::Align::Center);
             t.rows[0].props.cant_split = true;
@@ -1196,11 +1203,12 @@ fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
     };
 
     let rev_styled_path = tmp.path("rev-styled.docx");
-    crate::io::save_path(&rev_styled_path, &make_styled_table_doc(rev_png.clone(), true)).unwrap();
+    crate::io::save_path(&rev_styled_path, &make_styled_table_doc(rev_png.clone(), true, 200.0)).unwrap();
 
-    let mut s = Session::new(make_styled_table_doc(base_png.clone(), false));
+    let mut s = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
     let r = s.run("review.compare", &json!({"path": rev_styled_path.to_string_lossy(), "showIn": "new"})).unwrap();
     assert_eq!(r["changes"], 4, "table, row, cell property changes + replaced cell image count as 4 changes");
+    assert!(!r["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
     let t = s.doc.body[0].as_table().unwrap();
     assert!(t.props.fmt_change.is_some(), "table property change recorded");
     assert!(t.rows[0].props.fmt_change.is_some(), "row property change recorded");
@@ -1229,15 +1237,17 @@ fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
     let InlineObject::Image { media: m_rej, .. } = objs_rej[0].1 else { panic!("expected image") };
     assert_eq!(rejected.doc.media.get(m_rej).map(|b| &**b), Some(&base_png));
 
-    // Formatting-only table property differences are ignored when `formatting: false`.
+    // Layout/formatting-only differences with identical media keep single-table behavior.
     let rev_fmt_only_path = tmp.path("rev-fmt-only.docx");
-    crate::io::save_path(&rev_fmt_only_path, &make_styled_table_doc(base_png.clone(), true)).unwrap();
-    let mut s_no_fmt = Session::new(make_styled_table_doc(base_png.clone(), false));
+    crate::io::save_path(&rev_fmt_only_path, &make_styled_table_doc(base_png.clone(), true, 200.0)).unwrap();
+    let mut s_no_fmt = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
     let r_no_fmt =
         s_no_fmt.run("review.compare", &json!({"path": rev_fmt_only_path.to_string_lossy(), "showIn": "new", "formatting": false})).unwrap();
     assert_eq!(r_no_fmt["changes"], 0);
+    assert_eq!(s_no_fmt.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
 
-    // Column grid width difference alone: tracked whole-table replacement when formatting is enabled.
+    // Image-free table with identical cell text and only a changed column width:
+    // keeps the old single-table behavior without emitting two tables or empty shells.
     let make_grid_doc = |width: f32| -> Document {
         let mut d = Document::new();
         let mut t = wordcraft_doc::table::Table::new(1, 1, width);
@@ -1249,50 +1259,58 @@ fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
     crate::io::save_path(&grid_path, &make_grid_doc(260.0)).unwrap();
     let mut s_grid = Session::new(make_grid_doc(200.0));
     let r_grid = s_grid.run("review.compare", &json!({"path": grid_path.to_string_lossy(), "showIn": "new"})).unwrap();
-    assert_eq!(r_grid["changes"], 1, "column grid width difference must be tracked");
-    let grid_tables: Vec<&wordcraft_doc::table::Table> = s_grid.doc.body.iter().filter_map(|b| b.as_table()).collect();
-    assert_eq!(grid_tables.len(), 2, "grid width difference uses tracked whole-table replacement");
-    assert_eq!(grid_tables[0].grid, vec![200.0]);
-    assert_eq!(grid_tables[1].grid, vec![260.0]);
-    assert!(grid_tables[0].rows[0].cells[0].blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.del.is_some()));
-    assert!(grid_tables[1].rows[0].cells[0].blocks[0].as_para().unwrap().runs.iter().all(|r| r.props.ins.is_some()));
+    assert_eq!(r_grid["changes"], 0, "image-free grid width match keeps old single-table behavior");
+    assert!(!r_grid["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
 
-    let assert_grid_resolution = |doc: &Document, keep_idx: usize, keep_grid: f32, clear_idx: usize| {
+    let assert_single_grid_table = |doc: &Document| {
         let tables: Vec<&wordcraft_doc::table::Table> = doc.body.iter().filter_map(|b| b.as_table()).collect();
-        assert_eq!(tables.len(), 2);
-        let kept_p = tables[keep_idx].rows[0].cells[0].blocks[0].as_para().unwrap();
-        assert_eq!(tables[keep_idx].grid, vec![keep_grid]);
-        assert_eq!(kept_p.plain_text(), "Cell");
-        assert!(kept_p.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()));
-        let cleared_p = tables[clear_idx].rows[0].cells[0].blocks[0].as_para().unwrap();
-        assert_eq!(cleared_p.plain_text(), "");
-        assert!(cleared_p.mark.ins.is_none() && cleared_p.mark.del.is_none());
+        assert_eq!(tables.len(), 1, "must keep a single table with no duplicate empty shell");
+        assert_eq!(tables[0].grid, vec![260.0]);
+        let p = tables[0].rows[0].cells[0].blocks[0].as_para().unwrap();
+        assert_eq!(p.plain_text(), "Cell");
+        assert!(p.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()));
     };
+    assert_single_grid_table(&s_grid.doc);
 
-    let mut s_grid_acc = Session::new(s_grid.doc.clone());
-    s_grid_acc.run("review.acceptAll", &json!({})).unwrap();
-    assert_grid_resolution(&s_grid_acc.doc, 1, 260.0, 0);
-
-    let mut s_grid_rej = Session::new(s_grid.doc.clone());
-    s_grid_rej.run("review.rejectAll", &json!({})).unwrap();
-    assert_grid_resolution(&s_grid_rej.doc, 0, 200.0, 1);
+    for cmd in ["review.acceptAll", "review.rejectAll"] {
+        let mut s_res = Session::new(s_grid.doc.clone());
+        s_res.run(cmd, &json!({})).unwrap();
+        assert_single_grid_table(&s_res.doc);
+    }
 
     let cmp_grid_path = tmp.path("cmp-grid.docx");
     crate::io::save_path(&cmp_grid_path, &s_grid.doc).unwrap();
     let reopened_grid = crate::io::open_path(&cmp_grid_path).unwrap();
+    for cmd in ["review.acceptAll", "review.rejectAll"] {
+        let mut s_res = Session::new(reopened_grid.clone());
+        s_res.run(cmd, &json!({})).unwrap();
+        assert_single_grid_table(&s_res.doc);
+    }
 
-    let mut s_reopened_acc = Session::new(reopened_grid.clone());
-    s_reopened_acc.run("review.acceptAll", &json!({})).unwrap();
-    assert_grid_resolution(&s_reopened_acc.doc, 1, 260.0, 0);
+    // Replaced image + changed column grid width:
+    // - with formatting enabled: incompatible grid width defers structural change and reports `tables`;
+    // - with formatting disabled: tracks the replaced image in the single table.
+    let grid_img_path = tmp.path("rev-grid-img.docx");
+    crate::io::save_path(&grid_img_path, &make_styled_table_doc(rev_png.clone(), false, 260.0)).unwrap();
+    let mut s_grid_img = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
+    let r_grid_img = s_grid_img.run("review.compare", &json!({"path": grid_img_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    assert_eq!(r_grid_img["changes"], 0);
+    assert!(r_grid_img["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_eq!(s_grid_img.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
 
-    let mut s_reopened_rej = Session::new(reopened_grid);
-    s_reopened_rej.run("review.rejectAll", &json!({})).unwrap();
-    assert_grid_resolution(&s_reopened_rej.doc, 0, 200.0, 1);
-
-    let mut s_grid_no_fmt = Session::new(make_grid_doc(200.0));
-    let r_grid_no_fmt =
-        s_grid_no_fmt.run("review.compare", &json!({"path": grid_path.to_string_lossy(), "showIn": "new", "formatting": false})).unwrap();
-    assert_eq!(r_grid_no_fmt["changes"], 0, "grid width difference ignored when formatting is false");
+    let mut s_grid_img_nf = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
+    let r_grid_img_nf =
+        s_grid_img_nf.run("review.compare", &json!({"path": grid_img_path.to_string_lossy(), "showIn": "new", "formatting": false})).unwrap();
+    assert_eq!(r_grid_img_nf["changes"], 1, "with formatting false, replaced image inside grid-changed table is tracked");
+    assert!(!r_grid_img_nf["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
+    assert_eq!(s_grid_img_nf.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+    let mut s_grid_img_rej = Session::new(s_grid_img_nf.doc.clone());
+    s_grid_img_rej.run("review.rejectAll", &json!({})).unwrap();
+    let p_grid_rej = s_grid_img_rej.doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap();
+    let objs_grid_rej: Vec<(usize, &InlineObject)> = p_grid_rej.objects_with_offsets().collect();
+    assert_eq!(objs_grid_rej.len(), 1);
+    let InlineObject::Image { media: m_grid_rej, .. } = objs_grid_rej[0].1 else { panic!("expected image") };
+    assert_eq!(s_grid_img_rej.doc.media.get(m_grid_rej).map(|b| &**b), Some(&base_png));
 }
 
 #[test]
