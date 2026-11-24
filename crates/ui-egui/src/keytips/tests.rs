@@ -178,6 +178,150 @@ fn the_legacy_hint_hangs_under_the_slim_bar_without_a_ribbon() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "no letter typed into the document");
 }
 
+fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(children) => {
+                for child in children {
+                    walk(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+#[test]
+fn long_qat_badges_wait_for_the_complete_number_and_escape_cancels() {
+    // Collect genuinely enabled commands from a live harness context (where `frame_input` has
+    // published command states) so all 20 QAT buttons remain active during the test.
+    let mut h = harness(app());
+    let commands: Vec<String> = {
+        let ctx = h.ctx.clone();
+        let a = h.state();
+        let mut ids: Vec<String> = a
+            .session
+            .registry
+            .all()
+            .iter()
+            .filter(|s| s.id != "format.bold" && s.id != "format.italic" && crate::chrome::qat_enabled(&ctx, a, s.id))
+            .take(18)
+            .map(|s| s.id.to_string())
+            .collect();
+        ids.insert(0, "format.italic".into());
+        ids.insert(9, "format.bold".into());
+        ids
+    };
+    assert_eq!(commands.len(), 20, "expected 20 enabled QAT commands");
+    h.state_mut().session.ribbon.qat = Some(commands);
+    crate::test_harness::frames(&mut h, 2);
+    {
+        let ctx = h.ctx.clone();
+        let a = h.state();
+        let enabled_count = a.session.ribbon.qat().iter().filter(|id| crate::chrome::qat_enabled(&ctx, a, id)).count();
+        assert_eq!(enabled_count, 20, "all 20 QAT commands stay enabled");
+    }
+
+    let digit = |key, ch: &str| [key_event(key, true, egui::Modifiers::NONE), egui::Event::Text(ch.into())];
+
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active);
+    let shown = painted_texts(&h.output().shapes);
+    assert!(shown.iter().any(|t| t == "001"), "20-button QAT paints 001 for the 10th button: {shown:?}");
+
+    h.input_mut().events.extend(digit(egui::Key::Num0, "0"));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active, "first 0 waits for the rest of the multi-digit badge");
+    h.input_mut().events.extend(digit(egui::Key::Num0, "0"));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active, "second 0 still waits for the final digit of 001");
+    assert!(!bold(&mut h), "incomplete prefix 00 must not fire Bold");
+    let narrowed = painted_texts(&h.output().shapes);
+    assert!(narrowed.iter().any(|t| t == "001"), "001 remains painted while waiting on prefix 00");
+    assert!(!narrowed.iter().any(|t| t == "010"), "non-matching multi-digit badges are hidden under prefix 00");
+
+    h.input_mut().events.extend(digit(egui::Key::Num1, "1")); // 001: first button after the first nine.
+    crate::test_harness::frames(&mut h, 3);
+    assert!(bold(&mut h), "001 runs Bold");
+    assert!(!h.state().keytips_active, "completing 001 ends keytips");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "QAT digits never type into the document");
+
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active);
+    h.input_mut().events.extend(digit(egui::Key::Num0, "0"));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active);
+    h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    assert!(!h.state().keytips_active, "Escape cancels a partial multi-digit prefix");
+
+    // Reopening keytips and pressing 1 fires button 1 (Italic), proving the cancelled "0" prefix was cleared.
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active);
+    h.input_mut().events.extend(digit(egui::Key::Num1, "1"));
+    crate::test_harness::frames(&mut h, 3);
+    assert!(!h.state().keytips_active);
+    assert_eq!(
+        h.state_mut().session.run("format.state", &serde_json::json!({})).unwrap()["italic"],
+        true,
+        "after Escape, F10 then 1 runs the first button"
+    );
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "no keytip digit typed into the document");
+
+    // Verify production `craft::menu::Keytips` assigns distinct, prefix-free digit badges across
+    // single- and multi-digit QAT lengths without any test-only label helper.
+    for count in [9, 10, 18, 19, 100, 200] {
+        let digits: Vec<CommandRef> = (0..count).map(|i| CommandRef::new(format!("test.qat.{i}"))).collect();
+        let region_id = egui::Id::unique(("test_qat_digit_badges", count));
+        let ctx = crate::test_harness::context();
+        let run_pass = |events: Vec<egui::Event>| {
+            craft::ui::shell::embed::before_input(&ctx, |_| craft::ui::runtime::frame::FrameInput::new(craft::ui::runtime::env::RootEnv::default()));
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2000.0, 2000.0))),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let (_, recorded) = inspect::record(ui, region_id, |ui| {
+                        for row in digits.chunks(20) {
+                            ui.horizontal(|ui| {
+                                for cmd in row {
+                                    craft::ui::buttons::IconButton::command(craft::behavior::IconId::new("bold"), cmd.clone()).show(ui);
+                                }
+                            });
+                        }
+                    });
+                    let places: Vec<Arc<Recorded>> = recorded.into_iter().collect();
+                    let _ = Keytips::new(true).digits(&digits).places(&places).show_over(ui);
+                },
+            )
+        };
+        run_pass(Vec::new()).drop_without_applying_deltas();
+        let shown = run_pass(vec![key_event(egui::Key::F10, true, egui::Modifiers::NONE)]);
+        let labels = painted_texts(&shown.shapes);
+        shown.drop_without_applying_deltas();
+        assert_eq!(labels.len(), count, "expected one painted digit badge per QAT command for count={count}: {labels:?}");
+        for (i, label) in labels.iter().enumerate() {
+            assert!(!label.is_empty() && label.chars().all(|c| c.is_ascii_digit()), "non-digit badge {label:?} at {i} for count={count}");
+            assert!(
+                !labels.iter().enumerate().any(|(j, other)| i != j && other.starts_with(label.as_str())),
+                "ambiguous label {label} in {count} buttons"
+            );
+        }
+    }
+}
+
 #[test]
 fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     let mut a = app();
