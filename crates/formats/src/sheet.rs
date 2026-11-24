@@ -102,6 +102,20 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
                             _ => None,
                         };
                         let s = match (&value, &cell.value, kind) {
+                            // A `t="d"` cell whose day its month does not have, such as 2024-02-31, or
+                            // whose time is not [`iso_time_text`] stays unread instead of reading as
+                            // the nearest date or time.
+                            (Value::Number(_), craft_xlsx::CellValue::Date(text), Some(_))
+                                if !date_part_exists(text) || time_part(text).is_some_and(|time| !iso_time_text(time)) =>
+                            {
+                                String::new()
+                            }
+                            // A `t="d"` cell whose time has an offset keeps its text with the offset.
+                            (Value::Number(_), craft_xlsx::CellValue::Date(text), Some(_))
+                                if time_part(text).is_some_and(|time| time.contains(['+', '-'])) =>
+                            {
+                                clamp_cell(text.clone())
+                            }
                             // A `t="d"` cell whose serial has no calendar day, such as 1900-02-29,
                             // keeps its text.
                             (Value::Number(n), craft_xlsx::CellValue::Date(text), Some(kind)) => {
@@ -222,14 +236,71 @@ fn display(v: &Value, kind: Option<DateKind>, date_1904: bool) -> String {
 /// Whether `text` is an ISO 8601 date, with or without a time, in any year: its day exists in its
 /// month and year, or it is 1900-02-29, which Excel counts as a day, and
 /// `craft_xlsx::iso_date_serial` accepts it with its year replaced by 2000. A trailing `Z` is
-/// dropped first, as `craft_xlsx::iso_date_serial` drops it.
+/// dropped first, as `craft_xlsx::iso_date_serial` drops it. A time after `T` must be
+/// [`iso_time_text`], and `craft_xlsx::iso_date_serial` reads it without its offset, since it
+/// does not read a `-` offset.
 fn iso_date_text(text: &str) -> bool {
     text.trim().trim_end_matches('Z').split_once('-').is_some_and(|(year, rest)| {
+        let checked = match rest.split_once('T') {
+            Some((date, time)) => iso_time_text(time).then(|| format!("2000-{date}T{}", time.split(['+', '-']).next().unwrap_or(time))),
+            None => Some(format!("2000-{rest}")),
+        };
         !year.is_empty()
             && year.bytes().all(|b| b.is_ascii_digit())
             && day_in_month(year, rest)
-            && craft_xlsx::iso_date_serial(&format!("2000-{rest}"), false).is_some()
+            && checked.is_some_and(|checked| craft_xlsx::iso_date_serial(&checked, false).is_some())
     })
+}
+
+/// Whether `time` is written as `hh:mm` or `hh:mm:ss` with an optional fraction of a second,
+/// then an optional `+hh:mm`, `+hhmm`, `+hh`, `-hh:mm`, `-hhmm` or `-hh` offset whose hours are
+/// 00 to 23 and minutes 00 to 59, and nothing else.
+fn iso_time_text(time: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (clock, offset) = match time.split_once(['+', '-']) {
+        Some((clock, offset)) => (clock, Some(offset)),
+        None => (time, None),
+    };
+    let offset_ok = offset.is_none_or(|o| {
+        let (h, m) = match o.split_once(':') {
+            Some((h, m)) if m.len() == 2 => (h, m),
+            Some(_) => return false,
+            None if o.len() == 4 => o.split_at(2),
+            None => (o, "00"),
+        };
+        h.len() == 2 && digits(h) && digits(m) && h < "24" && m < "60"
+    });
+    let mut parts = clock.split(':');
+    let (Some(h), Some(m)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let seconds_ok = parts.next().is_none_or(|s| match s.split_once('.') {
+        Some((whole, fraction)) => digits(whole) && digits(fraction),
+        None => digits(s),
+    });
+    offset_ok && digits(h) && digits(m) && seconds_ok && parts.next().is_none()
+}
+
+/// Whether the date in a `t="d"` cell's text, if it has one, names a day its month and year have
+/// (1900-02-29 included, as in [`day_in_month`]). A time alone has no date and passes.
+fn date_part_exists(text: &str) -> bool {
+    let text = text.trim().trim_end_matches('Z');
+    let date = text.split('T').next().unwrap_or(text);
+    if !date.contains('-') || date.contains(':') {
+        return true;
+    }
+    text.split_once('-').is_some_and(|(year, rest)| !year.is_empty() && year.bytes().all(|b| b.is_ascii_digit()) && day_in_month(year, rest))
+}
+
+/// The time in a `t="d"` cell's text, without a trailing `Z`: what follows `T`, or the whole text
+/// when it has a `:` and no `T`, as `craft_xlsx::iso_date_serial` splits it.
+fn time_part(text: &str) -> Option<&str> {
+    let text = text.trim().trim_end_matches('Z');
+    match text.split_once('T') {
+        Some((_, time)) => Some(time),
+        None if text.contains(':') => Some(text),
+        None => None,
+    }
 }
 
 /// Whether the `MM-DD` at the start of `rest` names a day that `year` (ASCII digits) has.
@@ -435,8 +506,8 @@ fn format_section(sections: &[Section], value: f64) -> Option<&Section> {
 }
 
 /// Whether a format section shows a date or time: without quoted text, escaped characters,
-/// `[…]` (colors, locales, conditions) and `_x` / `*x` padding, it has `d` or `y` (date), `h` or
-/// `s` (time), or `m` alone (a month). `[h]`, `[m]` or `[s]` makes it an elapsed time.
+/// `[…]` (colors, locales, conditions) and `_x` / `*x` padding, it has `d` or `y` (date), `h`,
+/// `s`, `AM/PM` or `A/P` (time), or `m` alone (a month). `[h]`, `[m]` or `[s]` makes it an elapsed time.
 fn custom_date(code: &str) -> Option<DateKind> {
     let mut plain = String::new();
     let mut elapsed = None;
@@ -477,7 +548,8 @@ fn custom_date(code: &str) -> Option<DateKind> {
     }
     let has = |c: char| plain.contains(c);
     let date = has('d') || has('y');
-    let time = has('h') || has('s');
+    // `AM/PM` and `A/P` show the half of the day, a time.
+    let time = has('h') || has('s') || plain.contains("am/pm") || plain.contains("a/p");
     if let (Some(unit), false) = (elapsed, date) {
         return Some(DateKind::Elapsed(unit));
     }
@@ -653,6 +725,10 @@ mod tests {
         assert_eq!(custom_date("h:mm:ss"), Some(DateKind::Time));
         assert_eq!(custom_date("m/d/yy h:mm"), Some(DateKind::DateTime));
         assert_eq!(custom_date("mmm"), Some(DateKind::Date));
+        // An AM/PM marker shows a time, even with no hour or second in the code.
+        assert_eq!(custom_date("AM/PM"), Some(DateKind::Time));
+        assert_eq!(custom_date("A/P"), Some(DateKind::Time));
+        assert_eq!(NumFmt::code("AM/PM").date_kind(0.75).and_then(|k| serial_date(0.75, false, k)).as_deref(), Some("18:00"));
         assert_eq!(custom_date(r#"0.00" days""#), None);
         assert_eq!(custom_date("General"), None);
         assert_eq!(builtin_date(22, 1.0), Some(DateKind::DateTime));
@@ -721,6 +797,15 @@ mod tests {
         let rows = r#"<row r="1"><c r="A1" t="d"><v>06:00</v></c><c r="B1" t="d"><v>2024-03-05T00:00:00</v></c></row>"#;
         let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["06:00", "2024-03-05 00:00"]]);
+        // A day the month does not have stays unread instead of rolling over; 1900-02-29 is kept.
+        let rows = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="d"><v>2024-02-31</v></c><c r="C1" t="d"><v>2023-02-29T08:00</v></c><c r="D1" t="d"><v>2024-02-29</v></c><c r="E1" t="d"><v>1900-02-29</v></c></row>"#;
+        let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1", "", "", "2024-02-29", "1900-02-29"]]);
+        // A time with an offset keeps its text; a Z reads as the time it marks. A malformed
+        // time or offset stays unread.
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>2024-03-05T13:45:00+02:00</v></c><c r="B1" t="d"><v>06:00+02:00</v></c><c r="C1" t="d"><v>2024-03-05T13:45:00Z</v></c><c r="D1" t="d"><v>2024-03-05T13:45:00+garbage</v></c><c r="E1" t="d"><v>06:00+2</v></c><c r="F1" t="d"><v>2024-03-05T13:45:00+99:99</v></c><c r="G1" t="d"><v>2024-03-05T13:45:00-0960</v></c><c r="H1" t="d"><v>06:00+24</v></c><c r="I1" t="d"><v>2024-03-05T06:00:00:garbage</v></c><c r="J1" t="d"><v>06:00:00:00</v></c><c r="K1" t="d"><v>2024-03-05T06</v></c></row>"#;
+        let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
+        assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["2024-03-05T13:45:00+02:00", "06:00+02:00", "2024-03-05 13:45"]]);
     }
 
     #[test]
@@ -745,9 +830,23 @@ mod tests {
         let book = workbook_with(rows, "", r#"<xf numFmtId="0"/>"#, r#"<workbookPr date1904="1"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1900-02-29", "1896-02-29", "1896-02-29Z"]]);
         // Text that is not an ISO date stays unread.
-        let rows = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="d"><v>not-a-date</v></c><c r="C1" t="d"><v>1899-13-01</v></c></row>"#;
+        let rows = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="d"><v>not-a-date</v></c><c r="C1" t="d"><v>1899-13-01</v></c><c r="D1" t="d"><v>1800-03-05T06:00:00:garbage</v></c><c r="E1" t="d"><v>1800-03-05T06:00:00+garbage</v></c><c r="F1" t="d"><v>1800-03-05T06</v></c><c r="G1" t="d"><v>1800-03-05T1e1:00</v></c><c r="H1" t="d"><v>1800-03-05T06:00:00-garbage</v></c><c r="I1" t="d"><v>1800-03-05T06:00:00-05:00:00</v></c></row>"#;
         let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["1"]]);
+        // A date and time before the epoch keeps its text, with seconds, a fraction, an offset or a Z.
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>1800-03-05T06:00</v></c><c r="B1" t="d"><v>1800-03-05T06:00:00.5</v></c><c r="C1" t="d"><v>1800-03-05T06:00:00+02:00</v></c><c r="D1" t="d"><v>1800-03-05T06:00:00Z</v></c></row>"#;
+        let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
+        assert_eq!(
+            read_rows(&book, Pick::Index(0)).unwrap().1,
+            [["1800-03-05T06:00", "1800-03-05T06:00:00.5", "1800-03-05T06:00:00+02:00", "1800-03-05T06:00:00Z"]]
+        );
+        // A date and time with a negative offset keeps its text, before the epoch and after it.
+        let rows = r#"<row r="1"><c r="A1" t="d"><v>1800-03-05T06:00:00-05:00</v></c><c r="B1" t="d"><v>2024-03-05T13:45:00-05:00</v></c><c r="C1" t="d"><v>2024-03-05T13:45-0500</v></c><c r="D1" t="d"><v>2024-03-05T13:45:00-05</v></c></row>"#;
+        let book = styled_workbook(rows, "", r#"<xf numFmtId="0"/>"#);
+        assert_eq!(
+            read_rows(&book, Pick::Index(0)).unwrap().1,
+            [["1800-03-05T06:00:00-05:00", "2024-03-05T13:45:00-05:00", "2024-03-05T13:45-0500", "2024-03-05T13:45:00-05"]]
+        );
     }
 
     #[test]
