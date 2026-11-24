@@ -950,3 +950,24 @@ fn save_as_picture_asks_the_resolution_then_where() {
     assert_eq!(image::load_from_memory(&std::fs::read(&path).unwrap()).unwrap().width(), 150);
     assert!(status_text(&a).contains("timetable.png"), "{}", status_text(&a));
 }
+
+/// #7743 review: a picture no longer selected when the save dialog answers is not saved, and
+/// nothing else is saved under the name chosen for it.
+#[test]
+fn save_as_picture_saves_nothing_once_the_picture_is_unselected() {
+    let dir = scratch("save-picture-moved");
+    let (mut a, files) = async_app();
+    let red = image::RgbaImage::from_pixel(30, 15, image::Rgba([200, 30, 30, 255]));
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(red), image::ImageFormat::Png).unwrap();
+    a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})).unwrap();
+    a.run("picture.saveAs", json!({"dpi": 96})).unwrap();
+    assert_eq!(request(&files, 0).kind, PickKind::Save);
+    // While the dialog is open, the caret moves off the picture and text is typed.
+    a.run("select.collapse", json!({"end": true})).unwrap();
+    a.run("text.insert", json!({"text": "after"})).unwrap();
+    let path = dir.join("picture.png");
+    answer(&files, Some(&path.to_string_lossy()));
+    assert!(a.poll_file_dialog().unwrap().is_err());
+    assert!(!path.exists(), "nothing saved");
+    assert!(status_text(&a).contains("no longer selected"), "{}", status_text(&a));
+}

@@ -77,8 +77,10 @@ pub(crate) enum AfterPick {
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
     PrintPdf { settings: Value },
-    /// Save the selected picture there at this resolution (`picture.saveAs`'s `dpi`, #7743).
-    SavePicture { dpi: Value },
+    /// Save the selected picture there at this resolution (`picture.saveAs`'s `dpi`, #7743), if it
+    /// is still the one selected when the dialog was asked for: `picture` is that picture (its
+    /// place and media key) in the window showing `document`.
+    SavePicture { dpi: Value, document: u64, picture: Option<(wordcraft_doc::Pos, String)> },
     /// Load the picked CSV/TSV/text file or spreadsheet as the mail-merge recipients (#240, #334).
     Recipients,
     /// Add every picked font file (#582, #1789).
@@ -348,8 +350,15 @@ impl WordApp {
                 }
                 r
             }
-            AfterPick::SavePicture { dpi } => {
+            AfterPick::SavePicture { dpi, document, picture } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // The selection or the document may have changed while the dialog was open: then
+                // nothing is saved, rather than another picture under the name chosen for this one.
+                if picture.is_none() || document != self.session.document_id() || self.selected_picture() != picture {
+                    let e = tl!("The picture is no longer selected; nothing was saved.").to_string();
+                    self.status(e.clone());
+                    return Err(e);
+                }
                 let r = self.run("picture.saveAs", json!({"path": path, "dpi": dpi}));
                 match &r {
                     Ok(_) => self.status(crate::i18n::fmt(tl!("Saved {path}"), &[("path", &interface_path(&path))])),
@@ -524,7 +533,16 @@ impl WordApp {
         for (label, exts) in SAVE_PICTURE_TYPES {
             req = req.filter(tl!(label), exts);
         }
-        let _ = self.ask_file(req, AfterPick::SavePicture { dpi });
+        let (document, picture) = (self.session.document_id(), self.selected_picture());
+        let _ = self.ask_file(req, AfterPick::SavePicture { dpi, document, picture });
+    }
+
+    /// The selected picture's place and media key, if a picture is selected.
+    fn selected_picture(&self) -> Option<(wordcraft_doc::Pos, String)> {
+        match wordcraft_engine::cmd::objects::selected(&self.session)? {
+            (at, wordcraft_doc::para::InlineObject::Image { media, .. }) => Some((at, media)),
+            _ => None,
+        }
     }
 
     /// File › Print › Save these pages as PDF: ask where, then write the pages the print

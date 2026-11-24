@@ -100,7 +100,8 @@ pub fn picture_file(s: &Session, v: &Value, format: image::ImageFormat) -> Resul
         (None, None) => METAFILE_DPI,
     };
     let scale = dpi / POINTS_PER_INCH;
-    let (w_px, h_px) = ((w * scale).round().max(1.0), (h * scale).round().max(1.0));
+    // Rounded as the renderer rounds (`render_items`), so the refusal and the drawn size agree.
+    let (w_px, h_px) = ((w * scale).ceil().max(1.0), (h * scale).ceil().max(1.0));
     let too_large = || CmdError::Failed(format!("the picture is too large to save at {dpi:.0} DPI; choose a lower resolution"));
     if w_px > wordcraft_render::MAX_SIDE as f32 || h_px > wordcraft_render::MAX_SIDE as f32 {
         return Err(too_large());
@@ -108,10 +109,10 @@ pub fn picture_file(s: &Session, v: &Value, format: image::ImageFormat) -> Resul
     if (w_px as u64).saturating_mul(h_px as u64) > wordcraft_geom::MAX_RASTER_PIXELS {
         return Err(too_large());
     }
-    // Drawn as the page draws it, at its shown size: points scaled to these pixels exactly.
+    // Drawn as the page draws it, at its shown size, the resolution's scale on both axes.
     let rect = Rect::new(0.0, 0.0, w, h);
     let item = Draw::Image { rect, media, crop, alpha: fx.opacity(), alt: String::new(), fx, decorative: false };
-    let drawn = wordcraft_render::render_items(&s.doc, &[item], rect, w_px / w.max(f32::MIN_POSITIVE), &Default::default());
+    let drawn = wordcraft_render::render_items(&s.doc, &[item], rect, scale, &Default::default());
     let rgba = image::RgbaImage::from_raw(drawn.width, drawn.height, drawn.to_straight())
         .ok_or_else(|| CmdError::Failed("the drawn picture has the wrong size".into()))?;
     let img = match format {

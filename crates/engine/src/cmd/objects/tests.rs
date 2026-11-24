@@ -1907,3 +1907,17 @@ fn save_as_picture_refuses_what_it_cannot_write() {
     assert!(s.run("picture.saveAs", &json!({"path": at("x.png")})).is_err(), "no picture selected");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #7743 review: the resolution's scale is used on both axes, so a narrow picture keeps its
+/// height: 5 × 72 pt at 36 DPI is 3 × 36 pixels (the width rounded up, as the renderer rounds),
+/// not a height scaled by the rounded width.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_as_picture_scales_both_axes_by_the_resolution() {
+    let dir = save_dir("narrow");
+    let (mut s, _) = inch_wide_picture();
+    s.run("picture.size", &json!({"width": 5.0, "height": 72.0, "lockAspect": false})).unwrap();
+    let r = s.run("picture.saveAs", &json!({"path": dir.join("narrow.png").to_string_lossy(), "dpi": 36})).unwrap();
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(3), Some(36)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
