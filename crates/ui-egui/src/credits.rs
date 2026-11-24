@@ -121,6 +121,13 @@ fn about_info_for(identity: crate::os_window::LaunchIdentity, commit: Option<&st
         .built_with(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").to_string())
 }
 
+/// The About dialog opened on `tab`, with the Language data tab after Models (`AboutTab::App(0)`). The name
+/// table of the dialogs opens it for `about`, `contributors`, `models` and `languageData`.
+pub(crate) fn about(tab: AboutTab) -> HostedAbout {
+    // PLAN: assumed `HostedAbout::layout(self, AboutLayout) -> Self` (look-dialogs-b framework fix)
+    HostedAbout::new(about_info(), credits()).app_tab(language_data_tab()).tab(tab).layout(AboutLayout::Listed)
+}
+
 /// A Nightly window's About names its channel, keeps the full feed version and commit, invents
 /// nothing when the commit is missing, and adds the report link the stable About does not have.
 #[cfg(test)]
@@ -155,11 +162,4 @@ mod nightly_about_tests {
         let (name, _, _) = super::about_text(LaunchIdentity::Stable, Some(COMMIT));
         assert_eq!(name, "WordCraft");
     }
-}
-
-/// The About dialog opened on `tab`, with the Language data tab after Models (`AboutTab::App(0)`). The name
-/// table of the dialogs opens it for `about`, `contributors`, `models` and `languageData`.
-pub(crate) fn about(tab: AboutTab) -> HostedAbout {
-    // PLAN: assumed `HostedAbout::layout(self, AboutLayout) -> Self` (look-dialogs-b framework fix)
-    HostedAbout::new(about_info(), credits()).app_tab(language_data_tab()).tab(tab).layout(AboutLayout::Listed)
 }

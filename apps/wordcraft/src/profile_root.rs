@@ -213,7 +213,7 @@ fn validate_for(
     // itself (`packaging/linux/flatpak-bundle.sh`) is the one sandbox this build ships in.
     if platform != Platform::Windows
         && let Some(id) = env("FLATPAK_ID").filter(|v| !v.is_empty())
-        && id != OsString::from(NIGHTLY_FLATPAK_ID)
+        && id != NIGHTLY_FLATPAK_ID
     {
         return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
     }
