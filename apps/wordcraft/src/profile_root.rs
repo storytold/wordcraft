@@ -350,6 +350,10 @@ mod tests {
         }
         assert!(!flatpak.exists());
         assert!(fixture.check(Platform::Linux, &fixture.home().join(".var/app/ai.storyteller.launcher/nightly")).is_ok());
+        // Inside the Nightly Flatpak, XDG_DATA_HOME is this app's own persistent data folder, so
+        // the launcher's profile lands there rather than on the discarded sandbox home.
+        let nightly = fixture.home().join(".var/app/ai.storyteller.wordcraft.nightly/data/wordcraft-nightly");
+        assert_eq!(fixture.check(Platform::Linux, &nightly).unwrap(), nightly);
     }
 
     #[test]

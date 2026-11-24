@@ -54,12 +54,19 @@ What the channel is:
   archives on the `full-ci` label or on dispatch, with no secrets;
   `packaging/nightly-tests.py` runs the synthetic suites in Packaging lint.
 
-Every Linux format ships a launcher that starts the binary the channel's way, because a Nightly
-build refuses to run without a profile:
-`wordcraft --launch-profile nightly-v1 --profile-root "$HOME/.local/share/wordcraft-nightly" -- "$@"`.
+Every Linux format ships one launcher (`packaging/linux/nightly-launcher.sh`) that starts the
+binary the channel's way, because a Nightly build refuses to run without a profile:
+`wordcraft --launch-profile nightly-v1 --profile-root "${XDG_DATA_HOME:-$HOME/.local/share}/wordcraft-nightly" -- "$@"`.
 That launcher is the deb/rpm `/usr/bin/wordcraft-nightly` wrapper (real binary in
-`/usr/lib/wordcraft-nightly/`), the AppImage `AppRun` (a script, not a symlink), the Arch
-`bin/wordcraft` launcher, the plain tar's `bin/wordcraft` (real binary in `lib/wordcraft-nightly/`)
-and the Flatpak bundle built from that tar. Redirecting `XDG_*` alone is refused: the build's root
-validator derives the stable boundary from it, so the profile would sit inside it. The remaining
-activation steps are described in [nightly-release-preparation.md](nightly-release-preparation.md).
+`/usr/lib/wordcraft-nightly/`), the AppImage `AppRun` (a script, not a symlink, calling
+`usr/bin/wordcraft`), the Arch `bin/wordcraft-nightly` launcher (real binary in
+`bin/.wordcraft-nightly/`), the app-owned Nightly tar's `wordcraft` (real binary `wordcraft-bin`)
+and the plain tar's `bin/wordcraft` (real binary in `lib/wordcraft-nightly/`), which the Flatpak
+bundle also installs. `XDG_DATA_HOME` keeps the profile on the app's own data directory inside the
+Flatpak sandbox (`~/.var/app/ai.storyteller.wordcraft.nightly/data/wordcraft-nightly`), which
+persists; the sandbox's home is discarded. Redirecting `XDG_*` alone is refused: the build's root
+validator derives the stable boundary from it, so the profile would sit inside it. The launcher
+passes an already-supplied Launcher form (`--launch-profile`, and `--version`/`-V`) straight
+through, so the ArtCraft Launcher's own root is used and its version check opens no window. The
+remaining activation steps are described in
+[nightly-release-preparation.md](nightly-release-preparation.md).

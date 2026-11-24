@@ -47,8 +47,11 @@ expect() {
     exit 1
   fi
 }
-profile="$HOME/.local/share/wordcraft-nightly"
+profile="$XDG_DATA_HOME/wordcraft-nightly"
 prefix="$(printf 'XDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s' "$XDG_CONFIG_HOME" "$XDG_DATA_HOME")"
+# Run from a directory that holds no .wordcraft-nightly: a launcher found through PATH must
+# resolve its own folder, and must never follow XDG_* to the profile.
+cd "$work"
 expect "$(printf '%s\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>' "$prefix" \
   --launch-profile nightly-v1 --profile-root "$profile" --)"
 expect "$(printf '%s\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>' "$prefix" \
@@ -56,5 +59,14 @@ expect "$(printf '%s\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>' "$prefix" \
   'doc with spaces.docx' '--other-name.docx'
 expect "$(printf '%s\n<%s>' "$prefix" --version)" --version
 expect "$(printf '%s\n<%s>' "$prefix" -V)" -V
+# The ArtCraft Launcher's form passes through untouched: wrapping it again would make its tokens
+# file names and ignore the root it chose.
+root="$work/launcher profile with space"
+expect "$(printf '%s\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>' "$prefix" \
+  --launch-profile nightly-v1 --profile-root "$root" -- 'a.docx')" \
+  --launch-profile nightly-v1 --profile-root "$root" -- 'a.docx'
+expect "$(printf '%s\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>' "$prefix" \
+  --launch-profile nightly-v1 --profile-root "$root" --version)" \
+  --launch-profile nightly-v1 --profile-root "$root" --version
 
 echo "PASS: Arch Nightly handoff isolates the profile and preserves launch arguments"

@@ -31,7 +31,7 @@ class ArchivePolicy(unittest.TestCase):
         self.output = self.root / "nightly.tar.gz"
         self.required = {
             "wordcraft",
-            "wordcraft.real",
+            "wordcraft-bin",
             "wordcraft-nightly.png",
             "README.md",
             "LICENSE-MIT",

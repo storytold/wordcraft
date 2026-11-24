@@ -82,9 +82,10 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
   [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
   install -Dm644 "$NIGHTLY_ICON" \
     "$WORK/stage/share/icons/hicolor/256x256/apps/$FLATPAK_ID.png"
-  # The nightly tar carries a launcher in bin/wordcraft and the real binary beside it in
-  # lib/wordcraft-nightly/; the bundle must install both. The launcher is the Flatpak's wrapper:
-  # inside the sandbox HOME is the app's own directory, so the profile stays private.
+  # The nightly tar carries the launcher in bin/wordcraft and the GUI in lib/wordcraft-nightly/;
+  # the bundle must install both. The launcher keeps the profile under XDG_DATA_HOME, which inside
+  # the sandbox is this app's own persistent data directory
+  # (~/.var/app/ai.storyteller.wordcraft.nightly/data), not the throwaway sandbox home.
   sed -e "s|ai\.storyteller\.wordcraft|$FLATPAK_ID|g" \
       -e 's|^\(      - install -Dm755 bin/wordcraft /app/bin/wordcraft\)$|\1\n      - install -Dm755 lib/wordcraft-nightly/wordcraft /app/lib/wordcraft-nightly/wordcraft|' \
       "$HERE/flatpak/$APP_ID.bundle.yml" >"$WORK/$FLATPAK_ID.yml"
@@ -114,6 +115,10 @@ if [[ "$TEST" = 1 ]]; then
   flatpak install --user -y --noninteractive --reinstall "$OUT"
   flatpak info --user "$FLATPAK_ID"
   flatpak run --command=wordcraft-cli "$FLATPAK_ID" --version
+  if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
+    # The launcher and the GUI it starts are both installed, and the version query answers.
+    flatpak run --command=wordcraft "$FLATPAK_ID" --version
+  fi
   flatpak run --command=sh "$FLATPAK_ID" -c 'ls /app/share/applications /app/share/metainfo /app/share/mime/packages /app/share/icons/hicolor/*/apps'
 fi
 echo "==> done"

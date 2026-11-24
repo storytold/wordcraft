@@ -411,12 +411,14 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
-    let Some(arguments) = prepare_launch() else { return Ok(()) };
     // Windows: the print helper is a copy of this program that runs one job in its own process.
+    // It reads only its own job folder, so it runs before the launch profile is parsed: a Nightly
+    // wants a profile on every start, and the helper must print without one.
     #[cfg(windows)]
     if let Some(code) = craft::print::spool::isolated::helper_main() {
         std::process::exit(code);
     }
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     // A Nightly never updates itself: the Launcher owns its updates.
     #[cfg(windows)]
@@ -630,9 +632,11 @@ fn main() -> eframe::Result {
     let previous_nightly_unclean = nightly_record.as_ref().is_some_and(nightly_session::Session::previous_unclean);
     let nightly_watch: nightly_session::Shared = Arc::new(Mutex::new(nightly_record));
     let unclean_notice_shown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // The window's exit hook takes one clone of each; the return path keeps the other.
+    // The window body and its exit hook each take a clone of the flag; the return path keeps the
+    // other, so a start that created no window can still finish the record.
     let session_for_exit = nightly_watch.clone();
     let noticed_for_exit = unclean_notice_shown.clone();
+    let noticed_in_window = unclean_notice_shown.clone();
     let exit_settings = settings.clone();
     let result = eframe::run_native(
         wordcraft_ui_egui::os_window::name_for(wordcraft_ui_egui::os_window::identity()),
@@ -749,7 +753,7 @@ fn main() -> eframe::Result {
                 app.status_long(
                     "The previous WordCraft Nightly session did not finish normally. You can report a problem from Help › About. No diagnostics have been sent.",
                 );
-                unclean_notice_shown.store(true, std::sync::atomic::Ordering::Relaxed);
+                noticed_in_window.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             Ok(Box::new(App {
                 app,

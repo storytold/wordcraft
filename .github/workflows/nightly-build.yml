@@ -77,12 +77,15 @@ jobs:
           work="$RUNNER_TEMP/nightly-check"
           mkdir -p "$work"
           archive="$DIST/wordcraft-$WORDCRAFT_VERSION-linux-x86_64-nightly.tar.gz"
-          members="$(tar -tzf "$archive" | sort | tr '\n' ' ')"
-          [ "$members" = "ATTRIBUTION.md LICENSE-APACHE LICENSE-MIT NOTICE README.md wordcraft wordcraft-nightly.png " ] \
-            || { echo "unexpected members: $members"; exit 1; }
+          # The launcher and the GUI it starts, the icon and the notices; the embedded fonts'
+          # OFL-*.txt licences appear when the build has CRAFT_FONTS_DIR.
+          core="$(tar -tzf "$archive" | sort | grep -Ev '^OFL-[A-Za-z0-9_.-]+\.txt$' | tr '\n' ' ')"
+          [ "$core" = "ATTRIBUTION.md LICENSE-APACHE LICENSE-MIT NOTICE README.md wordcraft wordcraft-bin wordcraft-nightly.png " ] \
+            || { echo "unexpected members: $core"; exit 1; }
           tar -xzf "$archive" -C "$work"
           [ -x "$work/wordcraft" ] && [ ! -L "$work/wordcraft" ]
           [ "$(stat -c %a "$work/wordcraft")" = 755 ]
+          [ -x "$work/wordcraft-bin" ] && [ ! -L "$work/wordcraft-bin" ]
           mkdir -m 700 -p "$work/home" "$work/profile"
           out="$(env -i HOME="$work/home" PATH=/usr/bin:/bin "$work/wordcraft" --version 2>"$work/stderr")" \
             || { cat "$work/stderr"; exit 1; }
@@ -90,6 +93,7 @@ jobs:
           [ "$out" = "WordCraft $WORDCRAFT_VERSION (nightly-v1)" ]
           out="$(env -i HOME="$work/home" PATH=/usr/bin:/bin "$work/wordcraft" --launch-profile nightly-v1 --profile-root "$work/profile" --version)"
           [ "$out" = "WordCraft $WORDCRAFT_VERSION (nightly-v1)" ]
+          [ "$(head -c 2 "$work/wordcraft")" = '#!' ]
           echo "==> verified (unsigned): $out"
       - name: Keep the unsigned archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

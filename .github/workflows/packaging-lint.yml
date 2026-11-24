@@ -68,3 +68,5 @@ jobs:
         run: python3 packaging/nightly-tests.py
       - name: Check the Arch Nightly handoff launcher (no build)
         run: bash packaging/linux/nightly-arch-tar-test.sh
+      - name: Render and run the Nightly tar launcher (no build)
+        run: bash packaging/linux/nightly-package-test.sh

@@ -48,7 +48,6 @@ IS_NIGHTLY=0
 if [[ "${WORDCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* ]]; then
   IS_NIGHTLY=1
   export WORDCRAFT_BUILD_CHANNEL=nightly-v1
-  export WORDCRAFT_OVERRIDE_VERSION="$VERSION"
 fi
 BASENAME_VERSION="$VERSION"
 if [[ "$IS_NIGHTLY" = 1 && "$BASENAME_VERSION" != *-nightly* ]]; then
@@ -106,19 +105,11 @@ has() { local item="$1"; case " $FORMATS " in *" $item "*) return 0 ;; *) return
 # The Nightly channel starts only through its own launch profile, which holds every piece of user
 # state (preferences, window place, logs, recovery, fonts, templates, the dictionary and the suite
 # font store). Redirecting XDG_* instead is refused: the build's root validator derives the stable
-# boundary from it, so the chosen profile would sit inside it. The real binary is always
-# ../lib/wordcraft-nightly/wordcraft beside the launcher, in the packages, the plain tar and the
-# Flatpak bundle built from that tar.
+# boundary from it, so the chosen profile would sit inside it. One launcher serves every format
+# (packaging/linux/nightly-launcher.sh); it finds the GUI in ../lib/wordcraft-nightly/wordcraft,
+# the layout the packages, the plain tar and the Flatpak bundle built from that tar install.
 nightly_launcher() {
-  cat <<'WRAPPER'
-#!/bin/sh
-set -eu
-real_bin="$(dirname "$0")/../lib/wordcraft-nightly/wordcraft"
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
-  exec "$real_bin" "$@"
-fi
-exec "$real_bin" --launch-profile nightly-v1 --profile-root "${HOME:?HOME is required}/.local/share/wordcraft-nightly" -- "$@"
-WRAPPER
+  install -Dm755 "$HERE/nightly-launcher.sh" "$1"
 }
 
 # ---- .tar.gz ------------------------------------------------------------------------------------
@@ -128,18 +119,18 @@ if has tar; then
   if [[ "$IS_NIGHTLY" = 1 ]]; then
     # An unpacked nightly tar is isolated too: the launcher keeps the desktop file's Exec
     # (bin/wordcraft) and the real binary moves to lib/wordcraft-nightly/, the layout the
-    # deb/rpm wrapper and the Flatpak bundle built from this tar use as well.
-    install -d "$WORK/tar/$BASENAME/usr/lib/wordcraft-nightly"
-    mv "$WORK/tar/$BASENAME/usr/bin/wordcraft" "$WORK/tar/$BASENAME/usr/lib/wordcraft-nightly/wordcraft"
-    nightly_launcher >"$WORK/tar/$BASENAME/usr/bin/wordcraft"
-    chmod 755 "$WORK/tar/$BASENAME/usr/bin/wordcraft"
+    # deb/rpm wrapper and the Flatpak bundle built from this tar use as well. The tar holds the
+    # contents of usr/, so these paths have no usr/ component.
+    install -d "$WORK/tar/$BASENAME/lib/wordcraft-nightly"
+    mv "$WORK/tar/$BASENAME/bin/wordcraft" "$WORK/tar/$BASENAME/lib/wordcraft-nightly/wordcraft"
+    nightly_launcher "$WORK/tar/$BASENAME/bin/wordcraft"
   fi
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
 
-# The Arch handoff keeps the same basename as the plain tarball in a separate directory.
-# Flatpak, OCI and direct tar consumers still get the original binary, not this launcher.
+# The Arch handoff keeps the same basename as the plain tarball in a separate directory. It
+# stages the plain usr/ tree (GUI in bin/, no launcher), then installs its own launcher there.
 if [[ -n "$ARCH_TAR_DIR" ]]; then
   mkdir -p "$ARCH_TAR_DIR"
   if [[ "$(cd "$ARCH_TAR_DIR" && pwd -P)" == "$(cd "$DIST" && pwd -P)" ]]; then
@@ -169,8 +160,7 @@ if has deb || has rpm; then
     rm -rf "$NFPM_STAGE"
     cp -R "$STAGE" "$NFPM_STAGE"
     install -Dm755 "$NFPM_STAGE/usr/bin/wordcraft" "$NFPM_STAGE/usr/lib/wordcraft-nightly/wordcraft"
-    nightly_launcher >"$NFPM_STAGE/usr/bin/$NFPM_BIN"
-    chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
+    nightly_launcher "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     rm -f "$NFPM_STAGE/usr/bin/wordcraft"
     mv "$NFPM_STAGE/usr/bin/wordcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
     mv "$NFPM_STAGE/usr/share/doc/wordcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
@@ -246,20 +236,10 @@ if has appimage; then
   cp -R "$STAGE" "$APPDIR"
   if [[ "$IS_NIGHTLY" = 1 ]]; then
     APPIMAGE_ID="$APP_ID.nightly-v1"
-    cat >"$APPDIR/AppRun" <<'WRAPPER'
-#!/bin/sh
-set -eu
-# A real file, not a symlink to the binary: the Nightly build starts only through its own launch
-# profile, which holds every piece of user state.
-HERE="$(dirname "$(readlink -f "$0")")"
-real_bin="$HERE/usr/bin/wordcraft"
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
-  exec "$real_bin" "$@"
-fi
-exec "$real_bin" --launch-profile nightly-v1 \
-  --profile-root "${HOME:?HOME is required}/.local/share/wordcraft-nightly" -- "$@"
-WRAPPER
-    chmod 755 "$APPDIR/AppRun"
+    # A real file, not a symlink to the binary: the Nightly build starts only through its own
+    # launch profile, which holds every piece of user state. The launcher finds the GUI in
+    # usr/bin/wordcraft inside this AppDir.
+    nightly_launcher "$APPDIR/AppRun"
     sed -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \
         -e "s|^Name=WordCraft$|Name=WordCraft Nightly|" \
         -e '/^MimeType=/d' \
