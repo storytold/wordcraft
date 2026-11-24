@@ -1,10 +1,11 @@
-use craft::behavior::IconId;
+use craft::behavior::{ColumnWidth, IconId};
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
-use craft::ui::layout_components::{Row, Stack};
+use craft::ui::layout::{GridFit, empty_cell};
+use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::text::NumberField;
 
@@ -17,25 +18,33 @@ use crate::undo_marks::apply_edits;
 /// The row height and column width a Cell Size field accepts, in points (0.02 to 22 inches).
 const CELL_SIZE_RANGE: std::ops::RangeInclusive<f64> = 1.44..=1584.0;
 
+/// Two checkbox columns separated by two empty gutter cells: `Grid::gap` sets both axes, so the
+/// empty gutter widens the column gap to `3 * Gap::Tight` (at least `Gap::Stack`) while keeping
+/// rows `Gap::Tight` apart inside the ribbon group.
+const TABLE_STYLE_OPTION_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content; 4];
+
 pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
     if let Some(l) = look {
-        // Three rows of two, so Tab runs Header Row, First Column, Total Row, Last Column, Banded Rows, Banded Columns.
+        // Row-major pairs, so Tab runs Header Row, First Column, Total Row, Last Column, Banded Rows, Banded Columns.
         let options = [
-            [("Header Row", "headerRow", l.header_row), ("First Column", "firstColumn", l.first_column)],
-            [("Total Row", "totalRow", l.total_row), ("Last Column", "lastColumn", l.last_column)],
-            [("Banded Rows", "bandedRows", l.banded_rows), ("Banded Columns", "bandedColumns", l.banded_columns)],
+            ("Header Row", "headerRow", l.header_row),
+            ("First Column", "firstColumn", l.first_column),
+            ("Total Row", "totalRow", l.total_row),
+            ("Last Column", "lastColumn", l.last_column),
+            ("Banded Rows", "bandedRows", l.banded_rows),
+            ("Banded Columns", "bandedColumns", l.banded_columns),
         ];
         row.group(RibbonGroup::new("tableStyleOptions", tl!("Table Style Options").to_string(), IconId::new("tableStyleOptions").into()), |ui| {
-            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-                for line in options {
-                    Row::new().show(ui, |ui, _| {
-                        for (label, key, value) in line {
-                            let out = Checkbox::new(Bind::given(value)).label(tl!(label).to_string()).show(ui);
-                            apply_edits(app, out.events, |app, v| {
-                                let _ = app.run("table.look", json!({ key: v }));
-                            });
-                        }
+            Grid::new(&TABLE_STYLE_OPTION_COLUMNS).fit(GridFit::Fixed).gap(Gap::Tight).show(ui, |ui, _| {
+                for (index, (label, key, value)) in options.into_iter().enumerate() {
+                    if index % 2 == 1 {
+                        empty_cell(ui);
+                        empty_cell(ui);
+                    }
+                    let out = Checkbox::new(Bind::given(value)).label(tl!(label).to_string()).show(ui);
+                    apply_edits(app, out.events, |app, v| {
+                        let _ = app.run("table.look", json!({ key: v }));
                     });
                 }
             });
