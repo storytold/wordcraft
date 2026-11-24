@@ -2591,17 +2591,19 @@ fn decomposed_sara_am_splits_into_base_nikhahit_and_sara_aa() {
     let glyphs = [(1, 0.0, 0.0), (2, 5.0, 0.0), (3, 10.0, 0.0)];
     let ranges = [0..6, 0..6, 0..6];
     let rev: std::collections::HashMap<u32, char> = [(1, 'น'), (2, '\u{0E4D}'), (3, '\u{0E32}')].into_iter().collect();
-    let (split_text, parts) = split_clusters(text, &glyphs, &ranges, &rev);
+    let (split_text, parts, actual) = split_clusters_with_actual(text, &glyphs, &ranges, &rev);
     assert_eq!(split_text, "น\u{0E4D}\u{0E32}");
     assert_eq!(parts, [0..3, 3..6, 6..9]);
+    assert_eq!(actual, [(3..9, "\u{0E33}")]);
 
     let lao_text = "ນ້ຳ";
     let lao_glyphs = [(1, 0.0, 0.0), (2, 4.0, 0.0), (3, 4.0, 0.0), (4, 8.0, 0.0)];
     let lao_ranges = [0..9, 0..9, 0..9, 0..9];
     let lao_rev: std::collections::HashMap<u32, char> = [(1, 'ນ'), (2, '\u{0ECD}'), (3, '\u{0EC9}'), (4, '\u{0EB2}')].into_iter().collect();
-    let (lao_split, lao_parts) = split_clusters(lao_text, &lao_glyphs, &lao_ranges, &lao_rev);
+    let (lao_split, lao_parts, lao_actual) = split_clusters_with_actual(lao_text, &lao_glyphs, &lao_ranges, &lao_rev);
     assert_eq!(lao_split, "ນ\u{0EC9}\u{0ECD}\u{0EB2}");
     assert_eq!(lao_parts, [0..3, 6..9, 3..6, 9..12]);
+    assert_eq!(lao_actual, [(6..12, "\u{0EB3}")]);
 }
 
 /// Glyphs that don't match the NIKHAHIT/SARA AA structure keep the shared mark range, so
@@ -3551,24 +3553,25 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
 /// without control characters or cross-cluster word corruption (#5883).
 #[test]
 fn thai_text_extracts_correctly() {
-    let d = Document::from_text("ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
+    let original = "ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่";
+    let d = Document::from_text(original);
     let bytes = export(&d, &PdfOptions::default()).unwrap();
-    let expected = "ห้อง ก๋วยเตี๋ยว น\u{0E49}\u{0E4D}\u{0E32} ที่นี่";
 
-    // 1. Full extraction:
+    // 1. Full extraction preserves the original source spelling (`U+0E33`) via `/ActualText`:
     let text = extract_text(&bytes).concat();
     // No control characters or replacement characters in the extracted text (#5883).
     assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
     // Each word decodes to its own text, and specifically 'นี่' does not decode as 'น้ำ'.
     assert!(text.contains("ห้อง"), "{text:?}");
     assert!(text.contains("ก๋วยเตี๋ยว"), "{text:?}");
-    assert!(text.contains("น\u{0E49}\u{0E4D}\u{0E32}"), "{text:?}");
+    assert!(text.contains("น้ำ"), "{text:?}");
     assert!(text.contains("ที่นี่"), "{text:?}");
     assert!(!text.contains("ที่น้ำ"), "{text:?}");
-    assert_eq!(text.trim(), expected);
+    assert_eq!(text.trim(), original);
 
-    // 2. Raw ToUnicode extraction without ActualText or test-side vowel recomposition:
+    // 2. Raw ToUnicode extraction without `/ActualText` yields decomposed NIKHAHIT + SARA AA:
     let raw = extract_raw_tounicode_text(&bytes).concat();
+    let raw_expected = "ห้อง ก๋วยเตี๋ยว น\u{0E49}\u{0E4D}\u{0E32} ที่นี่";
     // No control characters or replacement characters in raw ToUnicode (#5883).
     assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
     assert!(raw.contains("ห้อง"), "{raw:?}");
@@ -3577,7 +3580,7 @@ fn thai_text_extracts_correctly() {
     assert!(raw.contains("นี่"), "{raw:?}");
     assert!(!raw.contains("ที่น้ำ"), "{raw:?}");
     assert!(raw.contains("น\u{0E49}\u{0E4D}\u{0E32}"), "{raw:?}");
-    assert_eq!(raw.trim(), expected);
+    assert_eq!(raw.trim(), raw_expected);
     // Tone marks and vowels are present in ToUnicode CMap:
     assert!(raw.contains('\u{0E49}'), "ToUnicode missing MAI THO: {raw:?}");
     assert!(raw.contains('\u{0E48}'), "ToUnicode missing MAI EK: {raw:?}");
@@ -3589,41 +3592,46 @@ fn thai_text_extracts_correctly() {
 /// without control characters or cluster corruption (#5883).
 #[test]
 fn lao_text_extracts_correctly() {
-    let d = Document::from_text("ສະບາຍດີ ນ້ຳດື່ມ");
+    let original = "ສະບາຍດີ ນ້ຳດື່ມ";
+    let d = Document::from_text(original);
     let bytes = export(&d, &PdfOptions::default()).unwrap();
-    let expected = "ສະບາຍດີ ນ\u{0EC9}\u{0ECD}\u{0EB2}ດື່ມ";
 
     let text = extract_text(&bytes).concat();
     assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
     assert!(text.contains("ສະບາຍດີ"), "{text:?}");
-    assert!(text.contains("ນ\u{0EC9}\u{0ECD}\u{0EB2}ດື່ມ"), "{text:?}");
-    assert_eq!(text.trim(), expected);
+    assert!(text.contains("ນ້ຳດື່ມ"), "{text:?}");
+    assert_eq!(text.trim(), original);
 
     let raw = extract_raw_tounicode_text(&bytes).concat();
+    let raw_expected = "ສະບາຍດີ ນ\u{0EC9}\u{0ECD}\u{0EB2}ດື່ມ";
     assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
     assert!(raw.contains("ສະບາຍດີ"), "{raw:?}");
     assert!(raw.contains("ນ\u{0EC9}\u{0ECD}\u{0EB2}ດື່ມ"), "{raw:?}");
     assert!(!raw.contains("ນ້ຳາດື່ມ"), "SARA AA must not be duplicated: {raw:?}");
-    assert_eq!(raw.trim(), expected);
+    assert_eq!(raw.trim(), raw_expected);
 }
 
-/// A font glyph shared by `นำ` and `น้ำ` still extracts cleanly through raw ToUnicode, without
-/// `/ActualText` filling in for it (#5883).
+/// A font glyph shared by `นำ` and `น้ำ` preserves the original spelling in Full extraction
+/// and extracts cleanly through raw ToUnicode without `/ActualText` (#5883).
 #[test]
 fn thai_repeated_sara_am_raw_tounicode_is_exact() {
-    let d = Document::from_text("นำ น้ำ");
+    let original = "นำ น้ำ";
+    let d = Document::from_text(original);
     let bytes = export(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(extract_text(&bytes).concat().trim(), original);
     let raw = extract_raw_tounicode_text(&bytes).concat();
     let expected = "น\u{0E4D}\u{0E32} น\u{0E49}\u{0E4D}\u{0E32}";
     assert_eq!(raw.trim(), expected, "{raw:?}");
 }
 
-/// A document containing both `ນຳ` and `ນ້ຳ` extracts cleanly through raw ToUnicode without
-/// duplicating Lao NIKHAHIT (`\u{0ECD}`) (#5883).
+/// A document containing both `ນຳ` and `ນ້ຳ` preserves the original spelling in Full extraction
+/// and extracts cleanly through raw ToUnicode without duplicating Lao NIKHAHIT (`\u{0ECD}`) (#5883).
 #[test]
 fn lao_repeated_sara_am_raw_tounicode_has_no_extra_nikhahit() {
-    let d = Document::from_text("ນຳ ນ້ຳ");
+    let original = "ນຳ ນ້ຳ";
+    let d = Document::from_text(original);
     let bytes = export(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(extract_text(&bytes).concat().trim(), original);
     let raw = extract_raw_tounicode_text(&bytes).concat();
     assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
     for word in raw.split_whitespace() {
@@ -3633,11 +3641,13 @@ fn lao_repeated_sara_am_raw_tounicode_has_no_extra_nikhahit() {
 }
 
 /// A document containing both SARA AM (`ำ`) and standalone SARA AA (`า`) (such as `ทำงาน` and `น้ำตา`)
-/// extracts cleanly without duplicating SARA AA in extractors that read ToUnicode (#5883).
+/// keeps original spelling in Full extraction without duplicating SARA AA in ToUnicode extractors (#5883).
 #[test]
 fn thai_sara_am_and_standalone_sara_aa_extract_cleanly() {
-    let d = Document::from_text("ทำงาน น้ำตา");
+    let original = "ทำงาน น้ำตา";
+    let d = Document::from_text(original);
     let bytes = export(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(extract_text(&bytes).concat().trim(), original);
     let raw = extract_raw_tounicode_text(&bytes).concat();
     assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
     assert!(raw.contains("ท\u{0E4D}างาน"), "{raw:?}");

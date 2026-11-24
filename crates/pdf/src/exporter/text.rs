@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
 use super::{
-    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rect, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id,
-    glyph_outlines, left_to_right, norm, ok, paint_of, rect_path, rgb, split_clusters, visual_order,
+    ContentTag, Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Node, Point, Rect, Rgb, Role, SpanTag, Stroke, Surface, Transform, baseline,
+    cluster_ends, fill, glyph_id, glyph_outlines, left_to_right, norm, ok, paint_of, rect_path, rgb, split_clusters_with_actual, visual_order,
 };
 
 /// How a run of glyphs is painted: its colour, opacity and synthetic bold and italic.
@@ -88,11 +88,11 @@ impl Exporter<'_> {
     pub(super) fn glyphs(
         &mut self,
         s: &mut Surface,
-        face: &FaceRef,
-        size: f32,
+        (face, size): (&FaceRef, f32),
         glyphs: &[(u32, f32, f32)],
         style: GlyphPaint,
         (text, known): (&str, &[std::ops::Range<usize>]),
+        para_tag: Option<usize>,
     ) {
         let GlyphPaint { color, alpha, bold, italic } = style;
         if !size.is_finite() || size <= 0.0 || size > 5000.0 {
@@ -133,12 +133,12 @@ impl Exporter<'_> {
         let upem = face.upem.max(1.0) as f32;
         let needs_reorder = is_rtl && !left_to_right(glyphs);
         let has_thai_or_lao_clusters = is_thai_or_lao && ranges.windows(2).any(|w| w[0] == w[1]);
-        let (order, ranges, txt) = if !needs_reorder && !has_thai_or_lao_clusters {
-            ((0..glyphs.len()).collect(), ranges, txt)
+        let (order, ranges, txt, actual_spans) = if !needs_reorder && !has_thai_or_lao_clusters {
+            ((0..glyphs.len()).collect(), ranges, txt, Vec::new())
         } else {
-            let (new_txt, parts) = split_clusters(&txt, glyphs, &ranges, &self.cmap(face));
+            let (new_txt, parts, actual_spans) = split_clusters_with_actual(&txt, glyphs, &ranges, &self.cmap(face));
             let order = if needs_reorder {
-                visual_order(&new_txt, glyphs, &ranges, &parts)
+                visual_order(&txt, glyphs, &ranges, &parts)
             } else if has_thai_or_lao_clusters && !is_rtl {
                 // Marks come out of shaping in visual order; write them in text order so a
                 // viewer without `/ActualText` reads the cluster as it is spelled. Right-to-left
@@ -149,22 +149,11 @@ impl Exporter<'_> {
             } else {
                 (0..glyphs.len()).collect()
             };
-            (order, Cow::Owned(parts), new_txt)
+            (order, Cow::Owned(parts), Cow::Owned(new_txt.into_owned()), actual_spans)
         };
         let placed: Vec<(u32, f32, f32, std::ops::Range<usize>)> =
             order.iter().filter_map(|&i| Some((glyphs.get(i).copied()?, ranges.get(i).cloned()?))).map(|((g, x, y), r)| (g, x, y, r)).collect();
-        let Some(&(_, x0, y0, _)) = placed.first() else { return };
-        let kg: Vec<KrillaGlyph> = placed
-            .iter()
-            .enumerate()
-            .map(|(k, (g, x, y, r))| {
-                let adv = match placed.get(k + 1) {
-                    Some((_, nx, _, _)) => (nx - x) / size,
-                    None => face.advance(*g) as f32 / upem,
-                };
-                KrillaGlyph::new(glyph_id(*g), adv, 0.0, (y0 - y) / size, 0.0, r.clone(), None)
-            })
-            .collect();
+        let Some(&(_, _, y0, _)) = placed.first() else { return };
         let pushed = italic;
         if italic {
             // The run's baseline: the y most of its glyphs share (marks sit higher or lower).
@@ -177,13 +166,46 @@ impl Exporter<'_> {
         } else {
             None
         });
+        let draw_segment = |s: &mut Surface, font: &super::Font, seg: &[(u32, f32, f32, std::ops::Range<usize>)]| {
+            let Some(&(_, sx0, sy0, _)) = seg.first() else { return };
+            let kg: Vec<KrillaGlyph> = seg
+                .iter()
+                .enumerate()
+                .map(|(k, (g, x, y, r))| {
+                    let adv = match seg.get(k + 1) {
+                        Some((_, nx, _, _)) => (nx - x) / size,
+                        None => face.advance(*g) as f32 / upem,
+                    };
+                    KrillaGlyph::new(glyph_id(*g), adv, 0.0, (sy0 - y) / size, 0.0, r.clone(), None)
+                })
+                .collect();
+            s.draw_glyphs(Point::from_xy(sx0, sy0), &kg, font.clone(), &txt, size, false);
+        };
         match font {
-            Some(font) => {
-                s.draw_glyphs(Point::from_xy(x0, y0), &kg, font, &txt, size, false);
-            }
+            Some(font) => match para_tag.filter(|_| self.opts.tagged) {
+                Some(idx) => {
+                    for (seg_range, actual) in glyph_segments(&placed, &actual_spans) {
+                        if let Some(seg) = placed.get(seg_range) {
+                            let id = s.start_tagged(ContentTag::Span(SpanTag::empty().with_actual_text(actual)));
+                            draw_segment(s, &font, seg);
+                            s.end_tagged();
+                            if let Some(e) = self.tags.get_mut(idx) {
+                                e.children.push(Node::Leaf(id));
+                            }
+                        }
+                    }
+                }
+                None => draw_segment(s, &font, &placed),
+            },
             None => {
-                if let Some(path) = glyph_outlines(face, size, glyphs) {
-                    s.draw_path(&path);
+                let draw_outlines = |s: &mut Surface| {
+                    if let Some(path) = glyph_outlines(face, size, glyphs) {
+                        s.draw_path(&path);
+                    }
+                };
+                match para_tag.filter(|_| self.opts.tagged) {
+                    Some(idx) => self.tagged(s, Role::Para(idx), None, |_, s| draw_outlines(s)),
+                    None => draw_outlines(s),
                 }
             }
         }
@@ -276,4 +298,40 @@ impl Exporter<'_> {
         s.set_fill(None);
         s.pop();
     }
+}
+
+/// Partitions `placed` into contiguous glyph slices paired with an optional `/ActualText` override
+/// for any span in `actual_spans`. Each `actual_spans` entry applies only if all of its glyphs
+/// appear contiguously so a split span never duplicates its `/ActualText`.
+fn glyph_segments<'a>(
+    placed: &[(u32, f32, f32, std::ops::Range<usize>)],
+    actual_spans: &[(std::ops::Range<usize>, &'a str)],
+) -> Vec<(std::ops::Range<usize>, Option<&'a str>)> {
+    if actual_spans.is_empty() {
+        return vec![(0..placed.len(), None)];
+    }
+    let mut emitted = vec![false; actual_spans.len()];
+    let mut segs = Vec::new();
+    let mut start = 0usize;
+    let mut cur: Option<usize> = None;
+    for (pos, (_, _, _, r)) in placed.iter().enumerate() {
+        let next =
+            actual_spans.iter().position(|(sr, _)| sr.start <= r.start && r.end <= sr.end).filter(|&i| !emitted.get(i).copied().unwrap_or(true));
+        if pos == 0 {
+            cur = next;
+            continue;
+        }
+        if next != cur {
+            if let Some(prev) = cur
+                && let Some(flag) = emitted.get_mut(prev)
+            {
+                *flag = true;
+            }
+            segs.push((start..pos, cur.and_then(|i| actual_spans.get(i).map(|s| s.1))));
+            start = pos;
+            cur = next;
+        }
+    }
+    segs.push((start..placed.len(), cur.and_then(|i| actual_spans.get(i).map(|s| s.1))));
+    segs
 }

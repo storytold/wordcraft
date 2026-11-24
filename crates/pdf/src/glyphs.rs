@@ -40,12 +40,26 @@ pub(crate) fn left_to_right(glyphs: &[(u32, f32, f32)]) -> bool {
 /// range in the decomposed text so ToUnicode mappings are unique and do not collide with
 /// standalone SARA AA (`\u{0E32}` / `\u{0EB2}`). Clusters of any other script, such as a Devanagari
 /// pre-base vowel or a ligature drawn as two glyphs, keep their shared logical range.
+#[cfg(test)]
 pub(crate) fn split_clusters<'a>(
     text: &'a str,
     glyphs: &[(u32, f32, f32)],
     ranges: &[std::ops::Range<usize>],
     rev: &HashMap<u32, char>,
 ) -> (std::borrow::Cow<'a, str>, Vec<std::ops::Range<usize>>) {
+    let (txt, parts, _) = split_clusters_with_actual(text, glyphs, ranges, rev);
+    (txt, parts)
+}
+
+/// Same as [`split_clusters`], plus `(byte_range_in_output, original_text)` spans for any
+/// compatibility-decomposed Thai/Lao composite vowels so callers can preserve the original source
+/// spelling in `/ActualText` while keeping per-glyph `ToUnicode` entries decomposed.
+pub(crate) fn split_clusters_with_actual<'a>(
+    text: &'a str,
+    glyphs: &[(u32, f32, f32)],
+    ranges: &[std::ops::Range<usize>],
+    rev: &HashMap<u32, char>,
+) -> (std::borrow::Cow<'a, str>, Vec<std::ops::Range<usize>>, Vec<(std::ops::Range<usize>, &'a str)>) {
     let has_sara_am = ranges.iter().any(|r| text.get(r.clone()).is_some_and(|t| t.contains(['\u{0E33}', '\u{0EB3}']) && r.start < r.end));
     if !has_sara_am {
         let mut out = ranges.to_vec();
@@ -65,11 +79,12 @@ pub(crate) fn split_clusters<'a>(
             }
             i += n;
         }
-        return (std::borrow::Cow::Borrowed(text), out);
+        return (std::borrow::Cow::Borrowed(text), out, Vec::new());
     }
 
     let mut new_text = String::with_capacity(text.len() + 16);
     let mut out = ranges.to_vec();
+    let mut actual_spans = Vec::new();
     let mut last_copied = 0;
     let mut i = 0;
     while i < ranges.len() {
@@ -89,7 +104,7 @@ pub(crate) fn split_clusters<'a>(
         if n > 1 && sub.contains(['\u{0E33}', '\u{0EB3}']) && fc.is_some_and(|c| c != '\u{0E33}' && c != '\u{0EB3}') {
             let cluster_glyphs = glyphs.get(i..i + n).unwrap_or(&[]);
             if let Some(cluster_out) = out.get_mut(i..i + n) {
-                split_composite_vowel_cluster(sub, &chars, cluster_glyphs, rev, &mut new_text, cluster_out);
+                split_composite_vowel_cluster(sub, &chars, cluster_glyphs, rev, &mut new_text, cluster_out, &mut actual_spans);
             }
             last_copied = last_copied.max(r.end);
             i += n;
@@ -122,7 +137,7 @@ pub(crate) fn split_clusters<'a>(
         new_text.push_str(tail);
     }
 
-    (std::borrow::Cow::Owned(new_text), out)
+    (std::borrow::Cow::Owned(new_text), out, actual_spans)
 }
 
 fn split_one_to_one_cluster(
@@ -160,13 +175,14 @@ fn split_one_to_one_cluster(
     }
 }
 
-fn split_composite_vowel_cluster(
-    sub: &str,
+fn split_composite_vowel_cluster<'a>(
+    sub: &'a str,
     chars: &[(usize, char)],
     cluster_glyphs: &[(u32, f32, f32)],
     rev: &HashMap<u32, char>,
     new_text: &mut String,
     cluster_out: &mut [std::ops::Range<usize>],
+    actual_spans: &mut Vec<(std::ops::Range<usize>, &'a str)>,
 ) {
     let n = cluster_glyphs.len();
     let c_len = chars.first().map_or(0, |c| c.1.len_utf8());
@@ -212,6 +228,16 @@ fn split_composite_vowel_cluster(
 
         if parts.len() == cluster_out.len() {
             cluster_out.clone_from_slice(&parts);
+            let actual_range = if per_mark_structure {
+                (nikhahit_start..sara_aa_end, sub.get(vowel_off..))
+            } else {
+                ((cluster_start + c_len)..sara_aa_end, sub.get(c_len..))
+            };
+            if let (range, Some(orig)) = actual_range
+                && !orig.is_empty()
+            {
+                actual_spans.push((range, orig));
+            }
             return;
         }
     }
@@ -270,9 +296,11 @@ pub(crate) fn visual_order(
     groups
         .into_iter()
         .flat_map(|(_, mut idx)| {
-            let rtl = idx.first().and_then(|&g| text.get(clusters.get(g)?.clone())).is_some_and(|t| t.chars().any(wordcraft_fonts::is_rtl));
-            if rtl {
+            let cluster_text = idx.first().and_then(|&g| text.get(clusters.get(g)?.clone()));
+            if cluster_text.is_some_and(|t| t.chars().any(wordcraft_fonts::is_rtl)) {
                 idx.sort_by_key(|&g| std::cmp::Reverse(parts.get(g).map_or(0, |r| r.start)));
+            } else if cluster_text.is_some_and(|t| t.chars().any(|c| matches!(c, '\u{0E00}'..='\u{0EFF}'))) {
+                idx.sort_by_key(|&g| parts.get(g).map_or(usize::MAX, |r| r.start));
             }
             idx
         })

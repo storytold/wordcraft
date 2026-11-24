@@ -69,7 +69,7 @@ pub use export::{export, export_layout};
 #[cfg(test)]
 use exporter::Exporter;
 #[cfg(test)]
-use glyphs::{baseline, cluster_ends, left_to_right, split_clusters, visual_order};
+use glyphs::{baseline, cluster_ends, left_to_right, split_clusters, split_clusters_with_actual, visual_order};
 #[cfg(test)]
 use metadata::{civil, parse_iso};
 pub use options::{PdfError, PdfOptions, WATERMARK_MAX_CHARS};
