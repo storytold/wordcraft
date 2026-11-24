@@ -223,6 +223,8 @@ fn diff_blocks(ctx: &mut CompareCtx<'_>, old: &[Arc<Block>], new: &[Arc<Block>],
                             }
                         }
                         restore_orig_para_marks(pa, &mut p, ctx.orig_revs);
+                    } else {
+                        restore_orig_para_marks_aligned(pa, &mut p, ctx.orig_revs, ctx.opts);
                     }
                     out.push(para_block(p));
                 } else if let (Some(ab), Some(bb)) = (a, b)
@@ -288,11 +290,9 @@ fn diff_blocks(ctx: &mut CompareCtx<'_>, old: &[Arc<Block>], new: &[Arc<Block>],
     out
 }
 
-/// Restore valid original formatting revisions (< `orig_revs`) from `pa` onto `p` wherever `p`
-/// still carries the same formatting properties as `pa`. Called before `compare_formatting` so
-/// unchanged properties keep their original `fmt_change` without counting as new changes, while
-/// changed properties are never falsely attributed to an older formatting revision.
-fn restore_orig_para_fmt_changes(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
+/// Restore paragraph-level formatting revisions (`mark`, `props`, `section`) from `pa` onto `p`
+/// when `< orig_revs` and the corresponding formatting still matches.
+fn restore_orig_para_header_fmt(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
     let strip_sec = |s: &SectionProps| SectionProps { fmt_change: None, headers: Default::default(), footers: Default::default(), ..s.clone() };
     if pa.mark.formatting() == p.mark.formatting()
         && let Some(fmt) = pa.mark.fmt_change.as_ref().filter(|c| c.rev < orig_revs)
@@ -310,6 +310,33 @@ fn restore_orig_para_fmt_changes(pa: &Paragraph, p: &mut Paragraph, orig_revs: u
     {
         sec_p.fmt_change = Some(fmt.clone());
     }
+}
+
+/// Restore paragraph-level insertion, deletion and numbering-change marks (`< orig_revs`) from
+/// `pa` onto `p`.
+fn restore_orig_para_header_marks(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
+    if let Some(ins) = pa.mark.ins.filter(|&r| r < orig_revs) {
+        p.mark.ins = Some(ins);
+    }
+    if let Some(del) = pa.mark.del.filter(|&r| r < orig_revs) {
+        p.mark.del = Some(del);
+    }
+    if pa.props.numbering == p.props.numbering
+        && let Some(num) = pa.props.num_change.as_ref().filter(|c| c.rev < orig_revs)
+    {
+        p.props.num_change = Some(num.clone());
+    }
+}
+
+/// Restore valid original formatting revisions (< `orig_revs`) from `pa` onto `p` wherever `p`
+/// still carries the same formatting properties as `pa`. Called before `compare_formatting` so
+/// unchanged properties keep their original `fmt_change` without counting as new changes, while
+/// changed properties are never falsely attributed to an older formatting revision.
+fn restore_orig_para_fmt_changes(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
+    if orig_revs == 0 {
+        return;
+    }
+    restore_orig_para_header_fmt(pa, p, orig_revs);
     let mut new_runs = Vec::with_capacity(p.runs.len() + pa.runs.len());
     let (mut ia, mut ip) = (0, 0);
     let mut rem_a = pa.runs.first().map_or(0, |r| r.len);
@@ -337,6 +364,13 @@ fn restore_orig_para_fmt_changes(pa: &Paragraph, p: &mut Paragraph, orig_revs: u
             rem_p = p.runs.get(ip).map_or(0, |r| r.len);
         }
     }
+    while let Some(rp) = p.runs.get(ip) {
+        if rem_p > 0 {
+            new_runs.push(wordcraft_doc::para::Run { len: rem_p, props: rp.props.clone() });
+        }
+        ip += 1;
+        rem_p = p.runs.get(ip).map_or(0, |r| r.len);
+    }
     p.runs = new_runs;
     p.normalize();
     p.touch();
@@ -346,17 +380,10 @@ fn restore_orig_para_fmt_changes(pa: &Paragraph, p: &mut Paragraph, orig_revs: u
 /// onto `p` for paragraphs with matching text. Called after `compare_formatting` so an existing
 /// insertion by `ctx.author` does not suppress tracking a revised formatting change.
 fn restore_orig_para_marks(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
-    if let Some(ins) = pa.mark.ins.filter(|&r| r < orig_revs) {
-        p.mark.ins = Some(ins);
+    if orig_revs == 0 {
+        return;
     }
-    if let Some(del) = pa.mark.del.filter(|&r| r < orig_revs) {
-        p.mark.del = Some(del);
-    }
-    if pa.props.numbering == p.props.numbering
-        && let Some(num) = pa.props.num_change.as_ref().filter(|c| c.rev < orig_revs)
-    {
-        p.props.num_change = Some(num.clone());
-    }
+    restore_orig_para_header_marks(pa, p, orig_revs);
     let mut new_runs = Vec::with_capacity(p.runs.len() + pa.runs.len());
     let (mut ia, mut ip) = (0, 0);
     let mut rem_a = pa.runs.first().map_or(0, |r| r.len);
@@ -383,6 +410,354 @@ fn restore_orig_para_marks(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32) {
             ip += 1;
             rem_p = p.runs.get(ip).map_or(0, |r| r.len);
         }
+    }
+    while let Some(rp) = p.runs.get(ip) {
+        if rem_p > 0 {
+            new_runs.push(wordcraft_doc::para::Run { len: rem_p, props: rp.props.clone() });
+        }
+        ip += 1;
+        rem_p = p.runs.get(ip).map_or(0, |r| r.len);
+    }
+    p.runs = new_runs;
+    p.normalize();
+    p.touch();
+}
+
+/// One character of `Paragraph::plain_text()` attributed back to its source byte range in `p.text`.
+struct PlainChar {
+    ch: char,
+    src: std::ops::Range<usize>,
+}
+
+/// One normalized unit of a paragraph's `plain_text()` under [`CompareOptions`]: an index slice
+/// into the flat `srcs` array and its end byte offset in the normalized key string.
+struct NormUnit {
+    srcs: std::ops::Range<usize>,
+    norm_end: usize,
+}
+
+struct DecomposedPara {
+    lead_ws: std::ops::Range<usize>,
+    tail_ws: std::ops::Range<usize>,
+    norm: String,
+    units: Vec<NormUnit>,
+    srcs: Vec<std::ops::Range<usize>>,
+    empty_objs: Vec<std::ops::Range<usize>>,
+}
+
+/// Expand `p` the same way `Paragraph::plain_text()` does, attributing every plain character to
+/// its source byte range in `p.text` and collecting empty-text `OBJ` markers separately.
+fn plain_chars_with_ranges(p: &Paragraph) -> (Vec<PlainChar>, Vec<std::ops::Range<usize>>) {
+    let mut chars = Vec::with_capacity(p.text.len());
+    let mut empty_objs = Vec::new();
+    let mut objects = p.objects.iter();
+    for (i, c) in p.text.char_indices() {
+        let end = i + c.len_utf8();
+        if c != OBJ {
+            chars.push(PlainChar { ch: c, src: i..end });
+        } else if let Some(o) = objects.next() {
+            let pt = o.plain_text();
+            if pt.is_empty() {
+                empty_objs.push(i..end);
+            } else {
+                for oc in pt.chars() {
+                    chars.push(PlainChar { ch: oc, src: i..end });
+                }
+            }
+        } else {
+            empty_objs.push(i..end);
+        }
+    }
+    (chars, empty_objs)
+}
+
+/// Push `r` into `srcs` unless it duplicates the immediately preceding source range.
+fn push_dedup_range(srcs: &mut Vec<std::ops::Range<usize>>, r: std::ops::Range<usize>) {
+    if srcs.last() != Some(&r) {
+        srcs.push(r);
+    }
+}
+
+/// Decompose `p` following the exact semantics of [`CompareOptions::key`] on `p.plain_text()`,
+/// using whole-word/whole-string `str::to_lowercase()` (so contextual mappings like Greek final
+/// sigma match `CompareOptions::key` identically) and keeping empty-text `OBJ` markers out of
+/// whitespace splitting so marks survive collapsed spaces next to images or bookmarks.
+fn decompose_ignored(p: &Paragraph, opts: &CompareOptions) -> DecomposedPara {
+    let (chars, empty_objs) = plain_chars_with_ranges(p);
+    let mut srcs = Vec::with_capacity(chars.len());
+    let (lead_end, tail_start) = if opts.white_space {
+        (0, chars.len())
+    } else {
+        let lead = chars.iter().position(|pc| !pc.ch.is_whitespace()).unwrap_or(chars.len());
+        if lead == chars.len() {
+            for pc in &chars {
+                push_dedup_range(&mut srcs, pc.src.clone());
+            }
+            let len = srcs.len();
+            return DecomposedPara { lead_ws: 0..len, tail_ws: len..len, norm: String::new(), units: Vec::new(), srcs, empty_objs };
+        }
+        let tail = chars.iter().rposition(|pc| !pc.ch.is_whitespace()).map_or(lead, |i| i + 1);
+        (lead, tail)
+    };
+    let lead_start = srcs.len();
+    for pc in chars.get(..lead_end).unwrap_or_default() {
+        push_dedup_range(&mut srcs, pc.src.clone());
+    }
+    let lead_ws = lead_start..srcs.len();
+
+    let mut norm = String::with_capacity(tail_start.saturating_sub(lead_end));
+    let mut units = Vec::with_capacity(tail_start.saturating_sub(lead_end));
+    let mut idx = lead_end;
+    while idx < tail_start {
+        if !opts.white_space && chars[idx].ch.is_whitespace() {
+            let s0 = srcs.len();
+            while idx < tail_start && chars[idx].ch.is_whitespace() {
+                push_dedup_range(&mut srcs, chars[idx].src.clone());
+                idx += 1;
+            }
+            norm.push(' ');
+            units.push(NormUnit { srcs: s0..srcs.len(), norm_end: norm.len() });
+        } else {
+            let start = idx;
+            while idx < tail_start && (opts.white_space || !chars[idx].ch.is_whitespace()) {
+                idx += 1;
+            }
+            let chunk = &chars[start..idx];
+            if opts.case {
+                for pc in chunk {
+                    let s0 = srcs.len();
+                    srcs.push(pc.src.clone());
+                    norm.push(pc.ch);
+                    units.push(NormUnit { srcs: s0..srcs.len(), norm_end: norm.len() });
+                }
+            } else {
+                let raw: String = chunk.iter().map(|pc| pc.ch).collect();
+                let lower = raw.to_lowercase();
+                let mut lc_iter = lower.chars();
+                for (pos, pc) in chunk.iter().enumerate() {
+                    let s0 = srcs.len();
+                    srcs.push(pc.src.clone());
+                    if pos + 1 == chunk.len() {
+                        for lc in lc_iter.by_ref() {
+                            norm.push(lc);
+                        }
+                    } else {
+                        for _ in 0..pc.ch.to_lowercase().count() {
+                            if let Some(lc) = lc_iter.next() {
+                                norm.push(lc);
+                            }
+                        }
+                    }
+                    units.push(NormUnit { srcs: s0..srcs.len(), norm_end: norm.len() });
+                }
+            }
+        }
+    }
+
+    let tail_src_start = srcs.len();
+    for pc in chars.get(tail_start..).unwrap_or_default() {
+        push_dedup_range(&mut srcs, pc.src.clone());
+    }
+    let tail_ws = tail_src_start..srcs.len();
+
+    DecomposedPara { lead_ws, tail_ws, norm, units, srcs, empty_objs }
+}
+
+/// One aligned span on the revised paragraph: its UTF-8 byte range in `p.text` and the
+/// corresponding Original byte range(s) in `pa.text` whose unanimous marks apply to it.
+struct AlignedSpan {
+    b_range: std::ops::Range<usize>,
+    a_ranges: Vec<std::ops::Range<usize>>,
+}
+
+/// Align `pa` and `pb` when [`CompareOptions::key`] paired them despite ignored case or whitespace
+/// differences, returning strictly increasing, non-overlapping UTF-8 spans in `pb.text`.
+/// Returns `None` if the normalized streams or empty-text object counts diverge.
+fn align_ignored_spans(pa: &Paragraph, pb: &Paragraph, opts: &CompareOptions) -> Option<Vec<AlignedSpan>> {
+    let a = decompose_ignored(pa, opts);
+    let b = decompose_ignored(pb, opts);
+    if a.norm != b.norm || a.empty_objs.len() != b.empty_objs.len() {
+        return None;
+    }
+    let mut raw: Vec<AlignedSpan> = Vec::with_capacity(b.srcs.len() + b.empty_objs.len());
+    let mut push_group = |a_slice: &[std::ops::Range<usize>], b_slice: &[std::ops::Range<usize>]| {
+        if a_slice.is_empty() || b_slice.is_empty() {
+            return;
+        }
+        for b_range in b_slice {
+            raw.push(AlignedSpan { b_range: b_range.clone(), a_ranges: a_slice.to_vec() });
+        }
+    };
+    push_group(&a.srcs[a.lead_ws.clone()], &b.srcs[b.lead_ws.clone()]);
+    let (mut ia, mut ib) = (0usize, 0usize);
+    while ia < a.units.len() && ib < b.units.len() {
+        let a_s0 = a.units[ia].srcs.start;
+        let b_s0 = b.units[ib].srcs.start;
+        let mut a_s1 = a.units[ia].srcs.end;
+        let mut b_s1 = b.units[ib].srcs.end;
+        let mut a_pos = a.units[ia].norm_end;
+        let mut b_pos = b.units[ib].norm_end;
+        ia += 1;
+        ib += 1;
+        while a_pos != b_pos {
+            if a_pos < b_pos {
+                let u = a.units.get(ia)?;
+                a_s1 = u.srcs.end;
+                a_pos = u.norm_end;
+                ia += 1;
+            } else {
+                let u = b.units.get(ib)?;
+                b_s1 = u.srcs.end;
+                b_pos = u.norm_end;
+                ib += 1;
+            }
+        }
+        push_group(&a.srcs[a_s0..a_s1], &b.srcs[b_s0..b_s1]);
+    }
+    if ia != a.units.len() || ib != b.units.len() {
+        return None;
+    }
+    push_group(&a.srcs[a.tail_ws.clone()], &b.srcs[b.tail_ws.clone()]);
+    for (ao, bo) in a.empty_objs.into_iter().zip(b.empty_objs) {
+        raw.push(AlignedSpan { b_range: bo, a_ranges: vec![ao] });
+    }
+    raw.sort_by_key(|s| (s.b_range.start, s.b_range.end));
+    let mut out: Vec<AlignedSpan> = Vec::with_capacity(raw.len());
+    for span in raw {
+        if let Some(last) = out.last_mut() {
+            if last.b_range == span.b_range {
+                for r in span.a_ranges {
+                    push_dedup_range(&mut last.a_ranges, r);
+                }
+                continue;
+            }
+            if last.b_range.end > span.b_range.start {
+                return None;
+            }
+        }
+        out.push(span);
+    }
+    Some(out)
+}
+
+/// Restore valid original revisions (`< orig_revs`) from `pa` onto `p` when `pa` and `p` matched
+/// under ignored case or whitespace differences (`pa.text != p.text`). Never grafts revised
+/// revision IDs and never copies raw Original byte offsets onto different text.
+fn restore_orig_para_marks_aligned(pa: &Paragraph, p: &mut Paragraph, orig_revs: u32, opts: &CompareOptions) {
+    if orig_revs == 0 {
+        return;
+    }
+    restore_orig_para_header_fmt(pa, p, orig_revs);
+    restore_orig_para_header_marks(pa, p, orig_revs);
+    let has_orig_run_rev = pa.runs.iter().any(|r| {
+        r.props.ins.is_some_and(|idx| idx < orig_revs)
+            || r.props.del.is_some_and(|idx| idx < orig_revs)
+            || r.props.fmt_change.as_ref().is_some_and(|c| c.rev < orig_revs)
+    });
+    if !has_orig_run_rev || p.text.is_empty() {
+        p.touch();
+        return;
+    }
+    let Some(spans) = align_ignored_spans(pa, p, opts) else {
+        p.touch();
+        return;
+    };
+    let runs_a: Vec<(std::ops::Range<usize>, &CharProps)> = pa.run_ranges().filter(|(r, _)| r.start < r.end).collect();
+    let runs_p: Vec<(std::ops::Range<usize>, &CharProps)> = p.run_ranges().filter(|(r, _)| r.start < r.end).collect();
+    let mut new_runs: Vec<wordcraft_doc::para::Run> = Vec::with_capacity(runs_p.len() + runs_a.len());
+    let mut ip = 0usize;
+    let mut b_pos = 0usize;
+
+    let push_slice = |out: &mut Vec<wordcraft_doc::para::Run>,
+                      ip: &mut usize,
+                      from: usize,
+                      to: usize,
+                      ins: Option<u32>,
+                      del: Option<u32>,
+                      fmt: Option<(&wordcraft_doc::props::PropChange<CharProps>, &CharProps)>| {
+        if from >= to {
+            return;
+        }
+        while *ip < runs_p.len() && runs_p[*ip].0.end <= from {
+            *ip += 1;
+        }
+        let mut cur = from;
+        let mut k = *ip;
+        while cur < to
+            && let Some((rp, cp)) = runs_p.get(k)
+        {
+            let seg_end = rp.end.min(to);
+            if seg_end > cur {
+                let mut props = (*cp).clone();
+                if ins.is_some() {
+                    props.ins = ins;
+                }
+                if del.is_some() {
+                    props.del = del;
+                }
+                if let Some((fc, orig_fmt)) = fmt
+                    && props.fmt_change.is_none()
+                    && props.formatting() == *orig_fmt
+                {
+                    props.fmt_change = Some(Box::new(fc.clone()));
+                }
+                out.push(wordcraft_doc::para::Run { len: seg_end - cur, props });
+                cur = seg_end;
+            }
+            if rp.end <= cur {
+                k += 1;
+            }
+        }
+        *ip = k;
+    };
+
+    for span in spans {
+        if b_pos < span.b_range.start {
+            push_slice(&mut new_runs, &mut ip, b_pos, span.b_range.start, None, None, None);
+        }
+        let mut first = true;
+        let mut ins: Option<u32> = None;
+        let mut del: Option<u32> = None;
+        let mut fmt: Option<(&wordcraft_doc::props::PropChange<CharProps>, CharProps)> = None;
+        for a_range in &span.a_ranges {
+            let mut ka = runs_a.partition_point(|(r, _)| r.end <= a_range.start);
+            while let Some((ra, ca)) = runs_a.get(ka) {
+                if ra.start >= a_range.end {
+                    break;
+                }
+                if ra.end > a_range.start {
+                    let r_ins = ca.ins.filter(|&r| r < orig_revs);
+                    let r_del = ca.del.filter(|&r| r < orig_revs);
+                    let r_fmt = ca.fmt_change.as_deref().filter(|c| c.rev < orig_revs);
+                    if first {
+                        first = false;
+                        ins = r_ins;
+                        del = r_del;
+                        fmt = r_fmt.map(|fc| (fc, ca.formatting()));
+                    } else {
+                        if ins != r_ins {
+                            ins = None;
+                        }
+                        if del != r_del {
+                            del = None;
+                        }
+                        if fmt.as_ref().is_some_and(|(fc, f)| r_fmt != Some(*fc) || ca.formatting() != *f) {
+                            fmt = None;
+                        }
+                    }
+                }
+                if ra.end <= a_range.end {
+                    ka += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        push_slice(&mut new_runs, &mut ip, span.b_range.start, span.b_range.end, ins, del, fmt.as_ref().map(|(fc, f)| (*fc, f)));
+        b_pos = span.b_range.end;
+    }
+    if b_pos < p.text.len() {
+        push_slice(&mut new_runs, &mut ip, b_pos, p.text.len(), None, None, None);
     }
     p.runs = new_runs;
     p.normalize();
@@ -576,8 +951,13 @@ fn table_diff(ctx: &mut CompareCtx<'_>, ta: &Table, tb: &Table, depth: usize) ->
     }
 
     let row_key = |r: &Row| ctx.opts.key(&row_text(r, depth));
-    let keys_a: Vec<String> = ta.rows.iter().map(row_key).collect();
-    let keys_b: Vec<String> = tb.rows.iter().map(row_key).collect();
+    let mut ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut intern = |r: &Row| {
+        let next = ids.len();
+        *ids.entry(row_key(r)).or_insert(next)
+    };
+    let keys_a: Vec<usize> = ta.rows.iter().map(&mut intern).collect();
+    let keys_b: Vec<usize> = tb.rows.iter().map(&mut intern).collect();
     let ops = lcs_ops(&keys_a, &keys_b, ctx.budget);
 
     let mut pairs: Vec<(&Row, &Row)> = Vec::with_capacity(tb.rows.len());
@@ -601,6 +981,15 @@ fn table_diff(ctx: &mut CompareCtx<'_>, ta: &Table, tb: &Table, depth: usize) ->
             let inss = run.saturating_sub(dels);
             if dels != inss {
                 return None;
+            }
+            // If budget exhaustion or window chunking prevented `lcs_ops` from aligning matching
+            // rows across this balanced run (e.g. reordered or shifted rows), fall back to
+            // whole-table replacement instead of pairing unrelated rows by position.
+            if let (Some(ka), Some(kb)) = (keys_a.get(i..i + dels), keys_b.get(j..j + inss)) {
+                let seen_a: std::collections::HashSet<usize> = ka.iter().copied().collect();
+                if kb.iter().any(|key| seen_a.contains(key)) {
+                    return None;
+                }
             }
             for x in 0..dels {
                 let (ra, rb) = (ta.rows.get(i + x)?, tb.rows.get(j + x)?);
@@ -1247,4 +1636,32 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
         }
     }
     p
+}
+
+#[cfg(test)]
+pub(super) fn diff_tables_with_budget(ta: &Table, tb: &Table, mut budget: u64) -> (Vec<Arc<Block>>, usize) {
+    let mut doc = Document::new();
+    doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "Reviewer", "2026-11-24T00:00:00Z"));
+    doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Delete, "Reviewer", "2026-11-24T00:00:00Z"));
+    let opts = CompareOptions { case: true, white_space: true, formatting: true, characters: false };
+    let mut char_fallbacks = 0usize;
+    let mut changes = 0usize;
+    let a = Arc::new(Block::Table(ta.clone()));
+    let b = Arc::new(Block::Table(tb.clone()));
+    let mut out = Vec::new();
+    let mut ctx = CompareCtx {
+        doc: &mut doc,
+        ins: 0,
+        del: 1,
+        orig_revs: 0,
+        opts: &opts,
+        budget: &mut budget,
+        char_fallbacks: &mut char_fallbacks,
+        plain_revised: false,
+        changes: &mut changes,
+        author: "Reviewer",
+        date: "2026-11-24T00:00:00Z",
+    };
+    diff_tables(&mut ctx, &mut out, &a, ta, &b, tb, 0);
+    (out, changes)
 }

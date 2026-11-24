@@ -1449,12 +1449,6 @@ fn compare_deep_and_large_tables_strip_foreign_revisions_without_unmarked_duplic
     leaf.rows[0].cells[0].blocks = vec![para_block(tracked)];
     let deep_tbl = nest(leaf, MAX_TABLE_DEPTH);
 
-    let mut orig_doc = Document::new();
-    for _ in 0..3 {
-        orig_doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Delete, "Orig", "2026-11-17T00:00:00Z"));
-    }
-    orig_doc.body = vec![Arc::new(Block::Table(deep_tbl.clone())), para_block(Paragraph::new())];
-
     let mut rev_doc = Document::new();
     for _ in 0..3 {
         rev_doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "Rev", "2026-11-17T00:00:00Z"));
@@ -1465,13 +1459,13 @@ fn compare_deep_and_large_tables_strip_foreign_revisions_without_unmarked_duplic
     crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
     // Make `ta == tb` hold across `.docx` round-trip by opening `orig` from the same saved bytes.
     let mut orig_reopened = crate::io::open_path(&rev_file.0).unwrap();
+    assert!(orig_reopened.body.iter().any(|b| has_any_rev(b)), "reopened deep table must retain seeded insertion before compare");
     orig_reopened.revisions.clear();
-    let _ = orig_doc;
     let mut s = Session::new(orig_reopened);
     s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy()})).unwrap();
     assert!(!s.doc.body.iter().any(|b| has_any_rev(b)), "foreign revision indices survived inside deep equal table");
 
-    // 2. Equal `> MAX_ROWS` table carrying foreign revision indices also strips them.
+    // 2. Large equal table carrying foreign revision indices also strips them.
     let mut big_tbl = Table::new(505, 1, 200.0);
     let mut tracked_row = Paragraph::with_text("row504", CharProps::default());
     tracked_row.format(0, tracked_row.len(), &|c| c.ins = Some(2)).unwrap();
@@ -1484,10 +1478,11 @@ fn compare_deep_and_large_tables_strip_foreign_revisions_without_unmarked_duplic
     let big_file = TempDocx::new("tbl-big-foreign");
     crate::io::save_path(&big_file.0, &big_rev).unwrap();
     let mut big_orig = crate::io::open_path(&big_file.0).unwrap();
+    assert!(big_orig.body.iter().any(|b| has_any_rev(b)), "reopened large table must retain seeded insertion before compare");
     big_orig.revisions.clear();
     let mut s_big = Session::new(big_orig);
     s_big.run("review.compare", &json!({"path": big_file.0.to_string_lossy()})).unwrap();
-    assert!(!s_big.doc.body.iter().any(|b| has_any_rev(b)), "foreign revision indices survived inside > MAX_ROWS equal table");
+    assert!(!s_big.doc.body.iter().any(|b| has_any_rev(b)), "foreign revision indices survived inside large equal table");
 
     // 3. Changed innermost table at `MAX_TABLE_DEPTH` (`>= PARA_WALK_DEPTH`) keeps the single
     // stripped revised table instead of emitting two unmarked copies.
@@ -1796,4 +1791,164 @@ fn compare_table_control_change_falls_back_even_when_formatting_is_false() {
     assert!(!tables[1].controls.is_empty(), "inserted revised table keeps revised controls");
     assert!(tables[0].rows[0].cells[0].blocks[0].as_para().unwrap().runs[0].props.del.is_some());
     assert!(tables[1].rows[0].cells[0].blocks[0].as_para().unwrap().runs[0].props.ins.is_some());
+}
+
+#[test]
+fn compare_table_ignored_case_and_whitespace_preserves_original_marks() {
+    // 1. Same-provenance DOCX with an untracked "Alpha" followed by a pending insertion.
+    // Revised changes only "Alpha" -> "alpha" with tracking off, then Compare runs with
+    // `caseChanges: false`. Zero new changes must be reported, the pending insertion must stay
+    // rejectable, and Reject All after a DOCX round-trip must remove only the pending insertion.
+    let mut orig_tbl = make_test_table(&[&[""]], 200.0);
+    let mut cell_p = Paragraph::with_text("Alpha pending", CharProps::default());
+    cell_p.format("Alpha".len(), cell_p.len(), &|c| c.ins = Some(0)).unwrap();
+    orig_tbl.rows[0].cells[0].blocks = vec![para_block(cell_p)];
+
+    let mut orig_doc = Document::new();
+    orig_doc.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "Original Author", "2026-11-24T12:00:00Z"));
+    orig_doc.body = vec![Arc::new(Block::Table(orig_tbl)), para_block(Paragraph::new())];
+
+    let orig_file = TempDocx::new("tbl-ignore-case-orig");
+    crate::io::save_path(&orig_file.0, &orig_doc).unwrap();
+
+    let orig_reopened = crate::io::open_path(&orig_file.0).unwrap();
+    let mut rev_doc = crate::io::open_path(&orig_file.0).unwrap();
+    {
+        let Block::Table(ref mut t) = *Arc::make_mut(&mut rev_doc.body[0]) else {
+            panic!("first block must be table");
+        };
+        let Block::Para(ref mut p) = *Arc::make_mut(&mut t.rows[0].cells[0].blocks[0]) else {
+            panic!("cell must contain para");
+        };
+        // Edit "Alpha" -> "alpha" with tracking off, keeping " pending" untouched.
+        p.delete(0, "Alpha".len()).unwrap();
+        p.insert_text(0, "alpha", &CharProps::default()).unwrap();
+    }
+    let rev_file = TempDocx::new("tbl-ignore-case-rev");
+    crate::io::save_path(&rev_file.0, &rev_doc).unwrap();
+
+    let mut s = Session::new(orig_reopened);
+    let r = s.run("review.compare", &json!({"path": rev_file.0.to_string_lossy(), "caseChanges": false, "author": "Reviewer"})).unwrap();
+    assert_eq!(r["changes"], 0, "ignored capitalization must report zero new changes");
+    assert_eq!(s.doc.revisions[0].author, "Original Author");
+
+    let out_file = TempDocx::new("tbl-ignore-case-out");
+    crate::io::save_path(&out_file.0, &s.doc).unwrap();
+    let reopened_out = crate::io::open_path(&out_file.0).unwrap();
+    let cell = reopened_out.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(cell.plain_text(), "alpha pending");
+    assert_eq!(cell.props_of_char(0).ins, None, "untracked word must remain untracked");
+    assert_eq!(cell.props_of_char("alpha".len()).ins, Some(0), "original pending insertion must be preserved");
+
+    let mut s_rej = Session::new(reopened_out);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let rej_text = s_rej.doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap().plain_text();
+    assert_eq!(rej_text, "alpha", "Reject All must still remove the pending insertion");
+
+    // 2. Multi-byte case folding ('İ' 2 bytes -> "i\u{0307}" 3 bytes) and collapsed whitespace
+    // must align marks by normalized span without copying raw byte offsets or grafting Revised's
+    // own revision IDs.
+    let mut mb_orig_tbl = make_test_table(&[&[""]], 200.0);
+    let mut mb_p = Paragraph::with_text("\u{0130}  added", CharProps::default());
+    let added_start = "\u{0130}  ".len();
+    mb_p.format(added_start, mb_p.len(), &|c| c.ins = Some(0)).unwrap();
+    mb_orig_tbl.rows[0].cells[0].blocks = vec![para_block(mb_p)];
+    let mut mb_orig = Document::new();
+    mb_orig.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "OrigAuthor", "2026-11-24T12:00:00Z"));
+    mb_orig.body = vec![Arc::new(Block::Table(mb_orig_tbl)), para_block(Paragraph::new())];
+
+    let mut mb_rev_tbl = make_test_table(&[&[""]], 200.0);
+    let mut mb_rev_p = Paragraph::with_text("i\u{0307} added", CharProps::default());
+    // Seed a Revised-only revision on the untracked prefix to prove it is never grafted.
+    mb_rev_p.format(0, "i\u{0307}".len(), &|c| c.ins = Some(0)).unwrap();
+    mb_rev_tbl.rows[0].cells[0].blocks = vec![para_block(mb_rev_p)];
+    let mut mb_rev = Document::new();
+    mb_rev.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "RevAuthor", "2026-11-24T13:00:00Z"));
+    mb_rev.body = vec![Arc::new(Block::Table(mb_rev_tbl)), para_block(Paragraph::new())];
+    let mb_rev_file = TempDocx::new("tbl-ignore-mb-ws-rev");
+    crate::io::save_path(&mb_rev_file.0, &mb_rev).unwrap();
+
+    let mut s_mb = Session::new(mb_orig);
+    let r_mb = s_mb.run("review.compare", &json!({"path": mb_rev_file.0.to_string_lossy(), "caseChanges": false, "whiteSpace": false})).unwrap();
+    assert_eq!(r_mb["changes"], 0);
+    let mb_cell = s_mb.doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(mb_cell.plain_text(), "i\u{0307} added");
+    assert_eq!(mb_cell.props_of_char(0).ins, None, "Revised's own revision ID must not graft onto untracked prefix");
+    assert_eq!(mb_cell.props_of_char("i\u{0307} ".len()).ins, Some(0), "Original insertion must align to 'added'");
+    s_mb.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_mb.doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "i\u{0307} ");
+
+    // 3. Contextual Unicode case folding (Greek final sigma: "ΟΣ" -> "ος") and empty-text inline
+    // objects adjacent to collapsed whitespace (`whiteSpace: false`) must also align and preserve
+    // Original's pending insertion.
+    let mut gr_orig_tbl = make_test_table(&[&[""]], 200.0);
+    let mut gr_p = Paragraph::with_text("ΟΣ  pending", CharProps::default());
+    let bm_off = "ΟΣ ".len();
+    gr_p.insert_object(bm_off, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    let pend_start = gr_p.len() - "pending".len();
+    gr_p.format(pend_start, gr_p.len(), &|c| c.ins = Some(0)).unwrap();
+    gr_orig_tbl.rows[0].cells[0].blocks = vec![para_block(gr_p)];
+    let mut gr_orig = Document::new();
+    gr_orig.revisions.push(wordcraft_doc::Revision::new(RevisionKind::Insert, "OrigAuthor", "2026-11-24T12:00:00Z"));
+    gr_orig.body = vec![Arc::new(Block::Table(gr_orig_tbl)), para_block(Paragraph::new())];
+
+    let mut gr_rev_tbl = make_test_table(&[&[""]], 200.0);
+    let mut gr_rev_p = Paragraph::with_text("ος pending", CharProps::default());
+    gr_rev_p.insert_object("ος".len(), InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    gr_rev_tbl.rows[0].cells[0].blocks = vec![para_block(gr_rev_p)];
+    let mut gr_rev = Document::new();
+    gr_rev.body = vec![Arc::new(Block::Table(gr_rev_tbl)), para_block(Paragraph::new())];
+    let gr_rev_file = TempDocx::new("tbl-ignore-sigma-obj-rev");
+    crate::io::save_path(&gr_rev_file.0, &gr_rev).unwrap();
+
+    let mut s_gr = Session::new(gr_orig);
+    let r_gr = s_gr.run("review.compare", &json!({"path": gr_rev_file.0.to_string_lossy(), "caseChanges": false, "whiteSpace": false})).unwrap();
+    assert_eq!(r_gr["changes"], 0);
+    let gr_cell = s_gr.doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap();
+    let gr_pend_start = gr_cell.len() - "pending".len();
+    assert_eq!(gr_cell.props_of_char(0).ins, None);
+    assert_eq!(
+        gr_cell.props_of_char(gr_pend_start).ins,
+        Some(0),
+        "Greek final sigma + bookmark across collapsed whitespace must keep Original insertion"
+    );
+    s_gr.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_gr.doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap().plain_text(), "ος ");
+}
+
+#[test]
+fn compare_table_max_rows_guard_and_budget_exhausted_reorder_fallback() {
+    use wordcraft_doc::table::MAX_ROWS;
+
+    // 1. Reordered rows must still fall back to whole-table replacement when LCS budget is 0,
+    // while same-order edits still diff in place.
+    let reord_a = make_test_table(&[&["Alpha"], &["Beta"]], 200.0);
+    let reord_b = make_test_table(&[&["Beta"], &["Alpha"]], 200.0);
+    let (out, changes) = compare::diff_tables_with_budget(&reord_a, &reord_b, 0);
+    assert_eq!(changes, 1);
+    assert_eq!(out.len(), 2, "reordered rows must fall back even when budget is exhausted");
+
+    let edit_a = make_test_table(&[&["Old1"], &["Old2"]], 200.0);
+    let edit_b = make_test_table(&[&["New1"], &["New2"]], 200.0);
+    let (out_edit, changes_edit) = compare::diff_tables_with_budget(&edit_a, &edit_b, 0);
+    assert_eq!(changes_edit, 2);
+    assert_eq!(out_edit.len(), 1, "same-order edited rows still diff in place");
+
+    // 2. Tables with exactly MAX_ROWS diff in place, while MAX_ROWS + 1 falls back whole.
+    let mut base = make_test_table(&[&["same"]], 200.0);
+    let template_row = base.rows[0].clone();
+    base.rows.resize(MAX_ROWS, template_row.clone());
+    let mut at_limit_rev = base.clone();
+    at_limit_rev.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("edited", CharProps::default()))];
+    let (out_at, changes_at) = compare::diff_tables_with_budget(&base, &at_limit_rev, 50_000_000);
+    assert_eq!(changes_at, 1);
+    assert_eq!(out_at.len(), 1, "table with MAX_ROWS rows must diff in place");
+
+    let mut over_orig = base;
+    over_orig.rows.push(template_row.clone());
+    let mut over_rev = at_limit_rev;
+    over_rev.rows.push(template_row);
+    let (out_over, changes_over) = compare::diff_tables_with_budget(&over_orig, &over_rev, 50_000_000);
+    assert_eq!(changes_over, 1);
+    assert_eq!(out_over.len(), 2, "table above MAX_ROWS must fall back to whole-table replacement");
 }
