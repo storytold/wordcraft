@@ -3365,6 +3365,32 @@ fn page_fills_do_not_paint_the_fallback_color_beneath_them() {
     assert!(!raw(&gradient).contains("1 0 0 rg"), "the gradient is not painted over the fallback colour");
 }
 
+/// A gradient paints between two stops, so it needs two with a finite position. Below that it
+/// paints nothing and the page colour is still the page's background, not left blank.
+#[test]
+fn a_gradient_that_paints_nothing_still_draws_the_page_color() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let gradient = |stops: Vec<GradStop>| Gradient {
+        stops,
+        kind: GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    };
+    let stop = |pos: f32| GradStop { pos, color: Rgb(0, 0, 255), transparency: 0.0 };
+    // No stops; one stop; and two of which one has no usable position.
+    for stops in [vec![], vec![stop(0.0)], vec![stop(0.0), stop(f32::NAN)]] {
+        let mut d = Document::new();
+        d.settings.page_color = Some(Rgb(255, 0, 0));
+        d.settings.page_gradient = Some(gradient(stops));
+        let raw = String::from_utf8_lossy(&export(&d, &opts).unwrap()).into_owned();
+        assert!(raw.contains("1 0 0 rg"), "the page colour fills a page whose gradient paints nothing");
+        assert!(!raw.contains("0 0 1 rg"), "a gradient that cannot run is not painted as a solid");
+    }
+}
+
 #[test]
 fn a_translucent_pattern_fades_its_completed_group() {
     let mut d = Document::new();

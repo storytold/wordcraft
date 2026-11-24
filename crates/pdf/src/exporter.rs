@@ -225,8 +225,11 @@ impl Exporter<'_> {
     pub(crate) fn page(&mut self, s: &mut Surface, page: &Page, w: f32, h: f32) {
         // `page_color` is only the fallback older readers use for a gradient (its first stop) or
         // a pattern (its back colour). Painting it under the fill composites a translucent fill
-        // over itself, so the screen renderer ignores it the same way.
-        if self.doc.settings.page_gradient.is_none()
+        // over itself, so the screen renderer ignores it the same way. A gradient that paints
+        // nothing (fewer than two positioned stops) leaves the colour as the page's only
+        // background, though, so it is still drawn then: the same test the gradient itself makes.
+        let gradient_fills = self.doc.settings.page_gradient.as_ref().is_some_and(draw::gradient_paints);
+        if !gradient_fills
             && self.doc.settings.page_pattern.is_none()
             && let Some(c) = self.doc.settings.page_color
             && let Some(p) = rect_path(&Rect::new(0.0, 0.0, w, h))

@@ -279,7 +279,7 @@ impl Exporter<'_> {
     /// The page's linear gradient fill, its stops' transparencies carried into the shading.
     pub(super) fn page_gradient(&mut self, s: &mut Surface, g: &wordcraft_doc::fill::Gradient, w: f32, h: f32) {
         use wordcraft_doc::fill::GradientKind;
-        if !(ok(w) && ok(h) && w > 0.0 && h > 0.0) {
+        if !(ok(w) && ok(h) && w > 0.0 && h > 0.0) || !gradient_paints(g) {
             return;
         }
         let Some(p) = rect_path(&Rect::new(0.0, 0.0, w, h)) else { return };
@@ -300,9 +300,6 @@ impl Exporter<'_> {
                 opacity: norm(1.0 - s.transparency / 100.0),
             })
             .collect();
-        if stops.len() < 2 {
-            return;
-        }
         let paint: krilla::paint::Paint = krilla::paint::LinearGradient {
             x1: cx - dx * len / 2.0,
             y1: cy - dy * len / 2.0,
@@ -493,6 +490,13 @@ impl Exporter<'_> {
             s.pop();
         }
     }
+}
+
+/// Whether a page gradient paints at all: a linear gradient runs between two stops, so it needs
+/// two with a finite position. Fewer paint nothing, which is also when the page's `page_color`
+/// must be drawn instead of it (`Exporter::page`'s guard asks this same question).
+pub(super) fn gradient_paints(g: &wordcraft_doc::fill::Gradient) -> bool {
+    g.stops.iter().filter(|s| s.pos.is_finite()).count() >= 2
 }
 
 /// A centred page picture's size: its natural size (pixels at 96 dpi), scaled down by one factor
