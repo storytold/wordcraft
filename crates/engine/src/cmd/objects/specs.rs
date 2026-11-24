@@ -1,4 +1,4 @@
-use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
+use super::arrange::{MAX_OFFSET, bounds, copy_to, is_unclamped_view, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, shape_size, size};
 use super::select::{
@@ -293,9 +293,41 @@ pub fn specs() -> Vec<CommandSpec> {
                 return r;
             }
             unalign(s)?;
+            // In compat >= 15 (outside web/draft/outline), body wrapping Paragraph/Line floats
+            // clamp to page_top. Nudge relative to the displayed `hit.rect.y` in both directions:
+            // pin vertically to Anchor::Page when moving above page_top, and rebase onto
+            // `hit.origin.y` when moving at/below page_top so already-clamped floats move down
+            // immediately instead of sticking for the clamped offset.
+            let pin = (!is_unclamped_view(s))
+                .then(|| {
+                    let (pos, obj) = selected_or_text_box(s)?;
+                    let (_, _, float) = obj.frame()?;
+                    if pos.story != wordcraft_doc::StoryRef::Body
+                        || pos.path.depth() != 0
+                        || !wordcraft_layout::clamps_body_para_float(s.doc.settings.compat_mode, float.v_rel, float.wrap)
+                    {
+                        return None;
+                    }
+                    let layout = s.layout();
+                    let hit = layout.object(&pos, s.page_hint)?;
+                    let page_top = layout.pages.get(hit.page)?.body.y;
+                    Some((hit.rect.y + dy, hit.origin.y, page_top))
+                })
+                .flatten();
             with_float(s, |f| {
                 f.x = (f.x + dx).clamp(-MAX_OFFSET, MAX_OFFSET);
-                f.y = (f.y + dy).clamp(-MAX_OFFSET, MAX_OFFSET);
+                match pin {
+                    Some((t, _, top)) if t < top => {
+                        f.v_rel = wordcraft_doc::para::Anchor::Page;
+                        f.y = t.clamp(-MAX_OFFSET, MAX_OFFSET);
+                    }
+                    Some((t, oy, _)) => {
+                        f.y = (t - oy).clamp(-MAX_OFFSET, MAX_OFFSET);
+                    }
+                    None => {
+                        f.y = (f.y + dy).clamp(-MAX_OFFSET, MAX_OFFSET);
+                    }
+                }
             })
         })
         .params(r#"{"dx"?: pt, "dy"?: pt}"#)

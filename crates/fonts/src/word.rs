@@ -74,6 +74,9 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
+    // Verdana: wide-set humanist sans; DejaVu Sans and Bitstream Vera Sans match its advance
+    // widths closely (~1%), whereas Carlito and Liberation Sans are ~8-19% narrower.
+    const VERDANA: &[&str] = &["DejaVu Sans", "Bitstream Vera Sans", "Liberation Sans", "Arial", "Noto Sans", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
     // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
     // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
@@ -162,6 +165,7 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         "palatino linotype" | "book antiqua" | "palatino" => (PALATINO, true),
         "arial" | "helvetica" | "arial nova" => (ARIAL, true),
         "arial unicode ms" => (ARIAL_UNICODE, true),
+        "verdana" => (VERDANA, true),
         "times new roman" | "times" => (TIMES, true),
         "courier new" | "courier" | "consolas" | "lucida console" | "cascadia code" | "cascadia mono" => (MONO, true),
         "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => (SYMBOL, true),
@@ -192,6 +196,17 @@ pub fn symbol_font_metrics(family: &str) -> Option<(f64, f64)> {
 pub fn symbol_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
     let m = symbol_font_metrics(family)?;
     (resolved.substituted || one_em(line_metrics(&resolved.face), resolved.face.upem)).then_some(m)
+}
+
+/// Line (ascent, descent) in em for Verdana when drawn in a substitute face whose own line height
+/// differs from Windows Word's Verdana (2059 / 430 per 2048 = 1.2153 em).
+pub fn verdana_line(family: &str, resolved: &Resolved) -> Option<(f64, f64)> {
+    if resolved.substituted
+        && family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| charset_base_family(f).eq_ignore_ascii_case("verdana"))
+    {
+        return Some((2059.0 / 2048.0, 430.0 / 2048.0));
+    }
+    None
 }
 
 /// Is a line's (ascent, descent) one `upem` em tall?
@@ -731,16 +746,29 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
 }
 
-/// The line (ascent, descent) in units of an `upem` em that Word gives the classic PostScript
-/// families: their Windows counterparts' spacing, though Apple's own Times and Courier are one em
-/// tall (hhea 0.75 / -0.25, no gap). Measured in Word for Mac on synthetic documents (single
-/// spacing, 11 and 20 pt): Times lines lie exactly as far apart as Times New Roman's (hhea 1825 /
-/// -443, gap 87 per 2048), Courier's as Courier New's (1705 / -615, no gap). On Windows, Word
-/// draws a "Times" document in Times New Roman anyway.
+/// Line `(ascent, descent)` overrides in units of an `upem` em where Word's spacing differs from
+/// the installed face's own `hhea` table:
+/// - Classic PostScript families (`Times`, `Courier`): their Windows counterparts' spacing on all
+///   platforms, though Apple's own Times and Courier are one em tall (hhea 0.75 / -0.25, no gap).
+///   Measured in Word for Mac on synthetic documents (single spacing, 11 and 20 pt): Times lines
+///   lie exactly as far apart as Times New Roman's (hhea 1825 / -443, gap 87 per 2048), Courier's
+///   as Courier New's (1705 / -615, no gap). On Windows, Word draws a "Times" document in Times
+///   New Roman anyway.
+/// - `Roboto` on Windows: Word for Windows spaces Google Fonts Roboto by its `OS/2`
+///   `usWinAscent`/`usWinDescent` (1946 / 512 per 2048 = 1.2002 em), whereas its `hhea` is
+///   1900 / -500 (1.1719 em). On other targets (macOS, Linux, BSD, and `wasm32`, including the web
+///   app on Windows) Roboto keeps its `hhea` table (Word for Mac `ROBOTO_METRICS`), so a Roboto
+///   document can paginate differently in the Windows desktop app than in the web app or on other
+///   desktops.
 fn borrowed_line(family: &str, upem: f64) -> Option<(f64, f64)> {
+    borrowed_line_on(family, upem, cfg!(windows))
+}
+
+fn borrowed_line_on(family: &str, upem: f64, word_for_windows: bool) -> Option<(f64, f64)> {
     let (a, d) = match family.trim().to_ascii_lowercase().as_str() {
         "times" => hhea_line(1825, -443, 87),
         "courier" => hhea_line(1705, -615, 0),
+        "roboto" if word_for_windows => (1946.0, 512.0),
         _ => return None,
     };
     Some((a * upem / 2048.0, d * upem / 2048.0))
@@ -749,8 +777,8 @@ fn borrowed_line(family: &str, upem: f64) -> Option<(f64, f64)> {
 /// Line metrics for a face in font units: (ascent, descent), both positive, the way word
 /// processors measure single line spacing: the hhea values with the line gap above the ascent
 /// (Word puts the first baseline that far below the line top), falling back to OS/2
-/// usWinAscent/usWinDescent; Times and Courier borrow their Windows counterparts' (see
-/// [`borrowed_line`]).
+/// usWinAscent/usWinDescent; Times, Courier, and (on Windows) Roboto borrow Windows Word spacing
+/// (see [`borrowed_line`]).
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -797,7 +825,7 @@ mod tests {
         assert_eq!(borrowed_line("Times", 2048.0), Some((1912.0, 443.0)));
         assert_eq!(borrowed_line(" times ", 1000.0), Some((1912.0 / 2.048, 443.0 / 2.048)));
         assert_eq!(borrowed_line("Courier", 2048.0), Some((1705.0, 615.0)));
-        // Only those two: the Windows fonts themselves, and other Mac fonts, keep their own.
+        // Other families (the Windows fonts themselves and other Mac fonts) keep their own.
         for family in ["Times New Roman", "Courier New", "Helvetica", "Hoefler Text", "Palatino", ""] {
             assert_eq!(borrowed_line(family, 2048.0), None, "{family}");
         }
@@ -1200,5 +1228,62 @@ mod tests {
         assert!(is_thai_family(&thai_list) && !is_thai_family(&named_list));
         let cached = fallback_list_cache().lock().unwrap_or_else(|e| e.into_inner()).classes.len();
         assert!(cached >= 2, "{cached} lists classified");
+    }
+
+    #[test]
+    fn verdana_prefers_dejavu_and_bitstream_vera_over_narrow_sans() {
+        let list = substitutes("Verdana");
+        let pos = |n: &str| list.iter().position(|x| *x == n);
+        assert!(pos("DejaVu Sans").is_some() && pos("Bitstream Vera Sans").is_some(), "{list:?}");
+        assert!(pos("DejaVu Sans") < pos("Liberation Sans"), "{list:?}");
+        assert!(pos("Bitstream Vera Sans") < pos("Liberation Sans"), "{list:?}");
+        assert!(has_named_substitutes("Verdana"));
+        assert!(has_own_substitutes("Verdana"));
+
+        let db = FontDb::global();
+        let resolved = resolve("Verdana", false, false);
+        if !db.has_family("Verdana") {
+            assert!(resolved.substituted);
+            if db.has_family("DejaVu Sans") {
+                assert_eq!(resolved.face.family, "DejaVu Sans");
+            }
+            assert_eq!(verdana_line("Verdana", &resolved), Some((2059.0 / 2048.0, 430.0 / 2048.0)));
+            assert_eq!(verdana_line("Verdana CE", &resolved), Some((2059.0 / 2048.0, 430.0 / 2048.0)));
+        } else {
+            assert_eq!(verdana_line("Verdana", &resolved), None);
+        }
+        let arial = resolve("Arial", false, false);
+        assert_eq!(verdana_line("Arial", &arial), None);
+    }
+
+    /// Roboto borrows Word for Windows `OS/2` spacing (`1946/512`) only when `word_for_windows` is
+    /// true; other targets (macOS, Linux, BSD, `wasm32`, including the web app on Windows) return
+    /// `None` from `borrowed_line_on` and use `hhea`.
+    #[test]
+    fn roboto_line_metrics_match_platform_word() {
+        assert_eq!(borrowed_line_on("Roboto", 2048.0, true), Some((1946.0, 512.0)));
+        assert_eq!(borrowed_line_on(" roboto ", 1000.0, true), Some((1946.0 / 2.048, 512.0 / 2.048)));
+        assert_eq!(borrowed_line_on("Roboto", 2048.0, false), None);
+        assert_eq!(borrowed_line_on(" roboto ", 1000.0, false), None);
+        assert_eq!(borrowed_line("Roboto", 2048.0), borrowed_line_on("Roboto", 2048.0, cfg!(windows)));
+
+        let db = FontDb::global();
+        if db.has_family("Roboto") {
+            let r = resolve("Roboto", false, false);
+            assert!(!r.substituted);
+            if cfg!(windows) {
+                let (a, d) = line_metrics(&r.face);
+                let total = (a + d) / r.face.upem;
+                assert!((total - 2458.0 / 2048.0).abs() < 1e-6, "Roboto line height {total} != 1.2002 em");
+            } else if let Some(hhea) = r
+                .face
+                .skrifa()
+                .and_then(|f| f.hhea().ok())
+                .map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()))
+                .filter(|m| m.0 > 0.0 && m.0 + m.1 <= r.face.upem * 2.0)
+            {
+                assert_eq!(line_metrics(&r.face), hhea);
+            }
+        }
     }
 }

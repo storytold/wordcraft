@@ -1103,6 +1103,98 @@ fn ungroup_keeps_a_rotated_groups_arrangement() {
 }
 
 #[test]
+fn regroup_and_bounds_above_top_margin_preserve_position_in_modern_compat() {
+    // Ungrouping a 90-degree rotated group whose top sits above page_top and immediately
+    // regrouping it must keep its visual position rather than jumping down to page_top.
+    let mut s = rectangle_and_arrow(0.0);
+    select_both(&mut s);
+    s.run("arrange.group", &json!({})).unwrap();
+    s.run("arrange.rotation", &json!({"degrees": 90})).unwrap();
+    let before = page_pixels(&s);
+    s.run("arrange.ungroup", &json!({})).unwrap();
+    assert!(pixels_differing(&before, &page_pixels(&s)) < 20, "ungrouping keeps visual position");
+    s.run("arrange.group", &json!({})).unwrap();
+    assert!(pixels_differing(&before, &page_pixels(&s)) < 20, "regrouping keeps visual position above page_top");
+
+    // Explicit arrange.bounds above page_top (y = 30 < 72) in compat 15 keeps the requested y.
+    let mut s2 = Session::new(wordcraft_doc::Document::new());
+    s2.run("insert.shape", &json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+    s2.run("arrange.bounds", &json!({"x": 100, "y": 30})).unwrap();
+    let pos = all_objects(&s2)[0].0.clone();
+    let rect = rect_of(&mut s2, &pos);
+    assert!((rect[1] - 30.0).abs() < 0.5, "explicit bounds above page_top must stay at y=30, got {rect:?}");
+
+    // Nudging up past page_top (y = 80 -> dy = -40 -> y = 40) must not stick at page_top (72).
+    s2.run("arrange.bounds", &json!({"x": 100, "y": 80})).unwrap();
+    s2.run("arrange.nudge", &json!({"dy": -40})).unwrap();
+    let pos = all_objects(&s2)[0].0.clone();
+    let nudged = rect_of(&mut s2, &pos);
+    assert!((nudged[1] - 40.0).abs() < 0.5, "nudging above page_top must land at y=40, got {nudged:?}");
+
+    // Nudging down from a layout-clamped float (posOffset = -72 -> drawn at 72) by dy = +4 must
+    // move immediately to y = 76 rather than sticking at 72.
+    let mut s3 = Session::new(wordcraft_doc::Document::new());
+    s3.run("insert.shape", &json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+    s3.run("arrange.bounds", &json!({"x": 100, "y": 80})).unwrap();
+    let pos3 = all_objects(&s3)[0].0.clone();
+    super::select::edit_float(&mut s3, &pos3, |f| {
+        f.v_rel = wordcraft_doc::para::Anchor::Paragraph;
+        f.y = -72.0;
+    })
+    .unwrap();
+    s3.touch();
+    assert!((rect_of(&mut s3, &pos3)[1] - 72.0).abs() < 0.5, "clamped float starts drawn at page_top=72");
+    s3.run("arrange.nudge", &json!({"dy": 4})).unwrap();
+    let pos3 = all_objects(&s3)[0].0.clone();
+    let down = rect_of(&mut s3, &pos3);
+    assert!((down[1] - 76.0).abs() < 0.5, "nudging down from clamped float must land at y=76, got {down:?}");
+}
+
+#[test]
+fn arrange_nudge_on_active_text_box_respects_modern_clamp() {
+    use wordcraft_doc::para::Anchor;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.textBox", &json!({"text": "Active box", "width": 120, "height": 50})).unwrap();
+    let caret_sel = s.sel.clone();
+    let (pos, _) = text_box_target(&s).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"x": 100, "y": 80})).unwrap();
+
+    // Restore the typing caret inside the text box so `arrange.nudge` uses `selected_or_text_box`.
+    s.sel = caret_sel.clone();
+    assert!(selected(&s).is_none(), "caret is inside the text box");
+    assert!(text_box_target(&s).is_some(), "active text box is targeted");
+
+    // Nudging up past page_top (y = 80 -> dy = -40 -> y = 40) pins v_rel to Anchor::Page and moves
+    // the text box above the top margin without disturbing the caret.
+    s.run("arrange.nudge", &json!({"dx": 10, "dy": -40})).unwrap();
+    assert_eq!(s.sel, caret_sel, "nudge keeps caret inside active text box");
+    let up = rect_of(&mut s, &pos);
+    assert!((up[0] - 110.0).abs() < 0.5 && (up[1] - 40.0).abs() < 0.5, "nudging active text box above page_top must land at (110, 40), got {up:?}");
+    let (_, _, f) = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap().frame().unwrap();
+    assert_eq!(f.v_rel, Anchor::Page, "nudging above page_top converts v_rel to Page");
+
+    // Nudging down from a layout-clamped active text box (v_rel = Paragraph, y = -72 -> drawn at
+    // page_top = 72) by dy = +4 rebases onto origin and moves immediately to y = 76.
+    super::select::edit_float(&mut s, &pos, |f| {
+        f.v_rel = Anchor::Paragraph;
+        f.y = -72.0;
+    })
+    .unwrap();
+    s.touch();
+    assert!((rect_of(&mut s, &pos)[1] - 72.0).abs() < 0.5, "clamped text box starts drawn at page_top=72");
+    assert!(selected(&s).is_none(), "caret remains inside the text box");
+    s.run("arrange.nudge", &json!({"dx": -5, "dy": 4})).unwrap();
+    let down = rect_of(&mut s, &pos);
+    assert!(
+        (down[0] - 105.0).abs() < 0.5 && (down[1] - 76.0).abs() < 0.5,
+        "nudging clamped active text box down must land at (105, 76), got {down:?}"
+    );
+    let (_, _, f) = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap().frame().unwrap();
+    assert_eq!(f.v_rel, Anchor::Paragraph, "nudging down at/below page_top keeps Paragraph anchor");
+}
+
+#[test]
 fn picture_alt_and_crop_round_trip() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     let data = super::super::insert::base64_encode(&png(20, 10));

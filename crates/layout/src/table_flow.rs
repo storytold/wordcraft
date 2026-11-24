@@ -162,6 +162,15 @@ fn row_can_start(doc: &wordcraft_doc::Document, row: &wordcraft_doc::Row, laid: 
     split_keeping_nested(doc, laid, room).is_some()
 }
 
+/// Whether the repeated header block (`repeated_height` pt) leaves room on the continuation
+/// page/column (`cont_body_h`). Word still repeats a header that is shorter than the page body
+/// even if a tall body row overflows below it (pinned by
+/// `repeated_header_is_followed_by_the_next_row_even_when_it_overflows`), and stops repeating
+/// only when the header block alone fills or exceeds the continuation body.
+fn header_block_fits_continuation(repeated_height: f32, cont_body_h: f32) -> bool {
+    repeated_height < cont_body_h - 0.01
+}
+
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
     // A page break before the first row's paragraph moves the whole table to a new page, as
@@ -283,7 +292,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                         return false;
                     }
                     let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
-                    let page_height = pb.bottom - body_top - repeated_height;
+                    let cont_body_h = pb.next_room(body_top);
+                    let repeat_h = if header_block_fits_continuation(repeated_height, cont_body_h) { repeated_height } else { 0.0 };
+                    let page_height = pb.bottom - body_top - repeat_h;
                     height <= page_height + 0.01 && !row_can_start(ctx.doc, next, laid, pb.bottom - pb.y - height, page_height)
                 });
             // A row another row follows needs room for the border below it too (measured in Word).
@@ -317,8 +328,12 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 None => {}
             }
             pb.advance(block, body_top);
-            // Repeat header rows, up to the layout's cap.
-            if ri >= header_rows.len() && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
+            // Repeat header rows when the header block alone does not fill or exceed the
+            // continuation page/column (`pb.bottom - pb.top`), up to the layout's cap.
+            if ri >= header_rows.len()
+                && header_block_fits_continuation(repeated_height, pb.bottom - pb.top)
+                && ctx.header_repeats.saturating_add(header_cost) <= header_cap
+            {
                 ctx.header_repeats = ctx.header_repeats.saturating_add(header_cost);
                 for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
                     place(pb, h);

@@ -3423,3 +3423,54 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", equation_x].into_iter().map(String::from).collect();
     assert_eq!(shown, expected, "math face: {}", math_face.family);
 }
+
+#[test]
+fn fixed_layout_table_cell_clips_overflowing_inline_image_in_pdf() {
+    let mut d = Document::new();
+    let media = d.add_media(png(), "png");
+    let mut t = wordcraft_doc::Table::new(1, 2, 300.0);
+    t.props.fixed = true;
+    t.grid = vec![100.0, 200.0];
+    let mut p = Paragraph::with_text("", Default::default());
+    let obj = InlineObject::Image {
+        media,
+        w: 260.0,
+        h: 60.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    t.rows[0].cells[1].blocks = vec![para_block(p)];
+    d.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+
+    let lay = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+    let cell1 = lay.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { row: 0, cell: 1, rect, clip, .. } => Some((*rect, *clip)),
+            _ => None,
+        })
+        .expect("cell 1 placed");
+    assert!(cell1.1, "overflowing inline image in fixed-layout cell must set clip=true");
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let pdf_fixed = export_layout(&d, &lay, &opts).unwrap();
+    let clips_fixed = String::from_utf8_lossy(&pdf_fixed).matches("\nW\nn").count();
+
+    // Compare against the same table with fixed=false (no cell clip added for the overflowing image).
+    let mut d_auto = d.clone();
+    if let wordcraft_doc::Block::Table(tbl) = std::sync::Arc::make_mut(&mut d_auto.body[0]) {
+        tbl.props.fixed = false;
+    }
+    let lay_auto = wordcraft_layout::layout(&d_auto, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+    let pdf_auto = export_layout(&d_auto, &lay_auto, &opts).unwrap();
+    let clips_auto = String::from_utf8_lossy(&pdf_auto).matches("\nW\nn").count();
+    assert_eq!(
+        clips_fixed,
+        clips_auto + 1,
+        "expected exactly one added fixed-layout cell clip operator in PDF stream (fixed clips={clips_fixed}, auto clips={clips_auto})"
+    );
+}
