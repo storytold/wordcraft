@@ -83,11 +83,13 @@ impl MockClient {
 impl Session for MockClient {
     fn join(&mut self, role: Role, since: Option<u64>) -> Result<Join, Refusal> {
         let mut room = lock(&self.room)?;
-        let replica = room.replica_of(&self.peer)?;
         let from = since.unwrap_or(0);
         if from > room.head {
             return Err(Refusal::new(RefusalCode::Resync, format!("the relay holds {} operations; the peer asked for {}", room.head, from)));
         }
+        // A peer that cannot be served its version has not joined, so it must not take a replica
+        // number with it: a refused join would otherwise burn an identity for good.
+        let replica = room.replica_of(&self.peer)?;
         room.roles.insert(self.peer.clone(), role);
         self.role = role;
         self.replica = replica;
@@ -275,6 +277,21 @@ mod tests {
         assert_eq!(recovered.len(), 1, "the text the paragraph insertion carried is kept");
         assert_eq!(recovered[0].text, "typed");
         assert_eq!(recovered[0].block, minted, "the recovery names the id the peer minted for it");
+    }
+
+    #[test]
+    fn a_refused_version_does_not_spend_a_replica_number() {
+        let relay = MockRelay::new(document(&["one"]));
+        // A fresh room at version 0: every peer that asks for version 1 is refused, and the
+        // refusal must not leave a replica identity behind.
+        for index in 0..=u8::MAX {
+            let mut peer = relay.connect(&format!("refused-{index}"));
+            let refused = peer.join(Role::Viewer, Some(1)).expect_err("the relay holds no version 1");
+            assert_eq!(refused.code, RefusalCode::Resync);
+        }
+        let mut valid = relay.connect("valid");
+        let joined = valid.join(Role::Editor, None).expect("a valid join still finds a replica number");
+        assert_eq!(joined.replica, 0, "refused joins take no identity, so the first real peer gets the first one");
     }
 
     #[test]

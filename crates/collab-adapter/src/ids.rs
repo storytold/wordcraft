@@ -16,6 +16,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use wordcraft_doc::Document;
 
+use crate::seam::{Refusal, RefusalCode};
+
 /// The first id of a peer's own space. Existing blocks are numbered below it, so the two ranges
 /// cannot meet.
 pub const GENERATED_BASE: u32 = 1 << 24;
@@ -71,10 +73,17 @@ impl IdMap {
     ///
     /// The counter never runs backwards, so a removed block's id is never handed out again: a
     /// retry that arrives late is refused rather than applied to a different paragraph.
-    pub fn allocate(&mut self) -> BlockId {
-        let within = self.next.min(IDS_PER_REPLICA.saturating_sub(1));
+    ///
+    /// A replica that has minted all [`IDS_PER_REPLICA`] ids of its slice has nothing left to
+    /// give: the allocation is refused rather than clamped to the last id, which a replayed
+    /// journal could already have named. Allocations below the limit are unchanged.
+    pub fn allocate(&mut self) -> Result<BlockId, Refusal> {
+        if self.next >= IDS_PER_REPLICA {
+            return Err(Refusal::new(RefusalCode::BadRequest, format!("replica {} has minted all {IDS_PER_REPLICA} ids of its slice", self.replica)));
+        }
+        let id = BlockId(self.slice_base().saturating_add(self.next));
         self.next = self.next.saturating_add(1);
-        BlockId(self.slice_base().saturating_add(within))
+        Ok(id)
     }
 
     /// The first id of this replica's own slice.
@@ -184,28 +193,49 @@ mod tests {
         let doc = three_paragraphs();
         let mut a = IdMap::bind(&doc, 1);
         let mut b = IdMap::bind(&doc, 2);
-        let first = a.allocate();
-        let second = b.allocate();
+        let first = a.allocate().expect("a replica with room mints an id");
+        let second = b.allocate().expect("a replica with room mints an id");
         assert_ne!(first, second);
         assert!(first.0 >= GENERATED_BASE, "a minted id is above every id an existing block got");
         assert!(second.0 >= GENERATED_BASE);
-        assert_ne!(a.allocate(), first);
+        assert_ne!(a.allocate().expect("room for another id"), first);
     }
 
     #[test]
     fn a_replayed_block_moves_the_counter_past_its_id() {
         let doc = three_paragraphs();
         let mut ids = IdMap::bind(&doc, 1);
-        let first = ids.allocate();
+        let first = ids.allocate().expect("room for an id");
         ids.put(3, first);
 
         // The replica rejoins: the map is numbered again and the journal replays the insertion
         // with the id it was given before the peer went away.
         let mut again = IdMap::bind(&doc, 1);
         again.put(3, first);
-        let next = again.allocate();
+        let next = again.allocate().expect("room for the first id after the replay");
         assert_ne!(next, first, "a rejoin does not hand out an id the session already gave");
         assert!(next.0 > first.0, "the counter resumes past the ids the replay brought back");
+    }
+
+    #[test]
+    fn a_replayed_slice_end_leaves_no_id_to_hand_out_again() {
+        let doc = three_paragraphs();
+        let mut ids = IdMap::bind(&doc, 2);
+        let base = ids.slice_base();
+        let last = BlockId(base.saturating_add(IDS_PER_REPLICA.saturating_sub(1)));
+
+        // The whole slice came back through the journal: the counter now sits at its end, so the
+        // next insertion is refused instead of being given the id the replay already named.
+        ids.put(0, last);
+        let refused = ids.allocate().expect_err("the slice is spent");
+        assert_eq!(refused.code, RefusalCode::BadRequest);
+        assert!(refused.detail.contains("ids of its slice"));
+
+        // Allocations still below the limit are unchanged.
+        let mut fresh = IdMap::bind(&doc, 3);
+        let first = fresh.allocate().expect("room at the start of the slice");
+        assert_eq!(first, BlockId(fresh.slice_base()));
+        assert_eq!(fresh.allocate().expect("room for the second id"), BlockId(fresh.slice_base().saturating_add(1)));
     }
 
     #[test]
@@ -213,7 +243,7 @@ mod tests {
         let doc = three_paragraphs();
         let mut ids = IdMap::bind(&doc, 1);
         let two = ids.id_at(1).expect("an id");
-        let fresh = ids.allocate();
+        let fresh = ids.allocate().expect("room for an id");
         ids.shifted(1);
         ids.put(1, fresh);
         assert_eq!(ids.index(two), Some(2));

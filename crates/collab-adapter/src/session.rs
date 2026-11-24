@@ -76,8 +76,11 @@ impl DocSession {
         self.doc.plain_text(wordcraft_doc::StoryRef::Body)
     }
 
-    /// Mint the id of a paragraph this replica is about to insert.
-    pub fn next_block_id(&mut self) -> BlockId {
+    /// Mint an id of a paragraph this replica is about to insert.
+    ///
+    /// Fails only when this replica has minted every id of its slice; the caller then has no
+    /// identity left to create a block with and is told so instead of sharing one.
+    pub fn next_block_id(&mut self) -> Result<BlockId, Refusal> {
         self.ids.allocate()
     }
 
@@ -111,7 +114,7 @@ impl DocSession {
 
     /// Insert a paragraph after `after` (or at the top), minting its id first.
     pub fn insert_paragraph(&mut self, after: Option<BlockId>, text: &str) -> Result<BlockId, Refusal> {
-        let id = self.next_block_id();
+        let id = self.next_block_id()?;
         self.submit(Edit::InsertParagraph { after, id, text: text.to_owned() })?;
         Ok(id)
     }
