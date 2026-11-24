@@ -84,6 +84,9 @@ pub(super) fn home(ui: &mut Ui, app: &mut WordApp) {
     let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
     let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &recent)
         .layout(StartLayout::Greeting)
+        // The File rail beside the page has New and Open; production's Home had no second pair.
+        .offers_new(false)
+        .offers_open(false)
         .title(label(greeting))
         .templates(&cards)
         .more_templates(label("More templates →"))
