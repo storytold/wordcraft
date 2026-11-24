@@ -29,7 +29,7 @@ use craft::ui::runtime::focus::{self, FocusTarget};
 // PLAN: assumed `RuleKind` re-exported from `craft::ui::style`
 use craft::ui::style::{DataColor, RuleKind};
 use craft::ui::text::TextField;
-use craft::ui::tile_grid::{Tile, TileGrid};
+use craft::ui::tile_grid::{GridZoom, Tile, TileGrid};
 use egui::{Color32, CornerRadius, Pos2, Rect, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -316,7 +316,7 @@ fn layout_tiles(ui: &mut Ui, theme: &[Rgb], form: &mut SmartArtForm) -> bool {
     let current = shown.iter().position(|l| *l == form.layout).unwrap_or(0);
     let out = TileGrid::<usize>::new(tl!("Layouts").to_string())
         .thumb_size(ThumbSize::Large)
-        .zoom(1.4)
+        .zoom(GridZoom::Fixed(1.4))
         .select(SelectMode::Single)
         .card_columns(3)
         // Production's picker is three tile rows high and scrolls the rest; the cap also makes the grid the one owner
