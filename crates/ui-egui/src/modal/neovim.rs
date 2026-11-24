@@ -313,6 +313,12 @@ local directory=...
   vim.bo[m.buf].swapfile = false
   vim.bo[m.buf].bufhidden = 'hide'
   vim.bo[m.buf].filetype = 'wordcraft'
+  -- Soft/page breaks can leave an empty rendered row at the paragraph's end.
+  -- Keep its native caret position reachable instead of clamping back onto the break.
+  local virtual=vim.opt_local.virtualedit:get()
+  if not vim.tbl_contains(virtual,'all') and not vim.tbl_contains(virtual,'onemore') then
+    vim.opt_local.virtualedit:append('onemore')
+  end
   vim.api.nvim_create_autocmd('BufWriteCmd', {buffer=m.buf, callback=function(event)
     m.save=true
     if event.match~=vim.api.nvim_buf_get_name(m.buf) then m.savePath=event.match end
