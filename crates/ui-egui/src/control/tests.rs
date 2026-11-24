@@ -363,9 +363,15 @@ fn control_keys_cannot_paste_a_field_word_acts_on() {
     let ctx = h.ctx.clone();
     // Copied with the runtime installed, so the copy is on the clipboard Paste reads.
     let a = h.state_mut();
+    // Text beside the field, so the copy puts text on the clipboard for Paste to find.
+    a.run("document.setText", json!({"text": "Copied "})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("select.collapse", json!({"end": true})).unwrap();
     a.run("insert.field", json!({"instr": r#"DDEAUTO cmd "/c calc""#})).unwrap();
     a.run("select.all", json!({})).unwrap();
-    a.run("edit.copy", json!({})).unwrap();
+    let copied = a.run("edit.copy", json!({})).unwrap();
+    crate::system_clipboard::put_result(a, &ctx, &copied);
+    assert_eq!(fields(a), 1);
     // The field leaves the document: pasting it is bringing it in.
     a.run("document.setText", json!({"text": "Mine"})).unwrap();
     assert_eq!(fields(a), 0);
