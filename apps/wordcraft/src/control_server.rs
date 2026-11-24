@@ -234,10 +234,12 @@ mod tests {
     fn params_token_is_only_a_secret_for_auth() {
         let (port, rx, control) = boot();
 
-        // Neither `params.token` on a non-`auth` method nor legacy `params.key` on `auth` authenticates.
+        // Neither `params.token` on a non-`auth` method nor legacy `params.key` on
+        // `document.inspect` or `auth` authenticates.
         for (id, line) in [
             (1, format!(r#"{{"id":1,"method":"document.inspect","params":{{"token":"{TOKEN}"}}}}"#)),
-            (2, format!(r#"{{"id":2,"method":"auth","params":{{"key":"{TOKEN}"}}}}"#)),
+            (2, format!(r#"{{"id":2,"method":"document.inspect","params":{{"key":"{TOKEN}"}}}}"#)),
+            (3, format!(r#"{{"id":3,"method":"auth","params":{{"key":"{TOKEN}"}}}}"#)),
         ] {
             let mut c = Conn::open(port);
             assert_eq!(c.call(&line), serde_json::json!({"id": id, "ok": false, "error": "authentication required"}));
