@@ -75,13 +75,23 @@ impl Recorder<'_> {
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
     /// everything that isn't formatting); `None` when it already carries the right one.
     fn change<T: Clone + PartialEq>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
-        let (fb, fa) = (f(before), f(after));
-        let (had, has) = (get(before), get(after));
-        self.change_values(fb, fa, had, has)
+        self.change_values(f(before), f(after), get(before), get(after))
     }
 
     fn change_values<T: Clone + PartialEq>(&mut self, fb: T, fa: T, had: &Slot<T>, has: &Slot<T>) -> Option<Replacement<T>> {
-        let want = if fb == fa {
+        self.change_values_eq(fb, fa, had, has, Clone::clone)
+    }
+
+    fn change_values_eq<T: Clone + PartialEq, K: PartialEq>(
+        &mut self,
+        fb: T,
+        fa: T,
+        had: &Slot<T>,
+        has: &Slot<T>,
+        key: impl Fn(&T) -> K,
+    ) -> Option<Replacement<T>> {
+        let fa_key = key(&fa);
+        let want = if key(&fb) == fa_key {
             // Not formatted by this command: keep the change it carries (or carried).
             if has.is_some() {
                 return None;
@@ -92,7 +102,7 @@ impl Recorder<'_> {
             // is superseded by this one.
             let own = had.as_ref().filter(|c| self.own(c.rev));
             let old = own.map(|c| c.old.clone()).unwrap_or(fb);
-            if old == fa {
+            if key(&old) == fa_key {
                 None
             } else {
                 let rev = own.map(|c| c.rev).unwrap_or_else(|| self.rid());
@@ -100,6 +110,13 @@ impl Recorder<'_> {
             }
         };
         (want != *has).then_some(Replacement(want))
+    }
+
+    /// Tracked paragraph-formatting change for ordinary edits, treating a `num: 0` on a
+    /// paragraph whose style inherits no list as equivalent to `numbering: None`.
+    fn para_props(&mut self, before: &ParaProps, after: &ParaProps) -> Option<Replacement<ParaProps>> {
+        let styles = self.styles;
+        self.change_values_eq(before.formatting(), after.formatting(), &before.fmt_change, &after.fmt_change, |p| normalize_para_num(p, styles))
     }
 
     /// Record the formatting changes between `b` and `a` (the same text) into `a`.
@@ -154,7 +171,7 @@ impl Recorder<'_> {
             (nc, p_change)
         } else {
             // Normal tracked edits: keep on pPrChange (fmt_change), preserving numbering in baseline.
-            let p_change = self.change(&b.props, &a.props, ParaProps::formatting, |p| &p.fmt_change);
+            let p_change = self.para_props(&b.props, &a.props);
             (None, p_change)
         };
         if runs.is_empty() && mark.is_none() && props.is_none() && num_change.is_none() {
@@ -270,6 +287,18 @@ fn strip_num(p: &ParaProps) -> ParaProps {
     ParaProps { numbering: None, ..p.formatting() }
 }
 
+/// Normalize redundant `num: 0` when the paragraph's style does not inherit a list,
+/// and canonicalize the suppression level when the style does inherit a list.
+fn normalize_para_num(p: &ParaProps, styles: Option<&StyleSheet>) -> ParaProps {
+    let mut out = p.formatting();
+    if let Some(nr) = out.numbering
+        && nr.num == 0
+    {
+        out.numbering = style_active_num(styles, out.style.as_deref()).map(|_| NumRef { num: 0, level: 0 });
+    }
+    out
+}
+
 /// Keep the formatting changes the command `id` made to `s.doc` (compared with `before`) as
 /// tracked formatting changes, when Track Changes and Track Formatting are on.
 pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
@@ -327,9 +356,7 @@ impl ParaPropTracker {
             compare: false,
             rid: None,
         };
-        r.change(before, after, ParaProps::formatting, |p| &p.fmt_change)
-            .map(|Replacement(change)| change)
-            .unwrap_or_else(|| after.fmt_change.clone())
+        r.para_props(before, after).map(|Replacement(change)| change).unwrap_or_else(|| after.fmt_change.clone())
     }
 }
 
@@ -352,7 +379,7 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
         compare: false,
         rid: None,
     };
-    if let Some(Replacement(want)) = r.change(before, &after, ParaProps::formatting, |p| &p.fmt_change) {
+    if let Some(Replacement(want)) = r.para_props(before, &after) {
         let p = s.doc.para_mut(story, path)?;
         p.props.fmt_change = want;
         p.touch();

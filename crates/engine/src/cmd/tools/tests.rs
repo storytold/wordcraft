@@ -1564,6 +1564,30 @@ fn style_inherited_numbering_and_compare_fmt_change_preservation() {
     assert_eq!(p_after.props.numbering, Some(NumRef { num: 0, level: 0 }));
     assert!(p_after.props.fmt_change.is_some(), "removing style-inherited numbering tracks fmt_change (w:pPrChange)");
     assert!(p_after.props.num_change.is_none(), "tracked list edit does not emit num_change");
+    session.run("review.rejectAll", &json!({})).unwrap();
+    let p_restored = session.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p_restored.props.numbering, None, "rejecting restores style-inherited numbering baseline");
+
+    // Removing a direct list preserves the prior list in fmt_change baseline
+    let mut doc_direct = Document::from_text("Direct list");
+    doc_direct.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num: 1, level: 0 });
+    let mut s_direct = Session::new(doc_direct);
+    s_direct.doc.settings.track_changes = true;
+    s_direct.prefs.markup.track_formatting = true;
+    s_direct.author = "Author".into();
+    s_direct.run("para.bullets", &json!({"off": true})).unwrap();
+    let p_direct = s_direct.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(
+        p_direct.props.fmt_change.as_ref().and_then(|fc| fc.old.numbering),
+        Some(NumRef { num: 1, level: 0 }),
+        "removing direct list keeps prior list in w:pPrChange baseline"
+    );
+    s_direct.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(
+        s_direct.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering,
+        Some(NumRef { num: 1, level: 0 }),
+        "rejecting restores direct list"
+    );
 
     // Coalescing when neither value inherits a list: no spurious fmt_change
     let doc_plain = Document::from_text("Plain text");
@@ -1574,6 +1598,14 @@ fn style_inherited_numbering_and_compare_fmt_change_preservation() {
     s_plain.run("para.bullets", &json!({"off": true})).unwrap();
     let p_plain = s_plain.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
     assert!(p_plain.props.fmt_change.is_none(), "no fmt_change when neither value inherits a list");
+    // Adding bullets then toggling them off coalesces back to unnumbered with no fmt_change
+    s_plain.run("para.bullets", &json!({})).unwrap();
+    assert!(s_plain.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.fmt_change.is_some());
+    s_plain.run("para.bullets", &json!({"off": true})).unwrap();
+    assert!(
+        s_plain.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.fmt_change.is_none(),
+        "toggling bullets on then off on plain paragraph clears fmt_change"
+    );
 
     // 2. Compare preserves old.fmt_change when new has no fmt_change and formatting matches
     let mut old_p = Paragraph::with_text("Formatted", CharProps::default());
@@ -1649,11 +1681,7 @@ fn style_inherited_numbering_and_compare_fmt_change_preservation() {
     );
     crate::cmd::fmt_revisions::resolve_para_num(&mut new_style_num.props, false);
     assert_eq!(new_style_num.props.numbering, Some(NumRef { num: 0, level: 0 }));
-    assert_eq!(
-        styles.resolve_para(&new_style_num.props).numbering,
-        Some(NumRef { num: 0, level: 0 }),
-        "rejecting only num_change suppresses style-inherited bullet"
-    );
+    assert_eq!(styles.resolve_para(&new_style_num.props).numbering, None, "rejecting only num_change suppresses style-inherited bullet");
 
     // 3c. Accepting style-inherited num_change rebases fmt_change baseline so rejecting fmt_change
     // restores Normal style while preserving the accepted list numbering.
