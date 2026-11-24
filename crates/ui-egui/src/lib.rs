@@ -400,6 +400,11 @@ pub struct WordApp {
     /// The app-scope command states handed to the runtime, edited only when they change: the runtime resolves
     /// commands again only when their revision moves ([`WordApp::command_input`]).
     pub(crate) command_states: craft::ui::contract::Tracked<craft::ui::runtime::commands::CommandStates>,
+    /// Precomputed command metadata, translated hints, and last gate results for [`WordApp::command_input`],
+    /// avoiding per-frame allocations and catalog reparsing while idle.
+    pub(crate) command_states_cache: Option<app::command_board::CommandStatesCache>,
+    /// Cached keytip control lists and reserved shortcut letters per registry and active ribbon tab.
+    pub(crate) keytip_cache: Option<keytips::KeytipCache>,
     /// Frames drawn so far, counted to 2: the control channel's queued requests wait until the
     /// fonts are warm.
     pub(crate) fonts_frames: u8,
