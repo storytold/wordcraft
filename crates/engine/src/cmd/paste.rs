@@ -7,6 +7,7 @@
 //! HTML source can also be pasted as that format. Paste keeps the source formatting of another
 //! program's HTML or RTF; Merge Formatting keeps only its emphasis (#687).
 //! Plain text has no formatting to keep, so Paste inserts it as Keep Text Only does.
+//! WordCraft's own copy can also be pasted as a picture of itself ([`picture`], #7743).
 
 use std::sync::Arc;
 
@@ -16,6 +17,9 @@ use wordcraft_doc::{Block, Document, Paragraph};
 
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
+
+mod picture;
+pub use picture::{DEFAULT_DPI as PICTURE_DEFAULT_DPI, DPI_CHOICES as PICTURE_DPI_CHOICES};
 
 /// Largest clipboard payload Paste Special accepts, in bytes.
 pub const MAX_PASTE_BYTES: usize = 16 << 20;
@@ -37,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
             .key("Mod+Alt+V")
-            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64, "privateClipboard"?: bool}"#),
+            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64 (without it, "picture" draws WordCraft's own copy as a picture), "dpi"?: 36-2400 (that drawing's resolution; default 300), "privateClipboard"?: bool}"#),
     ]
 }
 
@@ -65,22 +69,23 @@ fn owns_clipboard(v: &Value) -> bool {
     p::bool(v, "privateClipboard").unwrap_or(true)
 }
 
-/// The source for a format, if the clipboard has it.
+/// Whether the clipboard holds WordCraft's own copy: the session has one, the system clipboard is
+/// still this window's ([`owns_clipboard`]), and its text, if given, is that copy's (other text
+/// means someone else copied since).
+fn own_copy(s: &Session, v: &Value) -> bool {
+    owns_clipboard(v) && s.clipboard.as_ref().is_some_and(|f| p::str(v, "text").is_none_or(|t| f.clipboard_text() == t.replace("\r\n", "\n")))
+}
+
+/// The source for a format, if the clipboard has it. An empty source for `formatted` or `picture`
+/// is WordCraft's own copy.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" if owns_clipboard(v) => {
-            let f = s.clipboard.as_ref()?;
-            // System clipboard text that isn't our own copy means someone else copied since.
-            match p::str(v, "text") {
-                Some(t) if f.clipboard_text() != t.replace("\r\n", "\n") => None,
-                _ => Some(String::new()),
-            }
-        }
-        "formatted" => None,
+        "formatted" => own_copy(s, v).then(String::new),
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
-        "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty),
+        // A picture on the system clipboard, else a picture of our own copy.
+        "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty).or_else(|| own_copy(s, v).then(String::new)),
         "text" => clip_text(s, v).and_then(non_empty),
         _ => None,
     }
@@ -142,6 +147,17 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             super::paste_text(s, &src.replace("\r\n", "\r").replace('\n', "\r"))?;
             let mut r = sel_result(s)?;
             r["pastedAs"] = json!(fmt);
+            return Ok(r);
+        }
+        "picture" if src.is_empty() => {
+            // Our own copy, drawn as a picture at its real size.
+            let dpi = picture::dpi(v)?;
+            let frag = s.clipboard.clone().ok_or_else(|| CmdError::Failed("the clipboard is empty".into()))?;
+            let pic = picture::draw(s, &frag, dpi)?;
+            let data = super::insert::base64_encode(&pic.png);
+            let mut r = super::insert::picture(s, &json!({"data": data, "width": pic.width}))?;
+            r["pastedAs"] = json!(fmt);
+            r["dpi"] = json!(dpi);
             return Ok(r);
         }
         "picture" => {

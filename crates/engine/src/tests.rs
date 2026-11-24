@@ -1802,7 +1802,7 @@ fn paste_special_lists_formats_and_pastes_text_without_formatting() {
     // No format: the formats are listed (and a front end is asked to show the dialog).
     let r = run(&mut s, "edit.pasteSpecial", json!({}));
     let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["formatted", "text"]);
+    assert_eq!(ids, ["formatted", "picture", "text"], "our own copy can be pasted as a picture of itself (#7743)");
     assert_eq!(s.ui_requests.last().unwrap()["open"], "pasteSpecial");
     run(&mut s, "caret.docEnd", json!({}));
     let r = run(&mut s, "edit.pasteSpecial", json!({"as": "text"}));
@@ -2138,6 +2138,102 @@ fn paste_special_lists_and_pastes_a_picture() {
     assert_eq!(s.doc.media.len(), 1);
     assert!(s.run("edit.pasteSpecial", &json!({"as": "picture", "picture": "%%%"})).is_err());
     assert!(s.run("edit.pasteSpecial", &json!({"as": "picture"})).is_err());
+}
+
+/// A session with a copied three-by-three table (a timetable), the caret after it.
+fn copied_timetable() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Timetable"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    for word in ["Mon", "Tue", "Wed"] {
+        run(&mut s, "text.insert", json!({"text": word}));
+        run(&mut s, "text.tab", json!({}));
+    }
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    s
+}
+
+/// The PNG of the picture a paste inserted, from the paste's result.
+fn pasted_png(s: &Session, r: &serde_json::Value) -> Vec<u8> {
+    s.doc.media.get(r["media"].as_str().unwrap()).unwrap().to_vec()
+}
+
+/// The pixels per metre a PNG records (`pHYs`), if it records them.
+fn png_pixels_per_metre(png: &[u8]) -> Option<u32> {
+    let at = png.windows(4).position(|w| w == b"pHYs")?;
+    let x = png.get(at + 4..at + 8)?;
+    Some(u32::from_be_bytes([x[0], x[1], x[2], x[3]]))
+}
+
+/// #7743: Paste Special › Picture draws WordCraft's own copy (here a table) as a picture at the
+/// resolution chosen: as wide as the table, at its real size, and the PNG records the resolution.
+#[test]
+fn paste_special_pastes_our_own_copy_as_a_picture_at_a_dpi() {
+    let mut s = copied_timetable();
+    let text_w = s.doc.last_section.text_width();
+    let media_before = s.doc.media.len();
+    let r = run(&mut s, "edit.pasteSpecial", json!({"as": "picture", "dpi": 300}));
+    assert_eq!((r["pastedAs"].as_str(), r["dpi"].as_f64()), (Some("picture"), Some(300.0)));
+    assert_eq!(s.doc.media.len(), media_before + 1);
+    let png = pasted_png(&s, &r);
+    assert_eq!(png_pixels_per_metre(&png), Some(11_811), "300 DPI recorded");
+    let img = image::load_from_memory(&png).unwrap();
+    let width_pt = r["width"].as_f64().unwrap() as f32;
+    assert!((img.width() as f32 * 72.0 / 300.0 - width_pt).abs() < 0.01, "{} px is {width_pt} pt at 300 DPI", img.width());
+    // The table spans the text column; the picture is cropped to it.
+    assert!(width_pt > text_w * 0.9 && width_pt <= text_w + 1.0, "{width_pt} pt for a {text_w} pt column");
+    // Not a white box: the table's borders and words are drawn.
+    let dark = img.to_luma8().pixels().filter(|p| p[0] < 100).count();
+    assert!(dark > 100, "{dark} dark pixels");
+    // One undo takes the picture out again.
+    run(&mut s, "edit.undo", json!({}));
+    assert!(
+        !s.doc
+            .body
+            .iter()
+            .any(|b| b.as_para().is_some_and(|p| p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::Image { .. }))))
+    );
+}
+
+/// #7743: the resolution changes the picture's pixels, not its size on the page.
+#[test]
+fn a_picture_of_the_copy_keeps_its_size_at_any_dpi() {
+    let mut s = copied_timetable();
+    let low = run(&mut s, "edit.pasteSpecial", json!({"as": "picture", "dpi": 150}));
+    let high = run(&mut s, "edit.pasteSpecial", json!({"as": "picture", "dpi": 600}));
+    let (lw, hw) = (low["width"].as_f64().unwrap(), high["width"].as_f64().unwrap());
+    assert!((lw - hw).abs() < 0.5, "{lw} pt vs {hw} pt");
+    let px = |r: &serde_json::Value| image::load_from_memory(&pasted_png(&s, r)).unwrap().width() as f64;
+    let ratio = px(&high) / px(&low);
+    assert!((ratio - 4.0).abs() < 0.05, "600 DPI has four times the pixels across: {ratio}");
+}
+
+/// #7743: a copy too large for a picture at the resolution asked, or with nothing to draw, is
+/// refused and the document is left as it was; a bad resolution is a parameter error.
+#[test]
+fn a_picture_of_the_copy_that_cannot_be_drawn_is_refused() {
+    let mut s = s();
+    let long: Vec<String> = (0..60).map(|n| format!("Line {n} of a long copy")).collect();
+    run(&mut s, "document.setText", json!({"text": long.join("\n")}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let before = s.doc.clone();
+    let r = s.run("edit.pasteSpecial", &json!({"as": "picture", "dpi": 2400}));
+    assert!(matches!(&r, Err(crate::CmdError::Failed(m)) if m.contains("lower resolution")), "{r:?}");
+    assert!(s.doc == before, "nothing pasted");
+    for bad in [json!(10), json!(9000), json!("300")] {
+        let r = s.run("edit.pasteSpecial", &json!({"as": "picture", "dpi": bad}));
+        assert!(matches!(r, Err(crate::CmdError::Params(_))), "{bad}: {r:?}");
+    }
+    run(&mut s, "document.setText", json!({"text": "a   b"}));
+    run(&mut s, "select.text", json!({"text": "   "}));
+    run(&mut s, "edit.copy", json!({}));
+    let r = s.run("edit.pasteSpecial", &json!({"as": "picture"}));
+    assert!(matches!(&r, Err(crate::CmdError::Failed(m)) if m.contains("nothing to draw")), "{r:?}");
 }
 
 #[test]
