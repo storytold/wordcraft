@@ -3,22 +3,23 @@
 //! (line style, width and colour, and which edges) and cell alignment, over a live preview. OK
 //! runs `table.newStyle` / `table.modifyStyle` with only what changed.
 
-use craft::behavior::{Anchor9, ColumnWidth};
+use craft::behavior::Anchor9;
 use craft::color_ui::ui::ColorPickerTab;
 use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::buttons::{Button, ControlPlace, ToggleButton};
 use craft::ui::contract::{Bind, Entry, Gap, Props as _, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft::ui::dialog::DialogId;
-use craft::ui::display::{Divider, Shade, Text};
+use craft::ui::display::{Divider, Picture, PictureSize, Text};
 use craft::ui::form::{Field, FieldGroup};
-use craft::ui::layout::{CellAlign, GridFit, empty_cell};
-use craft::ui::layout_components::{Grid, Row};
+use craft::ui::layout_components::Row;
+use craft::ui::list::ThumbAspect;
 use craft::ui::menu::Menu;
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::pickers::{ReferencePoint, ReferencePointKind, Select};
-use craft::ui::primitives::{Glyph, IconSpec};
+use craft::ui::primitives::{ContentPainterCx, Glyph, IconSpec};
 use craft::ui::runtime::env::Label;
-use craft::ui::style::{TypeRole, UiTokens, rgba_color};
+use craft::ui::sections::Section;
+use craft::ui::style::{UiTokens, rgba_color};
 use craft::ui::text::TextField;
 use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -345,7 +346,7 @@ fn look_for(mut look: TableLook, part: TablePart) -> TableLook {
 
 /// A small sample table drawn with `style` (5 columns, a header, three body rows and a total
 /// row), showing the parts `look` turns on: the dialog's live preview.
-fn paint_preview(ui: &mut Ui, rect: Rect, style: Option<&TableStyleProps>, look: &TableLook) {
+fn paint_preview(cx: &ContentPainterCx<'_>, rect: Rect, style: Option<&TableStyleProps>, look: &TableLook) {
     const COLS: usize = 5;
     const ROWS: usize = 5;
     const TEXT: [[&str; COLS]; ROWS] = [
@@ -355,10 +356,12 @@ fn paint_preview(ui: &mut Ui, rect: Rect, style: Option<&TableStyleProps>, look:
         ["West", "3", "8", "4", "15"],
         ["Total", "13", "16", "11", "40"],
     ];
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, Color32::WHITE);
-    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, Color32::from_gray(212)), egui::StrokeKind::Inside);
+    // The page is white whatever the interface theme; the style's colours are data, so they go through
+    // `data_shapes` and dim with a disabled picture.
+    cx.data_shapes([Shape::rect_filled(rect, 2.0, Color32::WHITE)]);
+    cx.painter.rect_stroke(rect, 2.0, Stroke::new(cx.stroke_width(craft::ui::primitives::StrokeWidth::Thin), cx.ink()), egui::StrokeKind::Inside);
     let Some(st) = style else { return };
+    let mut shapes: Vec<Shape> = Vec::new();
     let formats: Vec<PartFormat> = TablePart::ALL.iter().map(|p| st.part(*p)).collect();
     let table = rect.shrink2(vec2(14.0, 10.0));
     let (cw, rh) = (table.width() / COLS as f32, table.height() / ROWS as f32);
@@ -406,16 +409,16 @@ fn paint_preview(ui: &mut Ui, rect: Rect, style: Option<&TableStyleProps>, look:
                 }
             }
             if let Some(f) = fill {
-                painter.rect_filled(cell, 0.0, rgb(f));
+                shapes.push(Shape::rect_filled(cell, 0.0, rgb(f)));
             }
-            let edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
+            let mut edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
                 if let Some(e) = e.filter(Border::is_visible) {
                     let color = e.color.map_or(Color32::BLACK, rgb);
                     let stroke = Stroke::new(e.width.clamp(0.5, 3.0) * 1.3, color);
                     if matches!(e.style, BorderStyle::Dotted | BorderStyle::Dashed | BorderStyle::DotDash) {
-                        painter.extend(Shape::dashed_line(&[from, to], stroke, 3.0, 2.0));
+                        shapes.extend(Shape::dashed_line(&[from, to], stroke, 3.0, 2.0));
                     } else {
-                        painter.line_segment([from, to], stroke);
+                        shapes.push(Shape::line_segment([from, to], stroke));
                     }
                 }
             };
@@ -438,17 +441,19 @@ fn paint_preview(ui: &mut Ui, rect: Rect, style: Option<&TableStyleProps>, look:
                 Some(VAlign::Bottom) => (egui::Align::Max, cell.bottom() - 2.0),
                 _ => (egui::Align::Min, cell.top() + 2.0),
             };
-            let pos = pos2(x, y);
-            let r = painter.text(pos, egui::Align2([ax, ay]), txt, font.clone(), color);
+            let galley = cx.painter.layout_no_wrap(txt.to_string(), font, color);
+            let r = egui::Align2([ax, ay]).anchor_size(pos2(x, y), galley.size());
             if chr.bold.unwrap_or(false) {
                 // A second pass a hair to the right reads as bold at this size.
-                painter.text(pos + vec2(0.6, 0.0), egui::Align2([ax, ay]), txt, font, color);
+                shapes.push(Shape::galley(r.min + vec2(0.6, 0.0), galley.clone(), color));
             }
+            shapes.push(Shape::galley(r.min, galley, color));
             if chr.underline.is_some_and(|u| u != Underline::None) && !txt.is_empty() {
-                painter.line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(0.8, color));
+                shapes.push(Shape::line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(0.8, color)));
             }
         }
     }
+    cx.data_shapes(shapes);
 }
 
 /// A table style the form can be based on, with the parts it resolves to: a new style takes these
@@ -541,11 +546,10 @@ impl TableStyleForm {
 
     /// The edited part's font, size, toggles, colours, borders and alignment.
     fn formatting(&mut self, ui: &mut Ui, asks: &mut Vec<Asks>) {
-        const ALIGN_ROW_COLS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::Fixed(12.0), ColumnWidth::Content, ColumnWidth::Content];
         let Self { region, regions, pen, palette, catalog, font_settings, .. } = self;
         let Some(r) = regions.get_mut(*region) else { return };
         Divider::horizontal().show(ui);
-        Text::new(lab("Formatting")).role(TypeRole::BodyStrong).show(ui);
+        Text::new(lab("Formatting")).show(ui);
 
         // Row 1: Font, size, B, I, U, and Font color.
         Row::new().gap(Gap::Inline).show(ui, |ui, _| {
@@ -561,11 +565,8 @@ impl TableStyleForm {
                     },
                 );
             }
-            const SIZE_COL: [ColumnWidth; 1] = [ColumnWidth::Fixed(44.0)];
             let size_label = lab("Size:");
-            Grid::new(&SIZE_COL).fit(GridFit::Fixed).show(ui, |ui, _| {
-                TextField::new(size_label.clone(), Bind::bound(&mut r.size)).sizing(Sizing::FillWidth).show(ui);
-            });
+            TextField::new(size_label, Bind::bound(&mut r.size)).width_chars(4).show(ui);
 
             Row::new().gap(Gap::None).show(ui, |ui, _| {
                 ToggleButton::new(lab("Bold"), Bind::bound(&mut r.bold)).icon(crate::icons::id("bold")).icon_only().show(ui);
@@ -627,29 +628,29 @@ impl TableStyleForm {
             }
         });
 
-        // Row 3: Fill color + 12pt gap + Alignment grid (top-aligned with the 3x3 grid).
-        Grid::new(&ALIGN_ROW_COLS).fit(GridFit::Fixed).cells(CellAlign::Top).gap(Gap::Inline).show(ui, |ui, _| {
+        // Row 3: Fill color and Alignment grid.
+        Row::new().gap(Gap::Section).show(ui, |ui, _| {
             Row::new().gap(Gap::Inline).show(ui, |ui, _| {
                 Text::new(lab("Fill color:")).show(ui);
                 if color_field(ui, &lab("Fill color:"), &mut r.fill, &ColorFieldEmpty::NoColor, palette).more_colors {
                     asks.push(Asks::Color { field: "fill", current: Rgb::parse(&r.fill), tab: ColorPickerTab::Standard });
                 }
             });
-            empty_cell(ui);
-            Row::new().least_height(22.0).show(ui, |ui, _| {
+            Row::new().gap(Gap::Inline).show(ui, |ui, _| {
                 Text::new(lab("Alignment:")).show(ui);
+                // The grid is row by row from the top left, as `CELL_ALIGNS` is.
+                let current = CELL_ALIGNS.iter().position(|(n, _, _)| *n == r.align).and_then(|i| ANCHORS.get(i)).copied();
+                let picked =
+                    ReferencePoint::new(lab("Alignment:"), Bind::given(current)).kind(ReferencePointKind::Alignment).show(ui).value().copied();
+                if let Some(anchor) = picked {
+                    // Picking the selected cell again clears the alignment.
+                    r.align = anchor
+                        .and_then(|a| ANCHORS.iter().position(|x| *x == a))
+                        .and_then(|i| CELL_ALIGNS.get(i))
+                        .map(|(n, _, _)| n.to_string())
+                        .unwrap_or_default();
+                }
             });
-            // The grid is row by row from the top left, as `CELL_ALIGNS` is.
-            let current = CELL_ALIGNS.iter().position(|(n, _, _)| *n == r.align).and_then(|i| ANCHORS.get(i)).copied();
-            let picked = ReferencePoint::new(lab("Alignment:"), Bind::given(current)).kind(ReferencePointKind::Alignment).show(ui).value().copied();
-            if let Some(anchor) = picked {
-                // Picking the selected cell again clears the alignment.
-                r.align = anchor
-                    .and_then(|a| ANCHORS.iter().position(|x| *x == a))
-                    .and_then(|i| CELL_ALIGNS.get(i))
-                    .map(|(n, _, _)| n.to_string())
-                    .unwrap_or_default();
-            }
         });
     }
 }
@@ -689,10 +690,11 @@ impl WordForm for TableStyleForm {
         // part being edited turned on.
         let look = look_for(self.look, self.part());
         let preview = self.preview.as_ref();
-        ui.add_space(4.0);
-        Text::new(lab("Preview")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-        let (rect, _) = ui.allocate_exact_size(vec2(360.0, 130.0), egui::Sense::hover());
-        paint_preview(ui, rect, preview, &look);
+        Section::fixed(lab("Preview")).show(ui, |ui, _| {
+            Picture::painter(lab("Table style preview"), ThumbAspect::new(36, 13), |cx, rect| paint_preview(cx, rect, preview, &look))
+                .extent(PictureSize::Fill)
+                .show(ui);
+        });
         true
     }
 
@@ -816,44 +818,95 @@ mod tests {
         )
     }
 
-    /// Alignment choices expose their names and current selection, and can be toggled.
+    /// Alignment choices expose their names and current selection, and can be toggled through the dialog.
     #[test]
     fn alignment_buttons_expose_names_selection_and_clicks() {
-        use craft::behavior::Anchor9;
-        use craft::ui::pickers::{ReferencePoint, ReferencePointKind};
+        use crate::dialogs::host::FormHost;
         use egui::accesskit::{Role, Toggled};
         use egui_kittest::kittest::NodeT;
 
-        let mut h = crate::test_harness::builder().with_size(vec2(200.0, 120.0)).build_ui_state(
-            |ui, (selected, enabled): &mut (Option<Anchor9>, bool)| {
-                ui.add_enabled_ui(*enabled, |ui| {
-                    ReferencePoint::new("Alignment:", craft::ui::contract::Bind::bound(selected)).kind(ReferencePointKind::Alignment).show(ui);
-                });
-            },
-            (Some(Anchor9::TopLeft), true),
-        );
-        h.run_steps(2);
-        assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Top left").accesskit_node().toggled(), Some(Toggled::True));
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.table", json!({"rows": 4, "cols": 3})).unwrap();
+        app.run("table.newStyle", json!({"name": "AlignTest"})).unwrap();
+        let dialog_id = crate::dialogs::open(&mut app, "modifyTableStyle", &json!({})).expect("dialog opened");
+        // Keep the background ribbon's character controls out of the dialog's label queries.
+        app.ui.tab = "Insert".into();
+        let mut h = harness(app);
+        steps(&mut h);
+
         assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Bottom right").accesskit_node().toggled(), Some(Toggled::False));
         assert!(!h.get_by_role_and_label(Role::RadioButton, "Center").accesskit_node().is_disabled());
 
-        // When disabled, the options report disabled.
-        h.state_mut().1 = false;
-        h.run_steps(2);
-        assert!(h.get_by_role_and_label(Role::RadioButton, "Center").accesskit_node().is_disabled());
-
-        // Re-enable and test clicks
-        h.state_mut().1 = true;
-        h.run_steps(2);
+        // Click "Bottom right", check align == "bottomRight"
         h.get_by_role_and_label(Role::RadioButton, "Bottom right").click();
-        h.run_steps(2);
-        assert_eq!(h.state().0, Some(Anchor9::BottomRight));
-        assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Top left").accesskit_node().toggled(), Some(Toggled::False));
+        steps(&mut h);
         assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Bottom right").accesskit_node().toggled(), Some(Toggled::True));
+        {
+            let host = h.state().dialog_host.get_by_id::<FormHost<TableStyleForm>>(dialog_id).expect("form is hosted");
+            let r = &host.form().regions[host.form().region];
+            assert_eq!(r.align, "bottomRight");
+        }
+
+        // Click "Bottom right" again, check it is cleared
         h.get_by_role_and_label(Role::RadioButton, "Bottom right").click();
-        h.run_steps(2);
-        assert_eq!(h.state().0, None);
+        steps(&mut h);
         assert_eq!(h.get_by_role_and_label(Role::RadioButton, "Bottom right").accesskit_node().toggled(), Some(Toggled::False));
+        {
+            let host = h.state().dialog_host.get_by_id::<FormHost<TableStyleForm>>(dialog_id).expect("form is hosted");
+            let r = &host.form().regions[host.form().region];
+            assert_eq!(r.align, "");
+        }
+    }
+
+    /// #7692: empty or whitespace basedOn must be omitted so build_modified does not reject unbased styles.
+    #[test]
+    fn table_style_params_omits_empty_based_on() {
+        let regions: [TableRegion; 13] = std::array::from_fn(|_| TableRegion::default());
+        let basis: [TableRegion; 13] = std::array::from_fn(|_| TableRegion::default());
+        let params = table_style_params(Some("tableGrid"), "Table Grid", "", &regions, &basis);
+        assert!(!params.as_object().unwrap().contains_key("basedOn"));
+
+        let params_whitespace = table_style_params(Some("tableGrid"), "Table Grid", "   ", &regions, &basis);
+        assert!(!params_whitespace.as_object().unwrap().contains_key("basedOn"));
+
+        let params_with_base = table_style_params(None, "New Style", "tableGrid", &regions, &basis);
+        assert_eq!(params_with_base.get("basedOn").and_then(|v| v.as_str()), Some("tableGrid"));
+    }
+
+    /// #7692: modifying the default Table Grid style (which has no base style) sends no empty basedOn
+    /// and OK closes successfully without a blank preview or command rejection.
+    #[test]
+    fn modify_table_grid_style_omits_empty_based_on_and_does_not_fail() {
+        use crate::dialogs::host::FormHost;
+
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        let dialog_id = crate::dialogs::open(&mut app, "modifyTableStyle", &json!({})).expect("dialog opened");
+        app.ui.tab = "Insert".into();
+        let mut h = harness(app);
+        steps(&mut h);
+        {
+            let host = h.state().dialog_host.get_by_id::<FormHost<TableStyleForm>>(dialog_id).expect("form is hosted");
+            assert!(host.form().based_on.is_empty(), "Table Grid has no base style");
+            assert!(host.form().preview.is_some(), "Table Grid preview must build without a base style");
+            let params = host.form().params();
+            assert!(!params.as_object().unwrap().contains_key("basedOn"), "empty basedOn must be omitted");
+        }
+        {
+            use egui::accesskit::Role;
+
+            let dialog = h.get_by_role_and_label(Role::Dialog, "Modify Table Style").rect();
+            let preview = h.get_by_role_and_label(Role::Image, "Table style preview").rect();
+            assert!(
+                preview.width() > dialog.width() * 0.7 && preview.height() > 100.0,
+                "preview should fill the dialog slot instead of collapsing to a small thumbnail: preview={preview:?} dialog={dialog:?}"
+            );
+            let aspect = preview.width() / preview.height();
+            assert!((aspect - 36.0 / 13.0).abs() < 0.1, "preview should keep its 36:13 aspect ratio, got {aspect:.2} ({preview:?})");
+        }
+        h.get_by_label("OK").click();
+        steps(&mut h);
+        assert!(h.state().dialog_host.open_dialogs().is_empty(), "OK closes the dialog");
     }
 
     /// #714: picking a part under "Apply formatting to" and changing it edits that part (here the
