@@ -472,6 +472,52 @@ fn resolve_compare_hf_part(doc: &mut Document, part_id: u32, accept: bool) {
     }
 }
 
+/// Returns whether `part_id` is a First or Even header/footer slot of a section whose Compare
+/// layout flag (`title_page` or `even_odd_headers`) is currently tracked on `doc`.
+fn is_compare_tracked_hf_part(doc: &Document, part_id: u32) -> bool {
+    let has_even_odd = doc.compare_hf.as_ref().is_some_and(|f| f.even_odd.is_some());
+    let has_any_live_tag = doc.has_live_compare_title_page();
+    let sections = doc.sections();
+    let num_sections = sections.len();
+    sections.iter().enumerate().any(|(idx, (_, sec))| {
+        let sec_key = (idx + 1 < num_sections).then_some(idx);
+        let tracks_first = if has_any_live_tag {
+            sec.compare_title_page.0.is_some()
+        } else {
+            doc.compare_hf.as_ref().is_some_and(|f| f.title_page.iter().any(|(k, _)| *k == sec_key))
+        };
+        (tracks_first && (sec.headers.first == Some(part_id) || sec.footers.first == Some(part_id)))
+            || (has_even_odd && (sec.headers.even == Some(part_id) || sec.footers.even == Some(part_id)))
+    })
+}
+
+/// Returns whether resolving `from..to` in `story` at `path` should also resolve the trailing
+/// paragraph mark because it is the terminal paragraph of a Compare-tracked header/footer whose
+/// mark carries the exact same insert/delete revision as the resolved text ending at `len`.
+fn is_compare_hf_terminal_mark(s: &Session, story: StoryRef, path: &wordcraft_doc::Path, from: usize, to: usize, len: usize) -> bool {
+    let StoryRef::Part(part_id) = story else { return false };
+    if to != len || to <= from || crate::cmd::has_next_para(s, story, path) {
+        return false;
+    }
+    if !s.doc.parts.get(&part_id).is_some_and(|part| matches!(part.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer)) {
+        return false;
+    }
+    if !is_compare_tracked_hf_part(&s.doc, part_id) {
+        return false;
+    }
+    let Some(para) = s.doc.para(story, path) else { return false };
+    if para.mark.fmt_change.is_some() || (para.mark.ins.is_none() && para.mark.del.is_none()) {
+        return false;
+    }
+    if para.run_ranges().any(|(r, c)| r.start < from && (c.ins.is_some() || c.del.is_some() || c.fmt_change.is_some())) {
+        return false;
+    }
+    para.run_ranges()
+        .filter(|(r, _)| r.end > from && r.start < to)
+        .last()
+        .is_some_and(|(r, c)| r.end == len && (c.ins, c.del) == (para.mark.ins, para.mark.del))
+}
+
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // The style change Next / Previous Change selected: that one alone. A caret put at the
     // document start any other way resolves no style change.
@@ -523,8 +569,10 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
         let to = if path == b.path { b.off } else { len };
-        // A paragraph's mark is in the selection when the selection goes on past it.
-        let mark = path != b.path || caret_mark.as_ref() == Some(&path) || (to == len && matches!(a.story, StoryRef::Part(_)));
+        // A paragraph's mark is in the selection when the selection goes on past it, or for the
+        // terminal paragraph of a Compare-tracked header/footer whose mark shares the resolved
+        // run's revision.
+        let mark = path != b.path || caret_mark.as_ref() == Some(&path) || is_compare_hf_terminal_mark(s, a.story, &path, from, to, len);
         let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {

@@ -1060,6 +1060,95 @@ fn rtf_tracked_changes_accept_and_reject_after_opening_and_round_trip() {
     }
 }
 
+/// #6122 review: accepting only the last redlined run in a part (by range or caret) leaves a
+/// separately tracked paragraph mark and paragraph boundary intact.
+#[test]
+fn accepting_only_last_run_in_part_keeps_tracked_mark_and_boundary() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, CharProps, Paragraph, PartKind, Path, Pos, Revision, RevisionKind, StoryRef};
+
+    let make_part = |s: &mut Session, kind: PartKind| -> (u32, StoryRef) {
+        let part_id = match kind {
+            PartKind::Header => {
+                let id = s.run("insert.header", &json!({"text": ""})).unwrap()["story"].as_u64().unwrap() as u32;
+                s.run("insert.closeHeader", &json!({})).unwrap();
+                id
+            }
+            PartKind::Footer => {
+                let id = s.run("insert.footer", &json!({"text": ""})).unwrap()["story"].as_u64().unwrap() as u32;
+                s.run("insert.closeHeader", &json!({})).unwrap();
+                id
+            }
+            PartKind::Footnote => s.run("references.footnote", &json!({"text": ""})).unwrap()["id"].as_u64().unwrap() as u32,
+            PartKind::Endnote => s.run("references.endnote", &json!({"text": ""})).unwrap()["id"].as_u64().unwrap() as u32,
+            PartKind::TextBox => s.run("insert.textBox", &json!({"text": ""})).unwrap()["story"].as_u64().unwrap() as u32,
+            PartKind::Comment => {
+                s.run("select.all", &json!({})).unwrap();
+                let id = s.run("review.newComment", &json!({"text": "c"})).unwrap()["id"].as_u64().unwrap() as u32;
+                s.doc.comments.get(&id).unwrap().part
+            }
+        };
+        (part_id, StoryRef::Part(part_id))
+    };
+
+    for kind in [PartKind::Footnote, PartKind::Endnote, PartKind::TextBox, PartKind::Header, PartKind::Footer] {
+        for by_range in [true, false] {
+            let mut s = Session::new(Document::from_text("Body."));
+            let (part_id, story) = make_part(&mut s, kind);
+
+            s.doc.revisions.push(Revision::new(RevisionKind::Insert, "Alice", "2026-01-01T00:00:00Z"));
+            s.doc.revisions.push(Revision::new(RevisionKind::Delete, "Bob", "2026-01-02T00:00:00Z"));
+            let ins_rev = Some((s.doc.revisions.len() - 2) as u32);
+            let del_rev = Some((s.doc.revisions.len() - 1) as u32);
+
+            let mut p0 = Paragraph::with_text("keep ", CharProps::default());
+            let end0 = p0.len();
+            p0.insert_text(end0, "added", &CharProps { ins: ins_rev, ..Default::default() }).unwrap();
+            p0.mark.del = del_rev;
+            let p1 = Paragraph::with_text("next", CharProps::default());
+            s.doc.parts.get_mut(&part_id).unwrap().blocks = vec![Arc::new(Block::Para(p0)), Arc::new(Block::Para(p1))];
+
+            let p0_len = s.doc.para(story, &Path::top(0)).unwrap().len();
+            s.sel = if by_range {
+                crate::Selection { anchor: Pos { story, path: Path::top(0), off: 5 }, focus: Pos { story, path: Path::top(0), off: p0_len } }
+            } else {
+                crate::Selection::caret(Pos { story, path: Path::top(0), off: 7 })
+            };
+            s.run("review.accept", &json!({})).unwrap();
+
+            assert_eq!(s.doc.para_paths(story).len(), 2, "{kind:?} (range={by_range}): paragraph boundary stays intact");
+            let after_p0 = s.doc.para(story, &Path::top(0)).unwrap();
+            assert_eq!(after_p0.plain_text(), "keep added", "{kind:?}: accepted run stays");
+            assert!(after_p0.runs.iter().all(|r| r.props.ins.is_none()), "{kind:?}: inserted run is accepted");
+            assert_eq!(after_p0.mark.del, del_rev, "{kind:?} (range={by_range}): separately tracked mark stays intact");
+            assert_eq!(s.doc.para(story, &Path::top(1)).unwrap().plain_text(), "next");
+        }
+    }
+
+    // Single-paragraph parts (no following paragraph) also keep a separately tracked mark when
+    // accepting only the last run.
+    for kind in [PartKind::Footnote, PartKind::TextBox, PartKind::Header] {
+        let mut s = Session::new(Document::from_text("Body."));
+        let (part_id, story) = make_part(&mut s, kind);
+
+        s.doc.revisions.push(Revision::new(RevisionKind::Insert, "Alice", "2026-01-01T00:00:00Z"));
+        s.doc.revisions.push(Revision::new(RevisionKind::Delete, "Bob", "2026-01-02T00:00:00Z"));
+        let ins_rev = Some((s.doc.revisions.len() - 2) as u32);
+        let del_rev = Some((s.doc.revisions.len() - 1) as u32);
+
+        let mut p0 = Paragraph::with_text("added", CharProps { ins: ins_rev, ..Default::default() });
+        p0.mark.del = del_rev;
+        s.doc.parts.get_mut(&part_id).unwrap().blocks = vec![Arc::new(Block::Para(p0))];
+
+        s.sel = crate::Selection { anchor: Pos { story, path: Path::top(0), off: 0 }, focus: Pos { story, path: Path::top(0), off: 5 } };
+        s.run("review.accept", &json!({})).unwrap();
+
+        let after = s.doc.para(story, &Path::top(0)).unwrap();
+        assert!(after.runs.iter().all(|r| r.props.ins.is_none()));
+        assert_eq!(after.mark.del, del_rev, "{kind:?}: single-para part keeps separately tracked mark");
+    }
+}
+
 #[cfg(test)]
 mod spelling_navigation_tests {
     use super::*;
