@@ -107,7 +107,8 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
 /// A row labelled `label` that runs command `id` with `params`; its chord, enabled state and
 /// action come from the command, its wording from the menu (one command id serves several rows).
 fn item(ui: &mut Ui, label: &str, id: &str, params: Value) {
-    let _ = MenuItem::new(tl!(label).to_string()).command(CommandRef::with_params(id, params)).show(ui);
+    // `MenuItem::command`, not `new(..).command(..)`: only the row's own binding shows the command's chord.
+    let _ = MenuItem::command(CommandRef::with_params(id, params)).label(tl!(label).to_string()).show(ui);
 }
 
 fn rule(ui: &mut Ui) {
