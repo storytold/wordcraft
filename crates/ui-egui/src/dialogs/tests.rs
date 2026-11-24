@@ -1800,3 +1800,18 @@ fn smartart_layout_cells_keep_productions_size() {
     let grid = h.get_by_role_and_label(Role::ListBox, "Layouts").rect();
     assert!(grid.height() <= 304.0, "the picker is three 96 pt rows, got {:?}", grid.size());
 }
+
+/// #7456: the Insert Chart dialog renders compact chart type tiles in its 3-column gallery,
+/// instead of expanding each thumbnail to default card dimensions (~132×104 pt) and ballooning the grid.
+#[test]
+fn insert_chart_tiles_render_within_compact_bounds() {
+    use egui::accesskit::Role;
+
+    let mut h = app_harness(app_with("Text"));
+    open_named(&mut h, "insertChart", json!({}));
+    crate::test_harness::frames(&mut h, 4);
+    let cell = h.get_by_role_and_label(Role::ListItem, "Clustered Column").rect();
+    assert!(cell.width() <= 90.0 && cell.height() <= 92.0, "chart tile should be compact (~85×87 pt), got {:?}", cell.size());
+    let grid = h.get_by_role_and_label(Role::ListBox, "Chart types").rect();
+    assert!(grid.width() <= 380.0, "3-column chart types grid should not exceed comfortable dialog proportions (~360 pt), got {:?}", grid.size());
+}
