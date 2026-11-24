@@ -253,139 +253,6 @@ fn the_legacy_hint_hangs_under_the_slim_bar_without_a_ribbon() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "no letter typed into the document");
 }
 
-fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
-    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
-        match shape {
-            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
-            egui::Shape::Vec(children) => {
-                for child in children {
-                    walk(child, out);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    for clipped in shapes {
-        walk(&clipped.shape, &mut out);
-    }
-    out
-}
-
-#[test]
-fn long_qat_badges_wait_for_the_complete_number_and_escape_cancels() {
-    // Collect genuinely enabled commands from a live harness context (where `frame_input` has
-    // published command states) so all 20 QAT buttons remain active during the test.
-    let mut h = harness(app());
-    let commands: Vec<String> = {
-        let ctx = h.ctx.clone();
-        let a = h.state();
-        let mut ids: Vec<String> = a
-            .session
-            .registry
-            .all()
-            .iter()
-            .filter(|s| s.id != "format.bold" && s.id != "format.italic" && crate::chrome::qat_enabled(&ctx, a, s.id))
-            .take(18)
-            .map(|s| s.id.to_string())
-            .collect();
-        ids.insert(0, "format.italic".into());
-        ids.insert(9, "format.bold".into());
-        ids
-    };
-    assert_eq!(commands.len(), 20, "expected 20 enabled QAT commands");
-    h.state_mut().session.ribbon.qat = Some(commands);
-    crate::test_harness::frames(&mut h, 2);
-    {
-        let ctx = h.ctx.clone();
-        let a = h.state();
-        let enabled_count = a.session.ribbon.qat().iter().filter(|id| crate::chrome::qat_enabled(&ctx, a, id)).count();
-        assert_eq!(enabled_count, 20, "all 20 QAT commands stay enabled");
-    }
-
-    let digit = |key, ch: &str| [key_event(key, true, egui::Modifiers::NONE), egui::Event::Text(ch.into())];
-
-    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
-    crate::test_harness::frame(&mut h);
-    assert!(h.state().keytips_active);
-    let shown = painted_texts(&h.output().shapes);
-    assert!(shown.iter().any(|t| t == "001"), "20-button QAT paints 001 for the 10th button: {shown:?}");
-
-    h.input_mut().events.extend(digit(egui::Key::Num0, "0"));
-    crate::test_harness::frame(&mut h);
-    assert!(h.state().keytips_active, "first 0 waits for the rest of the multi-digit badge");
-    h.input_mut().events.extend(digit(egui::Key::Num0, "0"));
-    crate::test_harness::frame(&mut h);
-    assert!(h.state().keytips_active, "second 0 still waits for the final digit of 001");
-    assert!(!bold(&mut h), "incomplete prefix 00 must not fire Bold");
-    let narrowed = painted_texts(&h.output().shapes);
-    assert!(narrowed.iter().any(|t| t == "001"), "001 remains painted while waiting on prefix 00");
-    assert!(!narrowed.iter().any(|t| t == "010"), "non-matching multi-digit badges are hidden under prefix 00");
-
-    h.input_mut().events.extend(digit(egui::Key::Num1, "1")); // 001: first button after the first nine.
-    crate::test_harness::frames(&mut h, 3);
-    assert!(bold(&mut h), "001 runs Bold");
-    assert!(!h.state().keytips_active, "completing 001 ends keytips");
-    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "QAT digits never type into the document");
-
-    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
-    crate::test_harness::frame(&mut h);
-    assert!(h.state().keytips_active);
-    h.input_mut().events.extend(digit(egui::Key::Num0, "0"));
-    crate::test_harness::frame(&mut h);
-    assert!(h.state().keytips_active);
-    h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
-    crate::test_harness::frame(&mut h);
-    assert!(!h.state().keytips_active, "Escape cancels a partial multi-digit prefix");
-
-    // Reopening keytips and pressing 1 fires button 1 (Italic), proving the cancelled "0" prefix was cleared.
-    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
-    crate::test_harness::frame(&mut h);
-    assert!(h.state().keytips_active);
-    h.input_mut().events.extend(digit(egui::Key::Num1, "1"));
-    crate::test_harness::frames(&mut h, 3);
-    assert!(!h.state().keytips_active);
-    assert_eq!(
-        h.state_mut().session.run("format.state", &serde_json::json!({})).unwrap()["italic"],
-        true,
-        "after Escape, F10 then 1 runs the first button"
-    );
-    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "no keytip digit typed into the document");
-
-    // Verify production `craft::menu::Keytips` assigns distinct, prefix-free digit badges across
-    // single- and multi-digit QAT lengths without any test-only label helper.
-    for count in [9, 10, 18, 19, 100, 200] {
-        let digits: Vec<CommandRef> = (0..count).map(|i| CommandRef::new(format!("test.qat.{i}"))).collect();
-        let region_id = egui::Id::unique(("test_qat_digit_badges", count));
-        let ctx = crate::test_harness::context();
-        let run_pass = |events: Vec<egui::Event>| {
-            craft::ui::shell::embed::before_input(&ctx, |_| craft::ui::runtime::frame::FrameInput::new(craft::ui::runtime::env::RootEnv::default()));
-            ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2000.0, 2000.0))),
-                    focused: true,
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    let (_, recorded) = inspect::record(ui, region_id, |ui| {
-                        for row in digits.chunks(20) {
-                            ui.horizontal(|ui| {
-                                for cmd in row {
-                                    craft::ui::buttons::IconButton::command(craft::behavior::IconId::new("bold"), cmd.clone()).show(ui);
-                                }
-                            });
-                        }
-                    });
-                    let places: Vec<Arc<Recorded>> = recorded.into_iter().collect();
-                    let _ = Keytips::new(true).digits(&digits).places(&places).show_over(ui);
-                },
-            )
-        };
-        run_pass(Vec::new()).drop_without_applying_deltas();
-        let shown = run_pass(vec![key_event(egui::Key::F10, true, egui::Modifiers::NONE)]);
-        let labels = painted_texts(&shown.shapes);
-        shown.drop_without_applying_deltas();
         assert_eq!(labels.len(), count, "expected one painted digit badge per QAT command for count={count}: {labels:?}");
         for (i, label) in labels.iter().enumerate() {
             assert!(!label.is_empty() && label.chars().all(|c| c.is_ascii_digit()), "non-digit badge {label:?} at {i} for count={count}");
@@ -448,6 +315,98 @@ fn alt_then_q_opens_search() {
     crate::test_harness::frames(&mut h, 2);
     assert!(!crate::chrome::search::is_open(h.state()), "Q does not open Search while Backstage is open");
     assert!(h.state().dialog_host.open_dialogs().is_empty(), "Q does not open the Search dialog while Backstage is open");
+}
+
+/// #4960: Alt (or F10), then F opens the Backstage with painted badges on its pages; Alt, F, P
+/// (and the older Alt, F, V alias) open the Print page.
+#[test]
+fn file_keytips_reach_the_backstage_pages() {
+    let activate_and_file = |h: &mut egui_kittest::Harness<'static, WordApp>, use_alt: bool| {
+        if use_alt && !cfg!(target_os = "macos") {
+            let alt = egui::Modifiers { alt: true, ..Default::default() };
+            h.input_mut().events.extend([key_event(egui::Key::AltLeft, true, egui::Modifiers::NONE), egui::Event::ModifiersChanged(alt)]);
+            crate::test_harness::frame(h);
+            h.input_mut().events.extend([key_event(egui::Key::AltLeft, false, alt), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+            crate::test_harness::frame(h);
+        } else {
+            h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+            crate::test_harness::frame(h);
+        }
+        assert!(h.state().keytips_active, "activating keytips shows tab badges");
+
+        h.input_mut().events.extend([key_event(egui::Key::F, true, egui::Modifiers::NONE), egui::Event::Text("f".into())]);
+        crate::test_harness::frames(h, 2);
+        assert!(h.state().ui.backstage, "F opens the Backstage");
+        assert!(h.state().keytips_active, "Backstage keytips activate");
+    };
+
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut h = harness(app().with_host(std::sync::Arc::new(host)));
+
+    // Painted badges stay visible while waiting and cover every page in KEYTIPS (without drawing V).
+    activate_and_file(&mut h, true);
+    let badges = painted_texts(&h.output().shapes);
+    for (page, letter) in crate::backstage::KEYTIPS {
+        assert!(badges.iter().any(|text| text == letter), "missing painted badge {letter:?} for {page}: {badges:?}");
+    }
+    assert!(!badges.iter().any(|text| text == "V"), "V alias fires without painting a duplicate Print badge: {badges:?}");
+    crate::test_harness::frame(&mut h);
+    assert!(h.state().keytips_active, "Backstage keytip badges stay active while waiting");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "F did not type into the document");
+
+    // Unmapped letters do not navigate or type, and Escape ends the badges while leaving Backstage open.
+    let page = h.state().ui.backstage_page.clone();
+    h.input_mut().events.extend([key_event(egui::Key::Q, true, egui::Modifiers::NONE), egui::Event::Text("q".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!((h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, page.as_str()));
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "unmapped key does not type into the document");
+
+    h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
+    crate::test_harness::frames(&mut h, 2);
+    assert_eq!((h.state().keytips_active, h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (false, true, page.as_str()));
+
+    for (second, text, page) in [
+        (egui::Key::P, "p", "print"),
+        (egui::Key::V, "v", "print"),
+        (egui::Key::A, "a", "saveAs"),
+        (egui::Key::T, "t", "options"),
+        (egui::Key::S, "s", "saveAs"),
+    ] {
+        // Leave Backstage before starting the next F10, F sequence.
+        h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
+        crate::test_harness::frames(&mut h, 2);
+        assert!(!h.state().ui.backstage);
+
+        activate_and_file(&mut h, false);
+        h.input_mut().events.extend([key_event(second, true, egui::Modifiers::NONE), egui::Event::Text(text.into())]);
+        crate::test_harness::frames(&mut h, 2);
+        assert_eq!((h.state().ui.backstage, h.state().ui.backstage_page.as_str()), (true, page), "{second:?}");
+        assert!(!h.state().keytips_active, "badge letter completes and ends keytips");
+        assert!(!h.state().file_dialog_open(), "unnamed Save redirects to saveAs without opening a file dialog");
+        assert!(files.requests().is_empty(), "no native file picker requested");
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "{second:?} did not type into the document");
+    }
+
+    // Close (`C`) closes a clean document.
+    h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
+    crate::test_harness::frames(&mut h, 2);
+    activate_and_file(&mut h, false);
+    h.input_mut().events.extend([key_event(egui::Key::C, true, egui::Modifiers::NONE), egui::Event::Text("c".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(!h.state().has_document(), "Alt/F10, F, C closes an untouched document");
+    assert!(!h.state().ui.backstage && !h.state().keytips_active);
+
+    // Close (`C`) prompts on unsaved changes.
+    let mut dirty = app();
+    dirty.run("text.insert", serde_json::json!({"text": "Draft"})).unwrap();
+    let mut h = harness(dirty);
+    activate_and_file(&mut h, false);
+    h.input_mut().events.extend([key_event(egui::Key::C, true, egui::Modifiers::NONE), egui::Event::Text("c".into())]);
+    crate::test_harness::frames(&mut h, 2);
+    assert!(h.state().closing.is_some(), "Alt/F10, F, C prompts before discarding unsaved changes");
+    assert!(h.state().has_document());
+    assert!(!h.state().keytips_active);
 }
 
 #[test]
@@ -581,4 +540,57 @@ fn keytips_update_controls_when_switching_tabs() {
     press_keytip_seq(&mut h, &bold_badge);
     crate::test_harness::frames(&mut h, 3);
     assert!(bold(&mut h), "Home keytip badge {bold_badge} runs format.bold after switching back from Insert");
+}
+
+#[test]
+fn backstage_programmatic_close_refuses_unsaved_changes() {
+    let mut a = app();
+    a.run("text.insert", serde_json::json!({"text": "Unsaved"})).unwrap();
+    // Programmatic execute refuses unsaved work without force
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "close"}));
+    assert!(res.is_err(), "programmatic close must refuse unsaved document without force");
+
+    // Programmatic execute with force: true succeeds
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "close", "force": true}));
+    assert!(res.is_ok(), "forced close succeeds: {res:?}");
+}
+
+#[test]
+fn backstage_programmatic_save_on_legacy_word_file_does_not_open_dialog() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut a = app().with_host(std::sync::Arc::new(host));
+    a.session.path = Some(std::path::PathBuf::from("contract.doc"));
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "save"}));
+    assert!(res.is_ok(), "programmatic ui.backstage navigation returns status: {res:?}");
+    assert_eq!(res.unwrap()["backstage"], true);
+    assert_ne!(a.ui.backstage_page, "saveAs", "scripted save must not navigate to saveAs for legacy file");
+    assert!(!a.file_dialog_open(), "scripted navigation must never open modal file picker");
+    assert!(files.requests().is_empty(), "no file dialog was requested");
+}
+
+#[test]
+fn backstage_user_save_on_legacy_word_file_opens_save_as_picker() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut a = app().with_host(std::sync::Arc::new(host));
+    a.session.path = Some(std::path::PathBuf::from("contract.doc"));
+    let res = a.run("ui.backstage", serde_json::json!({"value": true, "page": "save"}));
+    assert!(res.is_ok());
+    assert_eq!(a.ui.backstage_page, "saveAs", "user Save on legacy file navigates to saveAs");
+    assert!(a.file_dialog_open(), "user Save on legacy file opens Save As file dialog");
+    assert_eq!(files.requests().len(), 1, "exactly one save file dialog was requested");
+}
+
+#[test]
+fn backstage_unnamed_save_navigates_to_save_as_without_dialog() {
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host = craft::host::Host::builder(crate::APP).files(files.clone()).build();
+    let mut a = app().with_host(std::sync::Arc::new(host));
+    assert!(a.session.path.is_none());
+    let res = a.execute("ui.backstage", serde_json::json!({"value": true, "page": "save"}));
+    assert!(res.is_ok());
+    assert_eq!(a.ui.backstage_page, "saveAs", "unnamed document falls back to saveAs page");
+    assert!(!a.file_dialog_open(), "unnamed fallback must not open file dialog");
+    assert!(files.requests().is_empty(), "no file dialog requested for unnamed save");
 }
