@@ -23,11 +23,13 @@ struct Rig {
     commands: Vec<(ViewportId, ViewportCommand)>,
     /// The viewports that drew in the last frame, in order.
     drawn: Vec<ViewportId>,
+    /// How the viewports asked to open their windows in every frame so far.
+    builders: Vec<egui::ViewportBuilder>,
 }
 
 impl Rig {
     fn new() -> Rig {
-        Rig { kit: Kit::new(), focused: None, closing: Vec::new(), commands: Vec::new(), drawn: Vec::new() }
+        Rig { kit: Kit::new(), focused: None, closing: Vec::new(), commands: Vec::new(), drawn: Vec::new(), builders: Vec::new() }
     }
 
     fn ctx(&self) -> egui::Context {
@@ -58,6 +60,7 @@ impl Rig {
             craft::ui::shell::embed::logic(ui.ctx(), || a.close_decision());
             a.ui(ui);
         });
+        self.builders.extend(out.builders.into_iter().map(|(_, b)| b));
         self.commands = out.commands;
         self.drawn = out.trees.iter().map(|(v, _)| *v).collect();
         self.closing.clear();
@@ -513,4 +516,31 @@ fn every_open_replaces_an_untouched_blank_document_in_its_window() {
         assert_eq!(text(&a), "Second", "{how}: it shows the opened file");
     }
     std::fs::remove_dir_all(second.parent().unwrap()).ok();
+}
+
+/// #3634: a NUL in the document title never reaches an OS window title (X11 and Wayland panic on
+/// it): not a native window's builder, not a `Title` command, not the window menu. Checks what the
+/// frames send, so a new title source that skips `display_title` fails here.
+#[test]
+fn nul_in_the_document_title_never_reaches_an_os_window_title() {
+    for raw in ["\u{0}", "a\u{0}b"] {
+        let mut rig = Rig::new();
+        let mut a = app("x");
+        a.run("file.properties", json!({"title": raw})).unwrap();
+        let mut sent = Vec::new();
+        for i in 0..6 {
+            if i == 3 {
+                a.run("view.newWindow", json!({})).unwrap();
+                assert_eq!(a.window_count(), 2);
+            }
+            rig.frame(&mut a);
+            sent.extend(rig.commands.iter().filter_map(|(_, c)| if let ViewportCommand::Title(t) = c { Some(t.clone()) } else { None }));
+        }
+        sent.extend(rig.builders.iter().filter_map(|b| b.title.clone()));
+        sent.extend(a.switch_windows_entries().into_iter().map(|e| e.1));
+        assert!(rig.builders.iter().any(|b| b.title.is_some()), "the new window's builder carries a title");
+        for t in &sent {
+            assert!(std::ffi::CString::new(t.as_str()).is_ok(), "an OS window title without NUL ({raw:?}): {t:?}");
+        }
+    }
 }
