@@ -202,6 +202,8 @@ pub enum BorderStyle {
     Triple,
     DotDash,
     Wave,
+    /// A double wave, preserved separately from the single-wave drawing approximation.
+    DoubleWave,
     /// The compound lines of thin and thick strokes (`thinThickSmallGap` to
     /// `thinThickThinLargeGap`), kept so a file writes back the line it read; drawn as a single
     /// line of the border's width.
@@ -228,6 +230,7 @@ impl BorderStyle {
             BorderStyle::Triple => "triple",
             BorderStyle::DotDash => "dotDash",
             BorderStyle::Wave => "wave",
+            BorderStyle::DoubleWave => "doubleWave",
             BorderStyle::ThinThickSmallGap => "thinThickSmallGap",
             BorderStyle::ThickThinSmallGap => "thickThinSmallGap",
             BorderStyle::ThinThickThinSmallGap => "thinThickThinSmallGap",
@@ -248,7 +251,8 @@ impl BorderStyle {
             "thick" => BorderStyle::Thick,
             "triple" => BorderStyle::Triple,
             "dotDash" | "dotDotDash" => BorderStyle::DotDash,
-            "wave" | "doubleWave" => BorderStyle::Wave,
+            "wave" => BorderStyle::Wave,
+            "doubleWave" => BorderStyle::DoubleWave,
             "thinThickSmallGap" => BorderStyle::ThinThickSmallGap,
             "thickThinSmallGap" => BorderStyle::ThickThinSmallGap,
             "thinThickThinSmallGap" => BorderStyle::ThinThickThinSmallGap,
