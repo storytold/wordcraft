@@ -322,8 +322,12 @@ fn label_object_parts(obj: &craft_wordmodel::para::InlineObject, labels: &mut Ha
 /// differs from what `Numbering::change_originals` would recover from its exported `w:original`.
 /// Returns `(entries, complete)`, where `complete` is `false` if collection hit `MAX_ENTRIES`
 /// or skipped deeper blocks carrying `num_change`.
-pub(crate) fn collect_overrides(source: &wordcraft_doc::Document, shared: &craft_wordmodel::Document) -> (Vec<SnapshotEntry>, bool) {
-    let mut collector = Collector { numbering: source.numbering.as_ref(), originals: None, entries: Vec::new(), complete: true };
+pub(crate) fn collect_overrides<'a>(
+    source: &'a wordcraft_doc::Document,
+    shared: &craft_wordmodel::Document,
+    change_orig: &mut Option<wordcraft_doc::numbering::ChangeOriginalIndex<'a>>,
+) -> (Vec<SnapshotEntry>, bool) {
+    let mut collector = Collector { numbering: source.numbering.as_ref(), change_orig, originals: None, entries: Vec::new(), complete: true };
     collector.blocks(&source.body, "b", 0);
     if source.parts.values().any(|part| blocks_have_num_change_any_depth(&part.blocks)) {
         let labels = part_labels(shared);
@@ -365,14 +369,54 @@ fn fnv1a_u8(h: &mut u64, val: u8) {
     fnv1a_bytes(h, &[val]);
 }
 
-fn hash_num_identity(h: &mut u64, source: &craft_wordmodel::Document, abstract_nsids: &HashMap<u32, String>, num_id: u32, max_level: u8) {
-    if let Some(num) = source.numbering.num(num_id) {
+/// First-match index over a `craft_wordmodel::numbering::Numbering`, built once per fingerprint
+/// so `hash_num_identity` resolves concrete/abstract definitions and normalized `w:nsid` values
+/// in O(1) without linearly rescanning `nums` and `abstracts`.
+struct NumberingIndex<'a> {
+    nums: HashMap<u32, &'a craft_wordmodel::numbering::Num>,
+    abstracts: HashMap<u32, (&'a craft_wordmodel::numbering::AbstractNum, Option<String>)>,
+}
+
+impl<'a> NumberingIndex<'a> {
+    fn new(numbering: &'a craft_wordmodel::numbering::Numbering) -> Self {
+        let mut nums = HashMap::with_capacity(numbering.nums.len());
+        for n in &numbering.nums {
+            nums.entry(n.id).or_insert(n);
+        }
+        // craft-docx writes a repeated w:nsid only on the first abstractNum that has it
+        // (write/styles.rs) and keeps only 8-hex-digit uppercase nsids on read (read/styles.rs).
+        // Validate hex8, normalize to uppercase, and dedup on the uppercase value so the
+        // fingerprint matches whether computed before save or after re-reading from DOCX
+        // (even for case-only duplicates like "abcd1234" and "ABCD1234"), while keeping
+        // first-match per abstract id.
+        let hex8 = |v: &str| v.len() == 8 && v.bytes().all(|b| b.is_ascii_hexdigit());
+        let mut written_nsids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut abstracts = HashMap::with_capacity(numbering.abstracts.len());
+        for a in &numbering.abstracts {
+            let nsid = a.nsid.as_deref().filter(|nsid| hex8(nsid)).map(str::to_ascii_uppercase).filter(|upper| written_nsids.insert(upper.clone()));
+            abstracts.entry(a.id).or_insert((a, nsid));
+        }
+        Self { nums, abstracts }
+    }
+}
+
+/// Prefix of `s` containing at most `max_chars` Unicode scalar values, without allocating.
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => s.get(..idx).unwrap_or(s),
+        None => s,
+    }
+}
+
+fn hash_num_identity(h: &mut u64, index: &NumberingIndex<'_>, num_id: u32, max_level: u8) {
+    if let Some(&num) = index.nums.get(&num_id) {
         fnv1a_u8(h, 1);
         fnv1a_u32(h, num.abstract_id);
-        if let Some(abs) = source.numbering.abstract_of(num_id) {
+        let abs_entry = index.abstracts.get(&num.abstract_id);
+        if let Some(&(abs, ref nsid)) = abs_entry {
             fnv1a_u8(h, 1);
             fnv1a_u32(h, abs.id);
-            if let Some(nsid) = abstract_nsids.get(&abs.id) {
+            if let Some(nsid) = nsid.as_deref() {
                 fnv1a_u8(h, 1);
                 fnv1a_bytes(h, nsid.as_bytes());
             } else {
@@ -381,13 +425,22 @@ fn hash_num_identity(h: &mut u64, source: &craft_wordmodel::Document, abstract_n
         } else {
             fnv1a_u8(h, 0);
         }
+        let abs = abs_entry.map(|&(abs, _)| abs);
         let limit = max_level.min(8);
         for lvl_idx in 0..=limit {
+            // Match craft_wordmodel::Numbering::level: first-match level override on `num`,
+            // falling back to `abs.levels.get(lvl_idx)` (even when `abs` is missing).
+            let lvl = num
+                .level_overrides
+                .iter()
+                .find(|(i, _)| *i == lvl_idx)
+                .map(|(_, l)| l)
+                .or_else(|| abs.and_then(|a| a.levels.get(usize::from(lvl_idx))));
             // craft-docx pads missing abstract levels 0..9 with default_level (empty text,
             // decimal, start 1) and truncates w:lvlText to 64 chars on read (read/styles.rs).
-            let (text, fmt, base_start): (String, &str, u32) = match source.numbering.level(num_id, lvl_idx) {
-                Some(lvl) => (lvl.text.chars().take(64).collect(), lvl.format.ooxml(), lvl.start),
-                None => (String::new(), "decimal", 1),
+            let (text, fmt, base_start): (&str, &str, u32) = match lvl {
+                Some(lvl) => (truncate_chars(&lvl.text, 64), lvl.format.ooxml(), lvl.start),
+                None => ("", "decimal", 1),
             };
             fnv1a_u8(h, 1);
             fnv1a_u8(h, lvl_idx);
@@ -464,32 +517,20 @@ pub(crate) fn fingerprint_shared_model<'a>(source: &craft_wordmodel::Document, o
         }
     }
     walk(&source.body, "b", &mut h, 0);
-    let labels = part_labels(source);
-    let mut labeled: Vec<(&str, &craft_wordmodel::Part)> =
-        source.parts.iter().filter_map(|(&id, part)| labels.get(&id).map(|l| (l.as_str(), part))).collect();
-    labeled.sort_by_key(|(label, _)| *label);
-    for (label, part) in labeled {
-        walk(&part.blocks, label, &mut h, 0);
+    if !source.parts.is_empty() {
+        let labels = part_labels(source);
+        let mut labeled: Vec<(&str, &craft_wordmodel::Part)> =
+            source.parts.iter().filter_map(|(&id, part)| labels.get(&id).map(|l| (l.as_str(), part))).collect();
+        labeled.sort_by_key(|(label, _)| *label);
+        for (label, part) in labeled {
+            walk(&part.blocks, label, &mut h, 0);
+        }
     }
     for (i, g) in source.glossary.iter().enumerate() {
         walk(&g.blocks, &format!("g{i}"), &mut h, 0);
     }
 
-    // craft-docx writes a repeated w:nsid only on the first abstractNum that has it
-    // (write/styles.rs) and keeps only 8-hex-digit uppercase nsids on read (read/styles.rs).
-    // Dedup and normalize nsids here so the fingerprint matches whether computed
-    // before save or after re-reading from DOCX.
-    let hex8 = |v: &str| v.len() == 8 && v.bytes().all(|b| b.is_ascii_hexdigit());
-    let mut written_nsids: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut abstract_nsids: HashMap<u32, String> = HashMap::new();
-    for a in &source.numbering.abstracts {
-        if let Some(nsid) = a.nsid.as_deref()
-            && written_nsids.insert(nsid)
-            && hex8(nsid)
-        {
-            abstract_nsids.insert(a.id, nsid.to_ascii_uppercase());
-        }
-    }
+    let index = NumberingIndex::new(&source.numbering);
 
     let mut sorted_overrides: Vec<&SnapshotEntry> = overrides.into_iter().collect();
     sorted_overrides.sort_by_key(|e| &e.loc);
@@ -500,7 +541,7 @@ pub(crate) fn fingerprint_shared_model<'a>(source: &craft_wordmodel::Document, o
                 fnv1a_u8(&mut h, 1);
                 fnv1a_u32(&mut h, nr.num);
                 fnv1a_u8(&mut h, nr.level.min(8));
-                hash_num_identity(&mut h, source, &abstract_nsids, nr.num, nr.level.min(8));
+                hash_num_identity(&mut h, &index, nr.num, nr.level.min(8));
             }
             None => {
                 fnv1a_u8(&mut h, 0);
@@ -508,12 +549,11 @@ pub(crate) fn fingerprint_shared_model<'a>(source: &craft_wordmodel::Document, o
         }
     }
 
-    let mut num_ids: Vec<u32> = source.numbering.nums.iter().map(|n| n.id).collect();
+    let mut num_ids: Vec<u32> = index.nums.keys().copied().collect();
     num_ids.sort_unstable();
-    num_ids.dedup();
     for num_id in num_ids.into_iter().take(MAX_ENTRIES) {
         fnv1a_u32(&mut h, num_id);
-        hash_num_identity(&mut h, source, &abstract_nsids, num_id, 8);
+        hash_num_identity(&mut h, &index, num_id, 8);
     }
 
     h
@@ -542,14 +582,15 @@ fn blocks_have_num_change_any_depth(blocks: &wordcraft_doc::Blocks) -> bool {
     false
 }
 
-struct Collector<'a> {
+struct Collector<'a, 'b> {
     numbering: &'a wordcraft_doc::numbering::Numbering,
+    change_orig: &'b mut Option<wordcraft_doc::numbering::ChangeOriginalIndex<'a>>,
     originals: Option<BTreeMap<String, NumRef>>,
     entries: Vec<SnapshotEntry>,
     complete: bool,
 }
 
-impl Collector<'_> {
+impl<'a> Collector<'a, '_> {
     fn inferred(&mut self, original: &str) -> Option<NumRef> {
         let trimmed = original.trim();
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
@@ -557,6 +598,11 @@ impl Collector<'_> {
         }
         let originals = self.originals.get_or_insert_with(|| self.numbering.change_originals());
         originals.get(trimmed).copied()
+    }
+
+    fn change_original(&mut self, num: u32, level: u8) -> Option<String> {
+        let index = self.change_orig.get_or_insert_with(|| wordcraft_doc::numbering::ChangeOriginalIndex::new(self.numbering));
+        index.get(num, level)
     }
 
     fn blocks(&mut self, blocks: &wordcraft_doc::Blocks, prefix: &str, depth: usize) {
@@ -580,7 +626,7 @@ impl Collector<'_> {
                     let exported_original = if !nc.original.is_empty() {
                         nc.original.clone()
                     } else if let Some(nr) = nc.snapshot {
-                        self.numbering.change_original(nr.num, nr.level).unwrap_or_default()
+                        self.change_original(nr.num, nr.level).unwrap_or_default()
                     } else {
                         String::new()
                     };
@@ -675,5 +721,128 @@ mod tests {
         let store = read_from_bytes(&xml).expect("parse stub");
         assert!(!store.complete, "stub must be marked incomplete");
         assert!(store.entries.is_empty(), "stub has no entries");
+    }
+
+    #[test]
+    fn fingerprint_preserves_first_match_and_level_overrides_with_duplicates() {
+        use craft_wordmodel::numbering::{AbstractNum, Level, Num, Numbering};
+
+        let make_doc = |first_lvl_text: &str, shadowed_num_start: u32, shadowed_abs_text: &str, dangling_override_text: &str, first_nsid: &str| {
+            let mut numbering = Numbering::default();
+            // First abstract id 10 and a shadowed duplicate abstract id 10.
+            numbering.abstracts.push(AbstractNum {
+                id: 10,
+                nsid: Some(first_nsid.into()),
+                levels: vec![Level { text: first_lvl_text.into(), start: 1, ..Level::default() }],
+                ..Default::default()
+            });
+            numbering.abstracts.push(AbstractNum {
+                id: 10,
+                nsid: Some("2222BBBB".into()),
+                levels: vec![Level { text: shadowed_abs_text.into(), start: 7, ..Level::default() }],
+                ..Default::default()
+            });
+            numbering.abstracts.push(AbstractNum {
+                id: 20,
+                levels: vec![Level { text: "%1)".into(), start: 2, ..Level::default() }],
+                ..Default::default()
+            });
+            // First num id 1 with duplicate level/start overrides on level 0 (first-match must win),
+            // followed by a shadowed duplicate num id 1 pointing to abstract 20.
+            numbering.nums.push(Num {
+                id: 1,
+                abstract_id: 10,
+                start_overrides: vec![(0, 5), (0, 99)],
+                level_overrides: vec![
+                    (0, Level { text: first_lvl_text.into(), start: 1, ..Level::default() }),
+                    (0, Level { text: "shadowed-lvl-override".into(), start: 42, ..Level::default() }),
+                ],
+            });
+            numbering.nums.push(Num {
+                id: 1,
+                abstract_id: 20,
+                start_overrides: vec![(0, shadowed_num_start)],
+                level_overrides: vec![(0, Level { text: "shadowed-num".into(), start: shadowed_num_start, ..Level::default() })],
+            });
+            // Num id 2 references a missing abstract (999) but defines a level override on level 0.
+            numbering.nums.push(Num {
+                id: 2,
+                abstract_id: 999,
+                start_overrides: Vec::new(),
+                level_overrides: vec![(0, Level { text: dangling_override_text.into(), start: 3, ..Level::default() })],
+            });
+
+            let mut doc = craft_wordmodel::Document::new();
+            doc.numbering = Arc::new(numbering);
+            doc
+        };
+
+        let overrides = vec![
+            SnapshotEntry { loc: "b:0".into(), original: "%1:1:0:.".into(), snapshot: Some(NumRef { num: 1, level: 0 }) },
+            SnapshotEntry { loc: "b:1".into(), original: "%1:3:0:.".into(), snapshot: Some(NumRef { num: 2, level: 0 }) },
+        ];
+
+        let long_64 = "•".repeat(64);
+        let long_80 = "•".repeat(80);
+        let base = make_doc(&long_64, 11, "shadow-a", "[%1]", "1111aaaa");
+        let base_fp = fingerprint_shared_model(&base, &overrides);
+
+        // Mutating shadowed duplicates (duplicate num id 1 or duplicate abstract id 10) must not change fp.
+        let shadowed_changed = make_doc(&long_64, 88, "shadow-b", "[%1]", "1111aaaa");
+        assert_eq!(
+            fingerprint_shared_model(&shadowed_changed, &overrides),
+            base_fp,
+            "shadowed duplicate num/abstract entries must not affect first-match fingerprint"
+        );
+
+        // Extending lvlText past 64 multi-byte chars hashes identically due to 64-char normalization.
+        let over_64 = make_doc(&long_80, 11, "shadow-a", "[%1]", "1111aaaa");
+        assert_eq!(fingerprint_shared_model(&over_64, &overrides), base_fp, "lvlText beyond 64 chars must normalize identically");
+
+        // Mutating the first-matched level override, nsid, or dangling-abstract level override changes fp.
+        let first_lvl_changed = make_doc("%1.", 11, "shadow-a", "[%1]", "1111aaaa");
+        assert_ne!(fingerprint_shared_model(&first_lvl_changed, &overrides), base_fp, "first-match level override change must alter fp");
+
+        let nsid_changed = make_doc(&long_64, 11, "shadow-a", "[%1]", "3333cccc");
+        assert_ne!(fingerprint_shared_model(&nsid_changed, &overrides), base_fp, "first-match abstract nsid change must alter fp");
+
+        let dangling_changed = make_doc(&long_64, 11, "shadow-a", "(%1)", "1111aaaa");
+        assert_ne!(fingerprint_shared_model(&dangling_changed, &overrides), base_fp, "dangling-abstract level override change must alter fp");
+    }
+
+    #[test]
+    fn fingerprint_indexes_many_lists_and_detects_tail_edits() {
+        use craft_wordmodel::numbering::{AbstractNum, Level, Num, Numbering};
+
+        const LISTS: u32 = MAX_ENTRIES as u32;
+        let mut numbering = Numbering::default();
+        numbering.abstracts.reserve(LISTS as usize);
+        numbering.nums.reserve(LISTS as usize);
+        for id in 1..=LISTS {
+            numbering.abstracts.push(AbstractNum {
+                id,
+                levels: vec![Level { text: format!("%1-{id}."), start: 1, ..Level::default() }],
+                ..Default::default()
+            });
+            numbering.nums.push(Num { id, abstract_id: id, ..Default::default() });
+        }
+
+        let overrides: Vec<SnapshotEntry> = (0..200u32)
+            .map(|i| {
+                let num = 1 + i * (LISTS / 200);
+                SnapshotEntry { loc: format!("b:{i}"), original: "%1:1:0:.".into(), snapshot: Some(NumRef { num, level: 0 }) }
+            })
+            .collect();
+
+        let mut doc = craft_wordmodel::Document::new();
+        doc.numbering = Arc::new(numbering);
+        let fp_initial = fingerprint_shared_model(&doc, &overrides);
+        assert_eq!(fingerprint_shared_model(&doc, &overrides), fp_initial, "fingerprint must be deterministic");
+
+        // Mutate the last list (at index MAX_ENTRIES - 1) and verify the fingerprint changes.
+        let mut edited = (*doc.numbering).clone();
+        edited.abstracts[(LISTS - 1) as usize].levels[0].text = "edited".into();
+        doc.numbering = Arc::new(edited);
+        assert_ne!(fingerprint_shared_model(&doc, &overrides), fp_initial, "editing the last indexed list must change the fingerprint");
     }
 }

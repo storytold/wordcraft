@@ -284,6 +284,36 @@ fn change_original_def(num: &Num, abs: &AbstractNum, level: u8) -> Option<String
     (out.len() <= MAX_CHANGE_ORIGINAL).then_some(out)
 }
 
+/// Indexed lookup for [`Numbering::change_original`], avoiding repeated linear scans across
+/// `nums` and `abstracts` when exporting many numbering changes while preserving first-match
+/// lookup semantics.
+pub struct ChangeOriginalIndex<'a> {
+    nums: HashMap<u32, &'a Num>,
+    abstracts: HashMap<u32, &'a AbstractNum>,
+}
+
+impl<'a> ChangeOriginalIndex<'a> {
+    /// Build a first-match index over `numbering.nums` and `numbering.abstracts`.
+    pub fn new(numbering: &'a Numbering) -> Self {
+        let mut nums = HashMap::with_capacity(numbering.nums.len());
+        for n in &numbering.nums {
+            nums.entry(n.id).or_insert(n);
+        }
+        let mut abstracts = HashMap::with_capacity(numbering.abstracts.len());
+        for a in &numbering.abstracts {
+            abstracts.entry(a.id).or_insert(a);
+        }
+        Self { nums, abstracts }
+    }
+
+    /// Compute the previous numbering cache (`w:original`) for `num` and `level`.
+    pub fn get(&self, num: u32, level: u8) -> Option<String> {
+        let n = self.nums.get(&num).copied()?;
+        let abs = self.abstracts.get(&n.abstract_id).copied()?;
+        change_original_def(n, abs, level)
+    }
+}
+
 impl Numbering {
     pub fn num(&self, id: u32) -> Option<&Num> {
         self.nums.iter().find(|n| n.id == id)
@@ -319,11 +349,18 @@ impl Numbering {
     /// budget is exhausted before all definitions can be inspected, the scan fails closed to avoid
     /// returning incomplete collision results.
     pub fn change_originals(&self) -> BTreeMap<String, NumRef> {
-        let abstracts: BTreeMap<u32, &AbstractNum> = self.abstracts.iter().map(|a| (a.id, a)).collect();
+        let mut abstracts: HashMap<u32, &AbstractNum> = HashMap::with_capacity(self.abstracts.len());
+        for a in &self.abstracts {
+            abstracts.entry(a.id).or_insert(a);
+        }
+        let mut seen_nums = std::collections::HashSet::with_capacity(self.nums.len());
         let mut map: BTreeMap<String, Option<NumRef>> = BTreeMap::new();
         let mut candidates = 0;
         let mut truncated = false;
         for n in &self.nums {
+            if !seen_nums.insert(n.id) {
+                continue;
+            }
             if candidates >= MAX_ORIGINAL_CANDIDATES || map.len() >= MAX_ORIGINAL_CACHES {
                 truncated = true;
                 break;
@@ -726,6 +763,37 @@ mod tests {
             num.level_overrides = vec![(0, Level { text: "x".repeat(MAX_CHANGE_ORIGINAL + 1), ..Level::default() })];
         }
         assert_eq!(n.change_original(list, 0), None, "an oversized cache is dropped, not truncated");
+    }
+
+    /// Duplicate `abstractNumId` and `numId` entries follow first-match semantics across
+    /// `change_original`, `ChangeOriginalIndex`, and `change_originals`.
+    #[test]
+    fn change_originals_uses_first_match_for_duplicate_ids() {
+        let mut n = Numbering::default();
+        // First abstract 10 is Decimal "%1."; shadowed duplicate 10 is Bullet "•".
+        n.abstracts.push(AbstractNum { id: 10, levels: vec![Level { text: "%1.".into(), ..Level::default() }], ..Default::default() });
+        n.abstracts.push(AbstractNum {
+            id: 10,
+            levels: vec![Level { format: NumFormat::Bullet, text: "•".into(), ..Level::default() }],
+            ..Default::default()
+        });
+        n.abstracts.push(AbstractNum {
+            id: 20,
+            levels: vec![Level { format: NumFormat::UpperRoman, text: "%1)".into(), ..Level::default() }],
+            ..Default::default()
+        });
+        // First num 1 points to abstract 10; shadowed duplicate num 1 points to abstract 20.
+        n.nums.push(Num { id: 1, abstract_id: 10, ..Default::default() });
+        n.nums.push(Num { id: 1, abstract_id: 20, ..Default::default() });
+
+        let idx = ChangeOriginalIndex::new(&n);
+        assert_eq!(n.change_original(1, 0).as_deref(), Some("%1:1:0:."));
+        assert_eq!(idx.get(1, 0).as_deref(), Some("%1:1:0:."));
+
+        let caches = n.change_originals();
+        assert_eq!(caches.get("%1:1:0:."), Some(&NumRef { num: 1, level: 0 }));
+        assert_eq!(caches.get("%1:1:23:•"), None, "shadowed duplicate abstract must not override first match");
+        assert_eq!(caches.get("%1:1:1:)"), None, "shadowed duplicate num must not enter cache");
     }
 
     /// Read-only counter APIs retain the renderer's bounds and never advance a list.
