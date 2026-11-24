@@ -308,6 +308,8 @@ impl WordApp {
                 let r = if ext == "png" {
                     let mut params = if options.is_object() { options } else { json!({}) };
                     params["path"] = json!(path);
+                    // The dialog confirmed only this name, not the numbered files beside it.
+                    params["replace"] = json!(false);
                     self.run("file.exportPng", params)
                 } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
                     // The engine takes an explicit format only for an .xml path, and a system Save

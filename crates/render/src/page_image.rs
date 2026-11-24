@@ -142,6 +142,25 @@ mod tests {
         assert_eq!(pixels, whole.to_straight());
     }
 
+    /// Large type whose ink reaches far from its glyphs' origins (descenders below the baseline,
+    /// letters stretched by `w:w`) is drawn whole across band and tile seams: a band holding only
+    /// a descender or the right of a stretched letter still draws it.
+    #[test]
+    fn large_type_crosses_band_seams_whole() {
+        let props = wordcraft_doc::props::CharProps { size: Some(260.0), ..Default::default() };
+        let stretched = wordcraft_doc::Paragraph::with_text("gjW", wordcraft_doc::props::CharProps { scale: Some(300.0), ..props.clone() });
+        let mut doc = Document::from_text("");
+        doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("gjpqy", props)), wordcraft_doc::para_block(stretched)];
+        doc.last_section.page_w = 1400.0;
+        doc.last_section.page_h = 800.0;
+        let l = layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
+        let page = l.pages.first().cloned().unwrap();
+        let opts = RenderOptions::default();
+        let whole = crate::render_page(&doc, &page, 0.5, &opts);
+        let (_, pixels, _) = decode(&page_png_in(&doc, &page, 0.5, &opts, 5, 41).unwrap());
+        assert!(pixels == whole.to_straight(), "banded large type differs from the whole page");
+    }
+
     /// The PNG says its resolution, so it prints at the page's size.
     #[test]
     fn page_png_records_its_resolution() {

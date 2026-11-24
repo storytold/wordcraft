@@ -2334,6 +2334,26 @@ fn host_open(a: &mut WordApp, name: &str) {
     assert!(a.session.dirty);
 }
 
+/// #7743: on the web, Export › Page image asks for the resolution and pages before anything is
+/// downloaded, then downloads the one page chosen at that resolution; the browser saves one page
+/// image at a time, so several pages are refused.
+#[test]
+fn web_page_images_ask_first_then_download_one_page() {
+    let (mut a, got) = host_app(false);
+    a.run("insert.pageBreak", json!({})).unwrap();
+    a.run("file.exportPng", json!({})).unwrap();
+    assert!(got.borrow().is_empty(), "nothing downloaded before the choice");
+    assert!(a.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some("exportImages")));
+    crate::dialogs::host::close_all(&mut a, &egui::Context::default());
+    a.run("file.exportPng", json!({"dpi": 96, "range": "current"})).unwrap();
+    let saves = saved(&got.0);
+    let [(request, bytes)] = saves.as_slice() else { panic!("one download: {:?}", got.borrow()) };
+    assert!(request.file_name.as_deref().is_some_and(|n| n.ends_with(".png")));
+    let width = image::load_from_memory(bytes).unwrap().width();
+    assert_eq!(width as f32, (a.session.doc.last_section.page_w * 96.0 / 72.0).ceil(), "96 DPI");
+    assert!(a.run("file.exportPng", json!({"dpi": 96, "range": "all"})).is_err(), "two pages, one download");
+}
+
 /// Save hands the opened file back under its own name and format; Save As says so and
 /// becomes the file the next Save writes.
 #[test]

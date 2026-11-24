@@ -142,6 +142,12 @@ impl WordApp {
             }
             return r;
         }
+        // Web: a page image downloads at once below, so the resolution and pages are asked
+        // first here, as the desktop asks through the request (#7743).
+        if self.browser_saves() && id == "file.exportPng" && self.user_origin && params.get("dpi").is_none() && params.get("path").is_none() {
+            let _ = dialogs::open(self, "exportImages", &json!({}));
+            return Ok(json!({"exported": false}));
+        }
         // Web: saving and exporting become downloads.
         if self.browser_saves() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));

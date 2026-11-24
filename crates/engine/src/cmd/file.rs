@@ -117,7 +117,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
         .pure(),
         CommandSpec::new("file.exportPng", "Export Page as PNG", "File › Export", export_png)
-            .params(r#"{"path": string (one page: this file; several: name-1.png, name-2.png… beside it), "page"?: n (1-based; default the first page), "range"?: "all" | "current" | "selection" | "custom" (as file.printPdf; not with `page`), "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "dpi"?: 36-2400 (default 144), "scale"?: px per pt (instead of dpi; 0.1-8), "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character on the page can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .params(r#"{"path": string (one page: this file; several: name-1.png, name-2.png… beside it), "page"?: n (1-based; default the first page), "range"?: "all" | "current" | "selection" | "custom" (as file.printPdf; not with `page`), "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "dpi"?: 36-2400 (default 144), "scale"?: px per pt (instead of dpi; 0.1-8), "replace"?: bool (default true; false refuses, writing nothing, when one of several pages' files already exists), "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character on the page can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
         CommandSpec::new("file.strictReport", "Strict Export Report", "File › Export", strict_report)
             .params(r#"{"markup"?: bool (as file.exportPdf), "page"?: n (1-based: check that page of the page image file.exportPng writes; omit for every page of a PDF)} → {"schema": 1, "strict": "passed" | "failed", "missing_glyphs": [{"cp": "U+2D30", "count": n}], "missing_pictures": [{"part", "source_part": the story part it is in (word/header2.xml; background, body, header, footer, text box or "" where unknown), "reason": "missing_part" | "external_target" | "link_only" | "undecodable" | "unsupported_format"}], "truncated": bool (either list was cut at 256 entries), "total_missing_glyphs": n (distinct, past the cap too), "total_missing_pictures": n (past the cap too), "glyphs_truncated": bool, "pictures_truncated": bool}"#)
@@ -553,6 +553,15 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let images = crate::page_images::PageImages::plan(s, v)?;
     let pages = &images.pages;
     let names = crate::page_images::paths(path, pages);
+    // Several pages go beside the name chosen, under names no one confirmed: with `replace: false`
+    // (the app, whose save dialog asked only about the name picked) one already there is refused
+    // before anything is written, rather than replaced.
+    if !p::bool(v, "replace").unwrap_or(true)
+        && names.len() > 1
+        && let Some(taken) = names.iter().find(|n| std::path::Path::new(n).exists())
+    {
+        return Err(CmdError::Failed(format!("{taken} already exists; choose another name")));
+    }
     let mut files = Vec::with_capacity(pages.len());
     for (&page, name) in pages.iter().zip(&names) {
         // A failure part way says which files are already there.

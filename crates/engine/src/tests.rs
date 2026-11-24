@@ -13903,6 +13903,29 @@ fn export_png_writes_the_pages_chosen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #7743: with `replace: false` (the app's export), several pages refuse to replace a numbered file
+/// already beside the name chosen, and write nothing; one page, whose name the save dialog
+/// confirmed, is written as before.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_png_keeps_a_numbered_file_already_there() {
+    let dir = scratch_dir("export-png-keep");
+    let mut s = three_pages();
+    let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    std::fs::write(dir.join("t-2.png"), b"mine").unwrap();
+    let r = s.run("file.exportPng", &json!({"path": at("t.png"), "range": "all", "replace": false}));
+    assert!(matches!(&r, Err(crate::CmdError::Failed(m)) if m.contains("t-2.png") && m.contains("already exists")), "{r:?}");
+    assert_eq!(std::fs::read(dir.join("t-2.png")).unwrap(), b"mine");
+    assert!(!dir.join("t-1.png").exists() && !dir.join("t-3.png").exists(), "nothing written");
+    std::fs::write(dir.join("one.png"), b"old").unwrap();
+    s.run("file.exportPng", &json!({"path": at("one.png"), "page": 1, "replace": false})).unwrap();
+    assert_ne!(std::fs::read(dir.join("one.png")).unwrap(), b"old", "the name the dialog confirmed is replaced");
+    // Scripts replace, as before.
+    s.run("file.exportPng", &json!({"path": at("t.png"), "range": "all"})).unwrap();
+    assert_ne!(std::fs::read(dir.join("t-2.png")).unwrap(), b"mine");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #7743: a bad resolution or page choice is a parameter error and writes nothing.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
