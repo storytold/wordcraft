@@ -75,6 +75,7 @@ impl WordApp {
     /// handed in as values and read back after, so no body reads a stale copy. Returns the
     /// shell's regions; a window another command swapped in mid-draw returns none.
     pub(super) fn paint_window(&mut self, ui: &mut egui::Ui) -> ShellRegions {
+        self.follow_title_bar(ui.ctx());
         crate::announce::expose(self, ui.ctx());
         let window = self.windows.shown();
         let stale = |app: &WordApp| app.windows.shown() != window;

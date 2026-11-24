@@ -487,6 +487,14 @@ fn main() -> eframe::Result {
     };
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     let x11 = false;
+    // Where the desktop leaves the window frame to the app (GNOME on Wayland), the framework's
+    // title bar carries the window buttons, unless File › Options › Use system title bar is on
+    // (#78). Decided before the window opens, so it opens with that frame.
+    let backend = if x11 { Backend::X11 } else { Backend::from_env() };
+    let title_bar = wordcraft_ui_egui::decide_title_bar(backend, settings.lock().get().system_title_bar);
+    if let Some(t) = &title_bar {
+        options.viewport = craft::window::policy::apply(options.viewport, &t.decision().frame);
+    }
     // What the OS asks of a running app arrives here; its wake repaints once the window exists.
     let repaint: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
     let (intake, sender) = FileIntake::new(Wake::new({
@@ -526,12 +534,15 @@ fn main() -> eframe::Result {
                     .lang(lang.craft_lang())
                     .build(),
             );
-            let shell = ShellInfo::current().backend(if x11 { Backend::X11 } else { Backend::from_env() });
-            let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
+            let shell = ShellInfo::current().backend(backend);
+            let mut spec = InstallSpec::new(shell, Arc::new(SystemWindows))
                 .app_id("ai.storyteller.wordcraft")
                 .system(SystemReader::start(wake))
                 .clipboard(Clipboard::new(SystemClipboard::new().decoder(decode_png)))
                 .placement(placement);
+            if let Some(t) = &title_bar {
+                spec = spec.frame(t.decision().clone());
+            }
             // PLAN: assumed `wordcraft_ui_egui::ui_fonts` re-exports sh.A10's `app::fonts::ui_fonts` (`mod app` is private; app-hub/shell-w11).
             embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang)).map_err(|e| format!("the runtime could not be installed: {e}"))?;
             // The system region picks the new document's paper, the units and the decimal
@@ -552,6 +563,9 @@ fn main() -> eframe::Result {
             // the region check below reads the saved region the settings apply.
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
                 app = app.with_fallback_chooser(true);
+            }
+            if let Some(t) = title_bar {
+                app = app.with_title_bar(t);
             }
             app.set_startup_update_check(true);
             // After the preferences, so the reason it gives is in the interface language.

@@ -155,6 +155,8 @@ impl WordApp {
             font_notice_seen: _,
             font_notices: _,
             packs_rt: _,
+            // Use system title bar applies to the root window, whose frame the others take.
+            title_bar: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             control: _,
             capture_token: _,
@@ -252,6 +254,7 @@ impl WordApp {
             dark_page: _,
             check_spelling: _,
             caret_animation: _,
+            system_title_bar: _,
             keyboard: _,
             print: _,
             ribbon: _,

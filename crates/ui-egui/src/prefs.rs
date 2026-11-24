@@ -116,6 +116,10 @@ pub struct Prefs {
     /// fades, as Word's does on Windows (on, the default), or it jumps and blinks on and off
     /// (off).
     pub caret_animation: bool,
+    /// File › Options › General › Use system title bar: where the desktop leaves the window frame
+    /// to the app (GNOME on Wayland), keep the desktop's frame instead of the app's window buttons
+    /// (#78).
+    pub system_title_bar: bool,
     /// Custom keyboard shortcuts (Customize Keyboard, #368); the session owns them while running.
     pub keyboard: Shortcuts,
     /// Custom ribbon tabs and groups, hidden tabs and the Quick Access Toolbar (Customize Ribbon,
@@ -209,6 +213,7 @@ impl Default for Prefs {
             dark_page: false,
             check_spelling: true,
             caret_animation: true,
+            system_title_bar: false,
             keyboard: Shortcuts::default(),
             ribbon: wordcraft_engine::RibbonLayout::default(),
             caption_labels: Vec::new(),

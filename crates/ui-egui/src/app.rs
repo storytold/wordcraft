@@ -22,6 +22,8 @@ mod frame;
 mod input;
 mod pictures;
 mod prefs;
+mod title_bar;
+pub use title_bar::{TitleBar, decide as decide_title_bar};
 
 #[cfg(test)]
 pub(crate) use commands::works_without_document;
@@ -111,6 +113,7 @@ impl WordApp {
             font_notice_seen: Vec::new(),
             font_notices: false,
             packs_rt: Default::default(),
+            title_bar: None,
             control: None,
             capture_token: 0,
             native_scale: 1.0,

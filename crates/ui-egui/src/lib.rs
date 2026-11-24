@@ -110,6 +110,7 @@ mod state;
 pub(crate) use app::works_without_document;
 // PLAN: assumed shell-w13 leaves `HostSaveFn` and `Inbox` out of `services` (sh.A14 removes `host_save` and `inbox`).
 pub use app::fonts::ui_fonts;
+pub use app::{TitleBar, decide_title_bar};
 pub use services::Services;
 pub use state::{AutoSaveBlock, keeps_everything};
 
@@ -440,6 +441,9 @@ pub struct WordApp {
     pub(crate) font_notices: bool,
     /// Language pack installs, the missing-pack bar ([`language_packs`]).
     pub(crate) packs_rt: language_packs::Runtime,
+    /// Set when the framework decides the window frame ([`WordApp::with_title_bar`]): GNOME on
+    /// Wayland, or `WORDCRAFT_TITLEBAR`.
+    pub(crate) title_bar: Option<app::TitleBar>,
     /// The control channel's requests and replies, once a host started it.
     pub(crate) control: Option<craft::automation::control::ControlChannel>,
     /// The last screenshot token handed out; tokens start at 1.

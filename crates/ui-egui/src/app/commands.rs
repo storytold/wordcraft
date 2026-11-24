@@ -852,6 +852,18 @@ impl WordApp {
                 }
                 json!({"caretAnimation": self.ui.caret_animation})
             }
+            "ui.systemTitleBar" => {
+                // File › Options › General › Use system title bar: `value` true gives the window
+                // the desktop's frame, false the app's own window buttons; no value reads it. It
+                // changes the window only where the desktop leaves the frame to the app (GNOME on
+                // Wayland); `appDrawsFrame` says whether the app draws the buttons now.
+                match p.get("value") {
+                    None => {}
+                    Some(Value::Bool(on)) => self.ui.system_title_bar = *on,
+                    Some(_) => return Some(Err("`value` must be true or false".into())),
+                }
+                json!({"systemTitleBar": self.ui.system_title_bar, "appDrawsFrame": self.draws_window_frame()})
+            }
             "ui.alignmentGuides" => {
                 // File › Options › Advanced › Editing: `value` true or false turns snapping to
                 // alignment guides while moving pictures and shapes on or off; no value reads it.
@@ -1236,6 +1248,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.closeDialog"
             | "ui.collapseRibbon"
             | "ui.quickAccessToolbar"
+            | "ui.systemTitleBar"
             | "ui.keytips"
             | "ui.dark"
             | "ui.theme"

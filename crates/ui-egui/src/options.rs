@@ -248,6 +248,7 @@ impl<'a> OptionsModel<'a> {
                 ("general.showCommunity", Bool(ui.show_discord)),
                 ("general.fontDownloadNotice", Bool(ui.font_download_notice)),
                 ("general.startScreen", Bool(ui.start_screen)),
+                ("general.systemTitleBar", Bool(ui.system_title_bar)),
                 ("general.initials", Text(String::new())),
             ],
             "display" => vec![
@@ -339,6 +340,9 @@ impl PreferencesModel for OptionsModel<'_> {
                         b("general.darkPage", tl!("Dark page (white text on black)"), app.session.view.dark_mode)
                             .help(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.")),
                         b("general.showCommunity", tl!("Show the community button in the title bar"), app.ui.show_discord),
+                        b("general.systemTitleBar", tl!("Use system title bar"), app.ui.system_title_bar)
+                            .help(tl!("Use the desktop's window frame and buttons instead of WordCraft's own."))
+                            .visible(app.system_title_bar_applies()),
                         b(
                             "general.fontDownloadNotice",
                             tl!("Tell me when a document's missing fonts can be downloaded"),
@@ -641,6 +645,7 @@ impl PreferencesModel for OptionsModel<'_> {
             ("general.fontDownloadNotice", Bool(v)) => self.app.ui.font_download_notice = v,
             ("general.darkPage", Bool(v)) => self.run("view.darkMode", json!({"value": v})),
             ("general.startScreen", Bool(v)) => self.run("ui.startScreen", json!({"value": v})),
+            ("general.systemTitleBar", Bool(v)) => self.run("ui.systemTitleBar", json!({"value": v})),
             ("general.userName", Text(t)) => {
                 if !wordcraft_engine::cmd::protect::enforced(&self.app.session.doc) {
                     self.app.session.author = t;
