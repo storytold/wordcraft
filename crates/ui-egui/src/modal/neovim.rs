@@ -370,7 +370,13 @@ local directory=...
     m.base=answer.text
     return answer
   end
+  local function leave_row_visual(mode)
+    if mode~='v' and mode~='V' and mode~='\022' and m.rowVisual~=nil then
+      m.rowVisual=nil; m.goal=nil; m.lastVertical=nil
+    end
+  end
   local function vertical(direction)
+    leave_row_visual(vim.api.nvim_get_mode().mode)
     local at=offset(vim.api.nvim_win_get_cursor(0))
     local goal=m.lastVertical==at and m.goal or nil
     local result=m.geometry(direction,vim.v.count1,at,goal)
@@ -586,6 +592,7 @@ local directory=...
       end
     end
     local mode=other and 'n' or vim.api.nvim_get_mode().mode
+    leave_row_visual(mode)
     local cursor=other and (m.cursor or {1,0}) or vim.api.nvim_win_get_cursor(0)
     if not other then m.cursor=cursor end
     local focus=math.min(offset(cursor),#text)
