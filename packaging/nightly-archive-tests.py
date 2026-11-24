@@ -29,7 +29,16 @@ class ArchivePolicy(unittest.TestCase):
         self.stage = self.root / "stage"
         self.stage.mkdir()
         self.output = self.root / "nightly.tar.gz"
-        self.required = {"wordcraft", "wordcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
+        self.required = {
+            "wordcraft",
+            "wordcraft.real",
+            "wordcraft-nightly.png",
+            "README.md",
+            "LICENSE-MIT",
+            "LICENSE-APACHE",
+            "NOTICE",
+            "ATTRIBUTION.md",
+        }
         for name in self.required:
             (self.stage / name).write_bytes(b"generated fixture: " + name.encode())
         (self.stage / "wordcraft").chmod(0o755)

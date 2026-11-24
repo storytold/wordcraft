@@ -697,7 +697,9 @@ fn main() -> eframe::Result {
             // change to the stable apps' shared fonts.
             match launch_profile::current().root() {
                 Some(root) => wordcraft_engine::packs::use_font_store_in(root.join("FontStore"), true),
-                None => wordcraft_engine::packs::use_font_store(true),
+                None => {
+                    wordcraft_engine::packs::use_font_store(true);
+                }
             }
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).

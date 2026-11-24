@@ -33,8 +33,13 @@ nightly_init() {
 }
 
 # Compile only: macOS runs the version query after signing (packaging/macos/nightly-verify.sh).
+# The channel and the exact feed version are passed explicitly: apps/wordcraft/build.rs reads
+# WORDCRAFT_BUILD_CHANNEL and WORDCRAFT_VERSION (not the older WORDCRAFT_OVERRIDE_VERSION), and
+# the built binary answers `--version` with `build_flavor::version`, i.e. "WordCraft <version>
+# (nightly-v1)". A stable compile here would print the Cargo version and fail the check below.
 nightly_compile_gui() {
-  (cd "$ROOT" && WORDCRAFT_OVERRIDE_VERSION="$VERSION" cargo build --release --locked -p wordcraft --target "$NIGHTLY_RUST_TARGET")
+  (cd "$ROOT" && WORDCRAFT_BUILD_CHANNEL=nightly-v1 WORDCRAFT_VERSION="$VERSION" \
+    cargo build --release --locked -p wordcraft --target "$NIGHTLY_RUST_TARGET")
   NIGHTLY_GUI="$CARGO_TARGET_DIR/$NIGHTLY_RUST_TARGET/release/wordcraft"
   [[ -f "$NIGHTLY_GUI" && ! -L "$NIGHTLY_GUI" ]] || nightly_die 'the owned GUI build did not produce a regular executable'
   [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$WORDCRAFT_BUILD_SHA" && -z "$(git -C "$ROOT" status --porcelain)" ]] || nightly_die 'source changed during the build'

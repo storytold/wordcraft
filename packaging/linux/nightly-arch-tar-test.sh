@@ -34,7 +34,10 @@ test ! -e "$stage/bin/.wordcraft-nightly"
 cmp "$stage/bin/wordcraft" "$bin/.wordcraft-nightly/wordcraft"
 cmp "$stage/bin/wordcraft-cli" "$bin/wordcraft-nightly-cli"
 export HOME="$work/home with space"
-unset XDG_CONFIG_HOME XDG_DATA_HOME
+# The launcher must not redirect XDG_* (the profile holds the state); the recorder prints them so
+# a regression to the environment model is visible.
+export XDG_CONFIG_HOME="$work/xdg config with space"
+export XDG_DATA_HOME="$work/xdg data with space"
 expect() {
   expected="$1"
   shift
@@ -44,12 +47,14 @@ expect() {
     exit 1
   fi
 }
-expect "$(printf 'XDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\n<>' "$HOME/.config/wordcraft-nightly" "$HOME/.local/share/wordcraft-nightly")"
-export XDG_CONFIG_HOME="$work/xdg config with space"
-export XDG_DATA_HOME="$work/xdg data with space"
-expect "$(printf 'XDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\n<%s>\n<%s>' "$XDG_CONFIG_HOME/wordcraft-nightly" "$XDG_DATA_HOME/wordcraft-nightly" 'doc with spaces.docx' '--other-name.docx')" \
+profile="$HOME/.local/share/wordcraft-nightly"
+prefix="$(printf 'XDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s' "$XDG_CONFIG_HOME" "$XDG_DATA_HOME")"
+expect "$(printf '%s\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>' "$prefix" \
+  --launch-profile nightly-v1 --profile-root "$profile" --)"
+expect "$(printf '%s\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>\n<%s>' "$prefix" \
+  --launch-profile nightly-v1 --profile-root "$profile" -- 'doc with spaces.docx' '--other-name.docx')" \
   'doc with spaces.docx' '--other-name.docx'
-expect "$(printf 'XDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\n<--version>' "$XDG_CONFIG_HOME" "$XDG_DATA_HOME")" --version
-expect "$(printf 'XDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\n<-V>' "$XDG_CONFIG_HOME" "$XDG_DATA_HOME")" -V
+expect "$(printf '%s\n<%s>' "$prefix" --version)" --version
+expect "$(printf '%s\n<%s>' "$prefix" -V)" -V
 
 echo "PASS: Arch Nightly handoff isolates the profile and preserves launch arguments"

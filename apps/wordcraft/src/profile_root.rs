@@ -11,6 +11,9 @@ use std::ffi::OsString;
 
 use std::path::{Component, Path, PathBuf};
 
+/// The app id of the nightly Flatpak this build ships in (`packaging/linux/flatpak-bundle.sh`).
+pub const NIGHTLY_FLATPAK_ID: &str = "ai.storyteller.wordcraft.nightly";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Platform {
     Windows,
@@ -205,9 +208,13 @@ fn validate_for(
     if env("WORDCRAFT_PROFILE_DIR").is_some_and(|v| !v.is_empty()) {
         return Err("nightly-v1 cannot be combined with WORDCRAFT_PROFILE_DIR".into());
     }
-    if platform != Platform::Windows && env("FLATPAK_ID").is_some_and(|v| !v.is_empty()) {
-        // These rows are native tar/app-bundle launches, not a Flatpak package. Inheriting its
-        // runtime namespace could point another profile at the stable app's token files.
+    // These rows are native tar/app-bundle launches, not a Flatpak package. Inheriting a Flatpak
+    // runtime could point another profile at the stable app's token files; the nightly Flatpak
+    // itself (`packaging/linux/flatpak-bundle.sh`) is the one sandbox this build ships in.
+    if platform != Platform::Windows
+        && let Some(id) = env("FLATPAK_ID").filter(|v| !v.is_empty())
+        && id != OsString::from(NIGHTLY_FLATPAK_ID)
+    {
         return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
     }
     let chosen = canonical_future(root)?;
@@ -467,6 +474,11 @@ mod tests {
         fixture.env.remove("WORDCRAFT_PROFILE_DIR");
         fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.wordcraft".into());
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("Flatpak"));
+        fixture.env.remove("FLATPAK_ID");
+        // The nightly Flatpak is the one sandbox this build ships in, so its own id is accepted.
+        let flatpak_profile = fixture.home().join("nightly/flatpak-profile");
+        fixture.env.insert("FLATPAK_ID".into(), NIGHTLY_FLATPAK_ID.into());
+        assert_eq!(fixture.check(Platform::Linux, &flatpak_profile).unwrap(), flatpak_profile);
         fixture.env.remove("FLATPAK_ID");
         fixture.env.remove("HOME");
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("HOME"));

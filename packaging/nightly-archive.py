@@ -33,7 +33,8 @@ def checked_entries(root, stage):
     total = 0
     for entry in entries:
         name = entry.name
-        if name not in {"wordcraft", "wordcraft-nightly.png"} and not notice(name):
+        # wordcraft is the launcher and wordcraft.real the binary it starts (nightly.sh).
+        if name not in {"wordcraft", "wordcraft.real", "wordcraft-nightly.png"} and not notice(name):
             raise ValueError(f"unexpected nightly member: {name}")
         if len(name.encode("utf-8")) > 100:
             raise ValueError(f"nightly member must be a short regular file: {name}")
@@ -44,7 +45,16 @@ def checked_entries(root, stage):
         if name.casefold() in folded:
             raise ValueError(f"case-colliding nightly member: {name}")
         folded.add(name.casefold())
-    required = {"wordcraft", "wordcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
+    required = {
+        "wordcraft",
+        "wordcraft.real",
+        "wordcraft-nightly.png",
+        "README.md",
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        "NOTICE",
+        "ATTRIBUTION.md",
+    }
     if not required.issubset({item.name for item in entries}):
         raise ValueError("required GUI/icon/notices missing")
     return entries

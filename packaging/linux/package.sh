@@ -103,10 +103,37 @@ fi
 
 has() { local item="$1"; case " $FORMATS " in *" $item "*) return 0 ;; *) return 1 ;; esac; }
 
+# The Nightly channel starts only through its own launch profile, which holds every piece of user
+# state (preferences, window place, logs, recovery, fonts, templates, the dictionary and the suite
+# font store). Redirecting XDG_* instead is refused: the build's root validator derives the stable
+# boundary from it, so the chosen profile would sit inside it. The real binary is always
+# ../lib/wordcraft-nightly/wordcraft beside the launcher, in the packages, the plain tar and the
+# Flatpak bundle built from that tar.
+nightly_launcher() {
+  cat <<'WRAPPER'
+#!/bin/sh
+set -eu
+real_bin="$(dirname "$0")/../lib/wordcraft-nightly/wordcraft"
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
+  exec "$real_bin" "$@"
+fi
+exec "$real_bin" --launch-profile nightly-v1 --profile-root "${HOME:?HOME is required}/.local/share/wordcraft-nightly" -- "$@"
+WRAPPER
+}
+
 # ---- .tar.gz ------------------------------------------------------------------------------------
 if has tar; then
   mkdir -p "$WORK/tar"
   cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    # An unpacked nightly tar is isolated too: the launcher keeps the desktop file's Exec
+    # (bin/wordcraft) and the real binary moves to lib/wordcraft-nightly/, the layout the
+    # deb/rpm wrapper and the Flatpak bundle built from this tar use as well.
+    install -d "$WORK/tar/$BASENAME/usr/lib/wordcraft-nightly"
+    mv "$WORK/tar/$BASENAME/usr/bin/wordcraft" "$WORK/tar/$BASENAME/usr/lib/wordcraft-nightly/wordcraft"
+    nightly_launcher >"$WORK/tar/$BASENAME/usr/bin/wordcraft"
+    chmod 755 "$WORK/tar/$BASENAME/usr/bin/wordcraft"
+  fi
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
@@ -142,16 +169,7 @@ if has deb || has rpm; then
     rm -rf "$NFPM_STAGE"
     cp -R "$STAGE" "$NFPM_STAGE"
     install -Dm755 "$NFPM_STAGE/usr/bin/wordcraft" "$NFPM_STAGE/usr/lib/wordcraft-nightly/wordcraft"
-    cat >"$NFPM_STAGE/usr/bin/$NFPM_BIN" <<'WRAPPER'
-#!/bin/sh
-set -eu
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
-  exec /usr/lib/wordcraft-nightly/wordcraft "$@"
-fi
-export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}/wordcraft-nightly"
-export XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/wordcraft-nightly"
-exec /usr/lib/wordcraft-nightly/wordcraft "$@"
-WRAPPER
+    nightly_launcher >"$NFPM_STAGE/usr/bin/$NFPM_BIN"
     chmod 755 "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     rm -f "$NFPM_STAGE/usr/bin/wordcraft"
     mv "$NFPM_STAGE/usr/bin/wordcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
@@ -168,6 +186,7 @@ WRAPPER
         -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
         -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
         -e "s|<binary>wordcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
+        -e '/<mediatype>/d' \
         "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml" >"$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
     rm -f "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
     rm -rf "$NFPM_STAGE/usr/share/mime"
@@ -230,13 +249,15 @@ if has appimage; then
     cat >"$APPDIR/AppRun" <<'WRAPPER'
 #!/bin/sh
 set -eu
+# A real file, not a symlink to the binary: the Nightly build starts only through its own launch
+# profile, which holds every piece of user state.
 HERE="$(dirname "$(readlink -f "$0")")"
+real_bin="$HERE/usr/bin/wordcraft"
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
-  exec "$HERE/usr/bin/wordcraft" "$@"
+  exec "$real_bin" "$@"
 fi
-export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}/wordcraft-nightly"
-export XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}/wordcraft-nightly"
-exec "$HERE/usr/bin/wordcraft" "$@"
+exec "$real_bin" --launch-profile nightly-v1 \
+  --profile-root "${HOME:?HOME is required}/.local/share/wordcraft-nightly" -- "$@"
 WRAPPER
     chmod 755 "$APPDIR/AppRun"
     sed -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \

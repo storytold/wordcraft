@@ -73,6 +73,7 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
       -e "s|<name>WordCraft</name>|<name>WordCraft Nightly</name>|g" \
       -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$FLATPAK_ID.desktop</launchable>|g" \
       -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$FLATPAK_ID</icon>|g" \
+      -e '/<mediatype>/d' \
       "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml" >"$WORK/stage/share/metainfo/$FLATPAK_ID.metainfo.xml"
   rm -f "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml"
   mv "$WORK/stage/share/mime/packages/$APP_ID.xml" "$WORK/stage/share/mime/packages/$FLATPAK_ID.xml"
@@ -81,8 +82,14 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
   [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
   install -Dm644 "$NIGHTLY_ICON" \
     "$WORK/stage/share/icons/hicolor/256x256/apps/$FLATPAK_ID.png"
+  # The nightly tar carries a launcher in bin/wordcraft and the real binary beside it in
+  # lib/wordcraft-nightly/; the bundle must install both. The launcher is the Flatpak's wrapper:
+  # inside the sandbox HOME is the app's own directory, so the profile stays private.
   sed -e "s|ai\.storyteller\.wordcraft|$FLATPAK_ID|g" \
+      -e 's|^\(      - install -Dm755 bin/wordcraft /app/bin/wordcraft\)$|\1\n      - install -Dm755 lib/wordcraft-nightly/wordcraft /app/lib/wordcraft-nightly/wordcraft|' \
       "$HERE/flatpak/$APP_ID.bundle.yml" >"$WORK/$FLATPAK_ID.yml"
+  grep -qx '      - install -Dm755 lib/wordcraft-nightly/wordcraft /app/lib/wordcraft-nightly/wordcraft' \
+    "$WORK/$FLATPAK_ID.yml" || { echo "error: the nightly manifest did not take the launcher's binary" >&2; exit 1; }
 else
   cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$FLATPAK_ID.yml"
 fi
