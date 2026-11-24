@@ -7390,6 +7390,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-collab-adapter"
+version = "0.18.1"
+dependencies = [
+ "craft-zip",
+ "wordcraft-doc",
+ "wordcraft-docx",
+ "wordcraft-engine",
+]
+
+[[package]]
 name = "wordcraft-control-key"
 version = "0.18.1"
 

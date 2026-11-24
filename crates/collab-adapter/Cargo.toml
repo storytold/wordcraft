@@ -1,0 +1,19 @@
+[package]
+name = "wordcraft-collab-adapter"
+description = "WordCraft adapter seam between the document model and the RFC-0020 live-session contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+wordcraft-doc = { workspace = true }
+
+[dev-dependencies]
+craft-zip = { workspace = true }
+wordcraft-docx = { workspace = true }
+wordcraft-engine = { workspace = true }
+
+[lints]
+workspace = true
