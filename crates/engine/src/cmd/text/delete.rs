@@ -92,8 +92,14 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
             s.autocap.as_ref().and_then(|c| c.pronoun_before_separator(&a, &f, s.undo_steps_so_far()))
             && matches!(para.text.get(start.off..f.off), Some("I " | "I," | "I." | "I;" | "I:" | "I!" | "I?"))
         {
+            // This restores a letter in place. Ordinary typing over a selection removes its link.
+            let props = para.props_of_char(start.off);
+            let linked_letter = props.link.as_ref().map(|_| props.clone());
             s.sel = Selection { anchor: start.clone(), focus: f.clone() };
-            let effect = crate::cmd::type_text_effect(s, "i")?;
+            let pending = std::mem::replace(&mut s.pending, linked_letter);
+            let effect = crate::cmd::type_text_effect(s, "i");
+            s.pending = pending;
+            let effect = effect?;
             if let Some(c) = &mut s.autocap {
                 c.note_backspace(&start, &f);
             }

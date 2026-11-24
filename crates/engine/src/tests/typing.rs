@@ -2914,6 +2914,23 @@ fn restoring_a_lowercase_i_preserves_the_deleted_separators_formatting_for_typin
     assert!(!bold_at(&s, 4), "the deleted separator was plain");
 }
 
+#[test]
+fn restoring_a_lowercase_i_keeps_its_hyperlink() {
+    let mut s = typed("so ");
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "ab"}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 4}}));
+    typ(&mut s, " i ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So a I b");
+    assert_eq!(links(&s), [("a I b".into(), false)]);
+
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So a ib");
+    assert_eq!(links(&s), [("a ib".into(), false)]);
+    typ(&mut s, "x");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "So a ixb");
+    assert_eq!(links(&s), [("a ib".into(), false)], "the next letter uses the unlinked separator formatting");
+}
+
 /// Checked in Word for Mac: the same rule as First Letter.
 #[test]
 fn undoing_an_initial_caps_fix_adds_an_initial_caps_exception() {
