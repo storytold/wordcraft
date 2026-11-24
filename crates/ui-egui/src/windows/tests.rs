@@ -546,8 +546,10 @@ fn nul_in_the_document_title_never_reaches_an_os_window_title() {
 }
 
 /// Issue #117: a viewport command schedules a repaint, so resending an unchanged window title every
-/// frame would keep the app redrawing at the monitor's refresh rate while idle. The window host
-/// deduplicates `SetTitle` per viewport so idle frames emit no `ViewportCommand::Title`.
+/// frame would keep the app redrawing at the monitor's refresh rate while idle. WordCraft supplies
+/// a stable `window_title()` to `AppShell` every frame so `craft-libs` (`ui-contract` windows
+/// `native.rs`) deduplicates `SetTitle` per viewport and idle frames emit no
+/// `ViewportCommand::Title`.
 #[test]
 fn window_title_is_sent_only_when_it_changes() {
     let mut rig = Rig::new();
@@ -574,9 +576,10 @@ fn window_title_is_sent_only_when_it_changes() {
     assert!(titles(&mut rig, &mut a).is_empty(), "steady state after edit sends no title");
 }
 
-/// When the root window closes and another open window is promoted into the root viewport, the
-/// root viewport receives the promoted window's title (per-viewport deduplication, not per-window)
-/// and sends no further title commands while idle.
+/// When the root window closes and WordCraft promotes another open window into the root viewport,
+/// `WordApp::paint_window` supplies the promoted window's `window_title()` every frame so
+/// `ViewportId::ROOT` receives the new title once and emits no further `ViewportCommand::Title`
+/// while idle (per-viewport deduplication lives in `craft-libs` `ui-contract` windows `native.rs`).
 #[test]
 fn root_viewport_receives_promoted_windows_title_after_root_closes() {
     let mut rig = Rig::new();
