@@ -850,11 +850,13 @@ fn web_layout_fills_the_window_width() {
     frame(&mut a, 1400.0, tick);
     assert_eq!(a.session.view.web_width, wide, "no change without a resize");
     let page = first_page(&a).unwrap();
-    // The page view keeps a side gutter clear (the rail width, S-L: the framework's page spacing); the page fills the
-    // rest of the window, so it neither overflows to the right nor leaves more than the gutter on the left.
-    let gutter = 40.0; // the `size.rail.width` token the page view keeps clear
-    assert!(page.left() <= gutter + 4.0, "page starts at the left gutter: {page:?}");
-    assert!(page.right() <= 1400.0 - gutter + 4.0, "page ends before the right gutter: {page:?}");
+    // The page view keeps its `PageSpacing::side` gutter clear on both sides; the page fills the rest of the window,
+    // so it uses the full room up to the PageView gutter rather than the wider rail width, without overflowing.
+    let gutter = a.canvas.page_side.expect("page view records its side gutter");
+    let rail = craft::ui::runtime::env::Env::of_root(&ctx).tokens.size.rail.width;
+    assert!(gutter < rail, "Productivity PageView gutter ({gutter}) is narrower than the rail width ({rail})");
+    assert!((page.left() - gutter).abs() <= 4.0, "page starts at the left gutter ({gutter}): {page:?}");
+    assert!(page.right() >= 1400.0 - gutter - 4.0 && page.right() <= 1400.0 - gutter + 4.0, "page fills to the right gutter ({gutter}): {page:?}");
     // A window drag: the width holds while the size keeps changing, then follows once it settles.
     for w in [1300.0, 1100.0, 900.0, 700.0, 500.0] {
         frame(&mut a, w, tick);
@@ -887,6 +889,23 @@ fn web_layout_fills_the_window_width() {
         frame(&mut a, 1400.0, tick);
     }
     assert_eq!(lines(&mut a), print_lines, "Print Layout is unchanged");
+
+    // Entering Web Layout before any prior PageView pass still settles to PageView's side gutter.
+    let fresh_ctx = crate::test_harness::context();
+    let mut fresh = app();
+    fresh.run("view.webLayout", json!({})).unwrap();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 740.0));
+    for step in 1..=2 {
+        let input = egui::RawInput { events: vec![], time: Some(step as f64 * tick), screen_rect: Some(screen), ..Default::default() };
+        crate::test_harness::pass(&fresh_ctx, &mut fresh, input);
+    }
+    let fresh_gutter = fresh.canvas.page_side.expect("page view records its side gutter on first Web Layout pass");
+    let fresh_page = first_page(&fresh).unwrap();
+    assert!((fresh_page.left() - fresh_gutter).abs() <= 4.0, "fresh Web Layout starts at the left gutter ({fresh_gutter}): {fresh_page:?}");
+    assert!(
+        fresh_page.right() >= 1400.0 - fresh_gutter - 4.0 && fresh_page.right() <= 1400.0 - fresh_gutter + 4.0,
+        "fresh Web Layout fills to the right gutter ({fresh_gutter}): {fresh_page:?}"
+    );
 }
 
 /// #688: dragging a selection past the viewport's edge scrolls the view toward the pointer, and the

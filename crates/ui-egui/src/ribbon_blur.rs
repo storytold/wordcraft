@@ -202,7 +202,8 @@ pub fn update(app: &mut WordApp, ctx: &Context) {
         return;
     }
     let Some(view) = app.canvas.view_rect() else { return };
-    refresh_thumbs(app, view.min.y);
+    let preview = crate::canvas::table_preview_active(app);
+    let preview_thumbs = refresh_thumbs(app, view.min.y, preview);
     let Some((layer, idx, ribbon)) = slot else { return };
     let t = crate::theme::Tokens::get(ctx);
     let paper = paper_of(app);
@@ -212,7 +213,10 @@ pub fn update(app: &mut WordApp, ctx: &Context) {
         .laid_page_rects()
         .iter()
         .enumerate()
-        .map(|(i, r)| PageView { rect: r.translate(shift), thumb: app.canvas.blur.thumbs.get(&i).map(|(_, thumb)| thumb), paper })
+        .map(|(i, r)| {
+            let thumb = if preview { preview_thumbs.get(&i) } else { app.canvas.blur.thumbs.get(&i).map(|(_, thumb)| thumb) };
+            PageView { rect: r.translate(shift), thumb, paper }
+        })
         .collect();
     let id = upload(ctx, compose(ribbon, &pages, t.canvas));
     let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -227,7 +231,8 @@ pub fn update(app: &mut WordApp, ctx: &Context) {
 
 /// Keep a thumbnail for each page in the band above the view's top, refreshed when the document, font or dark paper
 /// changes. Table previews use their matching layout and document and are not cached.
-fn refresh_thumbs(app: &mut WordApp, view_top: f32) {
+fn refresh_thumbs(app: &mut WordApp, view_top: f32, preview: bool) -> HashMap<usize, Thumb> {
+    let mut preview_thumbs = HashMap::new();
     let wanted: Vec<usize> = app
         .canvas
         .laid_page_rects()
@@ -244,7 +249,6 @@ fn refresh_thumbs(app: &mut WordApp, view_top: f32) {
         app.font_generation.hash(&mut h);
         h.finish()
     };
-    let preview = crate::canvas::table_preview_active(app);
     let layout = crate::canvas::visible_layout(app);
     for i in wanted {
         if !preview && app.canvas.blur.thumbs.get(&i).is_some_and(|(k, _)| *k == key) {
@@ -258,8 +262,11 @@ fn refresh_thumbs(app: &mut WordApp, view_top: f32) {
         let thumb = Thumb::of(&ci, paper_of(app));
         if !preview {
             app.canvas.blur.thumbs.insert(i, (key, thumb));
+        } else {
+            preview_thumbs.insert(i, thumb);
         }
     }
+    preview_thumbs
 }
 
 /// The colour of a page's paper.

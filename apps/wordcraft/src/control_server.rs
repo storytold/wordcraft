@@ -123,4 +123,107 @@ mod tests {
         assert!(supplied.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn boot() -> (u16, Receiver<ControlRequest>, Control) {
+        let options = ControlOptions { token: Some(TOKEN.to_string()), ..ControlOptions::default() };
+        let (rx, control) = start(&options, 0, host(), None).unwrap();
+        let port = control.listening.addr.port();
+        (port, rx, control)
+    }
+
+    /// Answer the next request that reaches the UI with `ok`, and return it.
+    fn answer(rx: &Receiver<ControlRequest>) -> ControlRequest {
+        let req = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let _ = req.reply.send(serde_json::json!({"ok": true, "result": {}}));
+        req
+    }
+
+    /// One connection, several lines.
+    struct Conn(std::io::BufReader<std::net::TcpStream>, std::net::TcpStream);
+
+    impl Conn {
+        fn open(port: u16) -> Self {
+            let s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            Self(std::io::BufReader::new(s.try_clone().unwrap()), s)
+        }
+        fn send(&mut self, line: &str) {
+            use std::io::Write;
+            writeln!(self.1, "{line}").unwrap();
+        }
+        fn recv(&mut self) -> serde_json::Value {
+            use std::io::BufRead;
+            let mut r = String::new();
+            let n = self.0.read_line(&mut r).expect("read reply line");
+            assert!(n > 0, "unexpected EOF while waiting for reply");
+            serde_json::from_str(&r).expect("reply is valid JSON")
+        }
+        fn call(&mut self, line: &str) -> serde_json::Value {
+            self.send(line);
+            self.recv()
+        }
+        /// The server closed the connection.
+        fn closed(&mut self) -> bool {
+            use std::io::BufRead;
+            let mut r = String::new();
+            match self.0.read_line(&mut r) {
+                Ok(0) => true,
+                Err(e) => matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::BrokenPipe
+                ),
+                _ => false,
+            }
+        }
+    }
+
+    /// Post-#7101 adaptation of `the_key_on_each_request` (#124, tracked under #7317 / #7720):
+    /// `craft::automation::server` replaced the legacy per-request `"key"` field with one-time
+    /// per-connection token authentication (`docs/control-protocol.md`, Token).
+    #[test]
+    fn a_connection_authenticates_once_with_the_token_and_unauthenticated_requests_are_refused() {
+        let (port, rx, control) = boot();
+
+        // Authenticate once per connection with `params.token`.
+        let mut c = Conn::open(port);
+        let auth_resp = c.call(&format!(r#"{{"id":1,"method":"auth","params":{{"token":"{TOKEN}"}}}}"#));
+        assert_eq!(auth_resp, serde_json::json!({"id": 1, "ok": true, "result": {"authenticated": true}}));
+
+        // Subsequent requests on the authenticated connection carry no token and reach the UI.
+        c.send(r#"{"id":7,"method":"document.inspect","params":{"text":true}}"#);
+        let req = answer(&rx);
+        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &serde_json::json!({"text": true})));
+        let r = c.recv();
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(7)));
+
+        c.send(r#"{"id":8,"method":"document.inspect","params":{"text":false}}"#);
+        let req = answer(&rx);
+        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &serde_json::json!({"text": false})));
+        let r = c.recv();
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(8)));
+        drop(c);
+
+        // An unauthenticated connection is refused and closed without reaching the UI.
+        let mut unauth = Conn::open(port);
+        let r = unauth.call(r#"{"id":9,"method":"document.inspect"}"#);
+        assert_eq!(r, serde_json::json!({"id": 9, "ok": false, "error": "authentication required"}));
+        assert!(unauth.closed());
+        assert!(rx.try_recv().is_err(), "unauthenticated request must not reach the UI");
+        drop(unauth);
+
+        // Legacy pre-#7101 per-request `"key"` does not bypass `auth` and closes the connection.
+        let mut legacy = Conn::open(port);
+        let r = legacy.call(&format!(r#"{{"id":10,"key":"{TOKEN}","method":"document.inspect","params":{{"text":true}}}}"#));
+        assert_eq!(r, serde_json::json!({"id": 10, "ok": false, "error": "authentication required"}));
+        assert!(legacy.closed());
+        assert!(rx.try_recv().is_err(), "legacy per-request key must not reach the UI");
+        drop(legacy);
+
+        control.shut_down();
+    }
 }

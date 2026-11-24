@@ -127,7 +127,11 @@ fn discover_printers(a: &mut WordApp) {
     }
     // Discovery runs on native hosts only: where the test host isn't one, the app has found the
     // recorder's printer and chosen it, as `native_print.rs` sets its own up.
-    let name = if a.printing.settings.printer.is_empty() { "Test queue".to_string() } else { a.printing.settings.printer.clone() };
+    let name = if crate::printing::printer_name(&a.printing.settings).is_empty() {
+        "Test queue".to_string()
+    } else {
+        crate::printing::printer_name(&a.printing.settings).to_string()
+    };
     if !a.printing.printers.iter().any(|p| p.name == name) {
         a.printing.printers.push(crate::printing::Printer::new(name.clone()).is_default(true));
     }
@@ -634,7 +638,7 @@ fn return_on_the_print_page_prints() {
 fn a_successful_native_print_returns_to_the_document() {
     for ok in [true, false] {
         let mut a = app();
-        a.printing.settings.printer = "Test Printer".into();
+        a.printing.settings.destination = crate::printing::Destination::Printer("Test Printer".into());
         a.services.print = Some(Recorder::new(if ok { Reply::Sent } else { Reply::Fail("no paper") }).with_printers(["Test Printer"]).spool());
         discover_printers(&mut a);
         a.run("file.print", json!({})).unwrap();
@@ -666,7 +670,7 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
     let mut texts: [Option<String>; 2] = [None, None];
     for (never_sent, close_document) in [(true, false), (false, false), (true, true), (false, true)] {
         let mut a = app();
-        a.printing.settings.printer = "Office".into();
+        a.printing.settings.destination = crate::printing::Destination::Printer("Office".into());
         a.printing.settings.copies = 3;
         // The worker never answers, as when the driver doesn't.
         let rec = Recorder::cancelling(Reply::Hold, never_sent).with_printers(["Office"]);
@@ -688,7 +692,7 @@ fn cancelling_a_waiting_print_job_frees_the_print_page() {
         assert_eq!(reply["cancelled"], never_sent);
         assert_eq!(rec.asked_to_cancel(), 1, "the backend was asked to stop the job");
         assert_eq!(a.printing.busy(), !never_sent, "never_sent {never_sent}: whether the page is still locked");
-        assert_eq!(a.printing.settings.printer, "Office", "the chosen printer is kept");
+        assert_eq!(crate::printing::printer_name(&a.printing.settings), "Office", "the chosen printer is kept");
         assert_eq!(a.printing.settings.copies, 3, "the settings are kept");
         assert_eq!(a.printing.printers.len(), 1, "the printer list is kept");
         let text = said(&a);
