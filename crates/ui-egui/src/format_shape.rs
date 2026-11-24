@@ -446,7 +446,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
         });
         crate::undo_marks::apply_edits(app, events, move |app, v: Option<f64>| {
             if let Some(val) = v.filter(|val| (1.0..=4000.0).contains(val)) {
-                let _ = app.run("picture.size", json!({ key: val, "lockAspect": false }));
+                let _ = app.run("shape.size", json!({ key: val, "lockAspect": false }));
             }
         });
     }
@@ -463,7 +463,7 @@ fn layout_section(app: &mut WordApp, ui: &mut Ui, layout: &CurrentLayout) {
     });
     crate::undo_marks::apply_edits(app, rot_events, |app, v: Option<f64>| {
         if let Some(degrees) = v.filter(|d| (0.0..=360.0).contains(d)) {
-            let _ = app.run("arrange.rotation", json!({"degrees": degrees}));
+            let _ = app.run("shape.rotation", json!({"degrees": degrees}));
         }
     });
 
@@ -1064,5 +1064,104 @@ mod tests {
         assert!(h.state_mut().dialog_host.confirm::<craft::color_ui::ui::ColorPickerDialog>(&ctx));
         crate::dialogs::host::settle(h.state_mut(), &ctx);
         assert_eq!(stroke(h.state()), Some(wordcraft_doc::Rgb(255, 0, 0)));
+    }
+
+    fn png_data() -> String {
+        let img = image::RgbaImage::from_fn(20, 10, |x, y| {
+            if x > 2 && x < 17 && y > 2 && y < 7 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        let b = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(img), image::ImageFormat::Png).unwrap();
+        wordcraft_engine::cmd::insert::base64_encode(&b)
+    }
+
+    fn body_objects(app: &WordApp) -> Vec<&InlineObject> {
+        let para = app.session.doc.body.first().and_then(|b| b.as_para()).unwrap();
+        para.object_offsets().into_iter().filter_map(|off| para.object_at(off)).collect()
+    }
+
+    fn edit_layout_spin(h: &mut egui_kittest::Harness<'static, WordApp>, label: &str, text: &str) {
+        let mut matches: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, label).collect();
+        let node = matches.pop().expect("layout spin button");
+        drop(matches);
+        node.click();
+        crate::test_harness::frames(h, 2);
+        let mut matches: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, label).collect();
+        matches.pop().expect("layout spin button").type_text(text);
+        crate::test_harness::frames(h, 2);
+        h.key_press(egui::Key::Enter);
+        crate::test_harness::frames(h, 3);
+    }
+
+    /// Issue #5896: with a Picture and a Shape selected (distinct dimensions and rotation),
+    /// Format Shape shows the shape's layout and Width/Height/Rotation only edit the shape.
+    #[test]
+    fn format_shape_pane_mixed_picture_and_shape_shows_and_updates_shape_only() {
+        use egui_kittest::kittest::NodeT;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.picture", json!({"data": png_data()})).unwrap();
+        a.run("picture.size", json!({"width": 60.0, "height": 40.0, "lockAspect": false})).unwrap();
+        a.run("arrange.rotation", json!({"degrees": 15.0})).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(a.session.doc.end_of(wordcraft_doc::StoryRef::Body));
+        a.run("insert.shape", json!({"kind": "rectangle", "width": 150.0, "height": 90.0})).unwrap();
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("select.addObject", json!({"index": 1})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+
+        let shown_layout = super::current_layout(&a).expect("mixed selection has shape layout");
+        assert_eq!((shown_layout.width, shown_layout.height, shown_layout.rotation), (150.0, 90.0, 0.0));
+
+        let mut h = harness(a);
+        h.run_steps(4);
+        let width_val = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, "Width").last().unwrap().accesskit_node().numeric_value();
+        let height_val = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Height").accesskit_node().numeric_value();
+        let rot_val = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Rotation").accesskit_node().numeric_value();
+        assert_eq!(width_val, Some(150.0));
+        assert_eq!(height_val, Some(90.0));
+        assert_eq!(rot_val, Some(0.0));
+
+        edit_layout_spin(&mut h, "Width", "210");
+        edit_layout_spin(&mut h, "Height", "115");
+        edit_layout_spin(&mut h, "Rotation", "35");
+
+        let objs = body_objects(h.state());
+        assert_eq!(objs.len(), 2);
+        let (pw, ph, pf) = objs[0].frame().unwrap();
+        assert_eq!((pw, ph, pf.spin().deg), (60.0, 40.0, 15.0), "picture dimensions and rotation stay untouched");
+        let (sw, sh, sf) = objs[1].frame().unwrap();
+        assert_eq!((sw, sh, sf.spin().deg), (210.0, 115.0, 35.0), "shape updated by Format Shape layout controls");
+        assert_eq!(wordcraft_engine::cmd::objects::picked_objects(&h.state().session).len(), 2, "multi-selection preserved");
+    }
+
+    /// Issue #5896: with an editable Chart and a Shape selected (distinct dimensions),
+    /// Format Shape shows the shape's layout and Width/Height only edit the shape.
+    #[test]
+    fn format_shape_pane_mixed_chart_and_shape_shows_and_updates_shape_only() {
+        use egui_kittest::kittest::NodeT;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.chart", json!({"type": "column"})).unwrap();
+        let (chart_w0, chart_h0, _) = body_objects(&a)[0].frame().unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(a.session.doc.end_of(wordcraft_doc::StoryRef::Body));
+        a.run("insert.shape", json!({"kind": "rectangle", "width": 140.0, "height": 70.0})).unwrap();
+        assert_ne!((chart_w0, chart_h0), (140.0, 70.0), "distinct initial dimensions");
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("select.addObject", json!({"index": 1})).unwrap();
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
+
+        let mut h = harness(a);
+        h.run_steps(4);
+        let width_val = h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, "Width").last().unwrap().accesskit_node().numeric_value();
+        let height_val = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Height").accesskit_node().numeric_value();
+        assert_eq!(width_val, Some(140.0));
+        assert_eq!(height_val, Some(70.0));
+
+        edit_layout_spin(&mut h, "Width", "220");
+        edit_layout_spin(&mut h, "Height", "105");
+
+        let objs = body_objects(h.state());
+        assert_eq!(objs.len(), 2);
+        let (cw, ch, _) = objs[0].frame().unwrap();
+        assert_eq!((cw, ch), (chart_w0, chart_h0), "chart dimensions stay untouched");
+        let (sw, sh, _) = objs[1].frame().unwrap();
+        assert_eq!((sw, sh), (220.0, 105.0), "shape updated by Format Shape layout controls");
     }
 }

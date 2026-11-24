@@ -2206,3 +2206,42 @@ fn chart_primary_with_added_shape_allows_rotation() {
     assert_eq!(chart_f.spin().deg, 0.0);
     assert_eq!(shape_f.spin().deg, 135.0);
 }
+
+/// Issue #5896: `shape.size` and `shape.rotation` only change shapes/canvases in a mixed
+/// Picture + Chart + Shape selection, while generic `picture.size` keeps resizing all targets.
+#[test]
+fn shape_size_and_rotation_only_affect_shapes_in_mixed_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let data = super::super::insert::base64_encode(&png(12, 12));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("picture.size", &json!({"width": 60.0, "height": 40.0, "lockAspect": false})).unwrap();
+    s.run("arrange.rotation", &json!({"degrees": 10.0})).unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.chart", &json!({"type": "column"})).unwrap();
+    let (chart_w0, chart_h0, _) = all_objects(&s)[1].1.frame().unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 150.0, "height": 80.0})).unwrap();
+
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+    s.run("select.addObject", &json!({"index": 2})).unwrap();
+
+    s.run("shape.size", &json!({"width": 210.0, "lockAspect": false})).unwrap();
+    s.run("shape.rotation", &json!({"degrees": 45.0})).unwrap();
+    assert_eq!(picked_objects(&s).len(), 3, "multi-selection preserved across shape.size and shape.rotation");
+
+    let objs = all_objects(&s);
+    let (pw, ph, pf) = objs[0].1.frame().unwrap();
+    assert_eq!((pw, ph, pf.spin().deg), (60.0, 40.0, 10.0), "picture untouched by shape.size/rotation");
+    let (cw, ch, _) = objs[1].1.frame().unwrap();
+    assert_eq!((cw, ch), (chart_w0, chart_h0), "chart untouched by shape.size");
+    let (sw, sh, sf) = objs[2].1.frame().unwrap();
+    assert_eq!((sw, sh, sf.spin().deg), (210.0, 80.0, 45.0), "shape updated");
+
+    // Generic picture.size continues to resize every sizable object in the selection.
+    s.run("picture.size", &json!({"width": 180.0, "lockAspect": false})).unwrap();
+    let objs2 = all_objects(&s);
+    assert_eq!(objs2[0].1.frame().unwrap().0, 180.0);
+    assert_eq!(objs2[1].1.frame().unwrap().0, 180.0);
+    assert_eq!(objs2[2].1.frame().unwrap().0, 180.0);
+}

@@ -92,9 +92,14 @@ pub(super) fn has_group(s: &Session) -> Option<&'static str> {
     }
 }
 
+/// Whether `o` is a shape, text box, or drawing canvas.
+pub(crate) fn is_shape_or_canvas(o: &InlineObject) -> bool {
+    matches!(o, InlineObject::Shape { .. }) || o.is_canvas()
+}
+
 /// Shape Fill and Shape Outline: any selected shape or Drawing Canvas, or the active text box.
 pub(crate) fn has_shape_or_canvas(s: &Session) -> Option<&'static str> {
-    if target_objects(s, |o| matches!(o, InlineObject::Shape { .. }) || o.is_canvas()).is_empty() { Some("select a shape first") } else { None }
+    if target_objects(s, is_shape_or_canvas).is_empty() { Some("select a shape first") } else { None }
 }
 
 pub(super) fn can_group(s: &Session) -> Option<&'static str> {
@@ -286,9 +291,9 @@ pub(super) fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
     with_obj(s, |o| apply_float(o, &f))
 }
 
-/// Mutates `Float` on all selected movable objects (or the active text box).
-pub(super) fn with_movable_floats(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
-    let targets = target_objects(s, |o| !matches!(o, InlineObject::Graphic { .. }) && o.is_drawing());
+/// Mutates `Float` on all selected targets matching `pred` (or the active text box if it matches).
+pub(super) fn with_floats_matching(s: &mut Session, pred: impl Fn(&InlineObject) -> bool, f: impl Fn(&mut Float)) -> CmdResult {
+    let targets = target_objects(s, pred);
     if targets.is_empty() {
         return Err(CmdError::Disabled("no picture or shape selected".into()));
     }
@@ -298,6 +303,11 @@ pub(super) fn with_movable_floats(s: &mut Session, f: impl Fn(&mut Float)) -> Cm
         last = serde_json::to_value(o).unwrap_or(Value::Null);
     }
     Ok(json!({"object": last, "count": targets.len()}))
+}
+
+/// Mutates `Float` on all selected movable objects (or the active text box).
+pub(super) fn with_movable_floats(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
+    with_floats_matching(s, |o| !matches!(o, InlineObject::Graphic { .. }) && o.is_drawing(), f)
 }
 
 /// The selected pictures, shapes, text boxes and groups: the one the selection holds, then

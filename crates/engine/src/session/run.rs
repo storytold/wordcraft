@@ -450,6 +450,8 @@ impl Session {
                     "shape.fill"
                         | "shape.effects"
                         | "shape.outline"
+                        | "shape.size"
+                        | "shape.rotation"
                         | "picture.size"
                         | "arrange.rotate"
                         | "arrange.rotation"

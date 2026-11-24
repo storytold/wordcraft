@@ -1,4 +1,4 @@
-use super::select::{edit_obj, obj_size, selected, target_objects, with_obj};
+use super::select::{edit_obj, is_shape_or_canvas, obj_size, selected, target_objects, with_obj};
 use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, Value, Wrap, json, p};
 use wordcraft_doc::picfx::PicFx;
 
@@ -123,16 +123,10 @@ fn planned_size(s: &Session, o: &InlineObject, v: &Value) -> Result<(f32, f32), 
     }
 }
 
-/// Size: `scale` is a percentage of the current size, or with `original` of what the crop leaves
-/// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
-/// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
-pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
-    let targets = target_objects(s, |o| match o {
-        InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() || graphic.smart_art.is_some(),
-        _ => o.is_drawing(),
-    });
+fn size_matching(s: &mut Session, v: &Value, pred: impl Fn(&InlineObject) -> bool, empty_msg: &str) -> CmdResult {
+    let targets = target_objects(s, pred);
     if targets.is_empty() {
-        return Err(CmdError::Disabled("no object".into()));
+        return Err(CmdError::Disabled(empty_msg.into()));
     }
     let planned: Vec<(Pos, f32, f32)> =
         targets.into_iter().map(|(pos, o)| planned_size(s, &o, v).map(|(w, h)| (pos, w, h))).collect::<Result<Vec<_>, _>>()?;
@@ -149,6 +143,26 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
         last = serde_json::to_value(o).unwrap_or(Value::Null);
     }
     Ok(json!({"object": last, "count": planned.len()}))
+}
+
+/// Size: `scale` is a percentage of the current size, or with `original` of what the crop leaves
+/// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
+/// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
+pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
+    size_matching(
+        s,
+        v,
+        |o| match o {
+            InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() || graphic.smart_art.is_some(),
+            _ => o.is_drawing(),
+        },
+        "no object",
+    )
+}
+
+/// Shape Size: resizes only selected shapes, text boxes, and drawing canvases (or the active text box).
+pub(super) fn shape_size(s: &mut Session, v: &Value) -> CmdResult {
+    size_matching(s, v, is_shape_or_canvas, "no shape selected")
 }
 
 /// An object size within 1–4000 pt. With `keep`, both sides scale by one factor, the one nearest

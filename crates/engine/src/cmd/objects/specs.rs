@@ -1,14 +1,23 @@
 use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
-use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
+use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, shape_size, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_any_movable, has_any_shape, has_floating, has_group, has_movable, has_object, has_picture,
-    has_placeable, has_shape, has_shape_or_canvas, has_sizable, obj_size, objects_list, selected_or_text_box, target_objects, with_float,
-    with_movable_floats, with_obj,
+    has_placeable, has_shape, has_shape_or_canvas, has_sizable, is_shape_or_canvas, obj_size, objects_list, selected_or_text_box, target_objects,
+    with_float, with_floats_matching, with_movable_floats, with_obj,
 };
 use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_body, shape_effects, text_box_target};
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
 use wordcraft_doc::picfx::PicFx;
+
+fn run_rotation(s: &mut crate::Session, v: &serde_json::Value, pred: impl Fn(&InlineObject) -> bool) -> crate::CmdResult {
+    let deg = p::req_f32(v, "degrees")?;
+    let (fh, fv) = (p::bool(v, "flipH"), p::bool(v, "flipV"));
+    with_floats_matching(s, pred, |f| {
+        let cur = f.spin();
+        f.set_spin(Spin::new(deg, fh.unwrap_or(cur.flip_h), fv.unwrap_or(cur.flip_v)));
+    })
+}
 
 /// Returns the section properties of the target object's anchor story (including text boxes anchored
 /// in a later body section or header/footer), falling back to `page::sect`.
@@ -208,12 +217,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"direction": "right|left|flipVertical|flipHorizontal"}  (turns 90° or mirrors the selected picture, shape or text box; its pixels are kept)"#)
         .when(has_any_movable),
         CommandSpec::new("arrange.rotation", "Rotation", "Layout › Arrange", |s, v| {
-            let deg = p::req_f32(v, "degrees")?;
-            let (fh, fv) = (p::bool(v, "flipH"), p::bool(v, "flipV"));
-            with_movable_floats(s, |f| {
-                let cur = f.spin();
-                f.set_spin(Spin::new(deg, fh.unwrap_or(cur.flip_h), fv.unwrap_or(cur.flip_v)));
-            })
+            run_rotation(s, v, |o| !matches!(o, InlineObject::Graphic { .. }) && o.is_drawing())
         })
         .params(r#"{"degrees": number, "flipH"?: bool, "flipV"?: bool}  (the exact angle, clockwise, of the selected picture, shape or text box; normalised to 0–360)"#)
         .when(has_any_movable),
@@ -351,7 +355,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(parsed)
                 }
             };
-            let targets = target_objects(s, |o| matches!(o, InlineObject::Shape { .. }) || o.is_canvas());
+            let targets = target_objects(s, is_shape_or_canvas);
             if targets.is_empty() {
                 return Err(CmdError::Disabled("no shape selected".into()));
             }
@@ -388,6 +392,12 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color"?: "RRGGBB" | null, "width"?: pt, "dash"?: "solid|dot|dash|lgDash|dashDot|lgDashDot|lgDashDotDot|sysDash|sysDot|sysDashDot|sysDashDotDot", "cap"?: "flat|rnd|sq"}  (a selected drawing canvas: its border)"#)
         .when(has_shape_or_canvas),
+        CommandSpec::new("shape.size", "Size", "Shape Format › Size", shape_size)
+            .params(r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent} (resizes the selected shapes, text boxes, and drawing canvases, or the active text box)"#)
+            .when(has_shape_or_canvas),
+        CommandSpec::new("shape.rotation", "Rotation", "Shape Format › Arrange", |s, v| run_rotation(s, v, is_shape_or_canvas))
+            .params(r#"{"degrees": number, "flipH"?: bool, "flipV"?: bool}  (rotates the selected shapes, text boxes, and drawing canvases, or the active text box)"#)
+            .when(has_shape_or_canvas),
         CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
             .params(
                 r#"{"shadow"?: preset|{"preset"?, "color"?: "RRGGBB", "transparency"?: %, "blur"?: pt, "distance"?: pt, "angle"?: deg}|null, "glow"?: pt|{"color"?: "RRGGBB", "size"?: pt, "transparency"?: %}|null, "softEdge"?: pt|null}  (shadow presets: offsetBottomRight, offsetBottom, offsetBottomLeft, offsetRight, offsetCenter, offsetLeft, offsetTopRight, offsetTop, offsetTopLeft; an omitted key is left as it is; applies to every shape in the selection)"#,
