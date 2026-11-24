@@ -7453,6 +7453,124 @@ fn justified_line_with_leading_tab_shrinks_spaces() {
     }
 }
 
+/// #5847: fit-time and final space compression apply only after left/default tabs, not after
+/// right, center, or decimal tabs whose anchors are resolved with unshrunk widths.
+#[test]
+fn justified_line_with_non_left_tab_preserves_anchor_and_does_not_shrink() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let para = |text: &str, right: f32, tabs: Vec<TabStop>| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(Align::Justify), indent_right: Some(right), tabs: Some(tabs), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first_pl = |d: &Document| {
+        let l = lay(d);
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap()
+    };
+
+    // 1. Right tab past the usable right edge: multiword run is absorbed against the stop and
+    // must keep its final edge at the stop rather than shrinking left of it.
+    let right_text = "lead\tnnnn nnnn nnnn";
+    let right_stop = 280.0;
+    let right_edge = 240.0;
+    let right_tabs = vec![TabStop { pos: right_stop, align: TabAlign::Right, leader: Default::default() }];
+    let right_unconstrained = para(right_text, 0.0, right_tabs.clone());
+    let full = right_unconstrained.last_section.text_width();
+    let pl_right_unconstrained = first_pl(&right_unconstrained);
+    let pl_right = first_pl(&para(right_text, full - right_edge, right_tabs));
+    assert_eq!(pl_right.lines.len(), 1, "absorbed multiword run after right tab stays on line 0");
+    assert!(
+        (pl_right.x_of(0, right_text.len()).unwrap() - right_stop).abs() < 0.01,
+        "right-tabbed multiword run must remain aligned to stop {right_stop}, got {:?}",
+        pl_right.x_of(0, right_text.len())
+    );
+    for k in 0..=right_text.len() {
+        assert_eq!(pl_right.x_of(0, k), pl_right_unconstrained.x_of(0, k), "char {k} after right tab must not shrink");
+    }
+
+    // 2. Decimal tab on an overfull line: spaces before the decimal point must not shrink and
+    // pull the decimal point left of its stop.
+    let dec_text = "\t12 34.56789";
+    let dec_stop = 200.0;
+    let dec_tabs = vec![TabStop { pos: dec_stop, align: TabAlign::Decimal, leader: Default::default() }];
+    let dec_unconstrained = para(dec_text, 0.0, dec_tabs.clone());
+    let pl_dec_unconstrained = first_pl(&dec_unconstrained);
+    let dot_idx = dec_text.find('.').unwrap();
+    let dec_end = pl_dec_unconstrained.x_of(0, dec_text.len()).unwrap();
+    let pl_dec = first_pl(&para(dec_text, full - (dec_end - 5.0), dec_tabs));
+    assert_eq!(pl_dec.lines.len(), 1, "decimal-tabbed run stays on line 0");
+    assert_eq!(
+        pl_dec.x_of(0, dot_idx),
+        pl_dec_unconstrained.x_of(0, dot_idx),
+        "decimal point must keep its unconstrained anchor on an overfull line"
+    );
+    for k in 0..=dec_text.len() {
+        assert_eq!(pl_dec.x_of(0, k), pl_dec_unconstrained.x_of(0, k), "char {k} after decimal tab must not shrink");
+    }
+
+    // 3. Center tab:
+    // (a) Overfull center-tabbed line must not run final compression and shift off its stop.
+    let center_overfull_text = "\taaaaaaaaaa bbbbbbbbbb";
+    let center_overfull_stop = 250.0;
+    let center_overfull_tabs = vec![TabStop { pos: center_overfull_stop, align: TabAlign::Center, leader: Default::default() }];
+    let center_unconstrained = para(center_overfull_text, 0.0, center_overfull_tabs.clone());
+    let pl_center_unconstrained = first_pl(&center_unconstrained);
+    let pl_center_overfull = first_pl(&para(center_overfull_text, full - 260.0, center_overfull_tabs));
+    assert_eq!(pl_center_overfull.lines.len(), 1, "overfull center-tabbed line stays on line 0");
+    let mid = (pl_center_overfull.x_of(0, 1).unwrap() + pl_center_overfull.x_of(0, center_overfull_text.len()).unwrap()) / 2.0;
+    assert!((mid - center_overfull_stop).abs() < 0.01, "centered midpoint {mid} must stay at {center_overfull_stop}");
+    for k in 0..=center_overfull_text.len() {
+        assert_eq!(pl_center_overfull.x_of(0, k), pl_center_unconstrained.x_of(0, k), "char {k} after center tab must not shrink");
+    }
+
+    // (b) Fit-time compression must not pull an overflowing trailing word onto a non-left-tabbed line.
+    let probe = para("n n i", 0.0, Vec::new());
+    let pl_probe = first_pl(&probe);
+    let sw = pl_probe.x_of(0, 2).unwrap() - pl_probe.x_of(0, 1).unwrap();
+    let w_i = pl_probe.x_of(0, 5).unwrap() - pl_probe.x_of(0, 4).unwrap();
+    let prefix = "n ".repeat(12);
+    let fit_text = format!("\t{prefix}i");
+    let pl_prefix = first_pl(&para(&prefix, 0.0, Vec::new()));
+    let w_pre = pl_prefix.x_of(0, prefix.len()).unwrap();
+    let room = (0.25 * 12.0 * sw).min(0.355 * (sw + w_i));
+    let fit_edge = w_pre + w_i - (room - 0.1);
+    for align in [TabAlign::Right, TabAlign::Center, TabAlign::Decimal] {
+        let pl_fit = first_pl(&para(&fit_text, full - fit_edge, vec![TabStop { pos: 3.0, align, leader: Default::default() }]));
+        assert_eq!(pl_fit.lines.len(), 2, "{align:?} tab must not use fit-time space shrinking to accept 'i'");
+    }
+
+    // 4. Right tab followed by a left tab: spaces after the final left tab still shrink while the
+    // earlier right tab keeps its anchor.
+    let word = "nnnn";
+    let n = 12;
+    let right_seg = "aa bb";
+    let pl_w = first_pl(&para(&format!("{word} {word}"), 0.0, Vec::new()));
+    let w = pl_w.x_of(0, word.len()).unwrap();
+    let left_room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let mixed_text = format!("\t{right_seg}\t{}", vec![word; 3 * n].join(" "));
+    let mixed_right_stop = 120.0;
+    let mixed_left_stop = 160.0;
+    let mixed_width = mixed_left_stop + (n + 1) as f32 * w + n as f32 * sw - (left_room - 0.1);
+    let pl_mixed = first_pl(&para(
+        &mixed_text,
+        full - mixed_width,
+        vec![
+            TabStop { pos: mixed_right_stop, align: TabAlign::Right, leader: Default::default() },
+            TabStop { pos: mixed_left_stop, align: TabAlign::Left, leader: Default::default() },
+        ],
+    ));
+    assert!(
+        (pl_mixed.x_of(0, 1 + right_seg.len()).unwrap() - mixed_right_stop).abs() < 0.01,
+        "earlier right tab must keep its stop {mixed_right_stop}"
+    );
+    let first_line_words = mixed_text[pl_mixed.lines[0].start..pl_mixed.lines[0].stop].split('\t').nth(2).unwrap_or("").split_whitespace().count();
+    assert_eq!(first_line_words, n + 1, "spaces after final left tab still shrink");
+}
+
 #[test]
 fn space_shrinking_is_only_for_justified_text() {
     crate::test_fonts();

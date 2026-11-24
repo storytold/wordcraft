@@ -23,8 +23,8 @@ pub(super) fn space_room(spaces: f32, word: f32) -> f32 {
 }
 
 /// Take `-slack` (an overflow) out of the line's inner spaces from `from` on (after the line's last
-/// tab), in proportion to their widths and never more than [`MAX_SPACE_SHRINK`] of them. Trailing
-/// spaces hang and are left alone.
+/// left/default tab), in proportion to their widths and never more than [`MAX_SPACE_SHRINK`] of them.
+/// Trailing spaces hang and are left alone.
 ///
 /// `c0` is the first cluster on the line, and `from` is where space shrinking begins (the cluster
 /// following the line's last tab, or `c0` when there are no tabs on the line). `c1` is the end of

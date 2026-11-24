@@ -25,7 +25,7 @@ struct Breaker<'e> {
     /// Where default tab stops are counted from (see [`next_tab`]).
     tab_origin: f32,
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
-    /// spaces (`space_room`); on a line with tabs, only the spaces after the last one.
+    /// spaces (`space_room`); on a line with tabs, only the spaces after a final left/default tab.
     shrink_spaces: bool,
     /// Word 2003's indent rules (`w:doNotSuppressIndentation`) before Word 2013's layout, for an
     /// unnumbered paragraph: a row starts right after a floating object before the indent.
@@ -102,6 +102,11 @@ struct Scan {
     decimal: Option<DecimalScan>,
     /// The width of the spaces so far on this line, after its last tab.
     space_w: f32,
+    /// Whether spaces after the last tab so far may shrink (true initially and after left/default
+    /// tabs; false after right, center, or decimal tabs whose anchors use unshrunk widths).
+    shrink_tab: bool,
+    /// Tab cluster indices on this line whose alignment is not `TabAlign::Left`.
+    non_left_tabs: Vec<usize>,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
 }
@@ -305,6 +310,8 @@ impl<'e> Breaker<'e> {
             pending_tab: None,
             decimal: None,
             space_w: 0.0,
+            shrink_tab: true,
+            non_left_tabs: Vec::new(),
             skip: false,
         }
     }
@@ -601,8 +608,10 @@ impl<'e> Breaker<'e> {
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
         let justify = display.is_none() && ((align == Align::Justify && stretch_end) || align == Align::Distribute);
-        // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
-        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0;
+        // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too,
+        // unless its last tab is a non-left tab whose anchor was resolved with unshrunk widths.
+        let can_shrink_tab = last_tab.is_none_or(|k| !sc.non_left_tabs.contains(&k));
+        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && can_shrink_tab;
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, (c0, align_from), c1, content_end, slack);
         } else if justify && slack > 0.0 {
@@ -876,6 +885,10 @@ impl Scan {
     /// decimal tab).
     fn place_tab(&mut self, pl: &mut ParaLayout, stop: TabStop) {
         let j = self.j;
+        self.shrink_tab = stop.align == TabAlign::Left;
+        if !self.shrink_tab {
+            self.non_left_tabs.push(j);
+        }
         match stop.align {
             TabAlign::Left | TabAlign::Bar | TabAlign::Clear => {
                 let w = (stop.pos - self.x).max(0.0);
@@ -916,7 +929,11 @@ impl Scan {
         // each segment's font, glyphs and position for painting.
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
-        let shrink = if bk.shrink_spaces { space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from) } else { 0.0 };
+        let shrink = if bk.shrink_spaces && self.shrink_tab {
+            space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
+        } else {
+            0.0
+        };
         let fits = absorbs
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
@@ -1052,6 +1069,7 @@ impl Scan {
             self.last_break = Some(tj - 1);
             self.pending_tab = None;
             self.leaders.retain(|(k, _)| *k < tj);
+            self.non_left_tabs.retain(|&k| k < tj);
         }
     }
 

@@ -516,6 +516,7 @@ mod tests {
             read_line_spacing: None,
             fit_objects: false,
             fitted: &[],
+            joined: false,
         };
         let mut p = Paragraph::with_text("n n n n\tWordWithoutSpaces", chr);
         p.props = ParaProps {
