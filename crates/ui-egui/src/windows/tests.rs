@@ -552,17 +552,26 @@ fn nul_in_the_document_title_never_reaches_an_os_window_title() {
 fn window_title_is_sent_only_when_it_changes() {
     let mut rig = Rig::new();
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-    let titles = |rig: &mut Rig, a: &mut WordApp| {
+    let titles = |rig: &mut Rig, a: &mut WordApp| -> Vec<(ViewportId, String)> {
         rig.frame(a);
-        rig.commands.iter().filter(|(_, c)| matches!(c, ViewportCommand::Title(_))).count()
+        rig.commands
+            .iter()
+            .filter_map(|(v, c)| match c {
+                ViewportCommand::Title(t) => Some((*v, t.clone())),
+                _ => None,
+            })
+            .collect()
     };
+    let initial_title = a.window_title();
     // The title goes out on the first frame that sets it.
-    assert_eq!(titles(&mut rig, &mut a), 1, "first frame sends the window title");
-    assert_eq!(titles(&mut rig, &mut a), 0, "subsequent idle frame sends no title");
-    assert_eq!(titles(&mut rig, &mut a), 0, "steady idle sends no title");
+    assert_eq!(titles(&mut rig, &mut a), vec![(ViewportId::ROOT, initial_title.clone())], "first frame sends the window title");
+    assert!(titles(&mut rig, &mut a).is_empty(), "subsequent idle frame sends no title");
+    assert!(titles(&mut rig, &mut a).is_empty(), "steady idle sends no title");
     a.run("text.insert", json!({"text": "edit"})).unwrap();
-    assert_eq!(titles(&mut rig, &mut a), 1, "dirty document changes the title stem, sending it once");
-    assert_eq!(titles(&mut rig, &mut a), 0, "steady state after edit sends no title");
+    let dirty_title = a.window_title();
+    assert_ne!(dirty_title, initial_title, "editing the document changes the window title");
+    assert_eq!(titles(&mut rig, &mut a), vec![(ViewportId::ROOT, dirty_title)], "dirty document changes the title stem, sending it once");
+    assert!(titles(&mut rig, &mut a).is_empty(), "steady state after edit sends no title");
 }
 
 /// When the root window closes and another open window is promoted into the root viewport, the
