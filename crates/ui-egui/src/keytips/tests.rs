@@ -96,6 +96,88 @@ fn legacy_menu_keys_stay_off_the_ribbon_letters_and_all_resolve() {
     }
 }
 
+/// #1697 review: with no ribbon showing (Focus, Full Screen View) no tab rects are recorded,
+/// so the legacy hint hangs under the slim screen bar at the top of the window instead of not
+/// showing; with the ribbon showing (normal window or dropped ribbon in Focus) it hangs under
+/// the tab row.
+#[test]
+fn the_legacy_hint_hangs_under_the_slim_bar_without_a_ribbon() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let trigger_legacy_v = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+        crate::test_harness::frame(h);
+        h.input_mut().events.extend([key_event(egui::Key::V, true, egui::Modifiers::NONE), egui::Event::Text("v".into())]);
+        crate::test_harness::frames(h, 2);
+    };
+    let cancel = |h: &mut egui_kittest::Harness<'static, WordApp>| {
+        h.input_mut().events.push(key_event(egui::Key::Escape, true, egui::Modifiers::NONE));
+        crate::test_harness::frames(h, 2);
+    };
+
+    let mut h = harness(app());
+    let home_tab = h.get_by_label("Home").rect();
+    trigger_legacy_v(&mut h);
+    assert!(h.state().keytips_active, "F10, V enters legacy keytip wait with the ribbon showing");
+    assert!(h.query_by_label("Old menu keys: Alt, V. Keep typing, or press Esc to cancel.").is_some(), "hint displays pending Alt, V sequence");
+    let ribbon_hint = h.get_by_role_and_label(Role::Dialog, "Old menu keys").rect();
+    assert!(ribbon_hint.top() >= home_tab.bottom() - 1.0, "legacy hint {ribbon_hint:?} hangs under the ribbon tab row {home_tab:?}");
+    cancel(&mut h);
+    assert!(!h.state().keytips_active, "Escape ends legacy keytips");
+    assert!(h.query_by_role_and_label(Role::Dialog, "Old menu keys").is_none(), "hint closes on Escape");
+
+    // Focus hides the ribbon and shows the slim screen bar at the top.
+    h.state_mut().run("view.focus", serde_json::json!({})).unwrap();
+    crate::test_harness::frames(&mut h, 3);
+    assert!(h.query_by_label("Insert").is_none(), "Focus hides the ribbon");
+    let focus_bar = h.get_by_label("Show the ribbon").rect();
+    trigger_legacy_v(&mut h);
+    assert!(h.state().keytips_active, "F10, V activates legacy keytips in Focus mode");
+    let focus_hint = h.get_by_role_and_label(Role::Dialog, "Old menu keys").rect();
+    assert!(
+        focus_hint.top() >= focus_bar.bottom() - 1.0 && focus_hint.top() < ribbon_hint.top(),
+        "Focus legacy hint {focus_hint:?} hangs under the slim screen bar {focus_bar:?} (above ribbon hint {ribbon_hint:?})"
+    );
+    assert!(focus_hint.width() < 720.0, "Focus hint {focus_hint:?} sizes to its content rather than stretching across the screen bar");
+    cancel(&mut h);
+    assert!(!h.state().keytips_active, "Escape ends legacy keytips in Focus");
+    assert!(h.state().session.view.focus_mode, "Escape cancelling legacy keytips keeps Focus active");
+
+    // When Focus drops the ribbon down, the tab row wins over the screen bar.
+    h.state_mut().run("ui.focusRibbon", serde_json::json!({"value": true})).unwrap();
+    crate::test_harness::frames(&mut h, 3);
+    let dropped_tab = h.get_by_label("Home").rect();
+    trigger_legacy_v(&mut h);
+    let dropped_hint = h.get_by_role_and_label(Role::Dialog, "Old menu keys").rect();
+    assert!(
+        dropped_hint.top() >= dropped_tab.bottom() - 1.0 && dropped_hint.top() > focus_hint.top(),
+        "dropped-ribbon hint {dropped_hint:?} hangs under the dropped tab row {dropped_tab:?}"
+    );
+    cancel(&mut h);
+
+    // Full Screen View hides the ribbon and shows the slim screen bar with Search.
+    h.state_mut().run("view.focus", serde_json::json!({})).unwrap();
+    h.state_mut().run("view.fullScreenView", serde_json::json!({})).unwrap();
+    crate::test_harness::frames(&mut h, 3);
+    assert!(h.query_by_label("Insert").is_none(), "Full Screen View hides the ribbon");
+    let search_bar = h.get_by_label("Search commands and help").rect();
+    trigger_legacy_v(&mut h);
+    assert!(h.state().keytips_active, "F10, V activates legacy keytips in Full Screen View");
+    let fs_hint = h.get_by_role_and_label(Role::Dialog, "Old menu keys").rect();
+    assert!(
+        fs_hint.top() >= search_bar.bottom() - 1.0 && fs_hint.top() < ribbon_hint.top(),
+        "Full Screen View legacy hint {fs_hint:?} hangs under the slim screen bar {search_bar:?} (above ribbon hint {ribbon_hint:?})"
+    );
+    assert!(fs_hint.width() < 720.0, "Full Screen View hint {fs_hint:?} sizes to its content rather than stretching across the screen bar");
+    h.input_mut().events.extend([key_event(egui::Key::U, true, egui::Modifiers::NONE), egui::Event::Text("u".into())]);
+    crate::test_harness::frames(&mut h, 3);
+    assert!(!h.state().session.view.full_screen_view, "Alt/F10, V, U leaves Full Screen View");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "no letter typed into the document");
+}
+
 #[test]
 fn qat_keytips_follow_custom_order_and_skip_disabled_commands() {
     let mut a = app();
