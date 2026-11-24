@@ -75,7 +75,7 @@ fn close_hides_the_pane_and_reset_reads_the_document_again() {
 fn a_new_picture_pick_lands_in_the_draft() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Background")), Default::default());
     a.ctx = Some(egui::Context::default());
-    a.finish_pick(crate::file_dialogs::AfterPick::BackgroundPicture, Some("picked.png".into())).expect("the pick lands in the draft");
+    a.finish_pick(crate::file_dialogs::AfterPick::BackgroundPicture, Some("picked.png".into()), None).expect("the pick lands in the draft");
     assert!(
         matches!(a.background.fill, crate::format_background::DraftFill::Picture { ref path, .. } if path.as_deref() == Some("picked.png")),
         "the new pick is the draft"

@@ -630,9 +630,9 @@ fn exporting_word_xml_over_a_word_2003_file_writes_word_xml() {
     let path = dir.join("letter.xml").to_string_lossy().into_owned();
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
-    a.finish_pick(AfterPick::Export { ext: crate::print_page::EXPORT_WORD_2003.into() }, Some(path.clone())).unwrap();
+    a.finish_pick(AfterPick::Export { ext: crate::print_page::EXPORT_WORD_2003.into() }, Some(path.clone()), None).unwrap();
     assert!(std::fs::read_to_string(&path).unwrap().contains("w:wordDocument"));
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(path.clone())).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(path.clone()), None).unwrap();
     let xml = std::fs::read_to_string(&path).unwrap();
     assert!(xml.contains("pkg:package") && !xml.contains("w:wordDocument"), "Word XML, not Word 2003 XML");
     let _ = std::fs::remove_dir_all(&dir);
@@ -646,19 +646,19 @@ fn exporting_word_xml_to_a_name_without_xml_appends_the_extension() {
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
     let bare = dir.join("letter").to_string_lossy().into_owned();
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare), None).unwrap();
     let xml = std::fs::read_to_string(dir.join("letter.xml")).unwrap();
     assert!(xml.contains("pkg:package"), "Word XML written at letter.xml");
     // A known document extension gives way to .xml; an unknown one stays.
     let docx = dir.join("notes.docx").to_string_lossy().into_owned();
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(docx)).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(docx), None).unwrap();
     assert!(dir.join("notes.xml").is_file());
     let v2 = dir.join("notes.v2").to_string_lossy().into_owned();
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(v2)).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(v2), None).unwrap();
     assert!(dir.join("notes.v2.xml").is_file());
     // The resulting name already exists: the system dialog never confirmed it, so refuse.
     let bare = dir.join("letter").to_string_lossy().into_owned();
-    assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).is_err());
+    assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare), None).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -672,7 +672,7 @@ fn exporting_word_xml_to_a_dotfile_name_writes_the_file() {
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
     for format in ["xml", crate::print_page::EXPORT_WORD_2003] {
         let typed = dir.join(".docx").to_string_lossy().into_owned();
-        a.finish_pick(AfterPick::Export { ext: format.into() }, Some(typed)).unwrap();
+        a.finish_pick(AfterPick::Export { ext: format.into() }, Some(typed), None).unwrap();
         let written = dir.join(".docx.xml");
         assert!(std::fs::read_to_string(&written).unwrap().contains(if format == "xml" { "pkg:package" } else { "w:wordDocument" }));
         let _ = std::fs::remove_file(&written);
@@ -766,12 +766,12 @@ fn an_imported_sources_file_adds_its_sources() {
     )
     .unwrap();
     let (mut a, _) = async_app();
-    a.finish_pick(AfterPick::Sources, Some(xml.to_string_lossy().to_string())).unwrap();
+    a.finish_pick(AfterPick::Sources, Some(xml.to_string_lossy().to_string()), None).unwrap();
     assert_eq!(a.session.doc.sources.len(), 1);
     assert_eq!(a.session.doc.sources[0].tag, "Riv21");
     assert!(status_text(&a).contains("Imported 1 source"), "{}", status_text(&a));
-    assert_eq!(a.finish_pick(AfterPick::Sources, None).unwrap(), json!({"cancelled": true}));
-    a.finish_pick(AfterPick::Sources, Some(xml.to_string_lossy().to_string())).unwrap();
+    assert_eq!(a.finish_pick(AfterPick::Sources, None, None).unwrap(), json!({"cancelled": true}));
+    a.finish_pick(AfterPick::Sources, Some(xml.to_string_lossy().to_string()), None).unwrap();
     assert_eq!(a.session.doc.sources.len(), 1, "the tag is already here");
     assert_eq!(status_text(&a), "No new sources in that file");
     let _ = std::fs::remove_dir_all(&dir);
