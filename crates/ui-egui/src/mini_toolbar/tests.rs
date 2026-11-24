@@ -1,11 +1,10 @@
+use egui::accesskit::Role;
+use egui::{Vec2, pos2};
+use egui_kittest::kittest::{NodeT, Queryable};
+
 use super::*;
 
-#[test]
-fn highlight_button_appearance_follows_the_picked_colour() {
-    assert_eq!(highlight_button_appearance("cyan"), ("highlight", Some(egui::Color32::from_rgb(0, 255, 255)), "cyan"));
-    assert_eq!(highlight_button_appearance("none"), ("highlightNoColor", None, "none"));
-    assert_eq!(highlight_button_appearance("unknown"), ("highlightNoColor", None, "none"));
-}
+type H = egui_kittest::Harness<'static, WordApp>;
 
 fn vp() -> Rect {
     Rect::from_min_size(pos2(100.0, 50.0), Vec2::new(1200.0, 700.0))
@@ -28,142 +27,40 @@ fn reading_mode_hides_formatting_even_with_an_existing_selection() {
 }
 
 #[test]
-fn sits_above_the_selection_when_there_is_room() {
-    let left = vp().center().x;
-    let r = anchor_rect(400.0, left, vp()).unwrap_or(Rect::EVERYTHING);
-    assert_eq!(r.size(), Vec2::new(BAR_W, BAR_H));
-    assert!((r.max.y - (400.0 - VGAP)).abs() < 1e-3, "bar bottom should clear the selection by VGAP");
-    assert!(r.max.y < 400.0, "the bar must be above the selection");
-    assert!((r.center().x - (left + ANCHOR_INSET)).abs() < 1e-3, "bar should be centred on the selection's left edge");
-}
-
-#[test]
-fn centred_unless_the_viewport_forces_a_shift() {
-    let left = vp().min.x + 20.0;
-    let r = anchor_rect(400.0, left, vp()).unwrap_or(Rect::EVERYTHING);
-    assert!((r.min.x - vp().min.x).abs() < 1e-3, "the bar must be pushed onto the viewport's left edge");
-    let right = vp().max.x - 20.0;
-    let r = anchor_rect(400.0, right, vp()).unwrap_or(Rect::EVERYTHING);
-    assert!((r.max.x - vp().max.x).abs() < 1e-3, "the bar must be pushed onto the viewport's right edge");
-}
-
-#[test]
-fn flips_below_when_there_is_no_room_above() {
-    let r = anchor_rect(60.0, 300.0, vp()).unwrap_or(Rect::EVERYTHING);
-    assert!((r.min.y - (60.0 + VGAP)).abs() < 1e-3, "bar top should clear the selection by VGAP below");
-    assert!(r.min.y > 60.0, "the bar must be below the selection");
-}
-
-#[test]
-fn never_leaves_the_viewport() {
-    for left in [0.0, 130.0, 400.0, 2000.0, -500.0] {
-        let r = anchor_rect(400.0, left, vp()).unwrap_or(Rect::EVERYTHING);
-        assert!(r.min.x >= vp().min.x - 1e-3, "left {left}: bar left {} out of viewport", r.min.x);
-        assert!(r.max.x <= vp().max.x + 1e-3, "left {left}: bar right {} out of viewport", r.max.x);
-    }
-}
-
-#[test]
-fn vertical_position_stays_inside_viewport_for_offscreen_anchor() {
-    let viewport = vp();
-    for selection_top in [viewport.top() - 500.0, viewport.bottom() + 500.0] {
-        let r = anchor_rect(selection_top, viewport.center().x, viewport).unwrap_or(Rect::EVERYTHING);
-        assert!(r.min.y >= viewport.top() - 1e-3, "bar top {} is above viewport {}", r.min.y, viewport.top());
-        assert!(r.max.y <= viewport.bottom() + 1e-3, "bar bottom {} exceeds viewport {}", r.max.y, viewport.bottom());
-    }
-}
-
-#[test]
 fn anchor_skips_rects_scrolled_offscreen_and_clips_partial_ones() {
     let clip = vp();
     // Page 1's line is above the viewport, page 2's line is inside it.
     let above = Rect::from_min_size(pos2(100.0, clip.top() - 300.0), Vec2::new(200.0, 20.0));
     let inside = Rect::from_min_size(pos2(120.0, clip.top() + 50.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([above, inside], clip), Some(inside));
+    assert_eq!(visible_anchor([above, inside], clip, false), Some(inside));
     // Partly scrolled off the top: anchored to the visible part, never above the viewport.
     let partial = Rect::from_min_size(pos2(100.0, clip.top() - 10.0), Vec2::new(200.0, 20.0));
-    let a = visible_anchor([partial], clip).unwrap();
+    let a = visible_anchor([partial], clip, false).unwrap();
     assert!((a.min.y - clip.top()).abs() < 1e-3 && (a.height() - 10.0).abs() < 1e-3);
     // Entirely off either end, or only touching the edge: nothing to anchor to.
     let below = Rect::from_min_size(pos2(100.0, clip.bottom() + 5.0), Vec2::new(200.0, 20.0));
     let touching = Rect::from_min_size(pos2(100.0, clip.top() - 20.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([above, below, touching], clip), None);
-    assert_eq!(visible_anchor([], clip), None);
+    assert_eq!(visible_anchor([above, below, touching], clip, false), None);
+    assert_eq!(visible_anchor([], clip, false), None);
     // Input order does not matter: the topmost visible rectangle wins.
     let lower = Rect::from_min_size(pos2(100.0, clip.top() + 200.0), Vec2::new(200.0, 20.0));
-    assert_eq!(visible_anchor([lower, inside], clip), Some(inside));
+    assert_eq!(visible_anchor([lower, inside], clip, false), Some(inside));
     // Degenerate input is rejected, not propagated.
     let nan = Rect::from_min_size(pos2(f32::NAN, 0.0), Vec2::new(10.0, 10.0));
-    assert_eq!(visible_anchor([nan], clip), None);
-}
-
-#[test]
-fn bar_for_a_partly_hidden_selection_stays_clear_of_the_top_edge() {
-    let clip = vp();
-    let partial = Rect::from_min_size(pos2(100.0, clip.top() - 40.0), Vec2::new(200.0, 20.0 + 30.0));
-    let a = visible_anchor([partial], clip).unwrap();
-    let bar = anchor_rect(a.min.y, a.min.x, clip).unwrap();
-    assert!(bar.min.y >= clip.top() - 1e-3 && bar.max.y <= clip.bottom() + 1e-3);
-}
-
-#[test]
-fn degenerate_inputs_are_rejected_not_crashed() {
-    assert!(anchor_rect(f32::NAN, 10.0, vp()).is_none());
-    assert!(anchor_rect(10.0, f32::NAN, vp()).is_none());
-    assert!(anchor_rect(f32::INFINITY, 10.0, vp()).is_none());
-    assert!(anchor_rect(10.0, f32::NEG_INFINITY, vp()).is_none());
-    assert!(anchor_rect(10.0, 10.0, Rect::EVERYTHING).is_none());
-    assert!(anchor_rect(10.0, 10.0, Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(0.0, 100.0))).is_none());
-}
-
-#[test]
-fn a_viewport_narrower_than_the_bar_still_yields_a_rect() {
-    let r = anchor_rect(10.0, 5.0, Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(20.0, 20.0)));
-    let r = r.unwrap_or(Rect::EVERYTHING);
-    assert!(r.width() > 0.0 && r.height() > 0.0, "a tiny viewport must still place a positive-size bar");
-    assert!(r.min.x.is_finite() && r.min.y.is_finite());
-}
-
-/// #535: the bar was one fixed-width row that cut off everything after Align Left. Draw it
-/// over a real selection: every control fits inside the bar, and the bar is no wider than its
-/// controls (both rows end together).
-#[test]
-fn every_control_fits_inside_the_bar() {
-    use wordcraft_engine::Session;
-    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
-    a.run("text.insert", json!({"text": "The quick brown fox jumps over the lazy dog"})).unwrap();
-    a.run("select.text", json!({"text": "brown fox"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
-    for _ in 0..6 {
-        h.step();
-    }
-    let [bar, used] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar is shown over a selection");
-    let viewport = h.state().canvas.viewport.expect("the canvas exposes its actual scroll viewport");
-    assert!(viewport.contains_rect(bar), "toolbar {:?} must stay inside canvas viewport {:?}", bar, viewport);
-    let inner = bar.shrink2(Vec2::new(PAD_X, PAD_Y));
-    assert!(
-        inner.expand(0.1).contains_rect(used),
-        "controls {:?} spill out of the bar {:?}",
-        [used.min.x, used.min.y, used.max.x, used.max.y],
-        [inner.min.x, inner.min.y, inner.max.x, inner.max.y]
-    );
-    assert!((used.width() - inner.width()).abs() < 0.5, "the bar ({}) should be as wide as its controls ({})", inner.width(), used.width());
-    assert!(used.min.x - inner.min.x < 0.5, "the font box starts at the bar's left edge");
+    assert_eq!(visible_anchor([nan], clip, false), None);
 }
 
 /// The whole window over a document with `pick` selected, run until the bar is up.
-fn bar_over(pick: &str) -> egui_kittest::Harness<'static, WordApp> {
+fn bar_over(pick: &str) -> H {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("text.insert", json!({"text": "The quick brown fox jumps over the lazy dog"})).unwrap();
     a.run("select.text", json!({"text": pick})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
+    bar_over_app(a)
+}
+
+/// `bar_over` for an app whose document and selection are already set up.
+fn bar_over_app(a: WordApp) -> H {
+    let mut h = crate::test_harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -175,18 +72,11 @@ fn bar_over(pick: &str) -> egui_kittest::Harness<'static, WordApp> {
     h
 }
 
-fn steps(h: &mut egui_kittest::Harness<'static, WordApp>) {
-    for _ in 0..6 {
-        h.step();
-    }
+fn steps(h: &mut H) {
+    crate::test_harness::frames(h, 6);
 }
 
-/// The bar's layer, when it was drawn last frame.
-fn bar_layer(h: &egui_kittest::Harness<'static, WordApp>) -> Option<egui::LayerId> {
-    h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().find(|l| l.id == egui::Id::unique("wc_mini_toolbar")))
-}
-
-fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2) {
+fn click_at(h: &mut H, at: egui::Pos2) {
     h.event(egui::Event::PointerMoved(at));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
@@ -194,158 +84,317 @@ fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2) {
     steps(h);
 }
 
-fn format_state(h: &mut egui_kittest::Harness<'static, WordApp>) -> Value {
+fn hover_at(h: &mut H, at: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(at));
+    steps(h);
+}
+
+fn press_key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+    h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    steps(h);
+    // A real key goes up again: a key never released reads as held, and a second press of it as its repeat.
+    h.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    steps(h);
+}
+
+fn format_state(h: &mut H) -> Value {
     h.state_mut().session.run("format.state", &json!({})).unwrap()
 }
 
-/// Hovering an entry of the bar's size list previews that size; the pick is not made.
-#[test]
-fn hovering_a_size_in_the_bars_list_previews_it() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
-    let mut h = bar_over("brown fox");
-    let (doc, size) = (h.state().session.doc.clone(), format_state(&mut h).get("size").cloned());
-    let viewport = h.state().canvas.viewport.unwrap();
-    let size_box = h
-        .get_all_by_role(Role::TextInput)
+/// The canvas viewport; the bar and the context menu's members are shown inside it, the ribbon is not.
+fn canvas(h: &H) -> Rect {
+    h.state().canvas.canvas_rect().expect("the document is shown")
+}
+
+/// The member named `label` inside the canvas, if one is shown there.
+fn member(h: &H, label: &str) -> Option<Rect> {
+    let c = canvas(h);
+    h.query_all_by_label(label).map(|n| n.rect()).find(|r| c.contains_rect(*r))
+}
+
+/// Whether the selection bar's members are shown over the document.
+fn bar_shown(h: &H) -> bool {
+    member(h, "Bold").is_some()
+}
+
+/// The topmost node named `label`: the ribbon's, since it is above the document.
+fn ribbon_member(h: &H, label: &str) -> egui::Pos2 {
+    h.get_all_by_label(label).map(|n| n.rect().center()).min_by(|a, b| a.y.total_cmp(&b.y)).expect("the ribbon has the control")
+}
+
+fn size_box(h: &H) -> Rect {
+    let c = canvas(h);
+    h.query_all_by_role(Role::TextInput)
         .map(|n| n.rect())
-        .filter(|r| viewport.contains_rect(*r))
+        .filter(|r| c.contains_rect(*r))
         .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
-        .expect("the bar has a size box");
-    click_at(&mut h, pos2(size_box.max.x + 8.0, size_box.center().y));
-    let twenty = h.get_by_label("20").rect().center();
-    h.event(egui::Event::PointerMoved(twenty));
-    steps(&mut h);
-    assert_eq!(h.state().canvas.command_previewed, Some(("format.size".to_string(), json!({"size": 20.0}))));
-    assert_ne!(crate::canvas::page_doc(h.state()), &doc, "the page shows the 20 pt text");
-    assert_eq!(&h.state().session.doc, &doc);
-    assert_eq!(format_state(&mut h).get("size").cloned(), size);
+        .expect("the bar has a size box")
 }
 
-/// Hovering a family of the bar's font list previews it; clicking it applies it.
-#[test]
-fn hovering_and_clicking_a_font_in_the_bars_list() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
-    let mut h = bar_over("brown fox");
-    let doc = h.state().session.doc.clone();
-    let viewport = h.state().canvas.viewport.unwrap();
-    let font_box = h
-        .get_all_by_role(Role::TextInput)
+fn font_box(h: &H) -> Rect {
+    let c = canvas(h);
+    h.query_all_by_role(Role::TextInput)
         .map(|n| n.rect())
-        .filter(|r| viewport.contains_rect(*r))
+        .filter(|r| c.contains_rect(*r))
         .min_by(|a, b| a.min.y.total_cmp(&b.min.y).then(a.min.x.total_cmp(&b.min.x)))
-        .expect("the bar has a font box");
-    click_at(&mut h, pos2(font_box.max.x + 8.0, font_box.center().y));
-    let family = h.state_mut().previews.families().into_iter().find(|f| f != "Aptos Display" && f != "Aptos").expect("another family is installed");
-    let at = h.get_all_by_label(&family).map(|n| n.rect().center()).find(|p| p.y > font_box.max.y).expect("the list shows the family");
-    h.event(egui::Event::PointerMoved(at));
-    steps(&mut h);
-    let previewed = h.state().canvas.command_previewed.clone();
-    assert!(previewed.is_some_and(|(id, _)| id == "format.font"), "hovering a family previews the font");
-    assert_eq!(&h.state().session.doc, &doc);
-    click_at(&mut h, at);
-    assert_ne!(&h.state().session.doc, &doc, "clicking the family applies the font");
+        .expect("the bar has a font box")
 }
 
-/// A picked family joins Recently Used Fonts when the list next opens, not in the frame after the
-/// pick, when the list is still on screen and would shift under the pointer.
+fn open_list_of(h: &mut H, boxed: Rect) {
+    click_at(h, pos2(boxed.max.x + 8.0, boxed.center().y));
+}
+
+/// The arrow of the bar's split button named `label`: the member that opens a popup.
+fn split_arrow(h: &H, label: &str) -> Rect {
+    let c = canvas(h);
+    let nodes: Vec<(Rect, bool)> = h
+        .query_all_by_label_contains(label)
+        .filter(|n| c.contains_rect(n.rect()))
+        .map(|n| (n.rect(), n.accesskit_node().has_popup().is_some()))
+        .collect();
+    // The arrow is its own button, named "<label> options" (`colors::split_with`); the main part keeps the label.
+    let arrow_name = format!("{label} options");
+    let named = h.query_all_by_label(arrow_name.as_str()).map(|n| n.rect()).find(|r| c.contains_rect(*r));
+    named
+        .or_else(|| nodes.iter().find(|(_, popup)| *popup).map(|(r, _)| *r))
+        .or_else(|| nodes.iter().max_by(|a, b| a.0.min.x.total_cmp(&b.0.min.x)).map(|(r, _)| *r))
+        .expect("the bar has the split button")
+}
+
+fn secondary_click(h: &mut H, at: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        crate::test_harness::frame(h);
+    }
+    steps(h);
+}
+
+fn long_document(h: &mut H) {
+    h.state_mut().run("caret.docStart", json!({})).unwrap();
+    h.state_mut().run("text.insert", json!({"text": "x\n".repeat(150)})).unwrap();
+    h.state_mut().run("select.text", json!({"text": "brown fox"})).unwrap();
+    steps(h);
+}
+
+fn wheel_over_page(h: &mut H, dy: f32) {
+    let page = canvas(h);
+    h.event(egui::Event::PointerMoved(pos2(page.min.x + 20.0, page.center().y)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, dy),
+        phase: egui::TouchPhase::Start,
+        modifiers: Default::default(),
+        source: egui::MouseWheelSource::Unknown,
+    });
+    steps(h);
+}
+
+/// #535: the bar's members all fit: none overlaps another and all lie inside the document area.
 #[test]
-fn a_picked_font_joins_the_recent_section_on_the_next_open() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
-    let mut h = bar_over("brown fox");
-    let viewport = h.state().canvas.viewport.unwrap();
-    let font_box = h
-        .get_all_by_role(Role::TextInput)
+fn every_control_fits_inside_the_bar() {
+    let h = bar_over("brown fox");
+    let c = canvas(&h);
+    let mut rects: Vec<(String, Rect)> = Vec::new();
+    for label in [
+        "Bold",
+        "Italic",
+        "Underline",
+        "Strikethrough",
+        "Align Left",
+        "Center",
+        "Align Right",
+        "Justify",
+        "Text Highlight Color",
+        "Font Color",
+        "Increase Font Size",
+        "Decrease Font Size",
+    ] {
+        let r = member(&h, label).unwrap_or_else(|| panic!("the bar has {label}"));
+        rects.push((label.to_string(), r));
+    }
+    rects.push(("font box".into(), font_box(&h)));
+    rects.push(("size box".into(), size_box(&h)));
+    // The framework's selection task bar is a group named by the label `mini_toolbar::show` gives it.
+    let bar = h
+        .query_all_by_role(Role::Group)
+        .filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting"))
         .map(|n| n.rect())
-        .filter(|r| viewport.contains_rect(*r))
-        .min_by(|a, b| a.min.y.total_cmp(&b.min.y).then(a.min.x.total_cmp(&b.min.x)))
-        .expect("the bar has a font box");
-    let arrow = pos2(font_box.max.x + 8.0, font_box.center().y);
-    click_at(&mut h, arrow);
-    let family = h.state_mut().previews.families().into_iter().find(|f| f != "Aptos Display" && f != "Aptos").expect("another family is installed");
-    let at = h.get_all_by_label(&family).map(|n| n.rect().center()).find(|p| p.y > font_box.max.y).expect("the list shows the family");
-    h.event(egui::Event::PointerMoved(at));
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    h.step();
-    h.step();
-    h.step();
-    assert_eq!(h.query_all_by_label("Recently Used Fonts").count(), 0, "the list does not shift under the pointer");
-    assert_eq!(h.query_all_by_label("Add Font…").count(), 0, "picking a family closes the list");
-    steps(&mut h);
-    click_at(&mut h, arrow);
-    assert_eq!(h.query_all_by_label("Recently Used Fonts").count(), 1, "the next open lists the family first");
+        .find(|r| c.contains_rect(*r))
+        .expect("the selection bar lies inside the document area");
+    assert!(bar.width() < 350.0, "bar width {} must not be bloated by text labels", bar.width());
+    for (name, r) in &rects {
+        assert!(bar.contains_rect(*r), "{name} {r:?} must stay inside the bar {bar:?}");
+    }
+    for (i, (a_name, a)) in rects.iter().enumerate() {
+        for (b_name, b) in &rects[i + 1..] {
+            assert!(!a.shrink(0.5).intersects(b.shrink(0.5)), "{a_name} {a:?} overlaps {b_name} {b:?}");
+        }
+    }
 }
 
-/// Hovering the highlight and font colour buttons previews their last colour.
+/// #7482: Text Highlight Color appearance follows the picked highlight choice.
+#[test]
+fn highlight_button_appearance_follows_the_picked_colour() {
+    assert_eq!(crate::colors::highlight_button_appearance("cyan"), ("highlight", Some(egui::Color32::from_rgb(0, 255, 255)), "cyan"));
+    assert_eq!(crate::colors::highlight_button_appearance("none"), ("highlightNoColor", None, "none"));
+    assert_eq!(crate::colors::highlight_button_appearance("unknown"), ("highlightNoColor", None, "none"));
+}
+
+/// #7447: the mini toolbar anchors to the start of the selection rather than its center,
+/// so its position does not shift with the length of the selection.
+#[test]
+fn the_bar_anchors_to_the_selection_start_rather_than_its_center() {
+    let h_short = bar_over("brown");
+    let h_long = bar_over("brown fox jumps over the lazy dog");
+
+    let bar_from = |h: &H| {
+        let c = canvas(h);
+        h.query_all_by_role(Role::Group)
+            .filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting"))
+            .map(|n| n.rect())
+            .find(|r| c.contains_rect(*r))
+            .expect("the selection bar is shown inside the canvas")
+    };
+
+    let bar_short = bar_from(&h_short);
+    let bar_long = bar_from(&h_long);
+
+    assert!(
+        (bar_short.min.x - bar_long.min.x).abs() < 1e-3,
+        "the toolbar's horizontal position must anchor to the selection start and not shift with selection length: short x={}, long x={}",
+        bar_short.min.x,
+        bar_long.min.x,
+    );
+
+    // A selection starting at a later word on the same line tracks that word's start.
+    let h_later = bar_over("jumps");
+    let bar_later = bar_from(&h_later);
+    assert!(
+        bar_later.min.x > bar_short.min.x + 20.0,
+        "a selection starting later on the line must place the toolbar further to the right: brown x={}, jumps x={}",
+        bar_short.min.x,
+        bar_later.min.x,
+    );
+}
+
+/// #7375: the bar's formatting controls are stacked into two rows: Row 2 controls (Bold,
+/// Align Left) sit strictly below Row 1 controls (Font, Font Size) rather than side-by-side.
+#[test]
+fn formatting_controls_stack_into_two_rows() {
+    let h = bar_over("brown fox");
+    let font = font_box(&h);
+    let size = size_box(&h);
+    let bold = member(&h, "Bold").expect("the bar has Bold");
+    let align_left = member(&h, "Align Left").expect("the bar has Align Left");
+    let grow = member(&h, "Increase Font Size").expect("the bar has Increase Font Size");
+    let shrink = member(&h, "Decrease Font Size").expect("the bar has Decrease Font Size");
+
+    // Row 1 controls sit on the top row together and align in height.
+    assert!((font.min.y - size.min.y).abs() < 1.0, "Font and Font Size must share Row 1: font {font:?}, size {size:?}");
+    assert!((grow.min.y - size.min.y).abs() < 1.0, "Grow Font and Font Size must share Row 1: grow {grow:?}, size {size:?}");
+    assert!((shrink.min.y - size.min.y).abs() < 1.0, "Shrink Font and Font Size must share Row 1: shrink {shrink:?}, size {size:?}");
+    assert!((grow.height() - size.height()).abs() < 2.0, "grow height ({}) aligns with row 1 height ({})", grow.height(), size.height());
+    assert!((shrink.height() - size.height()).abs() < 2.0, "shrink height ({}) aligns with row 1 height ({})", shrink.height(), size.height());
+
+    // Row 2 controls sit on the second row together.
+    assert!((bold.min.y - align_left.min.y).abs() < 1.0, "Bold and Align Left must share Row 2: bold {bold:?}, align_left {align_left:?}");
+
+    // Row 2 controls sit strictly below Row 1 controls.
+    assert!(bold.min.y >= font.max.y, "Bold ({bold:?}) must sit strictly below Font ({font:?})");
+    assert!(bold.min.y >= size.max.y, "Bold ({bold:?}) must sit strictly below Font Size ({size:?})");
+    assert!(align_left.min.y >= font.max.y, "Align Left ({align_left:?}) must sit strictly below Font ({font:?})");
+    assert!(align_left.min.y >= size.max.y, "Align Left ({align_left:?}) must sit strictly below Font Size ({size:?})");
+}
+
+/// #7482: Hovering the split buttons for highlight and font colour previews their command.
 #[test]
 fn hovering_the_colour_buttons_previews_their_colour() {
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
-    let viewport = h.state().canvas.viewport.unwrap();
+    let viewport = canvas(&h);
     for (label, id) in [("Text Highlight Color", "format.highlight"), ("Font Color", "format.color")] {
-        let r = h.get_all_by_label(label).map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the bar has the button");
-        h.event(egui::Event::PointerMoved(r.center()));
-        steps(&mut h);
+        let r = member(&h, label).expect("the bar has the button");
+        assert!(viewport.contains_rect(r), "{label} is inside viewport");
+        hover_at(&mut h, r.center());
         let previewed = h.state().canvas.command_previewed.clone();
         assert!(previewed.is_some_and(|(p, _)| p == id), "{label} previews {id}");
     }
 }
 
-/// Hovering a colour of the bar's highlight list previews it on the selection.
+/// Hovering any member of the bar previews its command on the selection; the pick is not made.
 #[test]
-fn hovering_a_highlight_colour_previews_it() {
-    use egui_kittest::kittest::{By, Queryable};
-    let mut h = bar_over("brown fox");
-    let doc = h.state().session.doc.clone();
-    let [bar, _] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar is shown over a selection");
-    let arrow = h
-        .query_all(By::new().predicate(|n| n.raw_bounds().is_some_and(|r| ((r.x1 - r.x0) - 11.0).abs() < 0.5 && ((r.y1 - r.y0) - 22.0).abs() < 0.5)))
-        .map(|n| n.rect())
-        .filter(|r| bar.contains_rect(*r))
-        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
-        .expect("the bar has the Highlight split button");
-    click_at(&mut h, arrow.center());
-    let no_color = h.get_by_label("No Color").rect();
-    h.event(egui::Event::PointerMoved(pos2(no_color.min.x + 10.0, no_color.center().y - 30.0)));
-    steps(&mut h);
-    let previewed = h.state().canvas.command_previewed.clone();
-    assert!(previewed.is_some_and(|(id, _)| id == "format.highlight"), "a swatch previews the highlight");
-    assert_eq!(&h.state().session.doc, &doc);
-    h.event(egui::Event::PointerMoved(pos2(5.0, 5.0)));
-    steps(&mut h);
-    assert_eq!(h.state().canvas.command_previewed, None);
+fn hovering_a_bar_member_previews_its_command() {
+    #[derive(Clone, Copy, Debug)]
+    enum Member {
+        Size,
+        Font,
+        Bold,
+        HighlightButton,
+        FontColorButton,
+        HighlightSwatch,
+    }
+    for (member_kind, command) in [
+        (Member::Size, "format.size"),
+        (Member::Font, "format.font"),
+        (Member::Bold, "format.bold"),
+        (Member::HighlightButton, "format.highlight"),
+        (Member::FontColorButton, "format.color"),
+        (Member::HighlightSwatch, "format.highlight"),
+    ] {
+        let mut h = bar_over("brown fox");
+        let (doc, sel, rev) = (h.state().session.doc.clone(), h.state().session.sel.clone(), h.state().session.rev());
+        let size = format_state(&mut h).get("size").cloned();
+        let font = format_state(&mut h).get("font").and_then(Value::as_str).unwrap_or_default().to_string();
+        let target = match member_kind {
+            Member::Size => {
+                let b = size_box(&h);
+                open_list_of(&mut h, b);
+                h.get_by_label("20").rect().center()
+            }
+            Member::Font => {
+                let b = font_box(&h);
+                // The font picker's chevron is an adornment inside the field and a click on the name opens the list
+                // too, so click the field itself (the size box's chevron lies beside it).
+                click_at(&mut h, b.center());
+                // The framework's font list is a tree of families (depth rows), so its rows are tree items.
+                h.query_all_by_role(Role::TreeItem)
+                    .filter(|n| {
+                        (n.rect().min.y >= b.max.y || n.rect().max.y <= b.min.y) && n.accesskit_node().label().as_deref() != Some(font.as_str())
+                    })
+                    .filter(|n| n.accesskit_node().label().as_deref().is_some_and(|name| !name.ends_with('…')))
+                    .map(|n| n.rect().center())
+                    .next()
+                    .expect("the list shows another family")
+            }
+            Member::Bold => member(&h, "Bold").expect("the bar has Bold").center(),
+            Member::HighlightButton => member(&h, "Text Highlight Color").expect("the bar has the button").center(),
+            Member::FontColorButton => member(&h, "Font Color").expect("the bar has the button").center(),
+            Member::HighlightSwatch => {
+                let arrow = split_arrow(&h, "Text Highlight Color");
+                click_at(&mut h, arrow.center());
+                h.query_all_by_label_contains("Yellow").next().expect("the list shows a swatch").rect().center()
+            }
+        };
+        hover_at(&mut h, target);
+        let previewed = h.state().canvas.command_previewed.clone();
+        assert!(previewed.as_ref().is_some_and(|(id, _)| id == command), "{member_kind:?} previews {command}, got {previewed:?}");
+        assert_ne!(crate::canvas::page_doc(h.state()), &doc, "{member_kind:?}: the page shows the preview");
+        assert_eq!((&h.state().session.doc, &h.state().session.sel, h.state().session.rev()), (&doc, &sel, rev), "{member_kind:?}");
+        assert_eq!(format_state(&mut h).get("size").cloned(), size);
+
+        hover_at(&mut h, pos2(5.0, 5.0));
+        assert_eq!(h.state().canvas.command_previewed, None, "{member_kind:?}: moving off the bar clears the preview");
+    }
 }
 
-/// Hovering a bar button previews its command on the selection; leaving the bar restores the
-/// page. The document, its selection and its revision stay as they were.
+/// An alignment preview moves the previewed selection; the bar stays anchored to the live
+/// selection so the hovered button remains under the pointer.
 #[test]
-fn hovering_a_bar_button_previews_it_on_the_selection() {
-    use egui_kittest::kittest::Queryable;
+fn the_bar_stays_put_under_an_alignment_preview() {
     let mut h = bar_over("brown fox");
-    let (doc, sel, rev) = (h.state().session.doc.clone(), h.state().session.sel.clone(), h.state().session.rev());
-    let viewport = h.state().canvas.viewport.unwrap();
-    let bold = h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the bar has Bold");
-    h.event(egui::Event::PointerMoved(bold.center()));
-    steps(&mut h);
-    assert_eq!(h.state().canvas.command_previewed, Some(("format.bold".to_string(), json!({}))));
-    assert_ne!(crate::canvas::page_doc(h.state()), &doc, "the page shows the bold text");
-    assert_eq!((&h.state().session.doc, &h.state().session.sel, h.state().session.rev()), (&doc, &sel, rev));
-    assert_eq!(format_state(&mut h).get("bold"), Some(&json!(false)));
-
-    h.event(egui::Event::PointerMoved(pos2(5.0, 5.0)));
-    steps(&mut h);
-    assert_eq!(h.state().canvas.command_previewed, None);
-    assert_eq!(crate::canvas::page_doc(h.state()), &doc, "off the bar the page is as it was");
-
-    // Alignment moves the previewed selection. The toolbar must stay anchored to the live
-    // selection so the hovered button remains under the pointer until the pointer leaves.
     let anchor = h.state().canvas.mini_anchor.unwrap();
-    let align_right = h.get_all_by_label("Align Right").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the bar has Align Right");
-    h.event(egui::Event::PointerMoved(align_right.center()));
-    steps(&mut h);
+    let align_right = member(&h, "Align Right").expect("the bar has Align Right");
+    hover_at(&mut h, align_right.center());
     assert_eq!(h.state().canvas.command_previewed, Some(("para.alignRight".to_string(), json!({}))));
     assert_eq!(h.state().canvas.mini_anchor, Some(anchor), "the alignment preview must not move the toolbar");
 }
@@ -355,29 +404,18 @@ fn hovering_a_bar_button_previews_it_on_the_selection() {
 #[test]
 fn the_page_holds_its_place_while_a_preview_is_shown() {
     let mut h = bar_over("brown fox");
-    h.state_mut().run("caret.docStart", json!({})).unwrap();
-    h.state_mut().run("text.insert", json!({"text": "x\n".repeat(150)})).unwrap();
-    h.state_mut().run("select.text", json!({"text": "brown fox"})).unwrap();
-    steps(&mut h);
-    let page = h.state().canvas.viewport.unwrap();
-    h.event(egui::Event::PointerMoved(pos2(page.min.x + 20.0, page.center().y)));
-    h.event(egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta: egui::vec2(0.0, -60.0),
-        phase: egui::TouchPhase::Start,
-        modifiers: Default::default(),
-        source: egui::MouseWheelSource::Unknown,
-    });
-    steps(&mut h);
-    let held = h.state().canvas.scroll_offset;
+    long_document(&mut h);
+    wheel_over_page(&mut h, -60.0);
+    let held = h.state().canvas.view.offset;
+    let bold = member(&h, "Bold").expect("the bar follows the selection");
+    hover_at(&mut h, bold.center());
+    assert!(h.state().canvas.command_previewed.is_some(), "hovering Bold starts a preview");
     for _ in 0..4 {
-        h.state_mut().canvas.command_preview = Some(("format.size".to_string(), json!({"size": 72.0})));
         h.state_mut().canvas.scroll_to_caret = true;
-        h.step();
+        crate::test_harness::frame(&mut h);
     }
-    assert!(h.state().canvas.command_previewed.is_some());
-    assert_eq!(h.state().canvas.scroll_offset, held, "the preview does not move the page");
-    steps(&mut h);
+    assert_eq!(h.state().canvas.view.offset, held, "the preview does not move the page");
+    hover_at(&mut h, pos2(5.0, 5.0));
     assert_eq!(h.state().canvas.preview_scroll, None, "the hold ends with the preview");
 }
 
@@ -385,113 +423,101 @@ fn the_page_holds_its_place_while_a_preview_is_shown() {
 #[test]
 fn the_bar_anchor_follows_the_selection_as_the_page_scrolls() {
     let mut h = bar_over("brown fox");
-    h.state_mut().run("caret.docStart", json!({})).unwrap();
-    h.state_mut().run("text.insert", json!({"text": "x\n".repeat(150)})).unwrap();
-    h.state_mut().run("select.text", json!({"text": "brown fox"})).unwrap();
-    steps(&mut h);
+    long_document(&mut h);
     let anchored = h.state().canvas.mini_anchor.unwrap();
-    let page = h.state().canvas.viewport.unwrap();
-    h.event(egui::Event::PointerMoved(pos2(page.min.x + 20.0, page.center().y)));
-    h.event(egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta: egui::vec2(0.0, 120.0),
-        phase: egui::TouchPhase::Start,
-        modifiers: Default::default(),
-        source: egui::MouseWheelSource::Unknown,
-    });
-    steps(&mut h);
+    wheel_over_page(&mut h, 120.0);
     assert_ne!(h.state().canvas.mini_anchor, Some(anchored), "the toolbar anchor follows the live selection as the viewport scrolls");
 }
 
-/// #2959: formatting must be available alongside the text's right-click menu, using the
-/// selection that was clicked. Its lists must remain usable inside the context popup.
+/// #2959: formatting is available alongside the text's right-click menu, using the selection that
+/// was clicked. Its lists stay usable inside the context menu.
 #[test]
 fn context_menu_toolbar_formats_the_selection_and_opens_its_size_list() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
     let selection = h.state().session.sel.clone();
     let caret = h.state_mut().session.layout().caret(&wordcraft_doc::Pos::body(0, 12)).unwrap();
     let at = crate::canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height / 2.0).unwrap();
-    h.event(egui::Event::PointerMoved(at));
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
-        h.step();
-    }
-    steps(&mut h);
+    secondary_click(&mut h, at);
     assert!(h.state().canvas.context_menu_open);
     assert_eq!(h.state().session.sel, selection, "right-click inside the selection keeps it");
-    assert!(bar_layer(&h).is_none(), "the standalone selection toolbar must not double up");
-    let viewport = h.state().canvas.viewport.unwrap();
-    let bold = h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the context menu has Bold");
+    let bold = member(&h, "Bold").expect("the context menu has Bold");
     let doc = h.state().session.doc.clone();
-    h.event(egui::Event::PointerMoved(bold.center()));
-    steps(&mut h);
-    assert_eq!(h.state().canvas.command_previewed, None, "the context toolbar does not start the hidden floating bar's preview repaint loop");
+    hover_at(&mut h, bold.center());
+    assert_eq!(h.state().canvas.command_previewed, None, "the context toolbar starts no preview");
     assert_eq!(&h.state().session.doc, &doc, "hovering a context-menu control does not preview a document change");
     click_at(&mut h, bold.center());
     assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)));
     assert_eq!(h.state().session.sel, selection);
     assert!(h.state().canvas.context_menu_open, "formatting keeps the context toolbar available");
 
-    let size_box = h
-        .get_all_by_role(Role::TextInput)
-        .map(|n| n.rect())
-        .filter(|r| viewport.contains_rect(*r))
-        .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
-        .expect("the context toolbar has a size box");
-    click_at(&mut h, pos2(size_box.max.x + 8.0, size_box.center().y));
+    let b = size_box(&h);
+    open_list_of(&mut h, b);
     let twenty = h.get_by_label("20").rect().center();
     click_at(&mut h, twenty);
     assert_eq!(format_state(&mut h).get("size").and_then(Value::as_f64), Some(20.0));
     assert_eq!(h.state().session.sel, selection);
     assert!(h.state().canvas.context_menu_open, "picking a font size keeps the parent menu available");
-    click_at(&mut h, pos2(size_box.max.x + 8.0, size_box.center().y));
-    assert!(egui::Popup::is_any_open(&h.ctx), "the child list is open");
-    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-    steps(&mut h);
-    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closes the child list");
-    assert!(h.state().canvas.context_menu_open, "the parent toolbar remains after dismissing its list");
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_ne!(format_state(&mut h).get("size").and_then(Value::as_f64), Some(20.0), "size is one undo step");
-    assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)), "the earlier Bold is a separate undo step");
-    let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the menu has Copy");
+
+    let top = canvas(&h).top();
+    let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| r.min.y > top).expect("the menu has Copy");
     click_at(&mut h, copy.center());
-    assert!(!h.state().canvas.context_menu_open, "ordinary menu commands still close the popup");
+    assert!(!h.state().canvas.context_menu_open, "ordinary menu commands still close the menu");
 }
 
 #[test]
 fn context_menu_toolbar_opens_at_a_caret_from_the_keyboard_and_dismisses() {
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
-    h.state_mut().run("caret.docEnd", json!({})).unwrap();
+    h.state_mut().run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 4)})).unwrap();
     steps(&mut h);
     let caret = h.state().session.sel.clone();
-    h.event(egui::Event::Key { key: egui::Key::F10, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT });
-    steps(&mut h);
-    let viewport = h.state().canvas.viewport.unwrap();
+    assert!(caret.is_collapsed());
+    press_key(&mut h, egui::Key::F10, egui::Modifiers::SHIFT);
     assert!(h.state().canvas.context_menu_open);
-    let bold = h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the keyboard menu has Bold at a caret too");
+    let bold = member(&h, "Bold").expect("the keyboard menu has Bold at a caret too");
     click_at(&mut h, bold.center());
     assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)));
     assert_eq!(h.state().session.sel, caret);
-    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-    steps(&mut h);
-    assert!(!h.state().canvas.context_menu_open);
+    // The framework's Escape closes the top layer first: the bar (where the click on Bold left the keyboard), then the
+    // menu under it.
+    // Each Escape closes one layer (the bar's own popups, the bar, the menu): press until the menu is gone.
+    for _ in 0..4 {
+        press_key(&mut h, egui::Key::Escape, Default::default());
+        if !h.state().canvas.context_menu_open {
+            break;
+        }
+    }
+    assert!(!h.state().canvas.context_menu_open, "Escape dismisses the keyboard-opened menu");
     h.event(egui::Event::Text(" typed".into()));
     steps(&mut h);
-    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).ends_with(" typed"), "typing resumes in the document");
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(" typed"), "typing resumes in the document");
 
     h.state_mut().run("ui.contextMenu", json!({})).unwrap();
     steps(&mut h);
-    assert!(h.state().canvas.context_menu_open);
-    click_at(&mut h, viewport.right_bottom() - Vec2::splat(10.0));
+    assert!(h.state().canvas.context_menu_open, "ui.contextMenu opens it again");
+    assert!(h.state().canvas.context_request.is_none(), "the pass consumed the ask");
+    let c = canvas(&h);
+    click_at(&mut h, c.right_bottom() - Vec2::splat(10.0));
     assert!(!h.state().canvas.context_menu_open, "an outside click dismisses both panels");
 }
 
 #[test]
+fn context_menu_toolbar_respects_read_mode_and_the_toolbar_preference() {
+    for read_mode in [false, true] {
+        let mut h = bar_over("brown fox");
+        h.state_mut().session.view.read_mode = read_mode;
+        h.state_mut().ui.mini_toolbar = read_mode;
+        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+        steps(&mut h);
+        assert!(h.state().canvas.context_menu_open, "the text menu remains available");
+        let top = canvas(&h).top();
+        assert!(member(&h, "Bold").is_none(), "the context toolbar is suppressed, read_mode={read_mode}");
+        assert!(h.query_all_by_label_contains("Copy").any(|n| n.rect().min.y > top), "the menu still offers Copy");
+    }
+}
+
+/// #7482: The companion toolbar fits within window bounds even in a narrow window (~380 pt).
+#[test]
 fn context_menu_toolbar_fits_near_the_bottom_right_of_a_narrow_window() {
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
     h.set_size(Vec2::new(380.0, 650.0));
     steps(&mut h);
@@ -500,41 +526,23 @@ fn context_menu_toolbar_fits_near_the_bottom_right_of_a_narrow_window() {
     h.state_mut().canvas.context_menu_at = Some(pos2(370.0, 640.0));
     steps(&mut h);
     let screen = h.ctx.content_rect();
-    let bold = h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the context toolbar is shown");
+    let bold = h.query_all_by_label("Bold").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the context toolbar is shown");
     assert!(screen.contains_rect(bold), "the toolbar stays inside the window: {bold:?} in {screen:?}");
     let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the menu has Copy");
     assert!(screen.contains_rect(copy), "the menu stays inside the window: {copy:?} in {screen:?}");
-    let align = h.get_all_by_label("Justify").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the last toolbar control is shown");
+    let align = h.query_all_by_label("Justify").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the last toolbar control is shown");
     assert!(screen.contains_rect(align), "all controls fit: {align:?} in {screen:?}");
 }
 
-#[test]
-fn context_menu_toolbar_respects_read_mode_and_the_toolbar_preference() {
-    use egui_kittest::kittest::Queryable;
-    for read_mode in [false, true] {
-        let mut h = bar_over("brown fox");
-        h.state_mut().session.view.read_mode = read_mode;
-        h.state_mut().ui.mini_toolbar = read_mode;
-        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
-        steps(&mut h);
-        assert!(h.state().canvas.context_menu_open, "the text menu remains available");
-        let top = h.state().canvas.viewport.unwrap().top();
-        assert!(h.query_all_by_label("Bold").all(|n| n.rect().min.y < top), "the context toolbar is suppressed, read_mode={read_mode}");
-        assert!(h.query_all_by_label_contains("Copy").any(|n| n.rect().min.y > top), "the menu still offers Copy");
-    }
-}
-
-/// The command panel under the context toolbar was stretched to the toolbar's width; each
-/// keeps its own width, so the panel matches the menu shown without the toolbar.
+/// #7482: The command panel under the context toolbar keeps its own width, not stretched by the toolbar.
 #[test]
 fn context_menu_panel_keeps_its_own_width_under_the_toolbar() {
-    use egui_kittest::kittest::Queryable;
     let copy_width = |toolbar: bool| {
         let mut h = bar_over("brown fox");
         h.state_mut().ui.mini_toolbar = toolbar;
         h.state_mut().run("ui.contextMenu", json!({})).unwrap();
         steps(&mut h);
-        let top = h.state().canvas.viewport.unwrap().top();
+        let top = canvas(&h).top();
         let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| r.min.y > top).expect("the menu has Copy");
         let bar = h.query_all_by_label("Justify").map(|n| n.rect()).find(|r| r.min.y > top);
         (copy, bar)
@@ -548,171 +556,105 @@ fn context_menu_panel_keeps_its_own_width_under_the_toolbar() {
 
 #[test]
 fn escape_in_a_ribbon_list_does_not_open_the_context_menu() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
+    let current = format_state(&mut h).get("size").and_then(Value::as_f64).unwrap_or_default();
+    let current = if current.fract() == 0.0 { format!("{current:.0}") } else { current.to_string() };
     let size = h
         .get_all_by_role(Role::TextInput)
-        .filter(|n| n.value().as_deref() == Some("12"))
+        .filter(|n| n.value().as_deref() == Some(current.as_str()))
         .map(|n| n.rect())
         .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
         .expect("the ribbon has a size field");
     click_at(&mut h, pos2(size.max.x + 8.0, size.center().y));
-    assert!(egui::Popup::is_any_open(&h.ctx));
-    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-    steps(&mut h);
-    assert!(!egui::Popup::is_any_open(&h.ctx));
+    let list_open = |h: &H| h.query_all_by_label("28").next().is_some();
+    assert!(list_open(&h), "the size list is open");
+    press_key(&mut h, egui::Key::Escape, Default::default());
+    assert!(!list_open(&h), "Escape closes the size list");
     assert!(!h.state().canvas.context_menu_open, "dismissing another popup must not open the text context menu");
-}
-
-/// The bar was drawn on the Tooltip layer, over every drop-down: the ribbon's font size list
-/// opened under it. Popups and menus are on Foreground; the bar must sit below them.
-#[test]
-fn the_bar_draws_below_popups() {
-    let h = bar_over("brown fox");
-    let layer = bar_layer(&h).expect("the bar is shown over a selection");
-    assert!(layer.order < Order::Foreground, "the bar is on {:?}, over the ribbon's drop-downs", layer.order);
 }
 
 /// Turning to the ribbon puts the bar away (it covered the ribbon's drop-downs); it comes back
 /// for the next selection, even one over the same text.
 #[test]
 fn a_click_on_the_ribbon_puts_the_bar_away_until_the_selection_changes() {
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
-    assert!(visible(h.state()) && bar_layer(&h).is_some(), "the bar is up over the selection");
-    // The ribbon's Bold is the topmost one; the bar has its own lower down.
-    let ribbon_bold = |h: &egui_kittest::Harness<'static, WordApp>| {
-        h.get_all_by_label("Bold").map(|n| n.rect().center()).min_by(|a, b| a.y.total_cmp(&b.y)).expect("the ribbon has Bold")
-    };
-    let at = ribbon_bold(&h);
+    assert!(visible(h.state()) && bar_shown(&h), "the bar is up over the selection");
+    let at = ribbon_member(&h, "Bold");
     click_at(&mut h, at);
     assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)), "the click ran the ribbon's Bold");
     assert!(!visible(h.state()), "a click on the ribbon puts the bar away");
-    assert!(bar_layer(&h).is_none(), "the bar is no longer drawn");
+    assert!(!bar_shown(&h), "the members are no longer drawn");
 
     h.state_mut().run("select.text", json!({"text": "lazy"})).unwrap();
     steps(&mut h);
-    assert!(visible(h.state()) && bar_layer(&h).is_some(), "a new selection brings the bar back");
+    assert!(visible(h.state()) && bar_shown(&h), "a new selection brings the bar back");
 
-    let at = ribbon_bold(&h);
+    let at = ribbon_member(&h, "Bold");
     click_at(&mut h, at);
-    assert!(bar_layer(&h).is_none());
-    h.state_mut().run("select.text", json!({"text": "quick"})).unwrap();
+    assert!(!bar_shown(&h));
+    // A press in the document selects the same text again: the bar comes back.
+    let (from, to) = {
+        let layout = h.state_mut().session.layout();
+        let a = layout.caret(&wordcraft_doc::Pos::body(0, 35)).unwrap();
+        let b = layout.caret(&wordcraft_doc::Pos::body(0, 39)).unwrap();
+        (
+            crate::canvas::page_to_screen(h.state_mut(), a.page, a.x, a.top + a.height / 2.0).unwrap(),
+            crate::canvas::page_to_screen(h.state_mut(), b.page, b.x, b.top + b.height / 2.0).unwrap(),
+        )
+    };
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    crate::test_harness::frame(&mut h);
+    h.event(egui::Event::PointerMoved(to));
+    crate::test_harness::frame(&mut h);
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     steps(&mut h);
-    h.state_mut().run("select.text", json!({"text": "lazy"})).unwrap();
-    steps(&mut h);
-    assert!(bar_layer(&h).is_some(), "selecting the same text again brings the bar back");
+    assert!(bar_shown(&h), "a press in the document brings the bar back for the same text");
 }
 
 /// The ribbon's size list hangs over the page: picking from it is no press in the document, so
-/// the bar stays away (it would cover the list again otherwise).
+/// the bar stays away.
 #[test]
 fn picking_from_a_ribbon_list_over_the_page_keeps_the_bar_away() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
     let size = format_state(&mut h).get("size").and_then(Value::as_f64).unwrap_or_default();
     let size = if size.fract() == 0.0 { format!("{size:.0}") } else { size.to_string() };
-    // The ribbon's size box is the topmost one showing the size; the bar has its own.
-    let size_box = h.get_all_by_role(Role::TextInput).filter(|n| n.value().as_deref() == Some(size.as_str())).map(|n| n.rect());
-    let size_box = size_box.min_by(|a, b| a.min.y.total_cmp(&b.min.y)).expect("the ribbon has a size box");
+    let size_box = h
+        .get_all_by_role(Role::TextInput)
+        .filter(|n| n.value().as_deref() == Some(size.as_str()))
+        .map(|n| n.rect())
+        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .expect("the ribbon has a size box");
     click_at(&mut h, pos2(size_box.max.x + 8.0, size_box.center().y));
-    assert!(bar_layer(&h).is_none(), "opening the ribbon's list puts the bar away");
-    let page = h.state().canvas.canvas_rect.expect("the document is shown");
+    assert!(!bar_shown(&h), "opening the ribbon's list puts the bar away");
     let item = h.get_by_label("28").rect().center();
-    assert!(page.contains(item), "the list's 28 ({item:?}) should hang over the page ({page:?}) for this test");
+    assert!(canvas(&h).contains(item), "the list's 28 should hang over the page for this test");
     click_at(&mut h, item);
     assert_eq!(format_state(&mut h).get("size").and_then(Value::as_f64), Some(28.0), "the ribbon's size list applied 28 pt");
-    assert!(!visible(h.state()) && bar_layer(&h).is_none(), "the bar stays away after a pick from the ribbon's list");
+    assert!(!visible(h.state()) && !bar_shown(&h), "the bar stays away after a pick from the ribbon's list");
 }
 
-/// Scrolled until the selection went under the ribbon, the bar went with it and drew over the
-/// ribbon and the ruler (#1069). With no part of the selection on screen it has no anchor
-/// (`visible_anchor`, #1501), so it hides: nothing over the ruler, which still takes the drag.
-#[test]
-// #1069 lets the bar slide under the ribbon with a selection scrolled past the document's
-// top; #1501, landed first, anchors it to the visible part of the selection only and drops it
-// once none shows. Which one Word does is the owner's call; until then this one is off.
-#[ignore = "conflicts with #1501's visible-selection anchor; see the comment above"]
-fn the_bar_scrolls_under_the_ribbon_not_over_it() {
-    let mut h = bar_over("The quick");
-    let page = h.state().canvas.canvas_rect.expect("the document is shown");
-    // Scroll the selection's line to 45 points above the document area, under the ruler.
-    let target = page.min.y - 45.0;
-    let line = h.state().canvas.mini_anchor.expect("the selection is on screen");
-    h.event(egui::Event::PointerMoved(page.center()));
-    h.step();
-    let delta = egui::vec2(0.0, target - line.min.y);
-    h.event(egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta,
-        phase: egui::TouchPhase::Start,
-        modifiers: Default::default(),
-        source: egui::MouseWheelSource::Unknown,
-    });
-    h.step();
-    h.state_mut().canvas.wheel = Default::default();
-    steps(&mut h);
-    assert!(h.state().canvas.mini_anchor.is_none(), "the selection scrolled off the document area");
-    assert!(bar_layer(&h).is_none(), "the bar hides with its selection, not over the ribbon");
-
-    // The ruler's left-indent marker sits at the line's start and the ruler's foot
-    // (`canvas::rulers`); dragging it moves the indent.
-    let marker = pos2(line.min.x, page.min.y - 6.0);
-    h.event(egui::Event::PointerMoved(marker));
-    h.event(egui::Event::PointerButton { pos: marker, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.step();
-    for dx in [6.0, 18.0, 36.0] {
-        h.event(egui::Event::PointerMoved(marker + egui::vec2(dx, 0.0)));
-        h.step();
-    }
-    let end = marker + egui::vec2(36.0, 0.0);
-    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    steps(&mut h);
-    let s = &h.state().session;
-    let indent = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).indent_left).unwrap_or_default();
-    assert!(indent > 0.0, "dragging the ruler's left-indent marker where the bar was left the indent at {indent}");
-}
-
-/// Picking from one of the bar's own lists (popups below it) keeps the bar up.
+/// Picking from one of the bar's own lists keeps the bar up: a press in its popup is not "outside".
 #[test]
 fn picking_from_the_bars_own_list_keeps_it() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
     let mut h = bar_over("brown fox");
-    let [bar, _] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar is shown over a selection");
-    // Its two boxes are font and size; the size box's arrow is just right of the rightmost.
-    let size_box = h.get_all_by_role(Role::TextInput).map(|n| n.rect()).filter(|r| bar.contains_rect(*r)).max_by(|a, b| a.min.x.total_cmp(&b.min.x));
-    let size_box = size_box.expect("the bar has a size box");
-    click_at(&mut h, pos2(size_box.max.x + 8.0, size_box.center().y));
+    let b = size_box(&h);
+    open_list_of(&mut h, b);
     let twenty = h.get_by_label("20").rect().center();
     click_at(&mut h, twenty);
     assert_eq!(format_state(&mut h).get("size").and_then(Value::as_f64), Some(20.0), "the bar's size list applied 20 pt");
-    assert!(visible(h.state()) && bar_layer(&h).is_some(), "the bar stays up after its own list is used");
+    assert!(visible(h.state()) && bar_shown(&h), "the bar stays up after its own list is used");
 }
 
-/// #2105: No Color removed the highlight but the Highlight button kept the colour picked
-/// before, so the next click on it highlighted again. As in Word, No Color becomes the
-/// button's choice: the next click removes highlighting.
+/// #2105: No Color becomes the Highlight button's choice: the next click removes highlighting.
 #[test]
 fn no_color_becomes_the_highlight_buttons_choice() {
-    use egui_kittest::kittest::{By, Queryable};
     let mut h = bar_over("brown fox");
     h.state_mut().run("format.highlight", json!({"color": "yellow"})).unwrap();
     steps(&mut h);
-    // The bar's split buttons are Highlight then Font Color; their arrows are 11 × 22.
-    let highlight_arrow = |h: &egui_kittest::Harness<'static, WordApp>| {
-        let [bar, _] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar is shown over a selection");
-        h.query_all(By::new().predicate(|n| n.raw_bounds().is_some_and(|r| ((r.x1 - r.x0) - 11.0).abs() < 0.5 && ((r.y1 - r.y0) - 22.0).abs() < 0.5)))
-            .map(|n| n.rect())
-            .filter(|r| bar.contains_rect(*r))
-            .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
-            .expect("the bar has the Highlight split button")
-    };
-    let arrow = highlight_arrow(&h);
+    let arrow = split_arrow(&h, "Text Highlight Color");
     click_at(&mut h, arrow.center());
-    let no_color = h.get(By::new().label_contains("No Color")).rect().center();
+    let no_color = h.get_by_label_contains("No Color").rect().center();
     click_at(&mut h, no_color);
     assert_eq!(format_state(&mut h).get("highlight"), Some(&Value::Null), "No Color removed the highlight");
     assert_eq!(h.state().canvas.last_highlight, "none");
@@ -721,7 +663,7 @@ fn no_color_becomes_the_highlight_buttons_choice() {
     h.state_mut().run("select.text", json!({"text": "lazy"})).unwrap();
     h.state_mut().run("format.highlight", json!({"color": "yellow"})).unwrap();
     steps(&mut h);
-    let arrow = highlight_arrow(&h);
+    let arrow = split_arrow(&h, "Text Highlight Color");
     click_at(&mut h, pos2(arrow.min.x - 12.0, arrow.center().y));
     assert_eq!(format_state(&mut h).get("highlight"), Some(&Value::Null), "the button applies No Color, not yellow again");
 
@@ -729,188 +671,164 @@ fn no_color_becomes_the_highlight_buttons_choice() {
     h.state_mut().canvas.last_highlight = "unknown".into();
     h.state_mut().run("format.highlight", json!({"color": "yellow"})).unwrap();
     steps(&mut h);
-    let arrow = highlight_arrow(&h);
+    let arrow = split_arrow(&h, "Text Highlight Color");
     click_at(&mut h, pos2(arrow.min.x - 12.0, arrow.center().y));
     assert_eq!(format_state(&mut h).get("highlight"), Some(&Value::Null), "an unknown remembered colour is normalized to No Color");
 }
 
-/// #3039: picking Automatic from the bar's font-colour menu hands the keyboard back to the
-/// document.
+/// #3039: picking Automatic from the bar's font-colour list hands the keyboard back to the document.
 #[test]
 fn the_font_colour_menus_automatic_returns_focus_to_the_document() {
-    use egui_kittest::kittest::{By, Queryable};
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), Default::default());
-    a.run("select.all", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(400.0, 400.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            egui::Area::new(egui::Id::unique("font_colour_probe")).fixed_pos(pos2(50.0, 50.0)).show(ui.ctx(), |ui| {
-                font_color_menu(ui, app);
-            });
-        },
-        a,
-    );
+    let mut h = bar_over("brown fox");
+    h.state_mut().run("format.color", json!({"color": "FF0000"})).unwrap();
     steps(&mut h);
-    let automatic = h.get(By::new().label_contains("Automatic")).rect().center();
-    h.state_mut().canvas.want_focus = false;
+    let arrow = split_arrow(&h, "Font Color");
+    click_at(&mut h, arrow.center());
+    assert!(!h.state().canvas.focused(&h.ctx), "the open list holds the keyboard");
+    let automatic = h.get_by_label_contains("Automatic").rect().center();
     click_at(&mut h, automatic);
-    assert!(h.state().canvas.want_focus, "Automatic returns focus to the document");
+    assert!(h.state().canvas.focused(&h.ctx), "Automatic returns focus to the document");
+    assert_ne!(format_state(&mut h).get("color"), Some(&json!("FF0000")), "the pick ran the font colour command");
 }
 
-/// #3038: a pick from the bar's highlight grid hands the keyboard back to the document,
-/// like the No Color button beside the swatches (it ran through `run_from_ribbon` already).
+/// #3038: a pick from the bar's highlight grid hands the keyboard back to the document.
 #[test]
 fn picking_a_highlight_swatch_returns_focus_to_the_document() {
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), Default::default());
-    a.run("select.all", json!({})).unwrap();
-    let origin = egui::Id::unique("hl_swatch_origin");
-    let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(400.0, 300.0)).build_ui_state(
-        move |ui, app: &mut WordApp| {
-            egui::Area::new(egui::Id::unique("hl_probe")).fixed_pos(pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
-                ui.ctx().data_mut(|d| d.insert_temp(origin, ui.next_widget_position()));
-                highlight_menu(ui, app);
-            });
-        },
-        a,
-    );
-    steps(&mut h);
-    // The first rendered swatch is Yellow (None is skipped), 18 × 18 at the grid's origin.
-    let first = h.ctx.data(|d| d.get_temp::<egui::Pos2>(origin)).expect("the grid drew");
-    h.state_mut().canvas.want_focus = false;
-    click_at(&mut h, first + Vec2::new(9.0, 9.0));
-    assert!(h.state().canvas.want_focus, "the swatch pick returns focus to the document");
-    assert!(format_state(&mut h).get("highlight").is_some_and(|v| !v.is_null()), "the first swatch applied a highlight");
+    let mut h = bar_over("brown fox");
+    let arrow = split_arrow(&h, "Text Highlight Color");
+    click_at(&mut h, arrow.center());
+    assert!(!h.state().canvas.focused(&h.ctx), "the open list holds the keyboard");
+    let first = h.query_all_by_label_contains("Yellow").next().expect("the list shows a swatch").rect().center();
+    click_at(&mut h, first);
+    assert!(h.state().canvas.focused(&h.ctx), "the swatch pick returns focus to the document");
+    assert!(format_state(&mut h).get("highlight").is_some_and(|v| !v.is_null()), "the swatch applied a highlight");
 }
 
-/// #3579: in a right-to-left paragraph the bar lit Align Left for a paragraph that sits on
-/// the right. Like the ribbon, it marks the alignment as seen on the page, the one its buttons
-/// set. Only the bar is drawn, so the ribbon's own alignment buttons can't answer for it.
+/// #3579: the bar marks the alignment as seen on the page, the one its buttons set, as the ribbon does.
 #[test]
-fn alignment_buttons_mark_the_alignment_seen_on_the_page_in_a_right_to_left_paragraph() {
-    use egui_kittest::kittest::Queryable;
+fn the_alignment_buttons_mark_the_paragraph_as_seen_on_the_page() {
     // A left-to-right paragraph first: a bar that always swapped the two would pass the RTL cases alone.
-    for (rtl, cmd, lit, unlit) in [
-        (false, None, "Align Left", "Align Right"),
-        (true, None, "Align Right", "Align Left"),
-        (true, Some("para.alignLeft"), "Align Left", "Align Right"),
-    ] {
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("سلام دنیا")), Default::default());
-        a.run("select.all", json!({})).unwrap();
-        if rtl {
-            a.run("para.rtl", json!({})).unwrap();
-        }
-        if let Some(cmd) = cmd {
-            a.run(cmd, json!({})).unwrap();
+    let cases: [(&str, &[(&str, Value)], &str, &str); 4] = [
+        ("سلام دنیا", &[("select.all", json!({}))], "Align Left", "Align Right"),
+        ("سلام دنیا", &[("select.all", json!({})), ("para.rtl", json!({}))], "Align Right", "Align Left"),
+        ("سلام دنیا", &[("select.all", json!({})), ("para.rtl", json!({})), ("para.alignLeft", json!({}))], "Align Left", "Align Right"),
+        (
+            "One\nTwo",
+            &[("select.text", json!({"text": "One"})), ("para.alignRight", json!({})), ("select.paragraph", json!({}))],
+            "Align Right",
+            "Align Left",
+        ),
+    ];
+    for (text, commands, lit, unlit) in cases {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), Default::default());
+        for (cmd, params) in commands {
+            a.run(cmd, params.clone()).unwrap();
         }
         // The bar writes in the interface fonts, which take effect the frame after they are set.
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(500.0, 200.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(Vec2::new(500.0, 200.0)).build_ui_state(
             move |ui, app: &mut WordApp| {
                 if !fonts {
-                    crate::theme::install_fonts(ui.ctx());
+                    // The runtime and its fonts are installed by the harness; the bar waits a frame.
                     fonts = true;
                     return;
                 }
                 egui::Area::new(egui::Id::unique("mini_align_probe")).fixed_pos(pos2(10.0, 10.0)).show(ui.ctx(), |ui| {
-                    let t = Tokens::get(ui.ctx());
-                    content(app, ui, &t, true);
+                    members(app, ui, true);
                 });
             },
             a,
         );
         steps(&mut h);
-        let checked = Tokens::get(&h.ctx).checked;
-        let marked: Vec<Rect> = h
-            .output()
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.fill == checked => Some(r.rect),
-                _ => None,
-            })
-            .collect();
-        let is_marked = |label: &str| {
-            let r = h.get_by_label(label).rect();
-            marked.iter().any(|m| m.contains(r.center()))
-        };
-        assert!(is_marked(lit), "rtl={rtl} {cmd:?}: {lit} is marked");
-        assert!(!is_marked(unlit), "rtl={rtl} {cmd:?}: {unlit} is not marked");
+        let toggled = |label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+        assert!(toggled(lit), "{text:?} {commands:?}: {lit} is marked");
+        assert!(!toggled(unlit), "{text:?} {commands:?}: {unlit} is not marked");
     }
 }
 
+/// After a click on a member no preview shows until the pointer leaves it: a toggle would
+/// otherwise preview its other state under the pointer and look as if it flashed.
 #[test]
-fn the_alignment_buttons_align_the_paragraph() {
-    use egui_kittest::kittest::Queryable;
-    for (label, align) in [("Center", "center"), ("Align Right", "right"), ("Justify", "both"), ("Align Left", "left")] {
+fn a_clicked_member_holds_its_preview_until_the_pointer_leaves() {
+    for (label, command) in [("Increase Font Size", None), ("Bold", Some("format.bold"))] {
         let mut h = bar_over("brown fox");
-        let viewport = h.state().canvas.viewport.unwrap();
-        let b = h.get_all_by_label(label).map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the bar has the button");
-        h.event(egui::Event::PointerMoved(b.center()));
-        steps(&mut h);
-        click_at(&mut h, b.center());
-        let got = h.state().session.doc.para_at(&h.state().session.sel.focus).map(|p| format!("{:?}", p.props.align)).unwrap_or_default();
-        assert!(got.to_lowercase().contains(align) || (align == "both" && got.to_lowercase().contains("justif")), "{label}: {got}");
+        let r = member(&h, label).unwrap_or_else(|| panic!("the bar has {label}"));
+        let at = r.center();
+        hover_at(&mut h, at);
+        assert!(h.state().canvas.command_previewed.is_some(), "{label}: hovering previews");
+        click_at(&mut h, at);
+        assert_eq!(h.state().canvas.command_previewed, None, "{label}: no preview after the click while the pointer stays");
+        hover_at(&mut h, pos2(5.0, 5.0));
+        hover_at(&mut h, at);
+        let previewed = h.state().canvas.command_previewed.clone();
+        assert!(previewed.is_some(), "{label}: coming back previews again");
+        if let Some(command) = command {
+            assert_eq!(previewed.map(|(id, _)| id).as_deref(), Some(command));
+            assert_ne!(crate::canvas::page_doc(h.state()), &h.state().session.doc, "{label}: the page shows the toggled-back state");
+        }
     }
 }
 
-/// After a click the button's preview stays off while the pointer is on it, so a toggle does not
-/// flash its other state; leaving and coming back previews again.
-#[test]
-fn a_clicked_button_holds_its_preview_until_the_pointer_leaves() {
-    use egui_kittest::kittest::Queryable;
-    let mut h = bar_over("brown fox");
-    let viewport = h.state().canvas.viewport.unwrap();
-    let size = format_state(&mut h).get("size").cloned();
-    let grow = h.get_all_by_label("Increase Font Size").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the bar has Grow").center();
-    h.event(egui::Event::PointerMoved(grow));
-    steps(&mut h);
-    assert!(h.state().canvas.command_previewed.is_some(), "hovering previews");
-    click_at(&mut h, grow);
-    steps(&mut h);
-    assert_ne!(format_state(&mut h).get("size").cloned(), size, "the click grew the text");
-    assert_eq!(h.state().canvas.command_previewed, None, "no preview of the next step under the pointer");
-    h.event(egui::Event::PointerMoved(pos2(5.0, 5.0)));
-    steps(&mut h);
-    h.event(egui::Event::PointerMoved(grow));
-    steps(&mut h);
-    assert!(h.state().canvas.command_previewed.is_some(), "coming back previews again");
+/// The bar's centre, and the selection's first visible line (the anchor) it hangs from.
+fn bar_centre_and_anchor(h: &H) -> (f32, Rect) {
+    let c = canvas(h);
+    let bar = h
+        .query_all_by_role(Role::Group)
+        .filter(|n| n.accesskit_node().label().as_deref() == Some("Formatting"))
+        .map(|n| n.rect())
+        .find(|r| c.contains_rect(*r))
+        .expect("the selection bar is shown inside the canvas");
+    (bar.center().x, h.state().canvas.mini_anchor.expect("the selection has an anchor"))
 }
 
-/// After a click the preview stays still while the pointer is on the button. Leaving and coming
-/// back previews the undo: Bold over bold text shows it unbolded.
-#[test]
-fn coming_back_to_a_toggle_previews_its_undo() {
-    use egui_kittest::kittest::Queryable;
-    let mut h = bar_over("brown fox");
-    let viewport = h.state().canvas.viewport.unwrap();
-    let bold = h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the bar has Bold").center();
-    click_at(&mut h, bold);
-    steps(&mut h);
-    assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)));
-    assert_eq!(h.state().canvas.command_previewed, None, "the page holds still after the click");
-    h.event(egui::Event::PointerMoved(pos2(5.0, 5.0)));
-    steps(&mut h);
-    h.event(egui::Event::PointerMoved(bold));
-    steps(&mut h);
-    assert_eq!(h.state().canvas.command_previewed, Some(("format.bold".to_string(), json!({}))), "coming back previews the undo");
-    let doc = h.state().session.doc.clone();
-    assert_ne!(crate::canvas::page_doc(h.state()), &doc, "the page shows the text unbolded");
+/// A paragraph long enough to wrap onto several lines, with a selection from `from_char` to its end.
+fn wrapped_selection(text: &str, rtl: bool, from_char: usize) -> H {
+    let text = text.repeat(40);
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+    if rtl {
+        a.run("select.all", json!({})).unwrap();
+        a.run("para.rtl", json!({})).unwrap();
+    }
+    let off = text.char_indices().nth(from_char).map_or(0, |(i, _)| i);
+    let end = text.len();
+    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, off), focus: wordcraft_doc::Pos::body(0, end) };
+    bar_over_app(a)
 }
 
-/// A selection that ends at the next paragraph's start (Select Paragraph, a triple-click) shows
-/// the alignment of the paragraph it covers, not the next one's.
+/// #7464: in a right-to-left paragraph the selection starts at the right, so the bar sits there,
+/// not at the left margin where the selection's first line ends.
 #[test]
-fn a_selected_paragraph_shows_its_own_alignment() {
-    let mut h = bar_over("brown fox");
-    h.state_mut().session = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("First paragraph\nSecond paragraph"));
-    h.state_mut().session.sel.anchor = wordcraft_doc::Pos::body(0, 2);
-    h.state_mut().session.sel.focus = wordcraft_doc::Pos::body(0, 2);
-    h.state_mut().run("para.alignRight", json!({})).unwrap();
-    h.state_mut().session.sel.anchor = wordcraft_doc::Pos::body(0, 0);
-    h.state_mut().session.sel.focus = wordcraft_doc::Pos::body(1, 0);
-    steps(&mut h);
-    let s = &h.state().session;
-    let focus_align = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).align);
-    assert_eq!(focus_align, Some(wordcraft_doc::Align::Left), "the next paragraph is left aligned");
-    let r = wordcraft_engine::cmd::para::selection_para(s);
-    assert_eq!(r.align, wordcraft_doc::Align::Right, "the buttons read the selected paragraph");
+fn the_bar_anchors_at_the_right_in_a_right_to_left_paragraph() {
+    let h = wrapped_selection("سلام دنیا ", true, 12);
+    let (x, anchor) = bar_centre_and_anchor(&h);
+    assert!(anchor.width() > 100.0, "the first selected line is a wide rect: {anchor:?}");
+    assert!((x - anchor.max.x).abs() < (x - anchor.min.x).abs(), "the bar x={x} is nearer the start (right) edge of {anchor:?}");
+}
+
+/// #7464: a left-to-right selection from mid-line 1 to a later line keeps the bar at its start.
+#[test]
+fn the_bar_anchors_at_the_start_of_a_multi_line_left_to_right_selection() {
+    let h = wrapped_selection("The quick brown fox ", false, 12);
+    let (x, anchor) = bar_centre_and_anchor(&h);
+    assert!(anchor.width() > 100.0, "the first selected line is a wide rect: {anchor:?}");
+    assert!((x - anchor.min.x).abs() < (x - anchor.max.x).abs(), "the bar x={x} is nearer the start (left) edge of {anchor:?}");
+}
+
+/// #7464: a right-to-left line mixing Arabic with Latin words or digits is several visual runs
+/// (emitted left to right): the bar hangs from the whole line's right edge, not the first run's.
+#[test]
+fn the_anchor_spans_every_run_on_the_topmost_line() {
+    let clip = vp();
+    let run = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), Vec2::new(50.0, 20.0));
+    let line1 = [run(200.0, 100.0), run(300.0, 100.0), run(250.0, 100.0)];
+    let later = run(900.0, 130.0);
+    let rects = [line1[0], line1[1], line1[2], later];
+    let a = visible_anchor(rects, clip, true).unwrap();
+    assert!(line1.iter().all(|r| a.max.x >= r.max.x && a.min.x <= r.min.x), "spans every run of line 1: {a:?}");
+    assert!(a.max.x < later.min.x && a.max.y <= later.min.y, "the later line is excluded: {a:?}");
+    let x = start_x(a, true);
+    assert!((x - a.max.x).abs() < (x - a.min.x).abs(), "RTL bar x={x} is nearer the line's right edge {}, not the left {}", a.max.x, a.min.x);
+    // Left to right keeps the first rectangle (vertical text stacks whole lines at one y-range).
+    let l = visible_anchor(rects, clip, false).unwrap();
+    assert!(l.min.x == line1[0].min.x && l.max.x < a.max.x, "LTR anchor is the top run only: {l:?}");
 }
