@@ -7,6 +7,9 @@
 //! - otherwise the copied cells overwrite the cells from the caret's cell rightwards and down,
 //!   adding the rows and columns they need (new cells empty).
 //!
+//! With a cell selection, Paste overwrites from its top-left, including when the copy is wider
+//! than the selection.
+//!
 //! Pasted cells take the destination's cell formatting (Word's default keeps the source's; not
 //! done yet). What this does not cover falls back to the old behaviour, a nested table (see
 //! [`paste_cells`]).
@@ -14,7 +17,7 @@
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::VMerge;
 use wordcraft_doc::table::{MAX_COLS, MAX_ROWS};
-use wordcraft_doc::{Block, Cell, InlineObject, Path, Pos, Row, Table};
+use wordcraft_doc::{Block, Cell, InlineObject, Path, Pos, Row, StoryRef, Table};
 
 use crate::{CmdError, Selection, Session};
 
@@ -107,7 +110,7 @@ enum Plan {
 
 /// How `src` goes into `dest` at (`row0`, `col0`), or `None` when it can't be laid over it (the
 /// paste nests the table instead).
-fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) -> Option<Plan> {
+fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize, allow_row_insertion: bool) -> Option<Plan> {
     if !plain_destination(dest) || col0 >= dest.grid.len() || row0 >= dest.rows.len() {
         return None;
     }
@@ -118,7 +121,7 @@ fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) ->
     }
     // Word inserts whole rows above the caret's row when the caret is in the first column and
     // the rows are as wide as the table; a one-column table can't tell rows from a cell.
-    if col0 == 0 && src_cols == dest_cols && dest_cols > 1 {
+    if allow_row_insertion && col0 == 0 && src_cols == dest_cols && dest_cols > 1 {
         return (dest.rows.len().saturating_add(src_rows) <= MAX_ROWS).then_some(Plan::InsertRows);
     }
     if dest.rows.len().max(row0.saturating_add(src_rows)) > MAX_ROWS || dest_cols.max(col0.saturating_add(src_cols)) > MAX_COLS {
@@ -131,6 +134,26 @@ fn plan(dest: &Table, src: &Table, src_cols: usize, row0: usize, col0: usize) ->
     }
     let hit = |r: usize| dest.rows.get(r).is_some_and(|row| row.cells.iter().skip(col0).take(src_cols).any(has_control));
     (!(row0..row0.saturating_add(src_rows).min(dest.rows.len())).any(hit)).then_some(Plan::Overwrite)
+}
+
+/// Overwrite cells from the top-left of a selection while it still identifies a rectangle.
+pub(super) fn paste_over_selection(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
+    let Some(range) = s.cell_range() else { return Ok(false) };
+    if s.doc.settings.track_changes || s.doc.control_at(&s.sel.ordered().0).is_some() {
+        return Ok(false);
+    }
+    let Some(src) = lone_table(frag) else { return Ok(false) };
+    let Some(src_cols) = plain_source(src) else { return Ok(false) };
+    let (row, col) = (range.rows.0, range.cols.0);
+    let story = range.story;
+    let table = range.table.clone();
+    let Some(dest) = s.doc.table(story, &table) else { return Ok(false) };
+    let Some(edit) = plan(dest, src, src_cols, row, col, false) else { return Ok(false) };
+    apply_plan(s, src, story, &table, row, col, edit)?;
+    s.column = None;
+    s.goal_x = None;
+    s.pending = None;
+    Ok(true)
 }
 
 /// A copied table pasted with the caret in a table cell, as Word's default Paste does it.
@@ -153,7 +176,7 @@ pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
     let Some(src_cols) = plain_source(src) else { return Ok(false) };
     let Some((tp, row0, col0)) = s.sel.focus.path.cell() else { return Ok(false) };
     let Some(dest) = s.doc.table(s.sel.focus.story, &tp) else { return Ok(false) };
-    if plan(dest, src, src_cols, row0, col0).is_none() {
+    if plan(dest, src, src_cols, row0, col0, true).is_none() {
         return Ok(false);
     }
     // A caret in a control that shows its placeholder: the edit rules would select the
@@ -175,17 +198,22 @@ pub fn paste_cells(s: &mut Session, frag: &Fragment) -> Result<bool, CmdError> {
     let Some((tp, row0, col0)) = at.path.cell() else { return Ok(false) };
     let story = at.story;
     let Some(dest) = s.doc.table(story, &tp) else { return Ok(false) };
-    let Some(plan) = plan(dest, src, src_cols, row0, col0) else { return Ok(false) };
-    let t = s.doc.table_mut(story, &tp)?;
+    let Some(edit) = plan(dest, src, src_cols, row0, col0, true) else { return Ok(false) };
+    apply_plan(s, src, story, &tp, row0, col0, edit)?;
+    Ok(true)
+}
+
+fn apply_plan(s: &mut Session, src: &Table, story: StoryRef, tp: &Path, row0: usize, col0: usize, plan: Plan) -> Result<(), CmdError> {
+    let t = s.doc.table_mut(story, tp)?;
     let first = match plan {
         Plan::InsertRows => insert_source_rows(t, src, row0),
         Plan::Overwrite => overwrite_cells(t, src, row0, col0),
     };
-    super::table::touch_cells(s, &tp)?;
+    super::table::touch_cells(s, tp)?;
     let mut path = tp.0.clone();
     path.extend([first.0 as u32, first.1 as u32, 0]);
     s.sel = Selection::caret(Pos { story, path: Path(path), off: 0 });
-    Ok(true)
+    Ok(())
 }
 
 /// Insert the rows of `src` above row `at` of `t` (same column count), formatted as that row.

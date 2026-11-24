@@ -303,7 +303,14 @@ fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
 /// else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
 /// as Keep Text Only does.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
-    match super::paste::paste_content(s, v)? {
+    let pasted = super::paste::paste_content(s, v)?;
+    if let super::paste::Pasted::Fragment(frag) = &pasted
+        && super::paste_cells::paste_over_selection(s, frag)?
+    {
+        return sel_result(s);
+    }
+    super::column::delete_cell_segments(s)?;
+    match pasted {
         super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
         super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
     }

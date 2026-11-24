@@ -74,6 +74,38 @@ fn paste_all_keeps_tables_in_copy_order_inside_the_cell() {
 }
 
 #[test]
+fn a_copied_table_over_selected_cells_overwrites_from_the_top_left() {
+    for (source_cols, expected) in
+        [(2, rows(&["s11,s12,d13", "s21,s22,d23", "d31,d32,d33"])), (3, rows(&["s11,s12,s13", "s21,s22,s23", "d31,d32,d33"]))]
+    {
+        let mut s = dest(1, 1);
+        crate::cmd::table::extend_selection(&mut s, Pos::new(StoryRef::Body, Path(vec![0, 0, 0, 0]), 0));
+        let range = s.cell_range().unwrap();
+        assert_eq!((range.rows, range.cols, range.stream), ((0, 1), (0, 1), false));
+        copy(&mut s, table("s", 2, source_cols));
+        paste(&mut s);
+        assert_eq!(grid(t0(&s)), expected, "source width {source_cols}");
+        assert_eq!(s.sel, Selection::caret(Pos::new(StoryRef::Body, Path(vec![0, 0, 0, 0]), 0)));
+        assert!(s.cell_range().is_none());
+
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(grid(t0(&s)), grid(&table("d", 3, 3)));
+        s.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(grid(t0(&s)), expected);
+        let reopened = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        assert_eq!(grid(reopened.body[0].as_table().unwrap()), expected);
+    }
+}
+
+#[test]
+fn plain_text_paste_still_replaces_a_cell_rectangle() {
+    let mut s = dest(0, 0);
+    crate::cmd::table::extend_selection(&mut s, Pos::new(StoryRef::Body, Path(vec![0, 1, 1, 0]), 0));
+    s.run("edit.paste", &json!({"text": "replacement"})).unwrap();
+    assert_eq!(grid(t0(&s)), rows(&["replacement,,d13", ",,d23", "d31,d32,d33"]));
+}
+
+#[test]
 fn a_whole_table_with_the_caret_in_the_first_column_inserts_its_rows_above() {
     for (row, want) in [
         (1, rows(&["d11,d12,d13", "s11,s12,s13", "s21,s22,s23", "s31,s32,s33", "d21,d22,d23", "d31,d32,d33"])),
