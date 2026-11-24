@@ -756,19 +756,20 @@ fn status_bar_view_mode_toggles_and_zoom_slider_proportions() {
 /// The frame the desktop app decides on GNOME's Wayland session, which draws no frames: the app's bar with GNOME's
 /// buttons, and the app set up to follow Use system title bar (#78).
 fn gnome_harness(system_title_bar: bool) -> egui_kittest::Harness<'static, WordApp> {
-    use craft::host::target::Backend;
+    use crate::TitleBar;
     use craft::ui::shell::{Caption, CaptionFamily, Captions, Frame};
     use craft::window::policy::{Decision, Desktop, DesktopKind};
-    let decision = move || {
-        let layout = craft::window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
-        let frame = if system_title_bar { Frame::Native } else { Frame::Integrated(Captions { family: CaptionFamily::Adwaita, layout }) };
-        let desktop = Desktop { kind: DesktopKind::Gnome, ssd: Some(false), gtk_theme: None, icon_theme: None };
-        Decision { frame, overridden: None, desktop }
-    };
+    let desktop = Desktop { kind: DesktopKind::Gnome, ssd: Some(false), gtk_theme: None, icon_theme: None };
+    let decision = |frame| Decision { frame, overridden: None, desktop: desktop.clone() };
+    let layout = craft::window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let t =
+        TitleBar::new(decision(Frame::Integrated(Captions { family: CaptionFamily::Adwaita, layout })), decision(Frame::Native), system_title_bar)
+            .unwrap();
     let mut a = new_app();
     a.ui.system_title_bar = system_title_bar;
-    let a = a.with_title_bar(Backend::Wayland, &decision());
-    let spec = move || crate::test_harness::install_spec().frame(decision());
+    let opened = t.decision().clone();
+    let a = a.with_title_bar(t);
+    let spec = move || crate::test_harness::install_spec().frame(opened.clone());
     let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(app_frame, a);
     crate::test_harness::frames(&mut h, 6);
     h
@@ -791,12 +792,12 @@ fn use_system_title_bar_swaps_the_window_buttons_for_the_desktop_frame() {
         })
     };
     let mut h = gnome_harness(false);
-    let drawn = window_buttons(&h);
     assert!(h.query_by_role_and_label(Role::Button, "Minimize").is_some(), "the title bar has the window buttons");
     assert_eq!(decorations(&commands_over(&mut h, 3)), None, "the window opened in its frame");
     h.state_mut().run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"})).unwrap();
     crate::test_harness::frames(&mut h, 4);
     assert!(h.query_by_label("Use system title bar").is_some(), "Options offers the choice");
+    let drawn = window_buttons(&h);
 
     let read = h.state_mut().run("ui.systemTitleBar", json!({"value": true})).unwrap();
     assert_eq!(read, json!({"systemTitleBar": true, "appDrawsFrame": false}));
@@ -809,7 +810,7 @@ fn use_system_title_bar_swaps_the_window_buttons_for_the_desktop_frame() {
     assert!(h.state_mut().run("ui.systemTitleBar", json!({"value": "no"})).is_err());
     h.state_mut().run("ui.systemTitleBar", json!({"value": false})).unwrap();
     assert_eq!(decorations(&commands_over(&mut h, 4)), Some(false), "the frame goes again");
-    assert!(window_buttons(&h) > framed, "and the buttons come back");
+    assert_eq!(window_buttons(&h), drawn, "and the same buttons come back");
 }
 
 /// #78: a window opened with the desktop's frame because Use system title bar was on gets the app's buttons when it
@@ -821,7 +822,7 @@ fn turning_use_system_title_bar_off_gives_a_framed_window_the_buttons() {
     h.state_mut().run("ui.systemTitleBar", json!({"value": false})).unwrap();
     let sent = commands_over(&mut h, 4);
     assert!(sent.iter().any(|c| matches!(c, egui::ViewportCommand::Decorations(false))), "{sent:?}");
-    assert!(window_buttons(&h) > framed, "the title bar gets the window buttons");
+    assert!(window_buttons(&h) > framed + 1, "the title bar gets the desktop's window buttons, not only Close");
 }
 
 /// #78: where the desktop draws the frame there is nothing to choose, and the setting changes no window.

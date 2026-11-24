@@ -492,8 +492,8 @@ fn main() -> eframe::Result {
     // (#78). Decided before the window opens, so it opens with that frame.
     let backend = if x11 { Backend::X11 } else { Backend::from_env() };
     let title_bar = wordcraft_ui_egui::decide_title_bar(backend, settings.lock().get().system_title_bar);
-    if let Some(decision) = &title_bar {
-        options.viewport = craft::window::policy::apply(options.viewport, &decision.frame);
+    if let Some(t) = &title_bar {
+        options.viewport = craft::window::policy::apply(options.viewport, &t.decision().frame);
     }
     // What the OS asks of a running app arrives here; its wake repaints once the window exists.
     let repaint: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
@@ -540,8 +540,8 @@ fn main() -> eframe::Result {
                 .system(SystemReader::start(wake))
                 .clipboard(Clipboard::new(SystemClipboard::new().decoder(decode_png)))
                 .placement(placement);
-            if let Some(decision) = title_bar.clone() {
-                spec = spec.frame(decision);
+            if let Some(t) = &title_bar {
+                spec = spec.frame(t.decision().clone());
             }
             // PLAN: assumed `wordcraft_ui_egui::ui_fonts` re-exports sh.A10's `app::fonts::ui_fonts` (`mod app` is private; app-hub/shell-w11).
             embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang)).map_err(|e| format!("the runtime could not be installed: {e}"))?;
@@ -564,8 +564,8 @@ fn main() -> eframe::Result {
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
                 app = app.with_fallback_chooser(true);
             }
-            if let Some(decision) = &title_bar {
-                app = app.with_title_bar(backend, decision);
+            if let Some(t) = title_bar {
+                app = app.with_title_bar(t);
             }
             app.set_startup_update_check(true);
             // After the preferences, so the reason it gives is in the interface language.
