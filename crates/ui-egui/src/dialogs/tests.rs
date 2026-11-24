@@ -1613,6 +1613,71 @@ fn find_symbol_mark_entry_cross_reference_and_merge_fields_are_modeless() {
     }
 }
 
+/// #3859: Escape in the fallback file chooser over a modal dialog (`templates`) cancels only the
+/// chooser; the dialog under it, drawn first on `dialog_host`, stays open and regains the top
+/// of the stack.
+#[test]
+fn escape_in_the_browser_leaves_the_dialog_under_it_open() {
+    use std::sync::Arc;
+
+    use craft::browse::places::{FakeDirectories, FolderCache};
+    use craft::dialogs::ui::FileChooser;
+    use craft::host::{ManualJobs, PickRequest, Wake};
+    use craft::ui::dialog::DialogResult;
+
+    let mut h = app_harness(app_with(""));
+    h.run_steps(6);
+    // A new window's page takes the keyboard from the first click or command; establish focus so
+    // the later blocked-input check actually tests modal blocking.
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    h.run_steps(2);
+    h.event(egui::Event::Text("a".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "a", "the page takes typing while no modal is open");
+
+    open_named(&mut h, "templates", json!({}));
+    assert_eq!(open_keys(h.state()), ["templates"]);
+
+    let jobs = Arc::new(ManualJobs::new());
+    let folders = FolderCache::new(Arc::new(FakeDirectories::new().folder("/d/drafts").file("/d/House.dotx")), jobs.clone(), Wake::none());
+    let req = PickRequest::open("template").directory("/d").fallback(true);
+    h.state_mut().dialog_host.open(FileChooser::new(req, None, folders));
+    for _ in 0..4 {
+        jobs.run_all();
+        h.step();
+    }
+
+    assert!(h.state().dialog_host.is_open::<FileChooser>(), "browser is open");
+    let open = h.state().dialog_host.open_dialogs();
+    assert_eq!(open.len(), 2, "browser is stacked over templates");
+    let ids: Vec<_> = open.iter().map(|d| d.id).collect();
+    assert_eq!(
+        ids,
+        [craft::ui::dialog::dialog_id("templates"), craft::ui::dialog::dialog_id("fileChooser")],
+        "browser is stacked on top of templates"
+    );
+    let listed = open.into_iter().find_map(|d| d.fields.and_then(|f| f.get("listed").cloned()));
+    assert_eq!(listed, Some(json!(true)), "the chooser finished listing its folder");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+
+    assert!(!h.state().dialog_host.is_open::<FileChooser>(), "Escape closes the browser");
+    assert_eq!(h.state_mut().dialog_host.take::<FileChooser>(), Some(DialogResult::Cancel), "Escape cancels the browser");
+    assert_eq!(open_keys(h.state()), ["templates"], "and leaves the dialog under it open");
+
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "a", "the document behind templates stays blocked");
+    assert!(is_open(h.state(), "templates"), "templates stays open");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "templates"), "a second Escape closes templates once it is back on top");
+    assert!(h.state().dialog_host.is_empty(), "all dialogs are closed");
+}
+
 /// Every dialog name the name table knows opens its dialog under the key the host reports, or
 /// nothing where its condition isn't met; scripts and every command use this table (dg.A2).
 #[test]
