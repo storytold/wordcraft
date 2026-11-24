@@ -87,8 +87,8 @@ fn background_at_caret_follows_page_colour_highlight_and_dark_mode() {
     assert_eq!(background_at(&d, &page, &light, x, y), Rgb::WHITE, "past the highlight");
 }
 
-/// The caret sits over the page's fill, not the paper beneath it: a gradient's mean stop and a
-/// pattern's back colour, each composited over the paper, are what the caret contrasts against.
+/// The caret sits over the page's fill, not the paper beneath it: a gradient's colour where the
+/// caret is and a pattern's back colour, each composited over the paper.
 #[test]
 fn background_at_caret_follows_gradient_and_pattern_fills() {
     use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
@@ -109,8 +109,15 @@ fn background_at_caret_follows_gradient_and_pattern_fills() {
         rot_with_shape: false,
         flip: GradientFlip::None,
     });
+    // The page runs black at its top to white at its foot: the caret takes the end it is at,
+    // not the mean grey of the whole page.
     let g = background_at(&d, &page, &light, 72.0, 72.0);
-    assert!((g.0 as i32 - 0x80).abs() < 3 && (g.1 as i32 - 0x80).abs() < 3 && (g.2 as i32 - 0x80).abs() < 3, "the mean stop over white: {g:?}");
+    assert!(g.luma() < 64.0, "near the black end of the gradient: {g:?}");
+    let mean = light.visible_fill(&d);
+    assert!(
+        (mean.0 as i32 - 0x80).abs() < 3 && (mean.1 as i32 - 0x80).abs() < 3 && (mean.2 as i32 - 0x80).abs() < 3,
+        "the mean stop over white: {mean:?}"
+    );
     d.settings.page_gradient = None;
     d.settings.page_pattern =
         Some(wordcraft_doc::PagePattern { preset: "pct50".into(), fore: Rgb::BLACK, back: Rgb(0x33, 0x66, 0x99), transparency: 50.0 });
@@ -122,6 +129,35 @@ fn background_at_caret_follows_gradient_and_pattern_fills() {
     assert_eq!(background_at(&d, &page, &reading, 72.0, 72.0), SEPIA_PAPER, "Read Mode's paper hides the pattern");
     d.settings.page_pattern = None;
     assert_eq!(background_at(&d, &page, &light, 72.0, 72.0), Rgb(0x10, 0x10, 0x40), "clearing the fill shows the page colour");
+}
+
+/// A gradient's colour is sampled where the caret sits, not averaged over the page: at the two
+/// ends of a black-to-white gradient it is black and white, so the caret (which inverts what it
+/// sits on) contrasts differently at each end. The page's mean grey gave both ends the same.
+#[test]
+fn background_at_samples_a_page_gradient_where_the_caret_sits() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut d = Document::from_text("Hello WordCraft");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = l.pages[0].clone();
+    let light = RenderOptions::default();
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(0x00, 0x00, 0x00), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(0xFF, 0xFF, 0xFF), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let black_end = background_at(&d, &page, &light, 4.0, 300.0);
+    let white_end = background_at(&d, &page, &light, page.w - 4.0, 300.0);
+    assert!(black_end.luma() < 16.0, "the left end is black: {black_end:?}");
+    assert!(white_end.luma() > 224.0, "the right end is white: {white_end:?}");
+    assert!(contrast(black_end, Rgb::WHITE) > 7.0, "a white caret shows at the black end: {black_end:?}");
+    assert!(contrast(white_end, Rgb::BLACK) > 7.0, "a black caret shows at the white end: {white_end:?}");
 }
 
 /// #299: a filled shape colours the caret's background only inside its outline: an
@@ -480,6 +516,47 @@ fn page_pattern_is_painted_as_its_tile() {
     assert_eq!(px(10, 10), [20, 40, 60], "the tile repeats");
 }
 
+/// #589: Print Markup widens a page by its comment column (`page.markup`), which is not part of
+/// the page's fill. A pattern covers the document page and stops there, and a gradient runs
+/// across it, so neither paints nor stretches over the balloons.
+#[test]
+fn page_fill_stops_at_the_markup_column() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    const MARKUP: f32 = 100.0;
+    let at = |img: &Rendered, x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    let mut d = Document::new();
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let mut page = l.pages[0].clone();
+    let doc_w = page.w as u32;
+    page.w += MARKUP;
+    page.markup = MARKUP;
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "lgCheck".into(), fore: Rgb(20, 40, 60), back: Rgb(230, 240, 250), transparency: 0.0 });
+    let img = render_page(&d, &page, 1.0, &RenderOptions::default());
+    assert_eq!(at(&img, 6, 2), [230, 240, 250], "the pattern's back colour on the document page");
+    assert_eq!(at(&img, doc_w + 6, 2), [255, 255, 255], "the comment column stays on the paper");
+    // A horizontal gradient ends at the document page's right edge, not the widened one.
+    d.settings.page_pattern = None;
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(255, 0, 0), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(0, 0, 255), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let img = render_page(&d, &page, 1.0, &RenderOptions::default());
+    let right = at(&img, doc_w - 4, 300);
+    assert!(right[2] > 230 && right[0] < 24, "the gradient's blue end is at the document page's edge: {right:?}");
+    assert_eq!(at(&img, doc_w + 4, 300), [255, 255, 255], "and it doesn't stretch over the comment column");
+}
+
 /// A translucent page fill composites over the page's paper, not over `page_color` — the
 /// fallback older readers use, which `design.pageFill` writes as a gradient's first stop or a
 /// pattern's back colour. Blending over that made a 50% gradient's left end solid, and left a
@@ -575,6 +652,29 @@ fn page_gradient_and_pattern_follow_a_dark_page() {
     let want = ink(Rgb(255, 0, 0));
     assert!(left.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 12), "the left end is the dark page's red {want:?}: {left:?}");
     assert_ne!(want, [255, 0, 0], "the dark page does change it");
+}
+
+/// A dark page inks a translucent fill's colours and the paper under it before compositing them,
+/// as the raster does. Inking the mix instead gave a colour the page never shows: a red pattern at
+/// 50% over a blue paper came out #FF98FF where the raster draws #993399, and the caret took that.
+#[test]
+fn a_dark_pages_translucent_fill_composites_the_inked_colours() {
+    let opts = RenderOptions { dark: true, paper: Rgb(0, 0, 255), ..Default::default() };
+    let mut d = Document::new();
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "pct50".into(), fore: Rgb(255, 0, 0), back: Rgb(255, 0, 0), transparency: 50.0 });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = l.pages[0].clone();
+    let img = render_page(&d, &page, 1.0, &opts);
+    let i = ((5 * img.width + 5) * 4) as usize;
+    let drawn = [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]];
+    let want = Rgb(153, 51, 153);
+    assert!(
+        drawn.iter().zip([want.0, want.1, want.2]).all(|(a, b)| a.abs_diff(b) <= 2),
+        "the raster draws inked red over inked blue {want:?}: {drawn:?}"
+    );
+    assert_eq!(opts.visible_fill(&d), want, "the visible fill agrees with the raster");
+    assert_eq!(background_at(&d, &page, &opts, 5.0, 5.0), want, "and so does the colour under the caret");
 }
 
 /// Read Mode's Page Color: the reading paper replaces the document's page color and page

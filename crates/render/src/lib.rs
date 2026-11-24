@@ -198,33 +198,60 @@ impl RenderOptions {
     /// its first stop or back colour in `page_color` for older readers, so readers must not use
     /// `page_color` for those fills (that is the fill, not the paper underneath).
     ///
+    /// A dark page inks the fill's colours and the paper before compositing them, as the raster
+    /// does; inking their mix instead picks a colour neither the paper nor the fill ever shows.
+    ///
     /// Read Mode's paper replaces the document's page background, fill included.
     pub fn visible_fill(&self, doc: &Document) -> Rgb {
         if self.read_paper.is_some() {
             return self.paper_of(doc);
         }
-        let paper = self.read_paper.unwrap_or(self.paper);
+        let paper = self.ink(self.paper);
         if let Some(g) = &doc.settings.page_gradient
             && !g.stops.is_empty()
         {
             let (mut r, mut gg, mut b, mut a) = (0.0f32, 0.0, 0.0, 0.0f32);
             for s in &g.stops {
-                r += s.color.0 as f32;
-                gg += s.color.1 as f32;
-                b += s.color.2 as f32;
+                let c = self.ink(s.color);
+                r += c.0 as f32;
+                gg += c.1 as f32;
+                b += c.2 as f32;
                 a += (1.0 - s.transparency.clamp(0.0, 100.0) / 100.0).clamp(0.0, 1.0);
             }
             let n = g.stops.len() as f32;
             let alpha = (a / n).clamp(0.0, 1.0);
             let mix = |fill: f32, under: u8| (fill / n * alpha + under as f32 * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
-            return self.ink(Rgb(mix(r, paper.0), mix(gg, paper.1), mix(b, paper.2)));
+            return Rgb(mix(r, paper.0), mix(gg, paper.1), mix(b, paper.2));
         }
         if let Some(p) = &doc.settings.page_pattern {
             let alpha = (1.0 - p.transparency.clamp(0.0, 100.0) / 100.0).clamp(0.0, 1.0);
+            let back = self.ink(p.back);
             let mix = |over: u8, under: u8| (over as f32 * alpha + under as f32 * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
-            return self.ink(Rgb(mix(p.back.0, paper.0), mix(p.back.1, paper.1), mix(p.back.2, paper.2)));
+            return Rgb(mix(back.0, paper.0), mix(back.1, paper.1), mix(back.2, paper.2));
         }
         self.paper_of(doc)
+    }
+
+    /// [`RenderOptions::visible_fill`] at page point (`x`, `y`) of `page`: a gradient sampled
+    /// where the point falls, so the caret takes the colour of the end it sits at rather than the
+    /// mean of the whole page (which can be the opposite of what lies behind it), and the paper
+    /// under a point outside the page's fill. Everything else (and a junk point) is the mean.
+    fn fill_at(&self, doc: &Document, page: &Page, x: f32, y: f32) -> Rgb {
+        if self.read_paper.is_some() || !(x.is_finite() && y.is_finite()) {
+            return self.visible_fill(doc);
+        }
+        let Some(paint) = doc.settings.page_gradient.as_ref().and_then(|g| media::page_gradient_paint(page, g, |c| self.ink(c))) else {
+            return self.visible_fill(doc);
+        };
+        // Print Markup's comment column, and any point off the page, lies on the paper.
+        let Some(rect) = media::page_fill_rect(page) else { return self.visible_fill(doc) };
+        if !rect.contains(kurbo::Point::new(f64::from(x), f64::from(y))) {
+            return self.paper_of(doc);
+        }
+        let (colour, alpha) = paint.at(x, y);
+        let paper = self.ink(self.paper);
+        let mix = |over: u8, under: u8| (over as f32 * alpha + under as f32 * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
+        Rgb(mix(colour.0, paper.0), mix(colour.1, paper.1), mix(colour.2, paper.2))
     }
 
     /// The on-screen color of paper with no page color: [`RenderOptions::read_paper`], else
@@ -373,8 +400,9 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
 /// pictures and turned or rotated content are left out. The caret takes its colour from this
 /// so it shows against whatever lies behind it (#299).
 pub fn background_at(doc: &Document, page: &Page, opts: &RenderOptions, x: f32, y: f32) -> Rgb {
-    // The caret sits over the page's fill, not the paper beneath it.
-    let paper = opts.visible_fill(doc);
+    // The caret sits over the page's fill, not the paper beneath it — and over the part of a
+    // gradient at its own point, not its mean, which can be the opposite of what is there.
+    let paper = opts.fill_at(doc, page, x, y);
     if !(x.is_finite() && y.is_finite()) {
         return paper;
     }

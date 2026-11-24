@@ -559,23 +559,62 @@ pub(crate) fn draw_page_background(ctx: &mut RenderContext, doc: &Document, page
     }
 }
 
-/// A linear gradient page background, at its angle (0° = left to right, 90° = top to bottom) and
-/// each stop's transparency.
-fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
-    use wordcraft_doc::fill::GradientKind;
-    let Some(g) = &doc.settings.page_gradient else { return };
-    let (w, h) = (f64::from(page.w), f64::from(page.h));
-    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
-        return;
+/// The page's fill area in page points: the document page, without the Print Markup area beside
+/// it that holds comment balloons (`page.markup`), so a fill doesn't paint the comment column or
+/// stretch past the page; at least 1 pt wide, as `draw_watermark` keeps the page it draws on.
+/// `None` for a page of no finite size.
+pub(crate) fn page_fill_rect(page: &Page) -> Option<kurbo::Rect> {
+    if !(page.w.is_finite() && page.h.is_finite()) {
+        return None;
     }
+    let w = f64::from((page.w - page.markup.max(0.0)).max(1.0));
+    let h = f64::from(page.h);
+    (h > 0.0).then(|| kurbo::Rect::new(0.0, 0.0, w, h))
+}
+
+/// Where a page gradient's line runs, in page points: through the centre of the page's fill area
+/// (and so its document page) at `g`'s angle, long enough to cover both its corners. 0° runs left
+/// to right and 90° top to bottom; a non-linear kind, or none, runs top to bottom.
+pub(crate) fn page_gradient_line(page: &Page, g: &wordcraft_doc::fill::Gradient) -> Option<((f32, f32), (f32, f32))> {
+    use wordcraft_doc::fill::GradientKind;
+    let rect = page_fill_rect(page)?;
+    let (w, h) = (rect.width(), rect.height());
     let angle = match g.kind {
         GradientKind::Linear { angle, .. } if angle.is_finite() => f64::from(angle),
         _ => 90.0,
     };
     let (dx, dy) = (angle.to_radians().cos(), angle.to_radians().sin());
-    // The line through the page's centre long enough to cover both corners.
     let len = w * dx.abs() + h * dy.abs();
     let (cx, cy) = (w / 2.0, h / 2.0);
+    let end = |k: f64| ((cx + dx * len / 2.0 * k) as f32, (cy + dy * len / 2.0 * k) as f32);
+    Some((end(-1.0), end(1.0)))
+}
+
+/// The page gradient as a [`wordcraft_layout::display::Paint`], its stops passed through `ink`
+/// and at their transparencies, over the page's fill area: `background_at` samples it where the
+/// caret sits, so the caret contrasts with the gradient there. `None` for a page without gradient
+/// geometry or with fewer than two stops (the raster draws none either).
+pub(crate) fn page_gradient_paint(
+    page: &Page,
+    g: &wordcraft_doc::fill::Gradient,
+    ink: impl Fn(wordcraft_doc::props::Rgb) -> wordcraft_doc::props::Rgb,
+) -> Option<wordcraft_layout::display::Paint> {
+    use wordcraft_layout::display::Paint;
+    let (p0, p1) = page_gradient_line(page, g)?;
+    let stops: Vec<(f32, wordcraft_doc::props::Rgb, f32)> = g
+        .stops
+        .iter()
+        .filter(|s| s.pos.is_finite())
+        .map(|s| ((s.pos / 100.0).clamp(0.0, 1.0), ink(s.color), 1.0 - s.transparency.clamp(0.0, 100.0) / 100.0))
+        .collect();
+    (stops.len() >= 2).then_some(Paint::Linear { p0, p1, stops })
+}
+
+/// A linear gradient page background, at its angle (0° = left to right, 90° = top to bottom) and
+/// each stop's transparency.
+fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
+    let Some(g) = &doc.settings.page_gradient else { return };
+    let (Some(rect), Some((p0, p1))) = (page_fill_rect(page), page_gradient_line(page, g)) else { return };
     let stops: Vec<peniko::ColorStop> = g
         .stops
         .iter()
@@ -591,20 +630,14 @@ fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view
         return;
     }
     ctx.set_transform(view);
-    ctx.set_paint(
-        peniko::Gradient::new_linear((cx - dx * len / 2.0, cy - dy * len / 2.0), (cx + dx * len / 2.0, cy + dy * len / 2.0))
-            .with_stops(stops.as_slice()),
-    );
-    ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w, h));
+    ctx.set_paint(peniko::Gradient::new_linear(p0, p1).with_stops(stops.as_slice()));
+    ctx.fill_rect(&rect);
 }
 
 /// A pattern page background: the preset's tile, repeated over the page at 8 points.
 fn draw_page_pattern(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
     let Some(p) = &doc.settings.page_pattern else { return };
-    let (w, h) = (f64::from(page.w), f64::from(page.h));
-    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
-        return;
-    }
+    let Some(rect) = page_fill_rect(page) else { return };
     let p = wordcraft_doc::PagePattern { fore: opts.ink(p.fore), back: opts.ink(p.back), ..p.sanitized() };
     let Some(pm) = pattern_pixmap(&p) else { return };
     const TILE: f32 = 8.0;
@@ -622,7 +655,7 @@ fn draw_page_pattern(ctx: &mut RenderContext, doc: &Document, page: &Page, view:
     if alpha < 1.0 {
         ctx.push_opacity_layer(alpha);
     }
-    ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w, h));
+    ctx.fill_rect(&rect);
     if alpha < 1.0 {
         ctx.pop_layer();
     }
