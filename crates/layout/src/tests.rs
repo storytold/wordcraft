@@ -5186,6 +5186,138 @@ fn repeated_header_moves_with_the_first_row_that_does_not_fit() {
     assert_eq!(rows_per_page(40.0), vec![vec![], vec![0, 1, 2]]);
 }
 
+/// A 288 pt high body holding a `filler` pt line, an optional caption kept with the table after
+/// it (keep with next), then a table of `rows` exact rows, 20 pt high but the last (`last` pt): a
+/// repeated header row and body rows each kept with the next but the last (the usual way to keep a
+/// table on one page).
+fn kept_table_doc(filler: f32, caption: bool, rows: usize, last: f32) -> Document {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(LineSpacing::Exactly(12.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    (d.last_section.page_w, d.last_section.page_h) = (400.0, 360.0);
+    (d.last_section.margin_top, d.last_section.margin_bottom) = (36.0, 36.0);
+    let mut t = Table::new(rows, 1, 328.0);
+    t.props.style = None;
+    t.props.cell_margins = Some([0.0; 4]);
+    for (ri, row) in t.rows.iter_mut().enumerate() {
+        row.props.header = ri == 0;
+        row.props.height = Some(if ri + 1 < rows { 20.0 } else { last });
+        row.props.height_rule = HeightRule::Exact;
+        let keep = ParaProps { keep_next: Some(ri + 1 < rows), ..plain.clone() };
+        row.cells[0].blocks = vec![para(&format!("Row {ri}"), keep)];
+    }
+    let mut body = vec![para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(filler)), ..plain.clone() })];
+    if caption {
+        body.push(para("Table 1. Caption", ParaProps { keep_next: Some(true), ..plain }));
+    }
+    body.push(Arc::new(Block::Table(t)));
+    d.body = body;
+    d
+}
+
+/// The page of the caption (body paragraph 1) of a [`kept_table_doc`], if it has one, and the rows
+/// of its table (the last body block) on each page.
+fn kept_table_pages(d: &Document, caption: bool) -> (Option<usize>, Vec<Vec<usize>>) {
+    let table = d.body.len().saturating_sub(1) as u32;
+    let l = lay(d);
+    let caption_page =
+        l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { path, .. } if path.0 == [1]))).filter(|_| caption);
+    let rows = l
+        .pages
+        .iter()
+        .map(|p| {
+            p.items
+                .iter()
+                .filter_map(|i| match i {
+                    Placed::Cell { row, cell: 0, table: tp, .. } if tp.0 == [table] => Some(*row),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    (caption_page, rows)
+}
+
+#[test]
+fn a_table_kept_whole_moves_on_with_its_header_and_caption() {
+    crate::test_fonts();
+    // Room for the caption, the header and a few rows, but not the whole kept table: the header
+    // rows don't stay alone above the gap the kept rows leave, and the caption goes on with them.
+    let (caption, pages) = kept_table_pages(&kept_table_doc(200.0, true, 6, 20.0), true);
+    assert_eq!(pages, vec![vec![], vec![0, 1, 2, 3, 4, 5]]);
+    assert_eq!(caption, Some(1), "the caption stays with its table");
+    let (_, pages) = kept_table_pages(&kept_table_doc(212.0, false, 6, 20.0), false);
+    assert_eq!(pages, vec![vec![], vec![0, 1, 2, 3, 4, 5]], "without a caption too");
+    // Room for all of it: nothing moves.
+    let (caption, pages) = kept_table_pages(&kept_table_doc(100.0, true, 6, 20.0), true);
+    assert_eq!((caption, pages), (Some(0), vec![vec![0, 1, 2, 3, 4, 5]]));
+    // Kept rows taller than a page can't be kept together: the table starts where it is, with its
+    // caption, and runs on under its repeated header.
+    let (caption, pages) = kept_table_pages(&kept_table_doc(200.0, true, 20, 20.0), true);
+    assert_eq!(caption, Some(0));
+    assert!(pages[0].starts_with(&[0, 1]), "{pages:?}");
+    assert!(pages[1..].iter().all(|p| p.is_empty() || p.first() == Some(&0)), "{pages:?}");
+    assert_eq!(pages.iter().flatten().filter(|r| **r != 0).count(), 19, "every body row is placed once: {pages:?}");
+    // A row ending the chain that no page holds below it (280 pt under 40 pt in 288 pt): moving on
+    // gains nothing, so the caption, the header and the kept row stay together where they are.
+    let (caption, pages) = kept_table_pages(&kept_table_doc(200.0, true, 3, 280.0), true);
+    assert_eq!((caption, pages), (Some(0), vec![vec![0, 1], vec![0, 2]]));
+}
+
+#[test]
+fn a_caption_goes_on_with_rows_its_table_style_keeps_together() {
+    crate::test_fonts();
+    // Keep with next from the table style's paragraph formatting, no header row: the caption is
+    // measured against the kept rows as the cells are laid out.
+    let mut d = kept_table_doc(200.0, true, 6, 20.0);
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+        id: "KeptTable".into(),
+        name: "Kept Table".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        para: ParaProps { keep_next: Some(true), ..Default::default() },
+        table: Some(Default::default()),
+        ..Default::default()
+    });
+    let Some(Block::Table(t)) = d.body.last_mut().map(Arc::make_mut) else { panic!("no table") };
+    t.props.style = Some("KeptTable".into());
+    for row in &mut t.rows {
+        row.props.header = false;
+        for b in &mut row.cells[0].blocks {
+            if let Block::Para(p) = Arc::make_mut(b) {
+                p.props.keep_next = None;
+            }
+        }
+    }
+    let (caption, pages) = kept_table_pages(&d, true);
+    assert_eq!((caption, pages), (Some(1), vec![vec![], vec![0, 1, 2, 3, 4, 5]]));
+}
+
+#[test]
+fn measuring_a_kept_table_ahead_counts_its_list_items_once() {
+    crate::test_fonts();
+    // The caption measures the table after it ahead of laying it out: a numbered paragraph in its
+    // cells is still counted once.
+    let mut d = kept_table_doc(100.0, true, 3, 20.0);
+    let mut items = numbered(&mut d, &["before", "in the table", "after"], ParaProps::default()).into_iter();
+    let (Some(before), Some(inside), Some(after)) = (items.next(), items.next(), items.next()) else { panic!("three items") };
+    d.body[0] = wordcraft_doc::para_block(before);
+    let Some(Block::Table(t)) = d.body.last_mut().map(Arc::make_mut) else { panic!("no table") };
+    t.rows[1].cells[0].blocks.push(wordcraft_doc::para_block(inside));
+    d.body.push(wordcraft_doc::para_block(after));
+    assert_eq!(labels(&lay(&d)), ["1.", "2.", "3."]);
+}
+
 #[test]
 fn a_repeated_header_is_never_left_alone_when_the_table_starts_mid_page() {
     // #1704: a table whose repeated header row fits at the bottom of a page while a body row

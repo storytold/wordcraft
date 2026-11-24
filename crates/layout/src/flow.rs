@@ -1134,7 +1134,9 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                     }
             }
         }
-        Some(Block::Table(_)) => 24.0,
+        // A table: the start of its first row, or more when its header rows or kept rows can't be
+        // left behind (a caption then goes on with them).
+        Some(Block::Table(t)) => super::table_flow::kept_start_height(ctx, t, block + 1, width).unwrap_or(super::table_flow::FIRST_ROW_START),
         None => 0.0,
     }
 }
