@@ -134,6 +134,7 @@ impl WordApp {
             } else {
                 interface(CommandRef::new("ui.collapseRibbon"), "Collapse the Ribbon", "Mod+Alt+R");
             }
+            interface(CommandRef::new("ui.modalEditing"), "Modal Editing", "Ctrl+Alt+M");
             interface(CommandRef::new("ui.resetInterfaceSize"), "Reset Interface Size", "Mod+Shift+0");
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));

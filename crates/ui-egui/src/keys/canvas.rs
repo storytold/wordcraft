@@ -49,6 +49,9 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
         read_mode_input(app, ctx, inputs, window);
         return;
     }
+    if app.modal_editor_inputs(inputs, ctx) {
+        return;
+    }
     // The erased text's formatting is carried only for a replacement in this list. The undo join
     // belongs to the deletion transaction instead: the engine's scoped `ime_text_join` survives
     // frames until its matching `text.insert` or any other command, key or new request consumes or

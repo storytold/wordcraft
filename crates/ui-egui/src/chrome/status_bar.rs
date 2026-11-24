@@ -102,6 +102,20 @@ fn readouts(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
         Text::new(label.to_string()).show(ui);
     }
     language(app, ui);
+    if app.ui.modal_editing {
+        let state = &app.canvas.modal;
+        let mode = match state.mode.as_str() {
+            "i" | "ic" | "ix" => tl!("Insert"),
+            "v" | "V" | "\u{16}" => tl!("Visual"),
+            "c" => tl!("Command"),
+            "" => tl!("Starting"),
+            _ => tl!("Normal"),
+        };
+        let text = if state.command.is_empty() { crate::i18n::fmt(tl!("Modal: {mode}"), &[("mode", mode)]) } else { format!(":{}", state.command) };
+        if item(ui, text, Some(tl!("Modal text editing. Ctrl+Alt+M turns it off.").to_string())).clicked() {
+            let _ = app.run("ui.modalEditing", json!({"value":false}));
+        }
+    }
     if app.session.doc.settings.track_changes {
         Text::new(tl!("Track Changes: On").to_string()).show(ui);
     }

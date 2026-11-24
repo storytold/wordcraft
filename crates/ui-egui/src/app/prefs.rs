@@ -29,6 +29,9 @@ impl WordApp {
     /// Restore preferences saved by [`WordApp::prefs`].
     pub fn apply_prefs(&mut self, ui: Prefs) {
         self.ui = ui;
+        if !cfg!(unix) {
+            self.ui.modal_editing = false;
+        }
         self.ui.backstage = false;
         // Word opens on Home every launch, so the tab the settings hold is not restored. Going File
         // and back to the editor within the run still returns to the tab that was showing.

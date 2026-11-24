@@ -382,6 +382,7 @@ impl WordApp {
     /// Read Aloud, its file dialog, AutoSave of its document. Runs in [`WordApp::logic`] for the
     /// active window and, with native windows, as each window draws.
     pub(crate) fn window_work(&mut self, ctx: &egui::Context) {
+        self.modal_poll(ctx);
         crate::windows::arrange::poll(self, ctx);
         if self.windows.native() {
             let doc = self.session.document_id();
