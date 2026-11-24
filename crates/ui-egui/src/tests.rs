@@ -4072,6 +4072,27 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     assert_eq!(restored.ui.scroll_speed, ScrollSpeed::Fast);
 }
 
+#[test]
+fn chart_series_dialog_distinguishes_untouched_and_cleared_number_format() {
+    use crate::dialogs_chart::ChartSeriesForm;
+
+    let mut a = app();
+    a.run("insert.chart", json!({"type": "line"})).unwrap();
+    let mut form = ChartSeriesForm::new(&a).unwrap();
+    assert!(form.params().unwrap().get("format").is_none());
+    form.fmt = "0.00%".into();
+    a.run("chart.series", form.params().unwrap()).unwrap();
+
+    let mut reopened = ChartSeriesForm::new(&a).unwrap();
+    assert_eq!(reopened.fmt, "0.00%");
+    assert!(reopened.params().unwrap().get("format").is_none());
+    reopened.fmt.clear();
+    let params = reopened.params().unwrap();
+    assert_eq!(params.get("format"), Some(&serde_json::Value::Null));
+    a.run("chart.series", params).unwrap();
+    assert!(ChartSeriesForm::new(&a).unwrap().fmt.is_empty());
+}
+
 /// Format Axis / Format Series dialogs (gap 13): clearing a field or leaving a box alone does
 /// what it says. An emptied minimum goes back to Auto, an untouched dialog keeps a series
 /// following the chart-wide data labels, and No fill / Smooth lines can be turned off again.

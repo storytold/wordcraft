@@ -8344,6 +8344,27 @@ fn chart_axis_and_series_settings_can_be_turned_off_again() {
 }
 
 #[test]
+fn chart_series_number_format_reset_survives_docx_reopen() {
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "line"}));
+    run(&mut s, "chart.series", json!({"index": 0, "format": "0.00%"}));
+    run(&mut s, "chart.series", json!({"index": 1, "format": "0.0"}));
+    run(&mut s, "chart.series", json!({"index": 0, "smooth": true}));
+    let reopened = |s: &Session| {
+        let doc = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        first_chart(&doc).unwrap()
+    };
+    assert_eq!(reopened(&s).series[0].fmt.as_deref(), Some("0.00%"), "omitting the format keeps the override");
+
+    run(&mut s, "chart.series", json!({"index": 0, "format": null}));
+    let chart = first_chart(&s.doc).unwrap();
+    assert_eq!(chart.series[0].fmt, None, "null clears the override");
+    assert!(chart.series[0].smooth);
+    assert_eq!(chart.series[1].fmt.as_deref(), Some("0.0"));
+    assert_eq!(reopened(&s), chart);
+}
+
+#[test]
 fn chart_formatting_is_one_undo_step_each() {
     let mut s = s();
     run(&mut s, "insert.chart", json!({"type": "line"}));

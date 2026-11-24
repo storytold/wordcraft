@@ -193,7 +193,12 @@ pub fn specs() -> Vec<CommandSpec> {
             set.markers = p::bool(v, "markers").or_else(|| p::bool(v, "marker"));
             let smooth = p::bool(v, "smooth");
             set.labels = p::bool(v, "labels").or_else(|| p::bool(v, "dataLabels"));
-            set.fmt = v.get("format").filter(|f| !f.is_null()).map(|f| f.as_str().unwrap_or_default().to_string());
+            let format = match v.get("format") {
+                None => None,
+                Some(Value::Null) => Some(None),
+                Some(Value::String(code)) => Some(Some(code)),
+                Some(_) => return Err(CmdError::Params("`format`: a number format string or null to use the chart default".into())),
+            };
             edit(s, move |c| {
                 if c.kind.is_round() && (v.get("fill").is_some() || v.get("line").is_some()) {
                     return Err(CmdError::Params("series fill and line are unavailable for pie and doughnut charts".into()));
@@ -231,13 +236,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 if set.labels.is_some() {
                     s.labels = set.labels;
                 }
-                if let Some(f) = &set.fmt {
-                    s.fmt = Some(f.clone());
+                if let Some(f) = format {
+                    s.fmt = f.cloned();
                 }
                 Ok(())
             })
         })
-        .params(r#"{"index"?: 0-based series (default 0), "fill"?: "RRGGBB"|"auto" (the chart's accent colour, clears No fill)|null|"none", "line"?: number (pt)|null|"none", "markers"?: bool, "smooth"?: bool, "labels"?: bool, "format"?: number format code (string)} (markers and smoothing: line or scatter; fill and line: unavailable for pie or doughnut)"#)
+        .params(r#"{"index"?: 0-based series (default 0), "fill"?: "RRGGBB"|"auto" (the chart's accent colour, clears No fill)|null|"none", "line"?: number (pt)|null|"none", "markers"?: bool, "smooth"?: bool, "labels"?: bool, "format"?: string|null (null: use the chart default)} (markers and smoothing: line or scatter; fill and line: unavailable for pie or doughnut)"#)
         .when(has_chart),
     ]
 }

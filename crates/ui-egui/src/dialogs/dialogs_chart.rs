@@ -290,6 +290,9 @@ pub struct ChartSeriesForm {
     pub smooth: bool,
     pub labels: bool,
     pub fmt: String,
+    /// The saved override as shown when the field opened. Clearing it sends an explicit reset.
+    #[serde(default)]
+    opened_fmt: String,
     /// The markers and labels the form opened with. An unchanged box sends nothing, so a series
     /// that follows the chart's setting keeps following it.
     opened_markers: bool,
@@ -304,6 +307,7 @@ impl ChartSeriesForm {
         let s = c.series.first()?;
         let markers = s.markers.unwrap_or(c.kind == wordcraft_doc::chart::ChartType::Scatter);
         let labels = s.labels.unwrap_or(c.data_labels);
+        let fmt = s.fmt.clone().unwrap_or_default();
         Some(ChartSeriesForm {
             index: 0,
             fill: s.fill.map(|c| c.hex()).unwrap_or_default(),
@@ -312,7 +316,8 @@ impl ChartSeriesForm {
             markers,
             smooth: s.smooth,
             labels,
-            fmt: s.fmt.clone().unwrap_or_default(),
+            fmt: fmt.clone(),
+            opened_fmt: fmt,
             opened_markers: markers,
             opened_labels: labels,
             stroke_and_fill: !c.kind.is_round(),
@@ -336,8 +341,9 @@ impl ChartSeriesForm {
         if self.labels != self.opened_labels {
             v.insert("labels".into(), json!(self.labels));
         }
-        if !self.fmt.trim().is_empty() {
-            v.insert("format".into(), json!(self.fmt.trim()));
+        let fmt = self.fmt.trim();
+        if fmt != self.opened_fmt.trim() {
+            v.insert("format".into(), json!((!fmt.is_empty()).then_some(fmt)));
         }
         Ok(Value::Object(v))
     }
