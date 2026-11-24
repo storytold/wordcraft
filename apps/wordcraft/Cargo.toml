@@ -57,7 +57,7 @@ winresource = "0.1"
 craft = { workspace = true, features = ["platform-apple-events"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
-winit = { version = "0.30", default-features = false, features = ["x11"] }
+winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
 # Check that the libraries winit's X11 backend opens are installed before choosing XWayland (see
 # `x11_libraries` in main.rs). Both are already in the build through winit's `x11` feature, at
 # these versions and with this feature.
