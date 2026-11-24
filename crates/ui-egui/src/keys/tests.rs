@@ -328,6 +328,54 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     assert_eq!(pictures(h.state_mut()), 1);
 }
 
+/// #5859: Mod+V admits a rich-only clipboard (HTML or RTF with no plain-text or picture flavor)
+/// and still routes an image+HTML clipboard with no plain-text flavor to picture paste.
+#[test]
+fn mod_v_pastes_rich_only_clipboard_and_preserves_picture_routing() {
+    let ctrl = mod_held();
+
+    let mut h = alt_frame_app();
+    offer(&h, vec![ClipItem::Html("<p><b>html-only</b></p>".into())]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "html-only", "Mod+V pastes HTML-only clipboard");
+    assert!(is_bold(&mut h), "HTML-only paste keeps formatting");
+
+    let mut h = alt_frame_app();
+    offer(&h, vec![ClipItem::Rtf(r"{\rtf1\ansi {\b rtf-only}}".into())]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "rtf-only", "Mod+V pastes RTF-only clipboard");
+    assert!(is_bold(&mut h), "RTF-only paste keeps formatting");
+
+    let mut h = alt_frame_app();
+    offer(
+        &h,
+        vec![
+            ClipItem::Image(std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([4, 4], &[200u8; 4 * 4 * 4]))),
+            ClipItem::Html("<p><b>fallback</b></p>".into()),
+        ],
+    );
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(pictures(h.state_mut()), 1, "image+HTML with no plain text routes to picture paste");
+    assert_eq!(body(h.state()), "", "picture paste does not fall back to HTML text");
+
+    let dir = std::env::temp_dir().join(format!("wc-mod-v-uri-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("clip.png");
+    std::fs::write(&png, crate::paste_picture::png_from_rgba(4, 4, vec![200; 64]).unwrap()).unwrap();
+    let raw = png.to_string_lossy().replace('\\', "/").replace(' ', "%20");
+    let uri = if raw.starts_with('/') { format!("file://{raw}\r\n") } else { format!("file:///{raw}\r\n") };
+    let mut h = alt_frame_app();
+    offer(&h, vec![ClipItem::custom(craft::platform::clipboard::URI_LIST, uri.into_bytes()), ClipItem::Html("<p><b>fallback</b></p>".into())]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(pictures(h.state_mut()), 1, "URI list+HTML with no plain text routes to picture file paste");
+    assert_eq!(body(h.state()), "", "picture file paste does not fall back to HTML text");
+}
+
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
 /// aren't, and keytips stay off (#961). Linux sends each digit's text too; Windows may send the
 /// composed character.
