@@ -353,15 +353,16 @@ fn control_keys_cannot_paste_a_field_word_acts_on() {
     fn fields(a: &WordApp) -> usize {
         a.session.doc.body.iter().map(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.objects.len() } else { 0 }).sum()
     }
-    let mut a = app();
+    let mut h = harness(app());
+    let ctx = h.ctx.clone();
+    // Copied with the runtime installed, so the copy is on the clipboard the paste reads.
+    let a = h.state_mut();
     a.run("insert.field", json!({"instr": r#"DDEAUTO cmd "/c calc""#})).unwrap();
     a.run("select.all", json!({})).unwrap();
     a.run("edit.copy", json!({})).unwrap();
     // The field leaves the document: pasting it is bringing it in.
     a.run("document.setText", json!({"text": "Mine"})).unwrap();
-    assert_eq!(fields(&a), 0);
-    let mut h = harness(a);
-    let ctx = h.ctx.clone();
+    assert_eq!(fields(a), 0);
     h.state_mut().canvas.focus_page(&ctx);
     frames(&mut h, 4);
     send(&mut h, "ui.key", json!({"key": "Insert", "shift": true}));
