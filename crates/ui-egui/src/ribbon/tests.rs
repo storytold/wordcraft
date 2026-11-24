@@ -970,26 +970,39 @@ fn table_style_options_align_in_two_columns() {
         (first_col.left() - last_col.left()).abs() < 0.5 && (first_col.left() - banded_col.left()).abs() < 0.5,
         "right column misaligned: {first_col:?}, {last_col:?}, {banded_col:?}"
     );
-    // Each row's pair shares the same top edge and stacks vertically without overlap.
+    // Each row's pair shares the same top edge and stacks vertically with tight spacing.
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let tight_gap = env.tokens.space.gap.tight;
+    let min_col_gap = env.tokens.space.gap.stack;
     assert!((header.top() - first_col.top()).abs() < 0.5, "row 1 misaligned: {header:?}, {first_col:?}");
     assert!((total.top() - last_col.top()).abs() < 0.5, "row 2 misaligned: {total:?}, {last_col:?}");
     assert!((banded.top() - banded_col.top()).abs() < 0.5, "row 3 misaligned: {banded:?}, {banded_col:?}");
     assert!(header.bottom() <= total.top() && total.bottom() <= banded.top(), "rows overlap: {header:?}, {total:?}, {banded:?}");
-    // A horizontal gap separates the widest left-column checkbox from the second column.
-    let left_max_right = [header, total, banded].into_iter().map(|r| r.right()).fold(f32::NEG_INFINITY, f32::max);
+    let row_gap_1 = total.top() - header.bottom();
+    let row_gap_2 = banded.top() - total.bottom();
     assert!(
-        first_col.left() > left_max_right,
-        "second column overlaps or touches the first column: left_max_right={left_max_right}, first_col={first_col:?}"
+        (row_gap_1 - tight_gap).abs() <= 0.5 && (row_gap_2 - tight_gap).abs() <= 0.5,
+        "rows should remain Gap::Tight ({tight_gap} pt) apart, got {row_gap_1} and {row_gap_2}"
+    );
+    // A horizontal gap at least `space.gap.stack` separates the widest left-column label from the second column.
+    let text_rect = |label: &str| {
+        h.output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("painted text for {label:?}"))
+    };
+    let left_label_max_right =
+        ["Header Row", "Total Row", "Banded Rows"].into_iter().map(|label| text_rect(label).right()).fold(f32::NEG_INFINITY, f32::max);
+    let col_gap = first_col.left() - left_label_max_right;
+    assert!(
+        col_gap >= min_col_gap,
+        "column gap between widest left label and right column too narrow: got {col_gap:.2} pt, expected >= {min_col_gap:.2} pt (left_label_max_right={left_label_max_right}, first_col={first_col:?})"
     );
     // All three rows stay above the group's caption.
-    let caption = h
-        .output()
-        .shapes
-        .iter()
-        .find_map(|s| match &s.shape {
-            egui::Shape::Text(t) if t.galley.text() == "Table Style Options" => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
-            _ => None,
-        })
-        .expect("Table Style Options group caption is painted");
+    let caption = text_rect("Table Style Options");
     assert!(banded.bottom() <= caption.top(), "checkboxes collide with group caption: {banded:?} vs {caption:?}");
 }
