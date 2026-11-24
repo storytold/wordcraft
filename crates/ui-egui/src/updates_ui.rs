@@ -16,6 +16,9 @@ pub(crate) struct Runtime {
     /// The desktop app turns the check at start on; tests and the web build leave it off.
     #[cfg(not(target_arch = "wasm32"))]
     startup_check: bool,
+    /// How many times the test stub answered a check (see `stub_update_check`).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) stub_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for Runtime {
@@ -25,6 +28,8 @@ impl Default for Runtime {
             updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            stub_calls: Default::default(),
         }
     }
 }
@@ -53,6 +58,20 @@ impl WordApp {
         rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(refused_check());
     }
 
+    /// Answers every update check with "up to date" instead of asking GitHub, so a test's result
+    /// doesn't depend on the network or its rate limit (#7463).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn stub_update_check(&mut self) {
+        let rt = &mut self.updates_rt;
+        rt.startup_check = false;
+        let calls = rt.stub_calls.clone();
+        rt.updater =
+            Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(std::sync::Arc::new(move || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(None)
+            }));
+    }
+
     /// Starts the helper of an update that is ready, so that it installs once the process has
     /// ended. Call it once the exit is certain, before a path that ends the process without
     /// dropping the app. Later calls do nothing.
@@ -68,7 +87,7 @@ impl WordApp {
 fn refused_check() -> craft::update::updater::CheckSource {
     let why = tl!("Updates are off in this window: WordCraft was started with another program's AppImage settings. Start WordCraft from its own menu entry to update it.")
         .to_string();
-    std::sync::Arc::new(move || Err(why.clone()))
+    std::sync::Arc::new(move || Err(why.clone().into()))
 }
 
 /// Help ▸ Check for Updates. The result dialog opens from [`run`] while the updater has a status.

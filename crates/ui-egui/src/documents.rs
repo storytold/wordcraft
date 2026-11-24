@@ -237,10 +237,15 @@ pub fn is_word_template(path: &str) -> bool {
 /// The name an open document goes by in the window: the engine's title, with an untitled
 /// document's `Document2` in the interface language.
 pub fn display_title(d: &DocInfo) -> String {
-    if d.path.is_none() {
-        return untitled_title(&d.title).unwrap_or_else(|| d.title.clone());
+    // NUL cannot go into an X11 window title (C string); a title of only NUL reads as untitled (#3634).
+    let title: String = d.title.chars().filter(|&c| c != '\0').collect();
+    if title.is_empty() && !d.title.is_empty() {
+        return tl!("Document1").into();
     }
-    d.title.clone()
+    if d.path.is_none() {
+        return untitled_title(&title).unwrap_or(title);
+    }
+    title
 }
 
 /// `Document2` (the engine's English name for an untitled document) in the interface language,
