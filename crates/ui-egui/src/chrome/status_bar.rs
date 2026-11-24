@@ -112,7 +112,7 @@ fn readouts(app: &mut WordApp, ui: &mut Ui) -> egui::Rect {
             _ => tl!("Normal"),
         };
         let text = if state.command.is_empty() { crate::i18n::fmt(tl!("Modal: {mode}"), &[("mode", mode)]) } else { format!(":{}", state.command) };
-        if item(ui, text, Some(tl!("Modal text editing. Ctrl+Alt+M turns it off.").to_string())).clicked() {
+        if item(ui, text, Some(tl!("Modal text editing. Ctrl+Alt+Shift+M turns it off.").to_string())).clicked() {
             let _ = app.run("ui.modalEditing", json!({"value":false}));
         }
     }

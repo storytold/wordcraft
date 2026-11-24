@@ -18,6 +18,7 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 pub(super) struct Worker {
     pub requests: mpsc::SyncSender<Value>,
     pub replies: mpsc::Receiver<Result<Value, String>>,
+    pub geometry: mpsc::SyncSender<Result<Value, String>>,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -32,12 +33,14 @@ impl Worker {
     pub(super) fn fake() -> (Self, mpsc::Receiver<Value>, mpsc::Sender<Result<Value, String>>) {
         let (requests, incoming) = mpsc::sync_channel(1);
         let (outgoing, replies) = mpsc::channel();
-        (Self { requests, replies, cancelled: Arc::new(AtomicBool::new(false)) }, incoming, outgoing)
+        let (geometry, _) = mpsc::sync_channel(1);
+        (Self { requests, replies, geometry, cancelled: Arc::new(AtomicBool::new(false)) }, incoming, outgoing)
     }
 
     pub fn start(config: String, ctx: egui::Context) -> Result<Self, String> {
         let (requests, incoming) = mpsc::sync_channel(1);
         let (outgoing, replies) = mpsc::channel();
+        let (geometry, answers) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let stop = cancelled.clone();
         std::thread::Builder::new()
@@ -57,7 +60,18 @@ impl Worker {
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     };
-                    let result = editor.request(&request);
+                    let result = editor.request(&request, &mut |query| {
+                        outgoing.send(Ok(serde_json::json!({"layoutQuery":query}))).map_err(|e| e.to_string())?;
+                        ctx.request_repaint();
+                        let deadline = Instant::now() + Duration::from_secs(4);
+                        loop {
+                            match answers.recv_timeout(Duration::from_millis(20)) {
+                                Ok(answer) => return answer,
+                                Err(mpsc::RecvTimeoutError::Timeout) if !stop.load(Ordering::Relaxed) && Instant::now() < deadline => {}
+                                Err(_) => return Err("document layout did not answer in time".into()),
+                            }
+                        }
+                    });
                     let failed = result.is_err();
                     if outgoing.send(result).is_err() {
                         break;
@@ -69,7 +83,7 @@ impl Worker {
                 }
             })
             .map_err(|error| format!("could not start the editor worker: {error}"))?;
-        Ok(Self { requests, replies, cancelled })
+        Ok(Self { requests, replies, geometry, cancelled })
     }
 }
 
@@ -136,11 +150,15 @@ impl Editor {
         }
         fs::write(editor.directory.join("init.lua"), INIT).map_err(|e| e.to_string())?;
         fs::write(editor.directory.join("client.lua"), CLIENT).map_err(|e| e.to_string())?;
-        editor.request(&serde_json::json!({"initialize":true}))?;
+        editor.request(&serde_json::json!({"initialize":true}), &mut |_| Err("layout is not ready".into()))?;
         Ok(editor)
     }
 
-    fn request(&mut self, request: &Value) -> Result<Value, String> {
+    fn request(&mut self, request: &Value, layout: &mut dyn FnMut(Value) -> Result<Value, String>) -> Result<Value, String> {
+        let query_path = self.directory.join("layout-request.json");
+        let answer_path = self.directory.join("layout-reply.json");
+        let _ = fs::remove_file(&query_path);
+        let _ = fs::remove_file(&answer_path);
         let mut request = request.clone();
         self.input.push_str(request["keys"].as_str().unwrap_or(""));
         request["keys"] = Value::String(self.input.clone());
@@ -159,8 +177,42 @@ impl Editor {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut deadline = Instant::now() + Duration::from_secs(5);
+        let mut queries = 0;
         let status = loop {
+            if query_path.exists() {
+                queries += 1;
+                if queries > 128 {
+                    let _ = client.kill();
+                    let _ = client.wait();
+                    return Err("too many displayed-line operations in one editor request".into());
+                }
+                let result = (|| {
+                    let mut bytes = Vec::new();
+                    File::open(&query_path).map_err(|e| e.to_string())?.take(LIMIT + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                    fs::remove_file(&query_path).map_err(|e| e.to_string())?;
+                    if bytes.len() as u64 > LIMIT {
+                        return Err("layout request exceeded the size limit".into());
+                    }
+                    let query: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                    let id = query["id"].clone();
+                    let mut answer = match layout(query) {
+                        Ok(answer) => answer,
+                        Err(error) => serde_json::json!({"error":error}),
+                    };
+                    answer["id"] = id;
+                    let temporary = self.directory.join("layout-reply.new");
+                    fs::write(&temporary, serde_json::to_vec(&answer).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                    fs::rename(temporary, &answer_path).map_err(|e| e.to_string())?;
+                    Ok::<_, String>(())
+                })();
+                if let Err(error) = result {
+                    let _ = client.kill();
+                    let _ = client.wait();
+                    return Err(error);
+                }
+                deadline = Instant::now() + Duration::from_secs(5);
+            }
             match client.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => {}
@@ -205,7 +257,7 @@ local r=vim.json.decode(table.concat(vim.fn.readfile(arg[2]),'\n'))
 local function rpc(method,...) return vim.rpcrequest(channel,method,...) end
 if r.initialize then
   local code=table.concat(vim.fn.readfile(arg[3]),'\n')
-  rpc('nvim_exec_lua',code,{})
+  rpc('nvim_exec_lua',code,{vim.fn.fnamemodify(arg[3],':h')})
   io.write(vim.json.encode({accepted=0})); return
 end
 local function mode() return rpc('nvim_get_mode') end
@@ -234,7 +286,12 @@ else
     r.sync=false; r.place=false; r.keys=''
     rpc('nvim_exec_lua','return WordCraftModal.request(...)',{r})
   end
-  result=rpc('nvim_exec_lua','return WordCraftModal.snapshot()',{})
+  repeat
+    local state=mode()
+    if state.blocking then result={busy=true,mode=state.mode}; break end
+    result=rpc('nvim_exec_lua','return WordCraftModal.snapshot()',{})
+    if result.layoutPending then vim.wait(10) end
+  until not result.layoutPending
 end
 result.accepted=accepted
 io.write(vim.json.encode(result))
@@ -242,6 +299,7 @@ io.write(vim.json.encode(result))
 
 // This is integration code against the public API, not copied editor implementation code.
 const INIT: &str = r#"
+local directory=...
 (function()
   if package.loaded.lazy then
     vim.api.nvim_exec_autocmds('User', {pattern='VeryLazy', modeline=false})
@@ -277,9 +335,210 @@ const INIT: &str = r#"
     end
     return {#lines,#lines[#lines]}
   end
+  local function previous(text,at)
+    if at<=0 then return 0 end
+    at=at-1
+    while at>0 and text:byte(at+1)>=128 and text:byte(at+1)<=191 do at=at-1 end
+    return at
+  end
+  local function go(at) vim.api.nvim_win_set_cursor(0,position(at)) end
+  local function select(a,b)
+    vim.cmd('normal! '..string.char(27))
+    go(a); vim.cmd('normal! v'); go(b)
+  end
+  function m.geometry(action,count,at,goal)
+    m.query=(m.query or 0)+1
+    local id=m.query
+    local request={id=id,action=action,count=count or 1,at=at or offset(vim.api.nvim_win_get_cursor(0)),goal=goal,snapshot=m.snapshot()}
+    m.geometryActive=true
+    local temporary=directory..'/layout-request.new'
+    vim.fn.writefile({vim.json.encode(request)},temporary)
+    assert(vim.uv.fs_rename(temporary,directory..'/layout-request.json'))
+    local answer
+    local ready=vim.wait(4000,function()
+      local ok,lines=pcall(vim.fn.readfile,directory..'/layout-reply.json')
+      if not ok then return false end
+      local decoded,value=pcall(vim.json.decode,table.concat(lines,'\n'))
+      if decoded and value.id==id then answer=value; return true end
+      return false
+    end,10,true)
+    m.geometryActive=false
+    if not ready or answer.error then
+      m.problem=answer and answer.error or 'WordCraft did not provide the displayed line in time.'
+      error(m.problem)
+    end
+    m.base=answer.text
+    return answer
+  end
+  local function vertical(direction)
+    local at=offset(vim.api.nvim_win_get_cursor(0))
+    local goal=m.lastVertical==at and m.goal or nil
+    local result=m.geometry(direction,vim.v.count1,at,goal)
+    if m.rowVisual then
+      local origin=m.geometry('row',1,m.rowVisual)
+      local target=m.geometry('row',1,result.focus)
+      if target.start>=origin.start then select(origin.start,previous(m.base,target.finish))
+      else select(previous(m.base,origin.finish),target.start) end
+    else go(result.focus) end
+    m.goal=result.goal; m.lastVertical=offset(vim.api.nvim_win_get_cursor(0))
+  end
+  local function bound(which)
+    m.rowVisual=nil; m.goal=nil
+    local result=m.geometry('row',vim.v.count1)
+    local at=result.start
+    if which=='end' then at=previous(m.base,result.finish)
+    elseif which=='first' then
+      local prefix=m.base:sub(result.start+1,result.finish):match('^%s*') or ''
+      at=result.start+#prefix
+    end
+    go(at)
+  end
+  local function visual_row()
+    local result=m.geometry('row',vim.v.count1)
+    m.rowVisual=result.start; m.goal=nil
+    select(result.start,previous(m.base,result.finish))
+  end
+  local function replace_range(a,b,text)
+    local first,last=position(a),position(b)
+    vim.api.nvim_buf_set_text(m.buf,first[1]-1,first[2],last[1]-1,last[2],vim.split(text,'\n',{plain=true}))
+    go(a)
+  end
+  local function yank(a,b,register)
+    local text=m.base:sub(a+1,b)
+    register=register or vim.v.register
+    if register=='_' then return end
+    vim.fn.setreg(register,text,'vu')
+    m.rowRegister={register=register,text=vim.fn.getreg(register)}
+  end
+  local function row_range(kind,count,content)
+    local at=offset(vim.api.nvim_win_get_cursor(0))
+    local origin=at
+    if kind=='up' then origin=m.geometry('up',count,at).focus end
+    local result=m.geometry('row',(kind=='up' or kind=='down') and count+1 or count,origin)
+    local first,last=result.start,content and result.finish or result.eraseEnd
+    if kind=='tail' then first=at; last=result.finish
+    elseif kind=='start' then last=at
+    elseif kind=='first' then
+      first=result.start+#(m.base:sub(result.start+1,result.finish):match('^%s*') or '')
+      first,last=math.min(first,at),math.max(first,at)
+    end
+    return first,last
+  end
+  function m.delete_row()
+    local operation=m.rowOperation
+    local first,last=row_range(operation.kind,operation.count,false)
+    yank(first,last,operation.register)
+    replace_range(first,last,'')
+    m.rowVisual=nil; m.goal=nil
+  end
+  local function prepare_delete(kind,count,register)
+    m.rowOperation={kind=kind,count=count or vim.v.count1,register=register or vim.v.register}
+    vim.go.operatorfunc='v:lua.WordCraftModal.delete_row'
+    return 'g@l'
+  end
+  local function yank_rows()
+    local first,last=row_range('rows',vim.v.count1,false)
+    yank(first,last)
+    m.rowVisual=nil; go(first)
+  end
+  local function change_rows(kind,count,register)
+    count=count or vim.v.count1
+    register=register or vim.v.register
+    local first,last=row_range(kind,count,true)
+    m.pendingRowChange={count=count,kind=kind,register=register}
+    if first==last then
+      go(first)
+      local point=position(first)
+      local line=vim.api.nvim_buf_get_lines(m.buf,point[1]-1,point[1],false)[1]
+      vim.cmd(point[2]>=#line and 'startinsert!' or 'startinsert')
+    else
+      select(first,previous(m.base,last))
+      -- Queue the native change before pending typing; its Insert session stays one undo step.
+      vim.api.nvim_feedkeys('"'..register..'c','in',false)
+    end
+    m.rowVisual=nil; m.goal=nil
+  end
+  local function pending_motion(kind)
+    local operator,count,register=vim.v.operator,vim.v.count1,vim.v.register
+    vim.cmd('normal! '..string.char(27))
+    if operator=='d' then
+      local keys=prepare_delete(kind,count,register)
+      vim.api.nvim_feedkeys(keys,'in',false)
+    elseif operator=='c' then change_rows(kind,count,register)
+    else
+      local first,last=row_range(kind,count,false)
+      if operator=='y' then yank(first,last,register); go(first)
+      elseif first<last then
+        select(first,previous(m.base,last))
+        vim.api.nvim_feedkeys('"'..register..operator,'in',false)
+      end
+    end
+  end
+  local function paste_row(before)
+    local register,count=vim.v.register,vim.v.count1
+    local operation=before and 'P' or 'p'
+    if m.rowRegister and vim.fn.getreg(register)==m.rowRegister.text then
+      local result=m.geometry('row',1)
+      local at=before and result.start or result.eraseEnd
+      local point=position(at)
+      local line=vim.api.nvim_buf_get_lines(m.buf,point[1]-1,point[1],false)[1]
+      if point[2]==#line and at==#m.base then
+        go(previous(m.base,at)); operation='p'
+      else go(at); operation='P' end
+    end
+    vim.api.nvim_feedkeys('"'..register..tostring(count)..operation,'in',false)
+  end
+  vim.api.nvim_create_autocmd('InsertLeave',{buffer=m.buf,callback=function()
+    if m.pendingRowChange then
+      m.lastRowChange=m.pendingRowChange; m.pendingRowChange=nil
+      m.lastRowChange.text=vim.fn.getreg('.')
+      m.lastRowChange.sequence=vim.fn.undotree().seq_last
+    end
+  end})
+  local function repeat_change()
+    local last=m.lastRowChange
+    if not last or vim.fn.undotree().seq_last~=last.sequence then
+      vim.cmd('normal! '..(vim.v.count>0 and tostring(vim.v.count) or '')..'.'); return
+    end
+    local first,finish=row_range(last.kind,vim.v.count>0 and vim.v.count or last.count,true)
+    yank(first,finish,last.register)
+    replace_range(first,finish,last.text)
+    go(previous(table.concat(vim.api.nvim_buf_get_lines(m.buf,0,-1,false),'\n'),first+#last.text))
+    last.sequence=vim.fn.undotree().seq_last
+  end
+  local options={buffer=m.buf,silent=true}
+  vim.keymap.set({'n','x'},'j',function() vertical('down') end,options)
+  vim.keymap.set({'n','x'},'k',function() vertical('up') end,options)
+  vim.keymap.set({'n','x'},'gj',function() vertical('down') end,options)
+  vim.keymap.set({'n','x'},'gk',function() vertical('up') end,options)
+  for _,key in ipairs({'0','g0'}) do vim.keymap.set({'n','x'},key,function() bound('start') end,options) end
+  for _,key in ipairs({'$','g$'}) do vim.keymap.set({'n','x'},key,function() bound('end') end,options) end
+  vim.keymap.set({'n','x'},'^',function() bound('first') end,options)
+  vim.keymap.set({'n','x'},'gg',function()
+    local result=m.geometry('first',vim.v.count1); go(result.focus); m.rowVisual=nil
+  end,options)
+  vim.keymap.set({'n','x'},'G',function()
+    local result=m.geometry(vim.v.count>0 and 'first' or 'last',vim.v.count1); go(result.focus); m.rowVisual=nil
+  end,options)
+  for key,kind in pairs({j='down',k='up',gj='down',gk='up',['0']='start',g0='start',['^']='first',['$']='tail',['g$']='tail'}) do
+    vim.keymap.set('o',key,function() pending_motion(kind) end,options)
+  end
+  vim.keymap.set('n','V',visual_row,options)
+  vim.keymap.set('n','dd',function() return prepare_delete('rows') end,{buffer=m.buf,silent=true,expr=true})
+  vim.keymap.set('n','yy',yank_rows,options)
+  vim.keymap.set('n','Y',yank_rows,options)
+  vim.keymap.set('n','cc',function() change_rows('rows') end,options)
+  vim.keymap.set('n','S',function() change_rows('rows') end,options)
+  vim.keymap.set('n','D',function() return prepare_delete('tail') end,{buffer=m.buf,silent=true,expr=true})
+  vim.keymap.set('n','C',function() change_rows('tail') end,options)
+  vim.keymap.set('n','.',repeat_change,options)
+  vim.keymap.set('n','p',function() paste_row(false) end,options)
+  vim.keymap.set('n','P',function() paste_row(true) end,options)
+
   function m.request(r)
     if vim.api.nvim_get_current_buf()~=m.buf then return false end
     if r.sync then
+      m.rowVisual=nil; m.goal=nil
       if not r.keepInsert then vim.cmd('stopinsert') end
       local undo = vim.bo[m.buf].undolevels
       vim.bo[m.buf].undolevels = -1
@@ -331,6 +590,7 @@ const INIT: &str = r#"
     if not other then m.cursor=cursor end
     local focus=math.min(offset(cursor),#text)
     while focus>0 and text:byte(focus+1) and text:byte(focus+1)>=128 and text:byte(focus+1)<=191 do focus=focus-1 end
+    local caret=focus
     local anchor=focus
     if mode=='v' or mode=='V' or mode=='\022' then
       local p=vim.fn.getpos('v')
@@ -348,7 +608,7 @@ const INIT: &str = r#"
     end
     local save,path,problem=m.save,m.savePath,m.problem; m.save=false; m.savePath=nil; m.problem=nil
     local sequence=vim.api.nvim_buf_call(m.buf,function() return vim.fn.undotree().seq_cur end)
-    return {text=text,edits=edits,focus=focus,anchor=anchor,mode=mode,sequence=sequence,
+    return {text=text,edits=edits,focus=focus,anchor=anchor,caret=caret,mode=mode,sequence=sequence,layoutPending=m.geometryActive or vim.fn.reg_executing()~='' or vim.fn.getchar(1)~=0,
       command=mode:sub(1,1)=='c' and vim.fn.getcmdline() or '',save=save,savePath=path,problem=problem}
   end
   return true

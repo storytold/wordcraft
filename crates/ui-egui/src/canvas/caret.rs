@@ -12,7 +12,7 @@ use craft::ui::fonts::FaceBytes;
 use craft::ui::primitives::{FaceRun, PaintShape, StrokeWidth, TextRun};
 use craft::ui::runtime::env::Label;
 use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
-use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Response, Ui, pos2, vec2};
 use wordcraft_layout::DocLayout;
 
 use super::cursor::{caret_color_at, preedit_cursor_chars};
@@ -24,6 +24,7 @@ use crate::caret_glide::{Bar, Look, LookRequest, blink_fading, look};
 struct Placement {
     /// The caret's bar, pixel-snapped.
     bar: Bar,
+    block: Option<Rect>,
     /// The page the caret is on.
     page: usize,
     /// The page point whose paper colour the caret contrasts with.
@@ -68,6 +69,7 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
         let y1 = pr.rect.min.y + (bx.base - slot.y + slot.d) * s;
         return Some(Placement {
             bar: [pos2(x, y0), pos2(x, y1)],
+            block: None,
             page: bx.page,
             probe: (bx.x + slot.x, bx.base - slot.y + (slot.d - slot.a) / 2.0),
             height: y1 - y0,
@@ -79,7 +81,8 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
         });
     }
     let sel = preview_sel(app).unwrap_or(&app.session.sel);
-    let c = doc.caret_on(&sel.focus, app.session.page_hint)?;
+    let focus = if app.ui.modal_editing { app.canvas.modal.caret.as_ref().unwrap_or(&sel.focus) } else { &sel.focus };
+    let c = doc.caret_on(focus, app.session.page_hint)?;
     // A caret whose page is scrolled out of view still has a place: the input method keeps its context and
     // surroundings there (production placed it from every laid page), from the page's rect in the whole layout.
     let unplaced;
@@ -114,8 +117,24 @@ fn place(app: &WordApp, doc: &DocLayout, pages: &[PlacedPage]) -> Option<Placeme
             .filter(|(run, base)| run.size.is_finite() && run.size > 0.0 && base.is_finite())
             .map(|(run, base)| TypingFace { face: run.requested_face, size: run.size * scale, baseline: pr.rect.min.y + base * scale })
     };
+    let modal_block = app.ui.modal_editing && !app.canvas.modal.mode.is_empty() && !app.canvas.modal.mode.starts_with(['i', 'c']);
+    let block = modal_block.then(|| {
+        let next = app
+            .session
+            .doc
+            .para_at(focus)
+            .and_then(|p| p.text.get(focus.off..))
+            .and_then(|text| text.chars().next())
+            .and_then(|ch| doc.caret_on(&wordcraft_doc::Pos { off: focus.off + ch.len_utf8(), ..focus.clone() }, c.page))
+            .filter(|next| next.page == c.page && (next.top - c.top).abs() < 1.0);
+        let width = next.map_or(0.0, |next| (next.x - c.x).abs() * scale);
+        let width = if width >= 1.0 { width } else { (y1 - y0) * 0.55 };
+        let left = next.filter(|next| next.x < c.x).map_or(x, |next| pr.rect.min.x + next.x * scale);
+        Rect::from_min_size(pos2(left, y0), vec2(width.max(2.0), (y1 - y0).max(2.0)))
+    });
     Some(Placement {
         bar,
+        block,
         page: c.page,
         probe: (c.x + c.width / 2.0, c.top + c.height / 2.0),
         height: y1 - y0,
@@ -184,9 +203,10 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     };
     let ink = |app: &mut WordApp| caret_color_at(app, &doc, pl.page, pl.probe.0, pl.probe.1, zoom_key, dim_body);
 
-    let shown = pl.collapsed && focused;
+    let shown = (pl.collapsed || pl.block.is_some()) && focused;
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
     let mut composition = None;
+    let mut block = None;
     if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() {
         // The caret is steady inside the composition, so the glide stands down while it shows.
         app.canvas.glide.reset();
@@ -205,7 +225,12 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     } else {
         let look = step(app, request(pl.bar, shown));
         if shown && look.opacity > 0.0 {
-            bars.push((look.bar, ink(app).gamma_multiply(look.opacity)));
+            let color = ink(app).gamma_multiply(look.opacity);
+            if let Some(rect) = pl.block {
+                block = Some((rect.translate(look.bar[0] - pl.bar[0]), color));
+            } else {
+                bars.push((look.bar, color));
+            }
         }
         if look.moving {
             ctx.request_repaint();
@@ -216,10 +241,10 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
         }
     }
     let mut report = report_rect(pl.bar);
-    if !bars.is_empty() || composition.is_some() {
+    if !bars.is_empty() || composition.is_some() || block.is_some() {
         // Over the whole view, as the other marks on the page: the marks measure nothing, so a flow placement would give
         // them an empty rect that clips their strokes away.
-        let out = CaretMarks::new(tl!("Text cursor").to_string(), bars, composition).show_at(ui, pass.rect);
+        let out = CaretMarks::new(tl!("Text cursor").to_string(), bars, block, composition).show_at(ui, pass.rect);
         // The candidate window sits at the input method's cursor inside the composition, as production placed it.
         if let Some(x) = out.composition_caret {
             report = Rect::from_min_max(pos2(x, report.min.y), pos2(x + 1.0, report.max.y));
@@ -261,6 +286,7 @@ pub(crate) struct CaretMarks {
     #[common]
     common: Common,
     bars: Vec<(Bar, Color32)>,
+    block: Option<(Rect, Color32)>,
     composition: Option<Composition>,
     /// Where the paint put the caret inside the composition (screen x), measured from the laid-out text.
     composition_caret: Option<f32>,
@@ -268,8 +294,8 @@ pub(crate) struct CaretMarks {
 
 impl CaretMarks {
     /// The marks named `label`: caret bars in screen points with their colours, and a composition.
-    fn new(label: impl Into<Label>, bars: Vec<(Bar, Color32)>, composition: Option<Composition>) -> Self {
-        CaretMarks { common: Common::new(), bars, composition, composition_caret: None }.label(label)
+    fn new(label: impl Into<Label>, bars: Vec<(Bar, Color32)>, block: Option<(Rect, Color32)>, composition: Option<Composition>) -> Self {
+        CaretMarks { common: Common::new(), bars, block, composition, composition_caret: None }.label(label)
     }
 }
 
@@ -325,6 +351,11 @@ impl Component for CaretMarks {
         for (bar, color) in &self.bars {
             draw.stroke(&PaintShape::Path(bar.to_vec()), StrokeWidth::Medium, DataColor::new(*color));
         }
+        if let Some((rect, color)) = self.block {
+            let shape = PaintShape::Rect(rect, CornerRadius::ZERO);
+            draw.data_fill(&shape, DataColor::new(color.gamma_multiply(0.3)));
+            draw.stroke(&shape, StrokeWidth::Thin, DataColor::new(color));
+        }
         let Some(c) = &self.composition else { return };
         let color = DataColor::new(c.color);
         let (layout, top, bottom) = match &c.typing {
@@ -356,5 +387,31 @@ impl Component for CaretMarks {
 
     fn finish(self, cx: Cx<'_, Self>) -> CaretMarksOutput {
         CaretMarksOutput { response: cx.response.clone(), composition_caret: self.composition_caret }
+    }
+}
+
+#[cfg(test)]
+mod modal_cursor_tests {
+    use super::*;
+    use wordcraft_doc::Document;
+    use wordcraft_engine::Session;
+
+    #[test]
+    fn normal_mode_uses_a_character_block_and_insert_mode_uses_the_bar() {
+        let mut app = WordApp::new(Session::new(Document::from_text("Wide")), Default::default());
+        let layout = app.session.layout();
+        let page = &layout.pages[0];
+        let pages = [PlacedPage::new(0, Rect::from_min_size(Pos2::ZERO, vec2(page.w, page.h)), 1.0, (0.0, page.h))];
+        app.ui.modal_editing = true;
+        app.canvas.modal.mode = "n".into();
+        let normal = place(&app, &layout, &pages).unwrap();
+        let block = normal.block.unwrap();
+        assert!(block.width() > 2.0 && block.height() > 2.0);
+        assert!(block.width() > report_rect(normal.bar).width(), "the normal cursor covers the character, not just the insertion edge");
+        app.canvas.modal.mode = "i".into();
+        assert!(place(&app, &layout, &pages).unwrap().block.is_none());
+        app.ui.modal_editing = false;
+        app.canvas.modal.mode = "n".into();
+        assert!(place(&app, &layout, &pages).unwrap().block.is_none(), "ordinary WordCraft keeps its insertion bar");
     }
 }

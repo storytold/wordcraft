@@ -134,7 +134,7 @@ impl WordApp {
             } else {
                 interface(CommandRef::new("ui.collapseRibbon"), "Collapse the Ribbon", "Mod+Alt+R");
             }
-            interface(CommandRef::new("ui.modalEditing"), "Modal Editing", "Ctrl+Alt+M");
+            interface(CommandRef::new("ui.modalEditing"), "Modal Editing", "Ctrl+Alt+Shift+M");
             interface(CommandRef::new("ui.resetInterfaceSize"), "Reset Interface Size", "Mod+Shift+0");
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));
@@ -274,6 +274,33 @@ mod tests {
     use wordcraft_engine::Session;
 
     use super::{WordApp, json};
+
+    /// The interface toggle must not shadow Word's existing New Comment chord.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn modal_toggle_and_new_comment_fire_separate_commands() {
+        use craft::ui::runtime::env::WindowKey;
+        use craft::ui::runtime::frame::take_output;
+        use craft::ui::shell::AppShell;
+        use craft::ui::testing::Frames;
+        use egui::{Event, Key, Modifiers};
+
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+        let mut frames = Frames::new();
+        frames.commands(app.command_input());
+        let mut show = |ui: &mut egui::Ui| {
+            AppShell::new(WindowKey::main()).body(|_, _, _| {}).show(ui, &mut ());
+        };
+        frames.idle(3, &mut show);
+        let ctrl_alt = Modifiers::CTRL | Modifiers::COMMAND | Modifiers::ALT;
+        for (modifiers, expected) in [(ctrl_alt, "review.newComment"), (ctrl_alt | Modifiers::SHIFT, "ui.modalEditing")] {
+            let event = |pressed| Event::Key { key: Key::M, physical_key: None, pressed, repeat: false, modifiers };
+            frames.frame(vec![event(true)], &mut show);
+            frames.frame(vec![event(false)], &mut show);
+            let fired: Vec<_> = take_output(&frames.ctx).fired.into_iter().filter(|f| f.phase == FirePhase::Press).map(|f| f.command.id).collect();
+            assert_eq!(fired, [expected], "the actual chord resolves to its own command");
+        }
+    }
 
     /// A size-field gesture is live through `apply_edits`; a fired Undo takes the gesture back first
     /// (`GestureHost::before_undo`), then undoes the step from before it. The gesture's later

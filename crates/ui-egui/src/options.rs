@@ -339,7 +339,7 @@ impl PreferencesModel for OptionsModel<'_> {
                         )),
                         b("general.modalEditing", tl!("Modal text editing (external editor)"), app.ui.modal_editing)
                             .enabled(cfg!(unix))
-                            .help(tl!("Uses an installed Neovim and its configuration for document text. Ctrl+Alt+M turns it off. Your editor configuration runs with your account permissions.")),
+                            .help(tl!("Uses an installed Neovim and its configuration for document text. Ctrl+Alt+Shift+M turns it off. Your editor configuration runs with your account permissions.")),
                         RowSpec::new("general.modalConfigDirectory", tl!("Editor configuration folder:"), RowKind::Text(&app.ui.modal_config_directory))
                             .help(tl!("Leave empty to use the installed editor’s normal configuration. Changes apply when modal editing is next enabled.")),
                         b("general.miniToolbar", tl!("Show the mini toolbar when text is selected"), app.ui.mini_toolbar),

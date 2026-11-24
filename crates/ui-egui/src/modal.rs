@@ -36,6 +36,7 @@ pub(crate) struct State {
     last_poll: Option<web_time::Instant>,
     #[cfg(not(target_arch = "wasm32"))]
     selection: Option<wordcraft_engine::Selection>,
+    pub caret: Option<wordcraft_doc::Pos>,
     pub mode: String,
     pub command: String,
     pub error: Option<String>,
@@ -70,7 +71,7 @@ impl WordApp {
                 egui::Event::Key { key, pressed, modifiers, .. } => {
                     // An escape hatch remains a normal app command, even when the external
                     // editor is busy or its configuration has remapped every other key.
-                    if modifiers.ctrl && modifiers.alt && !modifiers.shift && *key == egui::Key::M {
+                    if modifiers.ctrl && modifiers.alt && modifiers.shift && *key == egui::Key::M {
                         return true;
                     }
                     if modifiers.mac_cmd {
@@ -297,6 +298,16 @@ impl WordApp {
     pub(crate) fn modal_poll(&mut self, ctx: &egui::Context) {
         let reply = self.canvas.modal.worker.as_ref().and_then(|worker| worker.replies.try_recv().ok());
         if let Some(reply) = reply {
+            if let Ok(value) = &reply
+                && let Some(query) = value.get("layoutQuery")
+            {
+                let answer = self.modal_layout_query(query);
+                if let Some(worker) = &self.canvas.modal.worker {
+                    let _ = worker.geometry.try_send(answer);
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(10));
+                return;
+            }
             self.canvas.modal.pending = false;
             match reply.and_then(|reply| self.modal_apply(reply)) {
                 Ok(()) => {}
@@ -323,6 +334,74 @@ impl WordApp {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn modal_poll(&mut self, _ctx: &egui::Context) {}
+
+    /// A displayed-row mapping pauses inside Neovim while the drawing thread first applies
+    /// its pending text, then measures the actual rich-document layout. This also works inside
+    /// a macro: each request sees the preceding edit's reflow, without guessing a text width.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn modal_layout_query(&mut self, query: &Value) -> Result<Value, String> {
+        self.modal_apply(query["snapshot"].clone())?;
+        let story = self.canvas.modal.story;
+        let projection = Projection::new(&self.session.doc, story).map_err(|e| e.to_string())?;
+        let at = query["at"].as_u64().and_then(|n| usize::try_from(n).ok()).ok_or("invalid displayed-line position")?;
+        let from = projection.pos(at).map_err(|e| e.to_string())?;
+        let count = query["count"].as_u64().unwrap_or(1).clamp(1, 4096);
+        let layout = self.session.layout();
+        let mut page = self.session.page_hint;
+        let mut to = from.clone();
+        let action = query["action"].as_str().ok_or("missing displayed-line action")?;
+        let mut goal = query["goal"].as_f64().filter(|x| x.is_finite()).map(|x| x as f32);
+        if matches!(action, "first" | "last") {
+            to = if action == "first" { self.session.doc.start_of(story) } else { self.session.doc.end_of(story) };
+            for _ in 1..count {
+                let Some((next, _)) = layout.vertical(&to, None, 1, page) else { break };
+                to = next;
+                if let Some(caret) = layout.caret_on(&to, page) {
+                    page = caret.page;
+                }
+            }
+            let focus = projection.offset(&to).ok_or("the displayed row is outside the story")?;
+            return Ok(json!({"text":projection.text,"focus":focus}));
+        }
+        if matches!(action, "up" | "down") {
+            for _ in 0..count {
+                let Some((next, x)) = layout.vertical(&to, goal, if action == "up" { -1 } else { 1 }, page) else { break };
+                goal = Some(x);
+                if next == to {
+                    break;
+                }
+                to = next;
+                if let Some(caret) = layout.caret_on(&to, page) {
+                    page = caret.page;
+                }
+            }
+            let focus = projection.offset(&to).ok_or("the displayed row is outside the story")?;
+            return Ok(json!({"text":projection.text,"focus":focus,"goal":goal}));
+        }
+        if action != "row" {
+            return Err("unknown displayed-line action".into());
+        }
+        let (first, _) = layout.line_bounds(&from, page).ok_or("no displayed line at the caret")?;
+        for _ in 1..count {
+            let Some((next, _)) = layout.vertical(&to, None, 1, page) else { break };
+            if next == to {
+                break;
+            }
+            to = next;
+            if let Some(caret) = layout.caret_on(&to, page) {
+                page = caret.page;
+            }
+        }
+        let (_, finish) = layout.line_bounds(&to, page).ok_or("no displayed line at the selection end")?;
+        let (_, whole_end, last) = layout.line_span(&to, page).ok_or("no displayed line span at the caret")?;
+        let start = projection.offset(&first).ok_or("invalid displayed line start")?;
+        let finish = projection.offset(&finish).ok_or("invalid displayed line end")?;
+        let mut erase_end = projection.offset(&whole_end).ok_or("invalid displayed line span")?;
+        if last && projection.text.as_bytes().get(erase_end) == Some(&b'\n') {
+            erase_end += 1;
+        }
+        Ok(json!({"text":projection.text,"start":start,"finish":finish,"eraseEnd":erase_end}))
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn modal_apply(&mut self, reply: Value) -> Result<(), String> {
@@ -405,6 +484,8 @@ impl WordApp {
             self.session.set_selection(selection);
         }
         state.selection = Some(self.session.sel.clone());
+        let caret = reply["caret"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(focus);
+        state.caret = Some(projection.pos(caret).map_err(|e| e.to_string())?);
         state.before = projection.text;
         state.revision = self.session.rev();
         state.input_pending = reply["inputPending"].as_bool().unwrap_or(false);
@@ -590,6 +671,32 @@ mod tests {
         raw.events.push(egui::Event::Text("settings".into()));
         h.state_mut().modal_raw_input(&ctx, &mut raw);
         assert!(raw.events.iter().any(|event| matches!(event,egui::Event::Text(text) if text=="settings")));
+    }
+
+    #[test]
+    fn displayed_row_queries_use_native_wrap_and_keep_the_paragraph_when_deleting_a_row() {
+        let text = "Wide WWW letters, narrow iii letters, and café words. ".repeat(25);
+        let mut app = app(&text);
+        prime(&mut app, 0).unwrap();
+        let snapshot = |text: &str, sequence| json!({"text":text,"edits":[],"anchor":0,"focus":0,"caret":0,"mode":"n","sequence":sequence});
+        let row = app.modal_layout_query(&json!({"action":"row","at":0,"count":1,"snapshot":snapshot(&text,0)})).unwrap();
+        let start = row["start"].as_u64().unwrap() as usize;
+        let end = row["eraseEnd"].as_u64().unwrap() as usize;
+        assert_eq!(start, 0);
+        assert!(end > 0 && end < text.len(), "a displayed row is smaller than this wrapped paragraph");
+        let down = app.modal_layout_query(&json!({"action":"down","at":0,"count":1,"snapshot":snapshot(&text,0)})).unwrap();
+        let focus = down["focus"].as_u64().unwrap() as usize;
+        assert!(focus >= end && focus < text.len(), "down moves within the same paragraph");
+        let remaining = &text[end..];
+        let next = app
+            .modal_layout_query(&json!({"action":"row","at":0,"count":1,
+            "snapshot":{"text":remaining,"edits":[{"start":0,"end":end,"text":""}],"anchor":0,"focus":0,"caret":0,"mode":"n","sequence":1}}))
+            .unwrap();
+        assert_eq!(app.session.doc.body.len(), 1, "deleting a wrapped row must not split or remove the paragraph");
+        assert_eq!(app.session.doc.plain_text(StoryRef::Body), remaining);
+        assert_eq!(next["text"], remaining, "a subsequent macro step measures the edited document's reflow");
+        app.modal_apply(snapshot(&text, 0)).unwrap();
+        assert_eq!(app.session.doc.plain_text(StoryRef::Body), text);
     }
 
     #[test]
