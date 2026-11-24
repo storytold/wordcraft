@@ -112,7 +112,7 @@ pub(super) fn show(ui: &mut Ui, app: &mut WordApp) {
             for id in activated(out.response.events) {
                 let _ = app.run("file.new", json!({"template": id}));
                 app.ui.backstage = false;
-                app.canvas.focus_page(&ctx);
+                app.canvas.focus_page_after_pass();
             }
         }
         // Personal: the user templates folder's templates; a folder per category, as in Word.
@@ -147,7 +147,7 @@ pub(super) fn show(ui: &mut Ui, app: &mut WordApp) {
                 Tile::new(Label::from(p.label.clone())).thumb(ThumbAspect::new(PAGE_WIDE, PAGE_HIGH), paint_personal_card).tooltip(p.path.clone())
             });
             for path in activated(out.response.events) {
-                let failed = open_personal(app, &path, &ctx).err();
+                let failed = open_personal(app, &path).err();
                 app.backstage_state.personal_error = failed;
             }
         }

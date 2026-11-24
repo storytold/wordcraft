@@ -16,7 +16,6 @@ use crate::WordApp;
 
 /// Recovery is a separate copy. Leaving this page never discards it.
 pub(super) fn recovery(ui: &mut Ui, app: &mut WordApp) {
-    let ctx = ui.ctx().clone();
     heading(ui, "Recover documents");
     let _ = Text::new(label("Restore opens an unsaved copy. Your original file stays unchanged.")).show(ui);
     if app.session.password.is_some() {
@@ -48,7 +47,7 @@ pub(super) fn recovery(ui: &mut Ui, app: &mut WordApp) {
     let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| {
         if clicked(&Button::new(label("Continue without restoring")).id_salt("recover-continue").show(ui)) {
             let _ = app.run("ui.backstage", json!({"value": false}));
-            app.canvas.focus_page(&ctx);
+            app.canvas.focus_page_after_pass();
         }
         if clicked(&Button::new(label("Refresh")).id_salt("recover-refresh").enabled(!busy && app.session.recovery_ready()).show(ui)) {
             let _ = app.run("file.recover", json!({"refresh": true}));

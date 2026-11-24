@@ -30,7 +30,7 @@ pub(super) fn template_cards(list: &[(&str, &str)]) -> Vec<Template> {
 
 /// Runs what the user did on a start screen or recent list. A failed open stays on the page as its
 /// error (`BackstageState::open_error`); a later success clears it.
-fn run_actions(app: &mut WordApp, ctx: &egui::Context, actions: Vec<StartAction>) {
+fn run_actions(app: &mut WordApp, actions: Vec<StartAction>) {
     for action in actions {
         match action {
             StartAction::New | StartAction::MoreTemplates => app.ui.backstage_page = "new".into(),
@@ -40,7 +40,7 @@ fn run_actions(app: &mut WordApp, ctx: &egui::Context, actions: Vec<StartAction>
             StartAction::OpenRecent(path) => {
                 let failed = open_recent(app, &path.to_string_lossy()).err();
                 if failed.is_none() {
-                    app.canvas.focus_page(ctx);
+                    app.canvas.focus_page_after_pass();
                 }
                 app.backstage_state.open_error = failed;
             }
@@ -53,7 +53,7 @@ fn run_actions(app: &mut WordApp, ctx: &egui::Context, actions: Vec<StartAction>
             StartAction::UseTemplate(id) => {
                 let _ = app.run("file.new", json!({"template": id}));
                 app.ui.backstage = false;
-                app.canvas.focus_page(ctx);
+                app.canvas.focus_page_after_pass();
             }
             // Pins, folders and reveal are not part of File.
             _ => {}
@@ -93,12 +93,11 @@ pub(super) fn home(ui: &mut Ui, app: &mut WordApp) {
         .page_paper(DataColor::new(Color32::WHITE))
         .thumbnails(&store, &source)
         .show(ui);
-    run_actions(app, &ctx, out.actions);
+    run_actions(app, out.actions);
 }
 
 /// Open: Browse for a file, then the recent documents.
 pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
-    let ctx = ui.ctx().clone();
     heading(ui, "Open");
     if clicked(&Button::new(label("Browse…")).id_salt("open-browse").show(ui)) {
         let _ = app.run("ui.openFileDialog", json!({}));
@@ -119,5 +118,5 @@ pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
     }
     let recent = recent_files(app);
     let out = RecentList::new(&recent).max_recent(app.ui.recent_shown()).empty(label("Documents you open will show up here.")).show(ui);
-    run_actions(app, &ctx, out.actions);
+    run_actions(app, out.actions);
 }
