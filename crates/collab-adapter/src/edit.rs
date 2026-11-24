@@ -13,7 +13,10 @@
 //!
 //! Each applied edit reports its inverse ([`Effect::inverse`]), which is what a per-user undo stack
 //! stores. Undo itself stays where the collaboration branch put it; this increment only owes the
-//! inverse, and only for the four edits it knows.
+//! inverse, and only for the four edits it knows. These inverses restore text and nothing else: the
+//! payloads carry no model fragment, so a removal's inverse re-creates a paragraph with default
+//! properties and a deleted range's inverse re-inserts characters without the formatting they had.
+//! The fragment-carrying inverse (`collab-doc` on the collaboration branch) is the next increment.
 
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, StoryRef};
@@ -85,6 +88,11 @@ impl std::fmt::Display for EditError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Effect {
     /// The edit that takes this one back, for the per-user undo stack.
+    ///
+    /// It restores text only. [`Edit::RemoveParagraph`]'s inverse re-creates the paragraph with
+    /// default paragraph and character properties and without the non-text content the removal
+    /// dropped; [`Edit::DeleteRange`]'s inverse re-inserts the characters without their formatting.
+    /// A test that checks a restoration checks the text, not the block as it was.
     pub inverse: Edit,
     /// The blocks whose content the edit touched, including the one it created.
     pub touched: Vec<BlockId>,

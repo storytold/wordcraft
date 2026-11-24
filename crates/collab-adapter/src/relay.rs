@@ -83,7 +83,7 @@ impl MockClient {
 impl Session for MockClient {
     fn join(&mut self, role: Role, since: Option<u64>) -> Result<Join, Refusal> {
         let mut room = lock(&self.room)?;
-        let replica = room.replica_of(&self.peer);
+        let replica = room.replica_of(&self.peer)?;
         let from = since.unwrap_or(0);
         if from > room.head {
             return Err(Refusal::new(RefusalCode::Resync, format!("the relay holds {} operations; the peer asked for {}", room.head, from)));
@@ -159,13 +159,18 @@ impl Room {
         }
     }
 
-    fn replica_of(&mut self, peer: &str) -> u8 {
+    fn replica_of(&mut self, peer: &str) -> Result<u8, Refusal> {
         if let Some(replica) = self.replicas.get(peer) {
-            return *replica;
+            return Ok(*replica);
         }
-        let replica = u8::try_from(self.replicas.len()).unwrap_or(u8::MAX);
+        let Some(replica) = u8::try_from(self.replicas.len()).ok() else {
+            return Err(Refusal::new(
+                RefusalCode::NoReplica,
+                format!("the session has granted all {} replica numbers", u32::from(u8::MAX).saturating_add(1)),
+            ));
+        };
         self.replicas.insert(peer.to_owned(), replica);
-        replica
+        Ok(replica)
     }
 
     fn role_of(&self, peer: &str) -> Role {
@@ -197,11 +202,11 @@ impl Room {
                 Ok(Accepted { version })
             }
             Err(EditError::Gone) => {
-                if let (Some(block), Some(text)) = (edit.text_block(), edit.typed_text()) {
+                if let Some((block, text)) = recoverable(&edit) {
                     self.recovered.entry(peer.to_owned()).or_default().push(Recovered {
                         block,
                         text: text.to_owned(),
-                        detail: "the paragraph was removed before this edit was sequenced".to_owned(),
+                        detail: "the block this edit addressed was removed before it was sequenced".to_owned(),
                     });
                 }
                 Err(Refusal::new(RefusalCode::Gone, "the block was removed by an acknowledged edit"))
@@ -212,10 +217,75 @@ impl Room {
     }
 }
 
+/// The block an edit names for its author, and the text it carried, when the edit has text.
+///
+/// A paragraph insertion that lost its anchor names the paragraph it meant to create: the id was
+/// minted before the submission and the text is its author's, so the recovery list keeps both. An
+/// insertion at the top of the body can only be refused for its id, which is not a lost block.
+fn recoverable(edit: &Edit) -> Option<(BlockId, &str)> {
+    match edit {
+        Edit::InsertText { block, text, .. } => Some((*block, text.as_str())),
+        Edit::InsertParagraph { id, text, after: Some(_) } => Some((*id, text.as_str())),
+        Edit::InsertParagraph { .. } | Edit::DeleteRange { .. } | Edit::RemoveParagraph { .. } => None,
+    }
+}
+
 fn room(room: &Arc<Mutex<Room>>) -> Result<MutexGuard<'_, Room>, Refusal> {
     lock(room)
 }
 
 fn lock(room: &Arc<Mutex<Room>>) -> Result<MutexGuard<'_, Room>, Refusal> {
     room.lock().map_err(|_| Refusal::new(RefusalCode::Resync, "the room was poisoned by a failed holder"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::IdMap;
+    use crate::seam::Role;
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Block, Paragraph};
+
+    fn document(texts: &[&str]) -> Document {
+        let mut doc = Document::new();
+        doc.body.clear();
+        for text in texts {
+            doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+        }
+        doc
+    }
+
+    #[test]
+    fn a_paragraph_insertion_that_lost_its_anchor_hands_its_text_back() {
+        let base = document(&["one", "two"]);
+        let ids = IdMap::bind(&base, 0);
+        let two = ids.id_at(1).expect("an id");
+        let relay = MockRelay::new(base.clone());
+        let mut alice = relay.connect("alice");
+        alice.join(Role::Editor, None).expect("alice joins");
+        let mut bob = relay.connect("bob");
+        bob.join(Role::Editor, None).expect("bob joins");
+
+        alice.submit(Edit::RemoveParagraph { block: two }, 0).expect("alice removes the anchor");
+        let minted = BlockId(crate::ids::GENERATED_BASE);
+        let refused = bob.submit(Edit::InsertParagraph { after: Some(two), id: minted, text: "typed".into() }, 0);
+        assert_eq!(refused.expect_err("the anchor is gone").code, RefusalCode::Gone);
+
+        let recovered = bob.recovered();
+        assert_eq!(recovered.len(), 1, "the text the paragraph insertion carried is kept");
+        assert_eq!(recovered[0].text, "typed");
+        assert_eq!(recovered[0].block, minted, "the recovery names the id the peer minted for it");
+    }
+
+    #[test]
+    fn a_peer_beyond_the_last_replica_number_is_refused() {
+        let relay = MockRelay::new(document(&["one"]));
+        for index in 0..=u8::MAX {
+            let mut peer = relay.connect(&format!("peer-{index}"));
+            peer.join(Role::Viewer, None).expect("there is a replica number for every peer");
+        }
+        let mut extra = relay.connect("peer-256");
+        let refused = extra.join(Role::Viewer, None).expect_err("no replica number is left");
+        assert_eq!(refused.code, RefusalCode::NoReplica);
+    }
 }

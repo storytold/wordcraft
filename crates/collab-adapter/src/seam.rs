@@ -64,6 +64,9 @@ pub enum RefusalCode {
     /// The edit is malformed for its kind (an offset inside a character, a removal of the last
     /// paragraph, an id already in use).
     BadRequest,
+    /// The session has no replica number left to give the peer. Nothing was joined: a replica
+    /// identity is granted, never borrowed, so a peer is refused rather than sharing a slice.
+    NoReplica,
     /// A replica cannot be brought up to date from the journal it asked for; it must resync from
     /// the document.
     Resync,

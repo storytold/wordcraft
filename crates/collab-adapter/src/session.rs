@@ -16,8 +16,9 @@
 //!   the whole journal.
 //!
 //! A stale submission is not an error the person sees: [`DocSession::submit`] hands the refusal
-//! back, the caller syncs and re-submits — the edit was built on the paragraph's own text, so it
-//! still means what was typed.
+//! back. The offsets the edit carried were built on the paragraph as this replica had it, so the
+//! caller rebuilds the edit against the paragraph's text after syncing — resubmitting the same
+//! bytes can address characters somebody else inserted.
 
 use wordcraft_doc::Document;
 
@@ -83,13 +84,28 @@ impl DocSession {
     /// Submit an edit built on the version this replica has applied.
     ///
     /// On `Ok` the edit is sequenced and already applied here; other replicas see it on their next
-    /// sync. A refusal of [`RefusalCode::Stale`] means the caller should sync and submit again.
+    /// sync.
+    ///
+    /// A [`RefusalCode::Stale`] refusal means nothing was sequenced. The caller syncs and rebuilds
+    /// the edit against the paragraph as it now reads — the offsets of the refused edit describe a
+    /// text that has since moved — then submits the rebuilt one.
+    ///
+    /// A [`RefusalCode::Resync`] refusal is the other case: the relay answered `Ok` and only the
+    /// [`DocSession::sync`] that follows failed. The edit *is* sequenced, this replica is behind,
+    /// and the caller brings it up to date by syncing or reconnecting. Submitting the same edit
+    /// again would be a second, non-idempotent edit, so a `Resync` is never retried as a
+    /// submission.
     pub fn submit(&mut self, edit: Edit) -> Result<u64, Refusal> {
         if !self.role.may_edit() {
             return Err(Refusal::new(RefusalCode::ReadOnly, "a viewer reads and does not write"));
         }
         self.transport.submit(edit, self.version)?;
-        self.sync()?;
+        if let Err(refusal) = self.sync() {
+            return Err(Refusal::new(
+                RefusalCode::Resync,
+                format!("the edit was sequenced but this replica could not apply it ({refusal}); sync or reconnect, do not resubmit"),
+            ));
+        }
         Ok(self.version)
     }
 

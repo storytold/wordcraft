@@ -49,7 +49,9 @@ impl IdMap {
     /// Number the document's top-level blocks for a peer of replica `replica`.
     ///
     /// The body's existing blocks are numbered from `1` in document order, identically on every
-    /// replica; the peer's own space starts at [`GENERATED_BASE`].
+    /// replica; the peer's own space starts at [`GENERATED_BASE`]. Ids the session gave this
+    /// replica before a rejoin come back through [`IdMap::put`] as the journal replays, and each
+    /// one moves the counter past itself.
     pub fn bind(doc: &Document, replica: u8) -> IdMap {
         let mut map = IdMap { by_index: BTreeMap::new(), by_id: HashMap::new(), replica, next: 0 };
         for index in 0..doc.body.len() {
@@ -72,8 +74,17 @@ impl IdMap {
     pub fn allocate(&mut self) -> BlockId {
         let within = self.next.min(IDS_PER_REPLICA.saturating_sub(1));
         self.next = self.next.saturating_add(1);
-        let base = GENERATED_BASE.saturating_add(u32::from(self.replica).saturating_mul(IDS_PER_REPLICA));
-        BlockId(base.saturating_add(within))
+        BlockId(self.slice_base().saturating_add(within))
+    }
+
+    /// The first id of this replica's own slice.
+    fn slice_base(&self) -> u32 {
+        GENERATED_BASE.saturating_add(u32::from(self.replica).saturating_mul(IDS_PER_REPLICA))
+    }
+
+    /// Where an id sits inside this replica's slice, when it is one of its own.
+    fn within_slice(&self, id: BlockId) -> Option<u32> {
+        id.0.checked_sub(self.slice_base()).filter(|within| *within < IDS_PER_REPLICA)
     }
 
     /// The index the id is at, or `None` when the block is gone.
@@ -97,12 +108,21 @@ impl IdMap {
     }
 
     /// Put a newly created block at `index` and record its id.
+    ///
+    /// An id from this replica's own slice moves the counter past it, wherever the block came
+    /// from: the peer's own insertion, a journal replayed after a resync, or the relay's copy of
+    /// the document. A session numbers its blocks from the same space after a rejoin, so the
+    /// counter has to remember what it gave out before the replica went away — otherwise the next
+    /// insertion would mint an id a delayed edit still names.
     pub fn put(&mut self, index: usize, id: BlockId) {
         let Ok(index) = u32::try_from(index) else { return };
         if let Some(old) = self.by_index.insert(index, id) {
             self.by_id.remove(&old);
         }
         self.by_id.insert(id, index);
+        if let Some(within) = self.within_slice(id) {
+            self.next = self.next.max(within.saturating_add(1));
+        }
     }
 
     /// Note that a block was inserted at `index`: every block at or after it moved down one.
@@ -170,6 +190,22 @@ mod tests {
         assert!(first.0 >= GENERATED_BASE, "a minted id is above every id an existing block got");
         assert!(second.0 >= GENERATED_BASE);
         assert_ne!(a.allocate(), first);
+    }
+
+    #[test]
+    fn a_replayed_block_moves_the_counter_past_its_id() {
+        let doc = three_paragraphs();
+        let mut ids = IdMap::bind(&doc, 1);
+        let first = ids.allocate();
+        ids.put(3, first);
+
+        // The replica rejoins: the map is numbered again and the journal replays the insertion
+        // with the id it was given before the peer went away.
+        let mut again = IdMap::bind(&doc, 1);
+        again.put(3, first);
+        let next = again.allocate();
+        assert_ne!(next, first, "a rejoin does not hand out an id the session already gave");
+        assert!(next.0 > first.0, "the counter resumes past the ids the replay brought back");
     }
 
     #[test]

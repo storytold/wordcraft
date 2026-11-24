@@ -48,6 +48,23 @@ the collaboration branch's `collab-doc` and move behind the same seam next, not 
 | a viewer is refused | the adapter refuses before the submission leaves the process *and* the backend refuses a submission that bypasses it; nothing is sequenced, the document does not move. Presence is published by the viewer and read latest-wins by the editor's participant list |
 | a hundred-page document round-trips through `.docx` | 3000 paragraphs paginate at 100+ pages identically on both replicas and on the relay; a custom XML part related from the main part, which the model does not read, survives the session *and* the save byte for byte; the saved file opens with the edited text and the same pagination |
 
+## What this increment does not restore
+
+Two gaps are named here rather than fixed, because both need per-character or per-fragment data
+that this increment's payloads do not carry:
+
+- **An inverse restores text only.** `Effect::inverse` of a removal re-creates the paragraph with
+  default paragraph and character properties and without the non-text content the removal dropped;
+  a deleted range's inverse re-inserts its characters without their formatting. The undo stack
+  must not present these as a full restore until the fragment-carrying inverse (the branch's
+  `collab-doc`) sits behind the same seam.
+- **Accepted typing that another peer's removal takes away is not in the recovery list.** The list
+  holds the text of edits the relay *refused* (`Gone`): an insertion under a removed anchor, a text
+  edit whose paragraph is gone. When a paragraph that already holds somebody's accepted typing is
+  removed, every replica drops that typing — one visible result — and no recovery entry is made,
+  because saying whose characters were dropped needs per-character authorship, which arrives with
+  `Texts`.
+
 ## What the next increment owes
 
 1. The shared contract supersedes `seam::Session`; the adapter delegates instead of declaring.
