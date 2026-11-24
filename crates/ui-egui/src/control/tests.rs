@@ -344,8 +344,8 @@ fn control_keyboard_preserves_native_focus_and_document_protection() {
     assert_eq!(h.state().session.doc, doc, "control input respects the same protection as real keys");
 }
 
-/// #3628 review: input the control channel sends is automation too. Shift+Insert sent with
-/// `ui.key` (MCP's `key` tool) runs Paste, which can't bring a field Word acts on into a document
+/// #3628 review: input the control channel sends is automation too. Mod+V sent with `ui.key`
+/// (MCP's `key` tool) runs Paste, which can't bring a field Word acts on into a document
 /// that doesn't hold it; the same key from the keyboard pastes it.
 #[test]
 fn control_keys_cannot_paste_a_field_word_acts_on() {
@@ -365,14 +365,14 @@ fn control_keys_cannot_paste_a_field_word_acts_on() {
     assert_eq!(fields(a), 0);
     h.state_mut().canvas.focus_page(&ctx);
     frames(&mut h, 4);
-    send(&mut h, "ui.key", json!({"key": "Insert", "shift": true}));
+    send(&mut h, "ui.key", json!({"key": "V", "command": true}));
     frames(&mut h, 8);
     let status = status_text(h.state()).unwrap_or_default().to_string();
     assert_eq!(fields(h.state()), 0, "{status}");
     assert!(status.contains("DDEAUTO"), "the paste ran and was refused: {status:?}");
     assert_eq!(body_text(h.state()), "Mine");
     // From the keyboard, the same key pastes it.
-    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Insert);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::V);
     frames(&mut h, 4);
     assert_eq!(fields(h.state()), 1, "{:?}", status_text(h.state()));
 }
