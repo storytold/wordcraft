@@ -28,6 +28,13 @@ pub(crate) struct ModifyStyleForm {
     id: String,
     name: String,
     font: String,
+    /// The style's Asian text font, empty when it has none, and what it was when the dialog opened: OK sets it only
+    /// when it was changed (#5377).
+    font_ea: String,
+    font_ea_was: String,
+    /// Whether the Asian text font box is shown: a Chinese, Japanese or Korean interface, a style with an Asian font,
+    /// or East Asian text in the document (as the Font dialog does for the selection).
+    asian: bool,
     size: f64,
     bold: bool,
     italic: bool,
@@ -49,10 +56,18 @@ impl ModifyStyleForm {
             },
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
+        let font_ea = rc.font_ea.unwrap_or_default();
+        let lang = crate::i18n::current().code();
+        let asian = ["zh", "ja", "ko"].iter().any(|l| lang.starts_with(l))
+            || !font_ea.is_empty()
+            || app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).chars().any(super::font::east_asian_char);
         Some(ModifyStyleForm {
             id: id.into(),
             name: st.name.clone(),
             font: rc.font,
+            font_ea_was: font_ea.clone(),
+            font_ea,
+            asian,
             size: f64::from(rc.size),
             bold: rc.bold,
             italic: rc.italic,
@@ -65,9 +80,13 @@ impl ModifyStyleForm {
         })
     }
 
-    /// The `styles.modify` parameters; `font` is the family as the document stores it. An unparsable colour sends none.
-    fn params(&self, font: &str) -> Value {
+    /// The `styles.modify` parameters; `font` and `font_ea` are the families as the document stores them. An unparsable
+    /// colour sends none, and so does an Asian text font the dialog left as it was.
+    fn params(&self, font: &str, font_ea: &str) -> Value {
         let mut chr = json!({"font": font, "size": self.size, "bold": self.bold, "italic": self.italic});
+        if !self.font_ea.is_empty() && self.font_ea != self.font_ea_was {
+            chr["fontEa"] = json!(font_ea);
+        }
         if let Some(c) = wordcraft_doc::Rgb::parse(&self.color) {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
         }
@@ -137,13 +156,20 @@ fn modify_hooks() -> DialogHooks {
 fn body(ui: &mut Ui, form: &mut ModifyStyleForm, catalog: &Arc<Catalog>, settings: &mut FontPickerSettings, requests: &mut Vec<Request>) {
     Field::new(label(tl!("Name:"))).show(ui, |ui, _| TextField::new(label(tl!("Name:")), Bind::bound(&mut form.name)).show(ui));
     let actions = [label(tl!("Add Font…"))];
-    Field::new(label(tl!("Font:"))).show(ui, |ui, _| {
-        let out =
-            crate::widgets::font_picker(label(tl!("Font:")), Bind::bound(&mut form.font), catalog, Bind::bound(settings), &actions, None).show(ui);
-        if out.action == Some(0) {
-            requests.push(Request::AddFont);
-        }
-    });
+    // Word's two font boxes when East Asian text is in use: the Asian text font, then the Latin one.
+    let mut font_box = |ui: &mut Ui, name: &str, family: &mut String, settings: &mut FontPickerSettings| {
+        Field::new(label(name)).show(ui, |ui, _| {
+            let out = crate::widgets::font_picker(label(name), Bind::bound(family), catalog, Bind::bound(settings), &actions, None).show(ui);
+            if out.action == Some(0) {
+                requests.push(Request::AddFont);
+            }
+        });
+    };
+    if form.asian {
+        font_box(ui, tl!("Asian text font:"), &mut form.font_ea, settings);
+    }
+    let latin = if form.asian { tl!("Latin text font:") } else { tl!("Font:") };
+    font_box(ui, latin, &mut form.font, settings);
     // The form keeps a number; a cleared box leaves the value as it was.
     let (mut size, mut before, mut after) = (Some(form.size), Some(form.before), Some(form.after));
     Field::new(label(tl!("Size:")))
@@ -204,6 +230,7 @@ impl StackDialog for ModifyStyleDialog {
         match field {
             "name" => f.name = value.as_str().ok_or_else(wrong)?.to_string(),
             "font" => f.font = value.as_str().ok_or_else(wrong)?.to_string(),
+            "fontEa" => f.font_ea = value.as_str().ok_or_else(wrong)?.to_string(),
             "color" => f.color = value.as_str().ok_or_else(wrong)?.to_string(),
             "size" => f.size = value.as_f64().ok_or_else(wrong)?,
             "before" => f.before = value.as_f64().ok_or_else(wrong)?,
@@ -218,7 +245,7 @@ impl StackDialog for ModifyStyleDialog {
     fn json_fields(&self) -> Option<Value> {
         let f = &self.form;
         Some(
-            json!({"name": f.name, "font": f.font, "size": f.size, "color": f.color, "bold": f.bold, "italic": f.italic, "before": f.before, "after": f.after}),
+            json!({"name": f.name, "font": f.font, "fontEa": f.font_ea, "size": f.size, "color": f.color, "bold": f.bold, "italic": f.italic, "before": f.before, "after": f.after}),
         )
     }
 }
@@ -246,7 +273,8 @@ fn modify_settle(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
     app.set_font_picker_settings(settings);
     if let Some(form) = filed {
         let font = app.previews.font_stored(&form.font);
-        let answer = app.run("styles.modify", form.params(&font)).map(|_| ()).map_err(label);
+        let font_ea = app.previews.font_stored(&form.font_ea);
+        let answer = app.run("styles.modify", form.params(&font, &font_ea)).map(|_| ()).map_err(label);
         if answer.is_ok()
             && let Some(parent) = app.dialog_host.stack().parent(id)
             && let Some(manage) = app.dialog_host.get_mut_by_id::<ManageStylesDialog>(parent)

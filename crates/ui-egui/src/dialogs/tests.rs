@@ -1940,3 +1940,31 @@ fn insert_chart_tiles_render_within_compact_bounds() {
     let grid = h.get_by_role_and_label(Role::ListBox, "Chart types").rect();
     assert!(grid.width() <= 380.0, "3-column chart types grid should not exceed comfortable dialog proportions (~360 pt), got {:?}", grid.size());
 }
+
+/// #5377: Modify Style has the Font dialog's Asian text font box when East Asian text is in use. OK stores that font
+/// on the style apart from the Latin text font, and stores none when the box was left alone.
+#[test]
+fn modify_style_sets_the_asian_text_font_apart_from_the_latin_one() {
+    use egui_kittest::kittest::Queryable;
+    let normal = |app: &WordApp| app.session.doc.styles.get("Normal").map(|s| s.chr.clone()).unwrap_or_default();
+
+    let mut h = app_harness(app_with("Example"));
+    h.run_steps(3);
+    open_named(&mut h, "modifyStyle", json!({"style": "Normal"}));
+    assert!(h.query_by_label("Asian text font:").is_none(), "Latin text alone shows the one Font box");
+
+    let mut h = app_harness(app_with("한글 Example"));
+    h.run_steps(3);
+    let id = open_named(&mut h, "modifyStyle", json!({"style": "Normal"}));
+    assert!(h.query_all_by_label("Asian text font:").next().is_some(), "Hangul in the document shows the Asian text font box");
+    confirm(&mut h, id);
+    assert!(!is_open(h.state(), "modifyStyle"));
+    assert_eq!(normal(h.state()).font_ea, None, "an unchanged box sets no Asian font");
+
+    let id = open_named(&mut h, "modifyStyle", json!({"style": "Normal"}));
+    set_field(&mut h, "modifyStyle", "fontEa", json!("Noto Sans KR"));
+    confirm(&mut h, id);
+    let chr = normal(h.state());
+    assert_eq!(chr.font_ea.as_deref(), Some("Noto Sans KR"));
+    assert_eq!(chr.font.as_deref(), Some(wordcraft_doc::styles::BODY_FONT), "the Latin text font is as it was");
+}
