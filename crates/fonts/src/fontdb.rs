@@ -60,6 +60,10 @@ pub struct FontDb {
     diagram_fallbacks: RwLock<DiagramFallbackCache>,
     #[cfg(test)]
     diagram_searches: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    diagram_search_hook: Mutex<Option<Box<dyn FnOnce(&FontDb) + Send>>>,
+    #[cfg(test)]
+    diagram_publish_hook: Mutex<Option<Box<dyn FnOnce(&FontDb) + Send>>>,
     #[cfg(not(target_arch = "wasm32"))]
     catalog: RwLock<Vec<CatalogEntry>>,
     /// Fonts the user added at run time, and the folder they are stored in (#582).
@@ -126,6 +130,10 @@ impl FontDb {
             diagram_fallbacks: RwLock::new(DiagramFallbackCache::default()),
             #[cfg(test)]
             diagram_searches: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            diagram_search_hook: Mutex::new(None),
+            #[cfg(test)]
+            diagram_publish_hook: Mutex::new(None),
             #[cfg(not(target_arch = "wasm32"))]
             catalog: RwLock::new(Vec::new()),
             user: RwLock::new(user::UserFonts::default()),

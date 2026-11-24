@@ -283,9 +283,16 @@ impl FontDb {
                 return hit.clone();
             }
         }
+        // Keyed by the face count and generation the search last looked at, not the state after it:
+        // a face loaded or added meanwhile (for instance via `add_font`) must not be shadowed by
+        // caching an older answer under the newer face count.
         let (found, n) = self.search_diagram(&key.0, exclude, prefer_serif);
         if n != self.read_faces().len() || generation != self.generation() || key.0.len() > RUN_FALLBACK_CACHE_CHARS {
             return found;
+        }
+        #[cfg(test)]
+        if let Some(hook) = self.diagram_publish_hook.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            hook(self);
         }
         let mut cache = self.diagram_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if n != self.read_faces().len() || generation != self.generation() {
@@ -306,7 +313,7 @@ impl FontDb {
         found
     }
 
-    /// The face covering a diagram's missing character set, and the face count chosen from.
+    /// The face covering a diagram's missing character set, and the face count it was chosen from.
     /// Prefers faces matching `prefer_serif`; when the best loaded face has a mismatched serif
     /// classification, checks system font candidates and retains the loaded face only when no
     /// matching candidate covers the full set (#5672).
@@ -314,41 +321,43 @@ impl FontDb {
         #[cfg(test)]
         self.diagram_searches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-        let (mut base, _) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+        let (mut base, mut checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
         #[cfg(not(target_arch = "wasm32"))]
         if base.is_none() || base.as_ref().is_some_and(|f| f.is_serif() != prefer_serif) {
-            let initial = base.clone();
             for c in chars {
                 if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c) && f.is_serif() == prefer_serif) {
                     continue;
                 }
                 if self.system_fallback_matching(*c, Some((exclude, prefer_serif))) {
-                    let (cand, _) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                    let (cand, cand_checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                    let matching = cand.as_ref().is_some_and(|f| f.is_serif() == prefer_serif);
                     if let Some(f) = cand {
-                        let matching = f.is_serif() == prefer_serif;
-                        if matching || base.is_none() {
-                            base = Some(f);
-                        }
-                        if matching {
-                            break;
-                        }
+                        base = Some(f);
+                        checked = cand_checked;
+                    } else if base.is_none() {
+                        checked = cand_checked;
+                    }
+                    if matching {
+                        break;
                     }
                 }
             }
             if base.as_ref().is_none_or(|f| f.is_serif() != prefer_serif) {
                 self.indexed_run_fallback_matching(chars, Some((exclude, prefer_serif)));
-                let (cand, _) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
-                if let Some(f) = cand
-                    && (f.is_serif() == prefer_serif || base.is_none())
-                {
+                let (cand, cand_checked) = self.loaded_diagram_covering(chars, exclude, prefer_serif);
+                if let Some(f) = cand {
                     base = Some(f);
+                    checked = cand_checked;
+                } else if base.is_none() {
+                    checked = cand_checked;
                 }
             }
-            if base.is_none() {
-                base = initial;
-            }
         }
-        (base, self.read_faces().len())
+        #[cfg(test)]
+        if let Some(hook) = self.diagram_search_hook.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            hook(self);
+        }
+        (base, checked)
     }
 
     /// The first face covering every char in `chars`, preferring matching `prefer_serif`,

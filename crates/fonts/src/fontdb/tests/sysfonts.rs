@@ -1026,3 +1026,69 @@ fn diagram_fallback_caches_a_mismatched_loaded_face_after_system_search() {
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn diagram_fallback_skips_stale_cache_publish_when_add_font_arrives_between_selection_and_publication() {
+    let dir = font_dir("diag-concurrent-add-font");
+    let regular = "SourceSans3-Regular.ttf";
+    let italic = "SourceSans3-It.ttf";
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let primary = db.face("Source Sans 3", "Regular");
+    assert!(!primary.is_serif());
+
+    // 1. A matching sans face arrives via `add_font` (no generation bump) after `search_diagram`
+    //    selects the loaded mismatched serif face and before `search_diagram` returns its count.
+    assert!(db.add_font(mapping(regular, "Load Mincho A", 0xF_0040, 0xF_0041)) > 0);
+    let arriving_a = mapping(regular, "New Gothic AA", 0xF_0040, 0xF_0041);
+    *db.diagram_search_hook.lock().unwrap() = Some(Box::new(move |db| {
+        assert!(db.add_font(arriving_a) > 0);
+    }));
+    let gen_before = db.generation();
+    let run_a = ['\u{F0040}', '\u{F0041}'];
+    let first_a = db.fallback_for_diagram(&run_a, primary.id(), false).unwrap();
+    assert_eq!(first_a.family, "Load Mincho A");
+    assert_eq!(db.generation(), gen_before, "add_font does not change generation");
+    assert_ne!(
+        db.diagram_fallbacks.read().unwrap().faces,
+        db.read_faces().len(),
+        "stale selection from before add_font must not be cached under the newer face count"
+    );
+    let second_a = db.fallback_for_diagram(&run_a, primary.id(), false).unwrap();
+    assert_eq!(second_a.family, "New Gothic AA", "subsequent lookup sees the newly added matching face");
+    assert_eq!(db.diagram_fallbacks.read().unwrap().faces, db.read_faces().len());
+    let searches_after_a = db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(db.fallback_for_diagram(&run_a, primary.id(), false).unwrap().id(), second_a.id());
+    assert_eq!(db.diagram_searches.load(std::sync::atomic::Ordering::Relaxed), searches_after_a);
+
+    // 2. Fast-path match (no system search): an upright sans face arrives via `add_font` after
+    //    `loaded_diagram_covering` picks an italic sans face and before `search_diagram` returns.
+    assert!(db.add_font(mapping(italic, "Load Gothic C", 0xF_0060, 0xF_0061)) > 0);
+    let arriving_c = mapping(regular, "New Gothic CC", 0xF_0060, 0xF_0061);
+    *db.diagram_search_hook.lock().unwrap() = Some(Box::new(move |db| {
+        assert!(db.add_font(arriving_c) > 0);
+    }));
+    let run_c = ['\u{F0060}', '\u{F0061}'];
+    let first_c = db.fallback_for_diagram(&run_c, primary.id(), false).unwrap();
+    assert_eq!(first_c.family, "Load Gothic C");
+    assert_eq!(db.generation(), gen_before);
+    assert_ne!(db.diagram_fallbacks.read().unwrap().faces, db.read_faces().len());
+    let second_c = db.fallback_for_diagram(&run_c, primary.id(), false).unwrap();
+    assert_eq!(second_c.family, "New Gothic CC", "fast-path selection also avoids caching under a newer face count");
+
+    // 3. A matching sans face arrives via `add_font` after `search_diagram` returns and before
+    //    `diagram_fallbacks.write()` publishes the entry.
+    assert!(db.add_font(mapping(regular, "Load Mincho B", 0xF_0050, 0xF_0051)) > 0);
+    let arriving_b = mapping(regular, "New Gothic BB", 0xF_0050, 0xF_0051);
+    *db.diagram_publish_hook.lock().unwrap() = Some(Box::new(move |db| {
+        assert!(db.add_font(arriving_b) > 0);
+    }));
+    let run_b = ['\u{F0050}', '\u{F0051}'];
+    let first_b = db.fallback_for_diagram(&run_b, primary.id(), false).unwrap();
+    assert_eq!(first_b.family, "Load Mincho B");
+    assert_eq!(db.generation(), gen_before);
+    assert_ne!(db.diagram_fallbacks.read().unwrap().faces, db.read_faces().len());
+    let second_b = db.fallback_for_diagram(&run_b, primary.id(), false).unwrap();
+    assert_eq!(second_b.family, "New Gothic BB");
+
+    let _ = std::fs::remove_dir_all(dir);
+}
