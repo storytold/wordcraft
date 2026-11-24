@@ -778,6 +778,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// The area the page view of a window with one pane shows in: the room left once the reading-metrics probe, shown
+/// first in the flow, has taken its place. The panes of View › Split (#3254) share this area, so splitting the window
+/// moves neither its top nor its bottom edge.
+pub(crate) fn page_area(ui: &mut Ui) -> Rect {
+    let _ = reading_metrics::read(ui);
+    ui.available_rect_before_wrap()
+}
+
 /// Where the page view shows: over the room left (a window with one pane), or at a rect as one pane of View › Split
 /// (#3254, [`crate::split`]).
 #[derive(Clone, Copy, Debug, PartialEq)]

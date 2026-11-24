@@ -71,7 +71,5 @@ impl Component for ReadingProbe {
 
 /// The reading metrics under the current theme, or `None` when the probe did not measure this pass.
 pub(super) fn read(ui: &mut Ui) -> Option<ReadingMetrics> {
-    // At a zero rect, so the probe takes no room (and no item spacing) from the page view shown after it.
-    let at = egui::Rect::from_min_size(ui.available_rect_before_wrap().min, egui::Vec2::ZERO);
-    ReadingProbe { common: Common::new(), measured: None }.label("Reading metrics").show_at(ui, at).metrics
+    ReadingProbe { common: Common::new(), measured: None }.label("Reading metrics").show(ui).metrics
 }

@@ -89,6 +89,8 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, allowed: bool) {
         canvas::show(app, ui);
         return;
     }
+    // The panes take the area the one page view takes.
+    let _ = canvas::page_area(ui);
     let document = app.session.document_id();
     let mut split = match app.canvas.split.take() {
         Some(s) if s.view.as_ref().is_some_and(|v| v.document_id() == document) => s,
