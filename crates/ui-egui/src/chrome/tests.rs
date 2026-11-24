@@ -437,6 +437,142 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
 
+/// The AutoSave switch renders its knob on the right when on and on the left when off in a
+/// left-to-right interface, and mirrors those sides in a right-to-left interface.
+#[test]
+fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
+    use egui::accesskit::Role;
+
+    fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+        for clipped in shapes {
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match shape {
+                    egui::Shape::Vec(children) => {
+                        for child in children {
+                            walk(child, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            walk(&clipped.shape, out);
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-autosave-knob-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("draft.docx");
+
+    let ar = crate::i18n::fixture_lang("ar", "\tAutoSave\tAutoSave\n");
+
+    // Measure the rendered track and knob rects of the title bar's production AutoSave `Switch`.
+    let measure = |rtl: bool, on: bool| -> (egui::Rect, egui::Rect) {
+        let mut a = new_app();
+        a.ui.animations = crate::theme::Animations::Off;
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        a.run("file.autosave", json!({"value": on})).unwrap();
+        assert_eq!(a.autosaves(), on, "rtl={rtl} on={on}: AutoSave state matches");
+
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                if rtl {
+                    // Drive RTL via a fixture language so the test runs with or without embedded catalogs.
+                    crate::i18n::apply_language(ar);
+                    ctx.global_style_mut(|s| s.right_to_left = true);
+                    craft::ui::runtime::env::with_env(ui, |o| o.direction = Some(craft::i18n::Direction::Rtl), |ui| app.ui(ui));
+                    ctx.global_style_mut(|s| s.right_to_left = false);
+                    crate::i18n::apply_language(crate::i18n::Lang::EN);
+                } else {
+                    app.ui(ui);
+                }
+            },
+            a,
+        );
+        crate::test_harness::frames(&mut h, 6);
+
+        let switch_node = h.get_by_role_and_label(Role::Switch, "AutoSave");
+        let switch_rect = switch_node.rect();
+        assert!(switch_rect.is_positive(), "rtl={rtl} on={on}: AutoSave switch is laid out");
+        assert_eq!(
+            switch_node.accesskit_node().toggled(),
+            Some(if on { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False }),
+            "rtl={rtl} on={on}: AutoSave switch reports its toggled state"
+        );
+
+        let mut shapes = Vec::new();
+        collect_shapes(&h.output().shapes, &mut shapes);
+
+        let track = shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r)
+                    if switch_rect.expand(1.0).contains_rect(r.rect)
+                        && r.fill != egui::Color32::TRANSPARENT
+                        && r.rect.height() > 4.0
+                        && r.rect.width() >= r.rect.height() * 1.5 =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap_or_else(|| panic!("rtl={rtl} on={on}: expected painted AutoSave switch track inside {switch_rect:?}"));
+
+        let knob = shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Rect(r)
+                    if track.contains_rect(r.rect)
+                        && r.fill.a() == u8::MAX
+                        && r.rect.height() > 2.0
+                        && r.rect.height() < track.height()
+                        && (r.rect.width() - r.rect.height()).abs() <= 0.5
+                        && r.corner_radius == egui::CornerRadius::same(u8::MAX) =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .next()
+            .unwrap_or_else(|| panic!("rtl={rtl} on={on}: expected painted round AutoSave knob inside track {track:?}"));
+
+        (track, knob)
+    };
+
+    let (ltr_on_track, ltr_on_knob) = measure(false, true);
+    let (ltr_off_track, ltr_off_knob) = measure(false, false);
+    let (rtl_on_track, rtl_on_knob) = measure(true, true);
+    let (rtl_off_track, rtl_off_knob) = measure(true, false);
+
+    assert!(ltr_on_knob.center().x > ltr_on_track.center().x, "left to right, on: knob sits right ({ltr_on_knob:?} in {ltr_on_track:?})");
+    assert!(ltr_off_knob.center().x < ltr_off_track.center().x, "left to right, off: knob sits left ({ltr_off_knob:?} in {ltr_off_track:?})");
+    assert!(rtl_on_knob.center().x < rtl_on_track.center().x, "right to left, on: knob sits left ({rtl_on_knob:?} in {rtl_on_track:?})");
+    assert!(rtl_off_knob.center().x > rtl_off_track.center().x, "right to left, off: knob sits right ({rtl_off_knob:?} in {rtl_off_track:?})");
+
+    // In RTL the AutoSave switch itself is also mirrored toward the right edge of the title bar.
+    assert!(rtl_on_track.center().x > ltr_on_track.center().x, "right to left mirrors the AutoSave switch toward the start (right) edge");
+
+    // Symmetric mirroring within the track: LTR on-from-left equals RTL on-from-right, and same for off.
+    let ltr_on_from_left = ltr_on_knob.center().x - ltr_on_track.min.x;
+    let rtl_on_from_right = rtl_on_track.max.x - rtl_on_knob.center().x;
+    assert!(
+        (ltr_on_from_left - rtl_on_from_right).abs() <= 0.5,
+        "on knob mirrors symmetrically: ltr_from_left={ltr_on_from_left}, rtl_from_right={rtl_on_from_right}"
+    );
+    let ltr_off_from_left = ltr_off_knob.center().x - ltr_off_track.min.x;
+    let rtl_off_from_right = rtl_off_track.max.x - rtl_off_knob.center().x;
+    assert!(
+        (ltr_off_from_left - rtl_off_from_right).abs() <= 0.5,
+        "off knob mirrors symmetrically: ltr_from_left={ltr_off_from_left}, rtl_from_right={rtl_off_from_right}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #7311: the title bar's Discord community button keeps its solid accent fill and contrasting
 /// `on_strong` icon/label in both wide (pill with label) and narrow (compact icon-only) windows,
 /// across Light and Dark themes, and still dispatches `ui.discord` when clicked.
