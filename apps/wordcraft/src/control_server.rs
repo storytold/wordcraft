@@ -1,84 +1,50 @@
-//! Loopback JSON-lines control server: one request per line, one reply per line.
-//! This is the transport the MCP server (`wordcraft-cli mcp --connect`) wraps.
+//! The control server: craft-automation's loopback JSON-lines transport, started on the port the
+//! user asked for.
 //!
-//! Every request needs the window's key (`docs/control-protocol.md`, Keys): once the port is
-//! bound, the app writes a random key to `<settings>/control-key.<instance>` (mode 0600) and
-//! removes the file when the window closes.
+//! A connection authenticates once with the token (`docs/control-protocol.md`, Token). When no
+//! token or token file is supplied, the app generates a token and writes it to
+//! `<settings>/control-key.<instance>` (mode 0600) after the port is bound, and removes the file
+//! when the window closes.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::Receiver;
 
-use serde_json::{Value, json};
-use wordcraft_ui_egui::ControlRequest;
+use craft::automation::args::ControlOptions;
+use craft::automation::control::ControlRequest;
+use craft::automation::server::{Listening, serve};
+use craft::ui::runtime::windows::WindowHost;
 
-/// Longer request lines are refused (and the connection closed).
-const MAX_LINE: usize = 1 << 20;
+/// A running control server. [`Control::shut_down`] it when the window closes.
+pub struct Control {
+    /// Dropping it stops accepting connections and frees the port.
+    listening: Listening,
+    /// The default token file this run wrote; a token file the user supplied is never removed.
+    created: Option<PathBuf>,
+}
 
-/// A connection that sends no authorised request in this time is closed.
-const FIRST_REQUEST: Duration = Duration::from_secs(30);
-
-/// How long a caller waits for the UI to answer a request. A request still queued after this
-/// is cancelled and never runs.
-const REPLY_WAIT: Duration = Duration::from_secs(60);
-
-/// Connections that have not yet sent an authorised request are limited to this many; more are
-/// closed at once. Each one holds a thread until its first request or [`FIRST_REQUEST`].
-const MAX_UNAUTHENTICATED: usize = 64;
-
-/// Counts one unauthenticated connection until it authenticates or ends.
-struct Admission(Option<Arc<AtomicUsize>>);
-
-impl Admission {
-    fn enter(count: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
-        if count.fetch_add(1, Ordering::SeqCst) >= max {
-            count.fetch_sub(1, Ordering::SeqCst);
-            return None;
-        }
-        Some(Self(Some(count.clone())))
-    }
-    fn release(&mut self) {
-        if let Some(c) = self.0.take() {
-            c.fetch_sub(1, Ordering::SeqCst);
-        }
+impl Control {
+    /// Stop accepting connections and remove the token file this run wrote, if any.
+    pub fn shut_down(self) {
+        let Self { listening, created } = self;
+        drop(listening);
+        remove(created.as_deref());
     }
 }
 
-impl Drop for Admission {
-    fn drop(&mut self) {
-        self.release();
+fn remove(path: Option<&Path>) {
+    if let Some(path) = path {
+        let _ = std::fs::remove_file(path);
     }
 }
 
-/// The key file of a running control server; [`KeyFile::remove`] it when the window closes.
-pub struct KeyFile(PathBuf);
-
-impl KeyFile {
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-    pub fn remove(&self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// Bind `127.0.0.1:port`, write the key file into `settings` and serve. `None` when the port
-/// cannot be bound or there is no random key (the control channel is off); the key file is
-/// `None` when it could not be written (requests are then refused).
-pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
-    start_with(port, ctx, settings, |listener, ctx, key| serve_on(listener, ctx, key, FIRST_REQUEST))
-}
-
-fn start_with(
-    port: u16,
-    ctx: egui::Context,
-    settings: Option<&Path>,
-    serve: impl FnOnce(TcpListener, egui::Context, String) -> std::io::Result<Receiver<ControlRequest>>,
-) -> Option<(Receiver<ControlRequest>, Option<KeyFile>)> {
+/// Bind `127.0.0.1:port`, settle the token and serve. `None` when the port cannot be bound or
+/// the token cannot be set up (the control channel is off); a taken port leaves no token file.
+///
+/// With no token and no token file in `options`, the token is kept in the default file for
+/// `port` in `settings`; a file left by a run that did not exit cleanly is replaced. Without a
+/// settings folder a fresh token is generated and reported by the log.
+pub fn start(options: &ControlOptions, port: u16, host: WindowHost, settings: Option<&Path>) -> Option<(Receiver<ControlRequest>, Control)> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
@@ -86,255 +52,28 @@ fn start_with(
             return None;
         }
     };
-    let key = match random_key() {
-        Ok(k) => k,
+    let created = settings.filter(|_| options.token.is_none() && options.token_file.is_none()).map(|dir| wordcraft_control_key::key_path(dir, port));
+    // The port was free, so no other run owns a file left here.
+    remove(created.as_deref());
+    let effective = ControlOptions { token_file: created.clone().or_else(|| options.token_file.clone()), ..options.clone() };
+    let token = match effective.server_token() {
+        Ok(t) => t,
         Err(e) => {
-            log::error!("control server off: no random key ({e})");
+            remove(created.as_deref());
+            log::error!("control server off: {e}");
             return None;
         }
     };
-    let key_file = match settings {
-        Some(dir) => {
-            let p = wordcraft_control_key::key_path(dir, port);
-            match write_key_file(&p, &key) {
-                Ok(()) => Some(KeyFile(p)),
-                Err(e) => {
-                    log::error!("control key file not written ({e}): requests will be refused");
-                    None
-                }
-            }
+    let notice = effective.token_notice(&token);
+    match serve(listener, token, host) {
+        Ok((rx, listening)) => {
+            log::info!("control server listening on {}, {notice}", listening.addr);
+            Some((rx, Control { listening, created }))
         }
-        None => {
-            log::error!("no settings folder for the control key file: requests will be refused");
-            None
-        }
-    };
-    let rx = match serve(listener, ctx, key) {
-        Ok(rx) => rx,
         Err(e) => {
-            if let Some(f) = &key_file {
-                f.remove();
-            }
+            remove(created.as_deref());
             log::error!("control server off: cannot start the accept thread ({e})");
-            return None;
-        }
-    };
-    match &key_file {
-        Some(f) => log::info!("control server listening on 127.0.0.1:{port}, key in {}", f.path().display()),
-        None => log::info!("control server listening on 127.0.0.1:{port}"),
-    }
-    Some((rx, key_file))
-}
-
-/// A new key: 32 random bytes from the operating system, as hex.
-fn random_key() -> Result<String, String> {
-    let mut b = [0u8; 32];
-    getrandom::fill(&mut b).map_err(|e| e.to_string())?;
-    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
-}
-
-/// Write the key file: a stale one (from a run that did not exit cleanly) is replaced; on Unix
-/// the new file is created with mode 0600.
-fn write_key_file(p: &Path, key: &str) -> Result<(), String> {
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
-    }
-    let _ = std::fs::remove_file(p);
-    let mut open = std::fs::OpenOptions::new();
-    open.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
-    let mut f = open.open(p).map_err(|e| format!("cannot create {}: {e}", p.display()))?;
-    f.write_all(key.as_bytes()).map_err(|e| format!("cannot write {}: {e}", p.display()))
-}
-
-/// Compare a key with the window's in time that does not depend on where they differ. An
-/// empty key never matches.
-fn keys_match(given: &str, key: &str) -> bool {
-    let (a, b) = (given.as_bytes(), key.as_bytes());
-    !b.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
-fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Duration) -> std::io::Result<Receiver<ControlRequest>> {
-    serve_with(listener, ctx, key, Limits { first, wait: REPLY_WAIT, max_unauthenticated: MAX_UNAUTHENTICATED })
-}
-
-/// The time and count budgets of a server (small ones in tests).
-#[derive(Clone, Copy)]
-struct Limits {
-    first: Duration,
-    wait: Duration,
-    max_unauthenticated: usize,
-}
-
-fn serve_with(listener: TcpListener, ctx: egui::Context, key: String, limits: Limits) -> std::io::Result<Receiver<ControlRequest>> {
-    serve_with_spawner(listener, ctx, key, limits, |accept| std::thread::Builder::new().name("control-accept".into()).spawn(accept).map(|_| ()))
-}
-
-fn serve_with_spawner(
-    listener: TcpListener,
-    ctx: egui::Context,
-    key: String,
-    limits: Limits,
-    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
-) -> std::io::Result<Receiver<ControlRequest>> {
-    let (tx, rx) = channel::<ControlRequest>();
-    let key: Arc<str> = key.into();
-    let unauthenticated = Arc::new(AtomicUsize::new(0));
-    let accept = move || {
-        for stream in listener.incoming().flatten() {
-            let Some(admission) = Admission::enter(&unauthenticated, limits.max_unauthenticated) else {
-                log::warn!("control server: too many unauthenticated connections, one closed");
-                continue;
-            };
-            let (tx, ctx, key) = (tx.clone(), ctx.clone(), key.clone());
-            // A thread that cannot start closes this connection only (the guard releases its slot).
-            if let Err(e) = std::thread::Builder::new().name("control-conn".into()).spawn(move || serve(stream, tx, ctx, &key, limits, admission)) {
-                log::warn!("control server: no thread for a connection: {e}");
-            }
-        }
-    };
-    spawn(Box::new(accept))?;
-    Ok(rx)
-}
-
-/// The read side of a connection with an optional overall deadline: each read waits only for
-/// the time left, so blank lines, bad JSON or a slow drip of bytes cannot extend it.
-struct Timed {
-    s: TcpStream,
-    deadline: Option<Instant>,
-}
-
-impl Read for Timed {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if let Some(d) = self.deadline {
-            let left = d.checked_duration_since(Instant::now()).filter(|l| !l.is_zero()).ok_or(std::io::ErrorKind::TimedOut)?;
-            self.s.set_read_timeout(Some(left))?;
-        }
-        self.s.read(buf)
-    }
-}
-
-impl Timed {
-    fn set_deadline(&mut self, d: Option<Instant>) {
-        self.deadline = d;
-        if d.is_none() {
-            let _ = self.s.set_read_timeout(None);
-        }
-    }
-}
-
-/// The next line (trimmed), `None` at the end of the stream or after a read error.
-fn read_line(r: &mut BufReader<Timed>) -> Option<Result<String, &'static str>> {
-    let mut buf = Vec::new();
-    let n = r.by_ref().take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buf).ok()?;
-    if n == 0 {
-        return None;
-    }
-    if buf.len() > MAX_LINE {
-        return Some(Err("line too long"));
-    }
-    Some(String::from_utf8(buf).map(|s| s.trim().to_string()).map_err(|_| "not UTF-8"))
-}
-
-/// Read and drop the rest of an oversize line, so closing the socket does not reset the
-/// connection before the client has read the error. At most 64 MiB, within 2 s.
-fn discard_rest_of_line(r: &mut BufReader<Timed>) {
-    r.get_mut().set_deadline(Some(Instant::now() + Duration::from_secs(2)));
-    let mut left: usize = 64 << 20;
-    while left > 0 {
-        let (used, done) = match r.fill_buf() {
-            Ok([]) | Err(_) => return,
-            Ok(b) => match b.iter().position(|&c| c == b'\n') {
-                Some(i) => (i + 1, true),
-                None => (b.len(), false),
-            },
-        };
-        r.consume(used);
-        if done {
-            return;
-        }
-        left = left.saturating_sub(used);
-    }
-}
-
-fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key: &str, limits: Limits, mut admission: Admission) {
-    let Ok(read) = stream.try_clone() else { return };
-    let mut out = stream;
-    // One overall deadline from accept to the first authorised request; after it, none.
-    let mut reader = BufReader::new(Timed { s: read, deadline: Some(Instant::now() + limits.first) });
-    let mut authorised = false;
-    // The key an `auth` request gave this connection.
-    let mut conn_key: Option<String> = None;
-    while let Some(line) = read_line(&mut reader) {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": e}));
-                if e == "line too long" {
-                    discard_rest_of_line(&mut reader);
-                }
-                break;
-            }
-        };
-        if line.is_empty() {
-            continue;
-        }
-        let msg = match serde_json::from_str::<Value>(&line) {
-            Ok(m) => m,
-            // Close on a line that isn't JSON: an HTTP request (say, a web page's `fetch` to this
-            // port) starts with a request line that never parses, so it can't carry a command in
-            // its body, even before the key is checked.
-            Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("bad JSON: {e}; closing the connection")}));
-                break;
-            }
-        };
-        let id = msg.get("id").cloned().unwrap_or(Value::Null);
-        let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_string();
-        let params = msg.get("params").cloned().unwrap_or(json!({}));
-        // The top-level `key`; `auth` may carry it in its params. For other methods `params.key`
-        // is an ordinary parameter (`ui.key {"key": "Enter"}`).
-        let given =
-            msg.get("key").and_then(Value::as_str).or_else(|| if method == "auth" { params.get("key").and_then(Value::as_str) } else { None });
-        let mut reply = |mut v: Value| -> bool {
-            if let Some(o) = v.as_object_mut() {
-                o.insert("id".into(), id.clone());
-            }
-            writeln!(out, "{v}").is_ok()
-        };
-        // Checked on every request.
-        let k = given.or(conn_key.as_deref()).unwrap_or("");
-        if !keys_match(k, key) {
-            let _ = reply(json!({"ok": false, "error": "unauthorized"}));
-            break;
-        }
-        if !authorised {
-            authorised = true;
-            admission.release();
-            reader.get_mut().set_deadline(None);
-        }
-        if method == "auth" {
-            conn_key = Some(k.to_string());
-            if !reply(json!({"ok": true, "result": {}})) {
-                break;
-            }
-            continue;
-        }
-        let (req, rrx, waiter) = ControlRequest::with_waiter(method, params);
-        if tx.send(req).is_err() {
-            break;
-        }
-        ctx.request_repaint();
-        let r = rrx.recv_timeout(limits.wait).unwrap_or_else(|_| {
-            if waiter.cancel() {
-                json!({"ok": false, "error": "timeout before execution: the request was not run and never will be"})
-            } else {
-                json!({"ok": false, "error": "timeout: outcome unknown, the request had started when the wait ended; inspect the document to check"})
-            }
-        });
-        if !reply(r) {
-            break;
+            None
         }
     }
 }
@@ -342,402 +81,149 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpStream;
+    use craft::automation::client::ControlClient;
 
-    const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-    fn boot_with(first: Duration) -> (u16, Receiver<ControlRequest>) {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        (port, serve_on(listener, egui::Context::default(), KEY.to_string(), first).unwrap())
+    fn host() -> WindowHost {
+        WindowHost::of(&egui::Context::default())
     }
 
-    fn boot() -> (u16, Receiver<ControlRequest>) {
-        boot_with(FIRST_REQUEST)
+    #[test]
+    fn the_token_file_is_written_after_the_bind_and_removed_on_exit() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-control-life-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let options = ControlOptions::default();
+
+        // The port is taken: no token file.
+        let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = taken.local_addr().unwrap().port();
+        assert!(start(&options, port, host(), Some(&dir)).is_none());
+        assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "no token file after a failed bind");
+        drop(taken);
+
+        // Bound: the default file holds the token that opens the port.
+        let (_rx, control) = start(&options, 0, host(), Some(&dir)).unwrap();
+        let path = control.created.clone().unwrap();
+        assert_eq!(path, wordcraft_control_key::key_path(&dir, 0));
+        let token = std::fs::read_to_string(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert!(ControlClient::connect(control.listening.addr, token.trim()).is_ok());
+        control.shut_down();
+        assert!(!path.exists());
+
+        // A token file the user supplied stays.
+        let supplied = dir.join("supplied-token");
+        let options = ControlOptions { token_file: Some(supplied.clone()), ..ControlOptions::default() };
+        let (_rx, control) = start(&options, 0, host(), Some(&dir)).unwrap();
+        assert!(control.created.is_none());
+        control.shut_down();
+        assert!(supplied.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn boot() -> (u16, Receiver<ControlRequest>, Control) {
+        let options = ControlOptions { token: Some(TOKEN.to_string()), ..ControlOptions::default() };
+        let (rx, control) = start(&options, 0, host(), None).unwrap();
+        let port = control.listening.addr.port();
+        (port, rx, control)
     }
 
     /// Answer the next request that reaches the UI with `ok`, and return it.
     fn answer(rx: &Receiver<ControlRequest>) -> ControlRequest {
-        let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        let _ = req.reply.send(json!({"ok": true, "result": {}}));
+        let req = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let _ = req.reply.send(serde_json::json!({"ok": true, "result": {}}));
         req
     }
 
     /// One connection, several lines.
-    struct Conn(BufReader<TcpStream>, TcpStream);
+    struct Conn(std::io::BufReader<std::net::TcpStream>, std::net::TcpStream);
 
     impl Conn {
         fn open(port: u16) -> Self {
-            Self::open_within(port, Duration::from_secs(5))
-        }
-        fn open_within(port: u16, read_timeout: Duration) -> Self {
-            let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-            s.set_read_timeout(Some(read_timeout)).unwrap();
-            Self(BufReader::new(s.try_clone().unwrap()), s)
+            let s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            Self(std::io::BufReader::new(s.try_clone().unwrap()), s)
         }
         fn send(&mut self, line: &str) {
+            use std::io::Write;
             writeln!(self.1, "{line}").unwrap();
         }
-        fn recv(&mut self) -> Value {
+        fn recv(&mut self) -> serde_json::Value {
+            use std::io::BufRead;
             let mut r = String::new();
-            let _ = self.0.read_line(&mut r);
-            serde_json::from_str(&r).unwrap_or_default()
+            let n = self.0.read_line(&mut r).expect("read reply line");
+            assert!(n > 0, "unexpected EOF while waiting for reply");
+            serde_json::from_str(&r).expect("reply is valid JSON")
         }
-        fn call(&mut self, line: &str) -> Value {
+        fn call(&mut self, line: &str) -> serde_json::Value {
             self.send(line);
             self.recv()
         }
         /// The server closed the connection.
         fn closed(&mut self) -> bool {
+            use std::io::BufRead;
             let mut r = String::new();
-            closed_by_peer(self.0.read_line(&mut r))
+            match self.0.read_line(&mut r) {
+                Ok(0) => true,
+                Err(e) => matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::BrokenPipe
+                ),
+                _ => false,
+            }
         }
     }
 
-    /// Whether a read means the peer closed the connection. End of stream does; so does a reset,
-    /// which is how Windows can deliver a close when the writer had nothing to read back (the
-    /// Windows Print job failed here). Any other error, such as `InvalidData` for bytes that are
-    /// not UTF-8, leaves the connection open.
-    fn closed_by_peer(read: std::io::Result<usize>) -> bool {
-        match read {
-            Ok(n) => n == 0,
-            Err(e) => matches!(
-                e.kind(),
-                std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::NotConnected
-                    | std::io::ErrorKind::BrokenPipe
-            ),
-        }
-    }
-
+    /// Post-#7101 adaptation of `the_key_on_each_request` (#124, tracked under #7317 / #7720):
+    /// `craft::automation::server` replaced the legacy per-request `"key"` field with one-time
+    /// per-connection token authentication (`docs/control-protocol.md`, Token).
     #[test]
-    fn a_request_without_the_key_is_refused_and_closed() {
-        let (port, rx) = boot();
+    fn a_connection_authenticates_once_with_the_token_and_unauthenticated_requests_are_refused() {
+        let (port, rx, control) = boot();
+
+        // Authenticate once per connection with `params.token`.
         let mut c = Conn::open(port);
-        let r = c.call(r#"{"id":1,"method":"document.inspect"}"#);
-        assert_eq!((r["ok"].clone(), r["error"].clone(), r["id"].clone()), (json!(false), json!("unauthorized"), json!(1)));
-        assert!(c.closed());
-        assert!(rx.try_recv().is_err(), "nothing reached the UI");
-    }
+        let auth_resp = c.call(&format!(r#"{{"id":1,"method":"auth","params":{{"token":"{TOKEN}"}}}}"#));
+        assert_eq!(auth_resp, serde_json::json!({"id": 1, "ok": true, "result": {"authenticated": true}}));
 
-    #[test]
-    fn a_wrong_key_is_refused_and_closed() {
-        let (port, rx) = boot();
-        for key in ["nope", &KEY[..63], &format!("{KEY}0"), &KEY.to_uppercase()] {
-            let mut c = Conn::open(port);
-            assert_eq!(c.call(&format!(r#"{{"id":1,"key":"{key}","method":"document.inspect"}}"#))["error"], "unauthorized", "{key}");
-            assert!(c.closed());
-        }
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn the_key_on_each_request() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        c.send(&format!(r#"{{"id":7,"key":"{KEY}","method":"document.inspect","params":{{"text":true}}}}"#));
+        // Subsequent requests on the authenticated connection carry no token and reach the UI.
+        c.send(r#"{"id":7,"method":"document.inspect","params":{"text":true}}"#);
         let req = answer(&rx);
-        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &json!({"text": true})));
+        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &serde_json::json!({"text": true})));
         let r = c.recv();
-        assert_eq!((r["ok"].clone(), r["id"].clone()), (json!(true), json!(7)));
-        // Every request needs it: one without the key is refused, also after good ones.
-        assert_eq!(c.call(r#"{"id":8,"method":"document.inspect"}"#)["error"], "unauthorized");
-        assert!(c.closed());
-    }
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(7)));
 
-    #[test]
-    fn auth_once_per_connection() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
-        for id in 2..4 {
-            c.send(&format!(r#"{{"id":{id},"method":"document.inspect"}}"#));
-            answer(&rx);
-            assert_eq!(c.recv()["ok"], true);
-        }
-        // `params.key` works for `auth` too.
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(&format!(r#"{{"id":1,"method":"auth","params":{{"key":"{KEY}"}}}}"#))["ok"], true);
-        // A wrong key on an authenticated connection is still refused, and closes it.
-        assert_eq!(c.call(r#"{"id":2,"key":"nope","method":"document.inspect"}"#)["error"], "unauthorized");
-        assert!(c.closed());
-        // A failed auth closes the connection.
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(r#"{"id":1,"method":"auth","key":"nope"}"#)["error"], "unauthorized");
-        assert!(c.closed());
-    }
-
-    #[test]
-    fn params_key_is_only_a_secret_for_auth() {
-        let (port, rx) = boot();
-        // `params.key` does not authenticate other methods.
-        let mut c = Conn::open(port);
-        assert_eq!(c.call(&format!(r#"{{"id":1,"method":"document.inspect","params":{{"key":"{KEY}"}}}}"#))["error"], "unauthorized");
-        // It is an ordinary parameter for them (`ui.key` presses a key).
-        let mut c = Conn::open(port);
-        c.send(&format!(r#"{{"id":1,"key":"{KEY}","method":"ui.key","params":{{"key":"Enter"}}}}"#));
+        c.send(r#"{"id":8,"method":"document.inspect","params":{"text":false}}"#);
         let req = answer(&rx);
-        assert_eq!((req.method.as_str(), &req.params), ("ui.key", &json!({"key": "Enter"})));
-        assert_eq!(c.recv()["ok"], true);
-    }
-
-    #[test]
-    fn a_line_over_1_mib_is_refused_and_closed() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        let big = format!(r#"{{"id":1,"key":"{KEY}","method":"document.inspect","pad":"{}"}}"#, "x".repeat(MAX_LINE));
-        assert_eq!(c.call(&big)["error"], "line too long");
-        assert!(c.closed());
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn only_closure_errors_mean_the_peer_closed() {
-        use std::io::{Error, ErrorKind};
-        assert!(closed_by_peer(Ok(0)), "end of stream");
-        for kind in [ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted, ErrorKind::NotConnected, ErrorKind::BrokenPipe] {
-            assert!(closed_by_peer(Err(Error::new(kind, "closed"))), "{kind:?}");
-        }
-        assert!(!closed_by_peer(Ok(1)), "a reply arrived");
-        // Not UTF-8, a timeout or a would-block leave the socket open.
-        for kind in [ErrorKind::InvalidData, ErrorKind::TimedOut, ErrorKind::WouldBlock] {
-            assert!(!closed_by_peer(Err(Error::new(kind, "still open"))), "{kind:?}");
-        }
-    }
-
-    #[test]
-    fn a_silent_connection_is_closed() {
-        let (port, rx) = boot_with(Duration::from_millis(300));
-        // A loaded Windows CI runner can take seconds to schedule the connection thread. The
-        // production deadline is 30 s, so 10 s still proves the server's own budget fired.
-        let mut quiet = Conn::open_within(port, Duration::from_secs(20));
-        let t0 = Instant::now();
-        assert!(quiet.closed());
-        assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
-        // After an authorised request the connection may stay idle.
-        let mut busy = Conn::open(port);
-        assert_eq!(busy.call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
-        std::thread::sleep(Duration::from_millis(600));
-        busy.send(r#"{"id":2,"method":"document.inspect"}"#);
-        answer(&rx);
-        assert_eq!(busy.recv()["ok"], true);
-    }
-
-    #[test]
-    fn the_first_request_limit_is_one_overall_deadline() {
-        // Blank lines and bad JSON do not keep a connection without the key open.
-        let (port, _rx) = boot_with(Duration::from_millis(300));
-        let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let mut w = s.try_clone().unwrap();
-        let feeder = std::thread::spawn(move || {
-            for i in 0..40 {
-                if w.write_all(if i % 2 == 0 { b"\n" } else { b"not json\n" }).is_err() {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        });
-        let t0 = Instant::now();
-        let mut r = BufReader::new(s);
-        r.get_ref().set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if matches!(r.read_line(&mut line), Ok(0) | Err(_)) {
-                break;
-            }
-            assert!(line.contains("bad JSON"), "{line}");
-        }
-        let _ = feeder.join();
-        assert!(t0.elapsed() < Duration::from_millis(1500), "{:?}", t0.elapsed());
-    }
-
-    #[test]
-    fn bad_json_closes_the_connection() {
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        assert_eq!(c.call("not json")["ok"], false);
-        assert!(c.closed());
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn http_request_cannot_smuggle_a_command() {
-        // What a web page's `fetch("http://127.0.0.1:<port>/", {method: "POST", body})` sends,
-        // even with the key in the body.
-        let (port, rx) = boot();
-        let body = format!("\n{{\"key\":\"{KEY}\",\"method\":\"file.saveAs\",\"params\":{{\"path\":\"/tmp/x.docx\"}}}}\n");
-        let req = format!("POST / HTTP/1.1\r\nHost: 127.0.0.1:7981\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
-        let mut c = Conn::open(port);
-        c.1.write_all(req.as_bytes()).unwrap();
-        let _ = c.recv();
-        assert!(c.closed());
-        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
-    }
-
-    #[test]
-    fn keys_compare_whole() {
-        assert!(keys_match(KEY, KEY));
-        assert!(!keys_match(KEY, &KEY[..63]));
-        assert!(!keys_match(&KEY[..63], KEY));
-        assert!(!keys_match(KEY, &KEY.replace('f', "e")));
-        assert!(!keys_match("", ""), "an empty key never matches");
-    }
-
-    #[test]
-    fn random_keys_are_256_bits() {
-        let (a, b) = (random_key().unwrap(), random_key().unwrap());
-        assert_eq!(a.len(), 64);
-        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, b);
-    }
-
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("wordcraft-control-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
-    #[test]
-    fn the_key_file_is_written_after_the_bind_and_removed_on_exit() {
-        let dir = temp_dir("life");
-        // The port is taken: no key file.
-        let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = taken.local_addr().unwrap().port();
-        assert!(start(port, egui::Context::default(), Some(&dir)).is_none());
-        assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "no key file after a failed bind");
-        drop(taken);
-        // Bound: the key file holds the key that opens the port.
-        let mut free_port = port.wrapping_add(1).max(1024);
-        let mut started = None;
-        for _ in 0..100 {
-            if let Some(res) = start(free_port, egui::Context::default(), Some(&dir)) {
-                started = Some((res, free_port));
-                break;
-            }
-            free_port = free_port.wrapping_add(1).max(1024);
-        }
-        let ((rx, key_file), port) = started.unwrap();
-        let key_file = key_file.unwrap();
-        assert_eq!(key_file.path(), wordcraft_control_key::key_path(&dir, port));
-        let key = std::fs::read_to_string(key_file.path()).unwrap();
-        assert_eq!(key.len(), 64);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(key_file.path()).unwrap().permissions().mode() & 0o777, 0o600);
-        }
-        let mut c = Conn::open(port);
-        c.send(&format!(r#"{{"id":1,"key":"{key}","method":"document.inspect"}}"#));
-        answer(&rx);
-        assert_eq!(c.recv()["ok"], true);
-        key_file.remove();
-        assert!(!key_file.path().exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn an_accept_thread_spawn_failure_aborts_start_and_removes_the_key() {
-        let dir = temp_dir("spawn-failure");
-        let path = wordcraft_control_key::key_path(&dir, 0);
-        let mut bound = None;
-        let result = start_with(0, egui::Context::default(), Some(&dir), |listener, ctx, key| {
-            bound = Some(listener.local_addr().unwrap());
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), key, "startup wrote the key before spawning");
-            serve_with_spawner(listener, ctx, key, small(150, 8), |accept| {
-                drop(accept);
-                Err(std::io::Error::other("injected accept thread spawn failure"))
-            })
-        });
-        assert!(result.is_none(), "a server without its accept thread must not report success");
-        assert!(!path.exists(), "failed startup must remove its published key");
-        let _listener = TcpListener::bind(bound.unwrap()).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_complete_json_request_at_eof_can_reach_the_ui() {
-        // This is why a bridge write failure before the newline is outcome-unknown.
-        let (port, rx) = boot();
-        let mut c = Conn::open(port);
-        let body = json!({"id": 1, "key": KEY, "method": "engine.execute", "params": {"command": "text.insert", "params": {"text": "once"}}});
-        c.1.write_all(body.to_string().as_bytes()).unwrap();
-        c.1.shutdown(std::net::Shutdown::Write).unwrap();
-        let req = answer(&rx);
-        assert_eq!(req.params["params"]["text"], "once");
-        assert_eq!(c.recv()["ok"], true);
-        assert!(c.closed());
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn a_stale_key_file_is_replaced() {
-        let dir = temp_dir("stale");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("control-key.test");
-        std::fs::write(&p, "old").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
-        }
-        write_key_file(&p, KEY).unwrap();
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), KEY);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    fn boot_limits(limits: Limits) -> (u16, Receiver<ControlRequest>) {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        (port, serve_with(listener, egui::Context::default(), KEY.to_string(), limits).unwrap())
-    }
-
-    fn small(wait_ms: u64, max_unauthenticated: usize) -> Limits {
-        Limits { first: FIRST_REQUEST, wait: Duration::from_millis(wait_ms), max_unauthenticated }
-    }
-
-    #[test]
-    fn a_request_that_timed_out_in_the_queue_never_runs() {
-        let (port, rx) = boot_limits(small(150, 8));
-        let mut c = Conn::open(port);
-        let r = c.call(&format!(r#"{{"id":1,"key":"{KEY}","method":"engine.execute","params":{{"command":"text.insert"}}}}"#));
-        assert_eq!(r["ok"], false);
-        assert!(r["error"].as_str().unwrap_or("").starts_with("timeout before execution"), "{r}");
-        // The UI gets to it late: it must not run it.
-        let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(!req.start(), "a cancelled request was started");
-    }
-
-    #[test]
-    fn a_request_that_started_before_the_timeout_reports_an_unknown_outcome() {
-        let (port, rx) = boot_limits(small(150, 8));
-        let mut c = Conn::open(port);
-        c.send(&format!(r#"{{"id":1,"key":"{KEY}","method":"engine.execute","params":{{"command":"text.insert"}}}}"#));
-        let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(req.start());
+        assert_eq!((req.method.as_str(), &req.params), ("document.inspect", &serde_json::json!({"text": false})));
         let r = c.recv();
-        assert!(r["error"].as_str().unwrap_or("").contains("outcome unknown"), "{r}");
-    }
+        assert_eq!((&r["ok"], &r["id"]), (&serde_json::json!(true), &serde_json::json!(8)));
+        drop(c);
 
-    #[test]
-    fn unauthenticated_connections_are_limited() {
-        let (port, rx) = boot_limits(small(5_000, 2));
-        let mut idle = [Conn::open(port), Conn::open(port)];
-        // Give the server time to count both.
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(Conn::open(port).closed(), "the third idle connection was admitted");
-        // One authenticates: its slot is free again.
-        assert_eq!(idle[0].call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
-        std::thread::sleep(Duration::from_millis(200));
-        let mut again = Conn::open(port);
-        assert_eq!(again.call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
-        assert!(rx.try_recv().is_err());
+        // An unauthenticated connection is refused and closed without reaching the UI.
+        let mut unauth = Conn::open(port);
+        let r = unauth.call(r#"{"id":9,"method":"document.inspect"}"#);
+        assert_eq!(r, serde_json::json!({"id": 9, "ok": false, "error": "authentication required"}));
+        assert!(unauth.closed());
+        assert!(rx.try_recv().is_err(), "unauthenticated request must not reach the UI");
+        drop(unauth);
+
+        // Legacy pre-#7101 per-request `"key"` does not bypass `auth` and closes the connection.
+        let mut legacy = Conn::open(port);
+        let r = legacy.call(&format!(r#"{{"id":10,"key":"{TOKEN}","method":"document.inspect","params":{{"text":true}}}}"#));
+        assert_eq!(r, serde_json::json!({"id": 10, "ok": false, "error": "authentication required"}));
+        assert!(legacy.closed());
+        assert!(rx.try_recv().is_err(), "legacy per-request key must not reach the UI");
+        drop(legacy);
+
+        control.shut_down();
     }
 }
