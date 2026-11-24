@@ -2442,3 +2442,195 @@ fn hostile_numbers_are_ignored() {
     assert!(h.state().canvas.view.zoom.is_finite() && h.state().canvas.view.zoom > 0.0);
     assert!(h.state().canvas.view.offset.0.is_finite() && h.state().canvas.view.offset.1.is_finite());
 }
+
+/// Restored from pre-#7101 `ibeam::tests::the_drawn_i_beam_takes_the_canvas_colour_off_the_page`
+/// (#7317) against the post-#7101 `PageTextTool` + `craft` painted cursor pipeline: on native
+/// Windows, hovering text on a dark page selects `PaintedCursor::IBeam`, while hovering off the
+/// page (in the gap between pages or outside the page edge, with Hide White Space off or on)
+/// falls back to the default arrow. Non-Windows and Web shells keep the system text I-beam.
+#[test]
+fn the_drawn_i_beam_takes_the_canvas_colour_off_the_page() {
+    use craft::behavior::cursor::{Cursor, CursorIcon as BehaviorCursorIcon, PaintedCursor};
+    use craft::host::target::{Os, Runtime, ShellInfo};
+    use craft::ui::InstallSpec;
+    use std::sync::Arc;
+
+    let build_with_shell = |os: Os, runtime: Runtime| {
+        let text = vec!["A line of text to fill the pages."; 120].join("\n");
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text)), Default::default());
+        app.session.view.dark_mode = true;
+        app.session.view.zoom = 0.75;
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+
+        let mut h = crate::test_harness::builder_with(move || {
+            InstallSpec::new(ShellInfo::default().os(os).runtime(runtime), Arc::new(craft::ui::testing::windows::NoWindows))
+        })
+        .with_size(egui::vec2(1000.0, 2000.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                ctx.set_visuals(egui::Visuals::light());
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        steps(&mut h, 6);
+        h
+    };
+
+    let cursor_at = |h: &mut H, at: Pos2| -> Option<Cursor> {
+        h.event(egui::Event::PointerMoved(at));
+        h.app_frame();
+        craft::ui::runtime::cursor::current(&h.ctx)
+    };
+
+    // Native Windows selects the painted I-beam over the page and the default arrow off the page.
+    let mut h = build_with_shell(Os::Windows, Runtime::Native);
+    let shown = h.state().canvas.shown.pages.clone();
+    assert!(shown.len() > 1, "two pages shown");
+    let (p0, p1) = (&shown[0], &shown[1]);
+    assert!(p1.rect.min.y > p0.rect.max.y, "pages are stacked vertically with a gap between them");
+    assert_eq!(cursor_at(&mut h, p0.rect.center()), Some(Cursor::Painted(PaintedCursor::IBeam)), "on the dark page");
+
+    let gap = egui::pos2(p0.rect.center().x, (p0.rect.max.y + p1.rect.min.y) / 2.0);
+    assert!(!shown.iter().any(|p| p.rect.contains(gap)), "gap point lies outside every page rect");
+    assert_eq!(cursor_at(&mut h, gap), Some(Cursor::System(BehaviorCursorIcon::Default)), "between the pages");
+
+    let off_left = egui::pos2(p0.rect.min.x - 20.0, p0.rect.center().y);
+    assert_eq!(cursor_at(&mut h, off_left), Some(Cursor::System(BehaviorCursorIcon::Default)), "off the page edge");
+
+    // With Hide White Space on, page rects overlap across the cut margins (eliminating the
+    // inter-page rect gap, leaving only a thin seam between visible bands). Hovering page 1's
+    // text band or the hairline seam keeps the painted I-beam, while hovering off the page edge
+    // falls back to the default arrow.
+    assert!(h.state_mut().run("view.hideWhiteSpace", json!({"value": true})).is_ok());
+    steps(&mut h, 6);
+    let layout = h.state_mut().session.layout();
+    let shown = h.state().canvas.shown.pages.clone();
+    assert!(shown.len() > 1, "two pages shown with Hide White Space");
+    let (p0, p1) = (&shown[0], &shown[1]);
+    assert!(p1.rect.min.y < p0.rect.max.y, "Hide White Space collapses the inter-page rect gap");
+    let band0_bottom = p0.rect.min.y + p0.band.1;
+    let band1_top = p1.rect.min.y + p1.band.0;
+    assert!(band1_top > band0_bottom, "visible page bands meet across a hairline seam");
+    let seam = egui::pos2(p0.rect.center().x, (band0_bottom + band1_top) / 2.0);
+    assert!(p0.rect.contains(seam) && p1.rect.contains(seam), "seam lies inside overlapping page rects");
+    let body0 = layout.pages[0].body;
+    let on_body = p0.to_screen(craft::behavior::kurbo::Point::new(f64::from(body0.x + body0.w / 2.0), f64::from(body0.bottom() - 20.0)));
+    assert_eq!(cursor_at(&mut h, on_body), Some(Cursor::Painted(PaintedCursor::IBeam)), "on page 1's text area");
+    assert_eq!(cursor_at(&mut h, seam), Some(Cursor::Painted(PaintedCursor::IBeam)), "on the hairline seam between cut margins");
+    let off_page = egui::pos2(p0.rect.min.x - 20.0, p0.rect.center().y);
+    assert_eq!(cursor_at(&mut h, off_page), Some(Cursor::System(BehaviorCursorIcon::Default)), "off the page edge with Hide White Space");
+
+    // Non-Windows native and Windows web shells keep the system text cursor over the page.
+    for (os, runtime, label) in [(Os::Linux, Runtime::Native, "Linux native"), (Os::Windows, Runtime::Web, "Windows web")] {
+        let mut h = build_with_shell(os, runtime);
+        let p0 = h.state().canvas.shown.pages[0].rect;
+        assert_eq!(cursor_at(&mut h, p0.center()), Some(Cursor::System(BehaviorCursorIcon::Text)), "{label} keeps system I-beam");
+    }
+}
+
+/// Exercises the production `PaintedCursor::IBeam` renderer (`craft::ui::primitives::painted_image`)
+/// used by `PageTextTool::cursor` on native Windows: across standard and fractional display scales,
+/// the rasterised I-beam keeps contrasting stroke and halo colours and snaps both stem and cap rows
+/// to whole physical pixels without partial-coverage fringes.
+#[test]
+fn painted_i_beam_contrasts_and_snaps_to_whole_pixels_across_scales() {
+    use craft::behavior::cursor::PaintedCursor;
+
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    steps(&mut h, 2);
+
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let stroke_rgba = craft::ui::style::rgba_color(env.tokens.color.overlay.stroke).to_srgba_unmultiplied();
+    let halo_rgba = craft::ui::style::rgba_color(env.tokens.color.overlay.halo).to_srgba_unmultiplied();
+    let composite_over = |fg: [u8; 4], bg: [u8; 4]| -> [u8; 4] {
+        let fa = f32::from(fg[3]) / 255.0;
+        let ba = f32::from(bg[3]) / 255.0;
+        let out_a = fa + ba * (1.0 - fa);
+        if out_a <= 0.0 {
+            return [0, 0, 0, 0];
+        }
+        let ch = |i: usize| (((f32::from(fg[i]) * fa + f32::from(bg[i]) * ba * (1.0 - fa)) / out_a).round().clamp(0.0, 255.0)) as u8;
+        [ch(0), ch(1), ch(2), (out_a * 255.0).round().clamp(0.0, 255.0) as u8]
+    };
+    let expected_stroke = composite_over(stroke_rgba, halo_rgba);
+    let expected_halo = halo_rgba;
+    // Allow ±1 on RGB channels for straight<->premultiplied round-tripping when the halo is translucent,
+    // while requiring exact unattenuated alpha so partially covered edge fringes are rejected.
+    let matches_rgba = |actual: [u8; 4], expected: [u8; 4]| -> bool {
+        actual[3] == expected[3]
+            && actual[0].abs_diff(expected[0]) <= 1
+            && actual[1].abs_diff(expected[1]) <= 1
+            && actual[2].abs_diff(expected[2]) <= 1
+    };
+    let pixel = |rgba: &[u8], w: usize, x: usize, y: usize| -> [u8; 4] {
+        let at = (y * w + x) * 4;
+        [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+    };
+
+    for ppp in [0.8f32, 0.85, 0.9, 0.95, 1.0, 1.2, 1.25, 1.5, 2.0] {
+        let beam = craft::ui::primitives::painted_image(&env, &PaintedCursor::IBeam, ppp).expect("painted I-beam rasterises");
+        let w = usize::from(beam.size[0]);
+        let h_px = usize::from(beam.size[1]);
+        let [hx, hy] = beam.hotspot.map(usize::from);
+
+        // Stem across the hotspot row: one contiguous run with symmetric contrasting halo and unattenuated coverage.
+        let row: Vec<[u8; 4]> = (0..w).map(|x| pixel(&beam.rgba, w, x, hy)).collect();
+        let first = row.iter().position(|p| p[3] > 0).expect("stem drawn");
+        let last = row.iter().rposition(|p| p[3] > 0).expect("stem drawn");
+        assert!(first < hx && hx < last, "ppp {ppp}: halo on both sides of stem ({first}..={last} about {hx})");
+        assert!(row[first..=last].iter().all(|p| p[3] > 0), "ppp {ppp}: stem is one contiguous run");
+        assert_eq!(hx - first, last - hx, "ppp {ppp}: halo is symmetric about stem");
+        assert_ne!(row[hx][..3], row[first][..3], "ppp {ppp}: stroke and halo differ in colour");
+        assert_eq!(row[first], row[last], "ppp {ppp}: halo matches on both sides");
+        assert!(matches_rgba(row[hx], expected_stroke), "ppp {ppp}: stem centre {:?} != stroke {:?}", row[hx], expected_stroke);
+        assert!(matches_rgba(row[first], expected_halo), "ppp {ppp}: stem edge {:?} != halo {:?}", row[first], expected_halo);
+        for &p in row.iter().filter(|p| p[3] > 0) {
+            assert!(
+                matches_rgba(p, expected_stroke) || matches_rgba(p, expected_halo),
+                "ppp {ppp}: partially covered stem pixel {p:?} (expected stroke {expected_stroke:?} or halo {expected_halo:?})"
+            );
+        }
+
+        // Cap/serif rows on both sides of the stem halo: top and bottom caps extend past both
+        // edges of the stem halo, and every covered pixel from the stem halo edge out through
+        // each outer endpoint has unattenuated stroke/halo coverage (no anti-aliased fringe).
+        assert!(first > 0 && last + 1 < w, "ppp {ppp}: caps extend past both sides of stem halo");
+        for (side, cap_x, xs) in [("left", first - 1, 0..first), ("right", last + 1, (last + 1)..w)] {
+            let col: Vec<[u8; 4]> = (0..h_px).map(|y| pixel(&beam.rgba, w, cap_x, y)).collect();
+            let runs = col.windows(2).filter(|pair| pair[0][3] == 0 && pair[1][3] > 0).count() + usize::from(col[0][3] > 0);
+            assert_eq!(runs, 2, "ppp {ppp}: top and bottom {side} caps present at x={cap_x}");
+
+            for (cap_name, ys) in [("top", 0..hy), ("bottom", (hy + 1)..h_px)] {
+                let mut covered = Vec::new();
+                for y in ys {
+                    for x in xs.clone() {
+                        let p = pixel(&beam.rgba, w, x, y);
+                        if p[3] > 0 {
+                            covered.push((x, y, p));
+                        }
+                    }
+                }
+                assert!(covered.iter().any(|&(_, _, p)| matches_rgba(p, expected_stroke)), "ppp {ppp}: {cap_name} {side} cap stroke present");
+                assert!(covered.iter().any(|&(_, _, p)| matches_rgba(p, expected_halo)), "ppp {ppp}: {cap_name} {side} cap halo present");
+                for (x, y, p) in covered {
+                    assert!(
+                        matches_rgba(p, expected_stroke) || matches_rgba(p, expected_halo),
+                        "ppp {ppp}: partially covered {cap_name} {side} cap pixel at ({x}, {y}) {p:?} (expected stroke {expected_stroke:?} or halo {expected_halo:?})"
+                    );
+                }
+            }
+        }
+    }
+}
