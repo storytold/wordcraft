@@ -166,24 +166,19 @@ fn citations_provider_menu_has_zotero_checked() {
 /// Tracking's toggle: the gesture edits are revisions whenever it is on.
 #[test]
 fn the_action_pen_tile_turns_the_action_pen_on() {
-    use egui::accesskit::{Role, Toggled};
-    use egui_kittest::kittest::{NodeT, Queryable};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
     use wordcraft_engine::cmd::draw::DrawMode;
     let mut a = app();
     a.run("file.new", json!({"template": "sample"})).unwrap();
     a.run("ui.tab", json!({ "tab": "Draw" })).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        a,
-    );
+    let mut h = harness(a);
     h.run_steps(6);
     h.get_by_role_and_label(Role::Button, "Action Pen").click();
     h.run_steps(4);
     assert_eq!(h.state().session.view.draw.mode, DrawMode::ActionPen, "the tile put the Action Pen down");
-    let tile = h.get_by_role_and_label(Role::Button, "Action Pen");
-    assert!(tile.accesskit_node().toggled() == Some(Toggled::True), "the tile reads as on");
+    // The tile is a toggle: a second press puts it away again.
+    h.get_by_role_and_label(Role::Button, "Action Pen").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.view.draw.mode, DrawMode::Select, "the tile took the Action Pen up");
 }

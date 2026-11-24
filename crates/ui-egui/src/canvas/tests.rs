@@ -2329,7 +2329,7 @@ fn the_action_pen_loop_selects_words_with_the_pointer() {
         let map = wordcraft_engine::cmd::draw::action_pen::page_text(&h.state().session, &layout, 0);
         map.rows.first().map(|r| r.cells.iter().map(|c| c.rect).collect::<Vec<_>>()).unwrap_or_default()
     };
-    assert_eq!(cells.len(), 10, "the first line is laid out");
+    assert_eq!(cells.len(), 16, "the first line \"alpha beta gamma\" is laid out");
     let word = cells[0].union(&cells[4]).expand(5.0);
     let stroke: Vec<[f32; 2]> = (0..=40)
         .map(|i| {
@@ -2388,7 +2388,7 @@ fn the_action_pen_line_through_text_deletes_with_the_pointer() {
         let map = wordcraft_engine::cmd::draw::action_pen::page_text(&h.state().session, &layout, 0);
         map.rows.first().map(|r| r.cells.iter().map(|c| c.rect).collect::<Vec<_>>()).unwrap_or_default()
     };
-    assert_eq!(cells.len(), 10, "the first line is laid out");
+    assert_eq!(cells.len(), 16, "the first line \"alpha beta gamma\" is laid out");
     let y = cells[0].y + cells[0].h / 2.0;
     let (x0, x1) = (cells[0].x - 2.0, cells[4].right() + 2.0);
     let screen = |h: &mut H, x: f32, y: f32| page_to_screen(h.state_mut(), 0, x, y).expect("on screen");
