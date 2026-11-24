@@ -219,97 +219,9 @@ pub fn move_changes(s: &Session) -> Vec<(Pos, String, bool)> {
     out
 }
 
-/// Bounded traversal depth for pruning resolved nested tables, covering the full fallback
-/// subtree through leaf paragraphs even at maximum nesting depth.
-const MAX_PRUNE_DEPTH: usize = wordcraft_doc::table::MAX_TABLE_DEPTH + 4;
-
-/// Whether every paragraph in `p` has its paragraph mark marked deleted, and every text run (and
-/// inline object) in `p` is marked deleted.
-fn is_para_all_deleted(p: &Paragraph) -> bool {
-    p.mark.del.is_some() && p.run_ranges().all(|(_, c)| c.del.is_some())
-}
-
-/// Whether every paragraph in `p` has its paragraph mark marked inserted, and every text run (and
-/// inline object) in `p` is marked inserted.
-fn is_para_all_inserted(p: &Paragraph) -> bool {
-    p.mark.ins.is_some() && p.run_ranges().all(|(_, c)| c.ins.is_some())
-}
-
-/// Whether a block is wholly deleted.
-fn is_block_all_deleted(b: &wordcraft_doc::Block, depth: usize) -> bool {
-    if depth > MAX_PRUNE_DEPTH {
-        return false;
-    }
-    match b {
-        wordcraft_doc::Block::Para(p) => is_para_all_deleted(p),
-        wordcraft_doc::Block::Table(t) => is_table_all_deleted(t, depth + 1),
-    }
-}
-
-/// Whether a block is wholly inserted.
-fn is_block_all_inserted(b: &wordcraft_doc::Block, depth: usize) -> bool {
-    if depth > MAX_PRUNE_DEPTH {
-        return false;
-    }
-    match b {
-        wordcraft_doc::Block::Para(p) => is_para_all_inserted(p),
-        wordcraft_doc::Block::Table(t) => is_table_all_inserted(t, depth + 1),
-    }
-}
-
-/// Whether every cell of `t` has at least one block, and every block in every cell is wholly deleted.
-fn is_table_all_deleted(t: &wordcraft_doc::table::Table, depth: usize) -> bool {
-    if t.rows.is_empty() {
-        return false;
-    }
-    t.rows
-        .iter()
-        .all(|r| !r.cells.is_empty() && r.cells.iter().all(|c| !c.blocks.is_empty() && c.blocks.iter().all(|b| is_block_all_deleted(b, depth))))
-}
-
-/// Whether every cell of `t` has at least one block, and every block in every cell is wholly inserted.
-fn is_table_all_inserted(t: &wordcraft_doc::table::Table, depth: usize) -> bool {
-    if t.rows.is_empty() {
-        return false;
-    }
-    t.rows
-        .iter()
-        .all(|r| !r.cells.is_empty() && r.cells.iter().all(|c| !c.blocks.is_empty() && c.blocks.iter().all(|b| is_block_all_inserted(b, depth))))
-}
-
-/// Remove whole tables whose content has been resolved away:
-/// when `accept` is true, remove tables where all paragraphs and runs are marked deleted;
-/// when `accept` is false (Reject All), remove tables where all paragraphs and runs are marked inserted.
-fn prune_resolved_tables(blocks: &mut wordcraft_doc::Blocks, accept: bool, depth: usize) {
-    if depth > MAX_PRUNE_DEPTH {
-        return;
-    }
-    blocks.retain_mut(|b| {
-        let wordcraft_doc::Block::Table(t_ref) = &**b else {
-            return true;
-        };
-        if (accept && is_table_all_deleted(t_ref, depth)) || (!accept && is_table_all_inserted(t_ref, depth)) {
-            return false;
-        }
-        let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) else {
-            return true;
-        };
-        for r in &mut t.rows {
-            for c in &mut r.cells {
-                prune_resolved_tables(&mut c.blocks, accept, depth + 1);
-                if c.blocks.is_empty() {
-                    c.blocks.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()));
-                }
-            }
-        }
-        true
-    });
-}
-
 /// Accept or reject the tracked text and paragraph marks of the top-level paragraphs in a block
 /// list that is not a story (a note separator).
 fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Result<(), CmdError> {
-    prune_resolved_tables(blocks, accept, 0);
     for b in blocks.iter_mut() {
         let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
         let len = p.len();
@@ -330,17 +242,6 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
 }
 
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
-    prune_resolved_tables(&mut s.doc.body, accept, 0);
-    for part in s.doc.parts.values_mut() {
-        prune_resolved_tables(&mut part.blocks, accept, 0);
-    }
-    for sep in [&mut s.doc.footnote_separators, &mut s.doc.endnote_separators] {
-        for blocks in [&mut sep.separator, &mut sep.continuation_separator, &mut sep.continuation_notice].into_iter().flatten() {
-            prune_resolved_tables(blocks, accept, 0);
-        }
-    }
-    s.doc.ensure_nonempty();
-
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
@@ -442,7 +343,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // A caret in a paragraph whose own formatting changed (and no tracked text around it).
     let mut caret_props = None;
     let ranged = a != b;
-    let (mut a, mut b) = if a == b {
+    let (a, b) = if a == b {
         // The change at the caret: the run around it, else the paragraph mark right after it,
         // else the paragraph's formatting, else the table cell's.
         let found = s.doc.para_at(&a).and_then(|p| revision_span(p, a.off));
@@ -470,22 +371,6 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
-    if whole_body {
-        prune_resolved_tables(&mut s.doc.body, accept, 0);
-        s.doc.ensure_nonempty();
-        a = s.doc.start_of(StoryRef::Body);
-        b = s.doc.end_of(StoryRef::Body);
-    } else if let Some(tp) = s.doc.whole_table(&a, &b)
-        && let Some(t) = s.doc.table(a.story, &tp)
-        && ((accept && is_table_all_deleted(t, 0)) || (!accept && is_table_all_inserted(t, 0)))
-    {
-        let _ = s.doc.remove_block(a.story, &tp);
-        s.doc.ensure_nonempty();
-        crate::cmd::moves::resolve(s, &moves, accept)?;
-        s.sel = Selection::caret(s.doc.clamp(&a));
-        s.clamp_selection();
-        return if next { select_next_unresolved(s) } else { sel_result(s) };
-    }
     for path in s.doc.paths_between(&a, &b).into_iter().rev() {
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
