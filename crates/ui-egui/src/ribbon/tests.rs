@@ -943,3 +943,53 @@ fn decorative_text_dropdown_renders_compact_wordart_tiles() {
         rect.height()
     );
 }
+
+/// #7691: Table Design › Table Style Options aligns its six checkboxes in two columns with a gap
+/// between them and keeps all three rows above the group caption.
+#[test]
+fn table_style_options_align_in_two_columns() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h = tab_harness(app, "Table Design");
+    let rect = |label: &str| h.get_by_role_and_label(Role::CheckBox, label).rect();
+    let header = rect("Header Row");
+    let first_col = rect("First Column");
+    let total = rect("Total Row");
+    let last_col = rect("Last Column");
+    let banded = rect("Banded Rows");
+    let banded_col = rect("Banded Columns");
+    // Left column checkboxes share one left edge, and right column checkboxes share another.
+    assert!(
+        (header.left() - total.left()).abs() < 0.5 && (header.left() - banded.left()).abs() < 0.5,
+        "left column misaligned: {header:?}, {total:?}, {banded:?}"
+    );
+    assert!(
+        (first_col.left() - last_col.left()).abs() < 0.5 && (first_col.left() - banded_col.left()).abs() < 0.5,
+        "right column misaligned: {first_col:?}, {last_col:?}, {banded_col:?}"
+    );
+    // Each row's pair shares the same top edge and stacks vertically without overlap.
+    assert!((header.top() - first_col.top()).abs() < 0.5, "row 1 misaligned: {header:?}, {first_col:?}");
+    assert!((total.top() - last_col.top()).abs() < 0.5, "row 2 misaligned: {total:?}, {last_col:?}");
+    assert!((banded.top() - banded_col.top()).abs() < 0.5, "row 3 misaligned: {banded:?}, {banded_col:?}");
+    assert!(header.bottom() <= total.top() && total.bottom() <= banded.top(), "rows overlap: {header:?}, {total:?}, {banded:?}");
+    // A horizontal gap separates the widest left-column checkbox from the second column.
+    let left_max_right = [header, total, banded].into_iter().map(|r| r.right()).fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        first_col.left() > left_max_right,
+        "second column overlaps or touches the first column: left_max_right={left_max_right}, first_col={first_col:?}"
+    );
+    // All three rows stay above the group's caption.
+    let caption = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Table Style Options" => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            _ => None,
+        })
+        .expect("Table Style Options group caption is painted");
+    assert!(banded.bottom() <= caption.top(), "checkboxes collide with group caption: {banded:?} vs {caption:?}");
+}

@@ -1,10 +1,11 @@
-use craft::behavior::IconId;
+use craft::behavior::{ColumnWidth, IconId};
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
-use craft::ui::layout_components::{Row, Stack};
+use craft::ui::layout::GridFit;
+use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::text::NumberField;
 
@@ -17,6 +18,10 @@ use crate::undo_marks::apply_edits;
 /// The row height and column width a Cell Size field accepts, in points (0.02 to 22 inches).
 const CELL_SIZE_RANGE: std::ops::RangeInclusive<f64> = 1.44..=1584.0;
 
+/// Two content-sized checkbox columns so the second column aligns vertically while preserving
+/// `Gap::Tight` spacing inside the ribbon group.
+const TABLE_STYLE_OPTION_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content; 2];
+
 pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
     if let Some(l) = look {
@@ -27,16 +32,14 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             [("Banded Rows", "bandedRows", l.banded_rows), ("Banded Columns", "bandedColumns", l.banded_columns)],
         ];
         row.group(RibbonGroup::new("tableStyleOptions", tl!("Table Style Options").to_string(), IconId::new("tableStyleOptions").into()), |ui| {
-            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Grid::new(&TABLE_STYLE_OPTION_COLUMNS).fit(GridFit::Fixed).gap(Gap::Tight).show(ui, |ui, _| {
                 for line in options {
-                    Row::new().show(ui, |ui, _| {
-                        for (label, key, value) in line {
-                            let out = Checkbox::new(Bind::given(value)).label(tl!(label).to_string()).show(ui);
-                            apply_edits(app, out.events, |app, v| {
-                                let _ = app.run("table.look", json!({ key: v }));
-                            });
-                        }
-                    });
+                    for (label, key, value) in line {
+                        let out = Checkbox::new(Bind::given(value)).label(tl!(label).to_string()).show(ui);
+                        apply_edits(app, out.events, |app, v| {
+                            let _ = app.run("table.look", json!({ key: v }));
+                        });
+                    }
                 }
             });
         });
