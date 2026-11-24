@@ -56,13 +56,14 @@ fn keytips_never_reuse_another_commands_shortcut_letter() {
     let reserved = reserved_letters(&a);
     let folder = craft::i18n::Folder::new("en");
     for (tab, _) in TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS) {
-        let rows = rows(&a, tab);
-        let labels: Vec<(&str, Option<&str>)> = rows.iter().map(|r| (r.control.tip, r.letters.as_deref())).collect();
+        let tab_controls = KeytipCache::build_tab_controls(&a, tab);
+        let labels: Vec<(&str, Option<&str>)> = tab_controls.iter().map(|c| (c.label, c.letters)).collect();
         let badges = craft::keymap::mnemonic::assign_keytips(&labels, &reserved, &folder);
-        assert_eq!(badges.len(), rows.len(), "{tab}: one badge per control");
-        for (row, badge) in rows.iter().zip(&badges) {
-            let id = &row.control.command.id;
-            if let Some(own) = &row.letters {
+        assert_eq!(badges.len(), tab_controls.len(), "{tab}: one badge per control");
+        for (control, badge) in tab_controls.iter().zip(&badges) {
+            let id = &control.command.id;
+            assert!(!badge.is_empty(), "{tab}: {id} must receive a non-empty keytip badge");
+            if let Some(own) = control.letters {
                 assert_eq!(badge, own, "{tab}: {id} should keep its shortcut letter {own}");
             } else {
                 let first = badge.chars().next().unwrap_or('?');
@@ -254,24 +255,59 @@ fn keytips_option_persists() {
     assert!(b.ui.keytips_enabled, "older preferences retain enabled KeyTips");
 }
 
+/// After idle frames populate the keytip cache on Home, switching tabs updates the active tab's
+/// keytips so Insert badges run Insert commands and switching back to Home runs Home commands.
 #[test]
-fn keytip_cache_reuses_tab_controls_and_updates_on_tab_switch() {
+fn keytips_update_controls_when_switching_tabs() {
+    let badge_for = |a: &WordApp, tab: &str, command_id: &str| -> String {
+        let reserved = reserved_letters(a);
+        let folder = craft::i18n::Folder::new("en");
+        let tab_controls = KeytipCache::build_tab_controls(a, tab);
+        let labels: Vec<(&str, Option<&str>)> = tab_controls.iter().map(|c| (c.label, c.letters)).collect();
+        let badges = craft::keymap::mnemonic::assign_keytips(&labels, &reserved, &folder);
+        tab_controls
+            .iter()
+            .zip(badges)
+            .find(|(c, _)| c.command.id == command_id)
+            .map(|(_, badge)| badge)
+            .expect("command has a keytip badge on its tab")
+    };
+    let press_keytip_seq = |h: &mut egui_kittest::Harness<'static, WordApp>, seq: &str| {
+        for ch in seq.chars() {
+            let name = ch.to_ascii_uppercase().to_string();
+            let key = egui::Key::from_name(&name).unwrap();
+            let text = ch.to_ascii_lowercase().to_string();
+            h.input_mut().events.extend([key_event(key, true, egui::Modifiers::NONE), egui::Event::Text(text)]);
+            crate::test_harness::frame(h);
+        }
+    };
+
     let mut h = harness(app());
-    assert_eq!(h.state().keytip_cache.as_ref().map(|c| c.tab.as_str()), Some("Home"));
-    let home_ptr = h.state().keytip_cache.as_ref().unwrap().tab_controls.as_ptr();
-    let reserved_ptr = h.state().keytip_cache.as_ref().unwrap().reserved.as_ptr();
-
-    // Idle frames reuse the cached control and reserved-letter buffers without rebuilding.
+    // Let idle frames populate the keytip cache on the initial Home tab.
     crate::test_harness::frames(&mut h, 4);
-    assert_eq!(h.state().keytip_cache.as_ref().unwrap().tab_controls.as_ptr(), home_ptr);
-    assert_eq!(h.state().keytip_cache.as_ref().unwrap().reserved.as_ptr(), reserved_ptr);
+    assert_eq!(h.state().ui.tab, "Home");
 
-    // Switching tabs rebuilds the cached tab controls while keeping reserved letters intact.
-    h.state_mut().run("ui.tab", serde_json::json!({"tab": "Insert"})).unwrap();
+    // Switch to Insert via keytips (F10, N) and fire Page Break through its Insert keytip badge.
+    let page_break_badge = badge_for(h.state(), "Insert", "insert.pageBreak");
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
     crate::test_harness::frame(&mut h);
-    let cache = h.state().keytip_cache.as_ref().unwrap();
-    assert_eq!(cache.tab, "Insert");
-    // Tab controls plus the trailing Search badge (`SEARCH_LETTER`).
-    assert_eq!(cache.tab_controls.len(), controls("Insert").len() + 1);
-    assert_eq!(cache.reserved.as_ptr(), reserved_ptr);
+    press_keytip_seq(&mut h, tab_letter("Insert"));
+    assert_eq!(h.state().ui.tab, "Insert", "F10 and the Insert tab badge switch to Insert");
+    press_keytip_seq(&mut h, &page_break_badge);
+    crate::test_harness::frames(&mut h, 3);
+    assert!(
+        h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('\u{000C}'),
+        "Insert keytip badge {page_break_badge} runs insert.pageBreak after switching from Home"
+    );
+    assert!(!bold(&mut h), "switching to Insert does not fire Home's Bold command");
+
+    // Switch back to Home via keytips (F10, H) and fire Bold through its Home keytip badge.
+    let bold_badge = badge_for(h.state(), "Home", "format.bold");
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    press_keytip_seq(&mut h, tab_letter("Home"));
+    assert_eq!(h.state().ui.tab, "Home", "F10 and the Home tab badge switch back to Home");
+    press_keytip_seq(&mut h, &bold_badge);
+    crate::test_harness::frames(&mut h, 3);
+    assert!(bold(&mut h), "Home keytip badge {bold_badge} runs format.bold after switching back from Insert");
 }
