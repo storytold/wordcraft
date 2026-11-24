@@ -4,7 +4,8 @@
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Props as _, Show as _, clicked};
 use craft::ui::shell::{RecentFile, RecentList, RecentSort, RecentView, StartAction, StartLayout, StartScreen, Template};
-use egui::Ui;
+use craft::ui::style::DataColor;
+use egui::{Color32, Ui};
 use serde_json::json;
 
 use super::{HOME_TEMPLATES, TEMPLATES, TemplateThumbs, error_line, heading, label, open_recent, thumbs};
@@ -77,7 +78,9 @@ pub(super) fn home(ui: &mut Ui, app: &mut WordApp) {
     let recent = recent_files(app);
     let cards = template_cards(&TEMPLATES[..HOME_TEMPLATES.min(TEMPLATES.len())]);
     let store = thumbs::store(&ctx);
-    let source = TemplateThumbs { region: app.session.region() };
+    let region = app.session.region();
+    let (wide, high) = thumbs::page_aspect(&region);
+    let source = TemplateThumbs { region };
     let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
     let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &recent)
         .layout(StartLayout::Greeting)
@@ -85,6 +88,9 @@ pub(super) fn home(ui: &mut Ui, app: &mut WordApp) {
         .templates(&cards)
         .more_templates(label("More templates →"))
         .max_recent(app.ui.recent_shown())
+        .picture_aspect(wide, high)
+        .card_zoom(1.0)
+        .page_paper(DataColor::new(Color32::WHITE))
         .thumbnails(&store, &source)
         .show(ui);
     run_actions(app, &ctx, out.actions);
@@ -112,12 +118,6 @@ pub(super) fn open(ui: &mut Ui, app: &mut WordApp) {
         error_line(ui, &error);
     }
     let recent = recent_files(app);
-    let store = thumbs::store(&ctx);
-    let source = TemplateThumbs { region: app.session.region() };
-    let out = RecentList::new(&recent)
-        .max_recent(app.ui.recent_shown())
-        .empty(label("Documents you open will show up here."))
-        .thumbnails(&store, &source)
-        .show(ui);
+    let out = RecentList::new(&recent).max_recent(app.ui.recent_shown()).empty(label("Documents you open will show up here.")).show(ui);
     run_actions(app, &ctx, out.actions);
 }
