@@ -301,11 +301,19 @@ fn arrow_inset(stroke_width: f32, style: ArrowStyle, cap: LineCap) -> f32 {
 /// Draw the path `segs` (a line's or connector's, from its start to its end) short of its ends:
 /// each end by its distance, back against its unit direction (where its arrowhead points). An end
 /// moves at most half way to its neighbouring point, so the path keeps its shape, and a curve its
-/// direction at the end.
+/// direction at the end. The two ends of a single straight segment share its length in proportion
+/// to their distances instead, so an end without an arrowhead leaves its share to the other.
 fn shorten_ends(segs: &mut [PathSeg], [(start, start_dir), (end, end_dir)]: [(f32, (f32, f32)); 2]) {
-    let pull = |(x, y): (f32, f32), toward: Option<(f32, f32)>, by: f32, (dx, dy): (f32, f32)| {
-        let room = toward.map_or(0.0, |(tx, ty)| (tx - x).hypot(ty - y) / 2.0);
-        let by = if by.is_finite() && room.is_finite() { by.clamp(0.0, room) } else { 0.0 };
+    let distance = |by: f32| if by.is_finite() { by.max(0.0) } else { 0.0 };
+    let (start, end) = (distance(start), distance(end));
+    let share = |by: f32| match segs {
+        [PathSeg::Move(..), PathSeg::Line(..)] => by / (start + end).max(f32::EPSILON),
+        _ => 0.5,
+    };
+    let (start_share, end_share) = (share(start), share(end));
+    let pull = |(x, y): (f32, f32), toward: Option<(f32, f32)>, by: f32, share: f32, (dx, dy): (f32, f32)| {
+        let room = toward.map_or(0.0, |(tx, ty)| (tx - x).hypot(ty - y) * share);
+        let by = if room.is_finite() { by.min(room) } else { 0.0 };
         (x - dx * by, y - dy * by)
     };
     // The points next to each end, before either moves.
@@ -322,10 +330,10 @@ fn shorten_ends(segs: &mut [PathSeg], [(start, start_dir), (end, end_dir)]: [(f3
         _ => None,
     };
     if let Some(PathSeg::Move(x, y)) = segs.first_mut() {
-        (*x, *y) = pull((*x, *y), after_first, start, start_dir);
+        (*x, *y) = pull((*x, *y), after_first, start, start_share, start_dir);
     }
     if let Some(PathSeg::Line(x, y) | PathSeg::Cubic(.., x, y)) = segs.last_mut() {
-        (*x, *y) = pull((*x, *y), before_last, end, end_dir);
+        (*x, *y) = pull((*x, *y), before_last, end, end_share, end_dir);
     }
 }
 
