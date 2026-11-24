@@ -11,7 +11,12 @@ fn installed() -> egui::Context {
 
 /// The app in a headless harness that runs `logic` and `ui` and installs the runtime.
 fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    harness_with(app, crate::test_harness::install_spec)
+}
+
+/// [`harness`] with the runtime installed from `spec` (a memory clipboard, say).
+fn harness_with(app: WordApp, spec: impl FnOnce() -> craft::ui::InstallSpec + 'static) -> egui_kittest::Harness<'static, WordApp> {
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, a: &mut WordApp| {
             let ctx = ui.ctx().clone();
             crate::test_harness::logic(&ctx, a);
@@ -353,9 +358,10 @@ fn control_keys_cannot_paste_a_field_word_acts_on() {
     fn fields(a: &WordApp) -> usize {
         a.session.doc.body.iter().map(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.objects.len() } else { 0 }).sum()
     }
-    let mut h = harness(app());
+    use craft::platform::clipboard::{Clipboard, MemoryClipboard};
+    let mut h = harness_with(app(), || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
     let ctx = h.ctx.clone();
-    // Copied with the runtime installed, so the copy is on the clipboard the paste reads.
+    // Copied with the runtime installed, so the copy is on the clipboard Paste reads.
     let a = h.state_mut();
     a.run("insert.field", json!({"instr": r#"DDEAUTO cmd "/c calc""#})).unwrap();
     a.run("select.all", json!({})).unwrap();
