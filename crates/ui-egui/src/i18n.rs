@@ -77,7 +77,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 29] = [
+pub static LANGUAGES: [LangInfo; 30] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -129,6 +129,8 @@ pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "nl", prefer_hans: false, editing_lang: None },
     // Danish; `da`, `da-DK` and `da_DK.UTF-8` resolve here.
     LangInfo { code: "da", prefer_hans: false, editing_lang: None },
+    // Norwegian Bokmål; `nb`, `nb-NO` and `nb_NO.UTF-8` resolve here. Plain `no` and `nn` do not: the crate's locale matching has no Norwegian folding, so a POSIX `no_NO.UTF-8` stays English until craft-i18n adds it. Not in `wordcraft-proof`, so new documents keep the default US English.
+    LangInfo { code: "nb", prefer_hans: false, editing_lang: None },
     // Romanian; `ro`, `ro-RO`, `ro_RO.UTF-8` and `ro-MD` resolve here.
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
     // Arabic (Modern Standard); `ar` and every `ar-*` locale (`ar-MA`, `ar-EG`, `ar-SA` …) resolve
