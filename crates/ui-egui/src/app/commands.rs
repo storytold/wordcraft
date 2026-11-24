@@ -5,8 +5,8 @@ use craft::quit::{CloseAnswer, CloseScope};
 
 use super::command_board::command_enabled;
 use super::{
-    MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes, paste_picture,
-    printing, push_recent_font, system_clipboard, table_pen, theme, zotero,
+    MAX_RECENT, SaveInFlight, Value, WordApp, applied_font, chrome, crop, dialogs, file_dialogs, i18n, json, keeps_everything, panes, printing,
+    push_recent_font, system_clipboard, table_pen, theme, zotero,
 };
 use crate::colors;
 
@@ -61,19 +61,9 @@ impl WordApp {
             // PLAN: assumed shell-w8's `begin_closing(scope, documents, then, params) -> Result<Value, String>` opens the prompt.
             return self.begin_closing(CloseScope::Close, vec![self.session.document_id()], id.to_string(), params);
         }
-        // The ribbon and context-menu Paste commands send no text: read the system clipboard's, as
-        // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
-        // doesn't carry (#687).
+        // All ordinary Paste controls use the same system clipboard formats.
         let mut params = params;
         if let Some(r) = system_clipboard::fill(self, id, &mut params) {
-            return r;
-        }
-        // Paste without system clipboard text: a picture there is newer than our own copy (copying
-        // here replaces it with text), so it wins (#45).
-        if id == "edit.paste"
-            && params.get("text").is_none()
-            && let Some(r) = paste_picture::paste(self)
-        {
             return r;
         }
         let applied = applied_font(id, &params);

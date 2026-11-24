@@ -47,28 +47,65 @@ fn read_markup(clip: &ClipboardHandle, mime: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&flavor.data).into_owned()).filter(|t| !t.trim().is_empty())
 }
 
+/// A browser image copy can carry a source address or the image's alt text alongside the bitmap.
+fn single_image_offer(html: &str, text: Option<&str>) -> bool {
+    use craft_html::{Lexer, Token, unescape};
+    use wordcraft_engine::cmd::paste::html_fragment;
+
+    let fragment = html_fragment(html);
+    if fragment.len() > 64 << 10 {
+        return false;
+    }
+    let mut image = None;
+    let wrapper = |name: &str| matches!(name, "html" | "body" | "head" | "div" | "span" | "p");
+    for token in Lexer::new(fragment) {
+        match token {
+            Token::Start(tag) if tag.name == "img" && image.is_none() => {
+                image = Some((tag.attr("src").unwrap_or_default(), tag.attr("alt").unwrap_or_default()));
+            }
+            Token::Start(tag) if wrapper(&tag.name) && tag.attrs.is_empty() => {}
+            Token::Start(tag) if tag.name == "meta" && tag.attrs.len() == 1 && tag.has("charset") => {}
+            Token::Start(tag)
+                if tag.name == "meta"
+                    && tag.attrs.len() == 2
+                    && tag.raw_attr("http-equiv").is_some_and(|value| value.eq_ignore_ascii_case("content-type"))
+                    && tag.has("content") => {}
+            Token::End(name) if wrapper(&name) => {}
+            Token::Text(text) if unescape(text).trim().is_empty() => {}
+            _ => return false,
+        }
+    }
+    let Some((src, alt)) = image else { return false };
+    let text = text.unwrap_or_default().trim();
+    let alt = alt.trim();
+    let src = src.trim();
+    text.is_empty()
+        || text == alt
+        || text == src
+        || text.split_once('\n').is_some_and(|(address, description)| address.trim() == src && description.trim() == alt)
+}
+
 /// Add what the system clipboard holds to a paste command's params: its text (the ribbon and
 /// context-menu Paste send none), its HTML and RTF, and for Paste Special its picture. Params a
-/// caller already gave are kept. `Some` when the paste was done here instead (copied picture
-/// files, which reach us as their paths).
+/// caller already gave are kept. `Some` when a picture paste was handled here.
 pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Result<Value, String>> {
     if !is_paste(id) {
         return None;
     }
     let clip = handle(app)?;
     let o = params.as_object_mut()?;
+    let explicit = ["text", "html", "rtf", "picture"].iter().any(|k| o.contains_key(*k));
     // A caller that captured ownership already (Paste Special's dialog) keeps that value.
     if !o.contains_key("privateClipboard") {
         let own = app.clipboard_published && clip.holds_ours();
         o.insert("privateClipboard".into(), Value::Bool(own));
     }
+    let owned = app.session.clipboard.is_some() && o.get("privateClipboard").and_then(Value::as_bool) == Some(true);
+    let ordinary = id == "edit.paste" && !explicit && !owned && app.session.math.is_none();
     if !o.contains_key("text")
         && let Some(text) = clip.read_text().ok().flatten().filter(|t| !t.is_empty())
     {
-        // Picture files copied in a file manager reach us as their paths: paste the pictures,
-        // as Ctrl+V does.
-        if id == "edit.paste"
-            && app.session.math.is_none()
+        if ordinary
             && paste_picture::names_picture_files(&text)
             && let Some(r) = paste_picture::paste(app)
         {
@@ -87,9 +124,22 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     if let Some(rtf) = read_markup(&clip, RTF) {
         o.insert("rtf".into(), Value::String(rtf));
     }
+    if ordinary && o.get("rtf").is_none() {
+        let text = o.get("text").and_then(Value::as_str);
+        let html = o.get("html").and_then(Value::as_str);
+        if text.is_none() && html.is_none() {
+            return paste_picture::paste(app);
+        }
+        if !cfg!(target_arch = "wasm32")
+            && html.is_some_and(|html| single_image_offer(html, text))
+            && let Ok(Some(png)) = paste_picture::bitmap_png(&clip)
+        {
+            return Some(paste_picture::insert_bitmap(app, &png));
+        }
+    }
     // Native bitmap/image formats are for other programs. Our own paste keeps the original
     // fragment (size, cropping and floating-picture properties), while its owner mark lasts.
-    if app.session.clipboard.is_some() && o.get("privateClipboard").and_then(Value::as_bool) == Some(true) {
+    if owned {
         o.insert("text".into(), Value::String(app.session.clipboard_text.clone()));
     }
     if id == "edit.pasteSpecial"

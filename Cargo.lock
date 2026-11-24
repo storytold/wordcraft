@@ -9222,6 +9222,7 @@ dependencies = [
  "chrono",
  "craft",
  "craft-fonts-build",
+ "craft-html",
  "craft-ui-test-kit",
  "craft-zip",
  "eframe",

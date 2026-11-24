@@ -1,7 +1,6 @@
 // PLAN: the Insert key has no editor input, so the overtype switch is the shortcut layer's (shell-w6).
 use craft::behavior::editor::{EditorInput, SurroundingUnit};
 use craft::behavior::intent::{EditCommand, Granularity, MoveMods, NavMove};
-use craft::platform::clipboard::{RGBA8, URI_LIST};
 use craft::ui::canvas::ToolPass;
 use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
 
@@ -561,7 +560,9 @@ fn edit_command(app: &mut WordApp, ctx: &egui::Context, cmd: EditCommand) {
         EditCommand::Copy => {
             let _ = app.run("edit.copy", json!({}));
         }
-        EditCommand::Paste => paste(app, ctx),
+        EditCommand::Paste => {
+            let _ = app.run("edit.paste", json!({}));
+        }
         EditCommand::SelectAll => {
             let _ = app.run("select.all", json!({}));
         }
@@ -576,23 +577,6 @@ fn edit_command(app: &mut WordApp, ctx: &egui::Context, cmd: EditCommand) {
         }
         _ => {}
     }
-}
-
-/// Paste from the clipboard: copied picture files insert as pictures (#45), text and a clipboard
-/// picture go through `edit.paste`.
-fn paste(app: &mut WordApp, ctx: &egui::Context) {
-    let clip = ClipboardHandle::of(ctx);
-    let text = clip.read_text().ok().flatten();
-    if text.is_none() && !clip.has(&[RGBA8, URI_LIST]) {
-        return;
-    }
-    if let Some(t) = &text
-        && crate::paste_picture::paste_named_files(app, t)
-    {
-        return;
-    }
-    let params = text.map_or_else(|| json!({}), |t| json!({"text": t}));
-    let _ = app.run("edit.paste", params);
 }
 
 /// Escape: the nearest thing that takes it first (a painter, a pen, a table pen, an object, a text
