@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use craft::behavior::overlay::MinWidth;
 use craft::keymap::CommandRef;
 use craft::menu::{KeytipControl, Keytips, RibbonOutput};
 use craft::ui::contract::Bind;
@@ -31,12 +32,6 @@ pub(crate) fn search_region() -> egui::Id {
 /// The key of the inspected region the Backstage records over its page buttons.
 pub(crate) fn backstage_region() -> egui::Id {
     egui::Id::unique("wc_keytips_backstage_region")
-}
-
-/// The key of the inspected region the screen bar (Focus, Full Screen View) records; the legacy hint hangs from
-/// its first element when no ribbon shows.
-pub(crate) fn screen_bar_region() -> egui::Id {
-    egui::Id::unique("wc_keytips_screen_bar_region")
 }
 
 /// Word's tab letters, as Word for Windows shows them after Alt (File F, Design G, References S,
@@ -417,8 +412,8 @@ fn backstage_rows() -> Vec<Row> {
         .collect()
 }
 
-/// Shows the keytips after the ribbon and the regions they place badges on, and acts on what the keys chose.
-pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>) {
+/// Shows the keytips after the shell and the regions they place badges on, and acts on what the keys chose.
+pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>, screen_bar: Option<Rect>) {
     let ctx = ui.ctx().clone();
     // Alt during an object drag is part of the drag (Alt moves an object freely), not a keytip tap.
     // PLAN: `CanvasState::object_gesture` is canvas-w9's (cv.A10).
@@ -471,7 +466,6 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     }
     if let Some(pending) = &out.pending {
         // With no ribbon showing (Focus, Full Screen View) the hint hangs under the screen bar.
-        let screen_bar = inspect::recorded(&ctx, screen_bar_region()).and_then(|r| r.rect_in(&ctx, 0, ui.layer_id()));
         if let Some(anchor) = ribbon.tabs.or(screen_bar) {
             legacy_hint(ui, pending, anchor);
         }
@@ -483,9 +477,11 @@ fn legacy_hint(ui: &mut Ui, pending: &str, anchor: Rect) {
     let keys: Vec<String> = pending.chars().map(String::from).collect();
     let text = crate::i18n::fmt(tl!("Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel."), &[("keys", &keys.join(", "))]);
     let mut open = true;
-    Popover::new(tl!("Old menu keys"), Bind::bound(&mut open)).overlay(|overlay| overlay.anchor(Anchor::Rect(anchor))).show(ui, |ui, _| {
-        Text::new(text.clone()).show(ui);
-    });
+    Popover::new(tl!("Old menu keys"), Bind::bound(&mut open))
+        .overlay(|overlay| overlay.anchor(Anchor::Rect(anchor)).min_width(MinWidth::None))
+        .show(ui, |ui, _| {
+            Text::new(text.clone()).show(ui);
+        });
 }
 
 #[cfg(test)]

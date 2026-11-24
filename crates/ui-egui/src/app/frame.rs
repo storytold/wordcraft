@@ -86,6 +86,7 @@ impl WordApp {
         if !file {
             crate::backstage::reset_transition(ui.ctx());
         }
+        let ribbon_out = std::cell::RefCell::new(None);
         let shell = AppShell::new(key)
             .mode_set(ScreenModeSet::Document)
             .screen_mode(Bind::given(mode))
@@ -99,12 +100,12 @@ impl WordApp {
             // tabs and collapsed every one of them.
             .top(Slot::new("ribbonDrop").drops().size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
-                    ribbon_slot(app, ui);
+                    *ribbon_out.borrow_mut() = Some(ribbon::show(app, ui));
                 }
             })
             .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _cx, app: &mut WordApp| {
                 if !stale(app) {
-                    ribbon_slot(app, ui);
+                    *ribbon_out.borrow_mut() = Some(ribbon::show(app, ui));
                 }
             })
             // As tall as the bar: a failure's line under the message puts Install below the first line, and a slot of
@@ -144,6 +145,11 @@ impl WordApp {
             self.resolved_root().motion == craft::behavior::MotionMode::Full,
             crate::chrome::interface_direction().is_rtl(),
         );
+        // Keytips run outside the ribbon slots so legacy sequences and their hint still work when
+        // no ribbon shows (Focus, Full Screen View) and anchor under the slim screen bar.
+        let ribbon = ribbon_out.into_inner().unwrap_or_else(ribbon::no_ribbon);
+        let screen_bar = out.regions.slots.iter().find(|(slot, _)| *slot == "screenBar").map(|(_, rect)| *rect);
+        crate::keytips::show(ui, self, &ribbon, screen_bar);
         out.regions
     }
 
@@ -167,10 +173,4 @@ impl WordApp {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
     }
-}
-
-/// The ribbon, then its keytips, in a top slot: the keytips read what the ribbon recorded this pass.
-fn ribbon_slot(app: &mut WordApp, ui: &mut egui::Ui) {
-    let out = ribbon::show(app, ui);
-    crate::keytips::show(ui, app, &out);
 }
