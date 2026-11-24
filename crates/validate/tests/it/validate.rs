@@ -389,12 +389,61 @@ fn xml_doctype_relationships_and_other_xml_parts_distinguish_evidence() {
     let mut doc = Doc::minimal();
     let rel =
         r#"<Relationship Id="rLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="other.docx"/>"#;
-    let dtd = r#"<!DOCTYPE Relationships [<!ATTLIST Relationship TargetMode CDATA "External">]>"#;
-    doc.set("word/_rels/document.xml.rels", with_doctype(rels_xml(rel), dtd));
+    let part = "word/_rels/document.xml.rels";
     doc.add_with_override("customXml/data.dat", "application/xml", "<!DOCTYPE data><data/>");
-    let report = validate(&doc);
-    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
-    for (part, evidence) in [("word/_rels/document.xml.rels", Evidence::Observed), ("customXml/data.dat", Evidence::ByConstruction)] {
+    for (declaration, evidence) in [
+        (r#"<!DOCTYPE Relationships [<!ATTLIST Relationship TargetMode CDATA "External">]>"#, Evidence::ByConstruction),
+        (r#"<!DOCTYPE Relationships [<!ENTITY greeting "hello">]>"#, Evidence::Observed),
+    ] {
+        doc.set(part, with_doctype(rels_xml(rel), declaration));
+        let report = validate(&doc);
+        assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+        let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
+        assert_eq!((finding.severity, finding.evidence), (Severity::Error, evidence));
+        let finding = assert_finding(&report, "XML-DOCTYPE", Some("customXml/data.dat"));
+        assert_eq!((finding.severity, finding.evidence), (Severity::Error, Evidence::ByConstruction));
+    }
+}
+
+#[test]
+fn xml_doctype_main_evidence_requires_the_selected_ordinary_document() {
+    let document = r#"<!DOCTYPE w:document [<!ENTITY greeting "hello">]>"#;
+    let relationships = r#"<!DOCTYPE Relationships [<!ENTITY greeting "hello">]>"#;
+    for (part, rels, content_type) in [
+        ("word/document.xml", "word/_rels/document.xml.rels", CT_TEMPLATE_MAIN),
+        ("word/document.xml", "word/_rels/document.xml.rels", CT_MACRO_MAIN),
+        ("word/document.xml", "word/_rels/document.xml.rels", CT_MACRO_TEMPLATE_MAIN),
+        ("word/secondary.xml", "word/_rels/secondary.xml.rels", CT_MAIN),
+    ] {
+        let mut doc = Doc::minimal();
+        if part == "word/document.xml" {
+            let types = String::from_utf8(content_types_xml(&[], &[])).unwrap().replace(CT_MAIN, content_type);
+            doc.set("[Content_Types].xml", types);
+            doc.set(part, with_doctype(document_xml(""), document));
+        } else {
+            doc.add_with_override(part, content_type, with_doctype(document_xml(""), document));
+        }
+        doc.set(rels, with_doctype(rels_xml(""), relationships));
+        let report = validate(&doc);
+        for name in [part, rels] {
+            let finding = assert_finding(&report, "XML-DOCTYPE", Some(name));
+            assert_eq!((finding.severity, finding.evidence), (Severity::Error, Evidence::ByConstruction), "{content_type}: {name}");
+        }
+    }
+}
+
+#[test]
+fn xml_doctype_package_relationships_evidence_uses_the_relationships_role() {
+    let part = "_rels/.rels";
+    let original = Doc::minimal().get(part).to_vec();
+    for (declaration, evidence) in [
+        (r#"<!DOCTYPE Relationships [<!ENTITY greeting "hello">]>"#, Evidence::Observed),
+        (r#"<!DOCTYPE Relationships [<!ATTLIST Relationship probe CDATA #IMPLIED>]>"#, Evidence::Observed),
+        ("<!DOCTYPE Relationships SYSTEM 'wordcraft-test.dtd'>", Evidence::ByConstruction),
+    ] {
+        let mut doc = Doc::minimal();
+        doc.add_with_override(part, CT_STYLES, with_doctype(original.clone(), declaration));
+        let report = validate(&doc);
         let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
         assert_eq!((finding.severity, finding.evidence), (Severity::Error, evidence));
     }

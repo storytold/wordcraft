@@ -839,7 +839,7 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
     observation_contract! {
         rules: "XML-DOCTYPE";
         collections: "field.bytes*1,field.content_types*3,field.entries*1";
-        scope: "original prolog of every XML and relationships part, independent of ownership and profile; canonical footnotes relationships paths use existing story classification, diagram layout/colors/quickStyle paths use part identity, XHTML altChunk uses relationship and content-type evidence, custom XML uses relationship targets, and other probed roles use part or relationships-owner content types";
+        scope: "original prolog of every XML and relationships part, independent of ownership and profile; canonical footnotes relationships paths use existing story classification, diagram layout/colors/quickStyle paths use part identity, XHTML altChunk uses relationship and content-type evidence, custom XML uses relationship targets, the main document uses the resolved package owner and ordinary document content type, and other probed roles use part or relationships-owner content types";
         loss: "unavailable part bytes, undecidable or unsupported encoding, or unreadable prolog";
         fallback: "The probed matrix contains 56 part-role and declaration-form combinations, 47 with an adverse outcome and 9 tolerated (corpus/EVIDENCE.md). The tolerated combinations are footnotes relationships and diagram layout, colors, and quickStyle parts in the internal entity and ATTLIST forms, and XHTML altChunk in external identifier form without an internal subset. These combinations receive a structural Warning with ByConstruction evidence. Measured adverse combinations receive an Error with Observed evidence. Error grading with ByConstruction evidence for unmeasured declaration forms in probed parts (for example, the external form in diagram parts) and for part roles outside the probed set is an expedient interim pending measurement in issue #7735. Existing coverage checks handle unavailable evidence";
         package_loss: "independent";
@@ -878,12 +878,15 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
                 continue;
             }
 
+            let is_main_document = |name: &str, content_type| {
+                content_type == Some(package::MAIN_CONTENT_TYPE) && matches!(&pkg.main, Resolution::One(main) if main.eq_ignore_ascii_case(name))
+            };
             let is_measured_adverse = match (form, rels_owner.as_deref()) {
                 (Other, _) => false,
-                (InternalEntity | InternalAttlist, _) if entry.name.eq_ignore_ascii_case("_rels/.rels") => true,
+                (_, _) if entry.name.eq_ignore_ascii_case("_rels/.rels") => internal_form,
                 (InternalEntity | InternalAttlist, Some(owner)) => {
                     let content_type = pkg.content_types.of(owner);
-                    content_type.is_some_and(package::is_main_content_type)
+                    (form == InternalEntity && is_main_document(owner, content_type))
                         || content_type == Some(package::CHART_CONTENT_TYPE)
                         || custom_xml_targets.get_or_insert_with(|| relationship_targets(pkg, "customXml")).contains(owner)
                         || (form == InternalEntity
@@ -900,7 +903,8 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
                 (ExternalOnly, Some(_)) => false,
                 (_, None) => {
                     let content_type = pkg.content_types.of(&entry.name);
-                    is_measured_adverse_doctype(form, content_type)
+                    is_main_document(&entry.name, content_type)
+                        || is_measured_adverse_doctype(form, content_type)
                         || (form == InternalEntity
                             && custom_xml_targets
                                 .get_or_insert_with(|| relationship_targets(pkg, "customXml"))
@@ -918,9 +922,6 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
 
 /// The adverse non-relationships roles in the isolated, closure, and forms probe series.
 fn is_measured_adverse_doctype(form: scan::DoctypeForm, content_type: Option<&str>) -> bool {
-    if content_type.is_some_and(package::is_main_content_type) {
-        return true;
-    }
     match content_type {
         Some(
             package::STYLES_CONTENT_TYPE
