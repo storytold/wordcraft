@@ -309,6 +309,10 @@ impl WordApp {
                 let (tile, transparency) = self.background_picture_shape();
                 self.background.fill =
                     crate::format_background::DraftFill::Picture { path: Some(path), media: None, data: None, data_key: None, tile, transparency };
+                // The pane reloads a draft whose document or fingerprint does not match the one it
+                // draws: bind this pick to the document that is current now (the picker only
+                // reaches here when it is the one that opened it), or the next draw drops it.
+                self.background.bind_to_document(self.session.document_id(), &self.session.doc);
                 Ok(json!({"pending": "formatBackground"}))
             }
             AfterPick::Font => {
@@ -580,6 +584,8 @@ impl WordApp {
         let data_key = crate::format_background::picture_cache_key(&None, &Some(data.clone()), &None, doc_id, |_| 0);
         self.background.fill =
             crate::format_background::DraftFill::Picture { path: None, media: None, data: Some(data), data_key, tile, transparency };
+        // The pane reloads a draft whose document or fingerprint does not match the one it draws.
+        self.background.bind_to_document(doc_id, &self.session.doc);
         Ok(json!({"pending": "formatBackground"}))
     }
 

@@ -83,6 +83,16 @@ pub struct Draft {
 }
 
 impl Draft {
+    /// Bind the draft to the document that owns it now: a picker answer may arrive after the
+    /// window left and returned to that document, and the pane reloads a draft whose `doc` or
+    /// `base` does not match the document it draws, so without this the picked fill would be
+    /// dropped on the next draw.
+    pub(crate) fn bind_to_document(&mut self, doc_id: u64, doc: &wordcraft_doc::Document) {
+        self.loaded = true;
+        self.doc = doc_id;
+        self.base = fill_fingerprint(doc);
+    }
+
     /// The document's current fill.
     pub fn from_doc(doc: &wordcraft_doc::Document) -> Draft {
         let s = &doc.settings;
@@ -177,7 +187,7 @@ impl Draft {
 
 /// A hash of the page fill settings alone: typing elsewhere in the document doesn't disturb the
 /// pane's draft, but an undo of the fill (or another window's change) does.
-fn fill_fingerprint(doc: &wordcraft_doc::Document) -> u64 {
+pub(crate) fn fill_fingerprint(doc: &wordcraft_doc::Document) -> u64 {
     let s = &doc.settings;
     let key = format!("{:?}{:?}{:?}{:?}", s.page_color, s.page_picture, s.page_gradient, s.page_pattern);
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -590,10 +600,26 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
         DraftFill::Solid { color } => {
             p.rect_filled(rect, 0.0, crate::theme::c32(*color));
         }
-        DraftFill::Gradient { start, end, angle, transparency, transparency_touched, stops, .. } => {
-            // The preview draws the same stops Apply sends: endpoint pickers over the document's
-            // own stops, not just the two endpoints.
-            paint_gradient(p, rect, &Draft::gradient_stops(stops, *start, *end, *transparency, *transparency_touched), *angle);
+        DraftFill::Gradient { start, end, angle, transparency, transparency_touched, stops, kind } => {
+            match kind {
+                // The preview draws the same stops Apply sends: endpoint pickers over the
+                // document's own stops, not just the two endpoints.
+                GradientKind::Linear { .. } => {
+                    paint_gradient(p, rect, &Draft::gradient_stops(stops, *start, *end, *transparency, *transparency_touched), *angle);
+                }
+                // Apply keeps a path gradient's geometry; the preview draws linear bands only, so
+                // it says the fill cannot be shown here instead of drawing a linear stand-in.
+                GradientKind::Path { .. } => {
+                    p.rect_filled(rect, 0.0, Color32::WHITE);
+                    p.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        tl!("Path gradient: not previewed"),
+                        egui::FontId::proportional(11.0),
+                        Color32::from_gray(90),
+                    );
+                }
+            }
         }
         DraftFill::Pattern { preset, fore, back, transparency } => {
             // The page applies transparency once, to the whole opaque pattern; compositing the

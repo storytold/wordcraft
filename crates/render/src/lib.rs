@@ -182,6 +182,12 @@ pub const DARK_PAPER: u8 = 0x33;
 /// Read Mode's Sepia paper: Word's RGB (112, 66, 20) at 80% transparency over white.
 pub const SEPIA_PAPER: Rgb = Rgb(0xE2, 0xD9, 0xD0);
 
+/// Whether a page gradient draws anything: the raster, the PDF and the caret sampling all need
+/// two stops with a finite position, so fewer leave the page's paper showing.
+fn gradient_paints(g: &wordcraft_doc::fill::Gradient) -> bool {
+    g.stops.iter().filter(|s| s.pos.is_finite()).count() >= 2
+}
+
 impl RenderOptions {
     /// The on-screen color of the paper under `doc`'s pages: [`RenderOptions::read_paper`],
     /// else the document's page color, else [`RenderOptions::paper`]. A gradient or pattern page
@@ -208,7 +214,7 @@ impl RenderOptions {
         }
         let paper = self.ink(self.paper);
         if let Some(g) = &doc.settings.page_gradient
-            && !g.stops.is_empty()
+            && gradient_paints(g)
         {
             let (mut r, mut gg, mut b, mut a) = (0.0f32, 0.0, 0.0, 0.0f32);
             for s in &g.stops {
