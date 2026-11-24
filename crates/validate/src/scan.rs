@@ -862,21 +862,91 @@ pub(crate) fn decoded_prefix(bytes: &[u8]) -> Option<Cow<'_, str>> {
     }
 }
 
-/// Look for a declaration at its XML prolog position, without interpreting its subset.
-pub(crate) fn doctype_in_prolog(text: &str) -> bool {
+pub(crate) enum DoctypeForm {
+    InternalEntity,
+    ExternalOnly,
+    Other,
+}
+
+/// Look for a declaration at its XML prolog position and identify its form for grading.
+pub(crate) fn doctype_in_prolog(text: &str) -> Option<DoctypeForm> {
     let mut reader = quick_xml::Reader::from_str(text);
     loop {
         let offset = reader.buffer_position() as usize;
         match reader.read_event() {
             Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::Text(_)) => {}
-            Ok(Event::DocType(_)) => {
+            Ok(Event::DocType(decl)) => {
                 // The reader accepts a case-insensitive keyword. XML requires the exact keyword
                 // followed by XML whitespace.
-                return matches!(text.as_bytes()[offset..].strip_prefix(b"<!DOCTYPE"), Some([b' ' | b'\t' | b'\r' | b'\n', ..]));
+                if !matches!(text.as_bytes()[offset..].strip_prefix(b"<!DOCTYPE"), Some([b' ' | b'\t' | b'\r' | b'\n', ..])) {
+                    return None;
+                }
+                let form = std::str::from_utf8(&decl).map_or(DoctypeForm::Other, doctype_form);
+                return Some(form);
             }
-            _ => return false,
+            _ => return None,
         }
     }
+}
+
+fn xml_space(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\r' | '\n')
+}
+
+fn doctype_form(decl: &str) -> DoctypeForm {
+    let decl = decl.trim_matches(xml_space);
+    let Some(root_end) = decl.find(|ch| xml_space(ch) || ch == '[') else { return DoctypeForm::Other };
+    if root_end == 0 {
+        return DoctypeForm::Other;
+    }
+    let tail = decl[root_end..].trim_start_matches(xml_space);
+    if let Some(subset) = tail.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        if subset_has_internal_entity(subset) { DoctypeForm::InternalEntity } else { DoctypeForm::Other }
+    } else if external_id_only(tail) {
+        DoctypeForm::ExternalOnly
+    } else {
+        DoctypeForm::Other
+    }
+}
+
+fn external_id_only(tail: &str) -> bool {
+    let Some((keyword, literals)) = tail.split_once(xml_space) else { return false };
+    let literals = literals.trim_start_matches(xml_space);
+    let system_literal = match keyword {
+        "SYSTEM" => literals,
+        "PUBLIC" => {
+            let Some((_, rest)) = split_quoted_literal(literals) else { return false };
+            if !rest.starts_with(xml_space) {
+                return false;
+            }
+            rest.trim_start_matches(xml_space)
+        }
+        _ => return false,
+    };
+    split_quoted_literal(system_literal).is_some_and(|(_, rest)| rest.trim_matches(xml_space).is_empty())
+}
+
+/// Look only at top-level declarations so comments and quoted text cannot supply an ENTITY.
+fn subset_has_internal_entity(mut subset: &str) -> bool {
+    while !subset.is_empty() {
+        subset = subset.trim_start_matches(xml_space);
+        if let Some(rest) = subset.strip_prefix("<!--") {
+            let Some((_, after)) = rest.split_once("-->") else { return false };
+            subset = after;
+        } else if let Some(rest) = subset.strip_prefix("<?") {
+            let Some((_, after)) = rest.split_once("?>") else { return false };
+            subset = after;
+        } else if let Some(rest) = subset.strip_prefix("<!") {
+            let Some(end) = find_decl_end(rest.as_bytes(), 0) else { return false };
+            if rest[..end].strip_prefix("ENTITY").filter(|tail| tail.starts_with(xml_space)).and_then(internal_general_entity).is_some() {
+                return true;
+            }
+            subset = &rest[end + 1..];
+        } else {
+            return false;
+        }
+    }
+    false
 }
 
 /// The result of scanning the XML declaration for an encoding.
@@ -3502,19 +3572,11 @@ pub(crate) fn parse_doctype_entities(raw: &[u8], cap: usize) -> (Observed<HashSe
             if let Some(rest) = decl.strip_prefix("ENTITY")
                 && rest.starts_with(|c: char| c.is_ascii_whitespace())
             {
-                let rest = rest.trim_start();
-                if rest.starts_with('%') {
-                    unresolved = true;
-                    break;
-                }
-                let name_end = rest.find(|c: char| c.is_ascii_whitespace()).unwrap_or(rest.len());
-                let name = rest.get(..name_end).unwrap_or_default();
-                let val_part = rest.get(name_end..).unwrap_or_default().trim_start();
-                let Some(replacement) = entity_literal_text(val_part) else {
+                let Some((name, replacement)) = internal_general_entity(rest) else {
                     unresolved = true;
                     break;
                 };
-                if name.is_empty() || set.len() >= cap {
+                if set.len() >= cap {
                     unresolved = true;
                     break;
                 }
@@ -3665,20 +3727,26 @@ fn expand_into(
     Some(())
 }
 
-/// Extract the quoted literal of an internal general entity declaration (`"..."` or `'...'`),
-/// rejecting unterminated literals or trailing tokens such as NDATA/external keywords.
-fn entity_literal_text(val_part: &str) -> Option<&str> {
-    let (quote, rest) = if let Some(rest) = val_part.strip_prefix('"') {
-        ('"', rest)
-    } else {
-        let rest = val_part.strip_prefix('\'')?;
-        ('\'', rest)
-    };
-    let end = rest.find(quote)?;
-    if !rest.get(end + 1..)?.trim().is_empty() {
+/// Extract the name and replacement text of a literal internal general entity.
+fn internal_general_entity(tail: &str) -> Option<(&str, &str)> {
+    let tail = tail.trim_start();
+    if tail.starts_with('%') {
         return None;
     }
-    rest.get(..end)
+    let (name, value) = tail.split_once(|c: char| c.is_ascii_whitespace())?;
+    let (literal, trailing) = split_quoted_literal(value.trim_start())?;
+    (!name.is_empty() && trailing.trim().is_empty()).then_some((name, literal))
+}
+
+/// Extract a complete quoted literal and the remaining declaration text.
+fn split_quoted_literal(text: &str) -> Option<(&str, &str)> {
+    let (quote, rest) = if let Some(rest) = text.strip_prefix('"') {
+        ('"', rest)
+    } else {
+        let rest = text.strip_prefix('\'')?;
+        ('\'', rest)
+    };
+    rest.split_once(quote)
 }
 
 /// Scan the next named general entity reference (`&name;`) starting at or after `offset`, returning

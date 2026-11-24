@@ -424,6 +424,59 @@ fn xml_doctype_in_footnotes_relationships_warns() {
 }
 
 #[test]
+fn xml_doctype_internal_entity_in_diagram_definitions_warns() {
+    let ns = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+    for (part, root, kind) in [
+        ("word/diagrams/layout1.xml", "layoutDef", "diagramLayout"),
+        ("word/diagrams/colors1.xml", "colorsDef", "diagramColors"),
+        ("word/diagrams/quickStyle1.xml", "styleDef", "diagramStyle"),
+    ] {
+        let mut doc = Doc::minimal();
+        doc.add_with_override(
+            part,
+            &format!("application/vnd.openxmlformats-officedocument.{kind}+xml"),
+            format!(r#"<!DOCTYPE dgm:{root} [<!ENTITY greeting "hello">]><dgm:{root} xmlns:dgm="{ns}"/>"#),
+        );
+        let report = validate(&doc);
+        assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+        let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
+        assert_eq!((finding.severity, finding.evidence), (Severity::Warning, Evidence::ByConstruction));
+        assert_eq!(report.findings.len(), 1, "{report:?}");
+    }
+}
+
+#[test]
+fn xml_doctype_attlist_in_diagram_layout_is_an_error() {
+    let mut doc = Doc::minimal();
+    let part = "word/diagrams/layout1.xml";
+    doc.add_with_override(
+        part,
+        "application/vnd.openxmlformats-officedocument.diagramLayout+xml",
+        r#"<!DOCTYPE dgm:layoutDef [<!ATTLIST dgm:layoutDef name CDATA "sample">]><dgm:layoutDef xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram"/>"#,
+    );
+    let report = validate(&doc);
+    assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
+    let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
+    assert_eq!((finding.severity, finding.evidence), (Severity::Error, Evidence::Observed));
+    assert_eq!(report.findings.len(), 1, "{report:?}");
+}
+
+#[test]
+fn xml_doctype_external_identifier_in_xhtml_altchunk_warns() {
+    let mut doc = Doc::minimal();
+    let part = "chunk.xhtml";
+    let rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    doc.set("word/document.xml", document_xml(&format!(r#"<w:altChunk xmlns:r="{rel_ns}" r:id="rChunk"/><w:p/>"#)));
+    doc.set_doc_rels(&format!(r#"<Relationship Id="rChunk" Type="{rel_ns}/aFChunk" Target="../{part}"/>"#));
+    doc.add_with_override(part, "application/xhtml+xml", r#"<!DOCTYPE html PUBLIC "-//Example//DTD Test//EN" "test.dtd"><html><body/></html>"#);
+    let report = validate(&doc);
+    assert_eq!(report.verdict, Verdict::Pass, "{report:?}");
+    let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
+    assert_eq!((finding.severity, finding.evidence), (Severity::Warning, Evidence::ByConstruction));
+    assert_eq!(report.findings.len(), 1, "{report:?}");
+}
+
+#[test]
 fn xml_doctype_evidence_survives_a_document_profile_gate_or_encoding_error() {
     let mut doc = Doc::minimal();
     let strict = document_xml("<w:p/>");

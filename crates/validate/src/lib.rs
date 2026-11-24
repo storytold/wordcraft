@@ -838,36 +838,53 @@ fn check_document(pkg: &Package, acc: &mut Acc) {
 fn check_doctypes(pkg: &Package, acc: &mut Acc) {
     observation_contract! {
         rules: "XML-DOCTYPE";
-        collections: "field.bytes*1,field.entries*1";
-        scope: "original prolog of every XML and relationships part, independent of ownership and profile; the existing story classification identifies footnotes whose canonical relationships paths qualify for the Warning";
+        collections: "field.bytes*1,field.content_types*1,field.entries*1";
+        scope: "original prolog of every XML and relationships part, independent of ownership and profile; canonical footnotes relationships paths use existing story classification, diagram layout/colors/quickStyle paths use part identity, and XHTML altChunk targets use existing relationship and content-type evidence";
         loss: "unavailable part bytes, undecidable or unsupported encoding, or unreadable prolog";
-        fallback: "Word consumers refused, requested recovery, or timed out on 23 of 25 probed part-role and declaration-form combinations (corpus/EVIDENCE.md). All three measured consumers opened both footnotes-relationships probes, so declarations in those relationships parts receive a structural Warning. Other observed declarations receive an Error. Error grading for unprobed roles is an expedient interim with no measurement or policy basis, pending measured grading in a follow-up issue. Existing coverage checks handle unavailable evidence";
+        fallback: "The probed matrix contains 40 part-role and declaration-form combinations, 34 with an adverse outcome and six tolerated (corpus/EVIDENCE.md). The tolerated combinations are footnotes relationships in the internal entity and ATTLIST forms, diagram layout, colors, and quickStyle parts in internal entity form, and XHTML altChunk in external identifier form without an internal subset. Canonical footnotes relationships declarations and the tolerated diagram and XHTML altChunk forms receive a structural Warning. Other observed declarations receive an Error. Error grading for unmeasured declaration forms in probed parts and for part roles outside the probed set is an expedient interim pending measurement in a follow-up issue. Existing coverage checks handle unavailable evidence";
         package_loss: "independent";
     }
 
     acc.ran("XML-DOCTYPE");
     let mut roles = None;
+    let mut alt_chunk_targets = None;
     for entry in pkg.entries.iter().filter(|entry| !entry.is_dir && package::is_xml_part(pkg, &entry.name)) {
         let declared = match entry.decoded.as_deref() {
             Some(text) => scan::doctype_in_prolog(text),
             None if matches!(entry.decode_error, Some(DecodeError::Malformed(_))) => {
-                entry.bytes.as_deref().and_then(scan::decoded_prefix).is_some_and(|text| scan::doctype_in_prolog(&text))
+                entry.bytes.as_deref().and_then(scan::decoded_prefix).and_then(|text| scan::doctype_in_prolog(&text))
             }
-            None => false,
+            None => None,
         };
-        if declared {
+        if let Some(form) = declared {
             let is_footnotes_rels = rels_owner_name(&entry.name).is_some_and(|owner| {
                 entry.name.eq_ignore_ascii_case(&rels_part_name(&owner))
                     && roles.get_or_insert_with(|| story_roles(pkg)).get(&owner) == Some(&scan::PartRole::Footnotes)
             });
+            let is_tolerated_form = match form {
+                scan::DoctypeForm::InternalEntity => is_diagram_definition_path(&entry.name),
+                scan::DoctypeForm::ExternalOnly => {
+                    pkg.content_types.of(&entry.name) == Some("application/xhtml+xml")
+                        && alt_chunk_targets
+                            .get_or_insert_with(|| relationship_targets(pkg, "aFChunk"))
+                            .contains(entry.name.to_ascii_lowercase().as_str())
+                }
+                scan::DoctypeForm::Other => false,
+            };
             let message = format!("{} contains a DOCTYPE declaration", entry.name);
-            if is_footnotes_rels {
+            if is_footnotes_rels || is_tolerated_form {
                 acc.add_graded("XML-DOCTYPE", Severity::Warning, Evidence::ByConstruction, Some(entry.name.clone()), message);
             } else {
                 acc.add("XML-DOCTYPE", Some(entry.name.clone()), format!("{message}; see corpus/EVIDENCE.md for measured outcomes"));
             }
         }
     }
+}
+
+fn is_diagram_definition_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    let Some(("word/diagrams", name)) = path.rsplit_once('/') else { return false };
+    name.ends_with(".xml") && (name.starts_with("layout") || name.starts_with("colors") || name.starts_with("quickstyle"))
 }
 
 /// Reject owner roots the Transitional scanner cannot interpret. Malformed or unavailable XML
@@ -4181,7 +4198,7 @@ fn check_media(pkg: &Package, xml: &XmlScan, acc: &mut Acc) {
     }
 
     acc.ran("MEDIA-MAGIC");
-    let image_targets = image_rel_targets(pkg);
+    let image_targets = relationship_targets(pkg, "image");
     let mut drawing_targets = None;
     let mut decode_bytes = acc.limits.total_bytes;
     let mut decode_limited_at = None;
@@ -4479,8 +4496,8 @@ fn decode_png_pixels(bytes: &[u8], allocation: u64) -> Result<(), CodecError> {
     Ok(())
 }
 
-/// Collect lowercased target paths for all image relationships in the package.
-fn image_rel_targets(pkg: &Package) -> HashSet<String> {
+/// Collect lowercased internal target paths for an official relationship kind.
+fn relationship_targets(pkg: &Package, kind: &str) -> HashSet<String> {
     observation_contract! {
         rules: "-";
         collections: "field.rels*2,type.HashSet*2";
@@ -4493,7 +4510,7 @@ fn image_rel_targets(pkg: &Package) -> HashSet<String> {
     let mut set = HashSet::new();
     for rp in &pkg.rels {
         for r in &rp.rels {
-            if r.role.kind() == Some("image")
+            if r.role.kind() == Some(kind)
                 && let Some(t) = &r.target_abs
             {
                 set.insert(t.to_ascii_lowercase());
@@ -8569,7 +8586,7 @@ mod round6_tests {
             let bytes = fixture(&format!("{namespace}/image"), "application/octet-stream", b"payload");
             let mut acc = Acc::default();
             let pkg = package::load(&bytes, &mut acc).unwrap();
-            assert_eq!(image_rel_targets(&pkg).contains("word/vendor.dat"), expected);
+            assert_eq!(relationship_targets(&pkg, "image").contains("word/vendor.dat"), expected);
         }
     }
 
