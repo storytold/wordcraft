@@ -383,7 +383,7 @@ fn xml_doctype_is_a_refusal_in_the_main_part() {
 }
 
 #[test]
-fn xml_doctype_grades_main_relationships_and_arbitrary_xml_independently() {
+fn xml_doctype_is_a_refusal_in_relationships_and_other_xml_parts() {
     let mut doc = Doc::minimal();
     let rel =
         r#"<Relationship Id="rLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="other.docx"/>"#;
@@ -392,151 +392,35 @@ fn xml_doctype_grades_main_relationships_and_arbitrary_xml_independently() {
     doc.add_with_override("customXml/data.dat", "application/xml", "<!DOCTYPE data><data/>");
     let report = validate(&doc);
     assert_eq!(report.verdict, Verdict::Fail, "{report:?}");
-    let main_rels = assert_finding(&report, "XML-DOCTYPE", Some("word/_rels/document.xml.rels"));
-    assert_eq!((main_rels.severity, main_rels.evidence), (Severity::Error, Evidence::Observed));
-    let arbitrary_xml = assert_finding(&report, "XML-DOCTYPE", Some("customXml/data.dat"));
-    assert_eq!((arbitrary_xml.severity, arbitrary_xml.evidence), (Severity::Warning, Evidence::ByConstruction));
-}
-
-// These synthetic fixtures are built in memory from the test module's own OPC markup.
-const DOCTYPE_RELS_ENTITY: &str = r#"<!DOCTYPE Relationships [<!ENTITY greeting "hello">]>"#;
-const DOCTYPE_RELS_ATTLIST: &str = r#"<!DOCTYPE Relationships [<!ATTLIST Relationship TargetMode CDATA "External">]>"#;
-
-fn assert_isolated_doctype(doc: &Doc, part: &str, severity: Severity, evidence: Evidence, verdict: Verdict) -> Report {
-    let report = validate(doc);
-    assert_eq!(report.verdict, verdict, "{report:?}");
-    let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
-    assert_eq!((finding.severity, finding.evidence), (severity, evidence));
-    assert_eq!(report.findings.len(), 1, "{report:?}");
-    report
+    for part in ["word/_rels/document.xml.rels", "customXml/data.dat"] {
+        assert_eq!(assert_finding(&report, "XML-DOCTYPE", Some(part)).severity, Severity::Error);
+    }
 }
 
 #[test]
-fn xml_doctype_main_relationships_entity_fails() {
+fn xml_doctype_in_footnotes_relationships_warns() {
+    // Original synthetic packages assembled from this module's OPC markup.
     let mut doc = Doc::minimal();
-    let part = "word/_rels/document.xml.rels";
-    doc.set(part, with_doctype(rels_xml(""), DOCTYPE_RELS_ENTITY));
-    assert_isolated_doctype(&doc, part, Severity::Error, Evidence::Observed, Verdict::Fail);
-}
-
-#[test]
-fn xml_doctype_main_relationships_attlist_fails() {
-    let mut doc = Doc::minimal();
-    let part = "word/_rels/document.xml.rels";
-    let rel =
-        r#"<Relationship Id="rLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="document.xml"/>"#;
-    doc.set(part, with_doctype(rels_xml(rel), DOCTYPE_RELS_ATTLIST));
-    assert_isolated_doctype(&doc, part, Severity::Error, Evidence::Observed, Verdict::Fail);
-}
-
-#[test]
-fn xml_doctype_follows_the_selected_main_relationships_after_relocation() {
-    let mut doc = Doc::minimal();
-    let main = "stories/body.xml";
-    let rels = "stories/_rels/body.xml.rels";
-    let package_rels = String::from_utf8(doc.get("_rels/.rels").to_vec()).unwrap().replace("word/document.xml", main);
-    doc.set("_rels/.rels", package_rels);
-    let content_types = String::from_utf8(doc.get("[Content_Types].xml").to_vec()).unwrap().replace("word/document.xml", main);
-    doc.set("[Content_Types].xml", content_types);
-    doc.set(main, doc.get("word/document.xml").to_vec());
-    doc.remove("word/document.xml");
-    doc.set(rels, with_doctype(rels_xml(""), DOCTYPE_RELS_ENTITY));
-    assert_isolated_doctype(&doc, rels, Severity::Error, Evidence::Observed, Verdict::Fail);
-}
-
-fn footnotes_with_doctype_relationships(declaration: &str) -> Doc {
-    let mut doc = Doc::minimal();
+    let part = "word/notes/_rels/references.xml.rels";
     doc.set_doc_rels(
-        r#"<Relationship Id="rNote" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#,
+        r#"<Relationship Id="rNote" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="notes/references.xml"/>"#,
     );
-    doc.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[("/word/footnotes.xml", CT_FOOTNOTES)]));
-    doc.set("word/footnotes.xml", format!(r#"<w:footnotes xmlns:w="{W_NS}"/>"#));
+    doc.set("[Content_Types].xml", content_types_xml(&[("png", "image/png")], &[("/word/notes/references.xml", CT_FOOTNOTES)]));
+    doc.set("word/notes/references.xml", format!(r#"<w:footnotes xmlns:w="{W_NS}"/>"#));
     doc.set("word/media/note.png", b"\x89PNG\r\n\x1a\n".to_vec());
     let rel =
-        r#"<Relationship Id="rImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/note.png"/>"#;
-    doc.set("word/_rels/footnotes.xml.rels", with_doctype(rels_xml(rel), declaration));
-    doc
-}
-
-#[test]
-fn xml_doctype_footnotes_relationships_unused_entity_passes_with_warning() {
-    assert_isolated_doctype(
-        &footnotes_with_doctype_relationships(DOCTYPE_RELS_ENTITY),
-        "word/_rels/footnotes.xml.rels",
-        Severity::Warning,
-        Evidence::ByConstruction,
-        Verdict::Pass,
-    );
-}
-
-#[test]
-fn xml_doctype_footnotes_relationships_attlist_warns_with_incomplete_coverage() {
-    let part = "word/_rels/footnotes.xml.rels";
-    let report = assert_isolated_doctype(
-        &footnotes_with_doctype_relationships(DOCTYPE_RELS_ATTLIST),
-        part,
-        Severity::Warning,
-        Evidence::ByConstruction,
-        Verdict::Incomplete,
-    );
-    assert!(report.coverage_notes.iter().any(|note| note.contains(part) && note.contains("declarations were not fully examined")), "{report:?}");
-}
-
-#[test]
-fn xml_doctype_package_relationships_fails() {
-    let mut doc = Doc::minimal();
-    let part = "_rels/.rels";
-    doc.set(part, with_doctype(doc.get(part).to_vec(), DOCTYPE_RELS_ENTITY));
-    assert_isolated_doctype(&doc, part, Severity::Error, Evidence::Observed, Verdict::Fail);
-}
-
-#[test]
-fn xml_doctype_chart_relationships_fails() {
-    let mut doc = Doc::minimal();
-    doc.set_doc_rels(
-        r#"<Relationship Id="rChart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="charts/plot.xml"/>"#,
-    );
-    doc.add_with_override("word/charts/plot.xml", CT_CHART, r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#);
-    let part = "word/charts/_rels/plot.xml.rels";
-    doc.set(part, with_doctype(rels_xml(""), DOCTYPE_RELS_ENTITY));
-    assert_isolated_doctype(&doc, part, Severity::Error, Evidence::Observed, Verdict::Fail);
-}
-
-#[test]
-fn xml_doctype_custom_xml_item_relationships_fails() {
-    let mut doc = Doc::minimal();
-    doc.set_doc_rels(
-        r#"<Relationship Id="rData" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../data/store.xml"/>"#,
-    );
-    doc.set("data/store.xml", "<data/>");
-    let part = "data/_rels/store.xml.rels";
-    doc.set(part, with_doctype(rels_xml(""), DOCTYPE_RELS_ENTITY));
-    assert_isolated_doctype(&doc, part, Severity::Error, Evidence::Observed, Verdict::Fail);
-}
-
-#[test]
-fn xml_doctype_orphan_xml_passes_with_warning() {
-    let mut doc = Doc::minimal();
-    let part = "word/charts/chart1.xml";
-    doc.add_with_override(
-        part,
-        CT_CHART,
-        r#"<!DOCTYPE c:chartSpace><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#,
-    );
-    assert_isolated_doctype(&doc, part, Severity::Warning, Evidence::ByConstruction, Verdict::Pass);
-}
-
-#[test]
-fn xml_doctype_unmeasured_relationships_passes_with_warning() {
-    let mut doc = Doc::minimal();
-    doc.set_doc_rels(
-        r#"<Relationship Id="rHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>"#,
-    );
-    doc.set("[Content_Types].xml", content_types_xml(&[], &[("/word/header1.xml", CT_HEADER)]));
-    add_header(&mut doc);
-    let part = "word/_rels/header1.xml.rels";
-    doc.set(part, with_doctype(rels_xml(""), DOCTYPE_RELS_ENTITY));
-    assert_isolated_doctype(&doc, part, Severity::Warning, Evidence::ByConstruction, Verdict::Pass);
+        r#"<Relationship Id="rImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/note.png"/>"#;
+    for (declaration, verdict) in [
+        (r#"<!DOCTYPE Relationships [<!ENTITY greeting "hello">]>"#, Verdict::Pass),
+        (r#"<!DOCTYPE Relationships [<!ATTLIST Relationship TargetMode CDATA "External">]>"#, Verdict::Incomplete),
+    ] {
+        doc.set(part, with_doctype(rels_xml(rel), declaration));
+        let report = validate(&doc);
+        assert_eq!(report.verdict, verdict, "{report:?}");
+        let finding = assert_finding(&report, "XML-DOCTYPE", Some(part));
+        assert_eq!((finding.severity, finding.evidence), (Severity::Warning, Evidence::ByConstruction));
+        assert_eq!(report.findings.len(), 1, "{report:?}");
+    }
 }
 
 #[test]

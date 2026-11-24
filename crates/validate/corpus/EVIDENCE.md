@@ -128,7 +128,6 @@ target mode. The ATTLIST footnotes probe supplies a default on an image
 relationship. The footnotes observations apply to the reported open modes.
 The same validator Warning can accompany a Pass for the unused entity or
 Incomplete for the ATTLIST when relationship declaration coverage is lost.
-Other uncalibrated roles receive a structural Warning for the declaration.
 
 ## Corpus probes — media mismatches
 
