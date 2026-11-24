@@ -104,12 +104,17 @@ fn ods_options(only_sheet: Option<usize>) -> craft_ods::Options {
 /// [`MAX_TEXT_BYTES`], when the text ran out inside it, so that no recipient is left with only
 /// some of its fields. A second read with room for one more cell (its text and its value
 /// attribute, each within `max_cell_text`) tells: it keeps more of that row only if the first
-/// read cut the row short.
+/// read cut the row short. The second read may keep one more cell for each byte of that room,
+/// so its cell and merge limits get the same room. When the second read still fails (the cells
+/// after the cut are malformed, or keep no text), the row is left out.
 fn drop_cut_ods_row(bytes: &[u8], i: usize, sheet: &mut craft_ods::Sheet) {
     let Some(last) = sheet.cells.keys().map(|r| r.row).max() else { return };
     let in_last = |s: &craft_ods::Sheet| s.cells.keys().filter(|r| r.row == last).count();
     let mut options = ods_options(Some(i));
-    options.max_text = options.max_text.saturating_add(2 * options.max_cell_text as u64 + 1);
+    let room = 2 * options.max_cell_text as u64 + 1;
+    options.max_text = options.max_text.saturating_add(room);
+    options.max_cells = options.max_cells.saturating_add(room);
+    options.max_merges = options.max_merges.saturating_add(room);
     let further = craft_ods::read(bytes, &options).ok();
     let cut = further.as_ref().and_then(|b| b.sheets.get(i)).is_none_or(|s| in_last(s) > in_last(sheet));
     if cut {
@@ -503,6 +508,22 @@ mod tests {
             r#"<table:table-row><table:table-cell table:number-columns-repeated="100" office:value-type="string"><text:p>{long}</text:p></table:table-cell></table:table-row>"#
         ));
         assert_eq!(read_rows(&book, Pick::Index(0)).unwrap().1, [["Name", "Note"]]);
+    }
+
+    /// An OpenDocument sheet whose text runs out between rows close to [`MAX_CELLS`] cells keeps
+    /// its last complete row.
+    #[test]
+    fn an_ods_sheet_past_the_text_budget_near_the_cell_budget_keeps_its_last_row() {
+        // 33,723 bytes in 1,000 cells a row: 1,990 copies fit, with 94 bytes to spare, fewer than
+        // the first cell of the next copy needs.
+        let (first, rest) = ("a".repeat(1_755), "b".repeat(32));
+        let book = craft_ods::testing::spreadsheet(&format!(
+            r#"<table:table table:name="S"><table:table-row table:number-rows-repeated="3000"><table:table-cell office:value-type="string"><text:p>{first}</text:p></table:table-cell><table:table-cell table:number-columns-repeated="999" office:value-type="string"><text:p>{rest}</text:p></table:table-cell></table:table-row></table:table>"#
+        ))
+        .unwrap();
+        let rows = read_rows(&book, Pick::Index(0)).unwrap().1;
+        assert_eq!(rows.len(), 1_990);
+        assert!(rows.iter().all(|r| r.len() == 1_000 && r[0] == first && r[1..].iter().all(|c| *c == rest)));
     }
 
     /// An OpenDocument sheet with more than a million cells, and fewer than [`MAX_CELLS`], is read
