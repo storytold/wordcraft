@@ -50,7 +50,11 @@ if [[ "${WORDCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* ]
   export WORDCRAFT_BUILD_CHANNEL=nightly-v1
   export WORDCRAFT_OVERRIDE_VERSION="$VERSION"
 fi
-BASENAME="wordcraft-$VERSION-linux-$ARCH"
+BASENAME_VERSION="$VERSION"
+if [[ "$IS_NIGHTLY" = 1 && "$BASENAME_VERSION" != *-nightly* ]]; then
+  BASENAME_VERSION="$BASENAME_VERSION-nightly"
+fi
+BASENAME="wordcraft-$BASENAME_VERSION-linux-$ARCH"
 
 if [[ -n "$ARCH_TAR_DIR" && "$IS_NIGHTLY" != 1 ]]; then
   echo "error: --arch-tar-dir is only for Nightly builds" >&2

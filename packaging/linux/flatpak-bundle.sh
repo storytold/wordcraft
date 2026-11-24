@@ -44,7 +44,11 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-BASENAME="wordcraft-$VERSION-linux-$ARCH"
+BASENAME_VERSION="$VERSION"
+if [[ "$FLATPAK_ID" != "$APP_ID" && "$BASENAME_VERSION" != *-nightly* ]]; then
+  BASENAME_VERSION="$BASENAME_VERSION-nightly"
+fi
+BASENAME="wordcraft-$BASENAME_VERSION-linux-$ARCH"
 TARBALL="${TARBALL:-$DIST/$BASENAME.tar.gz}"
 [[ -f "$TARBALL" ]] || { echo "error: $TARBALL not found (run packaging/linux/package.sh --formats tar first)" >&2; exit 1; }
 for tool in flatpak flatpak-builder; do

@@ -440,10 +440,14 @@ fn main() -> eframe::Result {
             None => logger.stderr_only(),
         }
     }
+    let app_id = std::env::var("FLATPAK_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "ai.storyteller.wordcraft".to_string());
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("WordCraft")
-            .with_app_id("ai.storyteller.wordcraft")
+            .with_app_id(app_id)
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE)
             .with_drag_and_drop(true)
