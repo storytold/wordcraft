@@ -830,7 +830,7 @@ fn unimplemented_stub_ribbon_buttons_are_disabled() {
     }
 }
 
-/// #7324: Table ribbon menu buttons (Styles, Borders, Delete, AutoFit) bind their command IDs
+/// #7324, #7457: Table ribbon menu buttons (Styles, Borders, Select, Delete, AutoFit) bind their command IDs
 /// so they disable when editing is protected or when no table is active.
 #[test]
 fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
@@ -871,8 +871,13 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
 
     let app_no_table2 = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
     let h_layout_empty = tab_harness(app_no_table2, "Table Layout");
+    assert!(is_disabled(&h_layout_empty, "Select"), "Select button should be disabled when not in table");
     assert!(is_disabled(&h_layout_empty, "Delete"), "Delete button should be disabled when not in table");
     assert!(is_disabled(&h_layout_empty, "AutoFit"), "AutoFit button should be disabled when not in table");
+    assert!(
+        description(&h_layout_empty, "Select").as_deref().unwrap_or("").to_ascii_lowercase().contains("the cursor isn't in a table"),
+        "Select should indicate outside table in disabled hint"
+    );
 
     // 2. With an active table and no protection: buttons are enabled:
     let mut app_table = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
@@ -884,10 +889,11 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
     let mut app_table2 = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     app_table2.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     let h_layout = tab_harness(app_table2, "Table Layout");
+    assert!(!is_disabled(&h_layout, "Select"), "Select button should be enabled in table");
     assert!(!is_disabled(&h_layout, "Delete"), "Delete button should be enabled in table");
     assert!(!is_disabled(&h_layout, "AutoFit"), "AutoFit button should be enabled in table");
 
-    // 3. With an active table under document protection (read-only): buttons are disabled:
+    // 3. With an active table under document protection (read-only): mutating buttons are disabled:
     let mut app_protected_design = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     app_protected_design.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     app_protected_design.session.doc.settings.protection = Some("readOnly".into());
@@ -903,6 +909,7 @@ fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
     app_protected_layout.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     app_protected_layout.session.doc.settings.protection = Some("readOnly".into());
     let h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
+    assert!(!is_disabled(&h_prot_layout, "Select"), "Select button should remain enabled under protection");
     assert!(is_disabled(&h_prot_layout, "Delete"), "Delete button should be disabled under protection");
     assert!(is_disabled(&h_prot_layout, "AutoFit"), "AutoFit button should be disabled under protection");
     assert!(
