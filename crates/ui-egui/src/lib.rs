@@ -55,6 +55,8 @@ pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
+/// The window identity of the channel this build runs as (stable or Nightly).
+pub mod os_window;
 pub mod panes;
 pub mod paste_picture;
 pub mod prefs;

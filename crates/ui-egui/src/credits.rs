@@ -66,22 +66,95 @@ pub fn credits() -> Credits {
 }
 
 /// The About tab's contents: name, blurb, version and build, and the project links in the old About's order (site,
-/// Discord, source), one to a line.
+/// Discord, source), one to a line. A Nightly window names its channel, its exact feed version
+/// and commit, and offers a link to report a problem.
 pub fn about_info() -> AboutInfo {
-    let build = option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
-    // The dialog's own "Version {version}" words the line, so this is the number and the build only.
-    let version = crate::i18n::fmt(tl!("{version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]);
-    AboutInfo::new(
-        tl!("WordCraft").to_string(),
-        tl!("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.").to_string(),
-        version.to_string(),
-    )
-    .links([
-        AboutLink::new(tl!("getartcraft.com/apps/wordcraft").to_string(), "https://getartcraft.com/apps/wordcraft"),
-        AboutLink::new(tl!("Join us on Discord: discord.gg/artcraft").to_string(), "https://discord.gg/artcraft"),
-        AboutLink::new(tl!("Source code: github.com/storytold/wordcraft").to_string(), "https://github.com/storytold/wordcraft"),
-    ])
-    .built_with(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").to_string())
+    about_info_for(crate::os_window::identity(), option_env!("WORDCRAFT_BUILD_SHA"))
+}
+
+/// The About tab's three lines for `identity`: (name, blurb, version line). A Nightly window's
+/// are English only: they are not one of the stable catalogs' strings.
+fn about_text(identity: crate::os_window::LaunchIdentity, commit: Option<&str>) -> (String, String, String) {
+    match identity {
+        crate::os_window::LaunchIdentity::NightlyV1 => {
+            let version = option_env!("WORDCRAFT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+            let commit = commit.filter(|value| !value.is_empty()).unwrap_or("unavailable");
+            (
+                crate::os_window::name_for(identity).to_string(),
+                "A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.".to_string(),
+                format!("{version}\nCommit: {commit}"),
+            )
+        }
+        crate::os_window::LaunchIdentity::Stable => {
+            let build = commit.map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
+            // The dialog's own "Version {version}" words the line, so this is the number and the build only.
+            let version = crate::i18n::fmt(tl!("{version} ({build})"), &[("version", env!("CARGO_PKG_VERSION")), ("build", build)]);
+            (
+                tl!("WordCraft").to_string(),
+                tl!("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.")
+                    .to_string(),
+                version.to_string(),
+            )
+        }
+    }
+}
+
+fn about_info_for(identity: crate::os_window::LaunchIdentity, commit: Option<&str>) -> AboutInfo {
+    let (name, blurb, version) = about_text(identity, commit);
+    if identity == crate::os_window::LaunchIdentity::NightlyV1 {
+        return AboutInfo::new(name, blurb, version)
+            .links([
+                AboutLink::new("getartcraft.com/apps/wordcraft".to_string(), "https://getartcraft.com/apps/wordcraft"),
+                AboutLink::new("Join us on Discord: discord.gg/artcraft".to_string(), "https://discord.gg/artcraft"),
+                AboutLink::new("Source code: github.com/storytold/wordcraft".to_string(), "https://github.com/storytold/wordcraft"),
+                // Opens only after a click; nothing is collected or sent automatically.
+                AboutLink::new("Report a problem".to_string(), "https://github.com/storytold/wordcraft/issues"),
+            ])
+            .built_with("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.".to_string());
+    }
+    AboutInfo::new(name, blurb, version)
+        .links([
+            AboutLink::new(tl!("getartcraft.com/apps/wordcraft").to_string(), "https://getartcraft.com/apps/wordcraft"),
+            AboutLink::new(tl!("Join us on Discord: discord.gg/artcraft").to_string(), "https://discord.gg/artcraft"),
+            AboutLink::new(tl!("Source code: github.com/storytold/wordcraft").to_string(), "https://github.com/storytold/wordcraft"),
+        ])
+        .built_with(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").to_string())
+}
+
+/// A Nightly window's About names its channel, keeps the full feed version and commit, invents
+/// nothing when the commit is missing, and adds the report link the stable About does not have.
+#[cfg(test)]
+mod nightly_about_tests {
+    use crate::os_window::LaunchIdentity;
+
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn nightly_about_names_the_channel_and_keeps_the_full_version_and_commit() {
+        let (name, blurb, version) = super::about_text(LaunchIdentity::NightlyV1, Some(COMMIT));
+        assert_eq!(name, "WordCraft Nightly");
+        assert!(blurb.contains("word processor"));
+        let package = option_env!("WORDCRAFT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+        assert_eq!(version, format!("{package}\nCommit: {COMMIT}"));
+    }
+
+    #[test]
+    fn nightly_about_invents_no_provenance_when_the_commit_is_missing() {
+        for commit in [None, Some("")] {
+            let (_, _, version) = super::about_text(LaunchIdentity::NightlyV1, commit);
+            assert!(version.ends_with("\nCommit: unavailable"), "{version}");
+        }
+    }
+
+    #[test]
+    fn only_the_nightly_about_offers_the_report_link_and_the_stable_name_is_unchanged() {
+        let nightly = super::about_info_for(LaunchIdentity::NightlyV1, Some(COMMIT));
+        assert!(nightly.links.iter().any(|link| link.url == "https://github.com/storytold/wordcraft/issues"));
+        let stable = super::about_info_for(LaunchIdentity::Stable, Some(COMMIT));
+        assert!(!stable.links.iter().any(|link| link.url == "https://github.com/storytold/wordcraft/issues"));
+        let (name, _, _) = super::about_text(LaunchIdentity::Stable, Some(COMMIT));
+        assert_eq!(name, "WordCraft");
+    }
 }
 
 /// The About dialog opened on `tab`, with the Language data tab after Models (`AboutTab::App(0)`). The name

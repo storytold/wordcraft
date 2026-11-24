@@ -28,3 +28,33 @@ Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windo
 A scheduled dry run runs on `main` nightly at 03:00 UTC. It builds every release target except
 macOS, without signing, entering the `release` environment, pushing Flatpak images or making a
 draft release. Manual dispatch uses the normal release path (`dry-run` is false).
+
+## The Nightly channel
+
+A separate **Nightly** channel exists beside the release above. Its producer and signer are
+**enabled for supervised manual runs only** (no schedule, no automatic dispatch) and its signing
+policy is installed; it is not the release dry run above.
+
+What the channel is:
+
+- A build channel: `WORDCRAFT_BUILD_CHANNEL=nightly-v1` (with `WORDCRAFT_VERSION`, `WORDCRAFT_BUILD_SHA`
+  and `WORDCRAFT_BUILD_DATE`) compiles a `WordCraft Nightly` build with its own version line,
+  Windows identity and icon. Unset or `stable` stays the ordinary build.
+- The Launcher protocol: `--launch-profile nightly-v1 --profile-root <abs> -- files`, with
+  `--version` answered in both plain and profile form before any state is read. A Nightly build
+  without a profile is refused (it never falls back to the stable data).
+- Its own data: preferences, window place, logs, recovery, fonts, templates, the dictionary, the
+  suite font store and any control tokens live under that profile, which may not overlap stable
+  data, the shared font store or an installation.
+- Packaging: `packaging/linux/nightly.sh --arch x86_64` (plus the Arch handoff in
+  `packaging/linux/nightly-arch-tar.sh`), `packaging/windows/package.ps1 -Arch x64 -Nightly
+  -BuildOnly`, `packaging/macos/nightly.sh --arch aarch64` with `nightly-sign.sh` and
+  `nightly-verify.sh` for the trusted step, and `packaging/nightly-icons.py` for its icons.
+- Qualification: `.github/workflows/nightly-build.yml` builds and checks all three unsigned
+  archives on the `full-ci` label or on dispatch, with no secrets;
+  `packaging/nightly-tests.py` runs the synthetic suites in Packaging lint.
+
+A distro wrapper that starts the Nightly binary must pass the profile, e.g.
+`wordcraft --launch-profile nightly-v1 --profile-root "${XDG_CONFIG_HOME:-$HOME/.config}/wordcraft-nightly" -- "$@"`;
+redirecting `XDG_*` alone is refused. The remaining activation steps are described in
+[nightly-release-preparation.md](nightly-release-preparation.md).
