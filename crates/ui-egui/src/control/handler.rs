@@ -1,82 +1,72 @@
+use std::sync::Arc;
+
+use craft::automation::control::{ControlRequest, Reply};
+#[cfg(not(target_arch = "wasm32"))]
+use craft::automation::dialogs;
+use craft::automation::synthetic::input_method;
+use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
+use craft::ui::runtime::windows::{WindowAction, WindowHost};
+use serde_json::{Value, json};
+
 use super::screenshots::render_png;
-use super::{ControlRequest, Value, WordApp, json};
+use crate::WordApp;
 
-pub enum Outcome {
-    Done(Value),
-    Screenshot { path: Option<String> },
+fn ok(v: Value) -> Reply {
+    Reply::from_result(Ok(v))
 }
 
-fn ok(v: Value) -> Outcome {
-    Outcome::Done(json!({"ok": true, "result": v}))
+fn err(e: impl std::fmt::Display) -> Reply {
+    Reply::from_result(Err(e.to_string()))
 }
 
-fn err(e: impl std::fmt::Display) -> Outcome {
-    Outcome::Done(json!({"ok": false, "error": e.to_string()}))
+/// The screen point a point of `page` (page points from its top-left) is shown at; `None` when the
+/// page is not on screen. One rule for `ui.click` in document coordinates and `ui.clickText`.
+fn page_point_on_screen(canvas: &crate::canvas::CanvasState, page: usize, p: egui::Pos2) -> Option<egui::Pos2> {
+    // The placed page's own scale: the page view draws a point at 96/72 screen points per point at 100%, so the
+    // zoom alone put a page point short of where it shows.
+    let placed = canvas.shown.pages.iter().find(|placed| placed.page == page)?;
+    Some(placed.to_screen(craft::behavior::kurbo::Point::new(f64::from(p.x), f64::from(p.y))))
 }
 
+impl WordApp {
+    /// The next screenshot token: distinct from every earlier one of this app, never zero.
+    fn next_capture_token(&mut self) -> u64 {
+        let mut token = self.capture_token.wrapping_add(1);
+        if token == 0 {
+            token = 1;
+        }
+        self.capture_token = token;
+        token
+    }
+}
+
+/// UI state for `ui.inspect`: preferences, view, windows, open dialogs, canvas geometry, perf.
 pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
     let r = ctx.input_for(app.active_viewport(), |i| i.content_rect());
     let caret = crate::canvas::caret_screen(app).map(|(p, h)| json!({"x": p.x, "y": p.y, "h": h}));
+    let rect = |r: egui::Rect| [r.left(), r.top(), r.width(), r.height()];
+    // PLAN: assumed `Label::as_str` and `Tone: Debug` (sh.A3 `status_message`, expiry handled there)
+    let status = app.status_message().map(|m| json!({"text": m.text.as_str(), "tone": format!("{:?}", m.tone).to_lowercase()}));
     json!({
         "ui": app.prefs(),
         "view": app.session.view,
         "windows": app.session.windows,
         "proofing": app.spelling_review,
-        "dialog": app.dialog.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
+        "dialogs": open_dialogs(app),
         "window": [r.width(), r.height()],
-        "canvasRect": app.canvas.canvas_rect.map(|c| [c.left(), c.top(), c.width(), c.height()]),
-        "pages": app.canvas.page_rects.iter().map(|r| [r.left(), r.top(), r.width(), r.height()]).collect::<Vec<_>>(),
-        "scale": app.canvas.scale,
+        "canvasRect": app.canvas.canvas_rect().map(rect),
+        "pages": app.canvas.page_rects().map(|(_, r)| rect(r)).collect::<Vec<_>>(),
+        "scale": app.canvas.zoom(),
         "caret": caret,
-        "balloons": app.canvas.balloon_rects.iter().map(|(id, r)| json!({"id": id, "rect": [r.left(), r.top(), r.width(), r.height()]})).collect::<Vec<_>>(),
-        "balloon": app.canvas.balloon,
-        "focused": app.canvas.focused,
+        "balloon": app.canvas.selected_balloon(),
+        "focused": app.canvas.focused(ctx),
         "title": app.title_stem(),
+        "status": status,
         "dirty": app.session.dirty,
         "document": app.session.document_id(),
         "documents": app.session.documents(),
-        "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
+        "perf": {"frameMs": app.frame_ms, "layoutMs": app.session.layout().ms},
     })
-}
-
-fn key_from(name: &str) -> Option<egui::Key> {
-    egui::Key::from_name(name).or(match name.to_ascii_lowercase().as_str() {
-        "enter" | "return" => Some(egui::Key::Enter),
-        "esc" | "escape" => Some(egui::Key::Escape),
-        "delete" => Some(egui::Key::Delete),
-        "backspace" => Some(egui::Key::Backspace),
-        "left" => Some(egui::Key::ArrowLeft),
-        "right" => Some(egui::Key::ArrowRight),
-        "up" => Some(egui::Key::ArrowUp),
-        "down" => Some(egui::Key::ArrowDown),
-        "space" => Some(egui::Key::Space),
-        "tab" => Some(egui::Key::Tab),
-        "alt" | "altleft" | "altgr" => Some(egui::Key::AltLeft),
-        "altright" => Some(egui::Key::AltRight),
-        "home" => Some(egui::Key::Home),
-        "end" => Some(egui::Key::End),
-        _ => None,
-    })
-}
-
-fn mods(p: &Value) -> egui::Modifiers {
-    let b = |k: &str| p.get(k).and_then(Value::as_bool).unwrap_or(false);
-    let cmd = b("cmd") || b("command") || b("ctrl");
-    egui::Modifiers {
-        alt: b("alt"),
-        ctrl: cmd && !cfg!(target_os = "macos"),
-        shift: b("shift"),
-        mac_cmd: cmd && cfg!(target_os = "macos"),
-        command: cmd,
-    }
-}
-
-fn click_events(app: &mut WordApp, pos: egui::Pos2, button: egui::PointerButton, count: u64, m: egui::Modifiers) {
-    app.synthetic.push(egui::Event::PointerMoved(pos));
-    for _ in 0..count.clamp(1, 3) {
-        app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: m });
-        app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers: m });
-    }
 }
 
 /// Programmatic calls never open the Save prompt, so closing unsaved work must be explicit:
@@ -155,7 +145,7 @@ fn addressed(app: &WordApp, p: &Value) -> Result<Option<u64>, String> {
 }
 
 /// The reply to work run on another document: its result, or why it couldn't run or failed.
-fn reply<E: std::fmt::Display, F: std::fmt::Display>(r: Result<Result<Value, E>, F>) -> Outcome {
+fn reply<E: std::fmt::Display, F: std::fmt::Display>(r: Result<Result<Value, E>, F>) -> Reply {
     match r {
         Ok(Ok(v)) => ok(v),
         Ok(Err(e)) => err(e),
@@ -165,7 +155,7 @@ fn reply<E: std::fmt::Display, F: std::fmt::Display>(r: Result<Result<Value, E>,
 
 /// A document method addressed to open document `doc`, which isn't the active one: it runs on
 /// that document, and the window keeps showing the active one.
-fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
+fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Reply {
     if app.no_document == Some(doc) {
         return err(NO_DOCUMENT);
     }
@@ -213,19 +203,23 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
             }
             let r = app.session.with_document(doc, |s| s.run(id, &params));
             // UI requests the command made carry `document`, so the window can tell they aren't
-            // about the document it shows.
+            // about the document it shows. A command that changes nothing opens the dialog it asks for, as in
+            // `after_command`.
+            let origin = app.user_origin;
+            app.user_origin = origin || app.session.registry.get(id).is_some_and(|spec| !spec.mutates);
             for req in std::mem::take(&mut app.session.ui_requests) {
                 app.handle_request(&req);
             }
+            app.user_origin = origin;
             reply(r)
         }
     }
 }
 
-/// Dispatches one JSON-lines control request: commands and inspection, parity, synthetic click,
-/// drag, key, wheel and text input, screenshots and renders, resize, focus and quit, and unknown
-/// ids as commands. It refuses closing unsaved work and document operations without a document.
-pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+/// Dispatches one control request: commands and inspection, parity, the library's input and
+/// dialog methods, screenshots and renders, resize, focus, clipboard and quit, and unknown ids as
+/// commands. It refuses closing unsaved work and document operations without a document.
+pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Reply {
     let before = app.session.document_id();
     let outcome = handle_request(app, ctx, req);
     // A document a script opened doesn't bring up the missing-fonts box.
@@ -236,7 +230,103 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
     outcome
 }
 
-fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+/// The open dialogs for `ui.inspect`. The control library's dialog methods do not build for wasm32, so the web lists none.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_dialogs(app: &WordApp) -> Value {
+    dialogs::inspect(&app.dialog_host)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_dialogs(_app: &WordApp) -> Value {
+    json!([])
+}
+
+/// The input and dialog methods the control library implements.
+fn library_method(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Option<Reply> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = dialogs::dialog_method(&mut app.dialog_host, ctx, &req.method, &req.params) {
+        return Some(Reply::from_result(r));
+    }
+    let host = WindowHost::of(ctx);
+    let viewport = app.active_viewport();
+    let canvas = &app.canvas;
+    let map = |page: usize, p: egui::Pos2| page_point_on_screen(canvas, page, p);
+    match input_method(&req.method, &req.params, &host, viewport, &map)? {
+        Ok(()) => Some(Reply::AfterInput),
+        Err(e) => Some(err(e)),
+    }
+}
+
+/// `ui.clickText {page, x, y, ..}`: a click at a point of a page, as the library's `ui.click`
+/// would deliver it at the screen point the page point is shown at.
+fn click_text(app: &mut WordApp, ctx: &egui::Context, p: &Value) -> Reply {
+    let page = p.get("page").and_then(Value::as_u64).map_or(0, |v| usize::try_from(v).unwrap_or(usize::MAX));
+    let num = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);
+    let (Some(x), Some(y)) = (num("x"), num("y")) else { return err("missing x/y") };
+    let Some(pos) = page_point_on_screen(&app.canvas, page, egui::pos2(x, y)) else { return err("page not on screen") };
+    // The other params (count, button, modifiers) are the library click's own.
+    let mut click = p.as_object().cloned().unwrap_or_default();
+    click.remove("page");
+    click.insert("x".into(), json!(pos.x));
+    click.insert("y".into(), json!(pos.y));
+    click.insert("coordinates".into(), json!("screen"));
+    match input_method("ui.click", &Value::Object(click), &WindowHost::of(ctx), app.active_viewport(), &|_: usize, _: egui::Pos2| None) {
+        Some(Ok(())) => ok(json!({"screen": [pos.x, pos.y]})),
+        Some(Err(e)) => err(e),
+        None => err("ui.click is not available"),
+    }
+}
+
+/// `ui.resize {width, height}`: sizes the active window's inner area, within what its surface can be.
+fn resize(app: &mut WordApp, ctx: &egui::Context, p: &Value) -> Reply {
+    let num = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);
+    let (Some(w), Some(h)) = (num("width"), num("height")) else { return err("missing width/height") };
+    // The window's surface is a GPU texture: no side may pass the largest one (#3734).
+    let max_side = ctx.input(|i| i.max_texture_side) as f32 / ctx.pixels_per_point();
+    let Some(size) = crate::window_geometry::requested_size(egui::vec2(w, h), max_side) else {
+        return err("width and height must be positive numbers no larger than 3.4e38");
+    };
+    WindowHost::of(ctx).act(app.active_viewport(), WindowAction::SetInnerSize(size));
+    ok(json!({"width": size.x, "height": size.y}))
+}
+
+/// `ui.clipboard {text?, html?, rtf?, png?}`: puts the given flavours on the clipboard.
+fn clipboard(ctx: &egui::Context, p: &Value) -> Reply {
+    let text = |k: &str| p.get(k).and_then(Value::as_str);
+    let mut items = Vec::new();
+    let mut offered = Vec::new();
+    if let Some(t) = text("text") {
+        items.push(ClipItem::Text(t.into()));
+        offered.push("text");
+    }
+    if let Some(t) = text("html") {
+        items.push(ClipItem::Html(t.into()));
+        offered.push("html");
+    }
+    if let Some(t) = text("rtf") {
+        items.push(ClipItem::Rtf(t.into()));
+        offered.push("rtf");
+    }
+    if let Some(b) = text("png") {
+        // PLAN: assumed `wordcraft_engine::cmd::insert::base64_decode` is exported beside `base64_encode`
+        let Some(bytes) = wordcraft_engine::cmd::insert::base64_decode(b) else { return err("`png` is not base64") };
+        let Ok(img) = image::load_from_memory(&bytes) else { return err("`png` is not a picture") };
+        let rgba = img.to_rgba8();
+        let (Ok(w), Ok(h)) = (usize::try_from(rgba.width()), usize::try_from(rgba.height())) else { return err("`png` is too large") };
+        items.push(ClipItem::Image(Arc::new(egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw()))));
+        offered.push("png");
+    }
+    if items.is_empty() {
+        return err("give at least one of `text`, `html`, `rtf`, `png`");
+    }
+    // PLAN(platform-w3): the reply should name the flavours the backend could not write; `Written` is read there
+    match ClipboardHandle::of(ctx).offer(&items) {
+        Ok(_) => ok(json!({"offered": offered})),
+        Err(e) => err(format!("{e:?}")),
+    }
+}
+
+fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Reply {
     let p = &req.params;
     if DOC_METHODS.contains(&req.method.as_str()) {
         match addressed(app, p) {
@@ -245,8 +335,10 @@ fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) 
             Err(e) => return err(e),
         }
     }
+    if let Some(r) = library_method(app, ctx, req) {
+        return r;
+    }
     let s = |k: &str| p.get(k).and_then(Value::as_str);
-    let f = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);
     match req.method.as_str() {
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
@@ -283,99 +375,17 @@ fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) 
         },
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.parity" => ok(wordcraft_engine::catalog::parity(&app.session.registry)),
-        "ui.click" => {
-            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
-            let button = match s("button") {
-                Some("right") => egui::PointerButton::Secondary,
-                _ => egui::PointerButton::Primary,
-            };
-            let count = p.get("count").and_then(Value::as_u64).unwrap_or(1);
-            click_events(app, egui::pos2(x, y), button, count, mods(p));
-            ok(json!({"queued": true}))
-        }
-        "ui.clickText" => {
-            let page = p.get("page").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
-            let Some(pos) = crate::canvas::page_to_screen(app, page, x, y) else { return err("page not on screen") };
-            let count = p.get("count").and_then(Value::as_u64).unwrap_or(1);
-            click_events(app, pos, egui::PointerButton::Primary, count, mods(p));
-            ok(json!({"screen": [pos.x, pos.y]}))
-        }
-        "ui.move" => {
-            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
-            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(x, y)));
-            ok(json!({"queued": true}))
-        }
-        "ui.press" | "ui.release" => {
-            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
-            let pos = egui::pos2(x, y);
-            app.synthetic.push(egui::Event::PointerMoved(pos));
-            app.synthetic.push(egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: req.method == "ui.press",
-                modifiers: mods(p),
-            });
-            ok(json!({"queued": true}))
-        }
-        "ui.drag" => {
-            let (Some(x), Some(y), Some(tx), Some(ty)) = (f("x"), f("y"), f("toX"), f("toY")) else { return err("missing x/y/toX/toY") };
-            let m = mods(p);
-            let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 100);
-            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(x, y)));
-            app.synthetic.push(egui::Event::PointerButton {
-                pos: egui::pos2(x, y),
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: m,
-            });
-            for i in 1..=steps {
-                let k = i as f32 / steps as f32;
-                app.synthetic.push(egui::Event::PointerMoved(egui::pos2(x + (tx - x) * k, y + (ty - y) * k)));
+        "ui.clickText" => click_text(app, ctx, p),
+        "ui.screenshot" => match craft::automation::screenshot::ScreenshotParams::from_params(p) {
+            Ok(params) => {
+                let token = app.next_capture_token();
+                Reply::screenshot(token, params, app.active_viewport())
             }
-            app.synthetic.push(egui::Event::PointerButton {
-                pos: egui::pos2(tx, ty),
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: m,
-            });
-            ok(json!({"queued": true}))
-        }
-        "ui.key" => {
-            let Some(k) = s("key").and_then(key_from) else { return err("unknown key") };
-            let m = mods(p);
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
-            ok(json!({"queued": true}))
-        }
-        "ui.wheel" => {
-            // Mouse-wheel or trackpad scroll at (x, y): `dy` points (positive scrolls up), or
-            // lines with `"unit": "line"`; `phase` "start"/"move"/"end" for a trackpad gesture.
-            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
-            let unit = match s("unit") {
-                Some("line") => egui::MouseWheelUnit::Line,
-                Some("page") => egui::MouseWheelUnit::Page,
-                _ => egui::MouseWheelUnit::Point,
-            };
-            let phase = match s("phase") {
-                Some("start") => egui::TouchPhase::Start,
-                Some("end") => egui::TouchPhase::End,
-                _ => egui::TouchPhase::Move,
-            };
-            let delta = egui::vec2(f("dx").unwrap_or(0.0), f("dy").unwrap_or(0.0));
-            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(x, y)));
-            app.synthetic.push(egui::Event::MouseWheel { unit, delta, phase, modifiers: mods(p), source: egui::MouseWheelSource::Unknown });
-            ok(json!({"queued": true}))
-        }
-        "ui.text" => {
-            let Some(t) = s("text") else { return err("missing text") };
-            app.synthetic.push(egui::Event::Text(t.to_string()));
-            ok(json!({"queued": true}))
-        }
-        "ui.screenshot" => Outcome::Screenshot { path: s("path").map(str::to_string) },
+            Err(e) => err(e),
+        },
         "ui.render" => {
             let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
-            let scale = f("scale").unwrap_or(2.0);
+            let scale = p.get("scale").and_then(Value::as_f64).map_or(2.0, |v| v as f32);
             match s("path") {
                 Some(path) => match app.session.run("file.exportPng", &json!({"path": path, "page": page, "scale": scale})) {
                     Ok(v) => ok(v),
@@ -389,21 +399,22 @@ fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) 
                 },
             }
         }
-        "ui.resize" => {
-            let (Some(w), Some(h)) = (f("width"), f("height")) else { return err("missing width/height") };
-            // The window's surface is a GPU texture: no side may pass the largest one (#3734).
-            let max_side = ctx.input(|i| i.max_texture_side) as f32 / ctx.pixels_per_point();
-            let Some(size) = crate::window_geometry::requested_size(egui::vec2(w, h), max_side) else {
-                return err("width and height must be positive numbers no larger than 3.4e38");
-            };
-            ctx.send_viewport_cmd_to(app.active_viewport(), egui::ViewportCommand::InnerSize(size));
-            ok(json!({"width": size.x, "height": size.y}))
-        }
+        "ui.resize" => resize(app, ctx, p),
         "ui.focus" => {
-            ctx.send_viewport_cmd_to(app.active_viewport(), egui::ViewportCommand::Focus);
-            app.canvas.want_focus = true;
+            WindowHost::of(ctx).act(app.active_viewport(), WindowAction::Focus);
+            app.canvas.focus_page(ctx);
             ok(json!({}))
         }
+        // The root's close goes through the close guard, as the OS button's does.
+        "ui.closeWindow" => ok(json!({"requested": WindowHost::of(ctx).act(egui::ViewportId::ROOT, WindowAction::Close)})),
+        "ui.clipboard" => clipboard(ctx, p),
+        "ui.replayAt" => {
+            let Some(at) = p.get("at").and_then(Value::as_f64) else { return err("missing `at`") };
+            // PLAN(canvas-w14): `crate::ink::replay_at(app: &mut WordApp, at: f32)`
+            crate::ink::replay_at(app, at as f32);
+            ok(json!({}))
+        }
+        "ui.accessTree" => Reply::access_tree(),
         "app.quit" => {
             // Quitting closes every open document, so unsaved work needs the same explicit
             // `force` as `file.close` rather than going silently (#3274).

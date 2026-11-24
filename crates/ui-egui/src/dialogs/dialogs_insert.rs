@@ -1,134 +1,121 @@
-//! Columns, Symbol and Field dialogs (#321): Layout › Columns › More Columns…, Insert › Symbol ›
-//! More Symbols… and Insert › Quick Parts › Field…. Each ends by running one command
-//! (`layout.columns`, `insert.symbol`, `insert.field`), so scripts and agents get the same result
-//! without the dialog. Shown through [`crate::dialogs::Dialog::Insert`].
+//! Symbol, Date and Time, Field, Columns and Drop Cap dialogs: Insert › Symbol › More Symbols…,
+//! Insert › Date & Time, Insert › Quick Parts › Field…, Layout › Columns › More Columns… and
+//! Insert › Drop Cap › Drop Cap Options…. Each ends by running one command (`insert.symbol`,
+//! `insert.dateTime`, `insert.field`, `layout.columns`, `insert.dropCap`), so scripts and agents get
+//! the same result without the dialog.
 
-use egui::{Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use craft::behavior::{Mixed, Selection, SelectionChange, keyed};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
+use craft::ui::dialog::DialogId;
+use craft::ui::form::Field;
+use craft::ui::list::{List, ListRow};
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
+use craft::ui::text::TextField;
+use egui::Ui;
+use serde_json::Value;
 
 use crate::WordApp;
-use crate::options::MeasureExt;
-use crate::theme::{Tokens, regular, semibold};
+use crate::dialogs::host::{Settle, open_form};
 
 mod columns;
 mod date_time;
 mod field;
-mod symbol;
+pub(crate) mod symbol;
 
-pub use columns::{ColumnsForm, DropCapForm};
-use columns::{columns_ui, drop_cap_ui};
+pub use columns::DropCapForm;
 pub use date_time::DateTimeForm;
 #[cfg(test)]
-pub(crate) use date_time::date_time_preview_matches;
-use date_time::date_time_ui;
-use field::field_ui;
+pub(crate) use date_time::date_time_previews_at;
 pub use field::{DATE_FORMATS, FIELD_CATEGORIES, FIELDS, FieldForm, FieldKind, NUMBER_FORMATS, STYLEREF_SWITCHES, field_kind};
-use symbol::symbol_ui;
+pub(crate) use symbol::SymbolDialog;
 pub use symbol::{RECENT_SYMBOLS, RecentSymbol, SPECIAL, SUBSETS, SymbolForm, remember_symbol, subset_of};
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "form", rename_all = "camelCase")]
-pub enum InsertDialog {
-    /// Date & Time insertion dialog.
-    DateTime(DateTimeForm),
-    Columns(ColumnsForm),
-    Symbol(SymbolForm),
-    Field(FieldForm),
-    SmartArt(crate::dialogs_smart_art::SmartArtForm),
-    ChartType(crate::dialogs_chart::ChartTypeForm),
-    ChartData(crate::dialogs_chart::ChartDataForm),
-    DefineBullet(crate::dialogs_bullet::DefineBulletForm),
-    DropCap(DropCapForm),
-}
-
-impl InsertDialog {
-    /// The dialog name used in command dispatch and UI state.
-    pub fn name(&self) -> &'static str {
-        match self {
-            InsertDialog::DateTime(_) => "dateTime",
-            InsertDialog::Columns(_) => "columns",
-            InsertDialog::Symbol(_) => "symbol",
-            InsertDialog::Field(_) => "field",
-            InsertDialog::SmartArt(_) => "insertSmartArt",
-            InsertDialog::ChartType(f) if f.change => "changeChartType",
-            InsertDialog::ChartType(_) => "insertChart",
-            InsertDialog::ChartData(_) => "chartData",
-            InsertDialog::DefineBullet(_) => "defineBullet",
-            InsertDialog::DropCap(_) => "dropCap",
+/// The dialog `ui.dialog` opens by `name`: `dateTime`, `columns`, `symbol`, `specialCharacters`,
+/// `field`, `dropCap` (where the paragraph can take one), and the chart, diagram and bullet names
+/// whose dialogs live in their own modules. `None` for another name or where a dialog cannot open.
+pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
+    match name {
+        "dateTime" => {
+            let form = DateTimeForm::new(app);
+            Some(open_form(app, parent, form))
         }
-    }
-
-    /// The window title (English; the caller translates it).
-    pub fn title(&self) -> &'static str {
-        match self {
-            InsertDialog::DateTime(_) => "Date and Time",
-            InsertDialog::Columns(_) => "Columns",
-            InsertDialog::Symbol(_) => "Symbol",
-            InsertDialog::Field(_) => "Field",
-            InsertDialog::SmartArt(_) => "Insert Diagram",
-            InsertDialog::ChartType(f) if f.change => "Change Chart Type",
-            InsertDialog::ChartType(_) => "Insert Chart",
-            InsertDialog::ChartData(_) => "Edit Data",
-            InsertDialog::DefineBullet(_) => "Define New Bullet",
-            InsertDialog::DropCap(_) => "Drop Cap",
+        "columns" => columns::open(app, parent),
+        "symbol" => Some(SymbolDialog::open(app, 0, parent)),
+        "specialCharacters" => Some(SymbolDialog::open(app, 1, parent)),
+        "field" => {
+            let form = FieldForm::new(app);
+            Some(open_form(app, parent, form))
         }
+        "dropCap" => {
+            let form = DropCapForm::read(app)?;
+            Some(open_form(app, parent, form))
+        }
+        // PLAN: assumed `dialogs_chart::open`, `dialogs_smart_art::open` and `dialogs_bullet::open` take
+        // `(app, name, params, parent) -> Option<DialogId>` (dialogs-w17, dialogs-w14).
+        "insertChart" | "changeChartType" | "chartData" => crate::dialogs_chart::open(app, name, params, parent),
+        "insertSmartArt" => crate::dialogs_smart_art::open(app, name, params, parent),
+        "defineBullet" => crate::dialogs_bullet::open(app, name, params, parent),
+        _ => None,
     }
 }
 
-/// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters`, `field`,
-/// `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart),
-/// `insertSmartArt`, `defineBullet` (Home › Bullets › Define New Bullet…), or `dropCap` (Drop Cap
-/// Options…, where the paragraph can take one).
-pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
-    Some(match name {
-        "dateTime" => InsertDialog::DateTime(DateTimeForm::new(app)),
-        "columns" => InsertDialog::Columns(ColumnsForm::read(app)),
-        "symbol" => InsertDialog::Symbol(SymbolForm::new(app, 0)),
-        "specialCharacters" => InsertDialog::Symbol(SymbolForm::new(app, 1)),
-        "field" => InsertDialog::Field(FieldForm::new(app)),
-        "insertSmartArt" => InsertDialog::SmartArt(crate::dialogs_smart_art::SmartArtForm::new(app)),
-        "insertChart" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, false)?),
-        "changeChartType" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, true)?),
-        "chartData" => InsertDialog::ChartData(crate::dialogs_chart::ChartDataForm::new(app)?),
-        "defineBullet" => InsertDialog::DefineBullet(crate::dialogs_bullet::DefineBulletForm::new(app)),
-        "dropCap" => InsertDialog::DropCap(DropCapForm::read(app)?),
-        _ => return None,
-    })
+/// A translated label for `text`.
+pub(super) fn word(text: &str) -> Label {
+    Label::from(tl!(text).to_string())
 }
 
-/// Draws the dialog; returns true to close it.
-pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut InsertDialog) -> bool {
-    match d {
-        InsertDialog::DateTime(f) => date_time_ui(app, ui, f),
-        InsertDialog::Columns(f) => columns_ui(app, ui, f),
-        InsertDialog::Symbol(f) => symbol_ui(app, ui, f),
-        InsertDialog::Field(f) => field_ui(app, ui, f),
-        InsertDialog::SmartArt(f) => crate::dialogs_smart_art::picker_ui(app, ui, f),
-        InsertDialog::ChartType(f) => crate::dialogs_chart::type_ui(app, ui, f),
-        InsertDialog::ChartData(f) => crate::dialogs_chart::data_ui(app, ui, f),
-        InsertDialog::DefineBullet(f) => crate::dialogs_bullet::body(app, ui, f),
-        InsertDialog::DropCap(f) => drop_cap_ui(app, ui, f),
-    }
+/// What a settle hook returns for the dialog `id`: done once it has closed, else it keeps waiting.
+pub(super) fn settled(app: &WordApp, id: DialogId) -> Settle {
+    if app.dialog_host.get_dyn(id).is_none() { Settle::Done } else { Settle::Keep }
 }
 
-/// OK / Cancel (or another OK label); returns (ok, cancel). `ok_enabled` greys OK out.
-pub(crate) fn buttons(ui: &mut Ui, ok: &str, cancel: &str, ok_enabled: bool) -> (bool, bool) {
-    let mut r = (false, false);
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-            let (okb, cancelb) =
-                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add_enabled(ok_enabled, crate::widgets::primary_button(ui, tl!(ok))), tl!(cancel));
-            if cancelb.clicked() || crate::dialogs::cancel_key_pressed(ui) {
-                r.1 = true;
-            }
-            if okb.clicked() || (ok_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                r.0 = true;
-            }
-        });
+/// A labelled single-line text field.
+pub(super) fn text_field(ui: &mut Ui, salt: &'static str, label: &Label, value: &mut String) {
+    Field::new(label.clone()).id_salt(salt).show(ui, |ui, _| {
+        TextField::new(label.clone(), Bind::bound(value)).show(ui);
     });
-    r
+}
+
+/// A labelled select over `rows`; the index picked this pass.
+pub(super) fn select_index(ui: &mut Ui, label: &Label, rows: &[Label], current: Option<usize>) -> Option<usize> {
+    let entries: Vec<Entry<usize>> = rows.iter().enumerate().map(|(at, row)| Entry::new(at, row.clone())).collect();
+    let current = current.map_or(Mixed::Mixed, Mixed::Same);
+    Field::new(label.clone()).show(ui, |ui, _| Select::new(label.clone(), Bind::given(current), &entries).show(ui).value().copied()).inner.flatten()
+}
+
+/// What a single-selection list reported in one pass.
+pub(super) struct Picked {
+    /// The row selected this pass.
+    pub selected: Option<usize>,
+    /// The row a double click or Enter activated this pass.
+    pub activated: Option<usize>,
+}
+
+/// A single-selection list of `rows`, `current` selected.
+pub(super) fn list_index(ui: &mut Ui, label: &Label, rows: &[String], current: Option<usize>) -> Picked {
+    let positions: Vec<usize> = (0..rows.len()).collect();
+    let source = keyed(&positions, |at: &usize| *at);
+    let mut selection = current.map_or_else(Selection::default, Selection::single);
+    let events = List::new(label.clone())
+        .select(SelectMode::Single)
+        .sizing(Sizing::Content)
+        .natural_height(true)
+        .selection(Bind::bound(&mut selection))
+        .show_items(ui, &source, &mut |at, _| ListRow::new(rows.get(*at).cloned().unwrap_or_default()))
+        .events;
+    let mut picked = Picked { selected: None, activated: None };
+    for event in events {
+        match event {
+            CollectionEvent::Selection(SelectionChange::Set(set)) => picked.selected = set.last().copied(),
+            CollectionEvent::Activate(row) => {
+                picked.selected = Some(row);
+                picked.activated = Some(row);
+            }
+            _ => {}
+        }
+    }
+    picked
 }
 
 #[cfg(test)]
