@@ -14,9 +14,9 @@ use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::primitives::{ContentPainterCx, TextRun};
 use craft::ui::runtime::env::{Label, LengthUnits, UnitKind};
 use craft::ui::sections::Section;
-use craft::ui::style::{Corners, SurfaceKind, TypeRole};
+use craft::ui::style::TypeRole;
 use craft::ui::text::{NumberField, TextField};
-use egui::{Rect, Ui, pos2, vec2};
+use egui::{Color32, Rect, Ui, pos2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::section::NumFormat;
@@ -293,7 +293,10 @@ impl ListForm {
 /// being edited at full strength and the others faded.
 fn preview(rows: Vec<PreviewRow>, edited: usize) -> impl Fn(&ContentPainterCx, Rect) {
     move |cx: &ContentPainterCx, rect: Rect| {
-        cx.surface(rect, SurfaceKind::Sunken, Corners::All);
+        cx.data_shapes([
+            egui::Shape::rect_filled(rect, 2.0, Color32::WHITE),
+            egui::Shape::rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(160)), egui::StrokeKind::Inside),
+        ]);
         let row = rect.height() / LEVELS as f32;
         // Positions are points, scaled so 4.5 inches fit.
         let scale = (rect.width() - 16.0).max(1.0) / 324.0;
@@ -302,14 +305,20 @@ fn preview(rows: Vec<PreviewRow>, edited: usize) -> impl Fn(&ContentPainterCx, R
             let top = rect.top() + row * i as f32;
             let paint = |cx: &ContentPainterCx| {
                 let run = TextRun::new(r.sample.clone()).role(TypeRole::Caption);
-                let width = cx.with_draw(|draw| draw.layout(&run, f32::INFINITY).size().x);
+                let layout = cx.with_draw(|draw| draw.layout(&run, f32::INFINITY));
+                let width = layout.size().x;
                 let x = x_of(r.aligned_at);
                 let number_x = match r.align.as_str() {
                     "center" => x - width / 2.0,
                     "right" => x - width,
                     _ => x,
                 };
-                cx.with_draw(|draw| draw.text(Rect::from_min_size(pos2(number_x, top), vec2(width + 1.0, row)), &run));
+                let spare = if layout.galley.rows.len() <= 1 { (row - layout.size().y).max(0.0) } else { 0.0 };
+                cx.data_shapes([egui::Shape::galley_with_override_text_color(
+                    pos2(number_x, top + spare / 2.0),
+                    layout.galley.clone(),
+                    Color32::BLACK,
+                )]);
                 let text_x = match r.follow.as_str() {
                     "space" => number_x + width + 3.0,
                     "nothing" => number_x + width,
@@ -317,7 +326,7 @@ fn preview(rows: Vec<PreviewRow>, edited: usize) -> impl Fn(&ContentPainterCx, R
                 };
                 let bar = Rect::from_min_max(pos2(text_x, top + row / 2.0 - 2.0), pos2(rect.right() - 8.0, top + row / 2.0 + 2.0));
                 if bar.width() > 0.0 {
-                    let draw_bar = |cx: &ContentPainterCx| cx.data_shapes([egui::Shape::rect_filled(bar, 1.0, cx.ink())]);
+                    let draw_bar = |cx: &ContentPainterCx| cx.data_shapes([egui::Shape::rect_filled(bar, 1.0, Color32::BLACK)]);
                     cx.faded(0.45, draw_bar);
                 }
             };
@@ -787,6 +796,81 @@ mod tests {
         }
         for (v, _) in MOVE_TO_MARKS {
             a.run("review.trackingOptions", json!({"moveToMark": v})).unwrap();
+        }
+    }
+
+    /// #7325: the Define New Multilevel List dialog preview renders an opaque white paper sheet
+    /// with a crisp stroke outline across both Light and Dark themes, and renders level samples
+    /// and text bars in fixed dark ink.
+    #[test]
+    fn define_new_multilevel_list_preview_opaque_paper_in_both_themes() {
+        use egui::epaint::ClippedShape;
+
+        fn collect_shapes<'a>(shapes: &'a [ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+            for clipped in shapes {
+                fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                    match shape {
+                        egui::Shape::Vec(children) => {
+                            for child in children {
+                                walk(child, out);
+                            }
+                        }
+                        other => out.push(other),
+                    }
+                }
+                walk(&clipped.shape, out);
+            }
+        }
+
+        for theme in ["light", "dark"] {
+            let mut a = app();
+            a.run("ui.theme", json!({"value": theme})).unwrap();
+            let mut h = harness(a);
+            assert_eq!(h.state_mut().run("list.define", json!({})).unwrap(), json!({"pending": "defineList"}));
+            h.run_steps(2);
+
+            let mut shapes = Vec::new();
+            collect_shapes(&h.output().shapes, &mut shapes);
+
+            // Verify the preview paper sheet is painted as an opaque white rect
+            let white_rects: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Rect(r)
+                        if r.fill == egui::Color32::WHITE && (r.rect.width() - 80.0).abs() <= 5.0 && (r.rect.height() - 48.0).abs() <= 5.0 =>
+                    {
+                        Some(r)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!white_rects.is_empty(), "{theme}: preview sheet must have an opaque white paper background");
+
+            // Verify crisp stroke border (StrokeKind::Inside with gray 160)
+            let stroke_rects: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Rect(r)
+                        if r.stroke.color == egui::Color32::from_gray(160)
+                            && (r.rect.width() - 80.0).abs() <= 5.0
+                            && (r.rect.height() - 48.0).abs() <= 5.0 =>
+                    {
+                        Some(r)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!stroke_rects.is_empty(), "{theme}: preview sheet must have a crisp stroke border");
+
+            // Verify sample text has black override text color in both themes
+            let black_text_samples: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    egui::Shape::Text(t) if t.override_text_color == Some(egui::Color32::BLACK) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            assert!(!black_text_samples.is_empty(), "{theme}: preview text samples must override text color with black");
         }
     }
 }
