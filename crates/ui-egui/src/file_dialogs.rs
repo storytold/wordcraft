@@ -54,6 +54,17 @@ fn interface_path(path: &str) -> String {
     craft::i18n::path(path, dir)
 }
 
+/// The picture types Save as Picture writes, as the save dialog offers them (the engine reads the
+/// type from the extension: `wordcraft_engine::cmd::objects::save_picture::format_of`).
+const SAVE_PICTURE_TYPES: [(&str, &[&str]); 6] = [
+    ("PNG picture (*.png)", &["png"]),
+    ("JPEG picture (*.jpg)", &["jpg", "jpeg"]),
+    ("GIF picture (*.gif)", &["gif"]),
+    ("Bitmap (*.bmp)", &["bmp"]),
+    ("TIFF picture (*.tif)", &["tif", "tiff"]),
+    ("WebP picture (*.webp)", &["webp"]),
+];
+
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
@@ -66,6 +77,8 @@ pub(crate) enum AfterPick {
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
     PrintPdf { settings: Value },
+    /// Save the selected picture there at this resolution (`picture.saveAs`'s `dpi`, #7743).
+    SavePicture { dpi: Value },
     /// Load the picked CSV/TSV/text file or spreadsheet as the mail-merge recipients (#240, #334).
     Recipients,
     /// Add every picked font file (#582, #1789).
@@ -335,6 +348,15 @@ impl WordApp {
                 }
                 r
             }
+            AfterPick::SavePicture { dpi } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let r = self.run("picture.saveAs", json!({"path": path, "dpi": dpi}));
+                match &r {
+                    Ok(_) => self.status(crate::i18n::fmt(tl!("Saved {path}"), &[("path", &interface_path(&path))])),
+                    Err(e) => self.status(e.clone()),
+                }
+                r
+            }
             AfterPick::PrintPdf { settings } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 let mut params = settings;
@@ -492,6 +514,17 @@ impl WordApp {
             req = req.filter(tl!(label), &[file_ext.as_str()]);
         }
         req
+    }
+
+    /// Save as Picture: ask where (and as which picture type), then save the selected picture there
+    /// at `dpi` (#7743).
+    pub(crate) fn save_picture_dialog(&mut self, dpi: Value) {
+        let name = format!("{}.png", tl!("Picture"));
+        let mut req = PickRequest::save("picture").file_name(name).suggested_extension("png");
+        for (label, exts) in SAVE_PICTURE_TYPES {
+            req = req.filter(tl!(label), exts);
+        }
+        let _ = self.ask_file(req, AfterPick::SavePicture { dpi });
     }
 
     /// File › Print › Save these pages as PDF: ask where, then write the pages the print

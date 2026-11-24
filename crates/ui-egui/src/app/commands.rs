@@ -142,6 +142,23 @@ impl WordApp {
             }
             return r;
         }
+        // Web: Save as Picture becomes a download too (#7743), once the resolution is chosen (a
+        // request without one shows that dialog first, as on the desktop).
+        if self.browser_saves() && id == "picture.saveAs" && (params.get("path").is_some() || params.get("dpi").is_some()) {
+            let name = params.get("path").and_then(Value::as_str).map_or_else(|| format!("{}.png", tl!("Picture")), str::to_string);
+            let format = wordcraft_engine::cmd::objects::save_picture::format_of(&name)
+                .ok_or_else(|| "save a picture as .png, .jpg, .gif, .bmp, .tif or .webp".to_string())?;
+            let (bytes, mut info) =
+                wordcraft_engine::cmd::objects::save_picture::picture_file(&self.session, &params, format).map_err(|e| e.to_string())?;
+            let request = PickRequest::save("picture").file_name(name.clone());
+            let ticket = self.host.files().save(request, bytes);
+            let pending = ticket.0;
+            let (document, rev) = (self.session.document_id(), self.session.rev());
+            self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved: false, rev, undo_stamp: None });
+            info["downloaded"] = json!(name);
+            info["pendingSave"] = json!(pending);
+            return Ok(info);
+        }
         // Web: saving and exporting become downloads.
         if self.browser_saves() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
@@ -492,6 +509,15 @@ impl WordApp {
                 }
                 "exportPdf" => self.export_dialog("pdf"),
                 "exportPng" => self.export_dialog("png"),
+                // Save as Picture asks for the resolution first (#7743); a request that carries
+                // it (that dialog's OK, or a script's choice) asks where.
+                "savePicture" if self.user_origin && req.get("dpi").is_none() => {
+                    let _ = dialogs::open(self, "savePicture", &json!({}));
+                }
+                "savePicture" => {
+                    let dpi = req.get("dpi").cloned().unwrap_or_else(|| json!("original"));
+                    self.save_picture_dialog(dpi);
+                }
                 "insertPicture" => self.pick_picture(),
                 "addFont" => self.pick_font(),
                 "loadSystemFonts" => self.load_system_fonts(),

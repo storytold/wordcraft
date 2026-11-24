@@ -1652,6 +1652,7 @@ fn every_dialog_name_opens_its_dialog_or_none() {
         "trackChangesOptions",
         "link",
         "pasteSpecial",
+        "savePicture",
         "watermark",
         "renameDocument",
         "zoom",

@@ -923,3 +923,30 @@ fn many_failed_fonts_end_with_a_count() {
     a.add_fonts(fonts).unwrap();
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// #7743: Save as Picture from the menu asks for the resolution, then where, offering the picture
+/// types; the picture is saved there at that resolution.
+#[test]
+fn save_as_picture_asks_the_resolution_then_where() {
+    let dir = scratch("save-picture");
+    let (mut a, files) = async_app();
+    let red = image::RgbaImage::from_pixel(300, 150, image::Rgba([200, 30, 30, 255]));
+    let png = wordcraft_geom::picture::encode_format(&image::DynamicImage::ImageRgba8(red), image::ImageFormat::Png).unwrap();
+    a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 72.0})).unwrap();
+    // From the menu: the resolution first, no file dialog yet.
+    a.run("picture.saveAs", json!({})).unwrap();
+    assert!(files.requests().is_empty());
+    assert!(a.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some("savePicture")));
+    crate::dialogs::host::close_all(&mut a, &egui::Context::default());
+    // With it chosen: where, as a picture type.
+    a.run("picture.saveAs", json!({"dpi": 150})).unwrap();
+    let r = request(&files, 0);
+    assert_eq!((r.kind, r.purpose.as_str()), (PickKind::Save, "picture"));
+    assert!(r.file_name.as_deref().is_some_and(|n| n.ends_with(".png")));
+    let path = dir.join("timetable.png");
+    answer(&files, Some(&path.to_string_lossy()));
+    let done = a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!((done["width"].as_u64(), done["height"].as_u64()), (Some(150), Some(75)), "an inch at 150 DPI");
+    assert_eq!(image::load_from_memory(&std::fs::read(&path).unwrap()).unwrap().width(), 150);
+    assert!(status_text(&a).contains("timetable.png"), "{}", status_text(&a));
+}

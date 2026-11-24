@@ -16,6 +16,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod arrange;
 mod group;
 mod picture;
+pub mod save_picture;
 mod select;
 mod shape;
 mod specs;
