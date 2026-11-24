@@ -272,6 +272,7 @@ fn edges_on(b: &Borders, edges: &str) -> bool {
 
 /// A square showing which edges a border choice draws: the drawn edges in the icon colour, the
 /// others as faint dotted guides.
+#[derive(craft::ui::contract::MemoProps)]
 struct EdgeGlyph {
     edges: &'static str,
 }

@@ -52,6 +52,21 @@ const GATED_UI_COMMANDS: &[(&str, &str)] = &[
     ("ui.zotero.removeCodes", "Unlink Citations"),
 ];
 
+/// Word feature catalog entries whose command is not yet registered in `registry`: each gets a
+/// catalog entry without a chord (preventing unregistered-command warnings) and a disabled state
+/// until an engine command takes its id.
+fn unimplemented_catalog_commands(registry: &wordcraft_engine::Registry) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    let mut seen = HashSet::new();
+    wordcraft_engine::catalog::CATALOG.lines().filter_map(move |line| {
+        let mut parts = line.split('|');
+        let _tab = parts.next()?;
+        let _group = parts.next()?;
+        let feature = parts.next()?;
+        let id = parts.next()?;
+        (registry.get(id).is_none() && seen.insert(id)).then_some((id, feature))
+    })
+}
+
 /// The default chords of an engine command: its `shortcut`, one binding per `" / "` piece.
 fn default_bindings(shortcut: &str) -> impl Iterator<Item = Binding> + '_ {
     shortcut.split(" / ").filter(|piece| !piece.is_empty()).filter_map(|piece| Binding::parse(piece).ok())
@@ -123,6 +138,11 @@ impl WordApp {
             for (id, label) in GATED_UI_COMMANDS {
                 defs.push(CommandDef::new(CommandRef::new(*id), tl!(*label), Scope::app()));
             }
+            for (id, feature) in unimplemented_catalog_commands(&registry) {
+                if seen.insert(id) {
+                    defs.push(CommandDef::new(CommandRef::new(id), tl!(feature), Scope::app()));
+                }
+            }
             // Word's Alt chords (Alt+Q, Alt+F7, Ctrl+Alt+1â€¦) fire while the person types in the page:
             // plain keys type, and every modified chord is offered to the keymap first.
             match AppCatalog::new(defs, generation) {
@@ -173,6 +193,14 @@ impl WordApp {
             .chain(GATED_UI_COMMANDS.iter().map(|(id, _)| *id));
         for id in ids {
             states.set(CommandRef::new(id), CommandState::new().enabled(command_enabled(self, id)));
+        }
+        let unavailable_hint: Option<Arc<str>> = crate::widgets::command_hint("", "", Some("")).map(Arc::from);
+        for (id, _) in unimplemented_catalog_commands(&registry) {
+            let mut state = CommandState::new().enabled(command_enabled(self, id));
+            if let Some(hint) = unavailable_hint.as_ref() {
+                state = state.hint(Arc::clone(hint));
+            }
+            states.set(CommandRef::new(id), state);
         }
         let commands = CommandRef::with_params("ui.dialog", json!({"name": "commands"}));
         states.set(commands, CommandState::new().enabled(command_enabled(self, "ui.dialog")));
@@ -276,5 +304,21 @@ mod tests {
         end.push(EditEvent::commit(id, Mixed::Same(11.0_f32), 20.0_f32));
         crate::undo_marks::apply_edits(&mut app, end, apply);
         assert_eq!(app.session.undo_depth(), after_undo, "the late Commit of the taken-back gesture adds no step");
+    }
+
+    /// #7310: unimplemented Word feature catalog commands publish a disabled state so ribbon
+    /// buttons and keytips bound to them resolve disabled instead of falling back to enabled.
+    #[test]
+    fn unimplemented_catalog_commands_publish_disabled_state() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+        let _ = app.command_input();
+        for id in ["tools.dictate", "draw.inkToMath", "review.translate", "review.blockAuthors"] {
+            assert!(app.session.registry.get(id).is_none(), "{id} is still an unimplemented stub");
+            let state = app.command_states.get(&CommandRef::new(id));
+            assert!(
+                state.is_some_and(|s| !s.is_enabled()),
+                "unimplemented catalog command {id} must publish an explicit disabled state, got {state:?}"
+            );
+        }
     }
 }
