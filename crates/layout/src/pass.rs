@@ -70,6 +70,7 @@ fn new_ctx<'a>(
     cache: &'a mut LayoutCache,
     opts: &'a LayoutOptions,
     (note_pages, marks, totals): (&HashMap<u32, usize>, Option<&Arc<BookmarkPages>>, &Totals),
+    sections: Vec<(usize, &'a SectionProps)>,
 ) -> Ctx<'a> {
     let notes = note_info(doc, opts.hides_deleted(StoryRef::Body), note_pages);
     let notes_hash = hash_of(&{
@@ -118,7 +119,7 @@ fn new_ctx<'a>(
         footer_wraps: HashMap::new(),
         pin: None,
         floats_above: HashMap::new(),
-        hf: Arc::new(HfLinks::new(doc.sections())),
+        hf: Arc::new(HfLinks::new(sections)),
         alphas: Default::default(),
         header_repeats: 0,
     }
@@ -241,7 +242,7 @@ fn new_page_builder<'p>(
 pub(super) fn with_flow_page(doc: &Document, test: impl FnOnce(&mut Ctx<'_>, &mut PageBuilder<'_>)) {
     let mut cache = LayoutCache::new();
     let opts = LayoutOptions::default();
-    let mut ctx = new_ctx(doc, &mut cache, &opts, (&HashMap::new(), None, &Totals::first_guess(1)));
+    let mut ctx = new_ctx(doc, &mut cache, &opts, (&HashMap::new(), None, &Totals::first_guess(1)), doc.sections());
     let sect = &doc.last_section;
     let early = EarlyFloats::new();
     let mut page = new_page_builder(sect, sect.page_num_format, &early, false, false);
@@ -553,10 +554,25 @@ pub(crate) fn layout_pass(
     (early, may_rewrap): (&EarlyFloats, bool),
 ) -> Pass {
     reset_cache(doc, cache, opts);
-    let mut ctx = new_ctx(doc, cache, opts, (note_pages, marks, totals));
+    let mode = Mode::of(opts.view);
+    let sections = doc.sections();
+    // ISO/IEC 29500-1 §17.15.1.54 places a top gutter above the body. Mirrored pages
+    // keep their binding margin on the inside. Use effective margins for the whole pass,
+    // including header/footer measurement and floating anchors, without changing the document.
+    let top_gutter = (!mode.reflow && doc.settings.gutter_at_top && !doc.settings.mirror_margins).then(|| {
+        sections
+            .iter()
+            .map(|&(end, sect)| {
+                let mut effective = sect.clone();
+                effective.margin_top += std::mem::take(&mut effective.gutter);
+                (end, effective)
+            })
+            .collect::<Vec<_>>()
+    });
+    let sections = if let Some(top_gutter) = &top_gutter { top_gutter.iter().map(|(end, sect)| (*end, sect)).collect() } else { sections };
+    let mut ctx = new_ctx(doc, cache, opts, (note_pages, marks, totals), sections);
     let hf = Arc::clone(&ctx.hf);
     let sections = &hf.sections;
-    let mode = Mode::of(opts.view);
     ctx.mirror = doc.settings.mirror_margins && !mode.reflow;
     (ctx.stacked_marks, ctx.quiet_marks) = section_marks(doc, opts, sections);
     let outline = (opts.view == ViewMode::Outline).then(|| OutlinePass::new(doc, opts.outline.clone().unwrap_or_default()));
