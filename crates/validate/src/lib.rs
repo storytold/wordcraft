@@ -224,9 +224,9 @@ pub(crate) const CT_MAIN_TYPE: RuleSpec = RuleSpec { id: "CT-MAIN-TYPE", severit
 pub(crate) const CT_DUP_DEFAULT: RuleSpec = RuleSpec { id: "CT-DUP-DEFAULT", severity: Severity::Error, evidence: Evidence::ByConstruction };
 /// `CT-DUP-OVERRIDE`: two Override entries for one part name (case-insensitive), OPC §7.2.3.2.1.
 pub(crate) const CT_DUP_OVERRIDE: RuleSpec = RuleSpec { id: "CT-DUP-OVERRIDE", severity: Severity::Error, evidence: Evidence::ByConstruction };
-/// `XML-DOCTYPE`: Word for the web refuses declarations in the main part, and desktop Word
-/// requires recovery for a declaration in a relationships part (Experiment A, 2026-11-22).
-pub(crate) const XML_DOCTYPE: RuleSpec = RuleSpec { id: "XML-DOCTYPE", severity: Severity::Error, evidence: Evidence::Observed };
+/// `XML-DOCTYPE`: a declaration in the original prolog. Calibrated part roles are graded
+/// Error at the finding site (see corpus/EVIDENCE.md).
+pub(crate) const XML_DOCTYPE: RuleSpec = RuleSpec { id: "XML-DOCTYPE", severity: Severity::Warning, evidence: Evidence::ByConstruction };
 /// `XML-MALFORMED`: an XML part does not parse. Severity is graded per part at the finding site
 /// (main part Corrupt, reachable Error, unreferenced Warning); the evidence for the unused
 /// Warning case is Observed, the referenced case is Inferred, the main part ByConstruction.
@@ -838,14 +838,15 @@ fn check_document(pkg: &Package, acc: &mut Acc) {
 fn check_doctypes(pkg: &Package, acc: &mut Acc) {
     observation_contract! {
         rules: "XML-DOCTYPE";
-        collections: "field.bytes*1,field.entries*1";
+        collections: "field.bytes*1,field.entries*1,type.Observed*1";
         scope: "original prolog of every XML and relationships part, independent of ownership and profile";
         loss: "unavailable part bytes, undecidable or unsupported encoding, or unreadable prolog";
-        fallback: "emit an Error for an observed declaration; leave unavailable evidence to the existing coverage checks";
+        fallback: "emit an Error for a declaration in a part with a calibrated adverse role and a structural Warning otherwise; leave unavailable prologs to existing coverage checks";
         package_loss: "independent";
     }
 
     acc.ran("XML-DOCTYPE");
+    let mut calibrated_parts = None;
     for entry in pkg.entries.iter().filter(|entry| !entry.is_dir && package::is_xml_part(pkg, &entry.name)) {
         let declared = match entry.decoded.as_deref() {
             Some(text) => scan::doctype_in_prolog(text),
@@ -855,9 +856,75 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
             None => false,
         };
         if declared {
-            acc.add("XML-DOCTYPE", Some(entry.name.clone()), format!("{} contains a DOCTYPE declaration, which Word refuses", entry.name));
+            let part = Some(entry.name.clone());
+            let message = format!("{} contains a DOCTYPE declaration", entry.name);
+            if calibrated_parts.get_or_insert_with(|| doctype_error_parts(pkg)).contains(&entry.name.to_ascii_lowercase()) {
+                acc.add_graded("XML-DOCTYPE", Severity::Error, Evidence::Observed, part, message);
+            } else {
+                acc.add("XML-DOCTYPE", part, message);
+            }
         }
     }
+}
+
+/// Identify the part roles whose Word probes showed an adverse outcome (corpus/EVIDENCE.md).
+fn doctype_error_parts(pkg: &Package) -> HashSet<String> {
+    observation_contract! {
+        rules: "-";
+        collections: "field.content_types*1,field.entries*1,field.reachable*1,field.rels*1,type.HashSet*3";
+        scope: "positive evidence from the selected main and established relationship targets of calibrated roles";
+        loss: "unavailable or ambiguous part and relationship identities; incomplete declarations";
+        fallback: "retain observed roles; grade a declaration with no calibrated role as a structural Warning";
+        package_loss: "independent";
+    }
+
+    let mut parts = HashSet::from(["_rels/.rels".to_string()]);
+    if let Resolution::One(main) = &pkg.main {
+        parts.insert(main.to_ascii_lowercase());
+        parts.insert(rels_part_name(main).to_ascii_lowercase());
+    }
+    let existing_parts: HashSet<_> = pkg.entries.iter().filter(|entry| !entry.is_dir).map(|entry| entry.name.to_ascii_lowercase()).collect();
+    for source in &pkg.rels {
+        let package_rels = source.name.eq_ignore_ascii_case("_rels/.rels");
+        let reachable_source = rels_owner_name(&source.name).is_some_and(|owner| pkg.reachable.contains(&owner) && existing_parts.contains(&owner));
+        if !package_rels && !reachable_source {
+            continue;
+        }
+        for rel in package::relationship_bindings(source).values() {
+            let Some(target) = &rel.target_abs else { continue };
+            let target = target.trim_start_matches('/');
+            let kind = rel.role.kind();
+            let chart_or_item =
+                kind == Some("chart") || (kind == Some("customXml") && pkg.content_types.of(target) == Some(package::XML_CONTENT_TYPE));
+            let core_properties = package_rels && rel.kind == "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
+            if chart_or_item
+                || core_properties
+                || matches!(
+                    kind,
+                    Some(
+                        "header"
+                            | "footer"
+                            | "footnotes"
+                            | "endnotes"
+                            | "comments"
+                            | "glossaryDocument"
+                            | "settings"
+                            | "styles"
+                            | "numbering"
+                            | "fontTable"
+                            | "theme"
+                    )
+                )
+            {
+                let target = target.to_ascii_lowercase();
+                if chart_or_item && existing_parts.contains(&target) {
+                    parts.insert(rels_part_name(&target));
+                }
+                parts.insert(target);
+            }
+        }
+    }
+    parts
 }
 
 /// Reject owner roots the Transitional scanner cannot interpret. Malformed or unavailable XML

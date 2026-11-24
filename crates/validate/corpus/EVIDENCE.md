@@ -56,6 +56,80 @@ corruption — the verbatim wording is what distinguishes the two.
 | 25-move-unpaired | opens clean, semantic loss | text demoted to plain text; move semantics silently dropped |
 | 26-media-magic | tier 5: opens, content loss | The drawing references a JPEG signature stub in a part declared as PNG. The picture does not render. |
 
+## XML-DOCTYPE — isolated part probes, 2026-11-22–23
+
+Experiment A and the per-part series for PR #5875 used original synthetic DOCX
+fixtures. The per-part series added one declaration to one member of a shared
+control. The fixture names below refer to those probes. The local per-part
+manifest records the original series' package hashes and changed members.
+Desktop outcomes describe the open attempt. Web outcomes distinguish an open
+refusal, an editing refusal, and view mode with a corruption banner.
+
+| Fixture (unused entity) | Target role | Consumer | Mode and outcome |
+| --- | --- | --- | --- |
+| `doctype-main-document.docx` | Main document | Word for the web | Browser open refused |
+| `doctype-header.docx` | Header | Word for the web | Editing refused |
+| `doctype-footer.docx` | Footer | Word for the web | Editing refused |
+| `doctype-footnotes.docx` | Footnotes | Word for the web | Editing refused |
+| `doctype-endnotes.docx` | Endnotes | Word for the web | Editing refused |
+| `doctype-comments.docx` | Comments | Word for the web | Editing refused |
+| `doctype-glossary.docx` | Glossary document | Word for the web | Editing refused |
+| `doctype-settings.docx` | Settings | Word for the web | Editing refused |
+| `doctype-styles.docx` | Styles | Word for the web | Editing refused |
+| `doctype-numbering.docx` | Numbering | Word for Windows | Desktop open failed as corrupted |
+| `doctype-numbering.docx` | Numbering | Word for the web | Opened cleanly |
+| `doctype-font-table.docx` | Font table | Word for the web | Editing refused |
+| `doctype-theme.docx` | Theme | Word for the web | Editing refused |
+| `doctype-chart.docx` | Chart | Word for the web | View-only with corruption banner |
+| `doctype-custom-xml.docx` | Custom XML item | Word for the web | View-only with corruption banner |
+| `doctype-core-properties.docx` | Package core properties | Word for the web | Editing refused |
+
+Word for Mac also prompted for recovery on the footnotes, endnotes, comments,
+glossary, settings, styles, numbering, font table, theme, custom XML item and
+core-properties probes. Its timeouts on the main document, header, footer and
+chart are corroborating context for the web outcomes. In Experiment A, web
+open was refused for `dtd-inert.docx` (unused entity), `dtd-used.docx`
+(referenced entity), and `dtd-external.docx` (external-subset declaration),
+each with the declaration in the main document. The web controls opened.
+
+| Fixture | Relationships role | Consumer | Mode and outcome |
+| --- | --- | --- | --- |
+| `doctype-document-rels.docx` | Main document, unused entity | Word for Mac | Desktop recovery prompt |
+| `doctype-document-rels.docx` | Main document, unused entity | Word for Windows | Desktop open failed as corrupted |
+| `doctype-document-rels.docx` | Main document, unused entity | Word for the web | Browser open refused |
+| `dtd-attlist.docx` | Main document, ATTLIST | Word for Mac | Desktop recovery prompt |
+| `dtd-attlist.docx` | Main document, ATTLIST | Word for the web | Opened cleanly |
+| `doctype-pkg-rels.docx` | Package, unused entity | Word for Windows | Desktop open failed |
+| `doctype-pkg-rels.docx` | Package, unused entity | Word for the web | Browser open refused |
+| `doctype-pkg-rels.docx` | Package, unused entity | Word for Mac | Desktop recovery prompt |
+| `doctype-pkg-rels-attlist.docx` | Package, ATTLIST | Word for Windows | Desktop open failed |
+| `doctype-pkg-rels-attlist.docx` | Package, ATTLIST | Word for the web | Browser open refused |
+| `doctype-pkg-rels-attlist.docx` | Package, ATTLIST | Word for Mac | Desktop recovery prompt |
+| `doctype-chart-rels.docx` | Chart, unused entity | Word for Windows | Desktop open failed |
+| `doctype-chart-rels.docx` | Chart, unused entity | Word for the web | Browser open refused |
+| `doctype-chart-rels-attlist.docx` | Chart, ATTLIST | Word for Windows | Desktop open failed |
+| `doctype-chart-rels-attlist.docx` | Chart, ATTLIST | Word for the web | Browser open refused |
+| `doctype-chart-rels-attlist.docx` | Chart, ATTLIST | Word for Mac | Desktop recovery prompt |
+| `doctype-item-rels.docx` | Custom XML item, unused entity | Word for Windows | Desktop open failed |
+| `doctype-item-rels.docx` | Custom XML item, unused entity | Word for the web | Opened in view mode |
+| `doctype-item-rels.docx` | Custom XML item, unused entity | Word for Mac | Desktop recovery prompt |
+| `doctype-item-rels-attlist.docx` | Custom XML item, ATTLIST | Word for Windows | Desktop open failed |
+| `doctype-item-rels-attlist.docx` | Custom XML item, ATTLIST | Word for the web | Opened in view mode |
+| `doctype-item-rels-attlist.docx` | Custom XML item, ATTLIST | Word for Mac | Desktop recovery prompt |
+| `doctype-footnotes-rels.docx` | Footnotes, unused entity | Word for Mac | Opened cleanly, both controls clean |
+| `doctype-footnotes-rels.docx` | Footnotes, unused entity | Word for Windows | Opened |
+| `doctype-footnotes-rels.docx` | Footnotes, unused entity | Word for the web | Opened cleanly |
+| `doctype-footnotes-rels-attlist.docx` | Footnotes, ATTLIST | Word for Mac | Opened cleanly, both controls clean |
+| `doctype-footnotes-rels-attlist.docx` | Footnotes, ATTLIST | Word for Windows | Opened |
+| `doctype-footnotes-rels-attlist.docx` | Footnotes, ATTLIST | Word for the web | Opened in view mode with content rendered |
+
+The ATTLIST main-relationships probe supplies an external hyperlink's omitted
+target mode. The ATTLIST footnotes probe supplies a default on an image
+relationship. The footnotes observations apply to the reported open modes.
+The same validator Warning can accompany a Pass for the unused entity or
+Incomplete for the ATTLIST when relationship declaration coverage is lost.
+Other uncalibrated roles receive a structural Warning for the declaration.
+
 ## Corpus probes — media mismatches
 
 Word for the web was used to open the drawn probes and inspect the picture on 2026-11-18. The complete JPEG displayed when declared as PNG. The signature stub and the text payload both left the drawing without a picture. Desktop Word for Mac 16.114.4 opened the drawn stub and text documents cleanly at the document level.
