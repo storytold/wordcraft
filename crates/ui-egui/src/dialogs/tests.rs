@@ -1530,6 +1530,47 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
 
+/// #6745: drawing Compare never checks the default folder; Browse does, and starts there. The
+/// picked file lands in the row.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn compare_checks_the_default_folder_only_when_browsing() {
+    use crate::file_dialogs::DEFAULT_FOLDER_CHECKS;
+
+    let folder = std::path::absolute(std::env::temp_dir().join(format!("wordcraft-compare-default-folder-{}", std::process::id()))).unwrap();
+    std::fs::create_dir_all(&folder).unwrap();
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::held());
+    let host =
+        craft::host::Host::builder(craft::host::AppInfo { id: "wordcraft-test", name: "WordCraft", version: "0" }).files(files.clone()).build();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default()).with_host(std::sync::Arc::new(host));
+    a.session.prefs.default_file_location = Some(folder.to_string_lossy().into_owned());
+    let mut h = app_harness(a);
+    let frames = |h: &mut egui_kittest::Harness<'_, WordApp>, count: usize| (0..count).for_each(|_| crate::test_harness::frame(h));
+    let checks = || DEFAULT_FOLDER_CHECKS.with(std::cell::Cell::get);
+    frames(&mut h, 4);
+
+    // Draw the dialog for several frames without browsing
+    let before = checks();
+    super::open(h.state_mut(), "compare", &json!({})).expect("compare opens");
+    frames(&mut h, 6);
+    assert_eq!(checks(), before, "drawing the dialog does not check the folder");
+    assert!(files.requests().is_empty());
+
+    // Browse next to Revised document checks the folder once and starts there
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Browse…").last().expect("the revised row has Browse").click();
+    frames(&mut h, 3);
+    assert_eq!(checks(), before + 1, "Browse checks the folder once");
+    let requests = files.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].default_directory.as_deref(), Some(folder.as_path()), "Browse starts in the default folder");
+
+    // The picked file lands in the row
+    files.answer(craft::host::Picked::Paths(vec![folder.join("revised.docx")]));
+    frames(&mut h, 3);
+    assert_eq!(fields_of(h.state(), "compare")["revised"], json!(folder.join("revised.docx").to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 // ---------------------------------------------------------------- modality and names
 
 /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),

@@ -779,7 +779,9 @@ struct DefaultFileLocation {
 }
 
 impl OptionsModel<'_> {
-    fn default_file_location(&mut self, ui: &mut Ui) {
+    /// The default local file location field; whether the setting changed.
+    fn default_file_location(&mut self, ui: &mut Ui) -> bool {
+        let mut applied = false;
         Stack::new().show(ui, |ui, cx| {
             let location = &mut *cx.keep::<DefaultFileLocation>();
             let saved = self.app.session.prefs.default_file_location.clone().unwrap_or_default();
@@ -813,6 +815,7 @@ impl OptionsModel<'_> {
                             location.saved = self.app.session.prefs.default_file_location.clone().unwrap_or_default();
                             location.draft.clone_from(&location.saved);
                             location.rejected = None;
+                            applied = true;
                         }
                         Err(error) => {
                             self.app.status(error.clone());
@@ -825,6 +828,7 @@ impl OptionsModel<'_> {
                 Notice::new(Tone::Bad, error.clone()).layout(NoticeLayout::Inline).announce(Politeness::Assertive).show(ui);
             }
         });
+        applied
     }
 
     /// The Dictionary file field. A text row reports every typed draft, and each would bind (and

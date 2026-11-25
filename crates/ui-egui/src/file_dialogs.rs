@@ -69,10 +69,18 @@ pub(crate) fn with_default_folder(req: PickRequest, saved: Option<&str>, has_pat
     req
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+thread_local! {
+    /// How often this test thread asked whether the saved default folder is usable.
+    pub(crate) static DEFAULT_FOLDER_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A setting read from disk may no longer name an existing local folder. Check the path's
 /// shape before touching the filesystem, since a network path could make Windows authenticate.
 #[cfg(not(target_arch = "wasm32"))]
 fn usable_default_location(saved: Option<&str>) -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    DEFAULT_FOLDER_CHECKS.with(|checks| checks.set(checks.get() + 1));
     let folder = saved?.trim();
     wordcraft_engine::cmd::user_templates::check_dir(folder).ok()?;
     let path = std::path::Path::new(folder);
