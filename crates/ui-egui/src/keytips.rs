@@ -449,25 +449,6 @@ fn backstage_controls() -> &'static [KeytipControl<'static>] {
     })
 }
 
-/// A control with the letters it asks for (used by unit tests).
-#[cfg(test)]
-struct Row {
-    control: Control,
-    letters: Option<String>,
-}
-
-/// A tab's controls with the shortcut letter each keeps, when its command has an Alt+letter shortcut.
-#[cfg(test)]
-fn rows(app: &WordApp, tab: &str) -> Vec<Row> {
-    controls(tab)
-        .into_iter()
-        .map(|control| {
-            let letters = shortcut_letter(app, &control.command.id).map(String::from);
-            Row { control, letters }
-        })
-        .collect()
-}
-
 /// Shows the keytips after the shell and the regions they place badges on, and acts on what the keys chose.
 pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>, screen_bar: Option<Rect>) {
     let ctx = ui.ctx().clone();

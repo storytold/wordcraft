@@ -234,53 +234,13 @@ impl WordApp {
             input = input.catalog(catalog);
         }
         let lang = crate::i18n::current().code();
-        let fresh_cache = !self.command_states_cache.as_ref().is_some_and(|cache| cache.matches(&registry, lang));
-        let mut cache = if fresh_cache {
-            CommandStatesCache::new(registry, lang)
-        } else {
-            self.command_states_cache.take().unwrap_or_else(|| CommandStatesCache::new(registry, lang))
+        let (mut cache, fresh_cache) = match self.command_states_cache.take() {
+            Some(cache) if cache.matches(&registry, lang) => (cache, false),
+            _ => (CommandStatesCache::new(registry, lang), true),
         };
 
-        if fresh_cache {
-            let mut states = CommandStates::new();
-            for i in 0..cache.registered.len() {
-                let (id, location, label, _, _) = cache.registered[i];
-                let current = gate_registered(self, id);
-                cache.registered[i].4 = Some(current);
-                let mut state = CommandState::new().enabled(current.0);
-                if let Some(hint) = cache.hint_for(i, location, label, current.1) {
-                    state = state.hint(hint);
-                }
-                states.set(cache.registered[i].3.clone(), state);
-            }
-            for i in 0..cache.ui_commands.len() {
-                let id = cache.ui_commands[i].0;
-                let enabled = command_enabled(self, id);
-                cache.ui_commands[i].2 = Some(enabled);
-                states.set(cache.ui_commands[i].1.clone(), CommandState::new().enabled(enabled));
-            }
-            for i in 0..cache.unimplemented.len() {
-                let id = cache.unimplemented[i].0;
-                let enabled = command_enabled(self, id);
-                cache.unimplemented[i].2 = Some(enabled);
-                let mut state = CommandState::new().enabled(enabled);
-                if let Some(hint) = cache.unavailable_hint.as_ref() {
-                    state = state.hint(Arc::clone(hint));
-                }
-                states.set(cache.unimplemented[i].1.clone(), state);
-            }
-            let dialog_enabled = command_enabled(self, "ui.dialog");
-            cache.commands_dialog.1 = Some(dialog_enabled);
-            states.set(cache.commands_dialog.0.clone(), CommandState::new().enabled(dialog_enabled));
-            if *self.command_states != states {
-                self.command_states.edit(|kept| *kept = states);
-            }
-            self.command_states_cache = Some(cache);
-            return input.states(&self.command_states);
-        }
-
-        // Steady-state path: re-evaluate every gate without allocating, and only touch
-        // `self.command_states` when at least one command's gate actually changed.
+        // Re-evaluate every command's gate without allocating on idle frames. A fresh cache has
+        // `None` in every `last` slot, so the same compare pass collects every entry for it.
         let mut reg_changes: Vec<(usize, bool, Option<&'static str>)> = Vec::new();
         for (i, &(id, _, _, _, last)) in cache.registered.iter().enumerate() {
             let current = gate_registered(self, id);
@@ -305,8 +265,9 @@ impl WordApp {
         let dialog_enabled = command_enabled(self, "ui.dialog");
         let dialog_changed = cache.commands_dialog.1 != Some(dialog_enabled);
 
-        if !reg_changes.is_empty() || !ui_changes.is_empty() || !unimpl_changes.is_empty() || dialog_changed {
-            self.command_states.edit(|kept| {
+        let any_changed = !reg_changes.is_empty() || !ui_changes.is_empty() || !unimpl_changes.is_empty() || dialog_changed;
+        if fresh_cache || any_changed {
+            let apply = |kept: &mut CommandStates| {
                 for (i, enabled, reason) in reg_changes {
                     let (_, location, label, _, _) = cache.registered[i];
                     cache.registered[i].4 = Some((enabled, reason));
@@ -332,7 +293,16 @@ impl WordApp {
                     cache.commands_dialog.1 = Some(dialog_enabled);
                     kept.set(cache.commands_dialog.0.clone(), CommandState::new().enabled(dialog_enabled));
                 }
-            });
+            };
+            if fresh_cache {
+                let mut states = CommandStates::new();
+                apply(&mut states);
+                if *self.command_states != states {
+                    self.command_states.edit(|kept| *kept = states);
+                }
+            } else {
+                self.command_states.edit(apply);
+            }
         }
         self.command_states_cache = Some(cache);
         input.states(&self.command_states)
@@ -486,5 +456,27 @@ mod tests {
         app.command_states_cache = None;
         let _ = app.command_input();
         assert_eq!(*app.command_states, incremental, "incremental cache matches full rebuild exactly");
+
+        // Swapping the registry rebuilds `command_states` cleanly and drops commands that are no
+        // longer registered.
+        app.no_document = None;
+        let full_registry = app.session.registry.clone();
+        app.session.registry = std::sync::Arc::new(wordcraft_engine::Registry::new(vec![wordcraft_engine::CommandSpec::new(
+            "test.ephemeral",
+            "Ephemeral",
+            "Home",
+            |_, _| Ok(json!({})),
+        )]));
+        let _ = app.command_input();
+        assert!(
+            app.command_states.get(&CommandRef::new("test.ephemeral")).is_some_and(|s| s.is_enabled()),
+            "custom registry command is published when registered"
+        );
+        app.session.registry = full_registry;
+        let _ = app.command_input();
+        assert!(
+            app.command_states.get(&CommandRef::new("test.ephemeral")).is_none(),
+            "swapping back to the default registry clears removed commands from command_states"
+        );
     }
 }
