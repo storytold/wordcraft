@@ -3,7 +3,7 @@
 //! machine, badges, claimed keys) is the framework's `Keytips`; this module gives it WordCraft's
 //! tabs, controls, legacy sequences and regions.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use craft::behavior::overlay::MinWidth;
 use craft::keymap::CommandRef;
@@ -59,29 +59,32 @@ pub const SEARCH_LETTER: &str = "Q";
 /// Legacy menu keys (#1697): Word 2003 menu sequences Word for Windows still takes after Alt,
 /// observed there. Hidden, as in Word: no badges, not in Customize Keyboard. They start only on
 /// letters no tab keytip or Search uses (see the test).
-fn legacy() -> Vec<(&'static str, CommandRef)> {
-    let cmd = CommandRef::new;
-    let dialog = |name: &str| CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name }));
-    vec![
-        ("VU", cmd("view.fullScreenView")),
-        ("VP", cmd("view.printLayout")),
-        ("VW", cmd("view.webLayout")),
-        ("VO", cmd("view.outline")),
-        ("VN", cmd("view.draft")),
-        ("VD", cmd("view.navigationPane")),
-        ("VL", cmd("view.ruler")),
-        ("VZ", dialog("zoom")),
-        ("EL", cmd("select.all")),
-        ("EF", dialog("find")),
-        ("EE", dialog("replace")),
-        ("EG", dialog("goto")),
-        ("IS", dialog("symbol")),
-        ("IPF", cmd("insert.picture")),
-        ("OF", dialog("font")),
-        ("OP", dialog("paragraph")),
-        ("TW", cmd("review.wordCount")),
-        ("AIT", dialog("insertTable")),
-    ]
+fn legacy() -> &'static [(&'static str, CommandRef)] {
+    static LEGACY: OnceLock<Vec<(&'static str, CommandRef)>> = OnceLock::new();
+    LEGACY.get_or_init(|| {
+        let cmd = CommandRef::new;
+        let dialog = |name: &str| CommandRef::with_params("ui.dialog", serde_json::json!({ "name": name }));
+        vec![
+            ("VU", cmd("view.fullScreenView")),
+            ("VP", cmd("view.printLayout")),
+            ("VW", cmd("view.webLayout")),
+            ("VO", cmd("view.outline")),
+            ("VN", cmd("view.draft")),
+            ("VD", cmd("view.navigationPane")),
+            ("VL", cmd("view.ruler")),
+            ("VZ", dialog("zoom")),
+            ("EL", cmd("select.all")),
+            ("EF", dialog("find")),
+            ("EE", dialog("replace")),
+            ("EG", dialog("goto")),
+            ("IS", dialog("symbol")),
+            ("IPF", cmd("insert.picture")),
+            ("OF", dialog("font")),
+            ("OP", dialog("paragraph")),
+            ("TW", cmd("review.wordCount")),
+            ("AIT", dialog("insertTable")),
+        ]
+    })
 }
 
 /// The letter badge for a tab (empty when it has none).
@@ -379,35 +382,88 @@ fn controls(tab: &str) -> Vec<Control> {
     }
 }
 
-/// A control with the letters it asks for.
+/// Maps an ASCII alphanumeric keytip letter to a static single-character `&'static str`, avoiding
+/// per-control `String` allocations when caching [`KeytipControl`].
+fn ascii_upper_str(c: char) -> Option<&'static str> {
+    const CHARS: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let idx = CHARS.find(c.to_ascii_uppercase())?;
+    CHARS.get(idx..idx + 1)
+}
+
+/// Cached keytip controls and reserved shortcut letters per engine registry and active ribbon tab,
+/// avoiding per-frame `registry.all()` scans and `KeytipControl` / `CommandRef` allocations while
+/// idle.
+pub(crate) struct KeytipCache {
+    registry: Arc<wordcraft_engine::Registry>,
+    reserved: Vec<char>,
+    tab: String,
+    tab_controls: Vec<KeytipControl<'static>>,
+}
+
+impl KeytipCache {
+    fn build_tab_controls(app: &WordApp, tab: &str) -> Vec<KeytipControl<'static>> {
+        let mut out: Vec<KeytipControl<'static>> = controls(tab)
+            .into_iter()
+            .map(|control| {
+                let letters = shortcut_letter(app, &control.command.id).and_then(ascii_upper_str);
+                KeytipControl::new(control.command, control.tip, letters)
+            })
+            .collect();
+        out.push(KeytipControl::new(CommandRef::new("tools.search"), "Search", Some(SEARCH_LETTER)));
+        out
+    }
+
+    fn new(app: &WordApp, tab: &str) -> Self {
+        KeytipCache {
+            registry: app.session.registry.clone(),
+            reserved: reserved_letters(app),
+            tab: tab.to_owned(),
+            tab_controls: Self::build_tab_controls(app, tab),
+        }
+    }
+
+    fn sync(&mut self, app: &WordApp, tab: &str) {
+        let reg_changed = !Arc::ptr_eq(&self.registry, &app.session.registry);
+        if reg_changed {
+            self.registry = app.session.registry.clone();
+            self.reserved = reserved_letters(app);
+        }
+        if reg_changed || self.tab != tab {
+            self.tab.clear();
+            self.tab.push_str(tab);
+            self.tab_controls = Self::build_tab_controls(app, tab);
+        }
+    }
+}
+
+/// The Backstage's pages as cached static keytip controls.
+fn backstage_controls() -> &'static [KeytipControl<'static>] {
+    static CONTROLS: OnceLock<Vec<KeytipControl<'static>>> = OnceLock::new();
+    CONTROLS.get_or_init(|| {
+        crate::backstage::KEYTIPS
+            .iter()
+            .map(|(page, letter)| {
+                KeytipControl::new(CommandRef::with_params("ui.backstage", serde_json::json!({ "page": page })), page, Some(letter))
+            })
+            .collect()
+    })
+}
+
+/// A control with the letters it asks for (used by unit tests).
+#[cfg(test)]
 struct Row {
     control: Control,
     letters: Option<String>,
 }
 
 /// A tab's controls with the shortcut letter each keeps, when its command has an Alt+letter shortcut.
+#[cfg(test)]
 fn rows(app: &WordApp, tab: &str) -> Vec<Row> {
     controls(tab)
         .into_iter()
         .map(|control| {
             let letters = shortcut_letter(app, &control.command.id).map(String::from);
             Row { control, letters }
-        })
-        .collect()
-}
-
-/// The Search box: its badge is Alt, Q on every tab.
-fn search_row() -> Row {
-    Row { control: Control { tip: "Search", command: CommandRef::new("tools.search") }, letters: Some(SEARCH_LETTER.to_string()) }
-}
-
-/// The Backstage's pages, one badge each: the first letter its page has in `KEYTIPS`.
-fn backstage_rows() -> Vec<Row> {
-    crate::backstage::KEYTIPS
-        .iter()
-        .map(|(page, letter)| Row {
-            control: Control { tip: page, command: CommandRef::with_params("ui.backstage", serde_json::json!({ "page": page })) },
-            letters: Some(letter.to_string()),
         })
         .collect()
 }
@@ -426,14 +482,15 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
         .filter_map(|t| ribbon.tab_ids.iter().find(|(name, _)| name == t).map(|(_, id)| (Label::from(t), tab_letter(t), *id)))
         .collect();
 
-    let mut rows = if app.ui.backstage { backstage_rows() } else { rows(app, &app.ui.tab) };
-    if !app.ui.backstage {
-        rows.push(search_row());
-    }
-    let controls: Vec<KeytipControl<'_>> =
-        rows.iter().map(|r| KeytipControl::new(r.control.command.clone(), r.control.tip, r.letters.as_deref())).collect();
-
-    let sequences = if cfg!(target_os = "macos") { Vec::new() } else { legacy() };
+    let cache = match app.keytip_cache.take() {
+        Some(mut cache) => {
+            cache.sync(app, &app.ui.tab);
+            cache
+        }
+        None => KeytipCache::new(app, &app.ui.tab),
+    };
+    let controls: &[KeytipControl<'_>] = if app.ui.backstage { backstage_controls() } else { &cache.tab_controls };
+    let sequences: &[(&str, CommandRef)] = if cfg!(target_os = "macos") { &[] } else { legacy() };
     // A hidden toolbar has no badges, and a disabled command's button has none to press.
     let digits: Vec<CommandRef> = if app.ui.quick_access_toolbar {
         app.session
@@ -447,7 +504,6 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     } else {
         Vec::new()
     };
-    let reserved = reserved_letters(app);
 
     let mut places: Vec<Arc<Recorded>> = Vec::new();
     places.extend(ribbon.controls.clone());
@@ -457,8 +513,15 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
         places.extend(inspect::recorded(&ctx, backstage_region()));
     }
 
-    let out =
-        Keytips::new(enabled).tabs(&tabs).controls(&controls).sequences(&sequences).digits(&digits).reserved(&reserved).places(&places).show_over(ui);
+    let out = Keytips::new(enabled)
+        .tabs(&tabs)
+        .controls(controls)
+        .sequences(sequences)
+        .digits(&digits)
+        .reserved(&cache.reserved)
+        .places(&places)
+        .show_over(ui);
+    app.keytip_cache = Some(cache);
     // PLAN: `WordApp::keytips_active` is app-hub's (rb.A11).
     app.keytips_active = out.active;
     if let Some(tab) = out.tab.as_deref().and_then(tab_of_badge) {
