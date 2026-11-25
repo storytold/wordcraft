@@ -5398,6 +5398,17 @@ fn a_heading_measures_a_kept_table_with_the_list_items_kept_between_them() {
     let page_of = |block: u32| l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { path, .. } if path.0 == [block])));
     assert!(page_of(1) > page_of(0), "the heading goes on to the next page: {:?}", (page_of(0), page_of(1)));
     assert_eq!(page_of(1), page_of(2), "the heading stays with the item kept with it");
+    // And with the table: its header row, the kept row and the row ending that chain.
+    let rows: Vec<usize> = page_of(1).and_then(|p| l.pages.get(p)).map_or(Vec::new(), |p| {
+        p.items
+            .iter()
+            .filter_map(|i| match i {
+                Placed::Cell { row, cell: 0, table, .. } if table.0 == [3] => Some(*row),
+                _ => None,
+            })
+            .collect()
+    });
+    assert_eq!(rows, [0, 1, 2], "the table's rows are on the heading's page");
 }
 
 #[test]
