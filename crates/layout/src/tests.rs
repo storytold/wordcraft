@@ -2527,6 +2527,100 @@ fn clicking_in_a_turned_cell_on_an_all_turned_page_stays_in_that_cell() {
 }
 
 #[test]
+fn clicking_near_shared_edge_within_turned_tolerance_stays_in_clicked_cell() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    let mut t = Table::new(1, 2, 468.0);
+    // Cell 0 is empty; Cell 1 has TextDirection::Up, which places turned text near Cell 1's left
+    // edge (the shared border with Cell 0) so its 2pt expanded hit box reaches into Cell 0.
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+    t.rows[0].cells[1].props.margins = Some([0.0; 4]);
+    t.rows[0].cells[1].props.text_direction = TextDirection::Up;
+    t.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Turned", Default::default()))];
+    d.body = vec![wordcraft_doc::Block::Table(t).into()];
+    let l = lay(&d);
+
+    let cell0 = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, row, cell, .. } if *row == 0 && *cell == 0 => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let turned_bounds = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { path, .. } if path == &Path(vec![0, 0, 1, 0]) => it.turned_bounds(),
+            _ => None,
+        })
+        .unwrap();
+
+    // Click inside Cell 0, 0.5pt left of the shared border, and confirm it lies within the 2pt
+    // expanded turned_bounds of Cell 1.
+    let click_x = cell0.right() - 0.5;
+    let click_y = turned_bounds.y + turned_bounds.h * 0.5;
+    assert!(cell0.contains(wordcraft_geom::Point::new(click_x, click_y)));
+    assert!(turned_bounds.expand(2.0).contains(wordcraft_geom::Point::new(click_x, click_y)));
+
+    let hit = l.hit(0, click_x, click_y, StoryRef::Body).unwrap();
+    assert_eq!(hit.path, Path(vec![0, 0, 0, 0]), "click inside cell 0 within 2pt of cell 1's turned text must stay in cell 0, got {:?}", hit.path);
+
+    // Outside the table, the 2pt tolerance on turned text still applies.
+    let mut d_out = Document::new();
+    let mut t_out = Table::new(1, 1, 468.0);
+    t_out.rows[0].cells[0].props.text_direction = TextDirection::Up;
+    t_out.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Edge", Default::default()))];
+    d_out.body = vec![wordcraft_doc::Block::Table(t_out).into()];
+    let l_out = lay(&d_out);
+    let out_bounds = l_out.pages[0].items.iter().find_map(|it| it.turned_bounds()).unwrap();
+    let out_hit = l_out.hit(0, out_bounds.x - 1.0, out_bounds.y + out_bounds.h * 0.5, StoryRef::Body).unwrap();
+    assert_eq!(out_hit.path, Path(vec![0, 0, 0, 0]));
+}
+
+#[test]
+fn clicking_in_a_header_or_footer_table_cell_stays_in_that_cell() {
+    crate::test_fonts();
+    let mut d = Document::from_text("Body text");
+
+    let mut ht = Table::new(1, 2, 468.0);
+    ht.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Short", Default::default()))];
+    ht.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("H1\nH2\nH3\nH4\nH5", Default::default()))];
+    let hid = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::Block::Table(ht).into()]);
+    d.last_section.headers.default = Some(hid);
+
+    let mut ft = Table::new(1, 2, 468.0);
+    ft.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("FShort", Default::default()))];
+    ft.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("F1\nF2\nF3\nF4\nF5", Default::default()))];
+    let fid = d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::Block::Table(ft).into()]);
+    d.last_section.footers.default = Some(fid);
+
+    let l = lay(&d);
+    let h_cell0 = l.pages[0]
+        .header
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, story, row, cell, .. } if *story == StoryRef::Part(hid) && *row == 0 && *cell == 0 => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let h_hit = l.hit(0, h_cell0.x + 10.0, h_cell0.bottom() - 4.0, StoryRef::Part(hid)).unwrap();
+    assert_eq!(h_hit.path, Path(vec![0, 0, 0, 0]), "click in header cell (0, 0) must stay in (0, 0), got {:?}", h_hit.path);
+
+    let f_cell0 = l.pages[0]
+        .footer
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, story, row, cell, .. } if *story == StoryRef::Part(fid) && *row == 0 && *cell == 0 => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let f_hit = l.hit(0, f_cell0.x + 10.0, f_cell0.bottom() - 4.0, StoryRef::Part(fid)).unwrap();
+    assert_eq!(f_hit.path, Path(vec![0, 0, 0, 0]), "click in footer cell (0, 0) must stay in (0, 0), got {:?}", f_hit.path);
+}
+
+#[test]
 fn a_tables_own_space_above_and_below_moves_the_text() {
     // ODT tables' `fo:margin-top`/`fo:margin-bottom`: added to the spacing around the table.
     let lay_with = |space: Option<(f32, f32)>| {
