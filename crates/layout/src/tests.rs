@@ -2470,6 +2470,63 @@ fn clicking_in_a_table_cell_stays_in_that_cell_even_away_from_center() {
 }
 
 #[test]
+fn clicking_in_a_nested_table_cell_stays_in_nested_cell() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    let mut outer = Table::new(1, 1, 468.0);
+    let mut inner = Table::new(1, 2, 300.0);
+    inner.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Inner", Default::default()))];
+    inner.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("L1\nL2\nL3\nL4\nL5", Default::default()))];
+    outer.rows[0].cells[0].blocks = vec![
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Outer\n\n\n\n\n\n", Default::default())),
+        wordcraft_doc::Block::Table(inner).into(),
+    ];
+    d.body = vec![wordcraft_doc::Block::Table(outer).into()];
+    let l = lay(&d);
+
+    let inner_cell = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, table, row, cell, .. } if table.0 == vec![0, 0, 0, 1] && *row == 0 && *cell == 0 => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+
+    // Click near the bottom of inner cell (0, 0), closer to outer cell's bottom or away from "Inner":
+    let click = l.hit(0, inner_cell.x + 10.0, inner_cell.bottom() - 4.0, StoryRef::Body).unwrap();
+    assert_eq!(click.path, Path(vec![0, 0, 0, 1, 0, 0, 0]), "click in nested cell must stay in nested cell, got {:?}", click.path);
+}
+
+#[test]
+fn clicking_in_a_turned_cell_on_an_all_turned_page_stays_in_that_cell() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    let mut t = Table::new(1, 2, 468.0);
+    // TextDirection::Up places text on the left side of each cell, so a click near the right
+    // edge of cell 0 is much closer to cell 1's text than cell 0's own text.
+    t.rows[0].cells[0].props.text_direction = TextDirection::Up;
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Left", Default::default()))];
+    t.rows[0].cells[1].props.text_direction = TextDirection::Up;
+    t.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Right", Default::default()))];
+    d.body = vec![wordcraft_doc::Block::Table(t).into()];
+    let l = lay(&d);
+
+    assert!(crate::hit::page_lines(&l.pages[0], StoryRef::Body).is_empty(), "page should have only turned lines");
+    let left_cell = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, row, cell, .. } if *row == 0 && *cell == 0 => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+
+    let click_right = l.hit(0, left_cell.right() - 4.0, left_cell.y + 10.0, StoryRef::Body).unwrap();
+    assert_eq!(click_right.path, Path(vec![0, 0, 0, 0]), "click on right of turned cell 0 must stay in cell 0, got {:?}", click_right.path);
+}
+
+#[test]
 fn a_tables_own_space_above_and_below_moves_the_text() {
     // ODT tables' `fo:margin-top`/`fo:margin-bottom`: added to the spacing around the table.
     let lay_with = |space: Option<(f32, f32)>| {

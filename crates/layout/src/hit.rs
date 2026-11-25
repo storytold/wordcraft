@@ -287,7 +287,9 @@ fn story_cell_at(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<(&Path,
             Placed::Cell { rect, table, row, cell, story: s, covered: false, .. } if *s == story && rect.contains(pt) => Some((table, *row, *cell)),
             _ => None,
         })
-        .last()
+        // Nested tables emit their cells before the enclosing cell, so prefer the deepest match
+        // and keep the last (topmost) cell on ties at the same nesting level.
+        .max_by_key(|(table, _, _)| table.0.len())
 }
 
 /// Whether header/footer part `id` has text near (x, y) on the page (its header or footer
@@ -459,10 +461,6 @@ impl DocLayout {
             return Some(pos);
         }
         let lines = page_lines(p, story);
-        if lines.is_empty() {
-            // A page of turned text (a vertical section): the nearest turned line.
-            return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
-        }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
         let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
         if let Some((table, row, cell)) = story_cell_at(p, story, x, y) {
@@ -475,6 +473,10 @@ impl DocLayout {
             if let Some(pos) = nearest_turned(p, story, x, y, &|p| !in_cell(p)) {
                 return Some(pos);
             }
+        }
+        if lines.is_empty() {
+            // A page of turned text (a vertical section): the nearest turned line.
+            return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
         if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
             return Some(at(best));
