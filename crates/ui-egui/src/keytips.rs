@@ -3,6 +3,7 @@
 //! machine, badges, claimed keys) is the framework's `Keytips`; this module gives it WordCraft's
 //! tabs, controls, legacy sequences and regions.
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use craft::behavior::overlay::MinWidth;
@@ -32,6 +33,60 @@ pub(crate) fn search_region() -> egui::Id {
 /// The key of the inspected region the Backstage records over its page buttons.
 pub(crate) fn backstage_region() -> egui::Id {
     egui::Id::unique("wc_keytips_backstage_region")
+}
+
+/// Per-context map of ribbon `menu_button` widget ids to the command id each opens a menu for,
+/// so [`Keytips`] places badges on menu buttons without binding them to fire on pointer click.
+fn menu_buttons_id() -> egui::Id {
+    egui::Id::unique("wc_keytips_menu_buttons")
+}
+
+/// Records (or clears) the command id associated with a ribbon `menu_button` widget id so
+/// [`show`] can attach `CommandRef` to its inspected element for language-independent badge placement.
+pub(crate) fn note_menu_button(ctx: &egui::Context, widget_id: egui::Id, command_id: Option<&str>) {
+    let existing = ctx.data(|d| d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id()));
+    let unchanged = match (&existing, command_id) {
+        (Some(map), Some(id)) => map.get(&widget_id).is_some_and(|cmd| cmd.id == id && cmd.params.is_null()),
+        (Some(map), None) => !map.contains_key(&widget_id),
+        (None, None) => true,
+        (None, Some(_)) => false,
+    };
+    if unchanged {
+        return;
+    }
+    ctx.data_mut(|d| {
+        let mut map = d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id()).map(|a| (*a).clone()).unwrap_or_default();
+        match command_id {
+            Some(id) => {
+                map.insert(widget_id, CommandRef::new(id));
+            }
+            None => {
+                map.remove(&widget_id);
+            }
+        }
+        d.insert_temp(menu_buttons_id(), Arc::new(map));
+    });
+}
+
+/// Attaches noted `menu_button` commands to uncommanded root elements of a ribbon `Recorded`
+/// snapshot so `craft::menu::Keytips` places badges on menu buttons regardless of translation.
+fn with_menu_commands(ctx: &egui::Context, recorded: Arc<Recorded>) -> Arc<Recorded> {
+    let Some(commands) = ctx.data(|d| d.get_temp::<Arc<HashMap<egui::Id, CommandRef>>>(menu_buttons_id())) else {
+        return recorded;
+    };
+    if commands.is_empty() || !recorded.elements.iter().any(|e| e.part.is_none() && e.command.is_none() && commands.contains_key(&e.id)) {
+        return recorded;
+    }
+    let mut patched = (*recorded).clone();
+    for element in &mut patched.elements {
+        if element.part.is_none()
+            && element.command.is_none()
+            && let Some(cmd) = commands.get(&element.id)
+        {
+            element.command = Some(cmd.clone());
+        }
+    }
+    Arc::new(patched)
 }
 
 /// Word's tab letters, as Word for Windows shows them after Alt (File F, Design G, References S,
@@ -449,25 +504,6 @@ fn backstage_controls() -> &'static [KeytipControl<'static>] {
     })
 }
 
-/// A control with the letters it asks for (used by unit tests).
-#[cfg(test)]
-struct Row {
-    control: Control,
-    letters: Option<String>,
-}
-
-/// A tab's controls with the shortcut letter each keeps, when its command has an Alt+letter shortcut.
-#[cfg(test)]
-fn rows(app: &WordApp, tab: &str) -> Vec<Row> {
-    controls(tab)
-        .into_iter()
-        .map(|control| {
-            let letters = shortcut_letter(app, &control.command.id).map(String::from);
-            Row { control, letters }
-        })
-        .collect()
-}
-
 /// Shows the keytips after the shell and the regions they place badges on, and acts on what the keys chose.
 pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>, screen_bar: Option<Rect>) {
     let ctx = ui.ctx().clone();
@@ -506,7 +542,8 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
     };
 
     let mut places: Vec<Arc<Recorded>> = Vec::new();
-    places.extend(ribbon.controls.clone());
+    let patch_menu_places = enabled && (app.keytips_active || !ctx.input(|i| i.events.is_empty()));
+    places.extend(ribbon.controls.clone().map(|recorded| if patch_menu_places { with_menu_commands(&ctx, recorded) } else { recorded }));
     places.extend(inspect::recorded(&ctx, qat_region()));
     places.extend(inspect::recorded(&ctx, search_region()));
     if app.ui.backstage {

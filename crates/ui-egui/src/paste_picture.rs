@@ -137,7 +137,7 @@ pub(crate) fn paste_named_files(app: &mut WordApp, text: &str) -> bool {
 mod tests {
     use super::*;
     use crate::system_clipboard::testing::{app_holding, rgba8};
-    use craft::platform::clipboard::{Flavor, URI_LIST};
+    use craft::platform::clipboard::{Flavor, RGBA8, URI_LIST};
 
     fn pictures(a: &mut WordApp) -> usize {
         a.session.run("arrange.selectionPane", &json!({})).unwrap().as_array().map(|x| x.len()).unwrap_or(0)
@@ -146,6 +146,29 @@ mod tests {
     fn uri_list(paths: &[PathBuf]) -> Flavor {
         let lines: Vec<String> = paths.iter().map(|p| format!("file://{}\r\n", p.display())).collect();
         Flavor::new(URI_LIST, lines.concat().into_bytes())
+    }
+
+    /// Hostile or damaged clipboard pictures and non-picture files are refused without panicking.
+    #[test]
+    fn hostile_clipboard_pictures_are_refused() {
+        assert!(png_from_rgba(usize::MAX, 2, Vec::new()).is_err());
+        assert!(png_from_rgba(10_000, 10_000, Vec::new()).is_err());
+        assert!(png_from_rgba(4, 4, vec![0; 63]).is_err());
+        assert!(png_from_rgba(0, 4, Vec::new()).is_err());
+
+        // Damaged RGBA8 pixels buffer on the clipboard.
+        let mut damaged = Vec::new();
+        damaged.extend_from_slice(&(4u32).to_le_bytes());
+        damaged.extend_from_slice(&(4u32).to_le_bytes());
+        damaged.extend_from_slice(&[0u8; 10]);
+        let mut a = app_holding(&[Flavor::new(RGBA8, damaged)]);
+        assert!(a.run("edit.paste", json!({})).is_err());
+        assert_eq!(pictures(&mut a), 0);
+
+        // Copied files that aren't pictures leave Paste to the usual clipboard.
+        let mut a = app_holding(&[uri_list(&[PathBuf::from("/tmp/notes.txt")])]);
+        assert_eq!(a.run("edit.paste", json!({})).unwrap_err(), system_clipboard::nothing_to_paste(&a));
+        assert_eq!(pictures(&mut a), 0);
     }
 
     /// Paste with only a picture on the clipboard inserts it at its natural size, one undo step.
