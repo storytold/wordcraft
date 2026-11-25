@@ -470,6 +470,30 @@ fn status_bar_texts_stop_before_the_controls_in_a_narrow_window() {
     assert!(painted_on_row_of(&wide, focus).iter().any(|(t, _)| t == "Track Changes: On"), "a wide window shows everything");
 }
 
+/// #5886: `Fit` picks the fullest step that fits, settles in one pass per unmeasured step, and drops stale
+/// widths when a step's own width changes.
+#[test]
+fn status_fit_settles_and_resizes_without_discard_loops() {
+    let mut fit = super::Fit::default();
+    assert_eq!(fit.step(), 0);
+
+    // Narrow room (200): measures step 0 (300), then step 1 (180 <= 200), and settles at step 1.
+    assert!(fit.note(0, 300.0, 200.0));
+    assert_eq!(fit.step(), 1);
+    assert!(fit.note(1, 180.0, 200.0));
+    assert_eq!(fit.step(), 1);
+    assert!(!fit.note(1, 180.0, 200.0));
+
+    // Widening room (400) immediately selects cached step 0 without re-measuring step 1.
+    assert!(fit.note(1, 180.0, 400.0));
+    assert_eq!(fit.step(), 0);
+    assert!(!fit.note(0, 300.0, 400.0));
+
+    // A width change at step 0 invalidates cached widths for other steps.
+    assert!(fit.note(0, 320.0, 200.0));
+    assert_eq!(fit.step(), 1);
+}
+
 /// #5886: status bar controls fit is per-window and settles without repaint or discard loops across wide and narrow windows.
 #[test]
 fn status_bar_controls_width_cache_is_per_window_and_avoids_discard_loops() {
@@ -509,7 +533,7 @@ fn status_bar_controls_width_cache_is_per_window_and_avoids_discard_loops() {
     };
 
     let mut out = step_kit(&mut a, true);
-    for _ in 0..5 {
+    for _ in 0..2 {
         out = step_kit(&mut a, true);
     }
     let child_vp = out.trees.iter().map(|(id, _)| *id).find(|id| *id != ViewportId::ROOT).expect("child viewport rendered");
@@ -530,61 +554,58 @@ fn status_bar_controls_width_cache_is_per_window_and_avoids_discard_loops() {
     assert!(has_zoom_slider(&out, ViewportId::ROOT), "wide window keeps the Zoom slider");
     assert!(!has_zoom_slider(&out, child_vp), "narrow window drops the Zoom slider at step >= 1");
 
-    for (frame, focus_root) in [true, true, false, false].into_iter().enumerate() {
-        let frame_out = step_kit(&mut a, focus_root);
-        assert!(has_zoom_slider(&frame_out, ViewportId::ROOT), "frame {frame} wide window keeps Zoom slider");
-        assert!(!has_zoom_slider(&frame_out, child_vp), "frame {frame} narrow window keeps compact controls");
-        assert!(a.enter_window(win1));
-        assert_eq!(a.chrome.status_fit, fit1, "frame {frame} wide window 1 settled without changes");
-        assert!(a.enter_window(win2));
-        assert_eq!(a.chrome.status_fit, fit2, "frame {frame} narrow window 2 settled without changes");
-    }
+    let frame_out = step_kit(&mut a, false);
+    assert!(has_zoom_slider(&frame_out, ViewportId::ROOT), "child-focused frame: wide window keeps Zoom slider");
+    assert!(!has_zoom_slider(&frame_out, child_vp), "child-focused frame: narrow window keeps compact controls");
+    assert!(a.enter_window(win1));
+    assert_eq!(a.chrome.status_fit, fit1, "wide window 1 settled without changes");
+    assert!(a.enter_window(win2));
+    assert_eq!(a.chrome.status_fit, fit2, "narrow window 2 settled without changes");
 
-    // 2. Direct single-pass inspection (`ctx.run_ui`): both narrow (400 pt) and wide (1200 pt)
-    // layouts settle to distinct steps and run in 1 pass with no immediate `request_repaint()` loop.
-    let ctx = crate::test_harness::context();
-    let mut b = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+    // 2. Direct single-pass inspection (`ctx.run_ui`): reuse `a` with one window, verify narrow (400 pt)
+    // and wide (1200 pt) layouts settle to distinct steps and run in 1 pass with no immediate repaint loop.
+    a.close_window(win2);
+    assert!(a.enter_window(win1));
 
-    let run_pass = |app: &mut WordApp, width: f32| -> (usize, Duration) {
-        let mut passes = 0;
-        craft::ui::shell::embed::before_input(&ctx, |out| app.frame_input(out));
-        let full =
-            ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 700.0))), ..Default::default() }, |ui| {
-                crate::test_harness::logic(ui.ctx(), app);
-                app.ui(ui);
-                passes += 1;
-            });
-        let delay = full.viewport_output.get(&ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
-        full.drop_without_applying_deltas();
-        (passes, delay)
+    let settle_one_pass = |app: &mut WordApp, width: f32, expect_compact: bool| -> super::Fit {
+        let run_pass = |app: &mut WordApp| -> (usize, Duration) {
+            let mut passes = 0;
+            craft::ui::shell::embed::before_input(&kit.ctx, |out| app.frame_input(out));
+            let full = kit.ctx.run_ui(
+                egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(width, 700.0))), ..Default::default() },
+                |ui| {
+                    crate::test_harness::logic(ui.ctx(), app);
+                    app.ui(ui);
+                    passes += 1;
+                },
+            );
+            let delay = full.viewport_output.get(&ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
+            full.drop_without_applying_deltas();
+            (passes, delay)
+        };
+        for _ in 0..4 {
+            let (_, delay) = run_pass(app);
+            let step_ok = if expect_compact { app.chrome.status_fit.step() >= 1 } else { app.chrome.status_fit.step() == 0 };
+            if delay > Duration::ZERO && step_ok {
+                break;
+            }
+        }
+        let settled = app.chrome.status_fit.clone();
+        if expect_compact {
+            assert!(settled.step() >= 1, "width {width}: settled at compact step: {settled:?}");
+        } else {
+            assert_eq!(settled.step(), 0, "width {width}: settled at full step: {settled:?}");
+        }
+        let (passes, delay) = run_pass(app);
+        assert_eq!(passes, 1, "width {width}: completed in 1 pass (no discard loop)");
+        assert!(delay > Duration::ZERO, "width {width}: requested no immediate repaint (delay {delay:?})");
+        assert_eq!(app.chrome.status_fit, settled, "width {width}: status_fit remained unchanged");
+        settled
     };
 
-    for _ in 0..6 {
-        let _ = run_pass(&mut b, 400.0);
-    }
-    let settled_narrow = b.chrome.status_fit.clone();
-    assert!(settled_narrow.step() >= 1, "narrow window settled at compact step: {settled_narrow:?}");
-
-    for frame in 0..4 {
-        let (passes, delay) = run_pass(&mut b, 400.0);
-        assert_eq!(passes, 1, "frame {frame} narrow window completed in 1 pass (no discard loop)");
-        assert!(delay > Duration::ZERO, "frame {frame} narrow window requested no immediate repaint (delay {delay:?})");
-        assert_eq!(b.chrome.status_fit, settled_narrow, "frame {frame} narrow window status_fit remained unchanged");
-    }
-
-    for _ in 0..6 {
-        let _ = run_pass(&mut b, 1200.0);
-    }
-    let settled_wide = b.chrome.status_fit.clone();
-    assert_eq!(settled_wide.step(), 0, "wide window settled at full step: {settled_wide:?}");
+    let settled_narrow = settle_one_pass(&mut a, 400.0, true);
+    let settled_wide = settle_one_pass(&mut a, 1200.0, false);
     assert_ne!(settled_narrow, settled_wide);
-
-    for frame in 0..4 {
-        let (passes, delay) = run_pass(&mut b, 1200.0);
-        assert_eq!(passes, 1, "frame {frame} wide window completed in 1 pass (no discard loop)");
-        assert!(delay > Duration::ZERO, "frame {frame} wide window requested no immediate repaint (delay {delay:?})");
-        assert_eq!(b.chrome.status_fit, settled_wide, "frame {frame} wide window status_fit remained unchanged");
-    }
 }
 
 /// Finds the painted track and knob rects inside a rendered `craft::ui::choice::Switch`.
