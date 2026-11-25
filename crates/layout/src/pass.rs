@@ -671,7 +671,9 @@ pub(crate) fn layout_pass(
     let mut prev_turn = TextDirection::Horizontal;
     // Incremental pagination: resume from the page the edit is on (see `incremental`).
     // A repeat pass for page totals (`NUMPAGES`) lays out with other totals: never resume across them.
-    let key = incremental::PassKey::new(doc, opts, env, ctx.notes_hash ^ hash_of(&(totals.pages, &totals.sections)));
+    // The pages the output's `PAGEREF`s show differ between its passes: another pass is another key.
+    let shown = hash_of(&(totals.pages, &totals.sections, ctx.fields.bookmarks_key, ctx.fields.output));
+    let key = incremental::PassKey::new(doc, opts, env, ctx.notes_hash ^ shown);
     let prev = ctx.cache.pass.take();
     // Balanced columns and endnotes at section ends re-lay or add pages behind the walk, body text
     // showing page totals depends on every page, and outline view, vertical sections and floats
