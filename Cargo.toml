@@ -50,7 +50,7 @@ craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "b436a
 craft = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0", default-features = false }
 craft-ui-test-kit = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
+craft-metafile = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
@@ -81,28 +81,28 @@ wuff = "0.2.9"
 brotli-decompressor = "5"
 vello_cpu = "0.2"
 image = { version = "0.25", default-features = false }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
+craft-image-codecs = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-tiff = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0", default-features = false, features = ["write"] }
 
-craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
+craft-wordmodel = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-docx = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
 craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-rtf = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0", features = ["doc"] }
-craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-flow = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-odf = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0", features = ["text"] }
-craft-markdown = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-html = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0", features = ["flow"] }
-craft-latex = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-math = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-mime = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0", features = ["detect"] }
-craft-sheet = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
-craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
+craft-rtf = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0", features = ["doc"] }
+craft-doc-binary = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-flow = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-odf = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0", features = ["text"] }
+craft-markdown = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-html = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0", features = ["flow"] }
+craft-latex = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-math = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-mime = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0", features = ["detect"] }
+craft-sheet = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-ods = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-xls = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-xlsx = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-xml = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
+craft-zip = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "db66e7a2c36a2800cffccccffbc87607090bd554", version = "=0.1.0" }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
 miniz_oxide = "0.9"
 cfb = "0.15"
