@@ -151,10 +151,18 @@ impl WordApp {
         // PLAN: assumed `updates_ui::run(app: &mut WordApp)` (shell-w13, sh.A20) opens the updater's dialogs on the host.
         updates_ui::run(self);
         crate::dialogs::host::prepare(self);
+        let had_dialogs = !self.dialog_host.is_empty();
         self.dialog_host.run(ui);
         crate::dialogs::host::settle(self, ctx);
+        crate::dialogs::chrome::apply_modal_nudge(self, ui);
         if moved(self) {
             return;
+        }
+        if had_dialogs && self.dialog_host.is_empty() && !self.file_dialog_open() && !self.ui.backstage {
+            self.canvas.focus_page(ctx);
+            self.canvas.focus_pending = true;
+            self.canvas.focus_page_after_pass();
+            ctx.request_repaint();
         }
         self.refocus_after_chrome_click(ctx, regions);
         if let Some(url) = self.canvas.open_url.take() {

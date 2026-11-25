@@ -459,4 +459,32 @@ mod tests {
         a.run("edit.paste", params).unwrap();
         assert!(!a.session.doc.media.is_empty());
     }
+
+    #[test]
+    fn empty_copy_does_not_publish_or_overwrite_clipboard_state() {
+        let mut a = app_with_copied_picture();
+        assert!(a.clipboard_published);
+        let clip = handle(&a).unwrap();
+        let image = clip.read_image().unwrap().unwrap();
+        assert_eq!((image.width, image.height), (2, 2));
+
+        a.run("caret.docEnd", json!({})).unwrap();
+        assert!(a.session.sel.is_collapsed());
+
+        let ctx = a.ctx.clone().unwrap();
+        let empty_r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &empty_r);
+
+        assert!(a.clipboard_published, "empty copy must not change published-copy state");
+        let clip = handle(&a).unwrap();
+        let image2 = clip.read_image().unwrap().unwrap();
+        assert_eq!((image2.width, image2.height), (2, 2), "empty copy must not overwrite clipboard image");
+
+        let mut a2 = app_holding(&[]);
+        assert!(!a2.clipboard_published);
+        let ctx2 = a2.ctx.clone().unwrap();
+        let empty_r2 = a2.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a2, &ctx2, &empty_r2);
+        assert!(!a2.clipboard_published, "empty copy must not change published-copy state when false");
+    }
 }

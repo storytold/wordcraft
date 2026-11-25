@@ -36,6 +36,9 @@ pub(crate) fn menu_button(
         face = face.tooltip(TooltipSpec::new(hint.clone()).disabled_text(hint));
     }
     let opener = face.trailing_icon(IconSpec::glyph(&MENU_ARROW)).enabled(enabled).show(ui);
+    if !ui.is_sizing_pass() {
+        crate::keytips::note_menu_button(ui.ctx(), opener.response.id, about.filter(|id| !id.is_empty()));
+    }
     Menu::new(name).opened_by(&opener.response, Trigger::Click).show(ui, body).output
 }
 

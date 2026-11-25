@@ -788,6 +788,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use egui_kittest::kittest::Queryable;
     use serde_json::json;
     use wordcraft_engine::Session;
@@ -858,5 +859,43 @@ mod tests {
         h.get_by_label("Ruler").click();
         crate::test_harness::frames(&mut h, 3);
         assert_ne!(h.state().session.view.ruler, ruler, "the custom group's button runs its command");
+    }
+
+    /// #1845: typing in the command filter searches across all commands regardless of category,
+    /// and Add >> places the selected command on the Quick Access Toolbar.
+    #[test]
+    fn command_filter_narrows_the_picker_and_add_works() {
+        let mut a = app();
+        a.run("tools.customizeRibbon", json!({})).unwrap();
+        let id = craft::ui::dialog::dialog_id("customizeRibbon");
+        assert!(a.dialog_host.open_dialogs().iter().any(|d| d.id == id), "the dialog is open");
+
+        let (category, current) = {
+            let d = a.dialog_host.get_by_id::<RibbonDialog>(id).expect("dialog exists");
+            (d.category.clone(), d.command.clone())
+        };
+
+        // Empty filter keeps the category scope.
+        let unfiltered = matching_commands(&a, &category, "");
+        assert!(!unfiltered.is_empty());
+
+        // Typing searches every command, ignoring the category.
+        let filter = "bold";
+        let cmds = matching_commands(&a, &category, filter);
+        assert!(cmds.iter().any(|(cmd_id, _)| cmd_id == "format.bold"));
+        assert!(cmds.len() < a.session.registry.all().len());
+
+        let ctx = egui::Context::default();
+        a.dialog_host.set_json_field(&ctx, id, "filter", json!(filter)).unwrap();
+        prepare(&mut a, id);
+
+        let picked = select_in(&cmds, &current);
+        assert!(!picked.is_empty());
+        a.dialog_host.set_json_field(&ctx, id, "command", json!(picked)).unwrap();
+
+        // The dialog's Add >> adds the filtered pick to the Quick Access Toolbar.
+        a.run("tools.customizeRibbon", json!({"qatAdd": picked})).unwrap();
+        assert!(a.session.ribbon.qat().contains(&picked.as_str()));
+        assert!(a.session.ribbon.qat().contains(&"format.bold"));
     }
 }

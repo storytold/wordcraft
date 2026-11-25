@@ -927,4 +927,32 @@ mod shortcut_tests {
             }
         }
     }
+
+    #[test]
+    fn copy_format_web_alias_respects_user_removal_and_reassignment() {
+        use craft_keymap::{Binding, Chord, CommandRef, Overrides, Policy};
+
+        let mut commands = super::super::registry().all().to_vec();
+        commands.iter_mut().find(|c| c.id == "edit.copyFormat").unwrap().shortcut = copy_format_shortcut(true);
+        let registry = Registry::new(commands);
+
+        let mut keymap = crate::keymap::registry_keymap(&registry, &Overrides::default());
+        let copy_cmd = CommandRef::new("edit.copyFormat");
+        let bold_cmd = CommandRef::new("format.bold");
+        let chord = Chord::parse("Mod+Alt+Shift+C").unwrap();
+        let binding = Binding::parse("Mod+Alt+Shift+C").unwrap();
+
+        assert!(keymap.bindings(&copy_cmd).iter().any(|b| b.trigger.chord == chord));
+        assert!(keymap.remove(&copy_cmd, &binding));
+        assert_eq!(keymap.holder(&chord), None);
+
+        keymap.assign(&bold_cmd, binding, Policy::Steal).unwrap();
+        assert_eq!(keymap.holder(&chord).as_ref().map(|c| c.id.as_str()), Some("format.bold"));
+        assert_eq!(keymap.holder(&Chord::parse("Mod+Shift+C").unwrap()).as_ref().map(|c| c.id.as_str()), Some("edit.copyFormat"));
+
+        let overrides = keymap.overrides().clone();
+        let restored = crate::keymap::registry_keymap(&registry, &overrides);
+        assert_eq!(restored.holder(&chord).as_ref().map(|c| c.id.as_str()), Some("format.bold"));
+        assert_eq!(restored.holder(&Chord::parse("Mod+Shift+C").unwrap()).as_ref().map(|c| c.id.as_str()), Some("edit.copyFormat"));
+    }
 }
