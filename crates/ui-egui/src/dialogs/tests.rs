@@ -1577,6 +1577,56 @@ fn modal_dialogs_block_the_window_behind_them() {
     assert!(h.state().ui.backstage, "File opens beside Find");
 }
 
+/// Dismissing a dialog opened from a non-canvas command or control returns keyboard focus to the page (#7458).
+#[test]
+fn dismissing_a_dialog_from_non_canvas_control_returns_keyboard_focus_to_page() {
+    let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default()));
+    h.run_steps(6);
+
+    // 1. Move focus to a control outside the canvas (Navigation pane search box)
+    h.state_mut().run("view.navigationPane", json!({"value": true})).unwrap();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").click();
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").is_focused());
+    assert!(!h.state().canvas.focused(&h.ctx), "canvas does not have focus");
+
+    // Open a dialog via command while Navigation pane has focus
+    h.state_mut().run("ui.dialog", json!({"name": "font"})).unwrap();
+    h.run_steps(3);
+    assert!(is_open(h.state(), "font"), "font dialog is open");
+
+    // Dismiss with Escape
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "font"), "font dialog closed");
+
+    // Canvas must have regained keyboard focus
+    assert!(h.state().canvas.focused(&h.ctx), "the document canvas took keyboard focus back");
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "!", "typing reached the document canvas");
+
+    // 2. Focus Navigation pane search box again, open dialog, and dismiss via Cancel button
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").click();
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search document").is_focused());
+    assert!(!h.state().canvas.focused(&h.ctx), "canvas does not have focus");
+
+    h.state_mut().run("ui.dialog", json!({"name": "font"})).unwrap();
+    h.run_steps(3);
+    assert!(is_open(h.state(), "font"), "font dialog is open");
+
+    press(&mut h, "Cancel");
+    h.run_steps(3);
+    assert!(!is_open(h.state(), "font"), "font dialog closed");
+
+    assert!(h.state().canvas.focused(&h.ctx), "the document canvas took keyboard focus back after Cancel");
+    h.event(egui::Event::Text("?".into()));
+    h.run_steps(2);
+    assert_eq!(body_of(h.state()), "!?", "typing reached the document canvas after Cancel");
+}
+
 /// Which dialogs leave the window working (#3859, Word for Mac 16.114.1): `shows_modal` and
 /// `modal_open` agree with it for each.
 #[test]
