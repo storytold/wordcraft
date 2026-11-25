@@ -289,14 +289,17 @@ impl NumFormat {
     pub fn from_ooxml(s: &str) -> NumFormat {
         NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
     }
-    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai letters
-    /// and counting, Vietnamese, text amounts) show decimal, as do values past a sequence's end
-    /// (the 21st item of ①…⑳). Thai numbers are the decimal number in Thai digits (๑, ๒ … ๑๐).
+    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Vietnamese,
+    /// text amounts) show decimal, as do values past a sequence's end (the 21st item of ①…⑳).
+    /// Thai numbers are the decimal number in Thai digits (๑, ๒ … ๑๐), Thai letters run
+    /// ก, ข, ค … ฮ, กก, and Thai counting spells the number (หนึ่ง, สอง … สิบเอ็ด).
     pub fn format(self, n: u32) -> String {
         use crate::cjk_numbers as cjk;
         match self {
             NumFormat::DecimalZero => format!("{n:02}"),
             NumFormat::ThaiNumbers => thai_digits(n),
+            NumFormat::ThaiLetters => repeated_letter(&THAI_LETTERS, n),
+            NumFormat::ThaiCounting => thai_counting(n),
             NumFormat::UpperRoman => roman(n).to_uppercase(),
             NumFormat::LowerRoman => roman(n),
             NumFormat::UpperLetter => letters(n).to_uppercase(),
@@ -349,8 +352,6 @@ impl NumFormat {
             | NumFormat::HindiConsonants
             | NumFormat::HindiNumbers
             | NumFormat::HindiCounting
-            | NumFormat::ThaiLetters
-            | NumFormat::ThaiCounting
             | NumFormat::BahtText
             | NumFormat::DollarText => n.to_string(),
         }
@@ -360,6 +361,63 @@ impl NumFormat {
 /// `n` in Thai digits, ๐ (U+0E50) to ๙ (#5757).
 fn thai_digits(n: u32) -> String {
     n.to_string().chars().filter_map(|c| c.to_digit(10).and_then(|d| char::from_u32(0x0E50 + d))).collect()
+}
+
+/// `thaiLetters`: the 44 consonants without the obsolete ฃ and ฅ and the rare ฆ, so a list
+/// runs ก, ข, ค, ง (#5757).
+const THAI_LETTERS: [char; 41] = [
+    'ก', 'ข', 'ค', 'ง', 'จ', 'ฉ', 'ช', 'ซ', 'ฌ', 'ญ', 'ฎ', 'ฏ', 'ฐ', 'ฑ', 'ฒ', 'ณ', 'ด', 'ต', 'ถ', 'ท', 'ธ', 'น', 'บ', 'ป', 'ผ', 'ฝ', 'พ', 'ฟ', 'ภ',
+    'ม', 'ย', 'ร', 'ล', 'ว', 'ศ', 'ษ', 'ส', 'ห', 'ฬ', 'อ', 'ฮ',
+];
+
+/// `thaiCounting`: the number in Thai words (#5757). Tens are สิบ, ยี่สิบ, สามสิบ…; a final
+/// one after a higher digit is เอ็ด (สิบเอ็ด, หนึ่งร้อยเอ็ด); millions repeat the count before
+/// ล้าน.
+fn thai_counting(n: u32) -> String {
+    if n == 0 {
+        return "ศูนย์".into();
+    }
+    let mut s = String::new();
+    thai_count_into(&mut s, n, false);
+    s
+}
+
+/// Appends the words for `n` (> 0) to `s`; `after` says that a higher part was already written.
+fn thai_count_into(s: &mut String, n: u32, after: bool) {
+    const DIGITS: [&str; 10] = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+    const PLACES: [(u32, &str); 4] = [(100_000, "แสน"), (10_000, "หมื่น"), (1_000, "พัน"), (100, "ร้อย")];
+    let digit = |d: u32| DIGITS.get(d as usize).copied().unwrap_or("");
+    let millions = n / 1_000_000;
+    if millions > 0 {
+        thai_count_into(s, millions, after);
+        s.push_str("ล้าน");
+    }
+    let mut rest = n % 1_000_000;
+    let mut higher = after || millions > 0;
+    for (place, name) in PLACES {
+        let d = rest / place;
+        if d > 0 {
+            s.push_str(digit(d));
+            s.push_str(name);
+            higher = true;
+        }
+        rest %= place;
+    }
+    match rest / 10 {
+        0 => {}
+        1 => s.push_str("สิบ"),
+        2 => s.push_str("ยี่สิบ"),
+        d => {
+            s.push_str(digit(d));
+            s.push_str("สิบ");
+        }
+    }
+    let higher = higher || rest >= 10;
+    match rest % 10 {
+        0 => {}
+        1 if higher => s.push_str("เอ็ด"),
+        d => s.push_str(digit(d)),
+    }
 }
 
 /// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on.
@@ -1013,7 +1071,7 @@ mod tests {
         assert_eq!(NumFormat::ThaiNumbers.format(u32::MAX), "๔๒๙๔๙๖๗๒๙๕");
         assert_eq!(NumFormat::from_ooxml("thaiNumbers"), NumFormat::ThaiNumbers);
         // Formats not drawn yet still show decimal.
-        assert_eq!(NumFormat::ThaiLetters.format(3), "3");
+        assert_eq!(NumFormat::VietnameseCounting.format(3), "3");
     }
 
     #[test]
@@ -1025,6 +1083,29 @@ mod tests {
         assert_eq!(NumFormat::RussianLower.format(100), "нннн");
         assert_eq!(NumFormat::RussianUpper.format(26), "Ы");
         assert_eq!(NumFormat::RussianUpper.format(36), "ЖЖ");
+    }
+
+    /// #5757: Thai letters skip ฃ, ฅ and ฆ and double after ฮ; Thai counting spells the number.
+    #[test]
+    fn thai_letters_and_counting_follow_thai_usage() {
+        let letters: Vec<String> = (1..=5).map(|n| NumFormat::ThaiLetters.format(n)).collect();
+        assert_eq!(letters.join(" "), "ก ข ค ง จ");
+        let all: String = (1..=41).map(|n| NumFormat::ThaiLetters.format(n)).collect();
+        assert_eq!(all.chars().count(), 41, "one letter each up to ฮ");
+        assert!(!all.contains(['ฃ', 'ฅ', 'ฆ', 'ฤ', 'ฦ']), "{all}");
+        assert!(all.chars().zip(all.chars().skip(1)).all(|(a, b)| a < b), "in alphabet order: {all}");
+        assert_eq!([NumFormat::ThaiLetters.format(41), NumFormat::ThaiLetters.format(42)], ["ฮ", "กก"]);
+        assert_eq!(NumFormat::ThaiLetters.format(0), "");
+
+        let words: Vec<String> = (1..=12).map(|n| NumFormat::ThaiCounting.format(n)).collect();
+        assert_eq!(words.join(" "), "หนึ่ง สอง สาม สี่ ห้า หก เจ็ด แปด เก้า สิบ สิบเอ็ด สิบสอง");
+        let count = |n| NumFormat::ThaiCounting.format(n);
+        assert_eq!([count(20), count(21), count(35)], ["ยี่สิบ", "ยี่สิบเอ็ด", "สามสิบห้า"]);
+        assert_eq!([count(100), count(101), count(110), count(111)], ["หนึ่งร้อย", "หนึ่งร้อยเอ็ด", "หนึ่งร้อยสิบ", "หนึ่งร้อยสิบเอ็ด"]);
+        assert_eq!(count(2569), "สองพันห้าร้อยหกสิบเก้า");
+        assert_eq!(count(1_000_001), "หนึ่งล้านเอ็ด");
+        assert_eq!(count(21_000_000), "ยี่สิบเอ็ดล้าน");
+        assert_eq!(count(u32::MAX), "สี่พันสองร้อยเก้าสิบสี่ล้านเก้าแสนหกหมื่นเจ็ดพันสองร้อยเก้าสิบห้า");
     }
 
     #[test]
