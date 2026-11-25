@@ -8,7 +8,7 @@ use craft::menu::CommandRef;
 use craft::ui::contract::{ActivateOn, BodyCx, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::layout_components::Row;
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
@@ -184,6 +184,7 @@ pub fn transform_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .select(SelectMode::None)
         .activate(ActivateOn::Click)
         .card_columns(4)
+        .thumb_size(ThumbSize::Small)
         // Every warp shows; the menu's body is the one scroll.
         .natural_height(true)
         .show_items(ui, &source, &mut |id, _| {
@@ -275,5 +276,27 @@ mod tests {
         assert_eq!(current_outline(&a), Rgb::parse("00B050").map(|c| (c, 2.25)));
         a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 2)})).unwrap();
         assert_eq!(current_outline(&a), None, "the body text has no outline");
+    }
+
+    /// #7449: the Transform menu renders compact preview tiles (~46×32 pt)
+    /// instead of expanding each warp thumbnail to default card dimensions (~132 pt).
+    #[test]
+    fn transform_menu_renders_compact_tiles() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Transform")), crate::Services::default());
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(600.0, 700.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                Menu::inline("Transform").show(ui, |ui, cx| transform_menu(ui, cx, app));
+            },
+            a,
+        );
+        h.run_steps(2);
+
+        let tile = h.get_by_role_and_label(Role::ListItem, "Arch Up").rect();
+        assert!(tile.width() <= 60.0 && tile.height() <= 45.0, "transform tile is compact (~46×32 pt), got {:?}", tile.size());
+        let grid = h.get_by_role_and_label(Role::ListBox, "Transform").rect();
+        assert!(grid.width() <= 260.0, "4-column transform menu grid width stays compact (~200 pt), got {:?}", grid.size());
     }
 }
