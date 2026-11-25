@@ -177,6 +177,8 @@ fn strip_id(ctx: &Context) -> egui::Id {
 #[derive(Default)]
 pub struct BlurState {
     thumbs: HashMap<usize, (u64, Thumb)>,
+    /// The layout those thumbnails were rendered from. Holding the Arc prevents its address from being reused.
+    layout: Option<std::sync::Arc<wordcraft_layout::DocLayout>>,
     slot: Option<(LayerId, ShapeIdx, Rect)>,
 }
 
@@ -241,6 +243,14 @@ fn refresh_thumbs(app: &mut WordApp, view_top: f32, preview: bool) -> HashMap<us
         .filter(|(_, r)| r.width() > 0.0 && r.max.y > view_top - BAND && r.min.y < view_top)
         .map(|(i, _)| i)
         .collect();
+    let layout = crate::canvas::visible_layout(app);
+    if !preview {
+        let same_layout = app.canvas.blur.layout.as_ref().is_some_and(|previous| std::sync::Arc::ptr_eq(previous, &layout));
+        if !same_layout {
+            app.canvas.blur.thumbs.clear();
+            app.canvas.blur.layout = Some(layout.clone());
+        }
+    }
     app.canvas.blur.thumbs.retain(|i, _| wanted.contains(i));
     let key = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -249,7 +259,6 @@ fn refresh_thumbs(app: &mut WordApp, view_top: f32, preview: bool) -> HashMap<us
         app.font_generation.hash(&mut h);
         h.finish()
     };
-    let layout = crate::canvas::visible_layout(app);
     for i in wanted {
         if !preview && app.canvas.blur.thumbs.get(&i).is_some_and(|(k, _)| *k == key) {
             continue;
@@ -283,8 +292,13 @@ pub fn glass(c: Color32) -> Color32 {
 /// The strip's size in texels, once it has been made for this viewport.
 #[cfg(test)]
 pub fn strip_size(ctx: &Context) -> Option<[usize; 2]> {
+    strip_image(ctx).map(|image| image.size)
+}
+
+#[cfg(test)]
+fn strip_image(ctx: &Context) -> Option<ColorImage> {
     let kept: Option<Strip> = ctx.data(|d| d.get_temp(strip_id(ctx)));
-    kept.map(|s| s.image.size)
+    kept.map(|s| s.image)
 }
 
 #[cfg(test)]
@@ -348,7 +362,8 @@ mod app_tests {
     use wordcraft_engine::Session;
 
     fn editor() -> WordApp {
-        let mut a = WordApp::new(Session::new(Document::from_text("Hello WordCraft")), Default::default());
+        let text = (0..160).map(|i| format!("Ribbon sample line {i}: alpha beta gamma delta.")).collect::<Vec<_>>().join("\n");
+        let mut a = WordApp::new(Session::new(Document::from_text(&text)), Default::default());
         a.run("ui.ribbonBlur", json!({"value": true})).unwrap();
         a
     }
@@ -371,8 +386,25 @@ mod app_tests {
     #[test]
     fn the_strip_is_drawn_over_the_editor_only() {
         let mut h = drawn(editor());
+        // Scroll a known page into the band under the ribbon.
+        h.state_mut().canvas.view.offset.1 = 250.0;
         h.run_steps(6);
-        assert!(strip_size(&h.ctx).is_some(), "the strip was made");
+        let before = strip_image(&h.ctx).expect("the strip was made");
+        assert!(before.pixels.iter().any(|p| p.r() < 180), "the strip contains the rendered page text, not only its paper");
+        h.state_mut().run("caret.docStart", json!({})).unwrap();
+        h.state_mut().run("select.all", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": "Replaced ribbon sample content."})).unwrap();
+        h.run_steps(4);
+        let after = strip_image(&h.ctx).expect("the strip remains visible after editing");
+        assert_ne!(before, after, "the strip changes when the page content changes");
+        let old_layout = h.state().canvas.blur.layout.clone().expect("the thumbnails have a layout");
+        let revision = h.state().session.rev();
+        let proofing = h.state().session.view.proofing;
+        h.state_mut().session.view.proofing = !proofing;
+        h.run_steps(2);
+        let new_layout = h.state().canvas.blur.layout.as_ref().expect("the cache tracks the new layout");
+        assert_eq!(h.state().session.rev(), revision, "changing the layout input does not edit the document");
+        assert!(!std::sync::Arc::ptr_eq(&old_layout, new_layout), "proofing creates a new layout without a document revision");
         h.state_mut().run("ui.backstage", json!({"value": true})).unwrap();
         assert!(!h.state().ribbon_glass(), "File covers the window");
         h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
