@@ -1130,7 +1130,7 @@ mod smoke {
         run.app.app.start_screen();
         run.settle();
         let before = run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
-        let layout = native_menu::layout(wordcraft_ui_egui::i18n::Lang::from_pref("en"));
+        let layout = native_menu::layout(&str::to_owned);
         let about = layout.bar.items().into_iter().find(|item| item.role == Some(ItemRole::About)).unwrap().command.clone();
         run.app.native_menu = Some(NativeMenu::new(Box::new(Selection(vec![Event::Click(about)]))));
         run.settle();
