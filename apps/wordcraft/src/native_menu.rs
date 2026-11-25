@@ -30,5 +30,8 @@ pub(super) fn update(menu: &mut NativeMenu, app: &mut WordApp, ctx: &egui::Conte
         }
     }
     menu.set_gate(Gate::default().modal(app.dialog_host_mut().shows_modal()));
-    menu.sync(layout(i18n::Lang::from_pref(&app.ui.language)));
+    let lang = i18n::Lang::from_pref(&app.ui.language);
+    for clash in menu.sync_with(lang.code(), || layout(lang)) {
+        log::warn!("application menu: {clash:?}");
+    }
 }

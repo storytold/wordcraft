@@ -25,6 +25,9 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# The nightly launch profile's refusal dialog (a native message box, like the app's other OS errors).
+rfd = { workspace = true }
+thiserror = { workspace = true }
 # The suite's shared libraries: the runtime hooks (`ui`, `ui-app`), file dialogs, the control
 # channel's arguments, the GPU choice, printing, settings and window placement, the OS appearance
 # reader and the system clipboard.
@@ -68,3 +71,6 @@ xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 # The update helper: a copy of this program started with `--finish-update`
 # (`craft::update::self_update::finish`).
 craft = { workspace = true, features = ["update"] }
+# The nightly Windows identity: an explicit AppUserModelID, so Nightly gets its own taskbar
+# button instead of sharing the stable app's (#16335's rule for the suite).
+winsafe = { version = "=0.0.29", default-features = false, features = ["user", "shell"] }
