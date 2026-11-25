@@ -2302,17 +2302,16 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
 
-/// Restored from pre-#7101 `scroll::tests::hostile_numbers_are_ignored` (#7317) against the
-/// post-#7101 `ScrollSpeed` + `PageView` canvas wheel/zoom pipeline: invalid speed codes,
-/// extreme finite wheel deltas, hostile zoom/rotation events, and non-finite view state are
-/// ignored or bounded without poisoning `offset` or `zoom`.
+/// Unit-level checks for #7742 (`hostile_numbers_are_ignored` logic): invalid `ScrollSpeed`
+/// codes, non-finite framework wheel/ease inputs, out-of-range `view.zoom` commands, and
+/// `sync_view_state` recovery from non-finite `session.view.zoom`.
 #[test]
-fn hostile_numbers_are_ignored() {
+fn hostile_scroll_and_zoom_logic_is_ignored() {
     use crate::scroll::ScrollSpeed;
     use craft::behavior::{Wheel, WheelEase, WheelPhase, WheelUnit};
     use craft::keymap::{Mods, Platform};
     use craft::ui::canvas::{NavigationOptions, WheelInput, WheelNavigation};
-    use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, Vec2};
+    use egui::Vec2;
 
     for bad in ["", "warp", "NaN", "infinity"] {
         assert_eq!(ScrollSpeed::from_code(bad), None);
@@ -2323,7 +2322,6 @@ fn hostile_numbers_are_ignored() {
         assert!(speed.touchpad_factor().is_finite() && speed.touchpad_factor() > 0.0);
     }
 
-    // Framework wheel classification and easing ignore non-finite deltas, clocks, and zoom factors.
     let mut nav_wheel = WheelNavigation::default();
     let opts = NavigationOptions::default();
     let wheel_input = |scroll: Vec2, zoom: f32| {
@@ -2343,20 +2341,40 @@ fn hostile_numbers_are_ignored() {
     assert_eq!(ease.step(f64::NAN), Vec2::ZERO);
     assert!(!ease.owes());
 
-    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    for _ in 0..4 {
-        a.run("text.insert", json!({"text": "Page text"})).unwrap();
-        a.run("layout.break", json!({"kind": "page"})).unwrap();
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    for bad_cmd in [json!({"value": -10.0}), json!({"value": 1e30}), json!({"value": "warp"})] {
+        assert!(app.run("view.zoom", bad_cmd).is_err());
     }
+
+    let mut state = PageViewState::default();
+    state.zoom = 1.5;
+    for bad_zoom in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        app.session.view.zoom = bad_zoom;
+        sync_view_state(&app, &mut state);
+        assert_eq!(state.zoom, 1.0, "non-finite session zoom {bad_zoom:?} falls back to 1.0");
+    }
+    app.session.view.zoom = 1.25;
+    sync_view_state(&app, &mut state);
+    assert_eq!(state.zoom, 1.25);
+}
+
+/// Restored from pre-#7101 `scroll::tests::hostile_numbers_are_ignored` (#7317) against the
+/// post-#7101 `ScrollSpeed` + `PageView` canvas wheel/zoom pipeline: hostile zoom/rotation
+/// events, extreme finite wheel deltas, and non-finite view state are ignored or bounded
+/// without poisoning `offset` or `zoom`.
+#[test]
+fn hostile_numbers_are_ignored() {
+    use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, Vec2};
+
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Page text"})).unwrap();
+    a.run("layout.break", json!({"kind": "page"})).unwrap();
     a.run("view.commentsPane", json!({"value": false})).unwrap();
 
     let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| a);
-    h.run_steps(6);
-
-    let at = h.state().canvas.shown.rect.center();
-    h.event(Event::PointerMoved(at));
     h.run_steps(2);
 
+    let at = h.state().canvas.shown.rect.center();
     let wheel = |unit, delta, modifiers, source| Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, source };
     let finite_view = |app: &WordApp| {
         let v = &app.canvas.view;
@@ -2367,6 +2385,7 @@ fn hostile_numbers_are_ignored() {
     let start_zoom = h.state().canvas.view.zoom;
 
     // Hostile zoom and rotation events over the canvas are ignored.
+    h.event(Event::PointerMoved(at));
     for bad in [
         Event::Zoom(f32::NAN),
         Event::Zoom(f32::INFINITY),
@@ -2376,39 +2395,32 @@ fn hostile_numbers_are_ignored() {
         Event::Rotate(f32::INFINITY),
     ] {
         h.event(bad);
-        h.run_steps(1);
     }
-    h.run_steps(2);
+    h.run_steps(1);
     assert!(finite_view(h.state()));
     assert_eq!(h.state().canvas.view.offset, start_offset);
     assert_eq!(h.state().canvas.view.zoom, start_zoom);
 
     // Normal touchpad input scrolls down cleanly after hostile events.
-    for _ in 0..4 {
-        h.event(wheel(MouseWheelUnit::Point, Vec2::new(0.0, -30.0), Modifiers::NONE, MouseWheelSource::Trackpad));
-        h.run_steps(1);
-    }
+    h.event(wheel(MouseWheelUnit::Point, Vec2::new(0.0, -30.0), Modifiers::NONE, MouseWheelSource::Trackpad));
+    h.run_steps(1);
     let scrolled_offset = h.state().canvas.view.offset;
     assert!(scrolled_offset.1 > start_offset.1, "normal wheel input scrolls down: {scrolled_offset:?} vs {start_offset:?}");
 
     // Huge finite deltas in both point and line units stay finite and clamped to document bounds.
     h.event(wheel(MouseWheelUnit::Point, Vec2::new(0.0, -1e30), Modifiers::NONE, MouseWheelSource::Trackpad));
-    h.run_steps(2);
+    h.run_steps(1);
     assert!(finite_view(h.state()));
     assert!(h.state().canvas.view.offset.1.abs() < 1e6, "offset stays clamped to document bounds: {:?}", h.state().canvas.view.offset);
 
     h.event(wheel(MouseWheelUnit::Line, Vec2::new(0.0, 1e30), Modifiers::NONE, MouseWheelSource::Wheel));
-    h.run_steps(2);
+    h.run_steps(1);
     assert!(finite_view(h.state()));
     assert!(h.state().canvas.view.offset.1.abs() < 1e6);
 
-    // Non-finite session zoom is clamped/recovered on the next pass without poisoning canvas state,
-    // and out-of-range view.zoom commands are rejected without mutating the view.
-    for bad_cmd in [json!({"value": -10.0}), json!({"value": 1e30}), json!({"value": "warp"})] {
-        assert!(h.state_mut().run("view.zoom", bad_cmd).is_err());
-    }
+    // Non-finite session zoom is clamped/recovered on the next pass without poisoning canvas state.
     h.state_mut().session.view.zoom = f32::NAN;
-    h.run_steps(2);
+    h.run_steps(1);
     assert!(h.state().canvas.view.zoom.is_finite() && h.state().canvas.view.zoom > 0.0);
     assert!(h.state().canvas.view.offset.0.is_finite() && h.state().canvas.view.offset.1.is_finite());
 }
