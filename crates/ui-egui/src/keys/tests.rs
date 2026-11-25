@@ -292,7 +292,7 @@ fn the_ignored_paste_uses_up_its_paste_modifiers() {
     let mut h = app_harness(copied_bold_app());
     let chord = Modifiers { shift: true, ..mod_held() };
     batch_frame(&mut h, vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord), egui::Event::Paste("x".into())]);
-    crate::test_harness::frame(&mut h);
+    batch_frame(&mut h, vec![key_event(Key::V, false, Modifiers::NONE), egui::Event::ModifiersChanged(Modifiers::NONE)]);
     assert_eq!(body(h.state()), "source target");
     assert!(is_bold(&mut h));
     run(&mut h, "select.text", json!({"text": "target"}));
