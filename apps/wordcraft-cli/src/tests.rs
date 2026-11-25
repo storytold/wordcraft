@@ -1,6 +1,23 @@
 use super::*;
 use std::io::Read;
 
+/// The desktop app's Nightly bootstrap is never a CLI option, in either spelling.
+#[test]
+fn the_launcher_profile_bootstrap_is_refused_in_both_forms() {
+    for argv in [
+        &["--launch-profile", "nightly-v1", "--profile-root", "/nightly/profiles/wordcraft", "--version"][..],
+        &["--launch-profile=nightly-v1", "--profile-root=/nightly/profiles/wordcraft"][..],
+        &["--profile-root", "/nightly/profiles/wordcraft"][..],
+    ] {
+        let argv: Vec<std::ffi::OsString> = argv.iter().map(std::ffi::OsString::from).collect();
+        assert!(launcher_profile_flag(&argv), "{argv:?}");
+    }
+    for argv in [&["--version"][..], &["proof.check", "--launch-profiles"][..], &["--profile-roots"][..]] {
+        let argv: Vec<std::ffi::OsString> = argv.iter().map(std::ffi::OsString::from).collect();
+        assert!(!launcher_profile_flag(&argv), "{argv:?}");
+    }
+}
+
 fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).into()).collect()
 }

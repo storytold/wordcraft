@@ -83,7 +83,7 @@ fn legacy_menu_keys_stay_off_the_ribbon_letters_and_all_resolve() {
     for (keys, command) in legacy() {
         let first = &keys[..1];
         assert!(!taken.iter().any(|l| l.starts_with(first)), "{keys} starts on a ribbon letter");
-        assert!(!legacy().iter().any(|(k, _)| *k != keys && k.starts_with(keys)), "{keys} hides a longer sequence");
+        assert!(!legacy().iter().any(|(k, _)| *k != *keys && k.starts_with(*keys)), "{keys} hides a longer sequence");
         let mut b = app();
         // The hosted parameter dialogs open nothing before the window's context is known.
         b.ctx = Some(egui::Context::default());
@@ -252,4 +252,26 @@ fn keytips_option_persists() {
     assert_eq!(b.run("ui.keytips", serde_json::json!({})).unwrap()["enabled"], false);
     b.apply_prefs(serde_json::from_str("{}").unwrap());
     assert!(b.ui.keytips_enabled, "older preferences retain enabled KeyTips");
+}
+
+#[test]
+fn keytip_cache_reuses_tab_controls_and_updates_on_tab_switch() {
+    let mut h = harness(app());
+    assert_eq!(h.state().keytip_cache.as_ref().map(|c| c.tab.as_str()), Some("Home"));
+    let home_ptr = h.state().keytip_cache.as_ref().unwrap().tab_controls.as_ptr();
+    let reserved_ptr = h.state().keytip_cache.as_ref().unwrap().reserved.as_ptr();
+
+    // Idle frames reuse the cached control and reserved-letter buffers without rebuilding.
+    crate::test_harness::frames(&mut h, 4);
+    assert_eq!(h.state().keytip_cache.as_ref().unwrap().tab_controls.as_ptr(), home_ptr);
+    assert_eq!(h.state().keytip_cache.as_ref().unwrap().reserved.as_ptr(), reserved_ptr);
+
+    // Switching tabs rebuilds the cached tab controls while keeping reserved letters intact.
+    h.state_mut().run("ui.tab", serde_json::json!({"tab": "Insert"})).unwrap();
+    crate::test_harness::frame(&mut h);
+    let cache = h.state().keytip_cache.as_ref().unwrap();
+    assert_eq!(cache.tab, "Insert");
+    // Tab controls plus the trailing Search badge (`SEARCH_LETTER`).
+    assert_eq!(cache.tab_controls.len(), controls("Insert").len() + 1);
+    assert_eq!(cache.reserved.as_ptr(), reserved_ptr);
 }
