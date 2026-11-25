@@ -101,6 +101,13 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             update_gallery_pen(app, custom, tool);
         }
     });
+    row.group(RibbonGroup::new("Edit", crate::tl!("Edit"), IconId::new("formatBackground").into()), |ui| {
+        Button::command(CommandRef::with_params("view.formatBackgroundPane", json!({"value": true})))
+            .label(crate::tl!("Format\nBackground"))
+            .icon(IconId::new("formatBackground"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+    });
     row.group(RibbonGroup::new("Convert", crate::tl!("Convert"), IconId::new("inkToShape").into()), |ui| {
         let on = app.session.view.draw.ink_to_shape;
         ToggleButton::command(CommandRef::with_params("draw.inkToShape", json!({})))

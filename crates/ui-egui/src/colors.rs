@@ -602,6 +602,9 @@ pub enum ColorFieldEmpty {
         /// What its swatch shows.
         face: AutoFace,
     },
+    /// The field requires a colour: the drop-down offers no empty choice, because the caller has
+    /// no value to mean "none".
+    Required,
 }
 
 /// The face of an Automatic choice's swatch.
@@ -630,6 +633,8 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
     let (shown, text) = match (current, empty) {
         (Some(c), _) => (Some(srgba(c)), Label::from(c.hex())),
         (None, ColorFieldEmpty::NoColor) => (None, Label::from(tl!("No Color").to_string())),
+        // A required field's value is never empty; an empty one has no label to show.
+        (None, ColorFieldEmpty::Required) => (None, Label::from(String::new())),
         // PLAN: framework gap: `IconSpec` has no multi-share swatch face, so `AutoFace::Several` shows its first colour until `IconSource` can paint `SwatchFace` shares (ribbon-w2).
         (None, ColorFieldEmpty::Automatic { label, face, .. }) => (
             match face {
@@ -643,15 +648,15 @@ pub fn color_field(ui: &mut Ui, label: &Label, value: &mut String, empty: &Color
     let spoken_value = current.map_or_else(|| text.as_str().to_string(), |c| format!("#{}", c.hex()));
     let spoken = format!("{} {spoken_value}", label.as_str());
     let field = SplitButton::<NoValue>::body(text, |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-        let empty_label = match empty {
-            ColorFieldEmpty::NoColor => Label::from(tl!("No Color").to_string()),
-            ColorFieldEmpty::Automatic { label, .. } => label.clone(),
+        let empty_choice = match empty {
+            ColorFieldEmpty::Required => None,
+            ColorFieldEmpty::NoColor => Some((Label::from(tl!("No Color").to_string()), String::new())),
+            ColorFieldEmpty::Automatic { label, value, .. } => Some((label.clone(), (*value).to_string())),
         };
-        if MenuItem::new(empty_label).show(ui).ran {
-            *value = match empty {
-                ColorFieldEmpty::NoColor => String::new(),
-                ColorFieldEmpty::Automatic { value, .. } => (*value).to_string(),
-            };
+        if let Some((empty_label, empty_value)) = empty_choice
+            && MenuItem::new(empty_label).show(ui).ran
+        {
+            *value = empty_value;
             resp.changed = true;
             cx.request_close();
         }

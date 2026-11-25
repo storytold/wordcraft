@@ -220,7 +220,10 @@ impl FontForm {
             for_bullet: false,
             start: serde_json::Map::new(),
             names,
-            paper: Some(app.session.doc.settings.page_color.unwrap_or(Rgb(255, 255, 255))),
+            // The sample sits on the page's visible fill — a gradient's mean stop or a pattern's
+            // back colour composited over the paper at its transparency — not the fallback colour
+            // a gradient or pattern stores for older readers.
+            paper: Some(wordcraft_render::RenderOptions::default().visible_fill(&app.session.doc)),
             dark: app.session.view.dark_mode,
             shown_as: latin_note,
             shown_as_ea: ea_note,
@@ -487,4 +490,45 @@ impl WordForm for FontForm {
 pub(crate) fn open(app: &mut WordApp, _name: &str, _params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     let form = FontForm::read(app);
     Some(open_form(app, parent, form))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> WordApp {
+        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default())
+    }
+
+    /// The sample sits on the fill a reader sees: a solid page colour, or a gradient's mean stop
+    /// and a pattern's back colour composited over the paper at their transparency.
+    #[test]
+    fn the_sample_paper_is_the_visible_fill() {
+        let mut a = app();
+        a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
+        assert_eq!(FontForm::read(&mut a).paper, Some(Rgb(0x10, 0x20, 0x40)), "a solid page colour is the paper");
+
+        a.run(
+            "design.pageFill",
+            json!({"fill": "gradient", "stops": [
+                {"pos": 0, "color": "000000", "transparency": 50},
+                {"pos": 100, "color": "000000", "transparency": 50}
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(FontForm::read(&mut a).paper, Some(Rgb(128, 128, 128)), "half-transparent black over white, not the black fallback");
+
+        a.run("design.pageFill", json!({"fill": "pattern", "preset": "pct10", "fore": "000000", "back": "000000", "transparency": 100})).unwrap();
+        assert_eq!(FontForm::read(&mut a).paper, Some(Rgb::WHITE), "a fully transparent pattern leaves the white paper");
+    }
+
+    /// The sample paper stays the file's colour on a dark page: `dark` inks the preview itself,
+    /// not the paper it hands to the renderer.
+    #[test]
+    fn the_sample_paper_is_not_inked_for_a_dark_page() {
+        let mut a = app();
+        a.run("design.pageColor", json!({"color": "#F0E0D0"})).unwrap();
+        a.session.view.dark_mode = true;
+        assert_eq!(FontForm::read(&mut a).paper, Some(Rgb(0xF0, 0xE0, 0xD0)));
+    }
 }

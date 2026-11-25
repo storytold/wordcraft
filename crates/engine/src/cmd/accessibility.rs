@@ -160,7 +160,11 @@ impl Checker<'_> {
             let t = doc.table(StoryRef::Body, &tp)?;
             t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|c| c.props.shading).or(t.props.shading)
         });
-        let page = doc.settings.page_color.unwrap_or(Rgb::WHITE);
+        // What a reader sees behind the text: a gradient's mean stop or a pattern's back colour
+        // composited over the paper (with its transparency), else the page colour, else white.
+        // `page_color` alone is the fill's full-strength fallback, not what a translucent fill
+        // leaves visible.
+        let page = wordcraft_render::RenderOptions::default().visible_fill(doc);
         let mut start = 0usize;
         for r in &p.runs {
             let text = p.text.get(start..start.saturating_add(r.len)).unwrap_or("");
@@ -291,6 +295,23 @@ mod tests {
         s.run("select.range", &i["select"]).unwrap();
         s.run(i["action"]["command"].as_str().unwrap(), &i["action"]["params"]).unwrap();
         assert!(!rules(&mut s).iter().any(|(_, r)| r == "altText"));
+    }
+
+    #[test]
+    fn contrast_checks_the_visible_fill_not_the_fallback_colour() {
+        let mut s = Session::new(Document::from_text("Intro"));
+        s.doc.core.title = "T".into();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("format.color", &json!({"color": "000000"})).unwrap();
+        // A fully transparent black pattern over white paper leaves black text readable.
+        s.run("design.pageFill", &json!({"fill": "pattern", "preset": "pct10", "fore": "000000", "back": "000000", "transparency": 100.0})).unwrap();
+        assert!(!rules(&mut s).iter().any(|(_, r)| r == "contrast"), "{:?}", rules(&mut s));
+        // A half-transparent black gradient is grey paper: still light enough for black text.
+        s.run("design.pageFill", &json!({"fill": "gradient", "start": "000000", "end": "000000", "transparency": 50.0})).unwrap();
+        assert!(!rules(&mut s).iter().any(|(_, r)| r == "contrast"), "{:?}", rules(&mut s));
+        // Opaque, the same fill is black and black text on it is hard to read.
+        s.run("design.pageFill", &json!({"fill": "gradient", "start": "000000", "end": "000000"})).unwrap();
+        assert!(rules(&mut s).iter().any(|(_, r)| r == "contrast"));
     }
 
     #[test]

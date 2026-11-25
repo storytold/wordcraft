@@ -399,7 +399,7 @@ impl PreferencesModel for OptionsModel<'_> {
                 GroupSpec::new(
                     Some(tl!("Printing")),
                     vec![
-                        b("display.printBackgrounds", tl!("Print the page color"), app.ui.print_backgrounds),
+                        b("display.printBackgrounds", tl!("Print page backgrounds (color, picture, gradient, pattern)"), app.ui.print_backgrounds),
                         b("display.updateFieldsBeforePrint", tl!("Update fields before printing"), app.ui.update_fields_before_print),
                     ],
                 ),

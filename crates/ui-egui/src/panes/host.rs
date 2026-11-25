@@ -28,6 +28,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui, mut centre: impl FnMut(&mut Ui, &mut
         (env.direction.is_rtl(), env.tokens.size)
     };
     let open = open(app);
+    // A closed Format Background pane throws its unsaved draft away: reopening reads the document's
+    // fill again, so a stale draft can't overwrite a change made elsewhere.
+    if !open.contains(&Pane::FormatBackground) {
+        crate::format_background::forget(app);
+    }
     let requests = {
         let cell = RefCell::new(&mut *app);
         let mut content = Content { app: &cell, rtl, size };

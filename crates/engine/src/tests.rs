@@ -17,6 +17,7 @@ mod find_apostrophes;
 mod fit_one_page;
 mod font_sizes;
 mod fonts;
+mod format_background;
 mod ime_noop;
 mod page_number_formats_in_lists;
 mod para_tools;

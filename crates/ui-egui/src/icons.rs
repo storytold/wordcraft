@@ -121,6 +121,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("fonts", include_bytes!("../icons/fonts.svg")),
     ("footer", include_bytes!("../icons/footer.svg")),
     ("footnote", include_bytes!("../icons/footnote.svg")),
+    ("formatBackground", include_bytes!("../icons/formatBackground.svg")),
     ("formula", include_bytes!("../icons/formula.svg")),
     ("fullScreen", include_bytes!("../icons/fullScreen.svg")),
     ("greetingLine", include_bytes!("../icons/greetingLine.svg")),

@@ -494,6 +494,8 @@ pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
         s.even_odd_headers,
         &s.page_color,
         &s.page_picture,
+        &s.page_gradient,
+        &s.page_pattern,
         s.watermark.as_ref().filter(|w| !w.text.trim().is_empty()),
         (&s.footnote_format, &s.endnote_format, &s.footnote_pr, &s.endnote_pr),
         (&doc.footnote_separators, &doc.endnote_separators),

@@ -46,6 +46,9 @@ pub struct ViewState {
     /// selected shapes' fill.
     #[serde(default)]
     pub format_shape_pane: bool,
+    /// The Format Background pane (Draw › Edit › Format Background): the page's fill.
+    #[serde(default)]
+    pub format_background_pane: bool,
     pub multi_page: bool,
     /// One Page or Page Width was chosen last: keep one page per row when a typed or wheel zoom replaces the fit mode.
     #[serde(default)]
@@ -194,6 +197,7 @@ impl Default for ViewState {
             accessibility_pane: false,
             alt_text_pane: false,
             format_shape_pane: false,
+            format_background_pane: false,
             multi_page: false,
             single_column: false,
             fit: String::new(),

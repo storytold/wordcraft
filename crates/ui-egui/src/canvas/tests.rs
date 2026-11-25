@@ -176,6 +176,19 @@ fn caret_contrasts_with_what_lies_under_it() {
     a.session.view.dark_mode = true;
     assert_eq!(at(&mut a, 2), Color32::WHITE, "dark page");
     a.session.view.dark_mode = false;
+    a.run(
+        "design.pageFill",
+        json!({"fill": "gradient", "stops": [
+            {"pos": 0, "color": "000000", "transparency": 0},
+            {"pos": 100, "color": "000000", "transparency": 0}
+        ]}),
+    )
+    .unwrap();
+    assert_eq!(at(&mut a, 2), Color32::WHITE, "an opaque black gradient fill");
+    a.run("design.pageFill", json!({"fill": "pattern", "preset": "pct20", "fore": "000000", "back": "000000"})).unwrap();
+    assert_eq!(at(&mut a, 2), Color32::WHITE, "an opaque black pattern fill");
+    a.run("design.pageFill", json!({"fill": "none"})).unwrap();
+    assert_eq!(at(&mut a, 2), Color32::BLACK, "no fill, white paper");
     a.run("select.text", json!({"text": "Hello"})).unwrap();
     a.run("format.highlight", json!({"color": "black"})).unwrap();
     assert_eq!(at(&mut a, 2), Color32::WHITE, "inside a black highlight");
@@ -2110,6 +2123,28 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let hidden = view_key(&app, false, Some(&object));
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+}
+
+/// Format Background: the page texture cache key follows the gradient and pattern fills, so
+/// changing either one repaints the page instead of serving the previous fill's texture.
+#[test]
+fn the_view_key_changes_when_the_gradient_or_pattern_fill_changes() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("x")), Default::default());
+    let plain = view_key(&a, false, None);
+    a.run(
+        "design.pageFill",
+        json!({"fill": "gradient", "stops": [
+            {"pos": 0, "color": "000000", "transparency": 0},
+            {"pos": 100, "color": "FFFFFF", "transparency": 0}
+        ]}),
+    )
+    .unwrap();
+    let gradient = view_key(&a, false, None);
+    assert_ne!(plain, gradient, "a gradient fill gets its own page texture");
+    a.run("design.pageFill", json!({"fill": "pattern", "preset": "ltDnDiag", "fore": "000000", "back": "FFFFFF"})).unwrap();
+    let pattern = view_key(&a, false, None);
+    assert_ne!(plain, pattern, "a pattern fill gets its own page texture");
+    assert_ne!(gradient, pattern, "each fill gets its own page texture");
 }
 
 #[test]

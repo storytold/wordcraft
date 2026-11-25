@@ -27,9 +27,13 @@ pub(super) fn thumbnails(ctx: &egui::Context) -> Thumbnails<usize> {
     Thumbnails::in_context(ctx, (SALT, limit), ThumbnailOptions::new().max_side(limit))
 }
 
-/// What every sheet is drawn from: the output layout's inputs and the print settings that impose it.
+/// What every sheet is drawn from: the output layout's inputs, the print settings that impose it,
+/// and the page fills the sheet shows — backgrounds off strips them, as the print job does, so a
+/// toggle or a fill change repaints the cached sheets.
 pub(super) fn inputs(app: &WordApp) -> Revision {
-    Revision::of(&(layout_key(app), app.print.settings.params().to_string()))
+    let s = &app.session.doc.settings;
+    let fills = format!("{:?}{:?}{:?}{:?}", s.page_color, s.page_picture, s.page_gradient, s.page_pattern);
+    Revision::of(&(layout_key(app), app.print.settings.params().to_string(), app.ui.print_backgrounds, fills))
 }
 
 /// Draws the imposed sheets of the document on the UI thread, as production's preview did.
@@ -59,6 +63,19 @@ impl ThumbSource<usize> for SheetSource<'_> {
         let w = ((sheet.width * scale).round() as usize).clamp(1, side);
         let h = ((sheet.height * scale).round() as usize).clamp(1, side);
         let mut image = ColorImage::filled([w, h], Color32::WHITE);
+        // Backgrounds off: the preview shows the plain page, as the job prints it, from a copy so
+        // the open document keeps its fills.
+        let stripped;
+        let doc = if self.app.ui.print_backgrounds {
+            &self.app.session.doc
+        } else {
+            stripped = {
+                let mut d = self.app.session.doc.clone();
+                let _ = wordcraft_doc::PageFills::take(&mut d.settings);
+                d
+            };
+            &stripped
+        };
         for slot in &sheet.slots {
             let Some(pg) = self.lay.pages.get(slot.page) else { continue };
             let k = (slot.width / pg.w).min(slot.height / pg.h);
@@ -68,7 +85,7 @@ impl ThumbSource<usize> for SheetSource<'_> {
             }
             let x0 = ((slot.x + (slot.width - pg.w * k) / 2.0) * scale).round() as i64;
             let y0 = ((slot.y + (slot.height - pg.h * k) / 2.0) * scale).round() as i64;
-            let page = wordcraft_render::render_page(&self.app.session.doc, pg, page_scale, &preview_options(self.app));
+            let page = wordcraft_render::render_page(doc, pg, page_scale, &preview_options(self.app));
             let straight = page.to_straight();
             let row_len = (page.width as usize).max(1) * 4;
             for (row, line) in straight.chunks_exact(row_len).enumerate() {

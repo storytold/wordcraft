@@ -561,6 +561,29 @@ mod tests {
         assert_ne!(preview::inputs(&app), revision);
     }
 
+    /// Format Background: the preview's sheets follow the page fills and the Print backgrounds
+    /// setting, so a fill change or the toggle repaints them instead of serving the old fill.
+    #[test]
+    fn preview_follows_the_page_fills_and_the_backgrounds_setting() {
+        let (mut app, _) = synthetic_app();
+        let plain = preview::inputs(&app);
+        app.run(
+            "design.pageFill",
+            json!({"fill": "gradient", "stops": [
+                {"pos": 0, "color": "102040", "transparency": 0},
+                {"pos": 100, "color": "FFFFFF", "transparency": 0}
+            ]}),
+        )
+        .unwrap();
+        let filled = preview::inputs(&app);
+        assert_ne!(filled, plain, "a new fill repaints the preview");
+        app.ui.print_backgrounds = true;
+        let shown = preview::inputs(&app);
+        assert_ne!(shown, filled, "backgrounds on draws the fill the job prints");
+        app.run("design.pageFill", json!({"fill": "pattern", "preset": "pct10", "fore": "000000", "back": "FFFFFF"})).unwrap();
+        assert_ne!(preview::inputs(&app), shown, "a pattern repaints it too");
+    }
+
     /// The Print page's preview shown in a harness at `ppp` pixels per point over the synthetic page.
     fn harness(ppp: f32) -> egui_kittest::Harness<'static, WordApp> {
         let (app, _) = synthetic_app();

@@ -43,6 +43,7 @@ pub mod documents;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod font_download;
+pub mod format_background;
 pub mod format_shape;
 pub mod i18n;
 pub mod icons;
@@ -429,6 +430,8 @@ pub struct WordApp {
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,
+    /// The Format Background pane's unsaved fill (Apply runs it as one command).
+    pub(crate) background: format_background::Draft,
     /// Web: a recipient list was asked for (Select Recipients › Use an Existing List…), so the
     /// next text file from the picker loads as recipients instead of opening (#240).
     pub recipient_list_pending: bool,
