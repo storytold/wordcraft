@@ -14,9 +14,16 @@
 
 #[cfg(target_os = "linux")]
 mod appimage_env;
+#[cfg(test)]
+mod build_channel;
+mod build_flavor;
 mod control_server;
 mod default_apps;
+mod launch_profile;
+mod nightly_session;
 mod prefs;
+mod process_identity;
+mod profile_root;
 mod region;
 
 use std::path::PathBuf;
@@ -58,6 +65,9 @@ struct App {
     spool: Spool,
     /// The control server, when `--control` started one; it removes the token file it made.
     control: Option<control_server::Control>,
+    /// The app binary's last step as the app leaves, run once at the end of `finish` (a Nightly
+    /// quit ends the process inside AppKit's terminate, after eframe's `on_exit`).
+    exit: Option<Box<dyn FnOnce()>>,
 }
 
 impl App {
@@ -95,7 +105,12 @@ impl App {
         if let Some(control) = self.control.take() {
             control.shut_down();
         }
-        self.app.start_pending_update();
+        if !launch_profile::current().is_nightly() {
+            self.app.start_pending_update();
+        }
+        if let Some(exit) = self.exit.take() {
+            exit();
+        }
     }
 }
 
@@ -202,10 +217,12 @@ type MakeDefault = Box<dyn Fn() -> Result<DefaultApp, DefaultAppError>>;
 /// What the app takes from its host beyond the runtime: File › Print through the system spooler,
 /// personal templates (#2852, made on first save in `Templates` in the settings folder), and making
 /// WordCraft the default app for Word documents (#295; macOS has no way to, so no button there).
-fn services(spool: Spool, intake: FileIntake) -> Services {
+fn services(spool: Spool, intake: FileIntake, nightly: bool) -> Services {
+    // Nightly never claims the stable app's file associations: the button would rewrite the same
+    // OS registration the stable WordCraft owns.
     #[cfg(any(unix, windows))]
-    let make_default_app =
-        (!cfg!(target_os = "macos")).then(|| -> MakeDefault { Box::new(|| craft::platform::default_app::make_default(&default_apps::identity())) });
+    let make_default_app = (!cfg!(target_os = "macos") && !nightly)
+        .then(|| -> MakeDefault { Box::new(|| craft::platform::default_app::make_default(&default_apps::identity())) });
     #[cfg(not(any(unix, windows)))]
     let make_default_app: Option<MakeDefault> = None;
     Services {
@@ -258,9 +275,9 @@ fn build_sha() -> &'static str {
 
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
 /// one (#1440). A `--control` port, a token or a token file that isn't is an error.
-fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
+fn text_args(arguments: Vec<std::ffi::OsString>) -> (Vec<String>, Vec<std::path::PathBuf>) {
     let (mut args, mut files) = (Vec::new(), Vec::new());
-    for (i, a) in std::env::args_os().skip(1).enumerate() {
+    for (i, a) in arguments.into_iter().enumerate() {
         match a.into_string() {
             Ok(a) => args.push(a),
             Err(a) if args.last().is_some_and(|p| matches!(p.as_str(), "--control" | "--control-token" | "--control-token-file")) => {
@@ -318,18 +335,96 @@ fn complain(message: std::fmt::Arguments<'_>) {
     let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: {message}\n"));
 }
 
+fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
+    process_identity::initialize(
+        build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1,
+        wordcraft_ui_egui::os_window::id_for(wordcraft_ui_egui::os_window::LaunchIdentity::NightlyV1),
+    )
+}
+
+/// Tell the person why a Launcher launch was refused, with a native message box on a desktop
+/// session (a Launcher start has no terminal to read standard error from).
+fn report_launch_profile_error(error: &str) {
+    complain(format_args!("launch profile: {error}"));
+    let desktop_session = cfg!(windows)
+        || cfg!(target_os = "macos")
+        || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
+    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+        if let Err(identity) = initialize_nightly_process_identity() {
+            complain(format_args!("launch profile: {identity}"));
+            return;
+        }
+        let _ = rfd::MessageDialog::new()
+            .set_title("WordCraft Nightly")
+            .set_description(error)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+}
+
+/// Select the immutable launch profile before any startup service or side effect.
+fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
+    // The trusted Launcher protocol is decided before logging, crash handling, the update helper,
+    // fonts, preferences or the settings folder.
+    let argv: Vec<_> = std::env::args_os().skip(1).collect();
+    // Plain `--version`, or the Launcher's `--launch-profile nightly-v1 --profile-root <dir>
+    // --version`: answered before root validation, process identity, IPC or any window.
+    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv))
+    {
+        let line = build_flavor::version(build_flavor::COMPILED, env!("WORDCRAFT_BUILT_VERSION"));
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), format!("{line}\n").as_bytes());
+        return None;
+    }
+    let early = launch_profile::parse(argv)
+        .and_then(|launch| {
+            build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
+            initialize_nightly_process_identity().map_err(|error| error.to_string())?;
+            Ok(launch)
+        })
+        .and_then(|launch| launch_profile::prepare(launch, launch_profile::validate_root))
+        .unwrap_or_else(|error| {
+            report_launch_profile_error(&error);
+            std::process::exit(2)
+        });
+    let identity = if early.profile.is_nightly() {
+        wordcraft_ui_egui::os_window::LaunchIdentity::NightlyV1
+    } else {
+        wordcraft_ui_egui::os_window::LaunchIdentity::Stable
+    };
+    if let Err(error) = launch_profile::install(early.profile).and_then(|()| wordcraft_ui_egui::os_window::select_identity(identity)) {
+        report_launch_profile_error(&error);
+        std::process::exit(2);
+    }
+    // One data root for everything the app keeps: preferences, window place, logs, recovery,
+    // fonts, templates, dictionaries and control token files all come from it.
+    if let Some(root) = launch_profile::current().root()
+        && let Err(error) = wordcraft_control_key::use_settings_dir(root.to_path_buf())
+    {
+        report_launch_profile_error(&error);
+        std::process::exit(2);
+    }
+    Some(early.args)
+}
+
 /// Parses the command line, installs logging and the panic hook, restores preferences and window
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
     // Windows: the print helper is a copy of this program that runs one job in its own process.
+    // It reads only its own job folder, so it runs before the launch profile is parsed: a Nightly
+    // wants a profile on every start, and the helper must print without one.
     #[cfg(windows)]
     if let Some(code) = craft::print::spool::isolated::helper_main() {
         std::process::exit(code);
     }
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
     // Windows: the update helper is a copy of this program started with `--finish-update`.
+    // A Nightly never updates itself: the Launcher owns its updates.
     #[cfg(windows)]
-    if let Some(result) = craft::update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if !launch_profile::current().is_nightly()
+        && let Some(result) = craft::update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &arguments)
+    {
         std::process::exit(i32::from(result.is_err()));
     }
     // Linux: before anything reads another program's AppImage variables, or a thread starts (#5653).
@@ -352,7 +447,7 @@ fn main() -> eframe::Result {
     let mut flags = ControlOptions::default();
     let mut files = Vec::new();
     let mut sample = false;
-    let (args, other_files) = text_args();
+    let (args, other_files) = text_args(arguments);
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
@@ -388,6 +483,7 @@ fn main() -> eframe::Result {
             },
             "--sample" => sample = true,
             "--version" => {
+                // A nightly build reported its channel line before this parser ran.
                 println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
                 return Ok(());
             }
@@ -422,6 +518,13 @@ fn main() -> eframe::Result {
         complain(format_args!("--control needs a port number from 1 to 65535, got \"0\""));
         std::process::exit(2);
     }
+    // Nightly runs the Launcher's documents only: no control server, token file or automation
+    // switch, and none inherited from a stable launch's environment.
+    if launch_profile::current().is_nightly() && (control.port.is_some() || control.token.is_some() || control.token_file.is_some()) {
+        complain(format_args!("a WordCraft Nightly window does not start a control server; open documents through ArtCraft Launcher"));
+        std::process::exit(2);
+    }
+    let nightly = launch_profile::current().is_nightly();
     let settings_dir = wordcraft_control_key::settings_dir();
     // The log file lives in the settings directory, next to the preferences; opened after the
     // arguments, so `--version` leaves no file behind. Records logged until now are written to it
@@ -440,10 +543,16 @@ fn main() -> eframe::Result {
             None => logger.stderr_only(),
         }
     }
+    // A Nightly window always carries its own id; a stable one keeps the Flatpak sandbox's id
+    // when it runs inside one (so docks match the flatpak's desktop file).
+    let app_id = match launch_profile::current().root() {
+        Some(_) => wordcraft_ui_egui::os_window::app_id().to_string(),
+        None => std::env::var("FLATPAK_ID").ok().filter(|id| !id.is_empty()).unwrap_or_else(|| wordcraft_ui_egui::os_window::APP_ID.to_string()),
+    };
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("WordCraft")
-            .with_app_id("ai.storyteller.wordcraft")
+            .with_title(wordcraft_ui_egui::os_window::name_for(wordcraft_ui_egui::os_window::identity()))
+            .with_app_id(app_id)
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE)
             .with_drag_and_drop(true)
@@ -504,9 +613,33 @@ fn main() -> eframe::Result {
     let _apple_events = craft::platform::open::apple_events::install(sender);
     #[cfg(not(target_os = "macos"))]
     drop(sender);
+    // Nightly's own health record: one owner per profile, cleared only by a controlled return.
+    let (nightly_record, health_unavailable) = match nightly_session::Session::begin_with_health(
+        launch_profile::current().root(),
+        env!("WORDCRAFT_BUILT_VERSION"),
+        option_env!("WORDCRAFT_BUILD_SHA"),
+    ) {
+        Ok(pair) => pair,
+        Err(error) => {
+            log::warn!("Nightly session health is unavailable: {error}");
+            (None, launch_profile::current().is_nightly())
+        }
+    };
+    let session_health_warning: Option<String> = health_unavailable.then(|| {
+        "WordCraft Nightly could not record session health in its private profile. You can still edit, but abnormal-exit detection is unavailable."
+            .to_string()
+    });
+    let previous_nightly_unclean = nightly_record.as_ref().is_some_and(nightly_session::Session::previous_unclean);
+    let nightly_watch: nightly_session::Shared = Arc::new(Mutex::new(nightly_record));
+    let unclean_notice_shown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // The window body and its exit hook each take a clone of the flag; the return path keeps the
+    // other, so a start that created no window can still finish the record.
+    let session_for_exit = nightly_watch.clone();
+    let noticed_for_exit = unclean_notice_shown.clone();
+    let noticed_in_window = unclean_notice_shown.clone();
     let exit_settings = settings.clone();
     let result = eframe::run_native(
-        "WordCraft",
+        wordcraft_ui_egui::os_window::name_for(wordcraft_ui_egui::os_window::identity()),
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
@@ -528,7 +661,7 @@ fn main() -> eframe::Result {
             );
             let shell = ShellInfo::current().backend(if x11 { Backend::X11 } else { Backend::from_env() });
             let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
-                .app_id("ai.storyteller.wordcraft")
+                .app_id(wordcraft_ui_egui::os_window::app_id())
                 .system(SystemReader::start(wake))
                 .clipboard(Clipboard::new(SystemClipboard::new().decoder(decode_png)))
                 .placement(placement);
@@ -547,19 +680,31 @@ fn main() -> eframe::Result {
                 prefs::load_user_dictionary(&mut session, &settings, path);
             }
             let spool = Spool::new(host.jobs_shared().clone());
-            let mut app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
+            let mut app = WordApp::new(session, services(spool.clone(), intake, nightly)).with_host(host).with_settings(settings.clone());
             // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
             // the region check below reads the saved region the settings apply.
             if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
                 app = app.with_fallback_chooser(true);
             }
-            app.set_startup_update_check(true);
-            // After the preferences, so the reason it gives is in the interface language.
-            if updates_unsafe {
-                app.disable_self_update();
+            if nightly {
+                // The Launcher installs Nightly; Help › Check for Updates says so instead.
+                app.use_launcher_updates();
+            } else {
+                app.set_startup_update_check(true);
+                // After the preferences, so the reason it gives is in the interface language.
+                if updates_unsafe {
+                    app.disable_self_update();
+                }
             }
             // Language packs from the suite's font store; an Install click is the person's own.
-            wordcraft_engine::packs::use_font_store(true);
+            // Nightly keeps its own store in the profile, so a pack installed there is not a
+            // change to the stable apps' shared fonts.
+            match launch_profile::current().root() {
+                Some(root) => wordcraft_engine::packs::use_font_store_in(root.join("FontStore"), true),
+                None => {
+                    wordcraft_engine::packs::use_font_store(true);
+                }
+            }
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
@@ -576,7 +721,8 @@ fn main() -> eframe::Result {
                 }
             }
             let mut control_server = None;
-            if let Some(port) = control.port
+            if !nightly
+                && let Some(port) = control.port
                 && let Some((rx, started)) =
                     control_server::start(&control, port, WindowHost::of(&ctx), wordcraft_control_key::settings_dir().as_deref())
             {
@@ -598,9 +744,32 @@ fn main() -> eframe::Result {
             for f in other_files {
                 open_non_unicode(&mut app, &f);
             }
-            Ok(Box::new(App { app, panels, drops, settings, spool, control: control_server }))
+            // The personal agent files, the session record and the control token all live in the
+            // profile; the app's own services are built with the nightly rule in mind.
+            if let Some(warning) = &session_health_warning {
+                app.status_long(warning.clone());
+            }
+            if previous_nightly_unclean {
+                app.status_long(
+                    "The previous WordCraft Nightly session did not finish normally. You can report a problem from Help › About. No diagnostics have been sent.",
+                );
+                noticed_in_window.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(Box::new(App {
+                app,
+                panels,
+                drops,
+                settings,
+                spool,
+                control: control_server,
+                exit: Some(Box::new(move || {
+                    nightly_session::finish_once(&session_for_exit, noticed_for_exit.load(std::sync::atomic::Ordering::Relaxed));
+                })),
+            }))
         }),
     );
+    // The exit hook has run; this is the no-op fallback for a start that created no window.
+    nightly_session::finish_once(&nightly_watch, unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed));
     // The app is dropped by now: whatever it saved on the way out is in the store.
     if let Err(e) = exit_settings.lock().flush() {
         log::warn!("preferences: {e}");
@@ -802,8 +971,8 @@ mod smoke {
             let (intake, sender) = FileIntake::new(Wake::new(|| {}));
             let drops = intake.sender();
             let session = Session::new(wordcraft_doc::Document::new());
-            let app = WordApp::new(session, services(spool.clone(), intake)).with_host(host).with_settings(settings.clone());
-            Run { app: App { app, panels, drops, settings, spool, control: None }, frames, ctx, sender }
+            let app = WordApp::new(session, services(spool.clone(), intake, false)).with_host(host).with_settings(settings.clone());
+            Run { app: App { app, panels, drops, settings, spool, control: None, exit: None }, frames, ctx, sender }
         }
 
         /// One frame as eframe runs it: the input hook once, the logic once, the UI per pass.
