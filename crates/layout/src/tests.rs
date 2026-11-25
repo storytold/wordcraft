@@ -2570,13 +2570,32 @@ fn clicking_near_shared_edge_within_turned_tolerance_stays_in_clicked_cell() {
     // Outside the table, the 2pt tolerance on turned text still applies.
     let mut d_out = Document::new();
     let mut t_out = Table::new(1, 1, 468.0);
+    t_out.rows[0].cells[0].props.margins = Some([0.0; 4]);
     t_out.rows[0].cells[0].props.text_direction = TextDirection::Up;
     t_out.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Edge", Default::default()))];
-    d_out.body = vec![wordcraft_doc::Block::Table(t_out).into()];
+    d_out.body = vec![
+        wordcraft_doc::Block::Table(t_out).into(),
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Upright", Default::default())),
+    ];
     let l_out = lay(&d_out);
+    let out_cell = l_out.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
     let out_bounds = l_out.pages[0].items.iter().find_map(|it| it.turned_bounds()).unwrap();
-    let out_hit = l_out.hit(0, out_bounds.x - 1.0, out_bounds.y + out_bounds.h * 0.5, StoryRef::Body).unwrap();
+    let out_x = out_bounds.x - 1.0;
+    let out_y = out_bounds.y + out_bounds.h * 0.5;
+    assert!(!out_cell.contains(wordcraft_geom::Point::new(out_x, out_y)));
+    assert!(out_bounds.expand(2.0).contains(wordcraft_geom::Point::new(out_x, out_y)));
+    let out_hit = l_out.hit(0, out_x, out_y, StoryRef::Body).unwrap();
     assert_eq!(out_hit.path, Path(vec![0, 0, 0, 0]));
+    // Beyond the 2pt tolerance, the upright paragraph is hit instead (proving tolerance is required).
+    let far_hit = l_out.hit(0, out_bounds.x - 3.0, out_y, StoryRef::Body).unwrap();
+    assert_eq!(far_hit.path, Path(vec![1]));
 }
 
 #[test]
