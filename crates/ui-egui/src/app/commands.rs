@@ -413,6 +413,8 @@ impl WordApp {
                 | "file.rename"
                 | "file.privacy"
                 | "file.privacyOptions"
+                | "file.proofing"
+                | "file.proofingExceptions"
                 | "file.setAuthor"
                 | "file.compatibility"
                 | "file.encrypt"

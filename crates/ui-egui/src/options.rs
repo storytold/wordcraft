@@ -309,6 +309,9 @@ impl PreferencesModel for OptionsModel<'_> {
         let marks = prefs.marks;
         let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
         let settings = &app.session.doc.settings;
+        let open = app.has_document();
+        let proofing_exceptions = crate::app::command_board::command_enabled(app, "file.proofingExceptions");
+        let privacy_options = crate::app::command_board::command_enabled(app, "file.privacyOptions");
         let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
         let b = |key, label, on| RowSpec::new(key, label, RowKind::Bool(on));
         let custom = |key, label| RowSpec::new(key, label, RowKind::Custom);
@@ -427,6 +430,18 @@ impl PreferencesModel for OptionsModel<'_> {
                         b("proofing.markGrammar", tl!("Mark grammar errors as you type"), prefs.mark_grammar).enabled(app.session.view.proofing),
                     ],
                 ),
+                // The open document's `file.proofingExceptions`: saved with it, and only the marks are hidden.
+                // Off and unchecked on the Start screen, where no document takes the setting, and off while
+                // the document is protected.
+                GroupSpec::new(
+                    Some(tl!("Exceptions for this document")),
+                    vec![
+                        b("proofing.hideSpellingErrors", tl!("Hide spelling errors in this document only"), open && settings.hide_spelling_errors)
+                            .enabled(proofing_exceptions),
+                        b("proofing.hideGrammarErrors", tl!("Hide grammar errors in this document only"), open && settings.hide_grammar_errors)
+                            .enabled(proofing_exceptions),
+                    ],
+                ),
                 GroupSpec::new(
                     Some(tl!("Custom dictionary")),
                     vec![
@@ -448,19 +463,23 @@ impl PreferencesModel for OptionsModel<'_> {
                     vec![if browser { row.help(&s.autosave_reason) } else { row }]
                 }),
                 // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
+                // Off and unchecked on the Start screen, where no document takes the setting, and off while
+                // the document is protected.
                 GroupSpec::new(
                     Some(tl!("Privacy for this document")),
                     vec![
                         b(
                             "save.removePersonalInfo",
                             tl!("Remove my name from comments, changes and file properties when saving"),
-                            settings.remove_personal_info,
-                        ),
+                            open && settings.remove_personal_info,
+                        )
+                        .enabled(privacy_options),
                         b(
                             "save.removeDateTime",
                             tl!("Leave out the date and time of comments and tracked changes when saving"),
-                            settings.remove_date_time,
-                        ),
+                            open && settings.remove_date_time,
+                        )
+                        .enabled(privacy_options),
                     ],
                 ),
             ],
@@ -665,6 +684,8 @@ impl PreferencesModel for OptionsModel<'_> {
             ("proofing.ignoreInternet", Bool(v)) => self.options(json!({"ignoreInternet": v})),
             ("proofing.checkSpelling", Bool(v)) => self.options(json!({"checkSpelling": v})),
             ("proofing.markGrammar", Bool(v)) => self.options(json!({"markGrammar": v})),
+            ("proofing.hideSpellingErrors", Bool(v)) => self.run("file.proofingExceptions", json!({"hideSpellingErrors": v})),
+            ("proofing.hideGrammarErrors", Bool(v)) => self.run("file.proofingExceptions", json!({"hideGrammarErrors": v})),
             ("save.autosave", Bool(v)) => {
                 if self.app.autosave_block() != Some(crate::AutoSaveBlock::Browser) {
                     self.app.autosave = v;

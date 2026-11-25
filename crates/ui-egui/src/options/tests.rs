@@ -1,7 +1,7 @@
 use serde_json::json;
 use wordcraft_geom::Unit;
 
-use craft::ui::patterns::preferences::{PrefValue, PreferencesModel};
+use craft::ui::patterns::preferences::{PrefValue, PreferencesModel, RowKind};
 
 use super::{OptionsModel, length, unit_suffix};
 use crate::prefs::{Prefs, legacy_ui_json};
@@ -186,6 +186,67 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
     assert_eq!(a.session.prefs.units, None);
     with_model(&mut a, true, |m| m.set("advanced.region", PrefValue::Choice("pl-PL".into())));
     assert_eq!(a.session.prefs.region.as_deref(), Some("pl-PL"));
+}
+
+/// Whether the Bool row `key` shows checked.
+fn row_checked(model: &OptionsModel<'_>, key: &str) -> bool {
+    let row = model.pages().into_iter().flat_map(|p| p.groups).flat_map(|g| g.rows).find(|r| r.key == key).expect("row exists");
+    match row.kind {
+        RowKind::Bool(on) => on,
+        _ => panic!("{key} is a checkbox"),
+    }
+}
+
+/// File › Options › Proofing › Exceptions: the checkboxes are the document's
+/// `file.proofingExceptions` settings.
+#[test]
+fn proofing_exception_checkboxes_hide_the_document_errors() {
+    let mut a = app();
+    a.run("file.new", json!({})).unwrap();
+    with_model(&mut a, true, |m| m.set("proofing.hideSpellingErrors", PrefValue::Bool(true)));
+    assert!(a.session.doc.settings.hide_spelling_errors);
+    assert!(!a.session.doc.settings.hide_grammar_errors);
+    assert!(with_model(&mut a, true, |m| row_checked(m, "proofing.hideSpellingErrors")));
+    with_model(&mut a, true, |m| m.set("proofing.hideGrammarErrors", PrefValue::Bool(true)));
+    let proofing = a.session.run("file.proofing", &json!({})).unwrap();
+    assert_eq!(proofing, json!({"hideSpellingErrors": true, "hideGrammarErrors": true}));
+    with_model(&mut a, true, |m| m.set("proofing.hideSpellingErrors", PrefValue::Bool(false)));
+    assert!(!a.session.doc.settings.hide_spelling_errors, "and off again");
+}
+
+/// The document's own checkboxes on the Proofing and Save panes.
+const DOCUMENT_CHECKBOXES: [&str; 4] =
+    ["proofing.hideSpellingErrors", "proofing.hideGrammarErrors", "save.removePersonalInfo", "save.removeDateTime"];
+
+/// On the Start screen no document is open, so the document's own checkboxes on the Proofing
+/// and Save panes are off and unchecked, whatever the blank document behind it holds.
+#[test]
+fn document_checkboxes_are_off_on_the_start_screen() {
+    let mut a = app();
+    assert!(a.start_screen() && !a.has_document());
+    let settings = &mut a.session.doc.settings;
+    settings.hide_spelling_errors = true;
+    settings.hide_grammar_errors = true;
+    settings.remove_personal_info = true;
+    settings.remove_date_time = true;
+    for key in DOCUMENT_CHECKBOXES {
+        assert!(!with_model(&mut a, true, move |m| row_enabled(m, key)), "{key} is off");
+        assert!(!with_model(&mut a, true, move |m| row_checked(m, key)), "{key} is unchecked");
+    }
+}
+
+/// A protected document refuses its privacy options and proofing exceptions, so their
+/// checkboxes are off while it is protected and on again once protection stops.
+#[test]
+fn document_checkboxes_are_off_while_the_document_is_protected() {
+    let mut a = app();
+    a.run("file.new", json!({})).unwrap();
+    let enabled = |a: &mut WordApp| DOCUMENT_CHECKBOXES.map(|key| with_model(a, true, move |m| row_enabled(m, key)));
+    assert_eq!(enabled(&mut a), [true; 4], "with a document open");
+    a.run("review.restrict", json!({"mode": "trackedChanges"})).unwrap();
+    assert_eq!(enabled(&mut a), [false; 4], "while protected");
+    a.run("review.restrict", json!({"stop": true})).unwrap();
+    assert_eq!(enabled(&mut a), [true; 4], "after protection stops");
 }
 
 /// File › Options › Accessibility › Animation effects: the help line follows the runtime's resolved

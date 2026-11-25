@@ -258,7 +258,11 @@ fn a_version_restore_keeps_the_live_protection() {
 #[test]
 fn a_document_wide_change_that_is_not_tracked_is_refused_under_protection() {
     for mode in ["readOnly", "forms", "comments", "trackedChanges"] {
-        for (id, params) in [("file.properties", json!({"title": "Forged title"})), ("file.privacyOptions", json!({"removePersonalInfo": true}))] {
+        for (id, params) in [
+            ("file.properties", json!({"title": "Forged title"})),
+            ("file.privacyOptions", json!({"removePersonalInfo": true})),
+            ("file.proofingExceptions", json!({"hideSpellingErrors": true})),
+        ] {
             let mut s = Session::new(Document::from_text("Some text."));
             s.run("review.restrict", &json!({"mode": mode})).unwrap();
             let before = s.doc.clone();
@@ -273,6 +277,8 @@ fn a_document_wide_change_that_is_not_tracked_is_refused_under_protection() {
     assert_eq!(s.doc.core.title, "A title");
     s.run("file.privacyOptions", &json!({"removePersonalInfo": true})).unwrap();
     assert!(s.doc.settings.remove_personal_info);
+    s.run("file.proofingExceptions", &json!({"hideSpellingErrors": true})).unwrap();
+    assert!(s.doc.settings.hide_spelling_errors);
 }
 
 /// A file command that changes the document is checked like any other: the privacy options,
@@ -296,6 +302,30 @@ fn file_commands_that_change_the_document_are_protected() {
     // Without protection they work.
     let mut s = Session::new(Document::from_text("Some text."));
     s.run("file.inspect", &json!({"remove": ["comments"]})).unwrap();
+}
+
+/// The privacy options and proofing exceptions are greyed out in every protection mode, also
+/// when an exception lets the author edit part of the document, as `check_before` refuses them.
+#[test]
+fn document_settings_commands_are_greyed_out_while_protected() {
+    let ids = ["file.privacyOptions", "file.proofingExceptions"];
+    let s = Session::new(Document::from_text("Some text."));
+    for id in ids {
+        assert_eq!(s.why_disabled(id), None, "{id} without protection");
+    }
+    for mode in ["readOnly", "forms", "comments", "trackedChanges"] {
+        for exception in [false, true] {
+            let mut s = Session::new(Document::from_text("Some text."));
+            if exception {
+                select(&mut s, "Some text.");
+                s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+            }
+            s.run("review.restrict", &json!({"mode": mode})).unwrap();
+            for id in ids {
+                assert!(s.why_disabled(id).is_some(), "{mode} (exception {exception}) {id}");
+            }
+        }
+    }
 }
 
 /// The user name is the identity a named exception range is checked against, and the author
