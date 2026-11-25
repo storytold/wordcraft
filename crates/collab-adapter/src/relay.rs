@@ -189,6 +189,7 @@ impl Room {
 
     fn submit(&mut self, peer: &str, edit: Edit, base: u64) -> Result<Accepted, Refusal> {
         if let Some(block) = edit.text_block()
+            && self.ids.index(block).is_some()
             && self.touched.get(&block).is_some_and(|version| *version > base)
         {
             return Err(Refusal::new(RefusalCode::Stale, format!("the paragraph {} changed after version {base}", block)));
@@ -277,6 +278,28 @@ mod tests {
         assert_eq!(recovered.len(), 1, "the text the paragraph insertion carried is kept");
         assert_eq!(recovered[0].text, "typed");
         assert_eq!(recovered[0].block, minted, "the recovery names the id the peer minted for it");
+    }
+
+    #[test]
+    fn a_text_edit_to_a_removed_block_hands_its_text_back() {
+        let base = document(&["one", "two", "three"]);
+        let ids = IdMap::bind(&base, 0);
+        let one = ids.id_at(0).expect("an id");
+        let relay = MockRelay::new(base);
+        let mut alice = relay.connect("alice");
+        alice.join(Role::Editor, None).expect("alice joins");
+        let mut bob = relay.connect("bob");
+        bob.join(Role::Editor, None).expect("bob joins");
+
+        alice.submit(Edit::InsertText { block: one, at: 0, text: "A".into() }, 0).expect("alice types in the paragraph");
+        alice.submit(Edit::RemoveParagraph { block: one }, 1).expect("alice removes it");
+
+        let refused = bob.submit(Edit::InsertText { block: one, at: 0, text: "typed".into() }, 0);
+        assert_eq!(refused.expect_err("the block is gone").code, RefusalCode::Gone, "a removed block is gone, not stale");
+        let recovered = bob.recovered();
+        assert_eq!(recovered.len(), 1, "the text the insertion carried is kept");
+        assert_eq!(recovered[0].text, "typed");
+        assert_eq!(recovered[0].block, one, "the recovery names the block the edit addressed");
     }
 
     #[test]
