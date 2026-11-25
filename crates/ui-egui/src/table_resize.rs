@@ -114,13 +114,16 @@ pub(crate) fn widths(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, pag
     if !measuring(app, ctx, page) {
         return Vec::new();
     }
+    let story = app.session.sel.focus.story;
     let caret = app.session.sel.focus.path.cell().map(|(tp, r, _)| (tp, r));
     let Some((tp, r)) = caret else { return Vec::new() };
     let mut row: Vec<wordcraft_geom::Rect> = layout.pages.get(page).map_or(Vec::new(), |p| {
         p.items
             .iter()
             .filter_map(|it| match it {
-                wordcraft_layout::Placed::Cell { rect, table, row, .. } if *table == tp && *row == r => Some(*rect),
+                wordcraft_layout::Placed::Cell { rect, table, row, story: cell_story, .. } if *cell_story == story && *table == tp && *row == r => {
+                    Some(*rect)
+                }
                 _ => None,
             })
             .collect()
