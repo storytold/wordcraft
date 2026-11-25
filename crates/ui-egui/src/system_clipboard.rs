@@ -6,6 +6,14 @@
 //! finds nothing usable says what the clipboard holds instead of "empty". Everything read here
 //! comes from other programs: the platform read bounds every size, and the text payloads are
 //! capped again before they reach the engine.
+//!
+//! A paste the page takes (Ctrl+V, and a menu, ribbon or KeyTip Paste, which the framework asks
+//! the platform for) uses the text the platform's paste event carried, which the canvas hands the
+//! page (`ToolPass::pasted`). egui-winit reads it through winit's own connection, so it has the
+//! copy where the installed clipboard can't be opened (a Wayland session where arboard finds no
+//! data-control protocol and no X11 fallback, #6635) or holds only what the compositor copied
+//! over to Xwayland, which may be another program's earlier copy. The installed clipboard's HTML,
+//! RTF, picture and files are read only while its text is the text being pasted ([`host_has`]).
 
 use std::sync::Arc;
 
@@ -47,19 +55,30 @@ fn read_markup(clip: &ClipboardHandle, mime: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&flavor.data).into_owned()).filter(|t| !t.trim().is_empty())
 }
 
+/// Whether the installed clipboard holds `text` (line endings aside), so its other formats are
+/// of the same copy. False when it can't be read.
+pub(crate) fn host_has(clip: &ClipboardHandle, text: &str) -> bool {
+    let lines = |s: &str| s.replace("\r\n", "\n");
+    clip.read_text().ok().flatten().is_some_and(|held| lines(&held) == lines(text))
+}
+
 /// Add what the system clipboard holds to a paste command's params: its text (the ribbon and
 /// context-menu Paste send none), its HTML and RTF, and for Paste Special its picture. Params a
-/// caller already gave are kept. `Some` when the paste was done here instead (copied picture
-/// files, which reach us as their paths).
+/// caller already gave are kept. When the caller gave text the clipboard doesn't hold, nothing
+/// else is read from it. `Some` when the paste was done here instead (copied picture files, which
+/// reach us as their paths).
 pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Result<Value, String>> {
     if !is_paste(id) {
         return None;
     }
     let clip = handle(app)?;
     let o = params.as_object_mut()?;
+    // Text from another copy than the clipboard's (egui's paste event where the clipboard can't be
+    // opened or holds an earlier copy, #6635): the clipboard's formats and owner mark aren't its.
+    let other_copy = o.get("text").and_then(Value::as_str).is_some_and(|t| !host_has(&clip, t));
     // A caller that captured ownership already (Paste Special's dialog) keeps that value.
     if !o.contains_key("privateClipboard") {
-        let own = app.clipboard_published && clip.holds_ours();
+        let own = !other_copy && app.clipboard_published && clip.holds_ours();
         o.insert("privateClipboard".into(), Value::Bool(own));
     }
     if !o.contains_key("text")
@@ -78,7 +97,7 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     }
     // Keep Text Only needs nothing more; a caller that passed formats of its own (an agent, Paste
     // Special's OK) has them already.
-    if id == "edit.pasteText" || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
+    if other_copy || id == "edit.pasteText" || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
         return None;
     }
     if let Some(html) = read_markup(&clip, HTML) {
@@ -290,12 +309,53 @@ pub(crate) mod testing {
         }
     }
 
+    /// A clipboard that can't be opened, as the system clipboard on a Wayland session where arboard
+    /// finds no data-control protocol and no X11 fallback (#6635): every call fails.
+    struct ClosedClipboard;
+
+    impl ClipboardBackend for ClosedClipboard {
+        fn write(&mut self, _flavors: &[Flavor]) -> Result<usize, ClipboardError> {
+            Err(ClipboardError::Unavailable)
+        }
+
+        fn read(&mut self, _mimes: &[&str], _limit: u64) -> Result<Option<Flavor>, ClipboardError> {
+            Err(ClipboardError::Unavailable)
+        }
+
+        fn read_image(&mut self, _limit: u64) -> Result<Option<ClipboardImage>, ClipboardError> {
+            Err(ClipboardError::Unavailable)
+        }
+
+        fn read_files(&mut self, _limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+            Err(ClipboardError::Unavailable)
+        }
+
+        fn has(&mut self, _mimes: &[&str]) -> bool {
+            false
+        }
+    }
+
+    /// A clipboard that can't be opened ([`ClosedClipboard`]).
+    pub(crate) fn closed() -> Clipboard {
+        Clipboard::new(ClosedClipboard)
+    }
+
+    /// An empty document whose window's clipboard can't be opened.
+    pub(crate) fn app_closed() -> WordApp {
+        app_over(closed())
+    }
+
     /// An empty document whose window's clipboard holds `flavors`.
     pub(crate) fn app_holding(flavors: &[Flavor]) -> WordApp {
         let mut clipboard = Clipboard::new(FilesClipboard::default());
         if !flavors.is_empty() {
             let _ = clipboard.write(flavors).unwrap();
         }
+        app_over(clipboard)
+    }
+
+    /// An empty document whose window's clipboard is `clipboard`.
+    fn app_over(clipboard: Clipboard) -> WordApp {
         let ctx = egui::Context::default();
         // PLAN: assumed craft::ui::install(&Context, InstallSpec) and craft::ui::testing::install_spec() from craft-ui-contract
         craft::ui::install(&ctx, crate::test_harness::install_spec().clipboard(clipboard)).unwrap();
@@ -355,6 +415,27 @@ mod tests {
             assert_eq!(first_para(&a), "bold");
             assert!(bold_at(&a, 0), "the RTF's bold");
         }
+    }
+
+    /// Text the caller brought keeps the clipboard's formatting only while the clipboard holds that
+    /// text (line endings aside). Other text (egui's paste of a newer copy than the one the clipboard
+    /// holds, #6635) pastes alone, and a clipboard that can't be opened adds nothing.
+    #[test]
+    fn text_the_clipboard_does_not_hold_pastes_without_its_formatting() {
+        let html = Flavor::new(HTML, b"<p>plain <b>strong</b></p>".to_vec());
+        for (text, bold) in [("plain strong", true), ("newer copy", false)] {
+            let mut a = app_holding(&[Flavor::text("plain strong"), html.clone()]);
+            a.run("edit.paste", json!({"text": text})).unwrap();
+            assert_eq!(first_para(&a), text);
+            assert_eq!(bold_at(&a, 7), bold, "{text}");
+        }
+        let held = app_holding(&[Flavor::text("a\nb")]);
+        let clip = handle(&held).unwrap();
+        assert!(host_has(&clip, "a\r\nb") && !host_has(&clip, "a b"));
+        let mut a = super::testing::app_closed();
+        assert!(!host_has(&handle(&a).unwrap(), "from the paste event"));
+        a.run("edit.paste", json!({"text": "from the paste event"})).unwrap();
+        assert_eq!(first_para(&a), "from the paste event");
     }
 
     /// Paste Special lists a picture on the system clipboard and pastes it.

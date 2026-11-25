@@ -128,9 +128,81 @@ fn read_picture_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
 }
 
 /// Paste text naming copied picture files: insert the pictures when the clipboard holds those
-/// files. False leaves the text to the usual paste.
+/// files. False leaves the text to the usual paste. When the installed clipboard doesn't hold the
+/// text ([`system_clipboard::host_has`]: it can't be opened, or it holds an earlier copy than the
+/// one egui's paste event read, #6635), it can't list the copied files either, so the picture
+/// files the text names are inserted; text that names no regular file here stays text. A
+/// clipboard that holds the text and no copied files leaves the text as text.
 pub(crate) fn paste_named_files(app: &mut WordApp, text: &str) -> bool {
-    names_picture_files(text) && paste(app).is_some()
+    if !names_picture_files(text) {
+        return false;
+    }
+    if system_clipboard::handle(app).is_some_and(|clip| !system_clipboard::host_has(&clip, text)) {
+        let files: Vec<PathBuf> = named_files(text).into_iter().filter(|p| p.is_file()).collect();
+        let Some(r) = paste_files(app, files) else { return false };
+        app.select_inserted_picture(&r);
+        return true;
+    }
+    paste(app).is_some()
+}
+
+/// The files named in text that [`names_picture_files`] accepts: each line's path, with a
+/// `file://` address's `%XX` escapes decoded. An address with a host other than `localhost`,
+/// one that names a share on another host on Windows ([`names_share`]), and one that doesn't
+/// decode to an absolute UTF-8 path, are left out.
+fn named_files(text: &str) -> Vec<PathBuf> {
+    let lines = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).take(MAX_FILES);
+    lines
+        .filter_map(|l| match l.strip_prefix("file://") {
+            Some(address) => {
+                // Only a local address: no host, or `localhost`. Another host's file isn't read.
+                let path = address.strip_prefix("localhost").unwrap_or(address);
+                if !path.starts_with('/') {
+                    return None;
+                }
+                let path = String::from_utf8(percent_decoded(path)).ok()?;
+                if cfg!(windows) && names_share(&path) {
+                    return None;
+                }
+                // `file:///C:/…` names `C:/…` on Windows.
+                let drive = path.strip_prefix('/').filter(|p| matches!(p.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic()));
+                let path = PathBuf::from(drive.filter(|_| cfg!(windows)).unwrap_or(&path));
+                path.is_absolute().then_some(path)
+            }
+            None => Some(PathBuf::from(l)),
+        })
+        .collect()
+}
+
+/// Whether a decoded `file://` path starts with two separators (`file:////server/…`, or an
+/// escaped `/` or `\`), which on Windows names a share on another host.
+fn names_share(path: &str) -> bool {
+    matches!(path.as_bytes(), [b'/' | b'\\', b'/' | b'\\', ..])
+}
+
+/// `s` with each `%XX` escape replaced by its byte; a `%` not followed by two hex digits is kept.
+fn percent_decoded(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match hex {
+            Some(v) if b == b'%' => {
+                out.push(v);
+                i += 3;
+            }
+            _ => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -223,6 +295,50 @@ mod tests {
         let focus = a.session.sel.focus.clone();
         assert_eq!(a.session.doc.para_at(&focus).map(|p| p.text.contains("wc-ribbon-paste")), Some(false));
         assert_eq!(none.unwrap_err(), system_clipboard::nothing_to_paste(&b));
+    }
+
+    /// Pasted text naming picture files the clipboard doesn't hold (#5217, #6635: it can't be
+    /// opened, or holds an earlier copy) inserts the files it names, `file://` addresses decoded;
+    /// a missing file's name stays text, and so does a picture path the clipboard holds as text.
+    #[test]
+    fn picture_files_named_in_text_the_clipboard_does_not_hold_are_inserted() {
+        let dir = std::env::temp_dir().join(format!("wc-paste-named-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shot 1.png");
+        std::fs::write(&path, png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap()).unwrap();
+        let name = path.to_string_lossy().replace(' ', "%20");
+        let name = if cfg!(windows) { format!("/{}", name.replace('\\', "/")) } else { name };
+        let text = format!("file://{name}\n");
+        let mut closed = crate::system_clipboard::testing::app_closed();
+        let mut earlier = app_holding(&[Flavor::text("an earlier copy")]);
+        let mut held = app_holding(&[Flavor::text(&text)]);
+        let pasted = [paste_named_files(&mut closed, &text), paste_named_files(&mut earlier, &text), paste_named_files(&mut held, &text)];
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(pasted, [true, true, false]);
+        assert_eq!([pictures(&mut closed), pictures(&mut earlier), pictures(&mut held)], [1, 1, 0]);
+        assert!(crate::objects::selected(&closed).is_some(), "the inserted picture is selected");
+        // The file is gone now: the text names no file here, and pastes as text.
+        assert!(!paste_named_files(&mut closed, &text), "a missing file's path stays text");
+        assert_eq!(pictures(&mut closed), 1);
+        assert_eq!(percent_decoded("a%20b%2Fc%zz%+1%4"), b"a b/c%zz%+1%4");
+        #[cfg(unix)]
+        assert_eq!(
+            named_files("file://localhost/tmp/a%20b.png\nfile://server/share/d.png\nfile://localhostile/e.png\n/tmp/c.png"),
+            [PathBuf::from("/tmp/a b.png"), PathBuf::from("/tmp/c.png")],
+            "another host's files are left out"
+        );
+        for share in ["//server/share/d.png", "/\\server/share/e.png", "\\\\server\\share\\f.png"] {
+            assert!(names_share(share), "{share}");
+        }
+        for local in ["/tmp/a.png", "/C:/Users/a.png", "/a\\b.png"] {
+            assert!(!names_share(local), "{local}");
+        }
+        let shares = named_files("file:////server/share/d.png\nfile:///%2Fserver/share/e.png\nfile://localhost/%5Cserver/share/f.png");
+        #[cfg(windows)]
+        assert_eq!(shares, Vec::<PathBuf>::new(), "a share on another host is left out");
+        #[cfg(unix)]
+        assert_eq!(shares.len(), 3, "paths that start with two separators are local outside Windows: {shares:?}");
     }
 
     /// A pasted picture is selected, with handles (#965); several copied files are all kept and

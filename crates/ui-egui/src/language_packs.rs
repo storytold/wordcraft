@@ -1652,6 +1652,55 @@ mod tests {
         assert!(backend.network.load(Ordering::Relaxed), "the person's click in the picker is the consent");
     }
 
+    /// The bounds of the first node whose label starts with `label`.
+    fn bounds_of(tree: &egui::accesskit::TreeUpdate, label: &str) -> Option<egui::accesskit::Rect> {
+        tree.nodes.iter().find(|(_, n)| n.label().is_some_and(|l| l.starts_with(label))).and_then(|(_, n)| n.bounds())
+    }
+
+    /// In the Add a language picker, the reason an agent's Install was refused shows in that row with its license,
+    /// whatever the license's length (Dutch's is one short line, Catalan's wraps).
+    #[test]
+    fn a_refused_install_says_why_in_its_own_row() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = ResetBackend;
+        let (mut a, ctx, backend) = options_app("language", false);
+        // The fetch the click starts runs on a thread and reports its end here.
+        let (done, ended) = std::sync::mpsc::channel();
+        packs::set_background(Some(std::sync::Arc::new(move || {
+            let _ = done.send(());
+        })));
+        let add = spot(&settled(&mut a, &ctx), "Add a language").expect("the button");
+        user_click(&mut a, &ctx, add);
+        assert!(a.dialog_host.is_open::<super::AddLanguage>(), "the picker opens");
+        while packs::fetching() {
+            ended.recv().expect("the fetch reports its end");
+        }
+        backend.network.store(false, Ordering::Relaxed);
+        for (row, locale) in [("Dutch", "nl"), ("Catalan", "ca")] {
+            let tree = settled(&mut a, &ctx);
+            let shown = bounds_of(&tree, row).unwrap_or_else(|| panic!("{row} is listed: {:?}", labels(&tree)));
+            let install = tree
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.label().is_some_and(|l| l.starts_with("Install")))
+                .filter_map(|(_, n)| n.bounds())
+                .find(|b| (b.y0 + b.y1) / 2.0 > shown.y0 && (b.y0 + b.y1) / 2.0 < shown.y1)
+                .unwrap_or_else(|| panic!("{row} offers Install"));
+            as_agent(&mut a, &ctx, "ui.click", json!({"x": (install.x0 + install.x1) / 2.0, "y": (install.y0 + install.y1) / 2.0}));
+            assert!(a.packs_rt.errors.get(locale).is_some_and(|e| e.contains("Only you")), "{row}: {:?}", a.packs_rt.errors);
+            let tree = settled(&mut a, &ctx);
+            let shown = bounds_of(&tree, row).expect("the row stays listed");
+            // The row's bounds stop at the list's visible edge, and the reason may run past it, so the reason starts
+            // inside the row.
+            let says_why = tree.nodes.iter().any(|(_, n)| {
+                n.label().is_some_and(|l| l.contains("Only you"))
+                    && n.bounds().is_some_and(|b| b.x1 > b.x0 && b.x0 >= shown.x0 && b.x1 <= shown.x1 && b.y0 >= shown.y0 && b.y0 < shown.y1)
+            });
+            let why: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.label().is_some_and(|l| l.contains("Only you"))).map(|(_, n)| n.bounds()).collect();
+            assert!(says_why, "{row}'s row ({shown:?}) says why: {why:?}");
+        }
+    }
+
     /// Set as default sets only the saved default proofing language (`review.language.preferred`); the
     /// document, its undo history, the redo stack and the modified flag are untouched.
     #[test]

@@ -65,7 +65,12 @@ fn ime_receipt_gate_rejects_exhausted_unavailable_stamps() {
 /// the engine's owner rule keeps the IME events of the tests that follow.
 fn app_harness(app: WordApp) -> H {
     // Every test isolates through an in-memory clipboard, installed before the first frame.
-    let spec = || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default()));
+    app_harness_over(app, || Clipboard::new(MemoryClipboard::default()))
+}
+
+/// [`app_harness`] with the window's clipboard made by `clipboard`.
+fn app_harness_over(app: WordApp, clipboard: fn() -> Clipboard) -> H {
+    let spec = move || crate::test_harness::install_spec().clipboard(clipboard());
     let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -259,6 +264,22 @@ fn a_global_mod_shift_v_leaves_the_next_mod_v_picture_paste_alone() {
     mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
     assert_eq!(pictures(h.state_mut()), before + 1);
+}
+
+/// #6635: a paste takes the text egui's paste event carries (Ctrl+V's, and the one the framework
+/// asks the platform for on a menu, ribbon or KeyTip Paste), where the window's clipboard can't
+/// be opened, and over an earlier copy the clipboard still holds, whose formatting it leaves.
+#[test]
+fn a_paste_takes_the_paste_events_text_over_the_clipboard() {
+    let mut h = app_harness_over(new_app(), crate::system_clipboard::testing::closed);
+    batch_frame(&mut h, vec![egui::Event::Paste("from the platform".into())]);
+    assert_eq!(body(h.state()), "from the platform");
+
+    let mut h = alt_frame_app();
+    offer(&h, bold_flavours("earlier"));
+    batch_frame(&mut h, vec![egui::Event::Paste("newer".into())]);
+    assert_eq!(body(h.state()), "newer");
+    assert!(!is_bold(&mut h), "the earlier copy's HTML isn't read");
 }
 
 /// A focused empty document whose clipboard holds a 4 × 4 picture.
