@@ -41,11 +41,11 @@ pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
 
-/// A layout being made on another thread: where its result and the layout cache come back, the
-/// document it is of, and what turns the result into the entry that is kept ([`LayoutSlots`]).
+/// A layout being made on another thread: where its result and the layout cache come back, and
+/// what turns the result into the entry that is kept ([`LayoutSlots`]). Each open document has its
+/// own, so a switch neither waits for another document's layout nor starts it again.
 struct BgLayout {
     rx: std::sync::mpsc::Receiver<(LayoutCache, Arc<DocLayout>)>,
-    document_id: u64,
     entry: LayoutEntryFn,
 }
 

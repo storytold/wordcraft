@@ -69,6 +69,7 @@ pub struct DocState {
     pub(super) ime_body_epoch: u64,
     pub(super) cache: LayoutCache,
     pub(super) layout: LayoutSlots,
+    pub(super) bg_layout: Option<super::BgLayout>,
     pub(super) typing: Option<TypedWord>,
     pub(super) originals: std::collections::HashMap<String, String>,
     pub(super) md_source: Option<crate::cmd::md_source::MdSource>,
@@ -126,6 +127,7 @@ impl DocState {
             ime_body_epoch: 0,
             cache: LayoutCache::new(),
             layout: Default::default(),
+            bg_layout: None,
             typing: None,
             originals: Default::default(),
             md_source: None,
@@ -230,7 +232,6 @@ impl Session {
             ime_body_epoch: _,
             cache: _,
             layout: _,
-            // Names its document, so a layout made for one never lands in another.
             bg_layout: _,
             typing: _,
             originals: _,
@@ -335,6 +336,7 @@ impl Session {
             ime_body_epoch,
             cache,
             layout,
+            bg_layout,
             typing,
             originals,
             md_source,
@@ -385,6 +387,7 @@ impl Session {
         swap(&mut self.ime_body_epoch, ime_body_epoch);
         swap(&mut self.cache, cache);
         swap(&mut self.layout, layout);
+        swap(&mut self.bg_layout, bg_layout);
         swap(&mut self.typing, typing);
         swap(&mut self.originals, originals);
         swap(&mut self.md_source, md_source);

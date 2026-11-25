@@ -417,7 +417,12 @@ impl WordApp {
         // again. Drawing it would wait for the layout, which is the freeze this avoids.
         if self.session.layout_pending() {
             ui.centered_and_justified(|ui| {
-                ui.spinner();
+                let spinner = ui.spinner();
+                // A screen reader hears that the document is on its way, from a polite live region.
+                ui.ctx().accesskit_node_builder(spinner.id, |node| {
+                    node.set_label(tl!("Laying out the document…"));
+                    node.set_live(egui::accesskit::Live::Polite);
+                });
             });
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
             return;

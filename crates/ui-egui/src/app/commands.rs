@@ -336,6 +336,15 @@ impl WordApp {
         }
     }
 
+    /// A long document that has just come to the window is paginated on another thread while a
+    /// spinner shows, not on the first draw, which would freeze the window for as long as it takes.
+    /// Nothing happens when its layout is up to date or already being made.
+    pub(crate) fn paginate_in_background(&mut self) {
+        if self.session.doc.body.len() >= BACKGROUND_LAYOUT_BLOCKS {
+            self.session.begin_background_layout();
+        }
+    }
+
     /// User commands can ask for a supported Save As target or an opening password (#55).
     /// Scripts and agents use [`WordApp::execute`], which never opens these dialogs.
     pub(crate) fn execute_user(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -356,11 +365,11 @@ impl WordApp {
         // Opening a file, or a new document from a template, reads a file that may be protected.
         let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
+        let shown = self.session.document_id();
         let r = self.execute(id, params);
-        // A long document is paginated on another thread while a spinner shows, not on the first
-        // draw, which would freeze the window for as long as it takes.
-        if id == "file.open" && r.is_ok() && self.session.doc.body.len() >= BACKGROUND_LAYOUT_BLOCKS {
-            self.session.begin_background_layout();
+        // Opening a file, closing one or switching brings another document to the window.
+        if r.is_ok() && (id == "file.open" || self.session.document_id() != shown) {
+            self.paginate_in_background();
         }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)

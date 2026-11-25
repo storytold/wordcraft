@@ -33,10 +33,15 @@ impl Session {
         !self.finish_background_layout(false)
     }
 
+    /// Whether the active document has a background layout not yet taken in, finished or not.
+    #[cfg(test)]
+    pub(crate) fn has_background_layout(&self) -> bool {
+        self.bg_layout.is_some()
+    }
+
     /// Take in the background layout: wait for it (`wait`) or only if it has finished. Returns
-    /// whether none is pending any more. Its result is kept only for the document that asked
-    /// for it; a layout for a revision since edited is simply not found by [`Session::layout`]'s
-    /// check of what a layout was made for.
+    /// whether none is pending any more. A layout for a revision since edited is simply not found
+    /// by [`Session::layout`]'s check of what a layout was made for.
     fn finish_background_layout(&mut self, wait: bool) -> bool {
         let Some(bg) = self.bg_layout.take() else { return true };
         let got = if wait {
@@ -51,9 +56,7 @@ impl Session {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
             }
         };
-        if let Some((cache, laid)) = got
-            && bg.document_id == self.document_id
-        {
+        if let Some((cache, laid)) = got {
             self.cache = cache;
             let [newest, _] = std::mem::take(&mut self.layout);
             self.layout = [Some((bg.entry)(laid)), newest];
@@ -86,7 +89,7 @@ impl Session {
         });
         // No thread to be had: the next `layout()` makes it in place (with a cold cache).
         if started.is_ok() {
-            self.bg_layout = Some(BgLayout { rx, document_id: self.document_id, entry });
+            self.bg_layout = Some(BgLayout { rx, entry });
         }
     }
 
@@ -287,6 +290,8 @@ impl Session {
     pub fn relayout(&mut self) {
         self.layout = Default::default();
         self.cache.clear();
+        // One still being made is of the old state: its result is not wanted.
+        self.bg_layout = None;
     }
 
     /// Set the language new documents are written in ([`Session::editing_lang`]; `None` or a

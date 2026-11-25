@@ -14578,6 +14578,32 @@ fn a_background_layout_is_the_layout_made_in_place() {
     assert!(Arc::ptr_eq(&made, &background.layout()));
 }
 
+/// #7653 (review): a second long document gets its own layout while the first one's is being made.
+#[test]
+fn each_document_has_its_own_background_layout() {
+    let mut s = long_session();
+    let first = s.document_id();
+    s.begin_background_layout();
+    let second = s.add_document(long_session().doc.clone());
+    assert!(!s.layout_pending(), "the new document does not wait for the other one's layout");
+    s.begin_background_layout();
+    assert!(s.has_background_layout(), "and gets its own");
+    s.activate(first).unwrap();
+    assert!(s.has_background_layout(), "the first one's is still there");
+    s.activate(second).unwrap();
+    wait_for_background_layout(&mut s);
+    assert!(s.layout().pages.len() > 1);
+}
+
+/// #7653 (review): a layout started before a relayout (the fonts changed) is not taken in.
+#[test]
+fn a_relayout_drops_the_layout_being_made() {
+    let mut s = long_session();
+    s.begin_background_layout();
+    s.relayout();
+    assert!(!s.has_background_layout());
+}
+
 #[test]
 fn a_layout_asked_for_while_one_is_being_made_waits_for_it_and_shows_later_edits() {
     let unedited_pages = long_session().layout().pages.len();
