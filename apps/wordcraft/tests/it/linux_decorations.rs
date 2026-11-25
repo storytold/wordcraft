@@ -96,15 +96,12 @@ fn cargo_lock_contains_font_free_sctk_adwaita() {
     let lockfile = std::fs::read_to_string(workspace_root.join("Cargo.lock")).expect("read Cargo.lock");
     assert!(lockfile.contains("name = \"sctk-adwaita\""), "Cargo.lock must include sctk-adwaita");
 
-    // Parse the sctk-adwaita package entry from Cargo.lock and verify its dependencies.
-    let adwaita_entry =
+    // Verify that Cargo.lock contains sctk-adwaita and none of the font renderer crates.
+    let _adwaita_entry =
         lockfile.split("[[package]]").find(|chunk| chunk.contains("name = \"sctk-adwaita\"")).expect("sctk-adwaita package entry in Cargo.lock");
 
-    assert!(
-        !adwaita_entry.contains("fontdue")
-            && !adwaita_entry.contains("ab_glyph")
-            && !adwaita_entry.contains("cosmic-text")
-            && !adwaita_entry.contains("crossfont"),
-        "sctk-adwaita must not depend on any font renderer in the notitle configuration"
-    );
+    for forbidden in ["fontdue", "ab_glyph", "cosmic-text", "crossfont"] {
+        let needle = format!("name = \"{forbidden}\"");
+        assert!(!lockfile.contains(&needle), "Cargo.lock must not contain {forbidden} in the notitle configuration");
+    }
 }
