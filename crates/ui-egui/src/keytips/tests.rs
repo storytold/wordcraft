@@ -30,6 +30,25 @@ fn bold(h: &mut egui_kittest::Harness<'static, WordApp>) -> bool {
     h.state_mut().session.run("format.state", &serde_json::json!({})).unwrap()["bold"] == true
 }
 
+fn painted_text_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
+            egui::Shape::Vec(children) => {
+                for child in children {
+                    walk(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
 #[test]
 fn every_keytip_command_is_registered() {
     // The keytip tables name commands by id; a renamed or removed command must fail here,
@@ -71,6 +90,61 @@ fn keytips_never_reuse_another_commands_shortcut_letter() {
             }
         }
     }
+}
+
+/// Home's Paste, a menu button, shows its keytip whatever the interface language. The keytips
+/// table holds the English tips, and `menu_button` previously matched it with its translated one,
+/// which no other language's "Paste" equals or begins with. Pseudo-localization stands in for one.
+#[test]
+fn a_menu_buttons_keytip_does_not_depend_on_the_language() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+
+    let a = app();
+    let reserved = reserved_letters(&a);
+    let cache = KeytipCache::new(&a, "Home");
+    let paste_idx = cache.tab_controls.iter().position(|c| c.command.id == "edit.paste").expect("Home tab has Paste");
+    let labels: Vec<(&str, Option<&str>)> = cache.tab_controls.iter().map(|c| (c.label, c.letters)).collect();
+
+    let english_folder = craft::i18n::Folder::new("en");
+    let english_badges = craft::keymap::mnemonic::assign_keytips(&labels, &reserved, &english_folder);
+    let paste_badge = &english_badges[paste_idx];
+    assert!(!paste_badge.is_empty(), "Paste receives a keytip badge");
+
+    for lang in ["de", "fr", "es", "tr", "pseudo", "ja", "zh", "pt-BR"] {
+        let folder = craft::i18n::Folder::new(lang);
+        let badges = craft::keymap::mnemonic::assign_keytips(&labels, &reserved, &folder);
+        assert_eq!(&badges[paste_idx], paste_badge, "language={lang}: Paste badge must stay {paste_badge} regardless of language");
+    }
+
+    let mut h = harness(app());
+    h.ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::keytips::pseudo_markers", |request| {
+        matches!(request.cluster, "⟦" | "⟧").then(|| egui::RasterizedGlyph {
+            bitmap: egui::GlyphBitmap {
+                image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+                offset_px: egui::Vec2::ZERO,
+                is_color: false,
+            },
+            advance_px: request.font_size_px.max(1.0),
+        })
+    }));
+    h.state_mut().ui.language = "pseudo".into();
+    crate::test_harness::frames(&mut h, 2);
+
+    let paste_rect = h.get_by_role_and_label(Role::Button, "⟦Paste⟧").rect();
+    h.input_mut().events.push(key_event(egui::Key::F10, true, egui::Modifiers::NONE));
+    crate::test_harness::frame(&mut h);
+    h.input_mut().events.extend([key_event(egui::Key::H, true, egui::Modifiers::NONE), egui::Event::Text("h".into())]);
+    crate::test_harness::frames(&mut h, 3);
+    let painted = painted_text_rects(&h.output().shapes);
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
+
+    assert_eq!(h.state().ui.tab.as_str(), "Home");
+    assert!(h.state().keytips_active, "F10, H activates Home command keytips");
+    assert!(
+        painted.iter().any(|(text, rect)| text == paste_badge && paste_rect.expand(8.0).contains(rect.center())),
+        "Paste's {paste_badge:?} badge is drawn over Paste {paste_rect:?} under pseudo-localization: {painted:?}"
+    );
 }
 
 /// #1697: legacy sequences never start on a tab keytip (table tabs included) or Search, and
