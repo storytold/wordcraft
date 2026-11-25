@@ -72,6 +72,8 @@ actual=$(cd "$work/elsewhere" && env -i HOME="$home" PATH="$work/tar:/usr/bin:/b
 
 # The flat tar nightly.sh stages: `wordcraft` beside `wordcraft-bin`, nothing else.
 source="$HERE/nightly.sh"
+# The pattern is the literal source text, not an expansion in this script.
+# shellcheck disable=SC2016
 grep -q 'nightly-tar-launch.sh" "$STAGE/wordcraft"' "$source" || {
   echo "FAIL: nightly.sh does not stage the template as wordcraft" >&2
   exit 1
