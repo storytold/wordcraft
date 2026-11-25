@@ -19,7 +19,7 @@ install -m 755 "$HERE/nightly-tar-launch.sh" "$work/tar/wordcraft"
 
 # The bytes are the shared template rendered for this app, not a local script.
 sha256sum "$HERE/nightly-tar-launch.sh" | cut -d' ' -f1 | grep -qx \
-  b67f728b25e00d7b1b759891283653d20d7900d6c5bc5aba813054cb1412f4cc || {
+  982164049ab06cd805fd41aa9b9f66624628e6ac34d63848043f3fd780fef6c5 || {
   echo "FAIL: nightly-tar-launch.sh is not the shared template rendered for wordcraft" >&2
   exit 1
 }
@@ -59,6 +59,11 @@ data="$work/xdg data with space"
 actual=$(env -i HOME="$home" XDG_DATA_HOME="$data" PATH="/usr/bin:/bin" "$work/tar/wordcraft" 'x.docx')
 [ "$actual" = "$(printf '<%s>\n' --launch-profile nightly-v1 --profile-root "$data/$identity" -- x.docx)" ]
 [ ! -e "$data" ] || { echo "FAIL: the launcher created the profile folder" >&2; exit 1; }
+
+# The ArtCraft Launcher names its own profile and per-install root: the argv goes to the GUI unchanged.
+actual=$(env -i HOME="$home" PATH="/usr/bin:/bin" "$work/tar/wordcraft" \
+  --launch-profile nightly-v1 --profile-root "$work/launcher profile with space" -- 'a.docx')
+[ "$actual" = "$(printf '<%s>\n' --launch-profile nightly-v1 --profile-root "$work/launcher profile with space" -- a.docx)" ]
 
 # The launcher found through PATH still resolves the GUI beside itself.
 mkdir -p "$work/elsewhere"
