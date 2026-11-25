@@ -1343,7 +1343,7 @@ fn the_custom_properties_dialog_adds_edits_and_deletes_in_one_step() {
     let mut app = app_with("Report body");
     let _ = app.run("file.properties", json!({"custom": {"Status": "draft", "Owner": "Mira"}}));
     let mut h = custom_properties(app);
-    assert!(h.query_by_label("Status = draft").is_some(), "the list shows the properties");
+    assert!(h.query_by_label("Status = draft (Text)").is_some(), "the list shows the properties");
     // A row is selected, so the buttons act on it.
     assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Modify").accesskit_node().is_disabled());
     assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Delete").accesskit_node().is_disabled());
@@ -1351,25 +1351,25 @@ fn the_custom_properties_dialog_adds_edits_and_deletes_in_one_step() {
     set_text_field(&mut h, "Name:", "Reviewer");
     set_text_field(&mut h, "Value:", "Ada");
     press(&mut h, "Add");
-    assert!(h.query_by_label("Reviewer = Ada").is_some(), "Add appends the typed property");
+    assert!(h.query_by_label("Reviewer = Ada (Text)").is_some(), "Add appends the typed property");
     // A duplicate name in another case replaces its value.
     set_text_field(&mut h, "Name:", "status");
     set_text_field(&mut h, "Value:", "final");
     press(&mut h, "Add");
-    assert!(h.query_by_label("Status = final").is_some(), "the duplicate replaced the value");
+    assert!(h.query_by_label("Status = final (Text)").is_some(), "the duplicate replaced the value");
     // Selecting a row fills the boxes; Modify changes its value.
-    h.get_by_label("Reviewer = Ada").click();
+    h.get_by_label("Reviewer = Ada (Text)").click();
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Name:").value().as_deref(), Some("Reviewer"));
     assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Value:").value().as_deref(), Some("Ada"));
     set_text_field(&mut h, "Value:", "Ada L.");
     press(&mut h, "Modify");
-    assert!(h.query_by_label("Reviewer = Ada L.").is_some(), "Modify keeps the edited value");
+    assert!(h.query_by_label("Reviewer = Ada L. (Text)").is_some(), "Modify keeps the edited value");
     // Delete another property, so the modified value is saved before that one goes.
-    h.get_by_label("Owner = Mira").click();
+    h.get_by_label("Owner = Mira (Text)").click();
     h.run_steps(2);
     press(&mut h, "Delete");
-    assert!(h.query_by_label("Owner = Mira").is_none(), "Delete removes the selected property");
+    assert!(h.query_by_label("Owner = Mira (Text)").is_none(), "Delete removes the selected property");
     // OK: one call, so one undo step, marking the document changed.
     let depth = h.state().session.undo_depth();
     h.state_mut().session.dirty = false;
@@ -1397,12 +1397,12 @@ fn the_custom_properties_dialog_keeps_a_case_only_rename() {
     let _ = app.run("file.properties", json!({"custom": {"Status": "draft"}}));
     let mut h = custom_properties(app);
     // Select the property and change only the case of its name, keeping the value.
-    h.get_by_label("Status = draft").click();
+    h.get_by_label("Status = draft (Text)").click();
     h.run_steps(2);
     set_text_field(&mut h, "Name:", "status");
     assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Value:").value().as_deref(), Some("draft"));
     press(&mut h, "Modify");
-    assert!(h.query_by_label("status = draft").is_some(), "the list shows the new spelling");
+    assert!(h.query_by_label("status = draft (Text)").is_some(), "the list shows the new spelling");
     press(&mut h, "OK");
     h.run_steps(2);
     assert!(!is_open(h.state(), "customProperties"), "OK closes the dialog");
@@ -1462,7 +1462,7 @@ fn the_custom_properties_dialog_cancel_changes_nothing_and_refuses_bad_names() {
     set_text_field(&mut h, "Name:", "   ");
     press(&mut h, "Add");
     assert!(notice_shown(&h), "a whitespace name shows the message");
-    assert!(h.query_by_label("Status = draft").is_some(), "nothing was added");
+    assert!(h.query_by_label("Status = draft (Text)").is_some(), "nothing was added");
     // The Name box caps typing at Word's limit.
     set_text_field(&mut h, "Name:", &"x".repeat(wordcraft_engine::cmd::file::MAX_CUSTOM_NAME + 20));
     let typed = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Name:").value().unwrap_or_default();
@@ -1471,12 +1471,12 @@ fn the_custom_properties_dialog_cancel_changes_nothing_and_refuses_bad_names() {
     set_text_field(&mut h, "Name:", "Reviewer");
     set_text_field(&mut h, "Value:", "Ada");
     press(&mut h, "Add");
-    assert!(h.query_by_label("Reviewer = Ada").is_some());
+    assert!(h.query_by_label("Reviewer = Ada (Text)").is_some());
     // Deleting every row shows the empty state and disables Modify and Delete.
-    h.get_by_label("Reviewer = Ada").click();
+    h.get_by_label("Reviewer = Ada (Text)").click();
     h.run_steps(2);
     press(&mut h, "Delete");
-    h.get_by_label("Status = draft").click();
+    h.get_by_label("Status = draft (Text)").click();
     h.run_steps(2);
     press(&mut h, "Delete");
 
@@ -1490,44 +1490,125 @@ fn the_custom_properties_dialog_cancel_changes_nothing_and_refuses_bad_names() {
     assert_eq!(h.state().session.undo_depth(), depth, "no step was recorded");
 }
 
-/// #2982: imported non-text properties (a number, Zotero's raw XML) stay as they are: Add
-/// and Modify refuse to turn one into text, while Delete still removes it.
+/// #2982: imported properties of a kind the dialog has no type for (currency, Zotero's raw
+/// XML) stay as they are: Add and Modify refuse to change one, while Delete still removes it.
 #[test]
 fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     let mut app = app_with("Report body");
     let _ = app.run("file.properties", json!({"custom": {"Status": "draft"}}));
-    app.session.doc.custom_props.push(wordcraft_doc::CustomProp { name: "Count".into(), kind: "i4".into(), value: "7".into(), ..Default::default() });
+    app.session.doc.custom_props.push(wordcraft_doc::CustomProp { name: "Count".into(), kind: "cy".into(), value: "7".into(), ..Default::default() });
     let mut h = custom_properties(app);
-    assert!(h.query_by_label("Count = 7").is_some(), "the imported property is listed");
+    assert!(h.query_by_label("Count = 7 (cy)").is_some(), "the imported property is listed");
     // Add with its name is refused rather than replacing it with text.
     set_text_field(&mut h, "Name:", "count");
     set_text_field(&mut h, "Value:", "8");
     press(&mut h, "Add");
     assert!(notice_shown(&h), "Add refuses the non-text name");
-    assert!(h.query_by_label("Count = 7").is_some(), "it keeps its value");
+    assert!(h.query_by_label("Count = 7 (cy)").is_some(), "it keeps its value");
     // Modify of the non-text property itself is refused.
-    h.get_by_label("Count = 7").click();
+    h.get_by_label("Count = 7 (cy)").click();
     h.run_steps(2);
     set_text_field(&mut h, "Value:", "8");
     press(&mut h, "Modify");
     assert!(notice_shown(&h), "Modify refuses the non-text property");
-    assert!(h.query_by_label("Count = 7").is_some(), "its value is unchanged");
+    assert!(h.query_by_label("Count = 7 (cy)").is_some(), "its value is unchanged");
     // Renaming a text property onto a non-text one is refused too.
-    h.get_by_label("Status = draft").click();
+    h.get_by_label("Status = draft (Text)").click();
     h.run_steps(2);
     set_text_field(&mut h, "Name:", "Count");
     press(&mut h, "Modify");
     assert!(notice_shown(&h), "a rename onto it is refused");
-    assert!(h.query_by_label("Status = draft").is_some(), "the text property keeps its name");
+    assert!(h.query_by_label("Status = draft (Text)").is_some(), "the text property keeps its name");
     // Delete still removes it outright.
-    h.get_by_label("Count = 7").click();
+    h.get_by_label("Count = 7 (cy)").click();
     h.run_steps(2);
     press(&mut h, "Delete");
-    assert!(h.query_by_label("Count = 7").is_none(), "Delete removes a non-text property");
+    assert!(h.query_by_label("Count = 7 (cy)").is_none(), "Delete removes a non-text property");
     press(&mut h, "Cancel");
     h.run_steps(2);
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
-    assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
+    assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "cy")], "Cancel leaves the imported property as it was");
+}
+
+/// The Custom Properties dialog opened from File › Info, over `props` set as text.
+fn custom_props_harness(setup: impl FnOnce(&mut WordApp)) -> egui_kittest::Harness<'static, WordApp> {
+    let mut app = app_with("Report body");
+    setup(&mut app);
+    custom_properties(app)
+}
+
+/// Pick `label` in the Custom Properties dialog's Type box.
+fn choose_custom_type(h: &mut egui_kittest::Harness<'_, WordApp>, label: &str) {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Type:").click();
+    h.run_steps(3);
+    h.get_by_label(label).click();
+    h.run_steps(3);
+}
+
+/// Word's Type box: a Number and a Yes or no property added through the form are stored as
+/// `vt:i4` and `vt:bool` by OK's one `file.properties` call; the list shows each type.
+#[test]
+fn the_custom_properties_dialog_adds_number_and_yes_no_properties() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = custom_props_harness(|_| {});
+    set_text_field(&mut h, "Name:", "Pages");
+    choose_custom_type(&mut h, "Number");
+    set_text_field(&mut h, "Value:", "12");
+    press(&mut h, "Add");
+    assert!(h.query_by_label("Pages = 12 (Number)").is_some(), "the list shows the type");
+    set_text_field(&mut h, "Name:", "Reviewed");
+    choose_custom_type(&mut h, "Yes or no");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Value:").is_none(), "Yes / No replace the Value box");
+    h.get_by_label("No").click();
+    h.run_steps(2);
+    press(&mut h, "Add");
+    assert!(h.query_by_label("Reviewed = No (Yes or no)").is_some());
+    let depth = h.state().session.undo_depth();
+    press(&mut h, "OK");
+    assert!(!is_open(h.state(), "customProperties"), "OK closes the dialog");
+    let props: Vec<(&str, &str, &str)> =
+        h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str(), p.value.as_str())).collect();
+    assert_eq!(props, [("Pages", "i4", "12"), ("Reviewed", "bool", "false")]);
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+}
+
+/// Selecting a stored date fills Type = Date and the Value box with its date part.
+#[test]
+fn the_custom_properties_dialog_shows_a_stored_date() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = custom_props_harness(|app| {
+        let _ = app.run("file.properties", json!({"custom": {"Status": "draft"}}));
+        app.session.doc.custom_props.push(wordcraft_doc::CustomProp {
+            name: "Due".into(),
+            kind: "filetime".into(),
+            value: "2026-11-30T14:05:00Z".into(),
+            ..Default::default()
+        });
+    });
+    assert!(h.query_by_label("Due = 2026-11-30 (Date)").is_some(), "the list shows the date part and type");
+    h.get_by_label("Due = 2026-11-30 (Date)").click();
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Type:").value().as_deref(), Some("Date"));
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Value:").value().as_deref(), Some("2026-11-30"));
+    assert_eq!(fields_of(h.state(), "customProperties")["kind"], json!("date"));
+}
+
+/// A value that doesn't match its type is refused with a message; the document is unchanged.
+#[test]
+fn the_custom_properties_dialog_refuses_an_invalid_number() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = custom_props_harness(|_| {});
+    set_text_field(&mut h, "Name:", "Pages");
+    choose_custom_type(&mut h, "Number");
+    set_text_field(&mut h, "Value:", "twelve");
+    press(&mut h, "Add");
+    assert!(notice_shown(&h), "the form says why");
+    assert!(h.query_by_label_contains("Pages =").is_none(), "nothing was added");
+    let depth = h.state().session.undo_depth();
+    press(&mut h, "OK");
+    assert!(h.state().session.doc.custom_props.is_empty(), "the document is unchanged");
+    assert_eq!(h.state().session.undo_depth(), depth, "no step was recorded");
 }
 
 // ---------------------------------------------------------------- modality and names
@@ -2256,4 +2337,81 @@ fn modal_dialog_with_open_popup_does_not_shake_on_inside_click_but_shakes_on_out
     h.run_steps(2);
     let key2 = chrome::nudge_id(&h.ctx, id2);
     assert!(h.ctx.data(|d| d.get_temp::<f64>(key2)).is_none(), "reopened dialog starts still");
+}
+
+/// PR #5541 review: imported properties whose stored form the Value box shows reduced (a date
+/// with a time, a 64-bit integer, a `1` boolean).
+fn imported_custom_props_form() -> CustomPropertiesForm {
+    let mut app = app_with("Report body");
+    for (name, kind, value) in [("Due", "filetime", "2026-11-30T14:05:00Z"), ("Big", "i8", "9007199254740993"), ("Flag", "bool", "1")] {
+        app.session.doc.custom_props.push(wordcraft_doc::CustomProp {
+            name: name.into(),
+            kind: kind.into(),
+            value: value.into(),
+            ..Default::default()
+        });
+    }
+    CustomPropertiesForm::read(&app)
+}
+
+fn custom_triples(f: &CustomPropertiesForm) -> Vec<(String, String, String)> {
+    f.props.iter().map(|p| (p.name.clone(), p.kind.clone(), p.value.clone())).collect()
+}
+
+/// Modify with nothing edited keeps each stored kind and value, so OK sends nothing.
+#[test]
+fn custom_property_modify_without_edits_keeps_stored_values() {
+    let mut f = imported_custom_props_form();
+    let before = custom_triples(&f);
+    for i in 0..3 {
+        f.select(i);
+        f.modify();
+        assert!(f.message.is_empty(), "row {i}: {}", f.message);
+    }
+    assert_eq!(custom_triples(&f), before);
+    assert_eq!(f.params(), json!({"custom": {}}));
+}
+
+/// A rename keeps the stored value when `file.properties` can store it again as it is, and is
+/// refused when it can't (an i8 above 2^53 would be rounded through f64).
+#[test]
+fn custom_property_rename_keeps_or_refuses_stored_values() {
+    let mut f = imported_custom_props_form();
+    f.select(0);
+    f.name = "Deadline".into();
+    f.modify();
+    assert!(f.message.is_empty(), "{}", f.message);
+    let p = f.props.iter().find(|p| p.name == "Deadline").expect("renamed");
+    assert_eq!((p.kind.as_str(), p.value.as_str()), ("filetime", "2026-11-30T14:05:00Z"));
+    assert_eq!(f.params(), json!({"custom": {"Due": null, "Deadline": {"value": "2026-11-30T14:05:00Z", "type": "date"}}}));
+
+    let mut f = imported_custom_props_form();
+    let before = custom_triples(&f);
+    f.select(1);
+    f.name = "Huge".into();
+    f.modify();
+    assert!(!f.message.is_empty(), "the rename is refused with a message");
+    assert_eq!(custom_triples(&f), before, "the list is unchanged");
+    assert_eq!(f.params(), json!({"custom": {}}));
+
+    let mut f = imported_custom_props_form();
+    f.select(2);
+    f.name = "Flag2".into();
+    f.modify();
+    assert!(f.message.is_empty(), "{}", f.message);
+    let p = f.props.iter().find(|p| p.name == "Flag2").expect("renamed");
+    assert_eq!(p.kind, "bool");
+    assert!(matches!(p.value.as_str(), "1" | "true"), "{}", p.value);
+}
+
+/// An edited value is still parsed for its type, as before.
+#[test]
+fn custom_property_modify_with_an_edit_still_retypes() {
+    let mut f = imported_custom_props_form();
+    f.select(0);
+    f.value = "2026-12-01".into();
+    f.modify();
+    assert!(f.message.is_empty(), "{}", f.message);
+    let p = f.props.iter().find(|p| p.name == "Due").unwrap();
+    assert_eq!((p.kind.as_str(), p.value.as_str()), ("filetime", "2026-12-01T00:00:00Z"));
 }

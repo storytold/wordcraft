@@ -7,19 +7,19 @@ use craft::behavior::{Mixed, Selection, keyed};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, Politeness, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, Politeness, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow};
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::form_dialogs::FormCx;
+use craft::ui::pickers::Select;
 use craft::ui::runtime::env::{Label, LengthUnits, UnitKind};
 use craft::ui::sections::Section;
-use craft::ui::style::TypeRole;
 use craft::ui::text::{NumberField, TextField};
 
 use super::host::{Asks, WordForm, open_form};
+use wordcraft_engine::cmd::file::CustomType;
 
 /// Opens the form dialog `name` when it is one of this file's: Table Properties (only with a table selection) or Custom
 /// Properties.
@@ -32,11 +32,6 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
         "customProperties" => Some(open_form(app, parent, CustomPropertiesForm::read(app))),
         _ => None,
     }
-}
-
-/// A muted caption under the rows.
-fn note(ui: &mut Ui, text: String) {
-    Text::new(Label::from(text)).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
 }
 
 /// A check box over `value`; `enabled` off greys it.
@@ -64,9 +59,10 @@ fn choose(ui: &mut Ui, id: &'static str, label: String, value: &mut String, opti
 /// The Custom tab of File › Info › Properties › Advanced Properties (#2982): the document's
 /// custom properties, edited as a working copy. OK sends the whole difference from what the
 /// dialog opened with as one undoable `file.properties` step (marking the document changed and
-/// refreshing File › Info); Cancel sends nothing. Text properties only for now: Word's
-/// number/date/yes-no types aren't offered, and a property of another type keeps its stored
-/// form — the dialog lists it but refuses to change it (Delete still removes one outright).
+/// refreshing File › Info); Cancel sends nothing. Each property has Word's Type (Text, Date,
+/// Number, Yes or no), validated as `file.properties` validates it. A property of a kind with
+/// no such type (Zotero's raw XML, currency) keeps its stored form — the dialog lists it but
+/// refuses to change it (Delete still removes one outright).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CustomPropertiesForm {
@@ -76,69 +72,129 @@ pub struct CustomPropertiesForm {
     start: Vec<wordcraft_doc::CustomProp>,
     /// The row the list selection is on.
     pub selected: usize,
-    /// The name/value boxes under the list.
+    /// The name/type/value boxes under the list.
     pub name: String,
+    pub kind: CustomType,
     pub value: String,
+    /// The Yes / No radio buttons that replace the Value box for Yes or no.
+    pub yes: bool,
     /// The last error to show under the form (a refused name, a failed command).
     pub message: String,
+}
+
+/// Word's label for a property type.
+pub(super) fn custom_type_label(t: CustomType) -> &'static str {
+    match t {
+        CustomType::Text => "Text",
+        CustomType::Date => "Date",
+        CustomType::Number => "Number",
+        CustomType::YesNo => "Yes or no",
+    }
+}
+
+/// A stored value as the Value box and the list show it: a date's `YYYY-MM-DD` part, Yes or
+/// No for a yes/no property, anything else as stored.
+fn custom_shown_value(p: &wordcraft_doc::CustomProp) -> String {
+    match CustomType::of_kind(&p.kind) {
+        Some(CustomType::Date) => p.value.split('T').next().unwrap_or("").to_string(),
+        Some(CustomType::YesNo) => if custom_bool(&p.value) { tl!("Yes") } else { tl!("No") }.to_string(),
+        _ => p.value.clone(),
+    }
+}
+
+/// A stored `vt:bool` value (`true`/`1`, any case, means yes).
+fn custom_bool(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1")
+}
+
+/// The list row for a property: name, value and type, e.g. `Pages = 12 (Number)`.
+pub(super) fn custom_row(p: &wordcraft_doc::CustomProp) -> String {
+    let ty = CustomType::of_kind(&p.kind).map_or(p.kind.as_str(), |t| tl!(custom_type_label(t)));
+    format!("{} = {} ({ty})", p.name, custom_shown_value(p))
 }
 
 impl CustomPropertiesForm {
     pub(crate) fn read(app: &WordApp) -> Self {
         let props = app.session.doc.custom_props.clone();
-        let mut form = Self { props: props.clone(), start: props, selected: 0, name: String::new(), value: String::new(), message: String::new() };
+        let mut form = Self {
+            props: props.clone(),
+            start: props,
+            selected: 0,
+            name: String::new(),
+            kind: CustomType::Text,
+            value: String::new(),
+            yes: true,
+            message: String::new(),
+        };
         // The first row is highlighted, so its fields are ready to modify, as in Word.
         form.select(0);
         form
     }
 
-    /// Clicking a row: it fills the name and value boxes, as in Word.
+    /// Clicking a row: it fills the name, type and value boxes, as in Word.
     pub(crate) fn select(&mut self, i: usize) {
         self.selected = i;
         self.message.clear();
         match self.props.get(i) {
             Some(p) => {
                 self.name = p.name.clone();
-                self.value = p.value.clone();
+                self.kind = CustomType::of_kind(&p.kind).unwrap_or(CustomType::Text);
+                self.yes = self.kind != CustomType::YesNo || custom_bool(&p.value);
+                self.value = if self.kind == CustomType::YesNo { String::new() } else { custom_shown_value(p) };
             }
             None => {
                 self.name.clear();
                 self.value.clear();
+                self.kind = CustomType::Text;
+                self.yes = true;
             }
         }
     }
 
-    /// The typed name and value, validated against the engine's own limits
-    /// (`file.properties`, which refuses them the same way).
-    fn form(&self) -> Result<(String, String), String> {
+    /// Validate the name independently of the displayed value, which can omit stored data.
+    fn form_name(&self) -> Result<String, String> {
         let max_name = wordcraft_engine::cmd::file::MAX_CUSTOM_NAME;
         let name = self.name.trim();
         if name.is_empty() || name.chars().count() > max_name {
             return Err(crate::i18n::fmt(tl!("Property names are 1–{max} characters."), &[("max", &max_name.to_string())]));
         }
+        Ok(name.to_string())
+    }
+
+    /// The typed name with the stored kind and value, validated against the engine's own
+    /// limits and type rules (`file.properties`, which refuses them the same way).
+    fn form(&self) -> Result<(String, &'static str, String), String> {
+        let name = self.form_name()?;
         if self.value.len() > wordcraft_engine::cmd::file::MAX_CUSTOM_VALUE {
             let max = wordcraft_engine::cmd::file::MAX_CUSTOM_VALUE;
             return Err(crate::i18n::fmt(tl!("Property values are at most {max} bytes."), &[("max", &max.to_string())]));
         }
-        Ok((name.to_string(), self.value.clone()))
+        let value = if self.kind == CustomType::YesNo { if self.yes { "yes" } else { "no" } } else { self.value.as_str() };
+        let (kind, value) = wordcraft_engine::cmd::file::parse_custom_value(self.kind, value).map_err(|()| {
+            crate::i18n::fmt(tl!("The value entered does not match the {type} type."), &[("type", tl!(custom_type_label(self.kind)))])
+        })?;
+        Ok((name, kind, value))
     }
 
-    /// Add: the typed name and value join the list, replacing a property of the same name
+    /// Add: the typed property joins the list, replacing a property of the same name
     /// (names compare case-insensitively, as in Word and the engine).
     pub(crate) fn add(&mut self) {
         match self.form() {
-            Ok((name, value)) => {
+            Ok((name, kind, value)) => {
                 self.message.clear();
                 match self.props.iter().position(|p| p.name.eq_ignore_ascii_case(&name)) {
-                    Some(i) if self.props[i].kind != "lpwstr" => {
-                        self.message = tl!("Only text properties can be changed.").to_string();
+                    Some(i) if self.props.get(i).is_some_and(|p| CustomType::of_kind(&p.kind).is_none()) => {
+                        self.message = tl!("Properties of this type can't be changed.").to_string();
                     }
                     Some(i) => {
-                        self.props[i].value = value;
+                        if let Some(p) = self.props.get_mut(i) {
+                            p.kind = kind.to_string();
+                            p.value = value;
+                        }
                         self.selected = i;
                     }
                     None => {
-                        self.props.push(wordcraft_doc::CustomProp { name, kind: "lpwstr".into(), value, ..Default::default() });
+                        self.props.push(wordcraft_doc::CustomProp { name, kind: kind.to_string(), value, ..Default::default() });
                         self.selected = self.props.len().saturating_sub(1);
                     }
                 }
@@ -147,40 +203,68 @@ impl CustomPropertiesForm {
         }
     }
 
-    /// Modify: the selected property takes the typed name and value; a different name moves it
-    /// there (replacing a property already of that name). A refused form keeps the list as it
-    /// was.
+    /// Modify: the selected property takes the typed name, type and value; a different name
+    /// moves it there (replacing a property already of that name). A refused form keeps the
+    /// list as it was.
     pub(crate) fn modify(&mut self) {
         let Some(old) = self.props.get(self.selected).cloned() else {
             self.message = tl!("Select a property to change.").to_string();
             return;
         };
-        if old.kind != "lpwstr" {
-            self.message = tl!("Only text properties can be changed.").to_string();
+        let fixed = |p: &wordcraft_doc::CustomProp| CustomType::of_kind(&p.kind).is_none();
+        if fixed(&old) {
+            self.message = tl!("Properties of this type can't be changed.").to_string();
             return;
         }
-        let (name, value) = match self.form() {
+        let unchanged = CustomType::of_kind(&old.kind) == Some(self.kind)
+            && if self.kind == CustomType::YesNo { self.yes == custom_bool(&old.value) } else { self.value == custom_shown_value(&old) };
+        let form = if unchanged {
+            self.form_name().and_then(|name| {
+                let mut value = old.value.clone();
+                if name != old.name {
+                    // Renames create a new property through the command parser. Refuse
+                    // values it would round or otherwise change; booleans may normalize.
+                    let stored =
+                        if self.kind == CustomType::YesNo { if custom_bool(&old.value) { "true" } else { "false" } } else { old.value.as_str() };
+                    match wordcraft_engine::cmd::file::parse_custom_value(self.kind, stored) {
+                        Ok((_, parsed))
+                            if parsed == old.value || (self.kind == CustomType::YesNo && custom_bool(&parsed) == custom_bool(&old.value)) =>
+                        {
+                            value = parsed;
+                        }
+                        _ => return Err(tl!("This property can't be renamed without changing its value.").to_string()),
+                    }
+                }
+                Ok((name, old.kind.clone(), value))
+            })
+        } else {
+            self.form().map(|(name, kind, value)| (name, kind.to_string(), value))
+        };
+        let (name, kind, value) = match form {
             Ok(f) => f,
             Err(m) => {
                 self.message = m;
                 return;
             }
         };
-        if self.props.iter().enumerate().any(|(i, p)| i != self.selected && p.kind != "lpwstr" && p.name.eq_ignore_ascii_case(&name)) {
-            self.message = tl!("Only text properties can be changed.").to_string();
+        if self.props.iter().enumerate().any(|(i, p)| i != self.selected && fixed(p) && p.name.eq_ignore_ascii_case(&name)) {
+            self.message = tl!("Properties of this type can't be changed.").to_string();
             return;
         }
         self.message.clear();
         self.props.remove(self.selected);
         match self.props.iter().position(|p| p.name.eq_ignore_ascii_case(&name)) {
             Some(i) => {
-                self.props[i].value = value;
-                self.props[i].link_target = old.link_target;
+                if let Some(p) = self.props.get_mut(i) {
+                    p.kind = kind.to_string();
+                    p.value = value;
+                    p.link_target = old.link_target;
+                }
                 self.selected = i;
             }
             None => {
                 let i = self.selected.min(self.props.len());
-                self.props.insert(i, wordcraft_doc::CustomProp { name, value, ..old });
+                self.props.insert(i, wordcraft_doc::CustomProp { name, kind: kind.to_string(), value, ..old });
                 self.selected = i;
             }
         }
@@ -195,8 +279,9 @@ impl CustomPropertiesForm {
     }
 
     /// The one `file.properties` call OK makes: a property gone since the dialog opened is
-    /// null, one added or changed carries its value and any bookmark target. Untouched properties aren't sent, so one of
-    /// another type (Zotero's raw XML, a number) keeps its stored form. A rename that only
+    /// null, one added or changed carries its value, its type when it isn't text, and any
+    /// bookmark target. Untouched properties aren't sent, so one of a kind the dialog doesn't
+    /// edit (Zotero's raw XML, a 64-bit integer) keeps its stored form. A rename that only
     /// changes case sends the old spelling as null too, so the stored spelling follows it.
     pub(crate) fn params(&self) -> Value {
         let mut custom = serde_json::Map::new();
@@ -213,12 +298,17 @@ impl CustomPropertiesForm {
                 .start
                 .iter()
                 .find(|q| q.name.eq_ignore_ascii_case(&p.name))
-                .is_none_or(|was| was.name != p.name || was.value != p.value || was.link_target != p.link_target);
+                .is_none_or(|was| was.name != p.name || was.kind != p.kind || was.value != p.value || was.link_target != p.link_target);
             if changed {
                 // A rename removes the old property before creating the new one. Carry its
                 // target too, including an explicit unlink when replacing a linked property.
                 let linked = p.link_target.is_some() || self.start.iter().any(|q| q.name.eq_ignore_ascii_case(&p.name) && q.link_target.is_some());
-                let value = if linked { json!({"value": p.value, "linkTarget": p.link_target}) } else { json!(p.value) };
+                let ty = CustomType::of_kind(&p.kind).unwrap_or(CustomType::Text);
+                let value = match (linked, ty) {
+                    (false, CustomType::Text) => json!(p.value),
+                    (false, ty) => json!({"value": p.value, "type": ty.id()}),
+                    (true, ty) => json!({"value": p.value, "type": ty.id(), "linkTarget": p.link_target}),
+                };
                 custom.insert(p.name.clone(), value);
             }
         }
@@ -237,7 +327,7 @@ impl WordForm for CustomPropertiesForm {
 
     fn body(&mut self, ui: &mut Ui, cx: &mut FormCx<'_, '_>, asks: &mut Vec<Asks>) -> bool {
         let _ = (cx, asks);
-        let rows: Vec<String> = self.props.iter().map(|p| format!("{} = {}", p.name, p.value)).collect();
+        let rows: Vec<String> = self.props.iter().map(custom_row).collect();
         let positions: Vec<usize> = (0..rows.len()).collect();
         let mut selection = if self.selected < rows.len() { Selection::single(self.selected) } else { Selection::default() };
         List::new(Label::from(tl!("Properties").to_string()))
@@ -272,15 +362,27 @@ impl WordForm for CustomPropertiesForm {
         if let Some(text) = typed.value().cloned() {
             self.name = text;
         }
-        let typed = TextField::new(Label::from(tl!("Value:").to_string()), Bind::given(self.value.clone())).id_salt("value").show(ui);
-        if let Some(text) = typed.value().cloned() {
-            self.value = text;
+        let types: Vec<Entry<String>> =
+            CustomType::ALL.iter().map(|t| Entry::new(t.id().to_string(), Label::from(tl!(custom_type_label(*t))))).collect();
+        let picked = Select::new(Label::from(tl!("Type:")), Bind::given(self.kind.id().to_string()), &types).id_salt("type").show(ui);
+        if let Some(t) = picked.value().and_then(|id| CustomType::from_id(id)) {
+            self.kind = t;
+        }
+        if self.kind == CustomType::YesNo {
+            // Word's Yes / No buttons take the Value box's place for a Yes or no property.
+            let mut yes = if self.yes { "yes" } else { "no" }.to_string();
+            choose(ui, "yesNo", tl!("Value:").to_string(), &mut yes, &[("yes", tl!("Yes").to_string()), ("no", tl!("No").to_string())]);
+            self.yes = yes == "yes";
+        } else {
+            let typed = TextField::new(Label::from(tl!("Value:").to_string()), Bind::given(self.value.clone())).id_salt("value").show(ui);
+            if let Some(text) = typed.value().cloned() {
+                self.value = text;
+            }
         }
         if !self.message.is_empty() {
             // A refusal is announced to a screen reader as it appears (an Alert node).
             Notice::new(Tone::Bad, Label::from(self.message.clone())).layout(NoticeLayout::Inline).announce(Politeness::Assertive).show(ui);
         }
-        note(ui, tl!("Text properties only: Word's number, date and yes-no types aren't offered.").to_string());
         true
     }
 
