@@ -565,13 +565,17 @@ pub(crate) fn show(ui: &mut Ui, app: &mut WordApp, ribbon: &RibbonOutput<String>
         let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
     }
     if let Some(pending) = &out.pending
-        && sequences.iter().any(|(keys, _)| keys.starts_with(pending.as_str()))
+        && should_show_legacy_hint(pending, sequences)
     {
         // With no ribbon showing (Focus, Full Screen View) the hint hangs under the screen bar.
         if let Some(anchor) = ribbon.tabs.or(screen_bar) {
             legacy_hint(ui, pending, anchor);
         }
     }
+}
+
+fn should_show_legacy_hint(pending: &str, sequences: &[(&str, CommandRef)]) -> bool {
+    sequences.iter().any(|(keys, _)| keys.starts_with(pending))
 }
 
 /// The hint under `anchor` while a legacy menu key sequence waits for its next letter.
