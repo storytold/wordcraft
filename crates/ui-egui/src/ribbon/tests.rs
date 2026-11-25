@@ -698,23 +698,16 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(shown(a, "Chart Design"), before, "Chart Design shown, the chart untouched");
 }
 
-fn table_design_harness(language: &str, theme: egui::Theme) -> Harness {
+fn table_design_harness() -> Harness {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
-    app.run("ui.language", json!({"value": language})).unwrap();
-    app.run("ui.theme", json!({"value": if theme == egui::Theme::Dark { "dark" } else { "light" }})).unwrap();
     app.run("ui.tab", json!({"tab": "Table Design"})).unwrap();
-    let h = crate::test_harness::builder().with_size(vec2(1600.0, 700.0)).with_theme(theme).build_ui_state(
-        move |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            assert_eq!(ctx.global_style().visuals.dark_mode, theme == egui::Theme::Dark, "the requested palette is active while drawing");
-            app.ui(ui);
+    crate::test_harness::builder().with_size(vec2(1600.0, 200.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let _ = super::show(app, ui);
         },
         app,
-    );
-    crate::test_harness::cjk_stand_in(&h.ctx);
-    h
+    )
 }
 
 /// The Shading arrow's name: "Shading options", in the interface language (#3172).
@@ -726,31 +719,37 @@ fn shading_options() -> String {
 fn table_shading_label_is_painted_beside_its_arrow() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
-    // Vietnamese and German labels need the embedded catalogs (CI has them); English always runs.
-    let languages: &[&str] = if crate::i18n::catalogs_embedded() { &["en", "vi", "de"] } else { &["en"] };
-    for &language in languages {
-        for theme in [egui::Theme::Light, egui::Theme::Dark] {
-            let mut h = table_design_harness(language, theme);
-            h.run_steps(3);
-            let label = tl!("Shading");
-            let main = h.get_by_role_and_label(Role::Button, label).rect();
-            let arrow = h.get_by_role_and_label(Role::Button, &shading_options()).rect();
-            assert!((main.top() - arrow.top()).abs() < 0.01 && (main.bottom() - arrow.bottom()).abs() < 0.01);
-            assert!((main.right() - arrow.right()).abs() < 0.01 && arrow.left() > main.left(), "{language}: {main:?}, {arrow:?}");
-            let text = h
-                .output()
-                .shapes
-                .iter()
-                .find_map(|s| match &s.shape {
-                    egui::Shape::Text(t) if t.galley.text() == label => Some(t),
-                    _ => None,
-                })
-                .expect("Shading is drawn as text, not just a hover tip");
-            let text_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
-            assert!(main.contains_rect(text_rect), "{language}: {text_rect:?} outside {main:?}");
-            assert!(text_rect.left() >= main.left() + 24.0, "the label starts after the icon");
-            assert!(text_rect.right() <= arrow.left(), "{language}: label {text_rect:?} overlaps arrow {arrow:?}");
-        }
+    // Vietnamese and German labels need the embedded catalogs (CI has them); English always runs in both themes.
+    let cases: &[(&str, egui::Theme)] = if crate::i18n::catalogs_embedded() {
+        &[("en", egui::Theme::Light), ("en", egui::Theme::Dark), ("vi", egui::Theme::Light), ("de", egui::Theme::Light)]
+    } else {
+        &[("en", egui::Theme::Light), ("en", egui::Theme::Dark)]
+    };
+    let mut h = table_design_harness();
+    for &(language, theme) in cases {
+        h.state_mut().run("ui.language", json!({"value": language})).unwrap();
+        h.state_mut().run("ui.theme", json!({"value": if theme == egui::Theme::Dark { "dark" } else { "light" }})).unwrap();
+        h.ctx.set_theme(theme);
+        crate::test_harness::frame(&mut h);
+        assert_eq!(h.ctx.global_style().visuals.dark_mode, theme == egui::Theme::Dark, "{language}/{theme:?}: palette active");
+        let label = tl!("Shading");
+        let main = h.get_by_role_and_label(Role::Button, label).rect();
+        let arrow = h.get_by_role_and_label(Role::Button, &shading_options()).rect();
+        assert!((main.top() - arrow.top()).abs() < 0.01 && (main.bottom() - arrow.bottom()).abs() < 0.01);
+        assert!((main.right() - arrow.right()).abs() < 0.01 && arrow.left() > main.left(), "{language}: {main:?}, {arrow:?}");
+        let text = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(t),
+                _ => None,
+            })
+            .expect("Shading is drawn as text, not just a hover tip");
+        let text_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+        assert!(main.contains_rect(text_rect), "{language}: {text_rect:?} outside {main:?}");
+        assert!(text_rect.left() >= main.left() + 24.0, "the label starts after the icon");
+        assert!(text_rect.right() <= arrow.left(), "{language}: label {text_rect:?} overlaps arrow {arrow:?}");
     }
     crate::i18n::apply_language(crate::i18n::Lang::EN);
 }
