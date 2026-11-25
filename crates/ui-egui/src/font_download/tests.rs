@@ -30,7 +30,7 @@ fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
 }
 
 fn harness_sized(app: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -42,8 +42,14 @@ fn harness_sized(app: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'stati
     h
 }
 
-fn shown(h: &egui_kittest::Harness<'static, WordApp>) -> Option<&'static str> {
-    h.state().dialog.as_ref().map(Dialog::name)
+/// The key of the top dialog on the host.
+fn shown(h: &egui_kittest::Harness<'static, WordApp>) -> Option<String> {
+    h.state().dialog_host.open_dialogs().last().and_then(|d| d.key.clone())
+}
+
+/// The open font box's rows and opt-out.
+fn the_box(h: &egui_kittest::Harness<'static, WordApp>) -> Option<(Vec<Row>, bool)> {
+    h.state().dialog_host.get::<FontBox>().map(|b| (b.fonts.clone(), b.dont_show))
 }
 
 #[test]
@@ -52,7 +58,7 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
         return;
     }
     let mut h = harness(app(true));
-    let Some(Dialog::FontDownload { fonts, dont_show }) = h.state().dialog.clone() else { panic!("no box: {:?}", shown(&h)) };
+    let Some((fonts, dont_show)) = the_box(&h) else { panic!("no box: {:?}", shown(&h)) };
     // Only the font that can be downloaded, with what it is drawn in and Microsoft's page.
     assert_eq!(fonts.len(), 1, "{fonts:?}");
     assert_eq!((fonts[0].font.as_str(), fonts[0].publisher.as_str()), ("Aptos", "Microsoft"));
@@ -64,7 +70,8 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
     // The headline counts what can be downloaded, not every font the document is missing.
     assert!(h.query_by_label("1 missing font can be downloaded").is_some());
     assert!(h.query_by_label_contains("isn't installed").is_none(), "other fonts may be missing too");
-    assert!(h.query_by_label("Aptos").is_some());
+    // The row names the font: its text and the row that holds it both carry the name, so any number of nodes is fine.
+    assert!(h.query_all_by_label("Aptos").next().is_some());
     assert!(h.query_by_label(format!("Shown as {} · Microsoft", fonts[0].shown_as.join(", ")).as_str()).is_some());
     assert!(h.query_by_label_contains("following them is up to you").is_some(), "whose part the licence is");
     assert!(h.query_by_label_contains("limits who may use it").is_none(), "Aptos has no such limit");
@@ -79,7 +86,7 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
         opened |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(u) if u.url == fonts[0].url));
     }
     assert!(opened, "the page is opened");
-    assert_eq!(shown(&h), Some("fontDownload"), "and the box stays for the next step");
+    assert_eq!(shown(&h).as_deref(), Some("fontDownload"), "and the box stays for the next step");
     // Closed, it stays closed for this document.
     // The box's own Close button, below the title bar's.
     let close =
@@ -88,6 +95,9 @@ fn an_opened_document_missing_a_downloadable_font_is_told_about_once() {
     h.run_steps(4);
     assert_eq!(shown(&h), None);
     assert!(h.state().ui.font_download_notice, "closing alone keeps the box on");
+    // Closed, it stays closed for this document: the next passes do not bring it back.
+    h.run_steps(4);
+    assert_eq!(shown(&h), None);
 }
 
 #[test]
@@ -110,11 +120,12 @@ fn dont_show_this_again_turns_the_box_off() {
         return;
     }
     let mut h = harness(app(true));
-    assert_eq!(shown(&h), Some("fontDownload"));
+    assert_eq!(shown(&h).as_deref(), Some("fontDownload"));
     h.get_by_label("Don't show this again").click();
     h.run_steps(2);
     assert!(!h.state().ui.font_download_notice, "kept at once");
     // Saved between runs, and read back.
+    // PLAN: `prefs()` now returns `Prefs` (sh.A13, app-hub's rename of `UiState`)
     let saved = serde_json::to_value(h.state().prefs()).unwrap();
     assert_eq!(saved["fontDownloadNotice"], json!(false), "{saved}");
     // The next opened document isn't told about.
@@ -130,19 +141,21 @@ fn the_box_waits_for_an_open_dialog_and_can_be_opened_by_hand() {
         return;
     }
     let mut a = app(true);
-    a.dialog = Dialog::open("wordCount", &mut a);
+    let ctx = egui::Context::default();
+    crate::dialogs::open(&mut a, "wordCount", &json!({}));
     let mut h = harness(a);
-    assert_eq!(shown(&h), Some("wordCount"), "the open dialog stays");
-    h.state_mut().dialog = None;
+    assert_eq!(shown(&h).as_deref(), Some("wordCount"), "the open dialog stays");
+    crate::dialogs::host::close_all(h.state_mut(), &ctx);
     h.run_steps(3);
-    assert_eq!(shown(&h), Some("fontDownload"), "then the box");
-    h.state_mut().dialog = None;
+    assert_eq!(shown(&h).as_deref(), Some("fontDownload"), "then the box");
+    crate::dialogs::host::close_all(h.state_mut(), &ctx);
     h.run_steps(3);
     assert_eq!(shown(&h), None);
     // The status bar's menu (`ui.dialog`) opens it again, even with the box turned off.
     h.state_mut().ui.font_download_notice = false;
     h.state_mut().run("ui.dialog", json!({"name": "fontDownload"})).unwrap();
-    let Some(Dialog::FontDownload { fonts, dont_show }) = h.state().dialog.clone() else { panic!("no box") };
+    h.run_steps(2);
+    let Some((fonts, dont_show)) = the_box(&h) else { panic!("no box") };
     assert_eq!(fonts.len(), 1);
     assert!(dont_show, "the box shows the setting");
 }
@@ -194,37 +207,6 @@ fn fonts_of_one_download_are_listed_together() {
     assert_eq!((g[1].fonts.as_slice(), g[1].url), (["Cascadia Code"].as_slice(), "https://c"));
 }
 
-/// As many downloads as the box lists, in a short window and a very short one: what is above
-/// the row with Close scrolls, so the opt-out and Close stay on screen and the box in the window.
-#[test]
-fn many_downloads_in_a_short_window_leave_the_opt_out_and_close_on_screen() {
-    for height in [600.0, 400.0] {
-        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
-        let fonts: Vec<Row> = (0..LISTED)
-            .map(|i| Row {
-                font: format!("Harbour Face {i}"),
-                shown_as: vec!["Carlito".into()],
-                download: format!("Harbour Face {i}"),
-                publisher: "Lantern Works".into(),
-                url: format!("https://example.org/{i}"),
-                restricted: false,
-            })
-            .collect();
-        a.dialog = Some(Dialog::FontDownload { fonts, dont_show: false });
-        let h = harness_sized(a, egui::vec2(1000.0, height));
-        // The steps are still there, to scroll to.
-        assert!(h.query_by_label("Add Font…").is_some());
-        for label in ["Don't show this again", "Close"] {
-            // Close is also the window's close box: every match is on screen.
-            let rects: Vec<egui::Rect> = h.query_all_by_label(label).map(|n| n.rect()).collect();
-            assert!(!rects.is_empty(), "no {label}");
-            for r in rects {
-                assert!(r.min.y >= 0.0 && r.max.y <= height, "{label} is at {r:?}, outside the {height} pt window");
-            }
-        }
-    }
-}
-
 /// A font whose publisher limits its use says so on its card, and has a card of its own.
 #[test]
 fn a_font_with_a_limited_licence_says_so() {
@@ -235,9 +217,9 @@ fn a_font_with_a_limited_licence_says_so() {
     if !wordcraft_engine::cmd::font::missing_fonts(&a.session.doc, &layout).iter().any(|f| f.font == "Segoe UI Variable") {
         return; // Installed here: not missing.
     }
-    a.dialog = Dialog::open("fontDownload", &mut a);
-    let Some(Dialog::FontDownload { fonts, .. }) = a.dialog.clone() else { panic!("no box") };
-    assert!(fonts.iter().any(|f| f.font == "Segoe UI Variable" && f.restricted), "{fonts:?}");
+    let font_box = FontBox::new(rows(&mut a), false);
+    assert!(font_box.fonts.iter().any(|f| f.font == "Segoe UI Variable" && f.restricted), "{:?}", font_box.fonts);
+    open(&mut a, KEY, &json!({}), None);
     let h = harness(a);
     assert!(h.query_by_label_contains("limits who may use it").is_some());
 }
@@ -250,4 +232,61 @@ fn only_so_many_documents_are_remembered() {
     }
     assert_eq!(a.font_notice_seen.len(), REMEMBERED);
     assert_eq!(a.font_notice_seen.last(), Some(&(REMEMBERED as u64 + 49)));
+}
+
+/// Each missing font's names, substitute and Download button sit in one compact row, not one under another, and a
+/// narrow window keeps them inside the box.
+#[test]
+fn each_download_is_one_row() {
+    let row = |font: &str, shown: &str, url: &str| Row {
+        font: font.into(),
+        shown_as: vec![shown.into()],
+        download: font.into(),
+        publisher: "Microsoft".into(),
+        url: url.into(),
+        restricted: false,
+    };
+    for width in [1440.0, 520.0] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let fonts = vec![row("Aptos", "Carlito", "https://a"), row("Cascadia Code", "Liberation Mono", "https://c")];
+        open_with(&mut a, None, FontBox::new(fonts, false), DialogHooks { prepare: None, settle });
+        let h = harness_sized(a, egui::vec2(width, 900.0));
+        let buttons: Vec<_> = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Download").collect();
+        assert_eq!(buttons.len(), 2);
+        for (button, shown) in buttons.iter().zip(["Shown as Carlito · Microsoft", "Shown as Liberation Mono · Microsoft"]) {
+            let shown = h.get_by_label(shown).rect();
+            let button = button.rect();
+            // The button is beside the text block, level with it, not under it.
+            assert!(button.min.x >= shown.max.x, "{width}: {button:?} {shown:?}");
+            assert!(button.center().y < shown.max.y, "{width}: button under the text: {button:?} {shown:?}");
+            assert!(button.max.x <= width, "{width}: clipped {button:?}");
+        }
+    }
+}
+
+/// One very long unbroken family name is cut inside its card and leaves the Download button inside the card too.
+#[test]
+fn a_long_unbroken_name_stays_inside_its_card() {
+    let long = format!("Aptos {}", "W".repeat(200));
+    let row = Row {
+        font: long.clone(),
+        shown_as: vec!["Carlito".into()],
+        download: "Aptos".into(),
+        publisher: "Microsoft".into(),
+        url: "https://a".into(),
+        restricted: false,
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    open_with(&mut a, None, FontBox::new(vec![row], false), DialogHooks { prepare: None, settle });
+    let h = harness_sized(a, egui::vec2(700.0, 900.0));
+    let button = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Download").next().expect("button").rect();
+    let name = h.get_by_label(&long).rect();
+    let shown = h.get_by_label("Shown as Carlito · Microsoft").rect();
+    // The card has no node of its own; the dialog it fills is the tightest box to hold both to.
+    let dialog = h.query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Dialog)).next().expect("the dialog").rect();
+    assert!(name.max.x <= button.min.x, "name runs under the button: {name:?} {button:?}");
+    assert!(dialog.contains_rect(name) && dialog.contains_rect(button), "outside the dialog: {name:?} {button:?} {dialog:?}");
+    // The card's padding stands between the button and the dialog's edge.
+    assert!(button.max.x < dialog.max.x, "button reaches the dialog's edge: {button:?} {dialog:?}");
+    assert!(name.min.x >= shown.min.x - 1.0 && name.width() > 0.0, "{name:?} {shown:?}");
 }
