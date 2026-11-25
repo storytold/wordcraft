@@ -137,6 +137,29 @@ fn copied_footnote_pastes_into_another_document_without_touching_its_notes() {
     assert!(copied.runs.iter().map(|r| &r.props).chain([&copied.mark]).all(|c| c.ins.is_none() && c.del.is_none() && c.fmt_change.is_none()));
 }
 
+/// A note referenced only from deleted text of a copied note is not copied: nothing would show it.
+#[test]
+fn note_named_in_deleted_note_text_is_not_copied() {
+    let mut src = doc(&["Alpha beta"]);
+    let outer = add_note(&mut src, 5, "outer");
+    let inner = make_note(&mut src, "inner");
+    src.revisions.push(crate::Revision::new(crate::RevisionKind::Delete, "Source", ""));
+    let note = src.para_mut(StoryRef::Part(outer), &Path::top(0)).unwrap();
+    let end = note.len();
+    note.insert_object(end, note_ref(inner), &CharProps { del: Some(0), ..CharProps::default() }).unwrap();
+    let frag = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 5 + OBJ_LEN));
+    let mut dst = doc(&["Other"]);
+    let parts_before = dst.parts.len();
+
+    let at = dst.end_of(StoryRef::Body);
+    dst.insert_fragment(&at, &frag).unwrap();
+
+    let ids = body_note_ids(&dst);
+    assert_eq!(ids.len(), 1);
+    assert_eq!(dst.parts.len(), parts_before + 1, "only the outer note gets a story");
+    assert!(dst.plain_text(StoryRef::Part(ids[0])).contains("outer"));
+}
+
 /// A selection that ends before the reference, or starts after it, copies no note; one that
 /// splits the reference's bytes doesn't panic.
 #[test]

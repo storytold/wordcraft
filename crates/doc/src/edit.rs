@@ -1718,14 +1718,31 @@ impl Document {
     /// to notes `parts` has no story for stay as they are. The notes' text boxes get stories of
     /// their own too.
     fn adopt_notes(&mut self, blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, budget: &mut BoxBudget) -> usize {
+        // Notes as reviewed, as their revision ids index the source's revisions; reuse compares them as copied
+        let as_copied = parts.clone();
+        for part in parts.values_mut().filter(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote)) {
+            for b in &mut part.blocks {
+                accept_copied_revisions(std::slice::from_mut(Arc::make_mut(b)));
+            }
+        }
+
         let mut found = std::collections::BTreeSet::new();
         let mut queue = Vec::new();
         for b in blocks.iter() {
             each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
         }
-        for part in parts.values() {
+        // A note's own mark asks for no story: a note nothing else names would be left unshown
+        for (own, part) in parts.iter() {
             for b in &part.blocks {
-                each_para(b, 0, &mut |p| note_ids_in(p, &mut found, &mut queue));
+                each_para(b, 0, &mut |p| {
+                    for o in &p.objects {
+                        if let InlineObject::NoteRef { id, .. } = o
+                            && id != own
+                        {
+                            found.insert(*id);
+                        }
+                    }
+                });
             }
         }
         // Keep the IDs sorted for the reuse check's lookups.
@@ -1742,7 +1759,7 @@ impl Document {
         let mut skipped = 0;
         for &old in &wanted {
             let Some(part) = parts.get(&old) else { continue };
-            let kept = !referenced.contains(&old) && self.can_reuse_note(old, parts, &wanted, &mut reuse_links_left);
+            let kept = !referenced.contains(&old) && self.can_reuse_note(old, &as_copied, &wanted, &mut reuse_links_left);
             if kept {
                 map.insert(old, Some(old));
                 continue;
@@ -1777,8 +1794,6 @@ impl Document {
             if note.is_empty() {
                 continue;
             }
-            // The copy's revision ids index the source document's revisions, so it comes as reviewed
-            accept_copied_revisions(&mut note);
             self.adopt_text_boxes(&mut note, parts, 0, budget);
             if let Some(p) = self.parts.get_mut(&new) {
                 p.blocks = note.into_iter().map(Arc::new).collect();
