@@ -380,15 +380,38 @@ fn a_refused_comment_edit_keeps_the_draft() {
 /// #1348: Escape in a comment field throws the draft away and shows the comment's text again.
 #[test]
 fn escape_reverts_a_comment_draft() {
-    let (mut h, id) = comment_harness();
-    click_balloon(&mut h, id);
-    type_in(&mut h, "Discarded ");
-    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-    steps(&mut h, 3);
-    assert_eq!(draft_text(h.state()), None, "the draft is gone");
-    assert_eq!(comment_text(h.state(), id), "Original", "nothing was written");
-    leave_field(&mut h);
-    assert_eq!(comment_text(h.state(), id), "Original", "and nothing is written later");
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Some text here"})).unwrap();
+    a.run("select.text", json!({"text": "text"})).unwrap();
+    let id = a.run("review.newComment", json!({"text": "Original"})).unwrap()["id"].as_u64().unwrap() as u32;
+    let doc_id = a.session.document_id();
+    let ctx = crate::test_harness::context();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+    let step = |a: &mut WordApp, events: Vec<egui::Event>| -> egui::Rect {
+        let mut rect = egui::Rect::NOTHING;
+        craft::ui::shell::embed::before_input(&ctx, |out| a.frame_input(out));
+        let input = egui::RawInput { events, screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            rect = ui
+                .scope(|ui| {
+                    crate::panes::comment_field(a, ui, doc_id, id);
+                })
+                .response
+                .rect;
+        })
+        .drop_without_applying_deltas();
+        rect
+    };
+    let field_rect = step(&mut a, Vec::new());
+    let at = field_rect.left_top() + egui::vec2(20.0, 12.0);
+    step(&mut a, vec![egui::Event::PointerMoved(at), button(at, egui::PointerButton::Primary, true)]);
+    step(&mut a, vec![button(at, egui::PointerButton::Primary, false), egui::Event::Text("Discarded ".into())]);
+    assert!(draft_text(&a).is_some_and(|d| d.contains("Discarded")), "the draft was recorded before Escape");
+    step(&mut a, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    assert_eq!(draft_text(&a), None, "the draft is gone");
+    assert_eq!(comment_text(&a, id), "Original", "nothing was written");
+    super::balloons::deselect_balloon(&mut a);
+    assert_eq!(comment_text(&a, id), "Original", "and nothing is written later");
 }
 
 /// #3268: clicking a balloon's Reply button, typing a reply and clicking away posts it as a
