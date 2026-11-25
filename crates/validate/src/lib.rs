@@ -841,7 +841,7 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
         collections: "field.bytes*1,field.content_types*3,field.entries*1";
         scope: "original prolog of every XML and relationships part, independent of ownership and profile; canonical footnotes relationships paths use existing story classification, diagram layout/colors/quickStyle paths use part identity, XHTML altChunk uses relationship and content-type evidence, custom XML uses relationship targets, the main document uses the resolved package owner and ordinary document content type, and other probed roles use part or relationships-owner content types";
         loss: "unavailable part bytes, undecidable or unsupported encoding, or unreadable prolog";
-        fallback: "The probed matrix contains 56 part-role and declaration-form combinations, 47 with an adverse outcome and 9 tolerated (corpus/EVIDENCE.md). The tolerated combinations are footnotes relationships and diagram layout, colors, and quickStyle parts in the internal entity and ATTLIST forms, and XHTML altChunk in external identifier form without an internal subset. These combinations receive a structural Warning with ByConstruction evidence. Measured adverse combinations receive an Error with Observed evidence. Error grading with ByConstruction evidence for unmeasured declaration forms in probed parts (for example, the external form in diagram parts) and for part roles outside the probed set is an expedient interim pending measurement in issue #7735. Existing coverage checks handle unavailable evidence";
+        fallback: "The probed matrix contains 56 part-role and declaration-form combinations, 47 with an adverse outcome and 9 tolerated (corpus/EVIDENCE.md). The tolerated combinations are footnotes relationships and diagram layout, colors, and quickStyle parts in the internal entity and ATTLIST forms, and XHTML altChunk in external identifier form without an internal subset. These combinations receive a structural Warning with ByConstruction evidence. Measured adverse combinations receive an Error with Observed evidence. All unmeasured part-role and declaration-form combinations receive a Warning with ByConstruction evidence as an expedient interim pending the measurements tracked in issue #7735. Existing coverage checks handle unavailable evidence";
         package_loss: "independent";
     }
 
@@ -914,7 +914,7 @@ fn check_doctypes(pkg: &Package, acc: &mut Acc) {
             if is_measured_adverse {
                 acc.add("XML-DOCTYPE", Some(entry.name.clone()), format!("{message}; see corpus/EVIDENCE.md for measured outcomes"));
             } else {
-                acc.add_graded("XML-DOCTYPE", Severity::Error, Evidence::ByConstruction, Some(entry.name.clone()), message);
+                acc.add_graded("XML-DOCTYPE", Severity::Warning, Evidence::ByConstruction, Some(entry.name.clone()), message);
             }
         }
     }
