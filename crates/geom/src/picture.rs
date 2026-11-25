@@ -9,8 +9,8 @@ use std::borrow::Cow;
 
 use craft_image_codecs::{
     ChannelLayout, CodecError, DecodeOptions, EncodeOptions, Format as CodecFormat, Image as CodecImage, Limits as CodecLimits, RasterColorType,
-    SampleType, bmp_probe, decode_as_with, detect, encode as codec_encode, inspect_raster, jpeg_worst_case_coefficients, png_probe, probe_size,
-    webp_probe,
+    SampleType, bmp_probe, convert_samples, decode_as_with, detect, encode as codec_encode, inspect_raster, jpeg_worst_case_coefficients, png_probe,
+    probe_size, webp_probe,
 };
 use image::{DynamicImage, ImageBuffer, ImageFormat};
 
@@ -99,22 +99,67 @@ fn dynamic_to_codec(img: &DynamicImage) -> Result<CodecImage, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Convert a decoded [`CodecImage`] to tightly-packed RGBA8 in small pixel bands so non-direct
+/// conversions (CMYK/Lab, 16-bit/float) keep transient `f32` scratch within ~640 KiB instead of
+/// allocating ~36–40 bytes/pixel across the full image, preserving the [`Probe::peak_bytes`]
+/// memory-budget contract.
+fn to_rgba8_banded(img: &CodecImage) -> Result<Vec<u8>, Refusal> {
+    const BAND_PIXELS: usize = 16_384;
+    let (w, h) = (img.width(), img.height());
+    let layout = img.layout();
+    let st = img.sample_type();
+    let pixels = u64::from(w).checked_mul(u64::from(h)).and_then(|p| usize::try_from(p).ok()).ok_or(Refusal::TooLarge { width: w, height: h })?;
+    let src_stride = layout.channels().checked_mul(st.bytes()).ok_or(Refusal::TooLarge { width: w, height: h })?;
+    let expected_src = pixels.checked_mul(src_stride).ok_or(Refusal::TooLarge { width: w, height: h })?;
+    let data = img.data();
+    if data.len() != expected_src {
+        return Err(Refusal::Broken("decoded image buffer size mismatch".into()));
+    }
+    let out_bytes = pixels.checked_mul(4).ok_or(Refusal::TooLarge { width: w, height: h })?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(out_bytes).map_err(|_| Refusal::TooLarge { width: w, height: h })?;
+    let band_src_bytes = BAND_PIXELS.checked_mul(src_stride).ok_or(Refusal::TooLarge { width: w, height: h })?;
+    for chunk in data.chunks(band_src_bytes) {
+        let band_px = u32::try_from(chunk.len() / src_stride).map_err(|_| Refusal::TooLarge { width: w, height: h })?;
+        let converted = convert_samples(chunk, band_px, 1, (layout, st), (ChannelLayout::Rgba, SampleType::U8)).map_err(broken)?;
+        out.extend_from_slice(&converted);
+    }
+    Ok(out)
+}
+
 fn codec_to_dynamic(img: CodecImage) -> Result<DynamicImage, Refusal> {
     let (w, h) = (img.width(), img.height());
     let layout = img.layout();
     let st = img.sample_type();
     if st == SampleType::U8 {
-        let raw = img.data().to_vec();
-        return match layout {
-            ChannelLayout::Gray => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageLuma8),
-            ChannelLayout::GrayA => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageLumaA8),
-            ChannelLayout::Rgb => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageRgb8),
-            ChannelLayout::Rgba => ImageBuffer::from_raw(w, h, raw).map(DynamicImage::ImageRgba8),
-            _ => None,
+        match layout {
+            ChannelLayout::Gray => {
+                return ImageBuffer::from_raw(w, h, img.into_data())
+                    .map(DynamicImage::ImageLuma8)
+                    .ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()));
+            }
+            ChannelLayout::GrayA => {
+                return ImageBuffer::from_raw(w, h, img.into_data())
+                    .map(DynamicImage::ImageLumaA8)
+                    .ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()));
+            }
+            ChannelLayout::Rgb => {
+                return ImageBuffer::from_raw(w, h, img.into_data())
+                    .map(DynamicImage::ImageRgb8)
+                    .ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()));
+            }
+            ChannelLayout::Rgba => {
+                return ImageBuffer::from_raw(w, h, img.into_data())
+                    .map(DynamicImage::ImageRgba8)
+                    .ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()));
+            }
+            // CMYK/YCCK JPEGs and CMYK/Lab TIFFs previously fell through to Refusal::Broken;
+            // convert them to RGBA8 in bounded bands below so raster, strict, and PDF export
+            // draw them (PDF embeds converted RGBA as Flate rather than skipping them).
+            ChannelLayout::Cmyk | ChannelLayout::CmykA | ChannelLayout::Lab | ChannelLayout::LabA => {}
         }
-        .ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()));
     }
-    let rgba8 = img.to_rgba8();
+    let rgba8 = to_rgba8_banded(&img)?;
     ImageBuffer::from_raw(w, h, rgba8).map(DynamicImage::ImageRgba8).ok_or_else(|| Refusal::Broken("decoded image buffer size mismatch".into()))
 }
 
@@ -1353,5 +1398,94 @@ mod tests {
         for junk in [&b"not a webp at all"[..], b"", b"RIFF", b"RIFF\0\0\0\0WEBPVP8L"] {
             assert!(!webp_probe::has_alpha(junk).unwrap_or(false));
         }
+    }
+
+    #[test]
+    fn cmyk_and_lab_images_decode_to_rgba8_within_budget() {
+        // Pure cyan ink [255, 0, 0, 0] -> RGB [0, 255, 255]; pure black [0, 0, 0, 255] -> [0, 0, 0].
+        let mut cmyk_px = Vec::with_capacity(8 * 8 * 4);
+        for y in 0..8 {
+            for x in 0..8 {
+                if y < 4 && x < 4 {
+                    cmyk_px.extend_from_slice(&[255, 0, 0, 0]);
+                } else {
+                    cmyk_px.extend_from_slice(&[0, 0, 0, 255]);
+                }
+            }
+        }
+        let cmyk_img = CodecImage::from_u8(8, 8, ChannelLayout::Cmyk, cmyk_px).unwrap();
+        // Direct conversion via codec_to_dynamic returns Rgba8 (previously Refusal::Broken).
+        let dyn_img = codec_to_dynamic(cmyk_img.clone()).unwrap();
+        assert_eq!(dyn_img.color(), image::ColorType::Rgba8);
+        assert_eq!(dyn_img.to_rgba8().get_pixel(0, 0).0, [0, 255, 255, 255]);
+        assert_eq!(dyn_img.to_rgba8().get_pixel(7, 7).0, [0, 0, 0, 255]);
+
+        // Round-trip through an encoded CMYK JPEG and CMYK TIFF via probe / decode / decode_for_drawing / check_for_drawing.
+        for fmt in [CodecFormat::Jpeg, CodecFormat::Tiff] {
+            let bytes = codec_encode(&cmyk_img, fmt, &EncodeOptions::default()).unwrap();
+            let p = probe(&bytes).unwrap();
+            assert_eq!((p.width, p.height), (8, 8));
+            assert_eq!(check_for_drawing(&bytes, 1024), Ok(()));
+            let dec = decode_for_drawing(&bytes, crate::MAX_DECODED_BYTES, 1024).unwrap();
+            assert_eq!(dec.color(), image::ColorType::Rgba8);
+            assert_eq!((dec.width(), dec.height()), (8, 8));
+            let rgba = dec.to_rgba8();
+            // Verify CMYK/Adobe ink polarity is not inverted after round-trip:
+            // pure cyan stays cyan (low R, high G & B), pure black stays dark.
+            let [cr, cg, cb, ca] = rgba.get_pixel(1, 1).0;
+            assert!(cr < cg && cr < cb && cr < 40 && cg > 200 && cb > 200 && ca == 255, "{fmt:?} cyan decoded as [{cr}, {cg}, {cb}, {ca}]");
+            let [kr, kg, kb, ka] = rgba.get_pixel(6, 6).0;
+            assert!(kr < 40 && kg < 40 && kb < 40 && ka == 255, "{fmt:?} black decoded as [{kr}, {kg}, {kb}, {ka}]");
+            let mem = decode_memory(&bytes).unwrap();
+            assert_eq!(mem.color(), image::ColorType::Rgba8);
+        }
+
+        // CmykA, Lab, and LabA U8 layouts also convert cleanly to Rgba8.
+        for (layout, px) in [
+            (ChannelLayout::CmykA, vec![0u8, 0, 0, 0, 128]),
+            (ChannelLayout::Lab, vec![255u8, 128, 128]),
+            (ChannelLayout::LabA, vec![255u8, 128, 128, 200]),
+        ] {
+            let img = CodecImage::from_u8(1, 1, layout, px).unwrap();
+            let expected = img.to_rgba8();
+            let dec = codec_to_dynamic(img).unwrap();
+            assert_eq!(dec.color(), image::ColorType::Rgba8);
+            assert_eq!(dec.to_rgba8().into_raw(), expected);
+        }
+
+        // Multi-band parity (> BAND_PIXELS = 16,384) for both U8 CMYK and U16 Lab matches CodecImage::to_rgba8 bit-for-bit.
+        let (bw, bh) = (200u32, 100u32);
+        let mut big_cmyk = Vec::with_capacity((bw * bh * 4) as usize);
+        for i in 0..(bw * bh) {
+            big_cmyk.extend_from_slice(&[(i & 0xFF) as u8, ((i >> 3) & 0xFF) as u8, ((i >> 6) & 0xFF) as u8, ((i >> 9) & 0xFF) as u8]);
+        }
+        let big_cmyk_img = CodecImage::from_u8(bw, bh, ChannelLayout::Cmyk, big_cmyk).unwrap();
+        let expected_cmyk = big_cmyk_img.to_rgba8();
+        assert_eq!(codec_to_dynamic(big_cmyk_img).unwrap().to_rgba8().into_raw(), expected_cmyk);
+
+        let mut big_lab16 = Vec::with_capacity((bw * bh * 3) as usize);
+        for i in 0..(bw * bh) {
+            big_lab16.extend_from_slice(&[((i * 257) & 0xFFFF) as u16, 32_768u16, 32_768u16]);
+        }
+        let big_lab_img = CodecImage::from_u16(bw, bh, ChannelLayout::Lab, &big_lab16).unwrap();
+        let expected_lab = big_lab_img.to_rgba8();
+        assert_eq!(codec_to_dynamic(big_lab_img).unwrap().to_rgba8().into_raw(), expected_lab);
+
+        // Huge CMYK JPEG header (16,000 x 16,000 x 4 channels -> 2 GiB peak > MAX_DECODED_BYTES)
+        // must be refused before pixel allocation as Refusal::TooLarge.
+        let mut huge_cmyk_jpg = vec![0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x14, 0x08];
+        huge_cmyk_jpg.extend_from_slice(&16_000u16.to_be_bytes());
+        huge_cmyk_jpg.extend_from_slice(&16_000u16.to_be_bytes());
+        huge_cmyk_jpg.push(4); // 4 components (CMYK)
+        for id in 1u8..=4 {
+            huge_cmyk_jpg.extend_from_slice(&[id, 0x11, 0x00]);
+        }
+        huge_cmyk_jpg.extend_from_slice(&[0xFF, 0xD9]);
+        let p = probe(&huge_cmyk_jpg).unwrap();
+        assert_eq!((p.width, p.height), (16_000, 16_000));
+        assert!(!p.fits(crate::MAX_DECODED_BYTES));
+        assert_eq!(p.decode(crate::MAX_DECODED_BYTES), Err(Refusal::TooLarge { width: 16_000, height: 16_000 }));
+        assert_eq!(decode_for_drawing(&huge_cmyk_jpg, crate::MAX_DECODED_BYTES, u32::MAX), Err(Refusal::TooLarge { width: 16_000, height: 16_000 }));
+        assert_eq!(check_for_drawing(&huge_cmyk_jpg, u32::MAX), Err(DrawFailure::Undecodable));
     }
 }
