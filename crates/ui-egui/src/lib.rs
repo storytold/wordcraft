@@ -579,6 +579,8 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 #[cfg(test)]
+mod file_browser;
+#[cfg(test)]
 mod test_harness;
 #[cfg(test)]
 mod tests;

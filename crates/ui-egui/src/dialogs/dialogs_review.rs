@@ -632,7 +632,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = app("");
         app.run("tools.autocorrect", json!({})).unwrap();
-        let mut h = crate::test_harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = crate::test_harness::builder().allow_missing_glyphs().with_size(vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -664,5 +664,86 @@ mod tests {
             h.step();
         }
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello. world");
+    }
+
+    /// #3036: the Replace list says so when the filter matches nothing instead of going blank.
+    #[test]
+    fn the_autocorrect_list_says_when_the_filter_matches_nothing() {
+        let mut app = app("");
+        app.session.prefs.autocorrect.entries.push(("brb".to_string(), "be right back".to_string()));
+        app.run("tools.autocorrect", json!({})).unwrap();
+        fn texts(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<String> {
+            fn extract(shape: &egui::Shape, out: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| extract(s, out)),
+                    _ => {}
+                }
+            }
+            let mut out = Vec::new();
+            for clipped in &h.output().shapes {
+                extract(&clipped.shape, &mut out);
+            }
+            out
+        }
+        let mut h = crate::test_harness::builder().allow_missing_glyphs().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(!texts(&h).iter().any(|t| t.contains("(none)")), "entries show, no hint");
+        if let Some(host) = h.state_mut().dialog_host.get_mut::<FormHost<AutoCorrectForm>>() {
+            host.form_mut().from = "zzz".to_string();
+        } else {
+            panic!("the AutoCorrect form is open");
+        }
+        for _ in 0..2 {
+            h.step();
+        }
+        assert!(texts(&h).iter().any(|t| t.contains("(none)")), "no matches: the hint shows");
+    }
+
+    /// #6046: Compare › More shows "Show changes at:" and its two choices each on one line. The
+    /// column is not the grid's last, so it first gets the grid's minimum cell width; wrapped to
+    /// that, its text broke after every few letters and the column stayed that narrow.
+    #[test]
+    fn compare_more_keeps_the_show_changes_at_column_on_one_line() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app("Original text.");
+        app.run("review.compare", json!({})).unwrap();
+        let mut h = crate::test_harness::builder().allow_missing_glyphs().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label("More >>").click();
+        h.run_steps(4);
+        let one_line = h.get_by_label("New document").rect().height();
+        for label in ["Word level", "Character level"] {
+            let r = h.get_by_label(label).rect();
+            assert!(r.height() <= one_line + 1.0, "{label} wraps: {r:?}, one line is {one_line}");
+        }
+        fn find_galley<'a>(shape: &'a egui::Shape, text: &str) -> Option<&'a std::sync::Arc<egui::Galley>> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == text => Some(&t.galley),
+                egui::Shape::Vec(v) => v.iter().find_map(|s| find_galley(s, text)),
+                _ => None,
+            }
+        }
+        let galley = h.output().shapes.iter().find_map(|s| find_galley(&s.shape, "Show changes at:")).expect("Show changes at: text galley");
+        assert_eq!(galley.rows.len(), 1, "Show changes at: must be on one line, but has {} rows", galley.rows.len());
+        // The next column starts after the widest of them.
+        let (left, right) = (h.get_by_label("Character level").rect(), h.get_by_label("Show changes in:").rect());
+        assert!(right.left() >= left.right(), "the columns overlap: {left:?} {right:?}");
     }
 }
