@@ -162,7 +162,9 @@ impl ResizeTarget {
             // difference, so the other borders stay.
             Edge::Column(0) => {
                 let Some(first) = w.first_mut() else { return Plan::default() };
-                let d = dx.clamp(*first - MAX_LEN, (*first - MIN_COL).max(*first - MAX_LEN));
+                // A first column already narrower than `MIN_COL` (or wider than `MAX_LEN`) is
+                // not forced to it: it only widens (or narrows).
+                let d = dx.clamp((*first - MAX_LEN).min(0.0), (*first - MIN_COL).max(0.0));
                 // An edge left where it was changes nothing, as a border does (below).
                 if d == 0.0 {
                     return Plan::default();

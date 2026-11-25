@@ -61,6 +61,12 @@ fn a_column_border_let_go_where_it_was_changes_nothing() {
     assert!(s.cell_range().is_some());
     s.run("table.resizeDrag", &json!({"page": 0, "x": a.right(), "y": y, "toX": a.right(), "toY": y})).unwrap();
     assert_eq!(first_table(&s), start, "a selected cell's border");
+    // Nor a left edge whose first column is already narrower than `MIN_COL`.
+    let l = s.layout();
+    let mut t = resize_target(&l, &s.doc, 0, a.x - 1.0, y, REACH).unwrap();
+    t.cols[1] = t.cols[0] + 3.0;
+    let plan = t.plan(0.0, 0.0, Share::Neighbour);
+    assert!(plan.widths.is_none() && plan.indent_by.is_none(), "a 3 pt first column");
 }
 
 /// With Shift only the left column changes and the table grows; the right edge does the same.
