@@ -1,36 +1,35 @@
-//! Crop mode on the canvas (Picture Format › Size › Crop, `ui.crop`): black crop handles replace
-//! the selected picture's resize handles; dragging one trims that side (a corner, two sides)
-//! while what stays visible keeps its scale and its place on the page, and dragging back out
-//! restores what was cropped away (never past the source's edge). The cropped-away part shows
-//! around the picture under a dark dim. Esc, Enter, a click outside the picture or Crop again
-//! leave crop mode and keep the crop. A drop is one `picture.crop` with the crop and the new size,
-//! so one undo step. Only unturned pictures: a turned one stays out of crop mode (status message).
-//!
-//! While dragging nothing is laid out: the preview is the picture's own source pixels, the part
-//! that would stay visible bright and the rest dimmed.
+//! Crop mode on the canvas (Picture Format › Size › Crop, `ui.crop`): the selected picture is
+//! edited through a `CropOverlay` scoped to the picture's source. Dragging a side trims it while
+//! what stays visible keeps its scale and its place on the page, and dragging back out restores
+//! what was cropped away (never past the source's edge). Esc, Enter, a click outside the picture
+//! or Crop again leave crop mode and keep the crop. A drop is one `picture.crop` with the crop and
+//! the new size, so one undo step. Only unturned pictures: a turned one stays out of crop mode
+//! (status message).
 
-use egui::{Color32, Painter, Pos2, Rect, Ui, pos2, vec2};
+use craft::behavior::geometry::CropBox;
+use craft::behavior::kurbo::{Point, Rect as DocRect};
+use craft::behavior::{CanvasView, EditEvent, Input, Metrics};
+use craft::pages::ui::{PageBody, PlacedPage};
+use craft::ui::canvas::{CropOverlay, CropScope};
+use craft::ui::contract::{Access, Bind, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
+use craft::ui::primitives::TextureCache;
+use craft::ui::runtime::env::Label;
+use craft::ui::style::{ComponentStyle, StyleCx};
+use egui::{Rect, Response, TextureId, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use wordcraft_doc::Pos;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_layout::DocLayout;
 
 use crate::WordApp;
-use crate::frame::{self, Handle};
-use crate::theme::Tokens;
 
 /// The most of the source one side can crop away (as `picture.crop` and the renderer clamp).
 const MAX_SIDE: f32 = 0.95;
-/// Pointer travel that turns a press on a handle into a drag (screen points).
-const DRAG_START: f32 = 3.0;
-/// Crop handles: arm length of a corner's L, length of an edge bar, thickness (screen points).
-const ARM: f32 = 11.0;
-const BAR: f32 = 16.0;
-const THICK: f32 = 3.5;
-/// The longest side of the source picture decoded for crop mode (pixels).
+
+/// The longest side of the source texture, in pixels.
 const SOURCE_MAX_PX: u32 = 1024;
 
-/// Where a crop handle drag leaves a picture: its crop (left, top, right, bottom fractions of the
+/// Where a crop drag leaves a picture: its crop (left, top, right, bottom fractions of the
 /// source), its new display size (points), and how far its frame's top-left corner moves (points).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cropped {
@@ -45,65 +44,60 @@ pub struct Cropped {
 const MIN_SIZE: f32 = 1.0;
 const MAX_SIZE: f32 = 4000.0;
 
-/// One axis of [`cropped`]: a `len` long side cropped `lo` / `hi`, its handle end `grab`
-/// (-1 low, 1 high, 0 none) dragged by `d` points. Returns the new crops, length and how far the
-/// low edge moved. The length stays within [`MIN_SIZE`]–[`MAX_SIZE`] at the same scale (the crop
-/// stops there), unless it was already outside it.
-fn axis(len: f32, lo: f32, hi: f32, grab: i8, d: f32) -> (f32, f32, f32, f32) {
-    // The source's full length at this scale; the visible part is 1-lo-hi of it.
-    let full = len / (1.0 - lo - hi).max(0.05);
-    // How far the grabbed side's crop may go: at most MAX_SIDE, and the length within its range.
-    let range = |cur: f32, other: f32| {
-        let most = (1.0 - other - MIN_SIZE / full).min(MAX_SIDE - other).max(cur);
-        let least = (1.0 - other - MAX_SIZE / full).max(0.0).min(cur);
-        (least, most)
-    };
-    let (mut lo2, mut hi2) = (lo, hi);
-    match grab {
-        -1 => {
-            let (least, most) = range(lo, hi);
-            lo2 = (lo + d / full).max(least).min(most);
-        }
-        1 => {
-            let (least, most) = range(hi, lo);
-            hi2 = (hi - d / full).max(least).min(most);
-        }
-        _ => {}
+/// One axis of [`crop_of`]: the crops (`lo`, `hi` as fractions of a `full` long source) the new
+/// edges ask for, clamped to [`MAX_SIDE`] a side and to a visible length within
+/// [`MIN_SIZE`]–[`MAX_SIZE`] at the same scale (unless it was already outside). Where the two sides
+/// together go too far, the side that moved more gives way.
+fn axis(full: f32, old: (f32, f32), new: (f32, f32)) -> (f32, f32) {
+    let (mut lo, mut hi) = (new.0.clamp(0.0, MAX_SIDE), new.1.clamp(0.0, MAX_SIDE));
+    let lo_moved = (lo - old.0).abs() >= (hi - old.1).abs();
+    let old_sum = old.0 + old.1;
+    let most = MAX_SIDE.min(1.0 - MIN_SIZE / full).max(old_sum);
+    let least = (1.0 - MAX_SIZE / full).clamp(0.0, most).min(old_sum);
+    let total = lo + hi;
+    let d = total.clamp(least, most) - total;
+    if lo_moved {
+        lo = (lo + d).clamp(0.0, MAX_SIDE);
+    } else {
+        hi = (hi + d).clamp(0.0, MAX_SIDE);
     }
-    (lo2, hi2, full * (1.0 - lo2 - hi2), (lo2 - lo) * full)
+    (lo, hi)
 }
 
-/// Drag crop handle `handle` of a `w`×`h` point picture cropped `crop` by (`dx`, `dy`) points: the
-/// grabbed sides are trimmed (inward) or restored (outward) at the picture's current scale.
-/// Hostile numbers (non-finite, non-positive sizes) leave it as it was; sizes are taken within
-/// 1–4000 pt, as `picture.crop` takes them.
-pub fn cropped(w: f32, h: f32, crop: [f32; 4], handle: Handle, dx: f32, dy: f32) -> Cropped {
-    cropped_on_screen((w, h), crop, (false, false), handle, (dx, dy))
-}
-
-/// [`cropped`] for a picture flipped left to right (`flip_h`) and/or top to bottom (`flip_v`):
-/// `handle` and the drag are on screen, the crop is the source's. Flipped, the side under a
-/// handle is the source's opposite side, so that's the one that moves.
-pub fn cropped_on_screen((w, h): (f32, f32), crop: [f32; 4], (flip_h, flip_v): (bool, bool), handle: Handle, (dx, dy): (f32, f32)) -> Cropped {
+/// Where a picture lands when the crop frame the overlay reports is `frame`: `source` is the whole
+/// source picture at the picture's scale and `crop0` the crop it has now (both in page points),
+/// `flips` whether it is flipped left to right and top to bottom. The frame's sides are on screen;
+/// flipped, the side under one is the source's opposite side, so that is the crop that changes.
+/// Hostile numbers (non-finite, non-positive sizes) leave the picture as it was; sizes are taken
+/// within 1–4000 pt, as `picture.crop` takes them.
+pub fn crop_of(source: Rect, frame: Rect, crop0: [f32; 4], flips: (bool, bool)) -> Cropped {
     let fin = |x: f32| if x.is_finite() { x } else { 0.0 };
-    let crop = crop.map(|c| fin(c).clamp(0.0, MAX_SIDE));
-    let (w, h) = (fin(w), fin(h));
-    let (dx, dy) = (fin(dx), fin(dy));
-    if w <= 0.0 || h <= 0.0 || (dx == 0.0 && dy == 0.0) {
-        return Cropped { crop, w, h, dx: 0.0, dy: 0.0 };
+    let crop0 = crop0.map(|c| fin(c).clamp(0.0, MAX_SIDE));
+    let shown = on_screen(crop0, flips.0, flips.1);
+    let (fw, fh) = (source.width(), source.height());
+    let old_w = fin(fw * (1.0 - shown[0] - shown[2]));
+    let old_h = fin(fh * (1.0 - shown[1] - shown[3]));
+    let same = Cropped { crop: crop0, w: old_w, h: old_h, dx: 0.0, dy: 0.0 };
+    let finite = |r: Rect| r.min.is_finite() && r.max.is_finite();
+    if !finite(source) || !finite(frame) || !(fw > 0.0 && fh > 0.0 && fw.is_finite() && fh.is_finite()) {
+        return same;
     }
-    let (w, h) = (w.min(MAX_SIZE), h.min(MAX_SIZE));
-    // On screen order: (left, right) and (top, bottom) as they show.
-    let (sl, sr) = if flip_h { (crop[2], crop[0]) } else { (crop[0], crop[2]) };
-    let (st, sb) = if flip_v { (crop[3], crop[1]) } else { (crop[1], crop[3]) };
-    let (l, r, w2, mx) = axis(w, sl, sr, handle.x, dx);
-    let (t, b, h2, my) = axis(h, st, sb, handle.y, dy);
-    let (l, r) = if flip_h { (r, l) } else { (l, r) };
-    let (t, b) = if flip_v { (b, t) } else { (t, b) };
-    Cropped { crop: [l, t, r, b], w: w2, h: h2, dx: mx, dy: my }
+    let (l, r) = ((frame.min.x - source.min.x) / fw, (source.max.x - frame.max.x) / fw);
+    let (t, b) = ((frame.min.y - source.min.y) / fh, (source.max.y - frame.max.y) / fh);
+    if ![l, r, t, b].iter().all(|x| x.is_finite()) {
+        return same;
+    }
+    let (l, r) = axis(fw, (shown[0], shown[2]), (l, r));
+    let (t, b) = axis(fh, (shown[1], shown[3]), (t, b));
+    let (w, h) = (fw * (1.0 - l - r), fh * (1.0 - t - b));
+    let old_left = shown[0] * fw;
+    let old_top = shown[1] * fh;
+    let out = Cropped { crop: on_screen([l, t, r, b], flips.0, flips.1), w, h, dx: l * fw - old_left, dy: t * fh - old_top };
+    if [out.w, out.h, out.dx, out.dy].iter().chain(&out.crop).all(|x| x.is_finite()) { out } else { same }
 }
 
-/// The crop as it shows on screen: (left, top, right, bottom) of the displayed picture.
+/// The crop as it shows on screen: (left, top, right, bottom) of the displayed picture. The map is
+/// its own inverse, so it also turns a screen crop into the source's.
 fn on_screen(crop: [f32; 4], flip_h: bool, flip_v: bool) -> [f32; 4] {
     let [l, t, r, b] = crop;
     let (l, r) = if flip_h { (r, l) } else { (l, r) };
@@ -111,52 +105,19 @@ fn on_screen(crop: [f32; 4], flip_h: bool, flip_v: bool) -> [f32; 4] {
     [l, t, r, b]
 }
 
-/// A crop handle being dragged.
-pub struct CropDrag {
-    /// The picture being cropped: the drop applies only while it's still the one in crop mode.
-    pos: Pos,
-    handle: Handle,
-    flip_h: bool,
-    flip_v: bool,
-    /// The picture's frame where the drag started (page points) and its page.
-    page: usize,
-    start: wordcraft_geom::Rect,
-    /// Its display size and crop then.
-    w: f32,
-    h: f32,
-    crop: [f32; 4],
-    press: Pos2,
-    moved: bool,
-    /// Where the drag puts it now.
-    now: Cropped,
-}
-
-impl CropDrag {
-    fn follow(&mut self, at: Pos2, scale: f32) {
-        if !self.moved && at.distance(self.press) < DRAG_START {
-            return;
-        }
-        self.moved = true;
-        let d = (at - self.press) / scale.max(0.01);
-        self.now = cropped_on_screen((self.w, self.h), self.crop, (self.flip_h, self.flip_v), self.handle, (d.x, d.y));
-    }
-}
-
 /// The selected picture, if it's unturned (it may be flipped).
 struct Picture {
     pos: Pos,
-    w: f32,
-    h: f32,
-    crop: [f32; 4],
     media: String,
+    crop: [f32; 4],
     flip_h: bool,
     flip_v: bool,
 }
 
 fn picture(app: &WordApp) -> Option<Picture> {
     match crate::objects::selected(app)? {
-        (pos, InlineObject::Image { w, h, crop, media, float, .. }) if wordcraft_geom::normalize_degrees(float.rot) == 0.0 => {
-            Some(Picture { pos, w: *w, h: *h, crop: *crop, media: media.clone(), flip_h: float.flip_h, flip_v: float.flip_v })
+        (pos, InlineObject::Image { crop, float, media, .. }) if wordcraft_geom::normalize_degrees(float.rot) == 0.0 => {
+            Some(Picture { pos, media: media.clone(), crop: *crop, flip_h: float.flip_h, flip_v: float.flip_v })
         }
         _ => None,
     }
@@ -188,186 +149,146 @@ pub fn toggle(app: &mut WordApp) -> Result<Value, String> {
         return Err(msg);
     };
     app.canvas.crop = Some(pos);
-    app.canvas.crop_drag = None;
     Ok(json!({"crop": true}))
 }
 
-fn leave(app: &mut WordApp) {
+/// Crop mode off, keeping the crop. The object path calls it when a press is not on the cropped picture.
+pub(crate) fn leave(app: &mut WordApp) {
     app.canvas.crop = None;
-    app.canvas.crop_drag = None;
 }
 
-/// Esc and Enter leave crop mode, keeping the crop. Returns true if the key was taken.
-pub fn key(app: &mut WordApp, key: egui::Key) -> bool {
+/// The picture in crop mode, laid out: its page and frame (page points).
+fn laid_out(app: &WordApp, layout: &DocLayout) -> Option<(usize, Rect)> {
+    let pos = active(app)?;
+    layout.object(&pos, app.session.page_hint).map(|o| (o.page, Rect::from_min_size(pos2(o.rect.x, o.rect.y), vec2(o.rect.w, o.rect.h))))
+}
+
+/// A page-point rect in document units.
+fn to_doc_rect(page: &PlacedPage, view: &CanvasView, r: Rect) -> DocRect {
+    let a = page.to_doc(view, Point::new(f64::from(r.min.x), f64::from(r.min.y)));
+    let b = page.to_doc(view, Point::new(f64::from(r.max.x), f64::from(r.max.y)));
+    DocRect::new(a.x, a.y, b.x, b.y)
+}
+
+/// A document-unit rect in page points.
+fn from_doc_rect(page: &PlacedPage, view: &CanvasView, r: DocRect) -> Rect {
+    let a = page.from_doc(view, Point::new(r.x0, r.y0));
+    let b = page.from_doc(view, Point::new(r.x1, r.y1));
+    Rect::from_min_max(pos2(a.x as f32, a.y as f32), pos2(b.x as f32, b.y as f32))
+}
+
+/// The source picture as a texture (downscaled), kept in the texture cache per media item; `None` when the
+/// media is missing. A source that cannot be decoded is a transparent texture, so the cropped-away area is
+/// just shielded.
+fn source_texture(app: &WordApp, ctx: &egui::Context, media: &str) -> Option<TextureId> {
+    let bytes = app.session.doc.media.get(media)?;
+    Some(TextureCache::texture(ctx, (media.to_owned(), bytes.len()), || {
+        let Ok(img) = wordcraft_geom::picture::decode(bytes, wordcraft_geom::MAX_DECODED_BYTES) else {
+            return egui::ColorImage::filled([1, 1], egui::Color32::TRANSPARENT);
+        };
+        let img = if img.width().max(img.height()) > SOURCE_MAX_PX { img.thumbnail(SOURCE_MAX_PX, SOURCE_MAX_PX) } else { img };
+        let rgba = img.to_rgba8();
+        egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw())
+    }))
+}
+
+/// The look of [`CropSource`]: it has none of its own, the picture is the content.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+struct CropSourceStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// The whole source picture at the picture's scale, under the crop overlay: the overlay's shield dims what
+/// the crop cuts away, and dragging a side back out shows what it restores. Display only.
+#[derive(craft::ui::contract::Component, craft::ui::contract::Props)]
+#[component(canvas_control)]
+struct CropSource {
+    #[common]
+    common: Common,
+    /// The source on screen.
+    rect: Rect,
+    texture: TextureId,
+    /// The part of the texture shown: flipped when the picture is.
+    uv: Rect,
+}
+
+impl CropSource {
+    fn new(label: impl Into<Label>, rect: Rect, texture: TextureId, flips: (bool, bool)) -> Self {
+        let (u0, u1) = if flips.0 { (1.0, 0.0) } else { (0.0, 1.0) };
+        let (v0, v1) = if flips.1 { (1.0, 0.0) } else { (0.0, 1.0) };
+        CropSource { common: Common::new(), rect, texture, uv: Rect::from_min_max(pos2(u0, v0), pos2(u1, v1)) }.label(label)
+    }
+}
+
+impl Component for CropSource {
+    const ROLE: Role = Role::GRAPHICS_OBJECT;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: Input = Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = CropSourceStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: CropSourceStyleKey) -> CropSourceStyle {
+        CropSourceStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> egui::Vec2 {
+        egui::Vec2::ZERO
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, _: &Cx<'_, Self>) {
+        ui.draw().texture(self.rect, self.texture, self.uv);
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.role(Role::None);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// The crop overlay of the picture in crop mode: its frame over the picture, bounded by its
+/// source. A drag is one `picture.crop`; Enter or Esc leaves crop mode keeping the crop. A press
+/// outside the picture claims no overlay part, so it goes to the object path, which leaves crop
+/// mode (`leave`).
+pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, layout: &DocLayout, body: &PageBody<'_>) {
     if active(app).is_none() {
         leave(app);
-        return false;
+        return;
     }
-    if matches!(key, egui::Key::Escape | egui::Key::Enter) {
-        leave(app);
-        return true;
+    let (Some((page, frame)), Some(pic)) = (laid_out(app, layout), picture(app)) else { return };
+    let Some(placed) = body.pages.iter().find(|p| p.page == page) else { return };
+    let c = on_screen(pic.crop, pic.flip_h, pic.flip_v);
+    let full_w = frame.width() / (1.0 - c[0] - c[2]).max(0.05);
+    let full_h = frame.height() / (1.0 - c[1] - c[3]).max(0.05);
+    let source = Rect::from_min_size(pos2(frame.min.x - c[0] * full_w, frame.min.y - c[1] * full_h), vec2(full_w, full_h));
+    if let Some(texture) = source_texture(app, ui.ctx(), &pic.media) {
+        let at = |p: egui::Pos2| placed.to_screen(Point::new(f64::from(p.x), f64::from(p.y)));
+        let on_screen = Rect::from_two_pos(at(source.min), at(source.max));
+        CropSource::new(tl!("Picture source").to_string(), on_screen, texture, (pic.flip_h, pic.flip_v)).show_at(ui, body.rect);
     }
-    false
-}
-
-fn screen(pages: &[Rect], scale: f32, page: usize, r: wordcraft_geom::Rect) -> Option<Rect> {
-    pages.get(page).map(|p| frame::to_screen(*p, scale, r))
-}
-
-/// The picture in crop mode, laid out: its frame (page points) and page.
-fn laid_out(app: &WordApp, layout: &DocLayout) -> Option<(usize, wordcraft_geom::Rect)> {
-    let pos = active(app)?;
-    layout.object(&pos, app.session.page_hint).map(|o| (o.page, o.rect))
-}
-
-/// Presses and drags in crop mode. `Some(true)`: taken; `Some(false)` / `None`: not about crop
-/// mode, so the usual object handling goes on (a press outside the picture has just left it).
-pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect], layout: &DocLayout, scale: f32, at: Pos2) -> Option<bool> {
-    if let Some(mut d) = app.canvas.crop_drag.take() {
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            return Some(true); // the drag is dropped without a change; crop mode stays on
-        }
-        if active(app).as_ref() != Some(&d.pos) {
-            // The picture changed under the drag (undo, another selection): drop it unapplied.
-            return Some(true);
-        }
-        if ui.input(|i| i.pointer.primary_down()) {
-            d.follow(at, scale);
-            app.canvas.crop_drag = Some(d);
-        } else if d.moved {
-            let c = d.now;
+    let crop_box = CropBox::upright(to_doc_rect(placed, &body.view, frame));
+    let scope = CropScope::object(to_doc_rect(placed, &body.view, source));
+    // Given, not bound: the box is made from the document each pass and only the drop's Commit changes the document, so
+    // the box stays at its pass-start value while a drag runs; a bound value that differs from the drag's last update
+    // reads as the document moving under the gesture, which cancels it.
+    let out = CropOverlay::new(tl!("Crop").to_string(), Bind::given(crop_box)).scope(scope).show_at(ui, body.rect);
+    for event in out.edit.events {
+        if let EditEvent::Commit { after, .. } = event {
+            let c = crop_of(source, from_doc_rect(placed, &body.view, after.rect), pic.crop, (pic.flip_h, pic.flip_v));
             let _ = app.run(
                 "picture.crop",
                 json!({"left": c.crop[0], "top": c.crop[1], "right": c.crop[2], "bottom": c.crop[3], "width": c.w, "height": c.h}),
             );
         }
-        return Some(true);
     }
-    if active(app).is_none() {
+    if out.apply.is_some() || out.discard {
         leave(app);
-        return None;
-    }
-    if !(ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer()) {
-        return None;
-    }
-    let (page, rect) = laid_out(app, layout)?;
-    let Picture { pos, w, h, crop, flip_h, flip_v, .. } = picture(app)?;
-    let f = screen(pages, scale, page, rect)?;
-    if let Some(handle) = frame::handle_at(f, 0.0, at) {
-        let now = Cropped { crop, w, h, dx: 0.0, dy: 0.0 };
-        app.canvas.crop_drag = Some(CropDrag { pos, handle, flip_h, flip_v, page, start: rect, w, h, crop, press: at, moved: false, now });
-        return Some(true);
-    }
-    if f.contains(at) {
-        return Some(true); // inside the picture: crop mode stays on
-    }
-    // Outside: crop mode ends with the crop kept, and the press goes on as usual.
-    leave(app);
-    None
-}
-
-/// The cursor over a crop handle (or while dragging one).
-pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
-    if let Some(d) = &app.canvas.crop_drag {
-        return Some(d.handle.cursor(0.0));
-    }
-    let (page, rect) = laid_out(app, layout)?;
-    let f = screen(pages, scale, page, rect)?;
-    match frame::handle_at(f, 0.0, at) {
-        Some(h) => Some(h.cursor(0.0)),
-        None if f.contains(at) => Some(egui::CursorIcon::Default),
-        None => None,
-    }
-}
-
-/// The source picture as a texture (downscaled), kept in egui's memory per media item; None when
-/// it can't be decoded (then the cropped-away area is just dimmed).
-fn source(app: &WordApp, ctx: &egui::Context, media: &str) -> Option<egui::TextureHandle> {
-    let bytes = app.session.doc.media.get(media)?;
-    let id = egui::Id::unique(("crop_source", media, bytes.len()));
-    if let Some(t) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
-        return t;
-    }
-    let tex = wordcraft_geom::picture::decode(bytes, wordcraft_geom::MAX_DECODED_BYTES).ok().map(|img| {
-        let img = if img.width().max(img.height()) > SOURCE_MAX_PX { img.thumbnail(SOURCE_MAX_PX, SOURCE_MAX_PX) } else { img };
-        let rgba = img.to_rgba8();
-        let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
-        ctx.load_texture(format!("crop_source_{media}"), ci, egui::TextureOptions::LINEAR)
-    });
-    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
-    tex
-}
-
-/// Draw crop mode: the cropped-away part dimmed around the picture, its frame and the crop
-/// handles; while dragging, the picture as the drop would leave it. Returns whether crop mode
-/// drew (then the usual frame isn't drawn).
-pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) -> bool {
-    let Some((page, rect)) = laid_out(app, layout) else { return false };
-    let Some(Picture { crop, media, flip_h, flip_v, .. }) = picture(app) else { return false };
-    let drag = app.canvas.crop_drag.as_ref().filter(|d| d.moved);
-    let (page, frame_pt, c) = match drag {
-        Some(d) => {
-            let n = d.now;
-            (d.page, wordcraft_geom::Rect::new(d.start.x + n.dx, d.start.y + n.dy, n.w, n.h), n.crop)
-        }
-        None => (page, rect, crop),
-    };
-    // The crop as it shows: a flipped picture shows its source's right on the left.
-    let c = on_screen(c, flip_h, flip_v);
-    // The whole source, at the picture's scale, around the visible part.
-    let fw = frame_pt.w / (1.0 - c[0] - c[2]).max(0.05);
-    let fh = frame_pt.h / (1.0 - c[1] - c[3]).max(0.05);
-    let full_pt = wordcraft_geom::Rect::new(frame_pt.x - c[0] * fw, frame_pt.y - c[1] * fh, fw, fh);
-    let (Some(f), Some(full)) = (screen(pages, scale, page, frame_pt), screen(pages, scale, page, full_pt)) else { return false };
-    let tex = source(app, painter.ctx(), &media);
-    // Where a screen rect is in the source (0–1), mirrored as the picture is flipped.
-    let uv = |r: Rect| {
-        let (w, h) = (full.width().max(0.01), full.height().max(0.01));
-        let u = |x: f32| if flip_h { 1.0 - (x - full.min.x) / w } else { (x - full.min.x) / w };
-        let v = |y: f32| if flip_v { 1.0 - (y - full.min.y) / h } else { (y - full.min.y) / h };
-        Rect::from_min_max(pos2(u(r.min.x), v(r.min.y)), pos2(u(r.max.x), v(r.max.y)))
-    };
-    if let (Some(tex), Some(_)) = (&tex, drag) {
-        // Dragging: the page still shows the old crop, so show the new visible part too.
-        painter.rect_filled(f, 0.0, Color32::WHITE);
-        painter.image(tex.id(), f, uv(f), Color32::WHITE);
-    }
-    // The cropped-away bands: top, bottom, left, right.
-    let bands = [
-        Rect::from_min_max(full.min, pos2(full.max.x, f.min.y)),
-        Rect::from_min_max(pos2(full.min.x, f.max.y), full.max),
-        Rect::from_min_max(pos2(full.min.x, f.min.y), pos2(f.min.x, f.max.y)),
-        Rect::from_min_max(pos2(f.max.x, f.min.y), pos2(full.max.x, f.max.y)),
-    ];
-    for b in bands.into_iter().filter(|b| b.width() > 0.0 && b.height() > 0.0) {
-        if let Some(tex) = &tex {
-            painter.image(tex.id(), b, uv(b), Color32::WHITE);
-        }
-        painter.rect_filled(b, 0.0, t.crop_dim);
-    }
-    painter.rect_stroke(full, 0.0, egui::Stroke::new(1.0, t.crop_dim), egui::StrokeKind::Outside);
-    painter.rect_stroke(f, 0.0, egui::Stroke::new(1.0, t.crop_handle), egui::StrokeKind::Inside);
-    paint_handles(painter, t, f);
-    true
-}
-
-/// The crop handles of frame `f`: an L at each corner, a bar mid-edge, drawn just inside the
-/// frame in the crop handle colour with a light halo.
-fn paint_handles(painter: &Painter, t: &Tokens, f: Rect) {
-    for h in frame::handles(f) {
-        let (sx, sy) = (f32::from(h.x), f32::from(h.y));
-        let c = pos2(f.center().x + sx * f.width() / 2.0, f.center().y + sy * f.height() / 2.0);
-        let bars: Vec<Rect> = match (h.x, h.y) {
-            (0, _) => vec![Rect::from_two_pos(c - vec2(BAR / 2.0, 0.0), c + vec2(BAR / 2.0, -sy * THICK))],
-            (_, 0) => vec![Rect::from_two_pos(c - vec2(0.0, BAR / 2.0), c + vec2(-sx * THICK, BAR / 2.0))],
-            _ => vec![Rect::from_two_pos(c, c + vec2(-sx * ARM, -sy * THICK)), Rect::from_two_pos(c, c + vec2(-sx * THICK, -sy * ARM))],
-        };
-        for b in &bars {
-            painter.rect_filled(b.expand(1.0), 0.0, t.handle);
-        }
-        for b in bars {
-            painter.rect_filled(b, 0.0, t.crop_handle);
-        }
     }
 }
 
@@ -379,112 +300,102 @@ mod tests {
 
     use super::*;
     use crate::WordApp;
-
-    const H: fn(i8, i8) -> Handle = |x, y| Handle { x, y };
+    use crate::table_resize::tests::{H, button, screen, steps};
+    use crate::test_harness::AppFrames as _;
 
     fn close(a: Cropped, b: Cropped) -> bool {
         let n = |x: f32, y: f32| (x - y).abs() < 1e-4;
         a.crop.iter().zip(b.crop).all(|(x, y)| n(*x, y)) && n(a.w, b.w) && n(a.h, b.h) && n(a.dx, b.dx) && n(a.dy, b.dy)
     }
 
+    fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
+        Rect::from_min_max(pos2(x0, y0), pos2(x1, y1))
+    }
+
+    /// The whole source: 200×100 pt at the page's origin.
+    fn src() -> Rect {
+        rect(0.0, 0.0, 200.0, 100.0)
+    }
+
     #[test]
     fn each_handle_trims_its_own_sides_and_keeps_the_scale() {
         let c = |crop, w, h, dx, dy| Cropped { crop, w, h, dx, dy };
-        // Left in by 50 of a 200 pt wide picture: a quarter of the source goes.
-        let r = cropped(200.0, 100.0, [0.0; 4], H(-1, 0), 50.0, 33.0);
+        let r = crop_of(src(), rect(50.0, 0.0, 200.0, 100.0), [0.0; 4], (false, false));
         assert!(close(r, c([0.25, 0.0, 0.0, 0.0], 150.0, 100.0, 50.0, 0.0)), "{r:?}");
-        // Right in by 40.
-        let r = cropped(200.0, 100.0, [0.0; 4], H(1, 0), -40.0, 0.0);
+        let r = crop_of(src(), rect(0.0, 0.0, 160.0, 100.0), [0.0; 4], (false, false));
         assert!(close(r, c([0.0, 0.0, 0.2, 0.0], 160.0, 100.0, 0.0, 0.0)), "{r:?}");
-        // Bottom in by 10; the sideways part of the drag doesn't count.
-        let r = cropped(200.0, 100.0, [0.0; 4], H(0, 1), 999.0, -10.0);
+        let r = crop_of(src(), rect(0.0, 0.0, 200.0, 90.0), [0.0; 4], (false, false));
         assert!(close(r, c([0.0, 0.0, 0.0, 0.1], 200.0, 90.0, 0.0, 0.0)), "{r:?}");
-        // Top-left corner: two sides, and the frame's corner follows.
-        let r = cropped(200.0, 100.0, [0.0; 4], H(-1, -1), 20.0, 10.0);
+        let r = crop_of(src(), rect(20.0, 10.0, 200.0, 100.0), [0.0; 4], (false, false));
         assert!(close(r, c([0.1, 0.1, 0.0, 0.0], 180.0, 90.0, 20.0, 10.0)), "{r:?}");
-        // Already cropped: the full source is wider than the frame (160 of 200 shown).
-        let r = cropped(160.0, 100.0, [0.2, 0.0, 0.0, 0.0], H(-1, 0), 20.0, 0.0);
+        // Already cropped 0.2 on the left (the frame starts at 40): the next trim adds to it.
+        let r = crop_of(src(), rect(60.0, 0.0, 200.0, 100.0), [0.2, 0.0, 0.0, 0.0], (false, false));
         assert!(close(r, c([0.3, 0.0, 0.0, 0.0], 140.0, 100.0, 20.0, 0.0)), "{r:?}");
     }
 
     #[test]
     fn crops_are_clamped_and_never_go_past_the_source() {
-        // At most 0.95 a side.
-        let r = cropped(200.0, 100.0, [0.0; 4], H(-1, 0), 1000.0, 0.0);
-        assert!((r.crop[0] - 0.95).abs() < 1e-4 && (r.w - 10.0).abs() < 1e-3 && (r.dx - 190.0).abs() < 1e-3, "{r:?}");
-        // Out past the original edge: back to uncropped, no further.
-        let r = cropped(160.0, 100.0, [0.0, 0.0, 0.2, 0.0], H(1, 0), 100.0, 0.0);
-        assert!(close(r, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{r:?}");
-        let r = cropped(200.0, 90.0, [0.0, 0.1, 0.0, 0.0], H(0, -1), 0.0, -500.0);
-        assert!(close(r, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: -10.0 }), "{r:?}");
-    }
-
-    /// #3135: a side can take almost the whole source (5% stays), so any part of the picture can
-    /// be kept, not only its middle; the two sides of an axis keep their 5%.
-    #[test]
-    fn either_side_can_crop_almost_all_the_source_away() {
-        // Drag the left handle 190 pt across a 200 pt picture: 10 pt (5%) stay.
-        let r = cropped(200.0, 100.0, [0.0; 4], H(-1, 0), 190.0, 0.0);
+        // At most 0.95 a side, whatever the frame asks.
+        let r = crop_of(src(), rect(195.0, 0.0, 200.0, 100.0), [0.0; 4], (false, false));
         assert!((r.crop[0] - 0.95).abs() < 1e-4 && (r.w - 10.0).abs() < 1e-3 && (r.dx - 190.0).abs() < 1e-3, "{r:?}");
         // The right side already takes 0.6: the left stops at 0.35, leaving 5%.
-        let r = cropped(80.0, 100.0, [0.0, 0.0, 0.6, 0.0], H(-1, 0), 1000.0, 0.0);
+        let r = crop_of(src(), rect(79.0, 0.0, 80.0, 100.0), [0.0, 0.0, 0.6, 0.0], (false, false));
         assert!((r.crop[0] - 0.35).abs() < 1e-4 && (r.crop[2] - 0.6).abs() < 1e-4 && (r.w - 10.0).abs() < 1e-3, "{r:?}");
-    }
-
-    #[test]
-    fn dragging_back_out_restores_what_was_cropped() {
-        let a = cropped(200.0, 100.0, [0.0; 4], H(1, 1), -30.0, -20.0);
-        let b = cropped(a.w, a.h, a.crop, H(1, 1), 30.0, 20.0);
+        // Out past the source's edge: back to uncropped, no further.
+        let r = crop_of(src(), rect(0.0, 0.0, 260.0, 100.0), [0.0, 0.0, 0.2, 0.0], (false, false));
+        assert!(close(r, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{r:?}");
+        // Dragging back out restores what was cropped.
+        let a = crop_of(src(), rect(0.0, 0.0, 170.0, 80.0), [0.0; 4], (false, false));
+        let b = crop_of(src(), rect(0.0, 0.0, 200.0, 100.0), a.crop, (false, false));
         assert!(close(b, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{a:?} {b:?}");
     }
 
     #[test]
     fn hostile_input_leaves_the_picture_as_it_was() {
         let same = |w, h, crop| Cropped { crop, w, h, dx: 0.0, dy: 0.0 };
-        // Junk drags: nothing moves.
-        for (dx, dy) in [(f32::NAN, 0.0), (f32::INFINITY, f32::NEG_INFINITY), (f32::NAN, f32::NAN)] {
-            let r = cropped(200.0, 100.0, [0.1, 0.0, 0.2, 0.0], H(-1, -1), dx, dy);
-            assert_eq!(r, same(200.0, 100.0, [0.1, 0.0, 0.2, 0.0]), "{dx} {dy}");
+        let crop = [0.1, 0.0, 0.2, 0.0];
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let r = crop_of(src(), rect(bad, 0.0, 100.0, bad), crop, (false, false));
+            assert_eq!(r, same(140.0, 100.0, crop), "{bad}");
         }
-        // Junk sizes: as it was (a non-finite size reads as 0), nothing moves.
-        assert_eq!(cropped(0.0, 100.0, [0.0; 4], H(-1, 0), 10.0, 0.0), same(0.0, 100.0, [0.0; 4]));
-        assert_eq!(cropped(-5.0, 100.0, [0.0; 4], H(1, 1), 10.0, 10.0), same(-5.0, 100.0, [0.0; 4]));
-        assert_eq!(cropped(200.0, f32::NAN, [0.0; 4], H(0, 1), 0.0, 10.0), same(200.0, 0.0, [0.0; 4]));
-        // A junk crop reads as uncropped / at most 0.95 a side; a zero drag leaves that be.
-        let r = cropped(200.0, 100.0, [f32::NAN, -1.0, 0.7, 0.0], H(-1, -1), 0.0, 0.0);
-        assert_eq!(r, same(200.0, 100.0, [0.0, 0.0, 0.7, 0.0]));
+        // Junk sources: nothing moves.
+        let r = crop_of(rect(0.0, 0.0, 0.0, 100.0), rect(0.0, 0.0, 10.0, 10.0), [0.0; 4], (false, false));
+        assert_eq!((r.dx, r.dy, r.crop), (0.0, 0.0, [0.0; 4]));
+        let r = crop_of(rect(0.0, 0.0, f32::NAN, 100.0), src(), [0.0; 4], (false, false));
+        assert_eq!((r.dx, r.dy, r.crop), (0.0, 0.0, [0.0; 4]));
+        // A junk crop reads as uncropped / at most 0.95 a side; a frame where the cleaned crop has it (no drag) leaves
+        // that be. (A frame over the whole source says the crop was dragged out, which restores it.)
+        let r = crop_of(src(), rect(0.0, 0.0, 60.0, 100.0), [f32::NAN, -1.0, 0.7, 0.0], (false, false));
+        assert_eq!(r.crop, [0.0, 0.0, 0.7, 0.0]);
     }
 
     /// Sizes stay within what `picture.crop` accepts (1–4000 pt) at the same scale, so the
     /// preview is finite and the drop doesn't drift.
     #[test]
     fn sizes_stay_within_1_to_4000_points() {
-        // A 1.5 pt wide picture can lose only a third of itself before it'd be under 1 pt.
-        let r = cropped(1.5, 100.0, [0.0; 4], H(-1, 0), 100.0, 0.0);
+        // A 1.5 pt wide source can lose only a third of itself before it'd be under 1 pt.
+        let r = crop_of(rect(0.0, 0.0, 1.5, 100.0), rect(1.4, 0.0, 1.5, 100.0), [0.0; 4], (false, false));
         assert!((r.w - 1.0).abs() < 1e-3 && (r.crop[0] - 1.0 / 3.0).abs() < 1e-3, "{r:?}");
-        // Restoring a heavily cropped 4000 pt picture stops at 4000 pt.
-        let r = cropped(4000.0, 100.0, [0.45, 0.0, 0.45, 0.0], H(1, 0), 1.0e7, 0.0);
+        // Restoring a heavily cropped 4000 pt picture (a 40000 pt source) stops at 4000 pt.
+        let big = rect(0.0, 0.0, 40000.0, 100.0);
+        let r = crop_of(big, rect(18000.0, 0.0, 40000.0, 100.0), [0.45, 0.0, 0.45, 0.0], (false, false));
         assert!(r.w <= 4000.0 + 1e-2 && r.w > 3999.0 && r.crop[2] > 0.0, "{r:?}");
-        // Huge sizes from a file: clamped first, all finite.
-        let r = cropped(f32::MAX, f32::MAX, [0.45; 4], H(1, 1), 1.0e30, 1.0e30);
-        assert!([r.w, r.h, r.dx, r.dy].iter().chain(&r.crop).all(|x| x.is_finite()) && r.w <= 4000.01 && r.h <= 4000.01, "{r:?}");
+        // Huge sizes from a file: all finite.
+        let r = crop_of(rect(0.0, 0.0, f32::MAX, f32::MAX), rect(1.0e30, 1.0e30, f32::MAX, f32::MAX), [0.45; 4], (false, false));
+        assert!([r.w, r.h, r.dx, r.dy].iter().chain(&r.crop).all(|x| x.is_finite()), "{r:?}");
     }
 
-    /// Flipped, the handle on the screen's left is on the source's right: dragging it trims the
-    /// side under it (as in Word), and the frame's left edge follows.
+    /// Flipped, the frame's left side on screen is the source's right: trimming it crops that
+    /// side, and the frame's left edge follows.
     #[test]
     fn flipped_pictures_trim_the_side_under_the_handle() {
         let c = |crop, w, h, dx, dy| Cropped { crop, w, h, dx, dy };
-        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (true, false), H(-1, 0), (50.0, 0.0));
-        assert!(close(r, c([0.0, 0.0, 0.25, 0.0], 150.0, 100.0, 50.0, 0.0)), "flip H, left handle: {r:?}");
-        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (true, false), H(1, 0), (-40.0, 0.0));
-        assert!(close(r, c([0.2, 0.0, 0.0, 0.0], 160.0, 100.0, 0.0, 0.0)), "flip H, right handle: {r:?}");
-        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (false, true), H(0, -1), (0.0, 10.0));
-        assert!(close(r, c([0.0, 0.0, 0.0, 0.1], 200.0, 90.0, 0.0, 10.0)), "flip V, top handle: {r:?}");
-        // Already cropped on the source's left (the screen's right), flipped: the left handle
-        // restores nothing there and trims the right of the source.
-        let r = cropped_on_screen((160.0, 100.0), [0.2, 0.0, 0.0, 0.0], (true, true), H(-1, -1), (20.0, 10.0));
-        assert!(close(r, c([0.2, 0.0, 0.1, 0.1], 140.0, 90.0, 20.0, 10.0)), "flip both, corner: {r:?}");
+        let r = crop_of(src(), rect(50.0, 0.0, 200.0, 100.0), [0.0; 4], (true, false));
+        assert!(close(r, c([0.0, 0.0, 0.25, 0.0], 150.0, 100.0, 50.0, 0.0)), "flip H, left side: {r:?}");
+        let r = crop_of(src(), rect(0.0, 0.0, 160.0, 100.0), [0.0; 4], (true, false));
+        assert!(close(r, c([0.2, 0.0, 0.0, 0.0], 160.0, 100.0, 0.0, 0.0)), "flip H, right side: {r:?}");
+        let r = crop_of(src(), rect(0.0, 10.0, 200.0, 100.0), [0.0; 4], (false, true));
+        assert!(close(r, c([0.0, 0.0, 0.0, 0.1], 200.0, 90.0, 0.0, 10.0)), "flip V, top side: {r:?}");
     }
 
     /// An app whose first paragraph holds a picture, selected.
@@ -508,29 +419,34 @@ mod tests {
     }
 
     #[test]
-    fn ui_crop_toggles_crop_mode_and_esc_enter_leave_it_keeping_the_crop() {
+    fn ui_crop_toggles_crop_mode() {
         let mut app = app_with_picture(0.0);
-        assert!(crate::widgets::enabled(&app, "ui.crop"));
         app.run("ui.crop", json!({})).unwrap();
         assert!(active(&app).is_some(), "Crop turns crop mode on");
         app.run("ui.crop", json!({})).unwrap();
         assert!(active(&app).is_none(), "Crop again turns it off");
+    }
+
+    /// Esc and Enter reach the overlay as keys of the canvas: crop mode ends and the crop stays.
+    #[test]
+    fn esc_and_enter_leave_crop_mode_keeping_the_crop() {
+        let mut h = crop_window(1);
         for key in [egui::Key::Escape, egui::Key::Enter] {
-            app.run("ui.crop", json!({})).unwrap();
-            app.run("picture.crop", json!({"left": 0.1})).unwrap();
-            assert!(crate::objects::key(&mut app, key, Default::default()), "{key:?} is taken");
-            assert!(active(&app).is_none(), "{key:?} leaves crop mode");
-            let Some((_, InlineObject::Image { crop, .. })) = crate::objects::selected(&app) else { panic!("still selected") };
-            assert_eq!(crop[0], 0.1, "{key:?} keeps the crop");
+            if active(h.state()).is_none() {
+                h.state_mut().run("ui.crop", json!({})).unwrap();
+            }
+            h.state_mut().run("picture.crop", json!({"left": 0.1})).unwrap();
+            steps(&mut h, 2);
+            h.key_press(key);
+            steps(&mut h, 3);
+            assert!(active(h.state()).is_none(), "{key:?} leaves crop mode");
+            assert_eq!(image_at(&h, 0).2[0], 0.1, "{key:?} keeps the crop");
         }
-        // Without crop mode, Escape isn't a crop key.
-        assert!(!crate::objects::key(&mut app, egui::Key::Escape, Default::default()));
     }
 
     #[test]
     fn ui_crop_needs_an_unturned_selected_picture() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
-        assert!(!crate::widgets::enabled(&app, "ui.crop"));
         assert!(app.run("ui.crop", json!({})).is_err());
         assert!(active(&app).is_none());
         let mut app = app_with_picture(30.0);
@@ -543,13 +459,10 @@ mod tests {
         assert!(active(&app).is_none());
     }
 
-    use crate::table_resize::tests::{H, button, screen, steps};
-
     fn png(w: u32, h: u32) -> Vec<u8> {
         let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]));
-        let mut v = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png).unwrap();
-        v
+
+        wordcraft_geom::picture::encode_format(&image::DynamicImage::from(img.clone()), image::ImageFormat::Png).unwrap()
     }
 
     fn test_picture() -> InlineObject {
@@ -575,7 +488,7 @@ mod tests {
         }
         a.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, OBJ.len_utf8())})).unwrap();
         a.run("ui.crop", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+        let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -601,12 +514,12 @@ mod tests {
     /// Press at `from` and move to `to` in a few steps, still holding the button.
     fn drag(h: &mut H, from: egui::Pos2, to: egui::Pos2) {
         h.event(egui::Event::PointerMoved(from));
-        h.step();
+        h.app_frame();
         button(h, from, true);
-        h.step();
+        h.app_frame();
         for i in 1..=4 {
             h.event(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 4.0)));
-            h.step();
+            h.app_frame();
         }
     }
 
@@ -641,9 +554,9 @@ mod tests {
         let r = rect_of(&mut h, 0);
         let out = screen(&mut h, r.right() + 150.0, r.bottom() + 150.0);
         h.event(egui::Event::PointerMoved(out));
-        h.step();
+        h.app_frame();
         button(&h, out, true);
-        h.step();
+        h.app_frame();
         button(&h, out, false);
         steps(&mut h, 3);
         assert!(active(h.state()).is_none(), "crop mode is off");
@@ -668,6 +581,5 @@ mod tests {
         assert_eq!(image_at(&h, 0), (200.0, 100.0, [0.0; 4]));
         assert_eq!(image_at(&h, OBJ.len_utf8()), (200.0, 100.0, [0.0; 4]));
         assert_eq!(h.state().session.undo_depth(), depth, "no edit");
-        assert!(h.state().canvas.crop_drag.is_none());
     }
 }

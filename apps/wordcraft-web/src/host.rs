@@ -30,10 +30,18 @@
 //! to the host rather than downloaded, the host guards leaving the page, and `?author=` names the
 //! user for comments and tracked changes.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::Mutex;
 
-use craft_web_host::web::{FileData, Host, Message};
-use wordcraft_ui_egui::{Inbox, Services, WordApp};
+use craft::host::{FileError, Files, PickId, PickRequest, Picked, WriteIntent};
+use craft::platform::browser_files::BrowserFiles;
+use craft::platform::open::{DropTarget, DroppedFile, IntakeSender};
+use craft::web_host::web::{FileData, Host, Message};
+use wordcraft_ui_egui::{Services, WordApp};
 
 /// The app id in the host messages (`wordcraft:ready`).
 const APP: &str = "wordcraft";
@@ -46,6 +54,12 @@ const MAX_OPEN_BYTES: u64 = 512 << 20;
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
+
+thread_local! {
+    /// The page's bridge, for [`HostedFiles`]: `Files` is `Send + Sync` but the page host is not. The browser
+    /// runs everything on one thread, so a save, called in the pass of the user's gesture, reaches it here.
+    static BRIDGE: RefCell<Option<Bridge>> = const { RefCell::new(None) };
+}
 
 #[derive(Clone)]
 pub struct Bridge {
@@ -60,17 +74,11 @@ impl Bridge {
         Some(Self { host: Rc::new(Host::connect(APP, canvas)?) })
     }
 
-    /// Hand saved and exported files to the host instead of downloading them, report unsaved
-    /// changes to it, and hear the files it sends.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
-        let bridge = self.clone();
-        services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
-        // Anything else that would download goes to the host too.
-        let bridge = self.clone();
-        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes, false)));
-        // The browser's save picker is never used, so no save finishes later.
-        services.async_saves = None;
+    /// Report unsaved changes to the host page, hear the files it sends, and let [`HostedFiles`]
+    /// hand it the saves.
+    pub fn connect(&self, services: &mut Services, intake: IntakeSender) {
+        self.listen(intake);
+        BRIDGE.with(|b| *b.borrow_mut() = Some(self.clone()));
         // The crate does not repeat a state it already reported.
         let host = self.host.clone();
         services.on_dirty = Some(Box::new(move |dirty: bool| host.post_dirty(dirty)));
@@ -94,25 +102,25 @@ impl Bridge {
     }
 
     fn post_save(&self, path: &str, bytes: &[u8], save_as: bool) -> Result<(), String> {
-        let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+        let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
         self.host.post_save(&name, bytes, None, save_as)
     }
 
     /// Hear `wordcraft:open` and queue the file like a dropped one.
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
+    fn listen(&self, intake: IntakeSender) {
         self.host.listen(move |message| {
             if let Message::Open { name, data } = message {
-                deliver_open(&inbox, &ctx, &name, &data);
+                deliver_open(&intake, &name, &data);
             }
         });
     }
 }
 
-/// The file an open message carries, pushed onto the inbox for the next frame, like a dropped
-/// file. A host's file is untrusted input: an oversized one is refused before it is copied into
-/// the app's memory (the data's own length, not the host's claim). The crate has cleaned the name
-/// (and cut it to 255 characters); a blank one comes as `document` and becomes `Document.docx`.
-fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData) {
+/// The file an open message carries, queued for the next frame like a dropped file. A host's file
+/// is untrusted input: an oversized one is refused before it is copied into the app's memory (the
+/// data's own length, not the host's claim). The crate has cleaned the name (and cut it to 255
+/// characters); a blank one comes as `document` and becomes `Document.docx`.
+fn deliver_open(intake: &IntakeSender, name: &str, data: &FileData) {
     let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
     let FileData::Bytes(array) = data else {
         log::warn!("host file {name} came as a File; WordCraft reads bytes only; not opened");
@@ -122,6 +130,87 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
         log::warn!("host file is {} bytes, over the {} MiB host open limit; not opened", data.size(), MAX_OPEN_BYTES >> 20);
         return;
     }
-    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, array.to_vec()));
-    ctx.request_repaint();
+    let file = DroppedFile { path: None, name, bytes: Some(Arc::from(array.to_vec())) };
+    intake.dropped(vec![file], DropTarget::Elsewhere);
+}
+
+/// The files of a hosted page: reads go to the browser's files, but a save goes to the host page,
+/// which stores it, so it answers at once.
+pub struct HostedFiles {
+    inner: Arc<BrowserFiles>,
+    /// Save answers by the id the inner files issued for them.
+    answers: Mutex<HashMap<u64, Picked>>,
+}
+
+impl HostedFiles {
+    /// Hosted files over the browser's.
+    pub fn new(inner: Arc<BrowserFiles>) -> Self {
+        Self { inner, answers: Mutex::new(HashMap::new()) }
+    }
+}
+
+impl Files for HostedFiles {
+    fn pick(&self, request: PickRequest) -> PickId {
+        self.inner.pick(request)
+    }
+
+    fn take_answer(&self, id: PickId) -> Option<Picked> {
+        if let Some(answer) = self.answers.lock().unwrap_or_else(|e| e.into_inner()).remove(&id.0) {
+            return Some(answer);
+        }
+        self.inner.take_answer(id)
+    }
+
+    fn forget(&self, id: PickId) {
+        if self.answers.lock().unwrap_or_else(|e| e.into_inner()).remove(&id.0).is_none() {
+            self.inner.forget(id);
+        }
+    }
+
+    fn pick_pending(&self) -> bool {
+        self.inner.pick_pending()
+    }
+
+    fn read(&self, path: &Path) -> Result<Vec<u8>, FileError> {
+        self.inner.read(path)
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        self.inner.write(path, bytes, intent)
+    }
+
+    fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
+        self.inner.last_folder(purpose)
+    }
+
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
+        let name = request.file_name.clone().unwrap_or_else(|| DEFAULT_NAME.to_string());
+        let sent = BRIDGE.with(|b| match b.borrow().as_ref() {
+            Some(bridge) => bridge.post_save(&name, &bytes, request.save_as),
+            None => Err("no host page".to_string()),
+        });
+        let answer = match sent {
+            // A Save As or first Save makes the page hold the document as this file: the answer
+            // names it, and the next Save posts the name with `save_as` false.
+            Ok(()) if request.save_as => Picked::Paths(vec![PathBuf::from(&name)]),
+            // An overwrite of the opened file, or a copy: the document's file stays as it is.
+            Ok(()) => Picked::Downloaded(name),
+            Err(error) => Picked::Failed(error),
+        };
+        // The inner files own the id space: a Folder pick is answered `Unavailable` at once, so it
+        // opens no picker and only yields an id, which is released and reused for this answer.
+        let id = self.inner.pick(PickRequest::folder("hosted-save"));
+        self.inner.forget(id);
+        self.answers.lock().unwrap_or_else(|e| e.into_inner()).insert(id.0, answer);
+        id
+    }
+
+    /// The host page opens documents, so no picker is offered.
+    fn can_pick(&self) -> bool {
+        false
+    }
+
+    fn browser_saves(&self) -> bool {
+        true
+    }
 }

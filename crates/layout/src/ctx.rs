@@ -7,8 +7,10 @@ use super::{
     ParaLayout, Paragraph, Rect, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
 };
 
-/// The character style Word formats line numbers with (`w:styleId="LineNumber"`).
+/// The character style Word formats line numbers with: `w:styleId="LineNumber"` in English
+/// Word; other languages localise the id (German `Zeilennummer`) but keep the built-in name.
 const LINE_NUMBER_STYLE: &str = "LineNumber";
+const LINE_NUMBER_STYLE_NAME: &str = "line number";
 
 /// A layout pass: finished, or to be done again with the page totals it found, or with the
 /// floats placed above their anchors it found ([`EarlyFloats`]).
@@ -199,7 +201,11 @@ impl Ctx<'_> {
         // Word formats line numbers with the "Line Number" character style over the document's
         // defaults (measured in Word for Mac: Aptos 12 pt black in a document whose defaults are
         // Aptos 12 pt), not in a fixed small grey.
-        let style = self.doc.styles.get(LINE_NUMBER_STYLE).map(|s| s.id.clone());
+        let styles = &self.doc.styles;
+        let style = styles
+            .get(LINE_NUMBER_STYLE)
+            .or_else(|| styles.find(LINE_NUMBER_STYLE_NAME).filter(|s| s.kind == wordcraft_doc::StyleKind::Character))
+            .map(|s| s.id.clone());
         let mut p = Paragraph::with_text(&n.to_string(), CharProps { style, ..Default::default() });
         p.props.space_after = Some(0.0);
         p.props.space_before = Some(0.0);
@@ -270,7 +276,7 @@ impl Ctx<'_> {
     }
 
     /// `p` laid out on its own, as the paragraph after a kept one is measured before it is placed
-    /// (no wrap areas, proofing, typed word or resized text boxes), through the cache when
+    /// (no wrap areas, typed word or resized text boxes), through the cache when
     /// [`Ctx::para_labelled`] would lay it out with those same inputs: it is then not laid out a
     /// second time when it is placed. Counts nothing (list labels, equation numbers, page totals).
     /// `None` when the inputs differ.
@@ -279,7 +285,7 @@ impl Ctx<'_> {
             .objects
             .iter()
             .any(|o| matches!(o, InlineObject::Shape { story: Some(_), float, .. } if float.wrap == Wrap::Inline && float.rot == 0.0));
-        if self.opts.proofing || self.boxes.inside() || resized || self.hide_deleted != self.opts.hides_deleted(StoryRef::Body) {
+        if self.boxes.inside() || resized || self.hide_deleted != self.opts.hides_deleted(StoryRef::Body) {
             return None;
         }
         let kept = (self.eq_count, self.uses_totals);
