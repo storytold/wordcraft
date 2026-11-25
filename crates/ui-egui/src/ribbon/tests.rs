@@ -342,6 +342,20 @@ fn language_names_resolve_aliases_and_tags() {
     assert!(c.extra.is_some() && !c.listed.contains(&true));
 }
 
+/// #1110: the strip's drawn buttons have names for screen readers: Share, and the "»" that
+/// holds the tabs that don't fit ("More tabs", not a glyph).
+#[test]
+fn the_tab_strip_buttons_have_names() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let mut h = app_harness(app, vec2(760.0, 700.0));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("Share"));
+    let more = h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("More tabs"));
+    more.click();
+    crate::test_harness::frames(&mut h, 2);
+    // The menu lists a tab that didn't fit (View is among the last on a narrow strip).
+    assert!(h.query(By::new().role(egui::accesskit::Role::MenuItem).label(tl!("View"))).is_some(), "the » menu lists the tabs left out");
+}
+
 /// Each contextual tab shows on the tab strip while its object is selected and leaves with the
 /// selection.
 #[test]
