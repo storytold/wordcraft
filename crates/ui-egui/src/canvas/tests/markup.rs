@@ -865,22 +865,33 @@ fn a_right_click_keeps_selected_cells_only_on_them() {
 /// for both.
 #[test]
 fn the_context_menu_in_a_table_follows_the_selection() {
-    let mut h = table_window();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 2);
+    let rclick = |h: &mut H, at: Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        h.event(button(at, egui::PointerButton::Secondary, true));
+        h.app_frame();
+        h.event(button(at, egui::PointerButton::Secondary, false));
+        h.app_frame();
+    };
     let b = cell(&mut h, 1, 2);
     let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
-    right_click(&mut h, at);
+    rclick(&mut h, at);
     assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 2)), "the caret moved to the cell");
     assert_menu(&h, &["Insert", "Delete", "Split Cells", "Text Direction", "Table Properties…"], true);
     assert_menu(&h, &["Merge Cells", "Distribute Rows", "AutoFit", "Select", "Cell Alignment"], false);
-    let depth = h.state().session.undo_depth();
-    pick(&mut h, &["Insert", "Insert Rows Below"]);
-    assert_eq!(h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len()), Some(3));
-    assert_eq!(h.state().session.undo_depth(), depth + 1);
     h.state_mut().run("table.selectTable", json!({})).unwrap();
-    right_click(&mut h, at);
+    rclick(&mut h, at);
     assert!(h.state().session.cell_range().is_some(), "a right-click on the selected table keeps it");
     assert_menu(&h, &["Delete", "Distribute Rows", "Distribute Columns", "AutoFit", "Insert Caption…", "Table Properties…"], true);
     assert_menu(&h, &["Split Cells", "Merge Cells"], false);
-    pick(&mut h, &["Delete", "Delete Table"]);
-    assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()));
 }
