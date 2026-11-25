@@ -1403,6 +1403,98 @@ fn clicking_during_ime_composition_dismisses_preedit_without_dragging_it() {
     assert!(!h.state().session.dirty, "dismissed composition does not mark the document dirty");
 }
 
+/// Replacing a multi-page forward selection with a short pre-edit shrinks the preview layout
+/// below the committed focus page; the preview overlay and candidate-window caret still show.
+#[test]
+fn ime_preedit_replacing_multipage_selection_draws_and_reports_caret() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "Line\n".repeat(120)})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    let committed_focus = app.session.layout().caret_on(&app.session.sel.focus, app.session.page_hint).expect("committed focus caret");
+    assert!(committed_focus.page >= 1, "forward selection spans onto page 1+: {committed_focus:?}");
+
+    let mut h = composing_harness(app);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "da".into(), active_range_chars: Some(2..2) }));
+    for _ in 0..4 {
+        h.app_frame();
+    }
+
+    let preview = super::pages::ensure_ime_preview(h.state_mut()).expect("active IME preview");
+    assert!(
+        preview.layout.pages.len() <= committed_focus.page,
+        "preview collapsed to {} page(s), fewer than committed focus page {}",
+        preview.layout.pages.len(),
+        committed_focus.page
+    );
+    assert!(drawn_composition(&h, "da").is_some(), "short preedit replacing multi-page selection must still paint");
+    assert!(h.output().platform_output.ime.is_some(), "candidate window caret must still be reported");
+}
+
+/// With Track Changes enabled, replacing a selection retains deleted bytes in the preview copy;
+/// Find highlight mapping shifts suffix matches past both the preedit and retained deleted text.
+#[test]
+fn ime_preedit_with_track_changes_maps_find_highlight_past_deleted_selection() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "abcDEFghi"})).unwrap();
+    app.run("edit.advancedFind", json!({"text": "ghi", "highlight": true})).unwrap();
+    app.session.doc.settings.track_changes = true;
+    app.session.sel = wordcraft_engine::Selection { anchor: Pos::body(0, 3), focus: Pos::body(0, 6) };
+    app.canvas.ime_preedit = "x".into();
+
+    let preview = super::pages::ensure_ime_preview(&mut app).expect("active IME preview");
+    assert_eq!(preview.doc.plain_text(StoryRef::Body), "abcxDEFghi");
+
+    let map = super::ImeRangeMap::new(&app.session.doc, &app.session.sel, &preview).expect("range map");
+    assert_eq!(map.map(&Pos::body(0, 0), &Pos::body(0, 3)), Some((Pos::body(0, 0), Pos::body(0, 3))));
+    assert_eq!(map.map(&Pos::body(0, 3), &Pos::body(0, 6)), None);
+    let mapped_suffix = map.map(&Pos::body(0, 6), &Pos::body(0, 9)).expect("mapped suffix");
+    assert_eq!(mapped_suffix, (Pos::body(0, 7), Pos::body(0, 10)));
+    assert_eq!(&preview.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().text[7..10], "ghi");
+
+    let areas = super::mark_areas(&mut app, &preview.layout, &[]);
+    let expected: Vec<_> = preview
+        .layout
+        .selection_rects(&preview.doc, &Pos::body(0, 7), &Pos::body(0, 10), app.session.page_hint)
+        .into_iter()
+        .map(|(page, r)| super::mark_area(page, &r, craft::pages::ui::MarkKind::Found))
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(areas.len(), expected.len());
+    for (got, want) in areas.iter().zip(&expected) {
+        assert_eq!(got.page, want.page);
+        assert_eq!(got.rect, want.rect);
+    }
+}
+
+/// When an active IME pre-edit ends right at a soft-wrap boundary, post-input scrolling follows
+/// the composition slice that owns the cursor rather than wrapping onto the next line.
+#[test]
+fn ime_preedit_ending_at_soft_wrap_scrolls_to_painted_slice_line() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("document.setText", json!({"text": "word ".repeat(30)})).unwrap();
+    app.run("caret.docStart", json!({})).unwrap();
+
+    let mut matched = None;
+    for len in 1..120 {
+        app.canvas.ime_preedit = format!("{} ", "a".repeat(len));
+        app.canvas.ime_preedit_range = Some((len + 1)..(len + 1));
+        app.canvas.ime_preview_layout = None;
+        let preview = super::pages::ensure_ime_preview(&mut app).expect("active IME preview");
+        let slices = preview.layout.composition_lines(&preview.start, &preview.end, 0);
+        let Some(last) = slices.last() else { continue };
+        let Some(naive) = preview.layout.caret_on(&preview.end, 0) else { continue };
+        if naive.top > last.top + 0.5 || naive.page > last.page {
+            matched = Some((len, last.page, last.top, naive.page, naive.top));
+            break;
+        }
+    }
+    let (len, slice_page, slice_top, naive_page, naive_top) = matched.expect("found a soft-wrap preedit boundary");
+    let (_, scroll_caret) = super::scroll_target_caret(&mut app, true);
+    let c = scroll_caret.expect("scroll target caret");
+    assert_eq!(c.page, slice_page, "len={len}: scroll page matches painted slice (naive was {naive_page})");
+    assert!((c.top - slice_top).abs() < 0.5, "len={len}: scroll top ({}) matches painted slice ({slice_top}), not naive ({naive_top})", c.top);
+}
+
 /// The composition's size never fails egui, which draws each glyph into its font atlas and
 /// panics on one wider than the atlas. In 1,638-point text at 500% the text's size is about
 /// 11,000 points, so the composition is drawn smaller.

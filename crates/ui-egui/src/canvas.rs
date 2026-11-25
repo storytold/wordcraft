@@ -603,62 +603,106 @@ fn mark_area(page: usize, r: &wordcraft_geom::Rect, kind: MarkKind) -> MarkArea 
     MarkArea::new(page, rect, kind)
 }
 
-/// Map a committed `(a, b)` span onto the IME preview copy so highlights after the caret follow
-/// the composition's reflow, skipping spans replaced by or straddling a cross-paragraph selection.
-fn map_range_to_ime_preview(a: &Pos, b: &Pos, sel: &wordcraft_engine::Selection, preview: &wordcraft_engine::ImePreview) -> Option<(Pos, Pos)> {
-    let (sel_start, sel_end) = sel.ordered();
-    if sel_start.story != sel_end.story || sel_start.path != sel_end.path {
-        return None;
+/// Byte-offset mapper from the committed document onto an active IME preview copy, accounting
+/// for both deleted-byte removal and retained tracked-deletion bytes inside the replaced span.
+pub(super) struct ImeRangeMap {
+    story: StoryRef,
+    path: wordcraft_doc::Path,
+    edit_start: usize,
+    edit_end: usize,
+    prefix_ok: bool,
+    suffix_delta: Option<isize>,
+}
+
+impl ImeRangeMap {
+    /// Build a mapper for `preview` relative to `doc` and committed `sel`, or `None` when the
+    /// selection crosses paragraphs or the edited paragraph is missing.
+    pub(super) fn new(doc: &wordcraft_doc::Document, sel: &wordcraft_engine::Selection, preview: &wordcraft_engine::ImePreview) -> Option<Self> {
+        let (sel_start, sel_end) = sel.ordered();
+        if sel_start.story != sel_end.story
+            || sel_start.path != sel_end.path
+            || sel_start.story != preview.start.story
+            || sel_start.path != preview.start.path
+        {
+            return None;
+        }
+        let orig = doc.para_at(&preview.start)?;
+        let prev = preview.doc.para_at(&preview.start)?;
+        let edit_start = sel_start.off.min(preview.start.off);
+        let edit_end = sel_end.off.max(preview.start.off);
+        let prefix_ok = orig.text.get(..edit_start).is_some_and(|s| prev.text.get(..edit_start) == Some(s));
+        let delta = prev.len() as isize - orig.len() as isize;
+        let suffix_delta = usize::try_from(edit_end as isize + delta)
+            .ok()
+            .filter(|&shifted_end| {
+                shifted_end >= preview.end.off && orig.text.get(edit_end..).is_some_and(|s| prev.text.get(shifted_end..) == Some(s))
+            })
+            .map(|_| delta);
+        Some(Self { story: preview.start.story, path: preview.start.path.clone(), edit_start, edit_end, prefix_ok, suffix_delta })
     }
-    let same_para = |p: &Pos| p.story == preview.start.story && p.path == preview.start.path;
-    if !same_para(a) && !same_para(b) {
-        return Some((a.clone(), b.clone()));
+
+    /// Map a committed `(a, b)` span onto the preview copy, skipping spans replaced by the active
+    /// composition or whose displacement cannot be verified.
+    pub(super) fn map(&self, a: &Pos, b: &Pos) -> Option<(Pos, Pos)> {
+        let same_para = |p: &Pos| p.story == self.story && p.path == self.path;
+        let map_suffix = |p: &Pos| {
+            let d = self.suffix_delta?;
+            Some(Pos { off: (p.off as isize + d).max(0) as usize, ..p.clone() })
+        };
+        if !same_para(a) && !same_para(b) {
+            return Some((a.clone(), b.clone()));
+        }
+        if same_para(a) && same_para(b) {
+            if b.off <= self.edit_start && a.off <= self.edit_start && self.prefix_ok {
+                return Some((a.clone(), b.clone()));
+            }
+            if a.off >= self.edit_end && b.off >= self.edit_end {
+                return Some((map_suffix(a)?, map_suffix(b)?));
+            }
+            return None;
+        }
+        if same_para(a) {
+            if a.off >= self.edit_end {
+                return Some((map_suffix(a)?, b.clone()));
+            }
+            if a.off < self.edit_start && self.prefix_ok {
+                return Some((a.clone(), b.clone()));
+            }
+            return None;
+        }
+        if b.off <= self.edit_start && self.prefix_ok {
+            return Some((a.clone(), b.clone()));
+        }
+        if b.off >= self.edit_end {
+            return Some((a.clone(), map_suffix(b)?));
+        }
+        None
     }
-    let delta = preview.end.off as isize - sel_end.off as isize;
-    let shift = |p: &Pos| Pos { off: (p.off as isize + delta).max(0) as usize, ..p.clone() };
-    let map_before_or_outside = |p: &Pos| (!same_para(p) || p.off <= sel_start.off).then(|| p.clone());
-    if same_para(a) && a.off >= sel_end.off {
-        let mb = if same_para(b) { (b.off >= sel_end.off).then(|| shift(b))? } else { b.clone() };
-        return Some((shift(a), mb));
-    }
-    if same_para(a) && a.off < sel_start.off {
-        return Some((a.clone(), map_before_or_outside(b)?));
-    }
-    if !same_para(a) {
-        return Some((a.clone(), map_before_or_outside(b)?));
-    }
-    None
 }
 
 /// The selection, Find › Reading Highlight and Read Aloud marks, in page points.
 fn mark_areas(app: &mut WordApp, layout: &DocLayout, selected: &[(usize, wordcraft_geom::Rect)]) -> Vec<MarkArea> {
     let mut areas: Vec<MarkArea> = selected.iter().map(|(page, r)| mark_area(*page, r, MarkKind::Selection)).collect();
+    let found: Option<Vec<(Pos, Pos)>> = preview_sel(app).is_none().then(|| app.session.find_highlights().iter().take(5000).cloned().collect());
+    let spoken = crate::read_aloud::highlight(app);
+    let preview = app.canvas.ime_preview_layout.as_ref().map(|(_, p)| p);
+    let range_map = preview.and_then(|p| ImeRangeMap::new(&app.session.doc, &app.session.sel, p));
+    let mark_doc = preview.map_or(&app.session.doc, |p| &p.doc);
+    let hint = app.session.page_hint;
     // Find's places are the document's, not the preview's.
-    if preview_sel(app).is_none() {
-        let hint = app.session.page_hint;
-        let found: Vec<(Pos, Pos)> = app.session.find_highlights().iter().take(5000).cloned().collect();
-        let preview = app.canvas.ime_preview_layout.as_ref().map(|(_, p)| p);
-        let mark_doc = preview.map_or(&app.session.doc, |p| &p.doc);
+    if let Some(found) = found {
         for (a, b) in &found {
-            let mapped = match preview {
-                Some(p) => map_range_to_ime_preview(a, b, &app.session.sel, p),
-                None => Some((a.clone(), b.clone())),
-            };
+            let mapped = if preview.is_some() { range_map.as_ref().and_then(|m| m.map(a, b)) } else { Some((a.clone(), b.clone())) };
             let Some((ma, mb)) = mapped else { continue };
             for (page, r) in layout.selection_rects(mark_doc, &ma, &mb, hint) {
                 areas.push(mark_area(page, &r, MarkKind::Found));
             }
         }
     }
-    if let Some((a, b)) = crate::read_aloud::highlight(app) {
-        let preview = app.canvas.ime_preview_layout.as_ref().map(|(_, p)| p);
-        let mark_doc = preview.map_or(&app.session.doc, |p| &p.doc);
-        let mapped = match preview {
-            Some(p) => map_range_to_ime_preview(&a, &b, &app.session.sel, p),
-            None => Some((a, b)),
-        };
+    if let Some((a, b)) = spoken {
+        let mapped = if preview.is_some() { range_map.as_ref().and_then(|m| m.map(&a, &b)) } else { Some((a, b)) };
         if let Some((ma, mb)) = mapped {
-            for (page, r) in layout.selection_rects(mark_doc, &ma, &mb, app.session.page_hint) {
+            for (page, r) in layout.selection_rects(mark_doc, &ma, &mb, hint) {
                 areas.push(mark_area(page, &r, MarkKind::Spoken));
             }
         }
@@ -850,11 +894,16 @@ fn ime_preview_cursor_pos(app: &WordApp, preview: &wordcraft_engine::ImePreview)
 /// an IME composition is active on a focused canvas, else the committed selection's caret.
 fn scroll_target_caret(app: &mut WordApp, focused: bool) -> (Arc<DocLayout>, Option<wordcraft_layout::hit::Caret>) {
     if focused
+        && preview_sel(app).is_none()
         && !app.canvas.ime_preedit.is_empty()
         && let Some(preview) = pages::ensure_ime_preview(app)
     {
         let pos = ime_preview_cursor_pos(app, &preview);
-        if let Some(c) = preview.layout.caret_on(&pos, app.session.page_hint) {
+        if let Some(c) = preview
+            .layout
+            .composition_caret(&preview.start, &preview.end, pos.off, app.session.page_hint)
+            .or_else(|| preview.layout.caret_on(&pos, app.session.page_hint))
+        {
             return (preview.layout, Some(c));
         }
     }

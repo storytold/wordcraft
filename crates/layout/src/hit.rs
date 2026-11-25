@@ -45,6 +45,15 @@ pub struct CompositionLine {
     pub typing: Option<(StyleRun, f32)>,
 }
 
+/// Index of the composition slice in `slices` that owns a cursor at paragraph byte offset
+/// `cursor_off`, keeping a cursor at the end of a wrapped slice on that slice.
+pub fn composition_cursor_slice(slices: &[CompositionLine], cursor_off: usize) -> Option<usize> {
+    if slices.is_empty() {
+        return None;
+    }
+    slices.iter().position(|s| cursor_off < s.bytes.end).or(Some(slices.len() - 1))
+}
+
 /// Geometry of a single line's slice of an IME composition range `start_off..end_off`.
 fn line_composition_slice(
     page: usize,
@@ -782,9 +791,10 @@ impl DocLayout {
         None
     }
 
-    /// The laid-out line slices covering an IME composition byte range `start..end` in order.
+    /// The laid-out line slices covering an IME composition byte range `start..end` in order,
+    /// paired with each slice's owning paragraph layout, line index, and paragraph x origin.
     /// Returns empty in turned text or when `start` and `end` do not name a non-empty span in one paragraph.
-    pub fn composition_lines(&self, start: &Pos, end: &Pos, page_hint: usize) -> Vec<CompositionLine> {
+    fn composition_slices_with_lines<'a>(&'a self, start: &Pos, end: &Pos, page_hint: usize) -> Vec<(CompositionLine, &'a ParaLayout, usize, f32)> {
         if start.story != end.story || start.path != end.path || start.off >= end.off {
             return Vec::new();
         }
@@ -801,11 +811,32 @@ impl DocLayout {
             }
             for li in *l0..*l1 {
                 if let Some(slice) = line_composition_slice(pi, para, (*l0, li), (*x, *y), (start.off, end.off)) {
-                    out.push(slice);
+                    out.push((slice, para.as_ref(), li, *x));
                 }
             }
         }
         out
+    }
+
+    /// The laid-out line slices covering an IME composition byte range `start..end` in order.
+    /// Returns empty in turned text or when `start` and `end` do not name a non-empty span in one paragraph.
+    pub fn composition_lines(&self, start: &Pos, end: &Pos, page_hint: usize) -> Vec<CompositionLine> {
+        self.composition_slices_with_lines(start, end, page_hint).into_iter().map(|(slice, _, _, _)| slice).collect()
+    }
+
+    /// Caret geometry for an active IME composition cursor at `cursor_off`, preserving the owning
+    /// composition slice's line affinity at soft-wrap boundaries.
+    pub fn composition_caret(&self, start: &Pos, end: &Pos, cursor_off: usize, page_hint: usize) -> Option<Caret> {
+        let entries = self.composition_slices_with_lines(start, end, page_hint);
+        if entries.is_empty() {
+            return None;
+        }
+        let idx = entries.iter().position(|(s, _, _, _)| cursor_off < s.bytes.end).unwrap_or(entries.len() - 1);
+        let (slice, para, li, px) = entries.get(idx)?;
+        let off = cursor_off.clamp(slice.bytes.start, slice.bytes.end);
+        let cx = para.x_of(*li, off)?;
+        let cx = para.caret_limit(*li).map_or(cx, |m| cx.min(m));
+        Some(Caret { page: slice.page, x: px + cx, top: slice.top, height: slice.height, width: 0.0 })
     }
 
     /// The style run text typed at `pos` would take (the character's before it, or at the start

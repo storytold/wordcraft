@@ -15,7 +15,7 @@ use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
 use wordcraft_layout::DocLayout;
 
-use super::cursor::{caret_color_at, preedit_cursor_chars};
+use super::cursor::{caret_color_at, caret_color_at_doc, preedit_cursor_chars};
 use super::story::dims_body;
 use super::{WordApp, preview_sel};
 use crate::caret_glide::{Bar, Look, LookRequest, blink_fading, look};
@@ -149,20 +149,23 @@ fn build_preview_compositions(
     ctx: &egui::Context,
     pages: &[PlacedPage],
     pass_right: f32,
-    color: Color32,
+    zoom_key: u64,
 ) -> Option<Vec<Composition>> {
     let preview = super::pages::ensure_ime_preview(app)?;
     let slices = preview.layout.composition_lines(&preview.start, &preview.end, app.session.page_hint);
-    if slices.is_empty() {
-        return None;
-    }
     let max_face_size = FaceRun::largest_size(ctx);
+    let global_cursor_byte = {
+        let text = &app.canvas.ime_preedit;
+        let cursor_chars = preedit_cursor_chars(text, app.canvas.ime_preedit_range.as_ref());
+        let cursor_byte = text.char_indices().nth(cursor_chars).map_or(text.len(), |(i, _)| i);
+        preview.start.off.saturating_add(cursor_byte).min(preview.end.off)
+    };
+    let cursor_idx = wordcraft_layout::hit::composition_cursor_slice(&slices, global_cursor_byte)?;
+    let probe = &slices[cursor_idx];
+    let dim_body = dims_body(app, &preview.layout);
+    let color = caret_color_at_doc(app, &preview.doc, &preview.layout, (probe.page, probe.x, probe.top + probe.height / 2.0), zoom_key, dim_body);
     let text = &app.canvas.ime_preedit;
-    let cursor_chars = preedit_cursor_chars(text, app.canvas.ime_preedit_range.as_ref());
-    let cursor_byte = text.char_indices().nth(cursor_chars).map_or(text.len(), |(i, _)| i);
-    let global_cursor_byte = preview.start.off.saturating_add(cursor_byte);
     let mut out = Vec::with_capacity(slices.len());
-    let mut assigned_cursor = false;
     for (idx, slice) in slices.iter().enumerate() {
         let (pr_rect, pr_scale) = placed_page_rect(app, &preview.layout, pages, slice.page)?;
         let rel_start = slice.bytes.start.checked_sub(preview.start.off)?;
@@ -171,14 +174,10 @@ fn build_preview_compositions(
         if slice_text.is_empty() {
             return None;
         }
-        let cursor = if !assigned_cursor && (global_cursor_byte < slice.bytes.end || idx + 1 == slices.len()) {
-            assigned_cursor = true;
+        let cursor = (idx == cursor_idx).then(|| {
             let local_bytes = global_cursor_byte.saturating_sub(slice.bytes.start).min(slice_text.len());
-            let local_chars = slice_text.get(..local_bytes).map_or_else(|| slice_text.chars().count(), |s| s.chars().count());
-            Some(local_chars)
-        } else {
-            None
-        };
+            slice_text.get(..local_bytes).map_or_else(|| slice_text.chars().count(), |s| s.chars().count())
+        });
         let scale = pr_scale as f32;
         let left = pr_rect.min.x + slice.x * scale;
         let y0 = pr_rect.min.y + slice.top * scale;
@@ -213,10 +212,24 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     let ctx = ui.ctx().clone();
     let focused = app.canvas.focused(&ctx);
     crate::dialogs_smart_art::end_typing_run(app, focused);
+    let zoom_key = body.view.zoom.to_bits();
+    if focused
+        && app.session.math.is_none()
+        && preview_sel(app).is_none()
+        && !app.canvas.ime_preedit.is_empty()
+        && let Some(slices) = build_preview_compositions(app, &ctx, body.pages, pass.rect.right(), zoom_key)
+    {
+        // The caret is steady inside the composition, so the glide stands down while it shows.
+        app.canvas.glide.reset();
+        let fallback = slices.first().map(|c| [pos2(c.left, c.caret_bar_y.0), pos2(c.left, c.caret_bar_y.1)]);
+        let out = CaretMarks::new(tl!("Text cursor").to_string(), Vec::new(), slices).show_at(ui, pass.rect);
+        if let Some(bar) = out.composition_caret.or(fallback) {
+            crate::keys::report_editor(app, pass, &ctx, report_rect(bar));
+        }
+        return;
+    }
     let doc = app.session.layout();
     let Some(pl) = place(app, &doc, body.pages) else { return };
-
-    let zoom_key = body.view.zoom.to_bits();
     // The glide runs in content space: where the document's origin lands on screen.
     let content_origin = body.view.to_screen(Point::ZERO);
     let now = craft::ui::runtime::pointer::frame(&ctx).time;
@@ -255,26 +268,22 @@ pub(crate) fn paint_caret(app: &mut WordApp, ui: &mut Ui, pass: &ToolPass, body:
     let mut bars: Vec<(Bar, Color32)> = Vec::new();
     let mut compositions: Vec<Composition> = Vec::new();
     if focused && !pl.in_equation && !app.canvas.ime_preedit.is_empty() {
-        // The caret is steady inside the composition, so the glide stands down while it shows.
+        // Fallback single-slice overlay (e.g. turned text or atlas-capped glyph sizes).
         app.canvas.glide.reset();
         let color = ink(app);
-        if let Some(slices) = build_preview_compositions(app, &ctx, body.pages, pass.rect.right(), color) {
-            compositions = slices;
-        } else {
-            let text = app.canvas.ime_preedit.clone();
-            let cursor = preedit_cursor_chars(&text, app.canvas.ime_preedit_range.as_ref());
-            compositions.push(Composition {
-                left: pl.left,
-                bottom: pl.bottom,
-                height: pl.height,
-                caret_bar_y: (pl.bar[0].y, pl.bar[1].y),
-                room: (pass.rect.right() - pl.left).max(0.0),
-                text,
-                cursor: Some(cursor),
-                color,
-                typing: pl.typing,
-            });
-        }
+        let text = app.canvas.ime_preedit.clone();
+        let cursor = preedit_cursor_chars(&text, app.canvas.ime_preedit_range.as_ref());
+        compositions.push(Composition {
+            left: pl.left,
+            bottom: pl.bottom,
+            height: pl.height,
+            caret_bar_y: (pl.bar[0].y, pl.bar[1].y),
+            room: (pass.rect.right() - pl.left).max(0.0),
+            text,
+            cursor: Some(cursor),
+            color,
+            typing: pl.typing,
+        });
     } else {
         let look = step(app, request(pl.bar, shown));
         if shown && look.opacity > 0.0 {
