@@ -897,8 +897,21 @@ fn parity_markdown(p: &Value) -> String {
     s
 }
 
+/// The Launcher's Nightly bootstrap belongs to the desktop app: a CLI must not accept it, in the
+/// separate-token or `=` form, so a mis-routed launch fails loudly instead of editing stable data.
+fn launcher_profile_flag(args: &[OsString]) -> bool {
+    args.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        arg == "--launch-profile" || arg == "--profile-root" || arg.starts_with("--launch-profile=") || arg.starts_with("--profile-root=")
+    })
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if launcher_profile_flag(&args) {
+        eprintln!("wordcraft-cli: --launch-profile and --profile-root are the desktop app's Nightly bootstrap, not a CLI option");
+        return ExitCode::from(2);
+    }
     // Language packs installed in the suite's font store are used; `proof.installPack` installs
     // only while the person has turned downloading on in the app.
     wordcraft_engine::packs::use_font_store(false);
