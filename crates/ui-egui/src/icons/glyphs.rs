@@ -69,7 +69,6 @@ pub(super) static ICONS: &[TextIcon] = &[
     TextIcon("thesaurus"),
     TextIcon("transform"),
     TextIcon("translate"),
-    TextIcon("underline"),
     TextIcon("watermark"),
     TextIcon("wordArt"),
     TextIcon("wordCount"),
@@ -165,10 +164,6 @@ fn paint(pen: &Pen, name: &str) -> bool {
     let green = pen.fixed(Color32::from_rgb(0x2E, 0x8B, 0x57));
     let orange = pen.fixed(Color32::from_rgb(0xE0, 0x7B, 0x1F));
     match name {
-        "underline" => {
-            pen.text(10.0, 9.0, 14.0, "U", c, false);
-            pen.line(&[(5.0, 17.0), (15.0, 17.0)]);
-        }
         "strike" => {
             pen.text(10.0, 10.0, 12.0, "ab", c, false);
             pen.line_c(&[(3.0, 10.5), (17.0, 10.5)], c);

@@ -484,15 +484,15 @@ impl Glyph for LibraryGlyph {
 mod tests {
     use super::*;
 
-    /// #7694: Bold and Italic keep their SVG drawings (a solid B, a filled italic I) while the other letter
-    /// icons beside them are drawn as text.
+    /// #7694: Bold, Italic and Underline draw their filled SVGs while the other letter icons beside them are
+    /// drawn as text.
     #[test]
-    fn bold_and_italic_stay_svgs_beside_the_text_letters() {
+    fn bold_italic_and_underline_are_svgs_beside_the_text_letters() {
         use craft::ui::primitives::IconSource;
-        for name in ["bold", "italic"] {
+        for name in ["bold", "italic", "underline"] {
             assert!(matches!(spec(name).source, IconSource::Svg(_)), "{name} should draw its SVG");
         }
-        assert!(matches!(spec("underline").source, IconSource::Glyph(_)));
+        assert!(matches!(spec("strike").source, IconSource::Glyph(_)));
     }
 
     /// The numbers of the outline path's `d` attribute, in order (the arrow's paths are only M, L, Z). The
