@@ -1950,6 +1950,21 @@ fn save_prompt_shows_why_the_save_failed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #3172: the ribbon's combo boxes name themselves: a screen reader reads their label (Font,
+/// Font Size), and the drop-down arrows say what they drop down.
+#[test]
+fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(6);
+    for (role, name) in [(Role::ComboBox, "Font"), (Role::ComboBox, "Font Size"), (Role::Button, "Font Color")] {
+        assert!(h.query_by_role_and_label(role, name).is_some(), "nothing on the ribbon is called {name:?} with {role:?}");
+    }
+}
+
 /// #3172: the Paste button is named "Paste": its tooltip adds the key as the platform writes it,
 /// so its name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
 #[test]
