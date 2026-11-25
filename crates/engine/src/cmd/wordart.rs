@@ -47,8 +47,8 @@ fn theme(s: &Session) -> Vec<Rgb> {
 }
 
 /// The text box story the selection formats as a whole: the selected shape's, or the one the
-/// caret is in.
-fn box_story(s: &Session) -> Option<u32> {
+/// caret is in. The ribbon reads the current effects from the same place.
+pub fn box_story(s: &Session) -> Option<u32> {
     if let Some((_, InlineObject::Shape { story: Some(id), .. })) = super::objects::object_selection(s) {
         return Some(*id);
     }

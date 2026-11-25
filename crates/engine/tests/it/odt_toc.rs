@@ -103,3 +103,58 @@ fn an_odt_bibliography_updates_from_its_citations_sources() {
     assert!(text.iter().any(|t| t.contains("Kilns and Fire")), "{text:?}");
     assert!(!text.iter().any(|t| t.contains("stale")), "{text:?}");
 }
+
+/// #6486: LibreOffice numbers headings through its outline style, the number followed by a tab,
+/// and its Contents styles carry only the right-aligned dotted stop for the page number. After
+/// Update Table, the tab after an entry's number stops near the number, not at the page-number
+/// stop: the title stays at the left and each entry stays on one line.
+#[test]
+fn an_odt_toc_with_numbered_headings_keeps_its_entries_on_one_line() {
+    let outline = |level: u8, cm: f32| {
+        format!(
+            r#"<text:outline-level-style text:level="{level}" style:num-format="1" style:num-suffix="." text:display-levels="{level}"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" text:list-tab-stop-position="{cm}cm" fo:text-indent="-{cm}cm" fo:margin-left="{cm}cm"/></style:list-level-properties></text:outline-level-style>"#
+        )
+    };
+    let contents = |n: u8, indent: f32| {
+        format!(
+            r#"<style:style style:name="Contents_20_{n}" style:display-name="Contents {n}" style:family="paragraph"><style:paragraph-properties fo:margin-left="{indent}cm"><style:tab-stops><style:tab-stop style:position="16.99cm" style:type="right" style:leader-style="dotted" style:leader-text="."/></style:tab-stops></style:paragraph-properties></style:style>"#
+        )
+    };
+    let styles = format!(
+        r#"<office:document-styles {NS}><office:styles>{}{}<text:outline-style style:name="Outline">{}{}</text:outline-style></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21.001cm" fo:page-height="29.7cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#,
+        contents(1, 0.0),
+        contents(2, 0.499),
+        outline(1, 0.762),
+        outline(2, 1.016)
+    );
+    let content = format!(
+        r#"<office:document-content {NS}><office:body><office:text>
+        <text:table-of-content text:name="T"><text:table-of-content-source text:outline-level="2"/><text:index-body><text:p text:style-name="Contents_20_1">1. Planning<text:tab/>1</text:p><text:p text:style-name="Contents_20_2">1.1. Budget<text:tab/>1</text:p></text:index-body></text:table-of-content>
+        <text:h text:outline-level="1">Planning</text:h><text:p>Text.</text:p>
+        <text:h text:outline-level="2">Budget</text:h><text:p>More text.</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let mut z = craft_zip::Writer::new();
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("styles.xml", styles.as_str()), ("content.xml", content.as_str())]
+    {
+        z.add(name, data.as_bytes(), craft_zip::Compression::Stored).unwrap();
+    }
+    let mut s = Session::new(io::open_bytes("toc.odt", &z.finish().unwrap()).unwrap());
+    s.run("references.updateToc", &json!({})).unwrap();
+    let layout = s.layout();
+    let mut checked = 0;
+    for (i, b) in s.doc.body.iter().enumerate() {
+        let Some(p) = b.as_para().filter(|p| p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading")) else {
+            continue;
+        };
+        let Some(tab) = p.text.find('\t') else { continue };
+        let pos = |off| wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(i), off };
+        let title = layout.caret(&pos(tab + 1)).unwrap();
+        let end = layout.caret(&pos(p.len())).unwrap();
+        assert!(p.plain_text().contains("Planning") || p.plain_text().contains("Budget"), "{:?}", p.text);
+        assert_eq!((title.page, title.top), (end.page, end.top), "{:?} wraps", p.text);
+        assert!(title.x < 200.0, "{:?}: the title starts at {}", p.text, title.x);
+        checked += 1;
+    }
+    assert_eq!(checked, 2);
+}
