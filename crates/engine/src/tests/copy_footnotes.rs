@@ -120,6 +120,28 @@ fn copy_with_a_note_pasted_under_track_changes_marks_the_note_inserted() {
 }
 
 #[test]
+fn note_pasted_into_another_document_keeps_no_revision_of_the_source() {
+    let (mut s, a) = with_note();
+    s.doc.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Delete, "Source", ""));
+    let deleted = s.doc.para(StoryRef::Part(a), &Path::top(0)).unwrap().text.find("first ").unwrap();
+    s.doc.para_mut(StoryRef::Part(a), &Path::top(0)).unwrap().format(deleted, deleted + "first ".len(), &|c| c.del = Some(0)).unwrap();
+    select_all_body(&mut s);
+    run(&mut s, "edit.copy", json!({}));
+    let mut other = wordcraft_doc::Document::new();
+    other.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Delete, "Unrelated", ""));
+    s.add_document(other);
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+
+    run(&mut s, "edit.paste", json!({}));
+
+    let ids = body_notes(&s);
+    assert_eq!(ids.len(), 1);
+    let note = s.doc.para(StoryRef::Part(ids[0]), &Path::top(0)).unwrap();
+    assert!(note.runs.iter().all(|r| r.props.del.is_none() && r.props.ins != Some(0)), "no run binds to the destination's revision 0");
+    assert!(note.text.contains("note") && !note.text.contains("first"), "the note pastes as it reads after review: {:?}", note.text);
+}
+
+#[test]
 fn copying_inside_a_note_makes_no_note_when_pasted() {
     let (mut s, a) = with_note();
     let story = StoryRef::Part(a);

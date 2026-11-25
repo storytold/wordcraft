@@ -640,6 +640,39 @@ fn rewrite_notes_in(blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, f: &d
     }
 }
 
+/// `blocks` with every tracked change accepted: deleted text gone, and no revision ids left on
+/// the text, paragraphs, tables, rows or cells. For a copied note, whose ids name revisions of
+/// the document it came from.
+fn accept_copied_revisions(blocks: &mut [Block]) {
+    let mut todo: Vec<&mut Block> = blocks.iter_mut().collect();
+    while let Some(b) = todo.pop() {
+        match b {
+            Block::Para(p) => {
+                p.drop_deleted_text();
+                for c in p.runs.iter_mut().map(|r| &mut r.props).chain([&mut p.mark]) {
+                    (c.ins, c.del, c.fmt_change) = (None, None, None);
+                }
+                (p.props.fmt_change, p.props.num_change) = (None, None);
+                if let Some(s) = p.section.as_deref_mut() {
+                    s.fmt_change = None;
+                }
+                p.normalize();
+                p.touch();
+            }
+            Block::Table(t) => {
+                t.props.fmt_change = None;
+                for row in &mut t.rows {
+                    row.props.fmt_change = None;
+                    for cell in &mut row.cells {
+                        cell.props.fmt_change = None;
+                        todo.extend(cell.blocks.iter_mut().map(Arc::make_mut));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Note the references in `p` name that `found` doesn't have yet: into `found` and `queue`.
 fn note_ids_in(p: &Paragraph, found: &mut std::collections::BTreeSet<u32>, queue: &mut Vec<u32>) {
     for o in &p.objects {
@@ -1744,6 +1777,8 @@ impl Document {
             if note.is_empty() {
                 continue;
             }
+            // The copy's revision ids index the source document's revisions, so it comes as reviewed
+            accept_copied_revisions(&mut note);
             self.adopt_text_boxes(&mut note, parts, 0, budget);
             if let Some(p) = self.parts.get_mut(&new) {
                 p.blocks = note.into_iter().map(Arc::new).collect();

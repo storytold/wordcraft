@@ -377,6 +377,46 @@ impl Paragraph {
         Ok(())
     }
 
+    /// Remove the text of tracked deletions, as Accept does, in one pass over the runs.
+    pub(crate) fn drop_deleted_text(&mut self) {
+        if self.runs.iter().all(|r| r.props.del.is_none()) {
+            return;
+        }
+        if self.runs.iter().all(|r| r.props.del.is_some()) && !self.text.is_empty() {
+            // Emptied, the mark takes the deleted text's formatting, as `delete` gives it
+            let revisions = (self.mark.ins, self.mark.del, self.mark.fmt_change.clone());
+            self.mark = self.props_of_char(0).clone();
+            (self.mark.ins, self.mark.del, self.mark.fmt_change) = revisions;
+        }
+
+        let mut text = String::with_capacity(self.text.len());
+        let mut objects = Vec::with_capacity(self.objects.len());
+        let mut runs = Vec::with_capacity(self.runs.len());
+        let mut source = std::mem::take(&mut self.objects).into_iter();
+        let mut start = 0usize;
+        for run in std::mem::take(&mut self.runs) {
+            crate::work::steps(1);
+            let end = start.saturating_add(run.len).min(self.text.len());
+            let piece = self.text.get(start..end).unwrap_or_default();
+            let held = piece.chars().filter(|c| *c == OBJ).count();
+            if run.props.del.is_some() {
+                source.by_ref().take(held).for_each(drop);
+            } else {
+                text.push_str(piece);
+                objects.extend(source.by_ref().take(held));
+                runs.push(run);
+            }
+            start = end;
+        }
+
+        // Text past the runs (files lie) stays, with its objects
+        text.push_str(self.text.get(start..).unwrap_or_default());
+        objects.extend(source);
+        (self.text, self.objects, self.runs) = (text, objects, runs);
+        self.normalize();
+        self.touch();
+    }
+
     /// Retain inline objects and compact their placeholders and formatting together.
     pub(crate) fn retain_objects(&mut self, mut keep: impl FnMut(&mut InlineObject) -> bool) {
         if self.objects.is_empty() {

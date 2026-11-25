@@ -106,7 +106,17 @@ fn copied_footnote_reference_pastes_as_a_new_note() {
 #[test]
 fn copied_footnote_pastes_into_another_document_without_touching_its_notes() {
     let mut src = doc(&["Alpha beta"]);
-    let a = add_note(&mut src, 5, "from the source");
+    let a = add_note(&mut src, 5, "from the source gone");
+    // Tracked changes in the source note: " gone" deleted, "source" inserted, "the" reformatted
+    src.revisions.push(crate::Revision::new(crate::RevisionKind::Delete, "Source", ""));
+    src.revisions.push(crate::Revision::new(crate::RevisionKind::Insert, "Source", ""));
+    let note = src.para_mut(StoryRef::Part(a), &Path::top(0)).unwrap();
+    let start = OBJ_LEN + " from the source".len();
+    let end = note.len();
+    note.format(start, end, &|c| c.del = Some(0)).unwrap();
+    note.format(OBJ_LEN + " from the ".len(), start, &|c| c.ins = Some(1)).unwrap();
+    note.format(OBJ_LEN + " from ".len(), OBJ_LEN + " from the".len(), &|c| c.fmt_change = crate::props::PropChange::boxed(1, CharProps::default()))
+        .unwrap();
     let mut dst = doc(&["Other"]);
     let theirs = add_note(&mut dst, 5, "already here");
     assert_eq!(a, theirs, "the ids collide");
@@ -121,6 +131,10 @@ fn copied_footnote_pastes_into_another_document_without_touching_its_notes() {
     assert!(!dst.plain_text(StoryRef::Part(theirs)).contains("from the source"));
     assert!(dst.plain_text(StoryRef::Part(ids[1])).contains("from the source"));
     assert_eq!(dst.parts[&ids[1]].kind, PartKind::Footnote);
+    // The source's revision ids mean nothing here: the note comes as reviewed
+    let copied = dst.para(StoryRef::Part(ids[1]), &Path::top(0)).unwrap();
+    assert!(!copied.text.contains("gone"));
+    assert!(copied.runs.iter().map(|r| &r.props).chain([&copied.mark]).all(|c| c.ins.is_none() && c.del.is_none() && c.fmt_change.is_none()));
 }
 
 /// A selection that ends before the reference, or starts after it, copies no note; one that
