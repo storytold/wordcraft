@@ -3524,6 +3524,33 @@ fn full_screen_follows_the_window() {
     assert!(!a.session.view.full_screen);
 }
 
+/// #1678: Focus and Full Screen View put the window in full screen, asked of the system once
+/// per change (switching between the two keeps it), and the usual window comes back after.
+#[test]
+fn focus_and_full_screen_view_ask_for_full_screen_once_per_change() {
+    use egui::ViewportCommand::Fullscreen;
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app());
+    for _ in 0..6 {
+        h.step();
+    }
+    let sent = |h: &mut egui_kittest::Harness<WordApp>| {
+        let mut out = Vec::new();
+        for _ in 0..2 {
+            h.step();
+            out.extend(h.output().viewport_output.values().flat_map(|v| v.commands.iter()).filter(|c| matches!(c, Fullscreen(_))).cloned());
+        }
+        out
+    };
+    assert_eq!(sent(&mut h), vec![], "a normal window to start with");
+    h.state_mut().run("view.focus", json!({})).unwrap();
+    assert_eq!(sent(&mut h), vec![Fullscreen(true)]);
+    assert_eq!(sent(&mut h), vec![]);
+    h.state_mut().run("view.fullScreenView", json!({})).unwrap();
+    assert_eq!(sent(&mut h), vec![], "Focus to Full Screen View stays full screen");
+    h.state_mut().run("view.fullScreenView", json!({})).unwrap();
+    assert_eq!(sent(&mut h), vec![Fullscreen(false)]);
+}
+
 /// #312: Dark page darkens only the pages; the interface keeps following its own setting.
 #[test]
 fn dark_page_leaves_the_interface_theme_alone() {
