@@ -55,6 +55,19 @@ fn save_as_suggests_the_first_words_of_a_new_document() {
     assert_eq!(app.default_save_name(), "kept.docm", "a saved file keeps its name and format");
 }
 
+#[test]
+fn save_as_skips_reserved_windows_device_names() {
+    let mut app = app();
+    app.session.run("text.insert", &json!({"text": "CoN. The introduction"})).unwrap();
+    assert_eq!(app.default_save_name(), format!("{}.docx", app.title_stem()));
+
+    for text in ["lPt\u{b2}", "ConOut$", "COM10"] {
+        app.session.run("text.newParagraph", &json!({})).unwrap();
+        app.session.run("text.insert", &json!({"text": text})).unwrap();
+    }
+    assert_eq!(app.default_save_name(), "COM10.docx");
+}
+
 /// A harness on a document with text whose page has the keyboard.
 fn canvas_harness() -> egui_kittest::Harness<'static, WordApp> {
     let mut a = app();

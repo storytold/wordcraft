@@ -735,7 +735,8 @@ const SUGGESTED_MAX: usize = 50;
 /// (`.`, `!`, `?`, `;`, `:` and their full-width forms) or line break, without the characters a
 /// file name can't hold (`\ / : * ? " < > |` and controls), white space collapsed, at most
 /// [`SUGGESTED_MAX`] characters cut at a word's end, and no dot or space at either end (Windows
-/// drops them). `None` when nothing is left, so the next paragraph, or `Document1`, is used.
+/// drops them). `None` for an empty or reserved Windows device name, so the next paragraph,
+/// or `Document1`, is used.
 pub(crate) fn suggested_stem(text: &str) -> Option<String> {
     let end = |c: char| matches!(c, '.' | '!' | '?' | ';' | ':' | '\n' | '\r' | '\u{0B}' | '\u{2029}' | '。' | '！' | '？' | '；' | '：');
     let head = text.split(end).next().unwrap_or("");
@@ -754,6 +755,15 @@ pub(crate) fn suggested_stem(text: &str) -> Option<String> {
         }
         words.push_str(w);
     }
-    let words = words.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
-    (!words.is_empty()).then_some(words)
+    let words = words.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    (!words.is_empty() && !is_reserved_windows_stem(words)).then(|| words.to_string())
+}
+
+fn is_reserved_windows_stem(stem: &str) -> bool {
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || upper
+            .strip_prefix("COM")
+            .or_else(|| upper.strip_prefix("LPT"))
+            .is_some_and(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
 }
