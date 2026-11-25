@@ -445,6 +445,38 @@ fn cut_note_with_an_edited_nested_box_restores_the_copied_box_text() {
     assert_eq!(d.plain_text(StoryRef::Part(inner)), "changed box");
 }
 
+/// A copied note's nested text boxes come as reviewed too: their revision ids name the source's
+/// revisions, never the destination's.
+#[test]
+fn copied_note_boxes_paste_into_another_document_as_reviewed() {
+    let mut src = doc(&["Alpha beta"]);
+    let note = add_note(&mut src, 5, "note");
+    src.revisions.push(crate::Revision::new(crate::RevisionKind::Delete, "Source", ""));
+    let mut inside = Paragraph::with_text("kept gone", CharProps::default());
+    inside.format("kept".len(), "kept gone".len(), &|c| c.del = Some(0)).unwrap();
+    let inner = src.add_part(PartKind::TextBox, vec![para_block(inside)]);
+    let mut outside = Paragraph::with_text("outer", CharProps { ins: Some(0), ..CharProps::default() });
+    outside.insert_object(0, box_shape(inner), &CharProps::default()).unwrap();
+    let outer = src.add_part(PartKind::TextBox, vec![para_block(outside)]);
+    let in_note = src.end_of(StoryRef::Part(note));
+    src.insert_object(&in_note, box_shape(outer), &CharProps::default()).unwrap();
+    let frag = src.copy_range(&Pos::body(0, 0), &src.end_of(StoryRef::Body));
+    let mut dst = doc(&["Other"]);
+    dst.revisions.push(crate::Revision::new(crate::RevisionKind::Delete, "Unrelated", ""));
+
+    let at = dst.end_of(StoryRef::Body);
+    dst.insert_fragment(&at, &frag).unwrap();
+
+    let [pasted] = body_note_ids(&dst).try_into().unwrap();
+    let box_in = |id| dst.para(StoryRef::Part(id), &Path::top(0)).unwrap().objects.iter().flat_map(InlineObject::text_boxes).next().unwrap();
+    let (outer_copy, inner_copy) = (box_in(pasted), box_in(box_in(pasted)));
+    assert_eq!(dst.plain_text(StoryRef::Part(inner_copy)), "kept");
+    for id in [outer_copy, inner_copy] {
+        let p = dst.para(StoryRef::Part(id), &Path::top(0)).unwrap();
+        assert!(p.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()), "box {id} keeps a source revision id");
+    }
+}
+
 #[test]
 fn cut_note_follows_the_copied_or_removed_nested_note() {
     for in_box in [false, true] {

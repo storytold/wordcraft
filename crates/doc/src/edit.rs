@@ -1718,11 +1718,20 @@ impl Document {
     /// to notes `parts` has no story for stay as they are. The notes' text boxes get stories of
     /// their own too.
     fn adopt_notes(&mut self, blocks: &mut [Block], parts: &mut BTreeMap<u32, Part>, budget: &mut BoxBudget) -> usize {
-        // Notes as reviewed, as their revision ids index the source's revisions; reuse compares them as copied
+        // Notes and their boxes as reviewed, as their revision ids index the source's revisions; reuse compares them as copied
         let as_copied = parts.clone();
-        for part in parts.values_mut().filter(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote)) {
+        let mut pending: Vec<u32> =
+            parts.iter().filter(|(_, p)| matches!(p.kind, PartKind::Footnote | PartKind::Endnote)).map(|(id, _)| *id).collect();
+        let mut seen = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(part) = parts.get_mut(&id) else { continue };
             for b in &mut part.blocks {
-                accept_copied_revisions(std::slice::from_mut(Arc::make_mut(b)));
+                let b = Arc::make_mut(b);
+                accept_copied_revisions(std::slice::from_mut(b));
+                each_para(b, 0, &mut |p| pending.extend(box_ids(p)));
             }
         }
 
