@@ -232,8 +232,9 @@ pub fn has_installed_substitute(family: &str) -> bool {
 /// Fonts made to measure alike (the same advance widths and line height), so text drawn in one
 /// wraps and paginates as in the others: Carlito for Calibri, Caladea for Cambria, Liberation and
 /// Croscore fonts for Arial, Times New Roman and Courier New, the Palatino look-alikes for Palatino
-/// Linotype and Book Antiqua, and Arial and Helvetica (drawn to Helvetica's widths) for one
-/// another. The one list of them: a missing font is drawn in its first installed twin
+/// Linotype and Book Antiqua, Arial and Helvetica (drawn to Helvetica's widths) for one
+/// another, and TH Sarabun New and TH SarabunPSK (New is PSK revised, keeping its advance
+/// widths). The one list of them: a missing font is drawn in its first installed twin
 /// ([`substitute`]), and text drawn in a twin doesn't change the layout ([`metric_compatible`]).
 /// Not macOS Times or Courier: their advance widths differ from Times New Roman's and Courier
 /// New's.
@@ -244,6 +245,7 @@ const METRIC_TWINS: &[&[&str]] = &[
     &["Calibri", "Carlito"],
     &["Cambria", "Caladea"],
     &["Palatino Linotype", "Palatino", "Book Antiqua", "TeX Gyre Pagella", "P052", "URW Palladio L", "Palladio"],
+    &["TH Sarabun New", "TH SarabunPSK"],
 ];
 
 /// The fonts that measure like `family` ([`METRIC_TWINS`]), in the order they are tried, without
@@ -820,6 +822,8 @@ mod tests {
         assert!(metric_compatible(" arial ", "Liberation Sans"));
         assert!(metric_compatible("Arial CE", "Helvetica"));
         assert!(metric_compatible("Book Antiqua", "TeX Gyre Pagella"));
+        assert!(metric_compatible("TH SarabunPSK", "TH Sarabun New") && metric_compatible("TH Sarabun New", "TH SarabunPSK"));
+        assert!(!metric_compatible("TH SarabunPSK", "Noto Sans Thai"));
         assert!(!metric_compatible("Calibri", "Helvetica Neue"));
         assert!(!metric_compatible("Open Sans", "Carlito"));
         assert!(!metric_compatible("Times New Roman", "Times"));
