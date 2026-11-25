@@ -34,6 +34,7 @@ struct Recorder {
     held: Arc<Mutex<Vec<mpsc::Sender<()>>>>,
     never_sent: bool,
     names: Vec<&'static str>,
+    chooses: bool,
 }
 
 impl Recorder {
@@ -45,12 +46,19 @@ impl Recorder {
             held: Arc::default(),
             never_sent: true,
             names: vec!["Test queue"],
+            chooses: true,
         }
     }
 
     /// The printers the spooler lists; the first is the default.
     fn with_printers<const N: usize>(mut self, names: [&'static str; N]) -> Self {
         self.names = names.to_vec();
+        self
+    }
+
+    /// A spooler where the user does not choose a printer (e.g. system print dialog).
+    fn without_choosing(mut self) -> Self {
+        self.chooses = false;
         self
     }
 
@@ -76,7 +84,14 @@ impl Recorder {
 }
 
 impl SpoolBackend for Recorder {
+    fn chooses_printer(&self) -> bool {
+        self.chooses
+    }
+
     fn printers(&self) -> Option<Vec<craft::print::Printer>> {
+        if !self.chooses {
+            return None;
+        }
         Some(
             self.names
                 .iter()
@@ -628,6 +643,50 @@ fn return_on_the_print_page_prints() {
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
     assert_eq!(rec.sent_count(), 2, "Return in the chooser prints nothing");
+}
+
+/// #2958: the Print button leads the settings, above the printer and the settings it prints
+/// with (as in Word), and it wears the accent the app gives a dialog's primary button, so the
+/// page's one action is found first and reads as one rather than as another setting.
+#[test]
+fn the_print_button_leads_the_settings_and_is_the_primary_action() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+
+    fn collect_shapes<'a>(shapes: &'a [egui::epaint::ClippedShape], out: &mut Vec<&'a egui::Shape>) {
+        for clipped in shapes {
+            fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+                match shape {
+                    egui::Shape::Vec(children) => {
+                        for child in children {
+                            walk(child, out);
+                        }
+                    }
+                    other => out.push(other),
+                }
+            }
+            walk(&clipped.shape, out);
+        }
+    }
+
+    const BLURB: &str = "Send the document straight to the system print dialog, or save a copy in another format below.";
+    let mut a = app();
+    a.services.print = Some(Recorder::new(Reply::Sent).without_choosing().spool());
+    a.run("file.print", json!({})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+    // The page's own Print button (the backstage list has a Print entry too): the last.
+    let print = h.query_all(By::new().role(Role::Button).label("Print")).last().expect("a Print button").rect();
+    let blurb = h.get_by_label(BLURB).rect();
+    assert!(print.min.y < blurb.min.y, "the Print button leads the settings: {print:?} above {blurb:?}");
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let accent = egui::Color32::from(craft::theme::Srgba::from(env.tokens.color.accent.strong));
+    let mut shapes = Vec::new();
+    collect_shapes(&h.output().shapes, &mut shapes);
+    assert!(
+        shapes.iter().any(|s| matches!(s, egui::Shape::Rect(r) if (r.rect.min.distance(print.min) < 1.0) && r.fill == accent)),
+        "the Print button is the primary (accent) button"
+    );
 }
 
 /// #3210: a successful native print submission returns to the document, the same as Word —
