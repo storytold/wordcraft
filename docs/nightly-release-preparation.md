@@ -15,13 +15,17 @@ gh api repos/storytold/wordcraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `88148a57ef09ef407d73c0f385e04cc7f4c2720a`, the craft-common-actions
-main commit that merged [#364](https://github.com/storytold/craft-common-actions/pull/364), which
-lets the signer run on the policy's signer branch (`release` or `nightly-signer`). It includes
-[#363](https://github.com/storytold/craft-common-actions/pull/363) (the multi-app pipeline, which
-makes the signer's `app-name` input required), #339 (`605d5876`) and #342 (`a4f6fd51`). Both callers
-name it in `uses` and `tooling-revision`. A pin is reviewed source availability, not provider,
-queue, native signing or crypto qualification. Existing stable workflows are unchanged.
+Shared tooling is pinned to `fc7124a1defa96813aee060031dc8b4d2afa3652`, the craft-common-actions
+main commit that merged [#370](https://github.com/storytold/craft-common-actions/pull/370) (the
+Windows and macOS nightly registry rows for the 14 apps) after
+[#369](https://github.com/storytold/craft-common-actions/pull/369) (shared helper checkouts kept out
+of the app's clean-source check, and macOS on `macos-15`), following
+[#364](https://github.com/storytold/craft-common-actions/pull/364) (the signer may run on the
+policy's signer branch) and [#363](https://github.com/storytold/craft-common-actions/pull/363) (the
+multi-app pipeline, which makes the signer's `app-name` input required and admits any reviewed
+registry app), with #342 (`a4f6fd51`, policy v3 and the `platforms` input) and #339 (`605d5876`)
+earlier. Both callers name it in `uses` and `tooling-revision`. A pin is reviewed source
+availability, not provider, queue, native signing or crypto qualification.
 
 **Registry admission.** Craft-common-actions #363 ("run the shared nightly pipeline for any reviewed
 registry app") is in the pin, and `nightly-apps.json` admits `storytold/wordcraft`. Both callers'
@@ -81,7 +85,7 @@ Read on 2026-11-24; re-read anything that may have moved (and fill in `producer_
 |---|---|---|
 | `repository_id` | `1408489772` | `gh api repos/storytold/wordcraft --jq .id` |
 | `producer_workflow_id` | `429734489` | `gh api repos/storytold/wordcraft/actions/workflows/nightly.yml --jq .id` |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `88148a5…` (craft-common-actions #364) | The callers' pin |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `fc7124a1…` (craft-common-actions #370 after #369 and #364) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members; equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist |
 | `platforms` | three rows | Storytold stable signing identities (Windows Authenticode subject, Linux OpenPGP fingerprint, macOS Apple Team ID `DJ6XS33FX8`) |
