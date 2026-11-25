@@ -250,8 +250,9 @@ fn diff_blocks(doc: &mut Document, old: &[Arc<Block>], new: &[Arc<Block>], ctx: 
 
 /// Emit a matched (`Op::Same`) table pair into `out`. Layout-only or media-identical matches keep
 /// the revised table as on `main`; tables with media differences are diffed cell by cell when
-/// compatible and within [`wordcraft_doc::table::MAX_TABLE_DEPTH`], or otherwise keep the revised
-/// table and record a `"tables"` fallback in `notHonoured` without emitting duplicate table shells.
+/// compatible and within [`wordcraft_doc::table::MAX_TABLE_DEPTH`], or otherwise preserve the
+/// original table and its media and record a `"tables"` fallback in `notHonoured` without
+/// emitting duplicate table shells.
 fn diff_matched_table(
     doc: &mut Document,
     (a, ta): (Option<&Arc<Block>>, &wordcraft_doc::table::Table),
@@ -267,7 +268,7 @@ fn diff_matched_table(
     } else if depth < wordcraft_doc::table::MAX_TABLE_DEPTH && same_table_cells(ta, tb, ctx) {
         out.push(Arc::new(Block::Table(diff_table(doc, ta, tb, ctx, depth))));
     } else {
-        if let Some(x) = b.or(a) {
+        if let Some(x) = a.or(b) {
             out.push(x.clone());
         }
         *ctx.table_fallbacks = ctx.table_fallbacks.saturating_add(1);

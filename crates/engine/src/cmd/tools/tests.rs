@@ -1029,11 +1029,21 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
         r_reshaped["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"),
         "incompatible reshaped table with replaced media must report `tables` in notHonoured"
     );
-    assert_single_table(&s_reshaped.doc, 2, 1, "reshaped table compare");
+    let assert_table_image = |doc: &Document, expected: &[u8], label: &str| {
+        let t = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+        let p = t.rows[0].cells[0].blocks[0].as_para().expect("cell para");
+        let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+        assert_eq!(objs.len(), 1, "{label}: expected single image");
+        let InlineObject::Image { media, .. } = objs[0].1 else { panic!("{label}: expected image") };
+        assert_eq!(doc.media.get(media).map(|b| b.as_slice()), Some(expected), "{label}: image payload");
+    };
+    assert_single_table(&s_reshaped.doc, 1, 2, "reshaped table compare");
+    assert_table_image(&s_reshaped.doc, &base_png, "reshaped table compare");
     for cmd in ["review.acceptAll", "review.rejectAll"] {
         let mut s_res = Session::new(s_reshaped.doc.clone());
         s_res.run(cmd, &json!({})).unwrap();
-        assert_single_table(&s_res.doc, 2, 1, cmd);
+        assert_single_table(&s_res.doc, 1, 2, cmd);
+        assert_table_image(&s_res.doc, &base_png, cmd);
     }
 
     // Equal cell count but changed spans ([1, 2] vs [2, 1]):
@@ -1083,6 +1093,9 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
     assert_eq!(r_span_diff["changes"], 0);
     assert!(r_span_diff["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
     assert_single_table(&s_span_diff.doc, 1, 2, "incompatible span with replaced media");
+    assert_table_image(&s_span_diff.doc, &base_png, "incompatible span with replaced media");
+    let t_span = s_span_diff.doc.body[0].as_table().unwrap();
+    assert_eq!([t_span.rows[0].cells[0].span(), t_span.rows[0].cells[1].span()], [1, 2]);
 
     // Nested tables up to MAX_TABLE_DEPTH (18 levels, leaf at depth 17) recursively retain one
     // table per nesting level and track replaced image bytes at the leaf.
@@ -1158,6 +1171,11 @@ fn compare_table_image_replacement_handles_layout_fallbacks_and_max_depth() {
     }
     let cap_tables: Vec<&wordcraft_doc::table::Table> = over_blocks.iter().filter_map(|b| b.as_table()).collect();
     assert_eq!(cap_tables.len(), 1, "at depth == MAX_TABLE_DEPTH, keeps single table without duplicate shell");
+    let over_leaf_p = cap_tables[0].rows[0].cells[0].blocks[0].as_para().expect("over-depth leaf para");
+    let over_leaf_objs: Vec<(usize, &InlineObject)> = over_leaf_p.objects_with_offsets().collect();
+    assert_eq!(over_leaf_objs.len(), 1, "over-depth table preserves single original image");
+    let InlineObject::Image { media: m_over, .. } = over_leaf_objs[0].1 else { panic!("expected over-depth image") };
+    assert_eq!(s_over.doc.media.get(m_over).map(|b| &**b), Some(&base_png));
 }
 
 /// #6086: Compatible tables with replaced media track table, row, and cell property differences
@@ -1297,6 +1315,19 @@ fn compare_unchanged_text_table_tracks_table_row_cell_props_and_grid_widths() {
     assert_eq!(r_grid_img["changes"], 0);
     assert!(r_grid_img["notHonoured"].as_array().unwrap().iter().any(|v| v == "tables"));
     assert_eq!(s_grid_img.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+    let t_grid_img = s_grid_img.doc.body[0].as_table().unwrap();
+    assert_eq!(t_grid_img.grid, vec![200.0], "unsupported grid+media fallback preserves original table grid");
+    let assert_grid_base_img = |doc: &Document, label: &str| {
+        let p = doc.body[0].as_table().unwrap().rows[0].cells[0].blocks[0].as_para().unwrap();
+        let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+        assert_eq!(objs.len(), 1, "{label}");
+        let InlineObject::Image { media, .. } = objs[0].1 else { panic!("expected image") };
+        assert_eq!(doc.media.get(media).map(|b| &**b), Some(&base_png), "{label}");
+    };
+    assert_grid_base_img(&s_grid_img.doc, "unsupported grid+media fallback preserves original image");
+    let mut s_grid_img_kept = Session::new(s_grid_img.doc.clone());
+    s_grid_img_kept.run("review.rejectAll", &json!({})).unwrap();
+    assert_grid_base_img(&s_grid_img_kept.doc, "unsupported grid+media rejectAll keeps original image");
 
     let mut s_grid_img_nf = Session::new(make_styled_table_doc(base_png.clone(), false, 200.0));
     let r_grid_img_nf =
