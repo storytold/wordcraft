@@ -147,8 +147,8 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
 /// Insert date and time at the caret or selection, formatted with a Word picture or default format.
 pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
     let language = p::str(v, "language");
-    if language.is_some_and(|l| !matches!(l, "en-US" | "pt-BR")) {
-        return Err(CmdError::Params("language must be en-US or pt-BR".into()));
+    if language.is_some_and(|l| !matches!(l, "en-US" | "pt-BR" | "th-TH")) {
+        return Err(CmdError::Params("language must be en-US, pt-BR or th-TH".into()));
     }
     let mut props = s.typing_props();
     if let Some(lang) = language {
@@ -206,13 +206,18 @@ pub fn format_date_at_in(fmt: &str, lang: Option<&str>, unix: u64, offset_secs: 
 }
 
 /// Month and weekday names of a language, as Word writes them in date fields: full names, the
-/// three-letter forms (`MMM`, `ddd`) being their first three letters, without a full stop.
-/// Weekdays start on Thursday (1970-01-01).
+/// three-letter forms (`MMM`, `ddd`) being their first three letters, without a full stop, unless
+/// the language has its own abbreviations. Weekdays start on Thursday (1970-01-01).
 struct DateNames {
     /// Full month names (January through December).
     months: [&'static str; 12],
     /// Weekday names starting on Thursday (1970-01-01).
     days: [&'static str; 7],
+    /// Abbreviated month and weekday names for `MMM` and `ddd`, when they are not the first three
+    /// letters of the full names.
+    short: Option<([&'static str; 12], [&'static str; 7])>,
+    /// Years are counted in this era: added to the Gregorian year (543 for the Buddhist era).
+    era: i64,
     /// The picture of a `DATE` field without `\@`.
     default: &'static str,
 }
@@ -220,6 +225,8 @@ struct DateNames {
 const ENGLISH: DateNames = DateNames {
     months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
     days: ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"],
+    short: None,
+    era: 0,
     default: "M/d/yyyy",
 };
 
@@ -228,13 +235,34 @@ const ENGLISH: DateNames = DateNames {
 const PORTUGUESE: DateNames = DateNames {
     months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
     days: ["quinta-feira", "sexta-feira", "sábado", "domingo", "segunda-feira", "terça-feira", "quarta-feira"],
+    short: None,
+    era: 0,
     default: "dd/MM/yyyy",
+};
+
+/// Thai, as Thai dates are written: years in the Buddhist era (Gregorian + 543), the usual
+/// abbreviations with their full stops (`พ.ย.`, `พ.`), and `d/M/yyyy` without a picture.
+const THAI: DateNames = DateNames {
+    months: ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"],
+    days: ["พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์", "จันทร์", "อังคาร", "พุธ"],
+    short: Some((
+        ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."],
+        ["พฤ.", "ศ.", "ส.", "อา.", "จ.", "อ.", "พ."],
+    )),
+    era: 543,
+    default: "d/M/yyyy",
 };
 
 /// Choose month and weekday names according to the primary language subtag.
 fn date_names(lang: Option<&str>) -> &'static DateNames {
     let primary = lang.and_then(|l| l.trim().split(['-', '_']).next()).unwrap_or("");
-    if primary.eq_ignore_ascii_case("pt") { &PORTUGUESE } else { &ENGLISH }
+    if primary.eq_ignore_ascii_case("pt") {
+        &PORTUGUESE
+    } else if primary.eq_ignore_ascii_case("th") {
+        &THAI
+    } else {
+        &ENGLISH
+    }
 }
 
 /// The picture Word gives a `DATE` field that has no `\@` switch, in the field's language.
@@ -252,9 +280,15 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, hms: (u32, u32, u3
 #[allow(clippy::too_many_arguments)]
 pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
     let names = date_names(lang);
-    let month = names.months.get(m.saturating_sub(1)).copied().unwrap_or(names.months[0]);
-    let day = names.days.get(days_since.rem_euclid(7) as usize).copied().unwrap_or(names.days[0]);
+    let (mi, di) = (m.saturating_sub(1), days_since.rem_euclid(7) as usize);
+    let month = names.months.get(mi).copied().unwrap_or(names.months[0]);
+    let day = names.days.get(di).copied().unwrap_or(names.days[0]);
     let three = |s: &str| -> String { s.chars().take(3).collect() };
+    let (month_short, day_short) = match names.short {
+        Some((months, days)) => (months.get(mi).map(|s| s.to_string()).unwrap_or_default(), days.get(di).map(|s| s.to_string()).unwrap_or_default()),
+        None => (three(month), three(day)),
+    };
+    let y = y + names.era;
     let mut out = String::new();
     let chars: Vec<char> = fmt.chars().collect();
     let mut i = 0;
@@ -296,11 +330,11 @@ pub fn format_date_parts_in(fmt: &str, lang: Option<&str>, y: i64, m: usize, d: 
             ('y' | 'Y', 4..) => out.push_str(&format!("{y:04}")),
             ('y' | 'Y', _) => out.push_str(&format!("{:02}", y % 100)),
             ('M', 4..) => out.push_str(month),
-            ('M', 3) => out.push_str(&three(month)),
+            ('M', 3) => out.push_str(&month_short),
             ('M', 2) => out.push_str(&format!("{m:02}")),
             ('M', 1) => out.push_str(&m.to_string()),
             ('d' | 'D', 4..) => out.push_str(day),
-            ('d' | 'D', 3) => out.push_str(&three(day)),
+            ('d' | 'D', 3) => out.push_str(&day_short),
             ('d' | 'D', 2) => out.push_str(&format!("{d:02}")),
             ('d' | 'D', 1) => out.push_str(&d.to_string()),
             ('H', 2..) => out.push_str(&format!("{hh:02}")),
@@ -560,6 +594,38 @@ mod date_time_locale_tests {
         assert_eq!(p.props_of_char(0).lang.as_deref(), Some("pt-BR"));
         assert_eq!(p.plain_text(), format_date_in("d 'de' MMMM 'de' yyyy", Some("pt-BR")));
         assert!(p.objects.iter().all(|o| !matches!(o, InlineObject::Field { .. })));
+    }
+
+    /// Thai dates: Thai month and weekday names with their own abbreviations, and the year in the
+    /// Buddhist era (Gregorian + 543); other languages keep the Gregorian year.
+    #[test]
+    fn thai_dates_use_thai_names_and_the_buddhist_year() {
+        // Wednesday 25 November 2026, 20,782 days after 1970-01-01.
+        let th = |pic| format_date_parts_in(pic, Some("th-TH"), 2026, 11, 25, (9, 5, 0), 20_782);
+        assert_eq!(th("d MMMM yyyy"), "25 พฤศจิกายน 2569");
+        assert_eq!(th("d MMM yyyy"), "25 พ.ย. 2569");
+        assert_eq!(th("'วัน'dddd'ที่' d MMMM 'พ.ศ.' yyyy"), "วันพุธที่ 25 พฤศจิกายน พ.ศ. 2569");
+        assert_eq!(th("d/M/yy ddd"), "25/11/69 พ.");
+        assert_eq!(th(default_date_picture(Some("th-TH"))), "25/11/2569");
+        assert_eq!(format_date_parts_in("d MMM yyyy", Some("en-US"), 2026, 11, 25, (9, 5, 0), 20_782), "25 Nov 2026");
+        // Every month and weekday has its own name and abbreviation.
+        let months: std::collections::HashSet<String> =
+            (1..=12).map(|m| format_date_parts_in("MMMM MMM", Some("th"), 2026, m, 1, (0, 0, 0), 0)).collect();
+        let days: std::collections::HashSet<String> =
+            (0..7).map(|k| format_date_parts_in("dddd ddd", Some("th"), 2026, 1, 1, (0, 0, 0), k)).collect();
+        assert_eq!((months.len(), days.len()), (12, 7));
+    }
+
+    /// `insert.dateTime` takes Thai: the text is Thai and its run is tagged th-TH.
+    #[test]
+    fn thai_date_time_inserts_thai_text() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.dateTime", &json!({"format": "d MMMM yyyy", "language": "th-TH"})).unwrap();
+        let paths = s.doc.para_paths(StoryRef::Body);
+        let p = s.doc.para(StoryRef::Body, &paths[0]).unwrap();
+        assert_eq!(p.props_of_char(0).lang.as_deref(), Some("th-TH"));
+        assert_eq!(p.plain_text(), format_date_in("d MMMM yyyy", Some("th-TH")));
+        assert!(s.run("insert.dateTime", &json!({"language": "th"})).is_err(), "only the listed tags");
     }
 
     /// Word's doubled apostrophe escapes one literal quote both before and inside a quoted run.

@@ -319,6 +319,22 @@ fn date_time_dialog_uses_saved_pt_br_language() {
     assert_eq!(f.params()["update"], false);
 }
 
+/// A saved Thai language opens the dialog on Thai, with the Thai pictures (Buddhist-era years).
+#[test]
+fn date_time_dialog_offers_thai_formats() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.ui.date_time_language = "th".into();
+    let f = DateTimeForm::new(&a);
+    assert_eq!(f.language, "th-TH");
+    assert_eq!(f.format, "d/M/yyyy");
+    let sample = wordcraft_engine::cmd::insert::format_date_in(&f.format, Some("th-TH"));
+    let english = wordcraft_engine::cmd::insert::format_date_in(&f.format, Some("en-US"));
+    assert_ne!(sample, english, "the Thai list shows Buddhist-era years");
+    // A tag that only starts with the same letters is not Thai.
+    a.ui.date_time_language = "thx".into();
+    assert_eq!(DateTimeForm::new(&a).language, "en-US");
+}
+
 /// Language tags with primary subtag `pt` (such as `pt_BR` or `pt-PT`) are normalized to `pt-BR`.
 #[test]
 fn date_time_dialog_normalizes_portuguese_language_tags() {
