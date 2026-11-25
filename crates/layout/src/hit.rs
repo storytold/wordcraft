@@ -279,6 +279,17 @@ fn story_items(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed>
     }
 }
 
+/// The topmost uncovered table cell in `story` under `(x, y)` on `page`.
+fn story_cell_at(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<(&Path, usize, usize)> {
+    let pt = Point::new(x, y);
+    story_items(page, story)
+        .filter_map(|it| match it {
+            Placed::Cell { rect, table, row, cell, story: s, covered: false, .. } if *s == story && rect.contains(pt) => Some((table, *row, *cell)),
+            _ => None,
+        })
+        .last()
+}
+
 /// Whether header/footer part `id` has text near (x, y) on the page (its header or footer
 /// lines). Used so an object behind the header text is only grabbed where there's no text,
 /// mirroring `text_at` for the body.
@@ -454,7 +465,7 @@ impl DocLayout {
         }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
         let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
-        if let Some((_story, table, row, cell)) = self.cell_at(page, x, y).filter(|(s, ..)| *s == story) {
+        if let Some((table, row, cell)) = story_cell_at(p, story, x, y) {
             let in_cell = |p: &Path| {
                 p.0.starts_with(&table.0) && p.0.get(table.0.len()) == Some(&(row as u32)) && p.0.get(table.0.len() + 1) == Some(&(cell as u32))
             };
