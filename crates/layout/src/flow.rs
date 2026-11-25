@@ -984,7 +984,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     }
     let before = f.gap_before(ctx, pb, broke_before);
     pb.y += before;
-    let rooms = Rooms::of(ctx, block, &f.pl);
+    let mut rooms = Rooms::of(ctx, block, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
@@ -993,7 +993,10 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         f.anchor_y = y0 - applied_before;
     }
     while f.l0 < f.n() {
+        // A paragraph moved on from the shared line (`unjoin`) is laid out again with borders of its own.
+        rooms = Rooms::of(ctx, block, &f.pl);
         f.keep_again(ctx, pb, rooms);
+        rooms = Rooms::of(ctx, block, &f.pl);
         f.place_due_late(ctx, pb);
         f.relay_wrap(ctx, pb);
         f.relay_pages(ctx, pb);

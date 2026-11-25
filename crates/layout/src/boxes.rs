@@ -274,7 +274,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
             Block::Para(p) => {
                 // A paragraph after one whose mark is hidden goes on from that one's last line
                 // (Word, #3986; see `Joint`); one that shows nothing passes the place on.
-                let (mark_hidden, shows_nothing, taken) = Joint::arrive(ctx, &mut joint, (i, p), width, table);
+                let (mark_hidden, shows_nothing, taken) = Joint::arrive(ctx, &mut joint, (i, p), (width, frames), table);
                 let p = taken.as_ref().map_or(p, |t| &t.para);
                 let label = ctx.next_label(p);
                 let listed = label.is_some();
@@ -314,7 +314,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 });
                 // Paragraph-relative floats start above the effective space before, as in the
                 // body path. Keep text and wrap exclusions relative to the text's actual top.
-                let para_top = y;
+                // A paragraph going on from a shared line has its origin at that line's top.
+                let para_top = taken.as_ref().map_or(y, |t| t.joint.top);
                 y += if i == 0 { before } else { before.max(0.0) };
                 TakenUp::start(taken.as_ref(), &mut y, &mut excl);
                 // Floating objects anchored here: place them, then wrap the text around them.
@@ -772,7 +773,7 @@ impl Joint {
         ctx: &mut Ctx,
         joint: &mut Option<Joint>,
         (i, p): (usize, &Paragraph),
-        width: f32,
+        (width, frames): (f32, bool),
         table: Option<&para::CellText>,
     ) -> (bool, bool, Option<TakenUp>) {
         let chr = table.map(|t| &t.chr);
@@ -780,7 +781,7 @@ impl Joint {
         let shows_nothing = mark_hidden && ctx.text_hidden(p, chr);
         let came = joint.take().filter(|j| j.next == i);
         *joint = came.filter(|_| shows_nothing).map(|j| Joint { next: i + 1, ..j });
-        let taken = came.filter(|_| !shows_nothing).and_then(|j| j.take_up(ctx, p, width, table));
+        let taken = came.filter(|_| !shows_nothing).and_then(|j| j.take_up(ctx, p, (width, frames), table));
         (mark_hidden, shows_nothing, taken)
     }
 
@@ -802,10 +803,11 @@ impl Joint {
     }
 
     /// Paragraph `p` of a box `width` wide going on from here, unless a page break comes before
-    /// it or it runs right to left: without its space before, as [`Joint::fit`] lays it out.
-    fn take_up(self, ctx: &mut Ctx, p: &Paragraph, width: f32, table: Option<&para::CellText>) -> Option<TakenUp> {
+    /// it, it runs right to left or it is a text frame (`frames`: placed apart, sharing no line):
+    /// without its space before, as [`Joint::fit`] lays it out.
+    fn take_up(self, ctx: &mut Ctx, p: &Paragraph, (width, frames): (f32, bool), table: Option<&para::CellText>) -> Option<TakenUp> {
         let own = ctx.doc.styles.resolve_para(&p.props);
-        if own.page_break_before || own.bidi {
+        if own.page_break_before || own.bidi || (frames && own.frame.is_some()) {
             return None;
         }
         let mut para = p.clone();
