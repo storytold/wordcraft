@@ -643,21 +643,28 @@ impl ObjectGesture {
     /// it's over. `lock` (`Some(horizontal)`) keeps an aligned copy on its axis.
     fn snap_move(&mut self, body: &PageBody, cx: &mut ToolContext, object: &ObjectHit, lock: Option<bool>) {
         let Some(pp) = placed(body, self.to_page) else { return };
-        let b = object.spin.bounds(self.rect);
+        let Some(b) = finite_spin_bounds(self.rect, object.spin) else { return };
         let a = pp.to_doc(&body.view, pt(b.x, b.y));
         let c = pp.to_doc(&body.view, pt(b.right(), b.bottom()));
+        if !a.x.is_finite() || !a.y.is_finite() || !c.x.is_finite() || !c.y.is_finite() {
+            return;
+        }
         let off = cx.snap_rect(DocRect::from_points(a, c));
         let off = match lock {
             Some(true) => Vec2::new(off.x, 0.0),
             Some(false) => Vec2::new(0.0, off.y),
             None => off,
         };
-        if off == Vec2::ZERO {
+        if !off.x.is_finite() || !off.y.is_finite() || off == Vec2::ZERO {
             return;
         }
         let at = pp.from_doc(&body.view, a + off);
-        self.rect.x += (at.x - f64::from(b.x)) as f32;
-        self.rect.y += (at.y - f64::from(b.y)) as f32;
+        let dx = (at.x - f64::from(b.x)) as f32;
+        let dy = (at.y - f64::from(b.y)) as f32;
+        if dx.is_finite() && dy.is_finite() {
+            self.rect.x += dx;
+            self.rect.y += dy;
+        }
     }
 
     /// The button went up. Commits a move as one command; false for a press on a Behind Text
@@ -789,15 +796,32 @@ pub(crate) fn snap(app: &WordApp, layout: &DocLayout) -> Option<PageSnap> {
     Some(pages.into_iter().enumerate().fold(PageSnap::new(options), |snap, (page, targets)| snap.page(page, targets)))
 }
 
+/// Axis-aligned bounds of `rect` turned by `spin`, or `None` when any input or bound is non-finite.
+fn finite_spin_bounds(rect: wordcraft_geom::Rect, spin: wordcraft_geom::Spin) -> Option<wordcraft_geom::Rect> {
+    if !rect.x.is_finite() || !rect.y.is_finite() || !rect.w.is_finite() || !rect.h.is_finite() || !spin.deg.is_finite() {
+        return None;
+    }
+    let (bw, bh) = spin.extent(rect.w, rect.h);
+    let x = rect.x + (rect.w - bw) / 2.0;
+    let y = rect.y + (rect.h - bh) / 2.0;
+    (x.is_finite() && y.is_finite() && bw.is_finite() && bh.is_finite()).then(|| wordcraft_geom::Rect::new(x, y, bw, bh))
+}
+
 /// The snap targets of `pg` in its own page points, each spanning the page's own range:
 /// its edges and centre, its margins, and the floating objects on it that `me` can snap to (all but
 /// itself and, for a text box, the objects in its text: they move with it). The page's own width
 /// leaves out the comment balloons' markup area.
 fn snap_targets(pg: &wordcraft_layout::Page, me: Option<&ObjectHit>) -> Vec<SnapTarget> {
-    let w = f64::from((pg.w - pg.markup).max(0.0));
-    let h = f64::from(pg.h);
+    if !pg.w.is_finite() || !pg.h.is_finite() || !pg.markup.is_finite() {
+        return Vec::new();
+    }
+    let w = (f64::from(pg.w) - f64::from(pg.markup)).max(0.0);
+    let h = f64::from(pg.h).max(0.0);
     let mut targets = Vec::new();
     let vertical = |targets: &mut Vec<SnapTarget>, x: f64, kind: SnapKind| {
+        if !x.is_finite() {
+            return;
+        }
         let mut t = SnapTarget::new(Axis::Y, x, kind);
         t.span = Some((0.0, h));
         targets.push(t);
@@ -805,9 +829,14 @@ fn snap_targets(pg: &wordcraft_layout::Page, me: Option<&ObjectHit>) -> Vec<Snap
     for (x, kind) in [(0.0, SnapKind::Bounds), (w / 2.0, SnapKind::Center), (w, SnapKind::Bounds)] {
         vertical(&mut targets, x, kind);
     }
-    vertical(&mut targets, f64::from(pg.body.x), SnapKind::Guide);
-    vertical(&mut targets, f64::from(pg.body.right()), SnapKind::Guide);
+    if pg.body.x.is_finite() && pg.body.w.is_finite() {
+        vertical(&mut targets, f64::from(pg.body.x), SnapKind::Guide);
+        vertical(&mut targets, f64::from(pg.body.x) + f64::from(pg.body.w), SnapKind::Guide);
+    }
     let horizontal = |targets: &mut Vec<SnapTarget>, y: f64, kind: SnapKind| {
+        if !y.is_finite() {
+            return;
+        }
         let mut t = SnapTarget::new(Axis::X, y, kind);
         t.span = Some((0.0, w));
         targets.push(t);
@@ -815,8 +844,10 @@ fn snap_targets(pg: &wordcraft_layout::Page, me: Option<&ObjectHit>) -> Vec<Snap
     for (y, kind) in [(0.0, SnapKind::Bounds), (h / 2.0, SnapKind::Center), (h, SnapKind::Bounds)] {
         horizontal(&mut targets, y, kind);
     }
-    horizontal(&mut targets, f64::from(pg.body.y), SnapKind::Guide);
-    horizontal(&mut targets, f64::from(pg.body.bottom()), SnapKind::Guide);
+    if pg.body.y.is_finite() && pg.body.h.is_finite() {
+        horizontal(&mut targets, f64::from(pg.body.y), SnapKind::Guide);
+        horizontal(&mut targets, f64::from(pg.body.y) + f64::from(pg.body.h), SnapKind::Guide);
+    }
     let pos = me.map(ObjectHit::pos);
     let own = me.and_then(|m| m.text_box).map(StoryRef::Part);
     for it in pg.items.iter().chain(&pg.header).chain(&pg.footer) {
@@ -825,12 +856,18 @@ fn snap_targets(pg: &wordcraft_layout::Page, me: Option<&ObjectHit>) -> Vec<Snap
         if *wrap == Wrap::Inline || is_me || Some(*story) == own {
             continue;
         }
-        let b = spin.bounds(*rect);
-        for (x, kind) in [(b.x, SnapKind::LayerEdge), (b.x + b.w / 2.0, SnapKind::LayerCenter), (b.right(), SnapKind::LayerEdge)] {
-            vertical(&mut targets, f64::from(x), kind);
+        let Some(b) = finite_spin_bounds(*rect, *spin) else {
+            continue;
+        };
+        let x0 = f64::from(b.x);
+        let x1 = x0 + f64::from(b.w);
+        for (x, kind) in [(x0, SnapKind::LayerEdge), ((x0 + x1) / 2.0, SnapKind::LayerCenter), (x1, SnapKind::LayerEdge)] {
+            vertical(&mut targets, x, kind);
         }
-        for (y, kind) in [(b.y, SnapKind::LayerEdge), (b.y + b.h / 2.0, SnapKind::LayerCenter), (b.bottom(), SnapKind::LayerEdge)] {
-            horizontal(&mut targets, f64::from(y), kind);
+        let y0 = f64::from(b.y);
+        let y1 = y0 + f64::from(b.h);
+        for (y, kind) in [(y0, SnapKind::LayerEdge), ((y0 + y1) / 2.0, SnapKind::LayerCenter), (y1, SnapKind::LayerEdge)] {
+            horizontal(&mut targets, y, kind);
         }
     }
     targets
