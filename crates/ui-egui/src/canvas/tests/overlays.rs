@@ -260,6 +260,19 @@ fn table_gridlines_skip_edges_a_border_draws() {
     );
 }
 
+/// #5967: a new table has borders on every edge, so it shows no gridline at all; with its
+/// borders removed every edge shows one.
+#[test]
+fn a_bordered_table_shows_no_gridlines() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.table", json!({"rows": 2, "cols": 3})).unwrap();
+    assert!(a.session.view.table_gridlines, "View Gridlines is on by default");
+    let segs = |a: &mut WordApp| gridline_segments(&a.session.layout().pages[0], true, None).len();
+    assert_eq!(segs(&mut a), 0);
+    a.run("table.borders", json!({"kind": "none"})).unwrap();
+    assert_eq!(segs(&mut a), 6 * 4, "every edge of the six cells");
+}
+
 /// The drawing grid the page shows starts at the text area's top left, stays inside it, spaces
 /// its lines by the settings the same both ways or differently across and down, and falls back
 /// to the spec's 1/8 inch for a missing spacing.
