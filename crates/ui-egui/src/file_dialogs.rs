@@ -54,6 +54,17 @@ fn interface_path(path: &str) -> String {
     craft::i18n::path(path, dir)
 }
 
+/// The picture types Save as Picture writes, as the save dialog offers them (the engine reads the
+/// type from the extension: `wordcraft_engine::cmd::objects::save_picture::format_of`).
+const SAVE_PICTURE_TYPES: [(&str, &[&str]); 6] = [
+    ("PNG picture (*.png)", &["png"]),
+    ("JPEG picture (*.jpg)", &["jpg", "jpeg"]),
+    ("GIF picture (*.gif)", &["gif"]),
+    ("Bitmap (*.bmp)", &["bmp"]),
+    ("TIFF picture (*.tif)", &["tif", "tiff"]),
+    ("WebP picture (*.webp)", &["webp"]),
+];
+
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
@@ -66,6 +77,10 @@ pub(crate) enum AfterPick {
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
     PrintPdf { settings: Value },
+    /// Save the selected picture there at this resolution (`picture.saveAs`'s `dpi`, #7743), if it
+    /// is still the one selected when the dialog was asked for: `picture` is that picture (its
+    /// place and media key) in the window showing `document`.
+    SavePicture { dpi: Value, document: u64, picture: Option<(wordcraft_doc::Pos, String)> },
     /// Load the picked CSV/TSV/text file or spreadsheet as the mail-merge recipients (#240, #334).
     Recipients,
     /// Add every picked font file (#582, #1789).
@@ -335,6 +350,22 @@ impl WordApp {
                 }
                 r
             }
+            AfterPick::SavePicture { dpi, document, picture } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // The selection or the document may have changed while the dialog was open: then
+                // nothing is saved, rather than another picture under the name chosen for this one.
+                if picture.is_none() || document != self.session.document_id() || self.selected_picture() != picture {
+                    let e = tl!("The picture is no longer selected; nothing was saved.").to_string();
+                    self.status(e.clone());
+                    return Err(e);
+                }
+                let r = self.run("picture.saveAs", json!({"path": path, "dpi": dpi}));
+                match &r {
+                    Ok(_) => self.status(crate::i18n::fmt(tl!("Saved {path}"), &[("path", &interface_path(&path))])),
+                    Err(e) => self.status(e.clone()),
+                }
+                r
+            }
             AfterPick::PrintPdf { settings } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 let mut params = settings;
@@ -492,6 +523,26 @@ impl WordApp {
             req = req.filter(tl!(label), &[file_ext.as_str()]);
         }
         req
+    }
+
+    /// Save as Picture: ask where (and as which picture type), then save the selected picture there
+    /// at `dpi` (#7743).
+    pub(crate) fn save_picture_dialog(&mut self, dpi: Value) {
+        let name = format!("{}.png", tl!("Picture"));
+        let mut req = PickRequest::save("picture").file_name(name).suggested_extension("png");
+        for (label, exts) in SAVE_PICTURE_TYPES {
+            req = req.filter(tl!(label), exts);
+        }
+        let (document, picture) = (self.session.document_id(), self.selected_picture());
+        let _ = self.ask_file(req, AfterPick::SavePicture { dpi, document, picture });
+    }
+
+    /// The selected picture's place and media key, if a picture is selected.
+    fn selected_picture(&self) -> Option<(wordcraft_doc::Pos, String)> {
+        match wordcraft_engine::cmd::objects::selected(&self.session)? {
+            (at, wordcraft_doc::para::InlineObject::Image { media, .. }) => Some((at, media)),
+            _ => None,
+        }
     }
 
     /// File › Print › Save these pages as PDF: ask where, then write the pages the print

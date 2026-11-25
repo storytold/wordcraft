@@ -130,6 +130,18 @@ pub fn encode_format(img: &DynamicImage, format: ImageFormat) -> Result<Vec<u8>,
     codec_encode(&codec_img, codec_fmt, &EncodeOptions::default()).map_err(|e| e.to_string())
 }
 
+/// [`encode_format`] with the picture's resolution, `dpi` dots per inch, recorded where the format
+/// keeps one (PNG's `pHYs`, JPEG, TIFF, BMP), so other programs show and print it at its size. A
+/// `dpi` that isn't a positive number records none.
+pub fn encode_format_at(img: &DynamicImage, format: ImageFormat, dpi: f32) -> Result<Vec<u8>, String> {
+    let mut codec_img = dynamic_to_codec(img)?;
+    if dpi.is_finite() && dpi > 0.0 {
+        codec_img.meta.dpi = Some((dpi, dpi));
+    }
+    let codec_fmt = to_codec_format(format).ok_or_else(|| format!("unsupported format: {format:?}"))?;
+    codec_encode(&codec_img, codec_fmt, &EncodeOptions::default()).map_err(|e| e.to_string())
+}
+
 /// Decode a raster image from memory using `craft-image-codecs` with default limits.
 pub fn decode_memory(bytes: &[u8]) -> Result<DynamicImage, Refusal> {
     let codec_fmt = detect(bytes).ok_or(Refusal::NotAPicture)?;

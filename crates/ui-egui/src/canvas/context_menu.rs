@@ -188,6 +188,7 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
     if picture {
         item(ui, "Change Picture…", "ui.changePicture", json!({}));
         item(ui, "Reset Picture", "picture.reset", json!({}));
+        item(ui, "Save as Picture…", "picture.saveAs", json!({}));
         item(ui, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
         item(ui, "Crop", "ui.crop", json!({}));
     }

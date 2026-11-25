@@ -25,6 +25,7 @@ mod paragraph;
 mod paste_special;
 mod phonetic;
 pub(crate) mod prompts;
+mod save_picture;
 mod search_commands;
 mod simple_forms;
 pub(crate) mod style_forms;
@@ -73,6 +74,7 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         "link" => link::open(app, name, params, parent),
         "bookmark" | "icons" => bookmarks::open(app, name, params, parent),
         "pasteSpecial" => paste_special::open(app, name, params, parent),
+        "savePicture" => save_picture::open(app, name, params, parent),
         "renameDocument" | "insertTable" | "watermark" | "fieldCode" | "editFieldCode" | "tableCellMargins" => {
             simple_forms::open(app, name, params, parent)
         }

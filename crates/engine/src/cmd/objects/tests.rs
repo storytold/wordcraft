@@ -1797,3 +1797,127 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// A fresh scratch folder for one test.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wordcraft-save-picture-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// The pixels per metre a PNG records (`pHYs`), if it records them.
+#[cfg(not(target_arch = "wasm32"))]
+fn png_pixels_per_metre(png: &[u8]) -> Option<u32> {
+    let at = png.windows(4).position(|w| w == b"pHYs")?;
+    let x = png.get(at + 4..at + 8)?;
+    Some(u32::from_be_bytes([x[0], x[1], x[2], x[3]]))
+}
+
+/// A session with one 300 × 150 pixel picture shown an inch wide (300 DPI), selected.
+#[cfg(not(target_arch = "wasm32"))]
+fn inch_wide_picture() -> (Session, Vec<u8>) {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let bytes = png(300, 150);
+    s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&bytes), "width": 72.0})).unwrap();
+    (s, bytes)
+}
+
+/// #7743: Save as Picture writes a picture shown as its file is byte for byte when saved as its
+/// own type, and draws it in another type at its own resolution, recorded in the file.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_as_picture_writes_the_picture_or_draws_it_in_another_type() {
+    let dir = save_dir("own");
+    let (mut s, bytes) = inch_wide_picture();
+    let rev = s.rev();
+    let r = s.run("picture.saveAs", &json!({"path": dir.join("table.png").to_string_lossy()})).unwrap();
+    assert_eq!(r["drawn"], false);
+    assert_eq!(std::fs::read(dir.join("table.png")).unwrap(), bytes, "its own file, unchanged");
+    let r = s.run("picture.saveAs", &json!({"path": dir.join("table.JPG").to_string_lossy()})).unwrap();
+    assert_eq!((r["drawn"].as_bool(), r["dpi"].as_f64()), (Some(true), Some(300.0)));
+    let jpg = image::load_from_memory(&std::fs::read(dir.join("table.JPG")).unwrap()).unwrap();
+    assert_eq!((jpg.width(), jpg.height()), (300, 150), "at its own resolution");
+    assert_eq!(s.rev(), rev, "saving a picture doesn't change the document");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7743: a resolution draws the picture at its size in the document with that many dots per
+/// inch, and the file records it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_as_picture_at_a_resolution() {
+    let dir = save_dir("dpi");
+    let (mut s, _) = inch_wide_picture();
+    let path = dir.join("big.png");
+    let r = s.run("picture.saveAs", &json!({"path": path.to_string_lossy(), "dpi": 600})).unwrap();
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(600), Some(300)), "an inch by half an inch at 600 DPI");
+    let saved = std::fs::read(&path).unwrap();
+    assert_eq!(png_pixels_per_metre(&saved), Some(23_622), "600 DPI recorded");
+    let img = image::load_from_memory(&saved).unwrap().to_rgba8();
+    assert_eq!(img.get_pixel(300, 150).0, [200, 30, 30, 255], "the red middle of the picture");
+    // "original" is the picture's own resolution, as with none.
+    let r = s.run("picture.saveAs", &json!({"path": dir.join("own.png").to_string_lossy(), "dpi": "original"})).unwrap();
+    assert_eq!(r["drawn"], false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7743: a cropped picture is saved as it is shown: only what the crop leaves, drawn.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_as_picture_keeps_the_crop() {
+    let dir = save_dir("crop");
+    let (mut s, _) = inch_wide_picture();
+    // Cropped as the crop handles crop: the frame shrinks with the picture, half an inch wide.
+    s.run("picture.crop", &json!({"left": 0.5, "width": 36.0})).unwrap();
+    let path = dir.join("half.png");
+    let r = s.run("picture.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(r["drawn"], true);
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(150), Some(150)), "the right half at 300 DPI");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7743: other types, resolutions past the limits, no picture selected: refused, nothing written.
+/// Without a path the app is asked where to save.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_as_picture_refuses_what_it_cannot_write() {
+    let dir = save_dir("bad");
+    let (mut s, _) = inch_wide_picture();
+    let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    for (bad, why) in [
+        (json!({"path": at("a.docx")}), "a document type"),
+        (json!({"path": at("a.png"), "dpi": 9}), "too low"),
+        (json!({"path": at("a.png"), "dpi": 4000}), "too high"),
+        (json!({"path": at("a.png"), "dpi": "best"}), "not a number"),
+    ] {
+        assert!(matches!(s.run("picture.saveAs", &bad), Err(CmdError::Params(_))), "{why}");
+    }
+    // An inch at 2400 DPI is fine; a picture 22 inches wide at 2400 DPI is not.
+    s.run("picture.size", &json!({"width": 1584.0})).unwrap();
+    let r = s.run("picture.saveAs", &json!({"path": at("huge.png"), "dpi": 2400}));
+    assert!(matches!(&r, Err(CmdError::Failed(m)) if m.contains("lower resolution")), "{r:?}");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing written");
+    s.ui_requests.clear();
+    assert_eq!(s.run("picture.saveAs", &json!({"dpi": 300})).unwrap()["saved"], false);
+    assert_eq!(s.ui_requests.last(), Some(&json!({"open": "savePicture", "dpi": 300})));
+    s.run("select.collapse", &json!({"end": true})).unwrap();
+    s.run("text.insert", &json!({"text": "x"})).unwrap();
+    assert!(s.run("picture.saveAs", &json!({"path": at("x.png")})).is_err(), "no picture selected");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7743 review: the resolution's scale is used on both axes, so a narrow picture keeps its
+/// height: 5 × 72 pt at 36 DPI is 3 × 36 pixels (the width rounded up, as the renderer rounds),
+/// not a height scaled by the rounded width.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_as_picture_scales_both_axes_by_the_resolution() {
+    let dir = save_dir("narrow");
+    let (mut s, _) = inch_wide_picture();
+    s.run("picture.size", &json!({"width": 5.0, "height": 72.0, "lockAspect": false})).unwrap();
+    let r = s.run("picture.saveAs", &json!({"path": dir.join("narrow.png").to_string_lossy(), "dpi": 36})).unwrap();
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(3), Some(36)));
+    let _ = std::fs::remove_dir_all(&dir);
+}

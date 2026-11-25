@@ -124,6 +124,11 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"maxPixels"?: n}"#)
         .when(has_picture),
         CommandSpec::new("picture.reset", "Reset Picture", "Picture Format › Adjust", reset).when(has_picture),
+        // The picture's context menu, as in Word (#7743).
+        CommandSpec::new("picture.saveAs", "Save as Picture", "Picture Format", super::save_picture::save_as)
+            .params(r#"{"path": string (.png, .jpg, .gif, .bmp, .tif or .webp: the type to save), "dpi"?: 36-2400 | "original" (default: the picture's own file when it is shown as it is, else drawn at its own resolution)}"#)
+            .when(has_picture)
+            .pure(),
         CommandSpec::new("picture.change", "Change Picture", "Picture Format › Adjust", |s, v| {
             let bytes = if let Some(d) = p::str(v, "data") {
                 crate::cmd::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64".into()))?
