@@ -154,6 +154,7 @@ impl WordApp {
         let had_dialogs = !self.dialog_host.is_empty();
         self.dialog_host.run(ui);
         crate::dialogs::host::settle(self, ctx);
+        crate::dialogs::chrome::apply_modal_nudge(self, ui);
         if moved(self) {
             return;
         }
