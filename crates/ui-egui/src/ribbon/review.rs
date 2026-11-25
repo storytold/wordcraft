@@ -56,11 +56,22 @@ pub(super) fn review(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            Button::command(CommandRef::new("review.deleteComment"))
-                .label(tl!("Delete").to_string())
-                .tooltip(tl!("Delete Comment").to_string())
-                .icon(IconId::new("deleteComment"))
-                .show(ui);
+            SplitButton::<u8>::command(
+                CommandRef::new("review.deleteComment"),
+                SplitMenu::Body(Box::new(|ui, _| {
+                    MenuItem::command(CommandRef::new("review.deleteComment")).label(tl!("Delete").to_string()).show(ui);
+                    MenuItem::command(CommandRef::with_params("review.deleteComment", json!({"all": true})))
+                        .label(tl!("Delete All Comments in Document").to_string())
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("review.deleteComment", json!({"resolved": true})))
+                        .label(tl!("Delete All Resolved Comments").to_string())
+                        .show(ui);
+                })),
+            )
+            .label(tl!("Delete").to_string())
+            .tooltip(tl!("Delete Comment").to_string())
+            .icon(IconId::new("deleteComment"))
+            .show(ui);
             Button::command(CommandRef::new("review.previousComment"))
                 .label(tl!("Previous").to_string())
                 .tooltip(tl!("Previous Comment").to_string())

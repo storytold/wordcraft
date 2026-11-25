@@ -298,6 +298,8 @@ Review|Language|Translate|review.translate
 Review|Language|Language|review.language
 Review|Comments|New Comment|review.newComment
 Review|Comments|Delete|review.deleteComment
+Review|Comments|Delete All Comments in Document|review.deleteComment
+Review|Comments|Delete All Resolved Comments|review.deleteComment
 Review|Comments|Previous|review.previousComment
 Review|Comments|Next|review.nextComment
 Review|Comments|Show Comments|review.comments
