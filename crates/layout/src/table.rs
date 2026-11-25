@@ -1779,8 +1779,8 @@ const FIXED_PCT_MIN_COLUMN: f32 = 2.0;
 fn floors_within(grid: &mut [f32], room: f32) {
     let over = grid.iter().sum::<f32>() - room;
     let spare: f32 = grid.iter().map(|w| (w - 4.0).max(0.0)).sum();
-    if over > 0.01 && spare > over {
-        let k = over / spare;
+    if over > 0.01 && spare + 0.01 >= over {
+        let k = (over / spare).min(1.0);
         grid.iter_mut().for_each(|w| *w -= (*w - 4.0).max(0.0) * k);
     }
 }
@@ -1906,6 +1906,12 @@ mod width_tests {
         let mut grid = [50.0, 50.0];
         autofit(&mut grid, &[(20.0, 20.0), (0.0, 0.0)], &table, 468.0, None, Some(100.0));
         assert!((grid.iter().sum::<f32>() - 100.0).abs() < 0.01 && grid[1] >= 4.0 - 0.01 && grid[0] > grid[1], "{grid:?}");
+        // The other column may give all it has above its own 4 pt.
+        let mut table = Table::new(1, 2, 8.0);
+        table.rows[0].cells.iter_mut().for_each(|c| c.props.width = None);
+        let mut grid = [4.0, 4.0];
+        autofit(&mut grid, &[(2.0, 2.0), (0.0, 0.0)], &table, 468.0, None, Some(8.0));
+        assert!(grid.iter().all(|w| (w - 4.0).abs() < 0.01), "{grid:?}");
     }
 
     #[test]

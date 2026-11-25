@@ -53,6 +53,14 @@ fn a_column_border_let_go_where_it_was_changes_nothing() {
     let y = a.y + a.h / 2.0;
     s.run("table.resizeDrag", &json!({"page": 0, "x": a.right(), "y": y, "toX": a.right(), "toY": y})).unwrap();
     assert_eq!(first_table(&s), start);
+    // The table's left edge, and a border of a selected cell, likewise (#6606 review).
+    s.run("table.resizeDrag", &json!({"page": 0, "x": a.x - 1.0, "y": y, "toX": a.x - 1.0, "toY": y})).unwrap();
+    assert_eq!(first_table(&s), start, "the left edge");
+    s.run("caret.set", &json!({"page": 0, "x": a.x + a.w / 2.0, "y": y})).unwrap();
+    s.run("table.selectCell", &json!({})).unwrap();
+    assert!(s.cell_range().is_some());
+    s.run("table.resizeDrag", &json!({"page": 0, "x": a.right(), "y": y, "toX": a.right(), "toY": y})).unwrap();
+    assert_eq!(first_table(&s), start, "a selected cell's border");
 }
 
 /// With Shift only the left column changes and the table grows; the right edge does the same.

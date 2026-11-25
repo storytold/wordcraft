@@ -163,6 +163,10 @@ impl ResizeTarget {
             Edge::Column(0) => {
                 let Some(first) = w.first_mut() else { return Plan::default() };
                 let d = dx.clamp(*first - MAX_LEN, (*first - MIN_COL).max(*first - MAX_LEN));
+                // An edge left where it was changes nothing, as a border does (below).
+                if d == 0.0 {
+                    return Plan::default();
+                }
                 *first -= d;
                 Plan { widths: Some(w), indent_by: Some(d), ..Plan::default() }
             }
@@ -179,7 +183,7 @@ impl ResizeTarget {
                     })
                     .collect();
                 let d = rows.iter().filter_map(|(_, w, i)| share_out(&mut w.clone(), *i, dx, share)).min_by(|a, b| a.abs().total_cmp(&b.abs()));
-                let Some(d) = d else { return Plan::default() };
+                let Some(d) = d.filter(|d| d.abs() > 0.0) else { return Plan::default() };
                 let cells = rows
                     .into_iter()
                     .map(|(r, mut w, i)| {
