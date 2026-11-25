@@ -88,9 +88,16 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let date = crate::cmd::now_iso();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
+        let existing_parts: std::collections::HashSet<_> = s.doc.parts.keys().copied().collect();
         // The revised document's text boxes get stories of their own in the result, so its
         // boxes never show a story of the original's (or none at all).
-        s.doc.adopt_fragment(&revised.body_fragment()).into_iter().map(Arc::new).collect()
+        let adopted: Vec<Arc<Block>> = s.doc.adopt_fragment(&revised.body_fragment()).into_iter().map(Arc::new).collect();
+        for (id, part) in &mut s.doc.parts {
+            if !existing_parts.contains(id) && part.kind == wordcraft_doc::PartKind::TextBox {
+                part.blocks = part.blocks.iter().map(clean_revised_block).collect();
+            }
+        }
+        adopted
     } else {
         revised.body.clone()
     };
@@ -567,7 +574,7 @@ fn decompose_ignored(p: &Paragraph, opts: &CompareOptions) -> DecomposedPara {
 /// corresponding Original byte range(s) in `pa.text` whose unanimous marks apply to it.
 struct AlignedSpan {
     b_range: std::ops::Range<usize>,
-    a_ranges: Vec<std::ops::Range<usize>>,
+    a_ranges: Arc<[std::ops::Range<usize>]>,
 }
 
 /// Align `pa` and `pb` when [`CompareOptions::key`] paired them despite ignored case or whitespace
@@ -584,8 +591,15 @@ fn align_ignored_spans(pa: &Paragraph, pb: &Paragraph, opts: &CompareOptions) ->
         if a_slice.is_empty() || b_slice.is_empty() {
             return;
         }
+        if a_slice.len() == b_slice.len() {
+            for (a_range, b_range) in a_slice.iter().zip(b_slice) {
+                raw.push(AlignedSpan { b_range: b_range.clone(), a_ranges: Arc::from([a_range.clone()]) });
+            }
+            return;
+        }
+        let shared: Arc<[std::ops::Range<usize>]> = Arc::from(a_slice);
         for b_range in b_slice {
-            raw.push(AlignedSpan { b_range: b_range.clone(), a_ranges: a_slice.to_vec() });
+            raw.push(AlignedSpan { b_range: b_range.clone(), a_ranges: Arc::clone(&shared) });
         }
     };
     push_group(&a.srcs[a.lead_ws.clone()], &b.srcs[b.lead_ws.clone()]);
@@ -619,16 +633,18 @@ fn align_ignored_spans(pa: &Paragraph, pb: &Paragraph, opts: &CompareOptions) ->
     }
     push_group(&a.srcs[a.tail_ws.clone()], &b.srcs[b.tail_ws.clone()]);
     for (ao, bo) in a.empty_objs.into_iter().zip(b.empty_objs) {
-        raw.push(AlignedSpan { b_range: bo, a_ranges: vec![ao] });
+        raw.push(AlignedSpan { b_range: bo, a_ranges: Arc::from([ao]) });
     }
     raw.sort_by_key(|s| (s.b_range.start, s.b_range.end));
     let mut out: Vec<AlignedSpan> = Vec::with_capacity(raw.len());
     for span in raw {
         if let Some(last) = out.last_mut() {
             if last.b_range == span.b_range {
-                for r in span.a_ranges {
-                    push_dedup_range(&mut last.a_ranges, r);
+                let mut merged = last.a_ranges.to_vec();
+                for r in span.a_ranges.iter() {
+                    push_dedup_range(&mut merged, r.clone());
                 }
+                last.a_ranges = Arc::from(merged);
                 continue;
             }
             if last.b_range.end > span.b_range.start {
@@ -719,7 +735,7 @@ fn restore_orig_para_marks_aligned(pa: &Paragraph, p: &mut Paragraph, orig_revs:
         let mut ins: Option<u32> = None;
         let mut del: Option<u32> = None;
         let mut fmt: Option<(&wordcraft_doc::props::PropChange<CharProps>, CharProps)> = None;
-        for a_range in &span.a_ranges {
+        for a_range in span.a_ranges.iter() {
             let mut ka = runs_a.partition_point(|(r, _)| r.end <= a_range.start);
             while let Some((ra, ca)) = runs_a.get(ka) {
                 if ra.start >= a_range.end {
@@ -787,9 +803,29 @@ fn diff_tables(ctx: &mut CompareCtx<'_>, out: &mut Vec<Arc<Block>>, a: &Arc<Bloc
         out.push(Arc::new(Block::Table(tbl)));
         return;
     }
+    if table_is_empty(ta) && table_is_empty(tb) {
+        // Empty-cell tables have no run/text content to mark; emitting both deleted and inserted
+        // copies would leave both tables behind after resolution because the sole paragraph mark in
+        // a cell cannot be removed.
+        out.push(clean_revised_block(b));
+        *ctx.changes += 1;
+        return;
+    }
     out.push(Arc::new(mark_block(a, &|c| c.del = Some(ctx.del), depth)));
     out.push(Arc::new(mark_inserted_block(b, ctx.ins, depth)));
     *ctx.changes += 1;
+}
+
+/// Whether `t` contains only empty paragraphs (no text, no inline objects, no nested tables).
+fn table_is_empty(t: &Table) -> bool {
+    t.rows.iter().all(|r| {
+        r.cells.iter().all(|c| {
+            c.blocks.iter().all(|b| match &**b {
+                Block::Para(p) => p.is_empty(),
+                Block::Table(nested) => table_is_empty(nested),
+            })
+        })
+    })
 }
 
 /// Whether `p` carries any revision bookkeeping (`ins`, `del`, `fmt_change`, `num_change`) that
@@ -960,6 +996,33 @@ fn table_diff(ctx: &mut CompareCtx<'_>, ta: &Table, tb: &Table, depth: usize) ->
     let keys_b: Vec<usize> = tb.rows.iter().map(&mut intern).collect();
     let ops = lcs_ops(&keys_a, &keys_b, ctx.budget);
 
+    // If any unmatched original row key also appears among unmatched revised rows (e.g. rows
+    // moved or swapped across edit runs), fall back to whole-table replacement instead of
+    // pairing unrelated rows by position.
+    let (mut unmatched_a, mut unmatched_b) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+    {
+        let (mut ia, mut ib) = (0usize, 0usize);
+        for &op in &ops {
+            match op {
+                Op::Same => {
+                    ia += 1;
+                    ib += 1;
+                }
+                Op::Del => {
+                    unmatched_a.insert(*keys_a.get(ia)?);
+                    ia += 1;
+                }
+                Op::Ins => {
+                    unmatched_b.insert(*keys_b.get(ib)?);
+                    ib += 1;
+                }
+            }
+        }
+    }
+    if !unmatched_a.is_disjoint(&unmatched_b) {
+        return None;
+    }
+
     let mut pairs: Vec<(&Row, &Row)> = Vec::with_capacity(tb.rows.len());
     let (mut i, mut j, mut k) = (0usize, 0usize, 0usize);
     while let Some(&op) = ops.get(k) {
@@ -981,15 +1044,6 @@ fn table_diff(ctx: &mut CompareCtx<'_>, ta: &Table, tb: &Table, depth: usize) ->
             let inss = run.saturating_sub(dels);
             if dels != inss {
                 return None;
-            }
-            // If budget exhaustion or window chunking prevented `lcs_ops` from aligning matching
-            // rows across this balanced run (e.g. reordered or shifted rows), fall back to
-            // whole-table replacement instead of pairing unrelated rows by position.
-            if let (Some(ka), Some(kb)) = (keys_a.get(i..i + dels), keys_b.get(j..j + inss)) {
-                let seen_a: std::collections::HashSet<usize> = ka.iter().copied().collect();
-                if kb.iter().any(|key| seen_a.contains(key)) {
-                    return None;
-                }
             }
             for x in 0..dels {
                 let (ra, rb) = (ta.rows.get(i + x)?, tb.rows.get(j + x)?);
@@ -1445,19 +1499,11 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
             continue;
         }
         match objects.next() {
-            Some(o) if o.plain_text().is_empty() => {
+            Some(o) => {
                 if !cur.is_empty() {
                     v.push(Tok::Text(std::mem::take(&mut cur), cur_start..i));
                 }
                 v.push(Tok::Obj(o, marker));
-            }
-            Some(o) => {
-                for c in o.plain_text().chars() {
-                    if cur.is_empty() {
-                        cur_start = i;
-                    }
-                    push(&mut v, &mut cur, cur_start, marker.end, c, characters);
-                }
             }
             None => {
                 // A marker without its object (a broken paragraph): kept as a visible
