@@ -91,8 +91,12 @@ fn thai_mixed_scripts_digits_and_punctuation_keep_unicode_boundaries() {
     let pl = para_layout(&l, 0);
     assert!(pl.lines.len() > 1, "the mixed-script paragraph wraps");
     for word in ["123", "๐๑๒๓"] {
-        let start = text.find(word).unwrap_or(text.len());
-        assert!(!pl.lines.iter().skip(1).any(|line| start < line.start && line.start < start + word.len()), "a line starts inside {word}");
+        for (start, _) in text.match_indices(word) {
+            assert!(
+                !pl.lines.iter().skip(1).any(|line| start < line.start && line.start < start + word.len()),
+                "a line starts inside {word} at byte {start}"
+            );
+        }
     }
     for marker in ["ภาษาไทย", "ไทย!"] {
         let boundary = text.find(marker).unwrap_or(text.len());
@@ -192,7 +196,7 @@ fn thai_emergency_wrapping_preserves_latin_ligatures() {
 
 #[test]
 fn thai_dictionary_context_skips_hidden_text_and_tracked_deletions() {
-    let text = "การประชุXmคณะกรรมการบริหารโครงการ";
+    let text = "การประชุXมคณะกรรมการบริหารโครงการ";
     let hidden = text.find('X').unwrap_or(text.len());
     let boundary = text.find("กรรมการ").unwrap_or(text.len());
     for deleted in [false, true] {
@@ -214,6 +218,25 @@ fn thai_dictionary_context_skips_hidden_text_and_tracked_deletions() {
             "visible Thai context maps its word boundary back to source byte {boundary} (deleted={deleted})"
         );
     }
+}
+
+#[test]
+fn thai_emergency_break_keeps_a_hidden_mark_with_its_base() {
+    // The hidden U+0301 is a cluster of its own that starts inside the grapheme a + U+0301. The
+    // emergency break after `a` must not start the next line there: the mark stays with `a`.
+    let text = "a\u{0301}กข";
+    let mut d = Document::from_text(text);
+    d.last_section.margin_left = 297.0;
+    d.last_section.margin_right = 297.0;
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.size = Some(72.0)).unwrap();
+    d.format_range(&Pos::body(0, 1), &Pos::body(0, 3), &|c| c.hidden = Some(true)).unwrap();
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "the narrow column wraps");
+    for line in pl.lines.iter().skip(1) {
+        assert!(!(0 < line.start && line.start < 3), "a line starts inside a\u{0301} at byte {}", line.start);
+    }
+    assert_eq!(pl.lines.last().map(|line| line.stop), Some(text.len()), "wrapping makes progress through the full paragraph");
 }
 
 /// A face with Myanmar letters (an installed system font), or `None` to skip.

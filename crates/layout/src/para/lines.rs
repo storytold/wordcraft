@@ -1072,6 +1072,13 @@ impl Scan {
                 self.xs.truncate(b + 1 - c0);
                 self.j = b + 1;
                 self.x = self.xs.last().copied().unwrap_or(self.line_start_x) + pl.clusters.get(b).map(|c| c.adv).unwrap_or(0.0);
+                // Clusters that start inside the grapheme before the break (a hidden combining
+                // mark, say) stay on this line, so the next one starts at an edit boundary.
+                while self.j < j && pl.clusters.get(self.j).is_some_and(|c| !pl.is_edit_boundary(c.start)) {
+                    self.xs.push(self.x);
+                    self.x += pl.clusters.get(self.j).map(|c| c.adv).unwrap_or(0.0);
+                    self.j += 1;
+                }
                 return true;
             }
             self.end = LineEnd::Para;
