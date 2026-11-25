@@ -55,6 +55,24 @@ fn save_as_suggests_the_first_words_of_a_new_document() {
     assert_eq!(app.default_save_name(), "kept.docm", "a saved file keeps its name and format");
 }
 
+/// #3634: every source of the title (path, file name, document title) drops NUL.
+#[test]
+fn title_stem_omits_nul_from_each_title_source() {
+    let mut app = app();
+    let fallback = app.title_stem();
+    for title in ["Résumé\u{0} notes", "\u{0}"] {
+        let expected = if title == "\u{0}" { fallback.as_str() } else { "Résumé notes" };
+        app.session.doc.core.title = title.into();
+        assert_eq!(app.title_stem(), expected);
+        app.session.file_name = Some(title.into());
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = Some(std::path::PathBuf::from(format!("{title}.docx")));
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = None;
+        app.session.file_name = None;
+    }
+}
+
 /// A harness on a document with text whose page has the keyboard.
 fn canvas_harness() -> egui_kittest::Harness<'static, WordApp> {
     let mut a = app();
