@@ -74,9 +74,9 @@ impl WordApp {
                         self.cancel_closing();
                         return Err(e);
                     }
-                    // A new document or an import-only Word file: ask where through Save As. The
+                    // A new document or an import-only file (Word 97–2003, EPUB): ask where through Save As. The
                     // guard goes on once that has saved, on a later frame (#94).
-                    if (self.session.path.is_none() || self.legacy_word_path()) && !self.browser_saves() {
+                    if (self.session.path.is_none() || self.import_only_path()) && !self.browser_saves() {
                         return match self.save_as(file_dialogs::AfterSave::Closing) {
                             // PLAN: assumed `AfterSave::Closing` (no fields: the state is `WordApp::closing`)
                             file_dialogs::Asked::Done(r) => r,
@@ -497,14 +497,15 @@ impl WordApp {
         Ok(json!({"closed": true}))
     }
 
-    /// These paths have readers but no writer, so an interactive save needs another format.
-    pub(super) fn legacy_word_path(&self) -> bool {
+    /// These paths have readers but no writer (legacy Word, #2445; EPUB, #3117), so an
+    /// interactive save needs another format.
+    pub(super) fn import_only_path(&self) -> bool {
         self.session
             .path
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("doc") || e.eq_ignore_ascii_case("dot"))
+            .is_some_and(|e| e.eq_ignore_ascii_case("doc") || e.eq_ignore_ascii_case("dot") || e.eq_ignore_ascii_case("epub"))
     }
 
     /// The name a browser Save or Export without a name uses. An export is named after the
@@ -519,7 +520,7 @@ impl WordApp {
         }
         if id == "file.save"
             && self.browser_saves()
-            && !self.legacy_word_path()
+            && !self.import_only_path()
             && let Some(name) = self.session.path.as_ref().and_then(|p| p.file_name())
         {
             return name.to_string_lossy().to_string();

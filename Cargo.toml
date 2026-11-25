@@ -103,6 +103,7 @@ craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "b436ae9925
 craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
 craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
+craft-epub = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
 miniz_oxide = "0.9"
 cfb = "0.15"
