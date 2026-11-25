@@ -509,10 +509,39 @@ fn file_commands_without_a_path_ask_for_one() {
     assert_eq!(request(&files, 1).kind, PickKind::Save);
     answer(&files, None);
     a.poll_file_dialog();
+    // Page images ask for their resolution and pages first (#7743): no file dialog yet.
     a.run("file.exportPng", json!({})).unwrap();
+    assert_eq!(files.requests().len(), 2);
+    assert!(a.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some("exportImages")));
+    crate::dialogs::host::close_all(&mut a, &egui::Context::default());
+    // With them chosen, it asks where.
+    a.run("file.exportPng", json!({"dpi": 600, "range": "all"})).unwrap();
     let r = request(&files, 2);
     assert_eq!(r.kind, PickKind::Save);
     assert!(r.file_name.as_deref().is_some_and(|n| n.ends_with(".png")));
+}
+
+/// #7743: the page images' resolution and pages go through the save dialog to the export, and
+/// several pages are written beside the name picked.
+#[test]
+fn page_images_keep_their_choices_through_the_save_dialog() {
+    let dir = scratch("page-images");
+    let (mut a, files) = async_app();
+    a.run("text.insert", json!({"text": "One"})).unwrap();
+    a.run("insert.pageBreak", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Two"})).unwrap();
+    a.run("file.exportPng", json!({"dpi": 96, "range": "all"})).unwrap();
+    assert_eq!(request(&files, 0).kind, PickKind::Save);
+    let picked_path = dir.join("pages.png");
+    answer(&files, Some(&picked_path.to_string_lossy()));
+    let done = a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!(done["dpi"], 96.0);
+    let page_w = (a.session.doc.last_section.page_w * 96.0 / 72.0).ceil() as u64;
+    for n in 1..=2 {
+        let png = std::fs::read(dir.join(format!("pages-{n}.png"))).unwrap();
+        assert_eq!(u64::from(image::load_from_memory(&png).unwrap().width()), page_w, "page {n} at 96 DPI");
+    }
+    assert!(status_text(&a).contains("2 page images"), "{}", status_text(&a));
 }
 
 /// One row per entry point: what it asks for, with which file types and name.
@@ -630,9 +659,9 @@ fn exporting_word_xml_over_a_word_2003_file_writes_word_xml() {
     let path = dir.join("letter.xml").to_string_lossy().into_owned();
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
-    a.finish_pick(AfterPick::Export { ext: crate::print_page::EXPORT_WORD_2003.into() }, Some(path.clone())).unwrap();
+    a.finish_pick(AfterPick::Export { ext: crate::print_page::EXPORT_WORD_2003.into(), options: serde_json::json!({}) }, Some(path.clone())).unwrap();
     assert!(std::fs::read_to_string(&path).unwrap().contains("w:wordDocument"));
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(path.clone())).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(path.clone())).unwrap();
     let xml = std::fs::read_to_string(&path).unwrap();
     assert!(xml.contains("pkg:package") && !xml.contains("w:wordDocument"), "Word XML, not Word 2003 XML");
     let _ = std::fs::remove_dir_all(&dir);
@@ -646,19 +675,19 @@ fn exporting_word_xml_to_a_name_without_xml_appends_the_extension() {
     let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
     let bare = dir.join("letter").to_string_lossy().into_owned();
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(bare)).unwrap();
     let xml = std::fs::read_to_string(dir.join("letter.xml")).unwrap();
     assert!(xml.contains("pkg:package"), "Word XML written at letter.xml");
     // A known document extension gives way to .xml; an unknown one stays.
     let docx = dir.join("notes.docx").to_string_lossy().into_owned();
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(docx)).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(docx)).unwrap();
     assert!(dir.join("notes.xml").is_file());
     let v2 = dir.join("notes.v2").to_string_lossy().into_owned();
-    a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(v2)).unwrap();
+    a.finish_pick(AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(v2)).unwrap();
     assert!(dir.join("notes.v2.xml").is_file());
     // The resulting name already exists: the system dialog never confirmed it, so refuse.
     let bare = dir.join("letter").to_string_lossy().into_owned();
-    assert!(a.finish_pick(AfterPick::Export { ext: "xml".into() }, Some(bare)).is_err());
+    assert!(a.finish_pick(AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(bare)).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -672,7 +701,7 @@ fn exporting_word_xml_to_a_dotfile_name_writes_the_file() {
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
     for format in ["xml", crate::print_page::EXPORT_WORD_2003] {
         let typed = dir.join(".docx").to_string_lossy().into_owned();
-        a.finish_pick(AfterPick::Export { ext: format.into() }, Some(typed)).unwrap();
+        a.finish_pick(AfterPick::Export { ext: format.into(), options: serde_json::json!({}) }, Some(typed)).unwrap();
         let written = dir.join(".docx.xml");
         assert!(std::fs::read_to_string(&written).unwrap().contains(if format == "xml" { "pkg:package" } else { "w:wordDocument" }));
         let _ = std::fs::remove_file(&written);
@@ -922,4 +951,23 @@ fn many_failed_fonts_end_with_a_count() {
     let fonts: Vec<(String, Value)> = (0..5).map(|i| format!("/nonexistent/f{i}.ttf")).map(|p| (p.clone(), json!({"path": p}))).collect();
     a.add_fonts(fonts).unwrap();
     assert_eq!(status_text(&a), "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
+}
+
+/// #7743 review: a request that makes its own page-image choices (a page, a scale) asks only
+/// where, and the export keeps those choices; the Export as Images dialog, which would start
+/// over, isn't shown.
+#[test]
+fn page_image_choices_made_by_the_caller_are_kept() {
+    let dir = scratch("page-image-choices");
+    let (mut a, files) = async_app();
+    a.run("text.insert", json!({"text": "One"})).unwrap();
+    a.run("insert.pageBreak", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Two"})).unwrap();
+    a.run("file.exportPng", json!({"page": 2, "scale": 1.0})).unwrap();
+    assert!(!a.dialog_host.open_dialogs().into_iter().any(|d| d.key.as_deref() == Some("exportImages")), "no dialog starting over");
+    assert_eq!(request(&files, 0).kind, PickKind::Save);
+    answer(&files, Some(&dir.join("second.png").to_string_lossy()));
+    let done = a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!(done["page"], 2, "the page asked for");
+    assert_eq!(done["width"].as_f64(), Some(f64::from(a.session.doc.last_section.page_w.ceil())), "one pixel a point");
 }

@@ -449,7 +449,12 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
     // Each format is a button across the column, its name at the reading start, as production's 320 pt rows.
     for &(label, ext) in EXPORT_FORMATS {
         if clicked(&Button::new(tl!(label)).id_salt(ext).sizing(Sizing::FillWidth).align(HAlign::Start).show(ui)) {
-            app.export_dialog(ext);
+            if ext == "png" {
+                // Page images ask for their resolution and pages first (#7743).
+                let _ = crate::dialogs::open(app, "exportImages", &json!({}));
+            } else {
+                app.export_dialog(ext);
+            }
         }
     }
     // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.

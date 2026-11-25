@@ -81,6 +81,10 @@ wuff = "0.2.9"
 brotli-decompressor = "5"
 vello_cpu = "0.2"
 image = { version = "0.25", default-features = false }
+# Page images at print resolution are encoded a band of rows at a time, so a 1500 DPI page never
+# sits in memory whole (#7743). The same crate and version the image codecs already build (no new
+# code in the build): pure Rust, MIT OR Apache-2.0.
+png = "0.18"
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "b436ae992591173ce53fdb1314421ba2d8897e49", version = "=0.1.0", default-features = false, features = ["write"] }

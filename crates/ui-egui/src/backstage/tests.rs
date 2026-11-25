@@ -774,7 +774,10 @@ fn export_refusal_shows_on_the_export_page() {
     let mut a = new_app();
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
     let mut h = file_page(a, "export");
-    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    let err = h
+        .state_mut()
+        .finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(bare))
+        .unwrap_err();
     h.run_steps(4);
     assert!(h.state().ui.backstage, "still on the Export page");
     assert!(err.contains("letter.xml already exists"), "{err}");
@@ -795,7 +798,10 @@ fn export_refusal_shows_on_the_print_page() {
     let mut a = new_app();
     a.run("text.insert", json!({"text": "Dear reader"})).unwrap();
     let mut h = file_page(a, "print");
-    let err = h.state_mut().finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    let err = h
+        .state_mut()
+        .finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(bare))
+        .unwrap_err();
     h.run_steps(4);
     assert!(h.state().ui.backstage, "still on the Print page");
     assert!(err.contains("letter.xml already exists"), "{err}");
@@ -809,7 +815,7 @@ fn export_refusal_shows_on_the_print_page() {
 fn cancelling_an_export_clears_its_page_error() {
     let mut a = new_app();
     a.export_error = "old refusal".into();
-    a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, None).unwrap();
+    a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, None).unwrap();
     assert!(a.export_error.is_empty());
 }
 
@@ -827,7 +833,7 @@ fn export_error_belongs_to_its_window() {
     a.run("ui.backstage", json!({"value": true, "page": "export"})).unwrap();
     // Window A (this one) is refused; window B is another window's state, outside Backstage.
     let mut b = crate::window_ui::WindowUi::new(a.session.document_id());
-    let err = a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into() }, Some(bare)).unwrap_err();
+    let err = a.finish_pick(crate::file_dialogs::AfterPick::Export { ext: "xml".into(), options: serde_json::json!({}) }, Some(bare)).unwrap_err();
     assert_eq!(a.export_error, err);
     // B's frame: swap its state in, run frames outside Backstage, swap back.
     a.swap_window(&mut b);

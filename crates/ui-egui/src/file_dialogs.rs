@@ -62,8 +62,9 @@ pub(crate) enum AfterPick {
     Picture,
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
-    /// Save a copy there in this format (`pdf`, `docx`, `png`…).
-    Export { ext: String },
+    /// Save a copy there in this format (`pdf`, `docx`, `png`…). `options` are the page images'
+    /// resolution and pages (`dpi`, `range`, `pages`, `parity`) for `png`, an empty object otherwise.
+    Export { ext: String, options: Value },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
     PrintPdf { settings: Value },
     /// Load the picked CSV/TSV/text file or spreadsheet as the mail-merge recipients (#240, #334).
@@ -170,12 +171,13 @@ impl WordApp {
     }
 
     /// Treat the dialog the service is showing as cancelled, e.g. one that never showed up;
-    /// returns the format of the export it was for, if any. `ui.fileBrowser` reuses it.
+    /// returns the format and options of the export it was for, if any. `ui.fileBrowser` reuses
+    /// them.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn give_up_file_dialog(&mut self) -> Option<String> {
+    pub(crate) fn give_up_file_dialog(&mut self) -> Option<(String, Value)> {
         let d = self.file_dialog.take()?;
         self.host.files().forget(d.id);
-        let export = if let AfterPick::Export { ext } = &d.after { Some(ext.clone()) } else { None };
+        let export = if let AfterPick::Export { ext, options } = &d.after { Some((ext.clone(), options.clone())) } else { None };
         let _ = self.finish_pick(d.after, None);
         export
     }
@@ -297,14 +299,18 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.load_recipients(json!({"path": path}))
             }
-            AfterPick::Export { ext } => {
+            AfterPick::Export { ext, options } => {
                 let Some(mut path) = picked else {
                     // Cancelled: an earlier refusal is not news any more.
                     self.clear_export_error();
                     return Ok(json!({"cancelled": true}));
                 };
                 let r = if ext == "png" {
-                    self.run("file.exportPng", json!({"path": path}))
+                    let mut params = if options.is_object() { options } else { json!({}) };
+                    params["path"] = json!(path);
+                    // The dialog confirmed only this name, not the numbered files beside it.
+                    params["replace"] = json!(false);
+                    self.run("file.exportPng", params)
                 } else if ext == "xml" || ext == crate::print_page::EXPORT_WORD_2003 {
                     // The engine takes an explicit format only for an .xml path, and a system Save
                     // dialog lets the user type any name: give it the extension
@@ -325,9 +331,19 @@ impl WordApp {
                     self.run("file.saveAs", json!({"path": path}))
                 };
                 match &r {
-                    Ok(_) => {
+                    Ok(done) => {
                         self.clear_export_error();
-                        self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &interface_path(&path))]));
+                        // Several page images are written beside the name picked (`name-1.png`…).
+                        let files = done.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+                        if files > 1 {
+                            let folder = std::path::Path::new(&path).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+                            self.status(crate::i18n::fmt(
+                                tl!("Exported {count} page images to {folder}"),
+                                &[("count", &files.to_string()), ("folder", &interface_path(&folder))],
+                            ));
+                        } else {
+                            self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &interface_path(&path))]));
+                        }
                     }
                     Err(e) => {
                         self.fail_export(e.clone());
@@ -477,9 +493,15 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
+        self.export_dialog_with(ext, json!({}));
+    }
+
+    /// [`Self::export_dialog`] with the export's `options` (page images: `dpi`, `range`, `pages`,
+    /// `parity`), which the export after the dialog runs with.
+    pub(crate) fn export_dialog_with(&mut self, ext: &str, options: Value) {
         let req = self.export_request(ext);
         // A refusal or failure is reported by `finish_pick` itself (Export page and status bar).
-        let _ = self.ask_file(req, AfterPick::Export { ext: ext.to_string() });
+        let _ = self.ask_file(req, AfterPick::Export { ext: ext.to_string(), options });
     }
 
     /// The request that asks where to save a copy in export format `ext`: the format's name and type,

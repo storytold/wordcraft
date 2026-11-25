@@ -117,7 +117,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
         .pure(),
         CommandSpec::new("file.exportPng", "Export Page as PNG", "File › Export", export_png)
-            .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character on the page can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .params(r#"{"path": string (one page: this file; several: name-1.png, name-2.png… beside it), "page"?: n (1-based; default the first page), "range"?: "all" | "current" | "selection" | "custom" (as file.printPdf; not with `page`), "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "dpi"?: 36-2400 (default 144), "scale"?: px per pt (instead of dpi; 0.1-8), "replace"?: bool (default true; false refuses, writing nothing, when one of several pages' files already exists), "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character on the page can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
         CommandSpec::new("file.strictReport", "Strict Export Report", "File › Export", strict_report)
             .params(r#"{"markup"?: bool (as file.exportPdf), "page"?: n (1-based: check that page of the page image file.exportPng writes; omit for every page of a PDF)} → {"schema": 1, "strict": "passed" | "failed", "missing_glyphs": [{"cp": "U+2D30", "count": n}], "missing_pictures": [{"part", "source_part": the story part it is in (word/header2.xml; background, body, header, footer, text box or "" where unknown), "reason": "missing_part" | "external_target" | "link_only" | "undecodable" | "unsupported_format"}], "truncated": bool (either list was cut at 256 entries), "total_missing_glyphs": n (distinct, past the cap too), "total_missing_pictures": n (past the cap too), "glyphs_truncated": bool, "pictures_truncated": bool}"#)
@@ -531,36 +531,52 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
     Ok(report.to_json())
 }
 
-/// Exports a page of the current document as a PNG image at the requested scale.
+/// Exports pages of the current document as PNG images (#7743): one page, or several, each to
+/// its own file (see [`crate::page_images`]), at a chosen resolution. Every page is checked before
+/// any file is written ([`crate::page_images::PageImages::plan`]), so a refusal writes nothing.
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
-    // No path: the app asks where to save, as file.exportPdf does (#2313).
+    // No path: the app asks where to save, as file.exportPdf does (#2313). The resolution and
+    // pages chosen so far go with the request, so the export after the dialog keeps them.
     let Some(path) = p::str(v, "path") else {
-        s.push_ui_request(json!({"open": "exportPng"}));
+        let mut req = json!({"open": "exportPng"});
+        for k in crate::page_images::CHOICES {
+            if let Some(x) = v.get(k).filter(|x| !x.is_null()) {
+                req[k] = x.clone();
+            }
+        }
+        s.push_ui_request(req);
         return Ok(json!({"exported": false}));
     };
-    let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
-    let strict = p::bool(v, "strict").unwrap_or(false);
-    let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
-    let export = export_options(s, v);
-    let l = s.export_layout_with(export.markup);
-    let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
-    // A page image is the printed page: headers and footers at full strength. Dimming them is
-    // the on-screen cue while editing the body, not part of the page. Tracked changes are marked
-    // as Track Changes Options mark them on screen.
-    let opts = crate::io_ext::page_image_options(&export);
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
     }
-    if strict {
-        let report = crate::strict::strict_report(&s.doc, &l, &opts.display, Some(page..=page), wordcraft_layout::StrictOutput::Png);
-        if !report.passed() {
-            return Err(CmdError::Failed(report.refusal()));
-        }
+    let images = crate::page_images::PageImages::plan(s, v)?;
+    let pages = &images.pages;
+    let names = crate::page_images::paths(path, pages);
+    // Several pages go beside the name chosen, under names no one confirmed: with `replace: false`
+    // (the app, whose save dialog asked only about the name picked) one already there is refused
+    // before anything is written, rather than replaced.
+    if !p::bool(v, "replace").unwrap_or(true)
+        && names.len() > 1
+        && let Some(taken) = names.iter().find(|n| std::path::Path::new(n).exists())
+    {
+        return Err(CmdError::Failed(format!("{taken} already exists; choose another name")));
     }
-    let img = wordcraft_render::render_page(&s.doc, pg, scale, &opts);
-    let png = img.to_png();
-    crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
-    Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len()}))
+    let mut files = Vec::with_capacity(pages.len());
+    for (&page, name) in pages.iter().zip(&names) {
+        // A failure part way says which files are already there.
+        let partly = |e: String, written: usize| {
+            CmdError::Failed(if written == 0 { e } else { format!("{e} ({written} of {} page images were written)", pages.len()) })
+        };
+        let (png, width, height) = images.png(&s.doc, page).map_err(|e| partly(e.to_string(), files.len()))?;
+        crate::io::write_file(name, &png).map_err(|e| partly(e, files.len()))?;
+        files.push(json!({"path": name, "page": page.saturating_add(1), "width": width, "height": height, "bytes": png.len()}));
+    }
+    // The first file's fields stay at the top, as they were for the one page this wrote before.
+    let mut r = files.first().cloned().unwrap_or_else(|| json!({}));
+    r["dpi"] = json!(images.dpi());
+    r["files"] = json!(files);
+    Ok(r)
 }
 
 /// Text and its bookmark association cross the dialog/command boundary together on rename.

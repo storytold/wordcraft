@@ -142,6 +142,17 @@ impl WordApp {
             }
             return r;
         }
+        // Web: a page image downloads at once below, so the resolution and pages are asked
+        // first here, as the desktop asks through the request (#7743).
+        if self.browser_saves()
+            && id == "file.exportPng"
+            && self.user_origin
+            && params.get("path").is_none()
+            && !wordcraft_engine::page_images::has_choices(&params)
+        {
+            let _ = dialogs::open(self, "exportImages", &json!({}));
+            return Ok(json!({"exported": false}));
+        }
         // Web: saving and exporting become downloads.
         if self.browser_saves() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
@@ -174,7 +185,14 @@ impl WordApp {
             let password =
                 if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = match wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts) {
+            // Page images: the one page and resolution asked for (#7743); the browser saves one
+            // download at a time, so more than one page is refused there.
+            let made = if id == "file.exportPng" {
+                wordcraft_engine::page_images::single_png(&self.session, &params).map_err(|e| e.to_string())
+            } else {
+                wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)
+            };
+            let bytes = match made {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     (
@@ -491,7 +509,21 @@ impl WordApp {
                     self.save_as_dialog();
                 }
                 "exportPdf" => self.export_dialog("pdf"),
-                "exportPng" => self.export_dialog("png"),
+                // File › Export › Page images asks for the resolution and pages first (#7743); a
+                // request that makes any choice of its own (that dialog's OK, a script's page,
+                // scale or strictness) asks only where, and keeps every choice it made.
+                "exportPng" if self.user_origin && !wordcraft_engine::page_images::has_choices(req) => {
+                    let _ = dialogs::open(self, "exportImages", &json!({}));
+                }
+                "exportPng" => {
+                    let mut options = json!({});
+                    for k in wordcraft_engine::page_images::CHOICES {
+                        if let Some(x) = req.get(k) {
+                            options[k] = x.clone();
+                        }
+                    }
+                    self.export_dialog_with("png", options);
+                }
                 "insertPicture" => self.pick_picture(),
                 "addFont" => self.pick_font(),
                 "loadSystemFonts" => self.load_system_fonts(),
@@ -1013,7 +1045,7 @@ impl WordApp {
                 (request, file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document })
             }
             "export" => {
-                let ext = pending.unwrap_or_else(|| "pdf".into());
+                let (ext, options) = pending.unwrap_or_else(|| ("pdf".into(), json!({})));
                 let file_ext = crate::print_page::export_file_ext(&ext).to_string();
                 let mut request =
                     PickRequest::save("export").file_name(format!("{}.{}", self.title_stem(), file_ext)).suggested_extension(file_ext.clone());
@@ -1021,7 +1053,7 @@ impl WordApp {
                 if let Some(&(label, _)) = crate::print_page::EXPORT_FORMATS.iter().find(|&&(_, e)| e == ext) {
                     request = request.filter(tl!(label), &[file_ext.as_str()]);
                 }
-                (request, file_dialogs::AfterPick::Export { ext })
+                (request, file_dialogs::AfterPick::Export { ext, options })
             }
             _ => (PickRequest::open("document"), file_dialogs::AfterPick::OpenDocument { document }),
         };

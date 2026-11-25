@@ -25,6 +25,8 @@ use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vec
 
 mod color_glyph;
 pub mod icon_lib;
+mod page_image;
+pub use page_image::{MAX_PAGE_IMAGE_PIXELS, MAX_PAGE_IMAGE_SIDE, page_image_size, page_png};
 
 /// Worker threads for rasterising (0 on the web, where there are no threads).
 pub fn default_threads() -> u16 {
@@ -782,10 +784,16 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     // The outline strokes in device pixels, for the hinted outlines.
     let stroke_px = outline_stroke * k * px_per_pt;
     let mut hinted_stroke = false;
+    // How far a glyph's ink may reach from its origin, points: at least the fixed margins this
+    // cull always had, and twice the font size (widened by `w:w`) for large type, so a glyph whose
+    // origin lies outside the drawn area but whose ink crosses into it is still drawn (a page
+    // image is drawn in bands, #7743).
+    let reach = 2.0 * *size as f64;
+    let (left, above, below) = ((reach * sx).max(100.0), reach.max(0.0), reach.max(200.0));
     for (gid, x, y) in glyphs {
         let (gx, gy) = (*x as f64, *y as f64);
         // Written so a NaN position is skipped too.
-        let near = gx >= visible.x0 - 100.0 && gx <= visible.x1 && gy >= visible.y0 && gy <= visible.y1 + 200.0;
+        let near = gx >= visible.x0 - left && gx <= visible.x1 && gy >= visible.y0 - above && gy <= visible.y1 + below;
         if !near {
             continue;
         }

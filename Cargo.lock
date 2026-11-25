@@ -9213,6 +9213,7 @@ dependencies = [
  "craft-metafile",
  "image",
  "log",
+ "png 0.18.1",
  "vello_cpu",
  "wordcraft-doc",
  "wordcraft-fonts",

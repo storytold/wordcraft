@@ -429,6 +429,7 @@ fn untranslated_interface_text() {
         "commands",
         "tableProperties",
         "pasteSpecial",
+        "exportImages",
         "about",
         "fontDownload",
         "contributors",

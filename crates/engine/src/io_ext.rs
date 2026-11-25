@@ -129,8 +129,8 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
             return Err(report.refusal());
         }
     }
-    let img = wordcraft_render::render_page(doc, p, scale, &page_image_options(opts));
-    Ok(img.to_png())
+    // Drawn as `file.exportPng` draws it: full size at any resolution, which the file records.
+    wordcraft_render::page_png(doc, p, scale, &page_image_options(opts))
 }
 
 #[cfg(test)]
@@ -167,10 +167,12 @@ mod tests {
         let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
         d.last_section.headers.default = Some(id);
 
-        let rendered = render_png(&d, 0, 1.0, &opts).unwrap();
+        // Compared as pixels: the page image's encoder isn't the one `Rendered::to_png` uses.
+        let pixels = |png: &[u8]| wordcraft_geom::picture::decode_memory(png).unwrap().to_rgba8().into_raw();
+        let rendered = pixels(&render_png(&d, 0, 1.0, &opts).unwrap());
         let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
-        let full = wordcraft_render::render_page(&d, &l.pages[0], 1.0, &ro).to_png();
-        let dimmed = wordcraft_render::render_page(&d, &l.pages[0], 1.0, &wordcraft_render::RenderOptions::default()).to_png();
+        let full = pixels(&wordcraft_render::render_page(&d, &l.pages[0], 1.0, &ro).to_png());
+        let dimmed = pixels(&wordcraft_render::render_page(&d, &l.pages[0], 1.0, &wordcraft_render::RenderOptions::default()).to_png());
         assert_eq!(rendered, full, "render_png draws headers at full strength");
         assert_ne!(rendered, dimmed, "render_png does not dim headers");
     }
