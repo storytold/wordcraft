@@ -11400,6 +11400,75 @@ fn keep_with_next_carries_the_heading_when_keep_lines_moves_the_next_paragraph()
     assert_eq!(pages(fit, false), [0, 0, 1], "without it the paragraph splits: {fit}");
 }
 
+/// The page of a kept heading with 30 pt of space after and of what follows it (a one-line
+/// paragraph, or a table under a repeated header row), for each place on the page a filler
+/// above pushes the heading down to, across the page edge.
+fn kept_heading_and_next_pages(table: bool) -> Vec<(usize, usize)> {
+    crate::test_fonts();
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = props;
+        p
+    };
+    (500..640)
+        .step_by(2)
+        .map(|push| {
+            let mut d = Document::new();
+            d.body = vec![
+                wordcraft_doc::para_block(para("Filler", ParaProps { space_after: Some(push as f32), ..plain.clone() })),
+                wordcraft_doc::para_block(para("HEADING", ParaProps { keep_next: Some(true), space_after: Some(30.0), ..plain.clone() })),
+            ];
+            let next = if table {
+                // Rows short enough that the room keep with next asks for a table is enough
+                // for the header and the first row, and no borders: the rows take all the room.
+                let mut t = Table::new(3, 1, 468.0);
+                t.props.style = None;
+                t.rows[0].props.header = true;
+                for row in &mut t.rows {
+                    row.props.height = Some(10.0);
+                    row.props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+                }
+                wordcraft_doc::Block::Table(t)
+            } else {
+                wordcraft_doc::Block::Para(para("Body", plain.clone()))
+            };
+            d.insert_block(StoryRef::Body, &Path::top(2), next).unwrap();
+            let l = lay(&d);
+            let next_page = if table {
+                l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Cell { .. }))).unwrap()
+            } else {
+                l.caret(&Pos::body(2, 0)).unwrap().page
+            };
+            (l.caret(&Pos::body(1, 0)).unwrap().page, next_page)
+        })
+        .collect()
+}
+
+/// A kept heading's own space after is room the paragraph after it needs on the page too: the
+/// heading goes over with that paragraph instead of staying alone at the bottom of the page when
+/// the space after leaves no room for its first line (#5536).
+#[test]
+fn keep_with_next_counts_the_headings_space_after_before_a_paragraph() {
+    let pages = kept_heading_and_next_pages(false);
+    assert!(pages.iter().any(|p| p.0 == 0) && pages.iter().any(|p| p.0 == 1), "the heading crosses the page edge: {pages:?}");
+    assert!(pages.iter().all(|p| p.0 == p.1), "the heading is never left alone: {pages:?}");
+}
+
+/// The same before a table with a repeated header row (#5536).
+#[test]
+fn keep_with_next_counts_the_headings_space_after_before_a_table() {
+    let pages = kept_heading_and_next_pages(true);
+    assert!(pages.iter().any(|p| p.0 == 0) && pages.iter().any(|p| p.0 == 1), "the heading crosses the page edge: {pages:?}");
+    assert!(pages.iter().all(|p| p.0 == p.1), "the heading is never left alone: {pages:?}");
+}
+
 #[test]
 fn section_mark_hidden_styles() {
     crate::test_fonts();

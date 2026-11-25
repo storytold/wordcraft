@@ -349,9 +349,12 @@ impl<'a> Flow<'a> {
         // A paragraph closing a section that the next one starts on a new page keeps with
         // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
         let closes_page = pb.next_starts_page && self.p.section.is_some();
+        // What follows starts below this paragraph's space after, so that needs room too (#5536).
         let need = height
             + if rp.keep_next && !closes_page {
-                next_first_line(ctx, self.block, self.laid_width, 0, pb.next_starts_page, &mut ctx.counters.clone())
+                let after = if break_mark { 0.0 } else { space_after_kept(ctx, self.block, rp, self.label.is_some()) };
+                space_after_beyond_next(ctx, self.block, after)
+                    + next_first_line(ctx, self.block, self.laid_width, 0, pb.next_starts_page, &mut ctx.counters.clone())
             } else {
                 0.0
             };
@@ -1060,6 +1063,19 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
         }
     }
     after
+}
+
+/// The part of body paragraph `block`'s space after (`after`, what is left of it below the
+/// paragraph) that keep with next needs room for on top of [`next_first_line`]: none with
+/// nothing after it; else what the next paragraph's space before, which that counts, does not
+/// cover already, as the two merge into the larger one (all of it when they add up instead).
+fn space_after_beyond_next(ctx: &Ctx, block: usize, after: f32) -> f32 {
+    let before = match ctx.doc.body.get(block + 1).map(|b| &**b) {
+        None => return 0.0,
+        Some(Block::Para(next)) if !ctx.doc.settings.sum_paragraph_spacing => ctx.doc.styles.resolve_para(&next.props).space_before.max(0.0),
+        Some(_) => 0.0,
+    };
+    (after - before).max(0.0)
 }
 
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
