@@ -553,13 +553,20 @@ fn move_input(app: &mut WordApp, mv: NavMove, m: MoveMods) {
 
 fn edit_command(app: &mut WordApp, ctx: &egui::Context, cmd: EditCommand) {
     match cmd {
+        // The chord runs only what the greyed button would (`command_enabled`): with nothing selected, and for Cut
+        // also where protection or Markdown Source greys the button, it does nothing, silently, rather than put
+        // "not available" on the status bar.
         EditCommand::Cut => {
-            if let Ok(r) = app.run("edit.cut", json!({})) {
+            if crate::app::command_board::command_enabled(app, "edit.cut")
+                && let Ok(r) = app.run("edit.cut", json!({}))
+            {
                 crate::system_clipboard::put_result(app, ctx, &r);
             }
         }
         EditCommand::Copy => {
-            let _ = app.run("edit.copy", json!({}));
+            if crate::app::command_board::command_enabled(app, "edit.copy") {
+                let _ = app.run("edit.copy", json!({}));
+            }
         }
         EditCommand::Paste => paste(app, ctx),
         EditCommand::SelectAll => {
@@ -757,4 +764,23 @@ fn inserted_literal_at(app: &WordApp, text: &str, start: &wordcraft_doc::Pos) ->
     let Some(para) = app.session.doc.para_at(start) else { return false };
     let Some(end) = start.off.checked_add(text.len()) else { return false };
     para.text.get(start.off..end) == Some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #7675: Cut and Copy with only a caret are silent (no "not available" status line) and change nothing.
+    #[test]
+    fn cut_and_copy_with_nothing_selected_stay_silent() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "Kilns fire clay"})).unwrap();
+        assert!(app.session.sel.is_collapsed());
+        let ctx = egui::Context::default();
+        for cmd in [EditCommand::Copy, EditCommand::Cut] {
+            edit_command(&mut app, &ctx, cmd);
+            assert!(app.status.is_none(), "{cmd:?}: nothing selected, nothing said");
+            assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns fire clay", "{cmd:?}: the text is untouched");
+        }
+    }
 }

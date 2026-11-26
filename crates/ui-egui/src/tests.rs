@@ -3943,6 +3943,29 @@ fn shift_f10_opens_the_context_menu_at_the_caret() {
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns fire");
 }
 
+/// #7673: with nothing selected the text menu greys Cut and Copy, as production did; a selection enables them.
+#[test]
+fn the_context_menu_greys_cut_and_copy_without_a_selection() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let row = |h: &Rig, name: &str| {
+        let node = h.query_all_by_label(name).find(|node| node.accesskit_node().role() == egui::accesskit::Role::MenuItem);
+        node.expect("the menu row").accesskit_node().is_disabled()
+    };
+    let mut h = harness(app());
+    h.run_steps(4);
+    h.event(egui::Event::Text("Kilns fire".into()));
+    h.run_steps(2);
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(row(&h, "Cut") && row(&h, "Copy"), "nothing is selected");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(!row(&h, "Cut") && !row(&h, "Copy"), "the text is selected");
+}
+
 /// A file dropped in the first two font-warm-up passes is taken before the early return;
 /// eframe does not preserve dropped files for a later frame.
 #[cfg(not(target_arch = "wasm32"))]
