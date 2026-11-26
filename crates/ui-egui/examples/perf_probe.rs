@@ -4,31 +4,45 @@
 //!
 //! `cargo run --release -p wordcraft-ui-egui --example perf_probe -- doc.docx [block]`
 //!
-//! A frame's time is the CPU time of `WordApp::logic` + `ui` for that frame (layout, page
+//! A frame's time is the CPU time of one harness step (`WordApp::logic` + `ui`: layout, page
 //! rasterisation, widgets). What the user sees adds the wait for the next frame and the
-//! presentation on screen (up to one display refresh).
+//! presentation on screen (up to one display refresh). Input goes in through control requests,
+//! as an agent sends it.
 
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use serde_json::json;
+use craft::automation::control::{ControlChannel, ControlRequest};
+use serde_json::{Value, json};
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{Services, WordApp};
 
 static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Applies the harness's pending raw input, runs one full app frame, and returns its wall-clock
+type Harness<'a> = egui_kittest::Harness<'a, WordApp>;
+
+/// Queues a control request; the app answers it in the logic phase of a following frame.
+fn request(tx: &Sender<ControlRequest>, method: &str, params: Value) {
+    let (req, _reply) = ControlRequest::new(method, params);
+    tx.send(req).expect("the app is running");
+}
+
+/// Queues a command through `engine.execute`.
+fn exec(tx: &Sender<ControlRequest>, command: &str, params: Value) {
+    request(tx, "engine.execute", json!({"command": command, "params": params}));
+}
+
+/// Hands the app's frame input to the runtime, runs one full app frame and returns its wall-clock
 /// duration in milliseconds.
-fn step(h: &mut egui_kittest::Harness<'_, WordApp>) -> f64 {
-    let mut raw = std::mem::take(h.input_mut());
+fn step(h: &mut Harness<'_>) -> f64 {
     let ctx = h.ctx.clone();
-    h.state_mut().raw_input_hook(&ctx, &mut raw);
-    *h.input_mut() = raw;
+    craft::ui::shell::embed::before_input(&ctx, |out| h.state_mut().frame_input(out));
     let t = Instant::now();
     h.step();
     t.elapsed().as_secs_f64() * 1000.0
 }
 
-fn stats(v: &[f64]) -> serde_json::Value {
+fn stats(v: &[f64]) -> Value {
     let mut s = v.to_vec();
     s.sort_by(f64::total_cmp);
     let at = |q: f64| s.get(((s.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(0.0);
@@ -44,7 +58,8 @@ fn main() {
     let mut session = Session::new(wordcraft_doc::Document::new());
     session.run("file.open", &json!({"path": path})).expect("open");
     let open_ms = t_open.elapsed().as_secs_f64() * 1000.0;
-    let app = WordApp::new(session, Services::default());
+    let (tx, rx) = std::sync::mpsc::channel::<ControlRequest>();
+    let app = WordApp::new(session, Services::default()).with_control(ControlChannel::new(rx));
     let mut h =
         egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(2.0).with_max_steps(1_000_000).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -57,6 +72,14 @@ fn main() {
             },
             app,
         );
+    // PLAN(app-hub): craft-ui `testing` feature and craft-automation in dev-dependencies
+    // PLAN(shell-w11): assumed `wordcraft_ui_egui::ui_fonts` and `i18n::Lang::EN`
+    if let Err(error) =
+        craft::ui::shell::embed::install(&h.ctx, craft::ui::testing::install_spec(), &wordcraft_ui_egui::ui_fonts(wordcraft_ui_egui::i18n::Lang::EN))
+    {
+        eprintln!("installing the UI runtime failed: {error:?}");
+        std::process::exit(1);
+    }
     READY.store(true, std::sync::atomic::Ordering::Relaxed);
     let first: Vec<f64> = (0..6).map(|_| step(&mut h)).collect();
     let mut out =
@@ -67,24 +90,29 @@ fn main() {
         let s = &h.state().session;
         s.doc.body.iter().enumerate().filter_map(|(i, b)| b.as_para().map(|p| (i, p.len()))).max_by_key(|(_, l)| *l).map(|(i, _)| i).unwrap_or(0)
     });
-    let typing = |h: &mut egui_kittest::Harness<'_, WordApp>, pos: serde_json::Value| -> serde_json::Value {
-        h.state_mut().session.run("caret.set", &json!({"pos": pos})).ok();
-        h.state_mut().canvas.want_focus = true;
+    let typing = |h: &mut Harness<'_>, pos: Value| -> Value {
+        // One click gives the page the keyboard; the caret is then put where the probe types.
+        request(&tx, "ui.click", json!({"x": 720.0, "y": 500.0}));
+        for _ in 0..3 {
+            step(h);
+        }
+        exec(&tx, "caret.set", json!({"pos": pos}));
+        let ctx = h.ctx.clone();
+        h.state_mut().canvas.focus_page(&ctx);
         for _ in 0..3 {
             step(h);
         }
         let mut frames = Vec::new();
-        let (mut lay, mut ren) = (Vec::new(), Vec::new());
+        let mut lay = Vec::new();
         for _ in 0..40 {
-            h.input_mut().events.push(egui::Event::Text("a".into()));
+            request(&tx, "ui.type", json!({"text": "a"}));
             frames.push(step(h));
             // the frame after (relayout of a long paragraph may finish there)
             frames.push(step(h));
             lay.push(h.state_mut().session.layout().ms);
-            ren.push(h.state().canvas.render_ms);
         }
         let typed = frames.chunks(2).map(|c| c[0] + c[1]).collect::<Vec<_>>();
-        json!({"frame_with_key_ms": stats(&frames.iter().step_by(2).copied().collect::<Vec<_>>()), "two_frames_ms": stats(&typed), "layout_ms": stats(&lay), "render_ms": stats(&ren)})
+        json!({"frame_with_key_ms": stats(&frames.iter().step_by(2).copied().collect::<Vec<_>>()), "two_frames_ms": stats(&typed), "layout_ms": stats(&lay)})
     };
     let mid = h.state().session.doc.body.get(doc_block).and_then(|b| b.as_para()).map(|p| p.len() / 2).unwrap_or(0);
     // a char boundary at or before the middle
@@ -100,21 +128,14 @@ fn main() {
     }
 
     // Scrolling: mouse wheel (120 pt notches) and trackpad (20 pt gestures) over the canvas.
-    let scroll = |h: &mut egui_kittest::Harness<'_, WordApp>, dy: f32, n: usize| -> serde_json::Value {
-        h.state_mut().session.run("caret.docStart", &json!({})).ok();
+    let scroll = |h: &mut Harness<'_>, dy: f32, n: usize| -> Value {
+        exec(&tx, "caret.docStart", json!({}));
         for _ in 0..3 {
             step(h);
         }
         let mut f = Vec::new();
         for _ in 0..n {
-            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(720.0, 500.0)));
-            h.input_mut().events.push(egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, dy),
-                phase: egui::TouchPhase::Move,
-                modifiers: egui::Modifiers::NONE,
-                source: egui::MouseWheelSource::Unknown,
-            });
+            request(&tx, "ui.wheel", json!({"x": 720.0, "y": 500.0, "dy": dy}));
             f.push(step(h));
         }
         json!({"frame_ms": stats(&f), "frames_over_33ms": f.iter().filter(|x| **x > 33.0).count(), "frames_over_16ms": f.iter().filter(|x| **x > 16.7).count()})
@@ -125,7 +146,7 @@ fn main() {
     // Zoom, ribbon tabs, resize: the frame after the change.
     let mut zoom = Vec::new();
     for z in [50, 75, 100, 150, 200, 100] {
-        h.state_mut().session.run("view.zoom", &json!({"value": z})).ok();
+        exec(&tx, "view.zoom", json!({"value": z}));
         let a = step(&mut h);
         let b = step(&mut h);
         zoom.push(json!({"zoom": z, "frame_ms": (a * 10.0).round() / 10.0, "next_ms": (b * 10.0).round() / 10.0}));
@@ -133,7 +154,7 @@ fn main() {
     out["zoom"] = json!(zoom);
     let mut tabs = Vec::new();
     for t in ["Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Home"] {
-        h.state_mut().execute("ui.tab", json!({"tab": t})).ok();
+        exec(&tx, "ui.tab", json!({"tab": t}));
         tabs.push(step(&mut h));
     }
     out["ribbon_tab_ms"] = stats(&tabs);
@@ -145,11 +166,9 @@ fn main() {
     out["resize_ms"] = stats(&rs);
     // Accept all (if the document has tracked changes).
     if !h.state().session.doc.revisions.is_empty() {
-        let t = Instant::now();
-        h.state_mut().session.run("review.acceptAll", &json!({})).ok();
-        let cmd = t.elapsed().as_secs_f64() * 1000.0;
+        exec(&tx, "review.acceptAll", json!({}));
         let f = step(&mut h);
-        out["accept_all"] = json!({"command_ms": (cmd * 10.0).round() / 10.0, "frame_ms": (f * 10.0).round() / 10.0});
+        out["accept_all"] = json!({"frame_ms": (f * 10.0).round() / 10.0});
     }
     println!("{out}");
 }
