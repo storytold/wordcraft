@@ -1231,3 +1231,30 @@ fn the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface() {
         );
     }
 }
+
+#[test]
+fn a_combo_field_reached_with_tab_shows_its_hint_after_a_delay() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Home");
+
+    // Focus the Font box right before Font Size, then Tab onto Font Size.
+    h.get(By::new().role(Role::ComboBox).label("Font")).focus();
+    h.step();
+    for _ in 0..4 {
+        h.key_press(egui::Key::Tab);
+        h.step();
+        if h.query(By::new().role(Role::ComboBox).label("Font Size")).is_some_and(|n| n.is_focused()) {
+            break;
+        }
+    }
+    assert!(h.get(By::new().role(Role::ComboBox).label("Font Size")).is_focused(), "Tab should focus Font Size");
+    assert_eq!(h.query_all_by_label("Font Size").count(), 1, "hint must not show immediately before delay");
+
+    let frames = ((craft::ui::contract::tooltip::DELAY * 60.0).ceil() as usize) + 5;
+    for _ in 0..frames {
+        h.step();
+    }
+    assert!(h.query_all_by_label("Font Size").count() >= 2, "hint must show after tooltip delay");
+}
