@@ -52,6 +52,22 @@ pub fn japanese_document_fonts() -> Vec<&'static CraftFont> {
     v
 }
 
+/// The craft-fonts faces for Hebrew (`"Hebr"`), in manifest order. Empty without craft-fonts.
+pub fn hebrew_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hebr"))
+}
+
+/// Hebrew faces in document-fallback order: serif families first (Frank Ruhl Libre, David Libre,
+/// Noto Serif Hebrew), matching the serif default text font, then the others; Regular before
+/// other styles.
+pub fn hebrew_document_fonts() -> Vec<&'static CraftFont> {
+    let is_serif = |fam: &str| matches!(fam, "Frank Ruhl Libre" | "David Libre" | "Noto Serif Hebrew" | "Noto Rashi Hebrew");
+    // Cardo and Handjet map Supplementary Private Use Area-A code points (U+F0001..), which would
+    // shadow PUA glyphs and break the cache-miss fixtures in `tests_sysfonts`.
+    let mut v: Vec<_> = hebrew_fonts().filter(|f| !matches!(f.family, "Cardo" | "Handjet")).collect();
+    v.sort_by_key(|f| (!is_serif(f.family), f.style != "Regular"));
+    v
+}
 /// The bundled serif used when a document asks for nothing better.
 pub const DEFAULT_FAMILY: &str = "Source Serif 4";
 
@@ -564,6 +580,7 @@ mod tests {
         assert!(f2.family.contains("Mincho"), "{f2:?}");
     }
 
+    /// Verifies that Arabic and Persian characters fall back to the embedded craft-fonts Arabic face.
     #[test]
     fn arabic_and_persian_fall_back_to_the_craft_fonts_arabic_face() {
         // #1652: with no system fonts (a headless CLI), Arabic and Persian drew as empty boxes.
@@ -577,6 +594,22 @@ mod tests {
         for c in "مرحبا پچژگ۱۲۳".chars().filter(|c| !c.is_whitespace()) {
             let fb = db.fallback_for(c, latin.id()).unwrap_or_else(|| panic!("no fallback for {c}"));
             assert_eq!(fb.family, arabic.family, "{c}");
+        }
+    }
+
+    /// Verifies that Hebrew characters fall back to an embedded craft-fonts Hebrew face.
+    #[test]
+    fn hebrew_falls_back_to_a_craft_fonts_hebrew_face() {
+        if hebrew_fonts().next().is_none() {
+            eprintln!("skipped: no Hebrew face in the optional craft-fonts input");
+            return;
+        }
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let latin = db.face(DEFAULT_FAMILY, "Regular");
+        for c in "שלום עולם ברוכים הבאים".chars().filter(|c| !c.is_whitespace()) {
+            let fb = db.fallback_for(c, latin.id()).unwrap_or_else(|| panic!("no fallback for {c}"));
+            assert!(fb.covers(c), "{} covers {c}", fb.family);
         }
     }
 
