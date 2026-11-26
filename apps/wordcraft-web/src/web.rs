@@ -10,7 +10,7 @@ use craft::host::{Files, Host, Wake};
 use craft::platform::appearance::SystemReader;
 use craft::platform::browser_files::BrowserFiles;
 use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard, Flavor, LateOffers, TEXT};
-use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
+use craft::platform::open::{DroppedFile, FileIntake, IntakeSender};
 use craft::print::spool::Spool;
 use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
@@ -227,7 +227,7 @@ impl eframe::App for WebShell {
                 match f.bytes_async().await {
                     Ok(bytes) => {
                         let file = DroppedFile { path: None, name, bytes: Some(Arc::from(bytes)) };
-                        sender.dropped(vec![file], DropTarget::Elsewhere);
+                        sender.dropped(vec![file]);
                     }
                     Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
                 }
@@ -412,7 +412,7 @@ fn guard_unload(dirty: Rc<Cell<bool>>, files: Arc<BrowserFiles>) -> Result<(), S
     let window = web_sys::window().ok_or("no window")?;
     let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
         // A save still in the browser's picker hasn't written anything yet.
-        if dirty.get() || files.pick_pending() {
+        if dirty.get() || files.pending_pick().is_some() {
             e.prevent_default();
             // Older browsers ask only when `returnValue` is set.
             e.set_return_value("unsaved changes");
