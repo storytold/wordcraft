@@ -372,6 +372,7 @@ impl<'e> Breaker<'e> {
             baseline: v.baseline,
             text_asc: v.text_asc,
             text_desc: v.text_desc,
+            content_desc: v.content_desc,
             c0: sc.c0,
             c1,
             xs: sc.xs,
@@ -551,7 +552,7 @@ impl<'e> Breaker<'e> {
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
-        Measure { height, baseline, text_asc, text_desc }
+        Measure { height, baseline, text_asc, text_desc, content_desc: below }
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
@@ -644,6 +645,7 @@ impl<'e> Breaker<'e> {
             baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
             text_asc: asc,
             text_desc: desc,
+            content_desc: desc,
             c0: self.n,
             c1: self.n,
             xs: vec![if self.rtl_para { x0 - shift } else { x0 + shift }],
@@ -720,6 +722,8 @@ struct Measure {
     baseline: f32,
     text_asc: f32,
     text_desc: f32,
+    /// See [`Line::content_desc`].
+    content_desc: f32,
 }
 
 /// Where the line's content ends: trailing spaces and markers hang.

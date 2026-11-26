@@ -170,6 +170,11 @@ pub struct Line {
     /// The text's own ascent and descent on this line, without line-spacing leading (the caret's extent).
     pub text_asc: f32,
     pub text_desc: f32,
+    /// How far below the baseline the line's content reaches: the text's descent, or on a line of
+    /// only pictures (and spaces) with multiple spacing, the pictures' own descent, since the
+    /// pictures end at the bottom of the font's room. What has to fit above the bottom margin
+    /// when the spacing's leading may hang into it.
+    pub content_desc: f32,
     /// Cluster index range.
     pub c0: usize,
     pub c1: usize,
