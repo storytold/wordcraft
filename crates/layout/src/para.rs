@@ -104,6 +104,8 @@ pub struct ParaLayout {
     /// It goes on from the last line of the paragraph before, whose mark is hidden, and shares
     /// that line ([`ParaEnv::joined`]).
     pub joined: bool,
+    /// How tall the line breaker takes a row to be when it checks it against wrap areas.
+    pub(crate) row_est: f32,
 }
 
 impl ParaLayout {

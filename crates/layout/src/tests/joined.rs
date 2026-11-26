@@ -4,7 +4,7 @@
 use super::lay;
 use crate::{Arc, DocLayout, Placed, StoryRef, hit};
 use wordcraft_doc::para::{Anchor, Float, Wrap};
-use wordcraft_doc::props::{Border, Borders, NumRef, TextFrame};
+use wordcraft_doc::props::{Border, Borders, LineSpacing, NumRef, TextFrame};
 use wordcraft_doc::{Block, Document, Path, Pos, Table};
 
 /// A table around the document's paragraphs (the cell paths are `[0, 0, 0, i]`).
@@ -122,28 +122,37 @@ fn a_text_frame_after_a_hidden_mark_is_not_joined() {
 #[test]
 fn a_joined_paragraphs_later_lines_start_below_a_taller_shared_line() {
     // A heading whose mark is hidden, then body text going on from it: the text's first line
-    // shares the heading's line; its later lines start below that line, not inside it (Word).
-    for cell in [false, true] {
+    // shares the heading's line; its later lines start below that line and the heading's bottom
+    // border, not inside it (Word), whatever the text's line spacing.
+    let spacings = [None, Some(LineSpacing::Exactly(12.0)), Some(LineSpacing::AtLeast(12.0)), Some(LineSpacing::Multiple(2.0))];
+    for (cell, spacing, bordered) in [false, true].into_iter().flat_map(|c| spacings.into_iter().flat_map(move |s| [(c, s, false), (c, s, true)])) {
+        let case = format!("cell {cell}, {spacing:?}, border {bordered}");
         let mut d = Document::from_text(&format!("Heading\n{}", "body text ".repeat(40)));
         d.format_range(&Pos::body(0, 0), &Pos::body(0, 7), &|c| c.size = Some(40.0)).unwrap();
-        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+        let heading = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        heading.mark.hidden = Some(true);
+        if bordered {
+            heading.props.borders = Some(Borders { bottom: Some(Border { space: 4.0, ..Border::single(1.5) }), ..Default::default() });
+        }
+        d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.line_spacing = spacing;
         if cell {
             in_cell(&mut d);
         }
         let l = lay(&d);
         let lines = hit::page_lines(&l.pages[0], StoryRef::Body);
         let heading = lines.iter().find(|h| h.path.0.last() == Some(&0)).unwrap();
+        // The shared line's bottom, with the heading's bottom border under it.
+        let rule = l.pages[0].items.iter().filter_map(|it| match it {
+            Placed::Rule { y0, y1, border, .. } if y0 == y1 && border.width == 1.5 => Some(*y0),
+            _ => None,
+        });
+        let floor = rule.fold(heading.bottom, f32::max);
+        assert!(!bordered || floor > heading.bottom, "setup: the border is drawn below the shared line ({case})");
         let body: Vec<_> = lines.iter().filter(|h| h.path.0.last() == Some(&1)).collect();
-        assert!(body.len() > 2, "setup: the body text runs to several lines ({cell})");
-        assert!(body[0].top < heading.bottom - 1.0, "the first line shares the heading's line ({cell})");
+        assert!(body.len() > 2, "setup: the body text runs to several lines ({case})");
+        assert!(body[0].top < heading.bottom - 1.0, "the first line at {} shares the heading's line ({case})", body[0].top);
         for line in &body[1..] {
-            assert!(
-                line.top >= heading.bottom - 0.01,
-                "line {} at {} starts inside the heading's line, ending {} ({cell})",
-                line.li,
-                line.top,
-                heading.bottom
-            );
+            assert!(line.top >= floor - 0.01, "line {} at {} starts inside the shared line, ending {floor} ({case})", line.li, line.top);
         }
     }
 }

@@ -707,6 +707,7 @@ impl<'e> Breaker<'e> {
     fn finish(mut self, pl: &mut ParaLayout) {
         self.hang_drop_cap(pl);
         pl.height = self.top;
+        pl.row_est = self.est_h;
         pl.lines = std::mem::take(&mut self.lines);
         let label_shift = self.label_shifts.get(pl.label_line()).copied().unwrap_or(0.0);
         if let Some(lab) = pl.label.as_mut() {
