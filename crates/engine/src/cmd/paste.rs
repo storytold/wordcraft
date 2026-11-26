@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Block, Document, Paragraph};
+use wordcraft_doc::{Block, Document, Paragraph, PartKind};
 
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -153,8 +153,8 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
         "html" => adopt(s, import_html(&src)),
         _ => adopt(s, wordcraft_formats::rtf::import(src.as_bytes()).map_err(|e| CmdError::Failed(format!("bad RTF: {e}")))?),
     };
-    insert(s, frag)?;
-    let mut r = sel_result(s)?;
+    let omitted = insert(s, frag)?;
+    let mut r = paste_result(s, omitted)?;
     r["pastedAs"] = json!(fmt);
     Ok(r)
 }
@@ -366,7 +366,7 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
 }
 
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
-pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<usize, CmdError> {
     // The pasted text keeps its own formatting; what Backspace carried over is not for after it (#6518).
     s.forget_carried();
     super::controls::prepare_edit(s)?;
@@ -392,7 +392,32 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
-    let end = s.doc.insert_fragment(&at, &frag)?;
+    let parts_before: std::collections::BTreeSet<u32> = if track { s.doc.parts.keys().copied().collect() } else { Default::default() };
+    let (end, omitted) = s.doc.insert_fragment_with_note_report(&at, &frag)?;
+    // The notes the paste made are inserted text too.
+    if let Some(r) = rid {
+        let made: Vec<u32> = s
+            .doc
+            .parts
+            .iter()
+            .filter(|(id, part)| !parts_before.contains(id) && matches!(part.kind, PartKind::Footnote | PartKind::Endnote))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in made {
+            let Some(part) = s.doc.parts.get_mut(&id) else { continue };
+            for b in &mut part.blocks {
+                each_para(Arc::make_mut(b), 0, &mut |p| {
+                    for run in &mut p.runs {
+                        run.props.ins = Some(r);
+                        run.props.fmt_change = None;
+                    }
+                    p.mark.ins = None;
+                    p.mark.del = None;
+                    p.touch();
+                });
+            }
+        }
+    }
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.
     if let Some(r) = rid
@@ -408,7 +433,18 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
         }
     }
     s.sel = Selection::caret(end);
-    Ok(())
+    if omitted > 0 {
+        s.status = "Some notes could not be copied and were left out of the paste.".into();
+    }
+    Ok(omitted)
+}
+
+pub(super) fn paste_result(s: &Session, omitted: usize) -> CmdResult {
+    let mut result = sel_result(s)?;
+    if omitted > 0 {
+        result["omittedNotes"] = json!(omitted);
+    }
+    Ok(result)
 }
 
 /// Every paragraph in a block, tables included (bounded depth).

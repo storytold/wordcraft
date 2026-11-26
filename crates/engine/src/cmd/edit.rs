@@ -292,28 +292,31 @@ fn spike(s: &mut Session, _: &Value) -> CmdResult {
 /// Ctrl+Shift+F3: insert everything the Spike collected, in order, and empty it.
 fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
     let frag = s.building_blocks.get(SPIKE).cloned().ok_or_else(|| CmdError::Disabled("edit.insertSpike: the Spike is empty".into()))?;
-    super::paste::insert(s, frag)?;
+    let omitted = super::paste::insert(s, frag)?;
     s.building_blocks.remove(SPIKE);
-    sel_result(s)
+    super::paste::paste_result(s, omitted)
 }
 
 /// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
 /// else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
 /// as Keep Text Only does.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
-    match super::paste::paste_content(s, v)? {
+    let omitted = match super::paste::paste_content(s, v)? {
         super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
-        super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
-    }
-    sel_result(s)
+        super::paste::Pasted::Text(text) => {
+            super::paste::insert_text(s, &text)?;
+            0
+        }
+    };
+    super::paste::paste_result(s, omitted)
 }
 
 /// Merge Formatting: the pasted text takes the destination's formatting, keeping its emphasis.
 fn paste_merge(s: &mut Session, v: &Value) -> CmdResult {
     let mut frag = super::paste::paste_fragment(s, v)?;
     super::paste::merge_formatting(s, &mut frag);
-    super::paste::insert(s, frag)?;
-    sel_result(s)
+    let omitted = super::paste::insert(s, frag)?;
+    super::paste::paste_result(s, omitted)
 }
 
 /// Most items the Clipboard pane keeps.
@@ -444,11 +447,11 @@ fn paste_clip_item(s: &mut Session, v: &Value) -> CmdResult {
 /// Every collected item, in the order they were copied (one undo step).
 fn paste_all_clips(s: &mut Session, _: &Value) -> CmdResult {
     let all: Vec<Fragment> = s.clip_history.items.iter().rev().map(|x| x.fragment.clone()).collect();
-    let mut r = sel_result(s)?;
+    let mut omitted = 0;
     for f in all {
-        r = paste_clip(s, f)?;
+        omitted += paste_clip(s, f)?["omittedNotes"].as_u64().unwrap_or(0) as usize;
     }
-    Ok(r)
+    super::paste::paste_result(s, omitted)
 }
 
 fn paste_text(s: &mut Session, v: &Value) -> CmdResult {

@@ -377,6 +377,98 @@ impl Paragraph {
         Ok(())
     }
 
+    /// Remove the text of tracked deletions, as Accept does, in one pass over the runs.
+    pub(crate) fn drop_deleted_text(&mut self) {
+        if self.runs.iter().all(|r| r.props.del.is_none()) {
+            return;
+        }
+        if self.runs.iter().all(|r| r.props.del.is_some()) && !self.text.is_empty() {
+            // Emptied, the mark takes the deleted text's formatting, as `delete` gives it
+            let revisions = (self.mark.ins, self.mark.del, self.mark.fmt_change.clone());
+            self.mark = self.props_of_char(0).clone();
+            (self.mark.ins, self.mark.del, self.mark.fmt_change) = revisions;
+        }
+
+        let mut text = String::with_capacity(self.text.len());
+        let mut objects = Vec::with_capacity(self.objects.len());
+        let mut runs = Vec::with_capacity(self.runs.len());
+        let mut source = std::mem::take(&mut self.objects).into_iter();
+        let mut start = 0usize;
+        for run in std::mem::take(&mut self.runs) {
+            crate::work::steps(1);
+            let end = start.saturating_add(run.len).min(self.text.len());
+            let piece = self.text.get(start..end).unwrap_or_default();
+            let held = piece.chars().filter(|c| *c == OBJ).count();
+            if run.props.del.is_some() {
+                source.by_ref().take(held).for_each(drop);
+            } else {
+                text.push_str(piece);
+                objects.extend(source.by_ref().take(held));
+                runs.push(run);
+            }
+            start = end;
+        }
+
+        // Text past the runs (files lie) stays, with its objects
+        text.push_str(self.text.get(start..).unwrap_or_default());
+        objects.extend(source);
+        (self.text, self.objects, self.runs) = (text, objects, runs);
+        self.normalize();
+        self.touch();
+    }
+
+    /// Retain inline objects and compact their placeholders and formatting together.
+    pub(crate) fn retain_objects(&mut self, mut keep: impl FnMut(&mut InlineObject) -> bool) {
+        if self.objects.is_empty() {
+            return;
+        }
+        let mut offsets = self.text.char_indices().inspect(|_| crate::work::steps(1)).filter(|(_, c)| *c == OBJ);
+        let mut removed = Vec::new();
+        self.objects.retain_mut(|object| {
+            let Some((off, _)) = offsets.next() else { return true };
+            if keep(object) {
+                true
+            } else {
+                removed.push(off);
+                false
+            }
+        });
+        if removed.is_empty() {
+            return;
+        }
+        let width = OBJ.len_utf8();
+        if removed.len() * width == self.text.len() {
+            let revisions = (self.mark.ins, self.mark.del, self.mark.fmt_change.clone());
+            self.mark = self.props_of_char(0).clone();
+            (self.mark.ins, self.mark.del, self.mark.fmt_change) = revisions;
+        }
+        let mut gone = removed.iter().copied().peekable();
+        let mut off = 0;
+        self.text.retain(|c| {
+            crate::work::steps(1);
+            let remove = gone.next_if_eq(&off).is_some();
+            off += c.len_utf8();
+            !remove
+        });
+
+        let mut gone = removed.into_iter().peekable();
+        let mut end = 0usize;
+        for run in &mut self.runs {
+            crate::work::steps(1);
+            let start = end;
+            end = end.saturating_add(run.len);
+            while let Some(&off) = gone.peek().filter(|&&off| off < end) {
+                run.len -= end.min(off + width).saturating_sub(start.max(off));
+                if off + width > end {
+                    break;
+                }
+                gone.next();
+            }
+        }
+        self.normalize();
+        self.touch();
+    }
+
     /// Delete `a..b` except the one-character objects at the offsets in `keep` (control
     /// markers a deletion leaves in place).
     pub fn delete_except(&mut self, a: usize, b: usize, keep: &[usize]) -> Result<()> {
