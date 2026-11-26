@@ -488,6 +488,7 @@ fn code_blocks_and_rules() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn deep_nesting_is_bounded() {
     let html = "<div><table><tr><td>".repeat(5000) + "x";
     let d = import("html", html.as_bytes()).unwrap().unwrap();
@@ -566,6 +567,7 @@ fn latex_export_carries_no_commands_from_the_document() {
 /// past them for the last text made a megabyte of labels take tens of seconds), and labels
 /// separated by text are all kept.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn latex_labels_in_a_row_are_read_in_linear_time() {
     let started = std::time::Instant::now();
     for src in ["\\label{a} ".repeat(100_000) + "x", "\\label{a}".repeat(100_000) + "x", "\\hypertarget{a}{} ".repeat(100_000)] {
@@ -743,6 +745,7 @@ fn decorative_picture_exports_with_empty_alt_text() {
 /// Hostile Markdown and HTML that rescanned the rest of the text from every `[`, `![`, `<` or `&`
 /// took quadratic time: a few hundred KB froze the importer for tens of seconds.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hostile_importer_input_takes_linear_time() {
     use std::time::{Duration, Instant};
     let cases: [(&str, String); 5] = [
@@ -764,6 +767,7 @@ fn hostile_importer_input_takes_linear_time() {
 /// bracket scan over them looking for a closing run through the rest of the text: superlinear
 /// time on hostile Markdown.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn unmatched_backtick_runs_take_linear_time() {
     use std::time::{Duration, Instant};
     // Runs of 1, 2, … 2000 backticks (2 MB), none of them closed.
@@ -1202,4 +1206,55 @@ fn latex_export_keeps_repeated_spaces() {
     assert!(!tex.contains("  "), "{tex}");
     let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
     assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
+}
+
+/// Container `background-color` imports and round-trips as paragraph shading (including mixed
+/// inline highlights and blank lines), while inline `<span style="background-color:...">` and
+/// `<mark>` highlights remain character shading (#6157).
+#[test]
+fn html_container_shading_is_paragraph_shading_while_inline_highlight_stays_on_runs() {
+    let html = concat!(
+        r#"<div style="background-color:#1e1e1e"><p><span style="color:#569cd6">const</span> x = 1;</p></div>"#,
+        r#"<p><span style="background-color:#ffff00">highlighted</span></p>"#,
+        r#"<p><mark>marked</mark></p>"#,
+        r#"<div style="background-color:#1e1e1e"><p>text <code style="background-color:#eeeeee">x</code></p></div>"#,
+        r#"<div style="background-color:#1e1e1e"><div>a</div><div>&nbsp;</div><div>b</div></div>"#,
+    );
+    let doc = crate::html::import(html);
+    assert_eq!(doc.body.len(), 7);
+
+    let Block::Para(code) = &*doc.body[0] else { panic!("expected code paragraph") };
+    assert_eq!(code.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    assert!(code.runs.iter().all(|r| r.props.shading.is_none()), "container background must not leak to runs");
+
+    let Block::Para(span_hl) = &*doc.body[1] else { panic!("expected highlighted paragraph") };
+    assert_eq!(span_hl.props.shading, None, "inline span highlight must not become paragraph shading");
+    assert_eq!(span_hl.runs.first().and_then(|r| r.props.shading), Some(wordcraft_doc::Rgb(0xff, 0xff, 0x00)));
+
+    let Block::Para(mark_hl) = &*doc.body[2] else { panic!("expected mark paragraph") };
+    assert_eq!(mark_hl.props.shading, None, "inline <mark> must not become paragraph shading");
+    assert_eq!(mark_hl.runs.first().and_then(|r| r.props.shading), Some(wordcraft_doc::Rgb(0xff, 0xff, 0x00)));
+
+    let Block::Para(mixed) = &*doc.body[3] else { panic!("expected mixed paragraph") };
+    assert_eq!(mixed.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    assert_eq!(mixed.props_of_char(0).shading, None, "unhighlighted text in shaded container has no run shading");
+    assert_eq!(mixed.props_of_char(5).shading, Some(wordcraft_doc::Rgb(0xee, 0xee, 0xee)), "inline <code> keeps its own run shading");
+
+    for idx in [4, 5, 6] {
+        let Block::Para(line) = &*doc.body[idx] else { panic!("expected block {idx}") };
+        assert_eq!(line.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "line {idx} (blank included) keeps container shading");
+    }
+
+    for exported in [crate::html::export(&doc), crate::html::export_fragment(&doc)] {
+        let back = crate::html::import(&exported);
+        let Block::Para(p0) = &*back.body[0] else { panic!("expected paragraph 0") };
+        let Block::Para(p1) = &*back.body[1] else { panic!("expected paragraph 1") };
+        let Block::Para(p2) = &*back.body[2] else { panic!("expected paragraph 2") };
+        assert_eq!(p0.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "{exported}");
+        assert!(p0.runs.iter().all(|r| r.props.shading.is_none()), "{exported}");
+        assert_eq!(p1.props.shading, None, "{exported}");
+        assert_eq!(p1.runs.first().and_then(|r| r.props.shading), Some(wordcraft_doc::Rgb(0xff, 0xff, 0x00)), "{exported}");
+        assert_eq!(p2.props.shading, None, "<p><mark>x</mark></p> round-trips as run shading: {exported}");
+        assert_eq!(p2.runs.first().and_then(|r| r.props.shading), Some(wordcraft_doc::Rgb(0xff, 0xff, 0x00)), "{exported}");
+    }
 }
