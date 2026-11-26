@@ -22,6 +22,12 @@ synced from the release manager's machine. On the release branch, the shared wor
 macOS and Windows jobs if their signing credentials are missing. Local packaging can still
 produce unsigned builds with a warning.
 
+The supervised nightly signer does not sign from `release`: it runs on `refs/heads/nightly-signer`,
+which only ever fast-forwards to reviewed main commits, and the `release` environment trusts both
+branches. Everything that can reach it is the trust closure: all of `.github/` and `packaging/`,
+including `packaging/env.sh`, which `packaging/macos/import-cert.sh` sources with the Apple keys.
+Stable releases still come only from `refs/heads/release`.
+
 Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windows/package.ps1`,
 `packaging/linux/package.sh` (then `packaging/linux/flatpak-bundle.sh` for the Flatpak), `packaging/web/package.sh`.
 
