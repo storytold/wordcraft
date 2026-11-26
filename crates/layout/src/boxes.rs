@@ -188,11 +188,65 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     true
 }
 
+/// The floating objects of a header whose place on the page doesn't depend on their paragraph's
+/// (set down from the page or from its top or bottom margin's area, and across from anything
+/// but a character): their wrap areas go into `excl` before any text is laid out, and their
+/// paragraph and object indexes are returned. Word wraps a header's text around such an object
+/// wherever its anchor is: the paragraphs before the anchor's go round it or below it too
+/// (measured in Word for Windows; the body does it with `EarlyFloats`). Only a header's own
+/// paragraphs: a footer is measured without its place on the page, and a cell's objects are
+/// placed by the cell. Not an object set down from the margin (`Anchor::Margin`): the header is
+/// measured from the section's top margin and drawn from where the body starts below it, so
+/// its place is not the same in both. Nor one in a text frame's paragraph, which is laid out
+/// apart and draws no objects.
+fn early_floats(
+    ctx: &mut Ctx,
+    story: StoryRef,
+    blocks: &Blocks,
+    (frame, width): (Option<PageFrame>, f32),
+    excl: &mut Vec<WrapArea>,
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut early = std::collections::HashSet::new();
+    let header = matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header));
+    let Some(frame) = frame.filter(|_| header) else { return early };
+    let legacy = is_legacy_header(ctx, story);
+    for (i, b) in blocks.iter().enumerate() {
+        let Block::Para(p) = &**b else { continue };
+        if p.objects.is_empty() || ctx.doc.styles.resolve_para(&p.props).frame.is_some() {
+            continue;
+        }
+        let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
+        for (oi, o) in p.objects.iter().enumerate() {
+            let Some((w, h, float)) = floating(o) else { continue };
+            let on_page =
+                matches!(float.v_rel, Anchor::Page | Anchor::TopMargin | Anchor::BottomMargin | Anchor::InsideMargin | Anchor::OutsideMargin)
+                    && float.h_rel != Anchor::Character;
+            if !on_page || (legacy && keeps_legacy_header_text(ctx, float.wrap)) || left_out(oi) {
+                continue;
+            }
+            let h = ctx.float_height(o, w, h);
+            let r = float_rect(Some(frame), (0.0, width), 0.0, w, h, float);
+            let outline = ctx.wrap_outline(o);
+            if let Some(area) = wrap_area(r, float, outline.as_deref().map(Vec::as_slice)) {
+                excl.push(area);
+                early.insert((i, oi));
+            }
+        }
+    }
+    early
+}
+
 /// Whether `story` is a header in a document of Word 2010's layout or older (compatibility mode
 /// below 15), whose text keeps its place beside the header's own floating objects (#6805).
 fn is_legacy_header(ctx: &Ctx, story: StoryRef) -> bool {
     ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT
         && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Header))
+}
+
+/// Whether such a header keeps its text in place beside an object wrapped `wrap` (#6805): square
+/// and top and bottom wrapping, and tight and through in mode 14, the legacy mode measured for them.
+fn keeps_legacy_header_text(ctx: &Ctx, wrap: Wrap) -> bool {
+    matches!(wrap, Wrap::TopAndBottom | Wrap::Square) || (ctx.doc.settings.compat_mode == 14 && matches!(wrap, Wrap::Tight | Wrap::Through))
 }
 
 /// Where a top and bottom object at `r` starts and ends for such a header.
@@ -245,8 +299,6 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // text keeps its place beside its own objects, which wrap nothing, and only a top and bottom
     // object reaching down from the text makes the header taller (#6805). Not in a table cell.
     let legacy_header = !in_cell && is_legacy_header(ctx, story);
-    // Contour wraps were measured in mode 14; earlier modes keep using their existing rule.
-    let legacy_header_contours = legacy_header && ctx.doc.settings.compat_mode == 14;
     // Top and bottom objects of such a header: where each starts and ends.
     let mut legacy_reach: Vec<(f32, f32)> = Vec::new();
     let mut table_areas = Vec::new();
@@ -262,6 +314,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
+    let early = early_floats(ctx, story, blocks, (frame, width), &mut excl);
     for (i, b) in blocks.iter().enumerate() {
         last_top = y;
         let mut path = prefix.to_vec();
@@ -339,12 +392,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     {
                         r.x = keep_in_cell(r.x, r.w, left, right);
                     }
-                    if (legacy_header && matches!(float.wrap, Wrap::TopAndBottom | Wrap::Square))
-                        || (legacy_header_contours && matches!(float.wrap, Wrap::Tight | Wrap::Through))
-                    {
+                    if legacy_header && keeps_legacy_header_text(ctx, float.wrap) {
                         // These objects do not reflow the legacy header's own text in Word.
                         legacy_reach.extend(legacy_reach_of(float, r));
-                    } else {
+                    } else if !early.contains(&(i, oi)) {
+                        // One placed before the text (`early_floats`) is in the wrap areas already.
                         let outline = ctx.wrap_outline(o);
                         excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
                     }
