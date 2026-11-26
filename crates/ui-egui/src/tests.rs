@@ -1857,10 +1857,30 @@ fn save_as_after_a_copy_starts_from_the_copy() {
     assert_eq!(first, ["txt"], "the copy's type comes first: {:?}", request.filters);
     assert_eq!(request.directory.as_deref(), Some(dir.as_path()), "the copy's folder");
 
+    // The in-app chooser asks the same.
+    a.run("ui.fileBrowser", json!({"purpose": "save"})).unwrap();
+    let request = files.requests().last().cloned().expect("the chooser asked where to save");
+    assert_eq!(request.file_name.as_deref(), Some("notes.txt"), "the chooser offers the copy's name");
+
     let own = dir.join("notes.docx");
     a.run("file.saveAs", json!({"path": own.to_string_lossy()})).unwrap();
     let request = asked(&mut a);
     assert_eq!(request.file_name.as_deref(), Some("notes.docx"), "a file of its own goes on from that file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7772: a name given after the copy was written wins over the copy's.
+#[test]
+fn save_as_after_a_copy_then_a_rename_offers_the_new_name() {
+    let dir = scratch("save-copy-rename");
+    let files = Arc::new(ScriptedFiles::new());
+    let mut a = app_with_files(files.clone());
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    a.run("file.saveAs", json!({"path": dir.join("notes.txt").to_string_lossy()})).unwrap();
+    a.run("file.rename", json!({"name": "Revised"})).unwrap();
+    let _ = a.save_as(crate::file_dialogs::AfterSave::Nothing);
+    let request = files.requests().last().cloned().expect("Save As asked where to save");
+    assert_eq!(request.file_name.as_deref(), Some("Revised.docx"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

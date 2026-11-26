@@ -308,6 +308,10 @@ impl WordApp {
             let old = old.to_string_lossy();
             self.ui.recent.retain(|r| *r != old);
         }
+        // A name given since the copy was written is the one Save As offers.
+        if r.is_ok() && id == "file.rename" {
+            self.last_copy = None;
+        }
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
         }
@@ -1015,11 +1019,8 @@ impl WordApp {
             "picture" => (PickRequest::open("picture"), file_dialogs::AfterPick::Picture),
             "recipients" => (Self::recipients_request(), file_dialogs::AfterPick::Recipients),
             "save" => {
-                // The same request as Browse…, with the save types of the name.
-                let name = self.default_save_name();
-                let mut request = PickRequest::save("document").file_name(name.clone()).save_as(true);
-                request.filters = crate::save_types::save_filters(&name);
-                (request, file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document })
+                // The same request as Browse… (a `folder` given here still wins, below).
+                (self.save_as_request(), file_dialogs::AfterPick::SaveAs { after: file_dialogs::AfterSave::Nothing, document })
             }
             "export" => {
                 let ext = pending.unwrap_or_else(|| "pdf".into());
