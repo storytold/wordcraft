@@ -230,7 +230,7 @@ impl WordApp {
         let math_session = self.session.math.as_ref().map(|m| m.session);
         let composing_before = !self.canvas.ime_preedit.is_empty();
         let old_path = self.session.path.clone();
-        let r = if self.ime_origin {
+        let mut r = if self.ime_origin {
             self.session.run_ime(id, &params).map_err(|e| e.to_string())
         } else {
             self.session.run(id, &params).map_err(|e| e.to_string())
@@ -303,6 +303,14 @@ impl WordApp {
             self.keep_web_font(id, &params, v);
         }
         self.after_command(id);
+        // Save the explicit choice before a window switch or exit. Each window has its own view.
+        if id == "view.ruler"
+            && let Ok(result) = &mut r
+            && let Some(visible) = result.get("value").and_then(Value::as_bool)
+        {
+            self.ui.ruler = visible;
+            add_saved(result, self.flush_prefs());
+        }
         if let Err(e) = &r {
             self.status(e.clone());
         }
