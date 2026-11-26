@@ -13,6 +13,7 @@ craft-docx = { workspace = true }
 craft-wordmodel = { workspace = true }
 wordcraft-doc = { workspace = true }
 craft-xml = { workspace = true }
+craft-zip = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

@@ -3,16 +3,23 @@
 //!
 //! A chart is an inline [`InlineObject::Graphic`] whose graphic keeps its model
 //! ([`ChartSpec`]); it is drawn by the same code that draws charts read from files, and saved as
-//! a chart part with its data in it (see `wordcraft_docx::chart_xml`). Charts made by other
-//! programs are shown as they are; the chart commands only edit charts with a model.
+//! a chart part with its data in it (see `wordcraft_docx::chart_xml`).
+//!
+//! A chart made by another program (Word, Excel…) keeps its own chart part, so it looks as it
+//! did there. Edit Data, Chart Title, Legend and Data Labels change that part in place (and the
+//! chart's embedded workbook, so Word's own Edit Data shows the new data), through
+//! `wordcraft_docx::chart_edit`; everything else about its look is kept. Change Chart Type
+//! needs WordCraft's model, so it stays with charts made in WordCraft.
 
 use std::sync::Arc;
 
 use serde_json::{Value, json};
+use wordcraft_doc::Pos;
 use wordcraft_doc::chart::{ChartAxis, ChartSeries, ChartSpec, ChartType, LegendPos, MAX_POINTS, MAX_SERIES, value_axis};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::para::{Float, InlineObject};
 use wordcraft_doc::props::Rgb;
+use wordcraft_docx::chart_edit::{self, PartChart, PartEdit, SeriesData};
 
 use super::objects::selected;
 use super::{delete_selection, sel_result};
@@ -55,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"type": "column|columnStacked|bar|barStacked|line|area|pie|doughnut|scatter"}"#)
-        .when(has_chart),
+        .when(has_model_chart),
         CommandSpec::new("chart.editData", "Edit Data", "Chart Design › Data", |s, v| {
             let d = v.get("data").unwrap_or(v);
             let (cats, series) = (d.get("categories"), d.get("series"));
@@ -64,6 +71,10 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             let cats = cats.map(categories).transpose()?;
             let series = series.map(series_list).transpose()?;
+            if selected_kept(s).is_some() {
+                let series = series.map(|l| l.into_iter().map(|(name, values)| SeriesData { name, values }).collect());
+                return edit_kept(s, &PartEdit::Data { categories: cats, series });
+            }
             edit(s, move |c| {
                 if let Some(cats) = &cats {
                     c.categories = cats.clone();
@@ -91,6 +102,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 None => None,
                 Some(_) => return Err(CmdError::Params("`text`: a string, or null for no title".into())),
             };
+            if let Some((_, kept)) = selected_kept(s) {
+                let title = match text {
+                    Some(t) => t,
+                    None if kept.title.is_some() => None,
+                    None => Some("Chart Title".into()),
+                };
+                return edit_kept(s, &PartEdit::Title(title));
+            }
             edit(s, move |c| {
                 c.title = match &text {
                     Some(t) => t.clone(),
@@ -109,6 +128,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 Some(id) => Some(Some(LegendPos::from_id(id).ok_or_else(|| CmdError::Params("`pos`: right|left|top|bottom|none".into()))?)),
                 None => None,
             };
+            if let Some((_, kept)) = selected_kept(s) {
+                let legend = match pos {
+                    Some(p) => p,
+                    None if kept.legend.is_some() => None,
+                    None => Some(LegendPos::Bottom),
+                };
+                return edit_kept(s, &PartEdit::Legend(legend));
+            }
             edit(s, move |c| {
                 c.legend = match pos {
                     Some(p) => p,
@@ -122,6 +149,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .when(has_chart),
         CommandSpec::new("chart.dataLabels", "Data Labels", "Chart Design › Chart Layouts › Add Chart Element", |s, v| {
             let on = p::bool(v, "on").or_else(|| p::bool(v, "value"));
+            if let Some((_, kept)) = selected_kept(s) {
+                return edit_kept(s, &PartEdit::DataLabels(on.unwrap_or(!kept.data_labels)));
+            }
             edit(s, move |c| {
                 c.data_labels = on.unwrap_or(!c.data_labels);
                 // The chart's setting replaces each series' own.
@@ -136,22 +166,84 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// The selected chart's model, when it has one.
+/// The selected chart as Chart Design shows and edits it: its model, or, for a chart made in
+/// another program, a model view of its data, title, legend and data labels (its look stays in
+/// its own chart part).
 pub fn selected_chart(s: &Session) -> Option<Arc<ChartSpec>> {
     match selected(s) {
-        Some((_, InlineObject::Graphic { graphic, .. })) => graphic.chart.clone(),
-        _ => None,
+        Some((_, InlineObject::Graphic { graphic, .. })) if graphic.chart.is_some() => graphic.chart.clone(),
+        _ => selected_kept(s).map(|(_, kept)| Arc::new(kept.view())),
     }
+}
+
+/// Whether the selected chart was made in another program and is edited in its own chart part.
+pub fn selected_chart_is_kept(s: &Session) -> bool {
+    selected_kept(s).is_some()
+}
+
+/// The selected chart made by another program, when its chart part can be read: where it is,
+/// and what Chart Design shows of it.
+fn selected_kept(s: &Session) -> Option<(Pos, PartChart)> {
+    let (pos, InlineObject::Graphic { graphic, .. }) = selected(s)? else { return None };
+    if graphic.kind != GraphicKind::Chart || graphic.chart.is_some() {
+        return None;
+    }
+    // A member picked inside a drawing canvas isn't the object at its place.
+    let here = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off));
+    if !matches!(here, Some(InlineObject::Graphic { graphic: g, .. }) if Arc::ptr_eq(g, &graphic)) {
+        return None;
+    }
+    let src = graphic.source.as_deref()?;
+    Some((pos, chart_edit::read_kept(&s.doc, src)?))
 }
 
 fn has_chart(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, InlineObject::Graphic { graphic, .. })) if graphic.chart.is_some() => None,
         Some((_, InlineObject::Graphic { graphic, .. })) if graphic.kind == GraphicKind::Chart => {
-            Some("this chart was made in another program: WordCraft shows it but can't edit it")
+            if selected_kept(s).is_some() {
+                None
+            } else {
+                Some("this chart was made in another program and its chart data wasn't kept: WordCraft shows it but can't edit it")
+            }
         }
         _ => Some("select a chart first"),
     }
+}
+
+/// `has_chart` for what needs WordCraft's model (Change Chart Type).
+fn has_model_chart(s: &Session) -> Option<&'static str> {
+    if selected_kept(s).is_some() {
+        return Some("this chart was made in another program: its data, title, legend and data labels can be edited, its type can't yet");
+    }
+    has_chart(s)
+}
+
+/// Make `edit` to the selected chart made by another program: its chart part (and workbook) are
+/// changed, and it is drawn again from the new part at its size.
+fn edit_kept(s: &mut Session, edit: &PartEdit) -> CmdResult {
+    let (pos, _) = selected_kept(s).ok_or_else(|| CmdError::Disabled("select a chart first".into()))?;
+    let Some(InlineObject::Graphic { w, h, graphic, .. }) = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned() else {
+        return Err(CmdError::Disabled("select a chart first".into()));
+    };
+    let src = graphic.source.clone().ok_or_else(|| CmdError::Disabled("this chart can't be edited".into()))?;
+    let done = chart_edit::edit_kept(&mut s.doc, &src, edit).map_err(|e| CmdError::Failed(e.0))?;
+    let (dw, dh) = if graphic.w > 0.0 && graphic.h > 0.0 { (graphic.w, graphic.h) } else { (w, h) };
+    let items = chart_edit::draw_part(&done.part, &s.doc.settings.theme_colors, dw, dh);
+    let next = Arc::new(Graphic { items, source: Some(done.source.clone()), w: dw, h: dh, ..(*graphic).clone() });
+    let view = chart_edit::read_part(&done.part).map(|c| c.view());
+    let para = s.doc.para_mut(pos.story, &pos.path)?;
+    if let Some(InlineObject::Graphic { graphic, .. }) = para.object_at_mut(pos.off) {
+        *graphic = next;
+    }
+    para.touch();
+    let mut out = json!({"chart": view, "madeElsewhere": true, "workbook": done.workbook});
+    if done.workbook == "linked" {
+        out["note"] = json!(
+            "the chart's data comes from a workbook outside the document, which isn't changed: Word shows the old data again when it updates the link"
+        );
+    }
+    Ok(out)
 }
 
 /// The graphic for `spec` drawn `w` × `h` points in the theme's colours.
