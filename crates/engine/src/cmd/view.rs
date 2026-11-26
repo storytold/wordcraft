@@ -31,14 +31,20 @@ pub fn specs() -> Vec<CommandSpec> {
         // The body as an outline of its headings, with the Outlining tab (`outline.*`).
         CommandSpec::new("view.outline", "Outline", "View › Views", |s, _| mode(s, ViewMode::Outline, false)).key("Mod+Alt+O").pure(),
         CommandSpec::new("view.readMode", "Read Mode", "View › Views", |s, _| mode(s, ViewMode::Print, true)).pure(),
+        CommandSpec::new("view.readLayout", "Reading Layout", "Reading › Layout", read_layout)
+            .params(r#"{"value": "columns" | "pages"}"#)
+            .pure(),
         CommandSpec::new("view.readColumnWidth", "Reading Column Width", "Reading › Layout", read_column_width)
             .params(r#"{"value": "auto" | "narrow" | "medium" | "wide" | "page"}"#)
+            .when(columns_only)
             .pure(),
         CommandSpec::new("view.readTextSize", "Reading Text Size", "Reading › Layout", read_text_size)
             .params(r#"{"value": percent (75–150)}"#)
+            .when(columns_only)
             .pure(),
         CommandSpec::new("view.readLineSpacing", "Reading Line Spacing", "Reading › Layout", read_line_spacing)
             .params(r#"{"value": "document" | 1.0 | 1.25 | 1.5 | 2.0}"#)
+            .when(columns_only)
             .pure(),
         CommandSpec::new("view.readPageColor", "Reading Page Color", "Reading › Layout", read_page_color)
             .params(r#"{"value": "none" | "sepia" | "inverse"}"#)
@@ -292,7 +298,8 @@ fn full_screen_available(_: &Session) -> Option<&'static str> {
 
 fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
     if read && !s.view.read_mode {
-        // Width, size and spacing reset on each entry. Page Color follows the saved preference.
+        // Layout, width, size and spacing reset on each entry. Page Color follows the saved preference.
+        s.view.read_pages = false;
         s.view.read_column_width = None;
         s.view.read_zoom = 1.0;
         s.view.read_line_spacing = None;
@@ -312,6 +319,22 @@ fn styles_pane_dock(s: &mut Session, v: &Value) -> CmdResult {
         s.view.styles_pane_dock = dock;
     }
     Ok(json!({"dock": s.view.styles_pane_dock.name()}))
+}
+
+/// The reading width, text size and line spacing shape Read Mode's columns, not the printed pages (#7634).
+fn columns_only(s: &Session) -> Option<&'static str> {
+    (s.view.read_mode && s.view.read_pages).then_some("only for Read Mode's columns")
+}
+
+/// Read Mode's Layout: the text in reading columns, or the pages as they print (#7634).
+fn read_layout(s: &mut Session, v: &Value) -> CmdResult {
+    let pages = match v.get("value").and_then(Value::as_str) {
+        Some("columns") => false,
+        Some("pages") => true,
+        _ => return Err(CmdError::Params("reading layout must be columns or pages".into())),
+    };
+    s.view.read_pages = pages;
+    Ok(json!({"layout": if pages { "pages" } else { "columns" }}))
 }
 
 fn read_column_width(s: &mut Session, v: &Value) -> CmdResult {

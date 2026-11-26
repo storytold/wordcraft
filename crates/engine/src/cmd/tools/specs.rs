@@ -375,6 +375,10 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("view.immersive", "Immersive Reader", "View › Immersive", |s, _| {
             s.view.read_mode = !s.view.read_mode;
+            // Read Mode opens in its columns (#7634).
+            if s.view.read_mode {
+                s.view.read_pages = false;
+            }
             Ok(json!({"value": s.view.read_mode}))
         })
         .pure(),
