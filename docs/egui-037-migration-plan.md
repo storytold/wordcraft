@@ -1,6 +1,8 @@
 # WordCraft: egui 0.37 migration plan
 
-**Status:** current-main reconciliation through `b4da59f0c38b506c36629b1d812ad7c0519fc238` passed all eight mandatory CI stages on 2026-10-25: 4,270 passing test executions, zero failures and 4 ignored (`egui037-wordcraft-main-refresh-ci-20261025-0603`). This includes main's encrypted-DOCX integrity requirement and selected-paragraph-mark highlight behavior. The dependency pins and lockfile are unchanged. A fresh review verified that the merge preserves the IME documentation and upstream fixes. Earlier counts and source snapshots below are historical.
+**Status:** 2026-11-23 packaging and evidence-reference refresh: source-built Flatpak installs attribution, application licences, brand terms and bundled-font licence texts beside NOTICE. Migration counts below describe the historical 2026-10-25 baseline, with native acceptance recorded separately. Earlier validation: current-main reconciliation through `b4da59f0c38b506c36629b1d812ad7c0519fc238` passed all eight mandatory CI stages on 2026-10-25: 4,270 passing test executions, zero failures and 4 ignored (`egui037-wordcraft-main-refresh-ci-20261025-0603`). This includes main's encrypted-DOCX integrity requirement and selected-paragraph-mark highlight behavior. The dependency pins and lockfile are unchanged. A fresh review verified that the merge preserves the IME documentation and upstream fixes. Earlier counts and source snapshots below are historical.
+
+Flatpak installs the nine notice and licence files referenced above. Compiler-audit paths are stable external evidence identifiers, not files shipped in this repository. The 27-language catalog count describes the migration baseline; it is not a current language inventory.
 
 Read-only comment balloons now consume the explicit `AlignedGalley` result from craft-ui at
 `25da1314d443171b4adeaad2cd9454b273f35c6f`: height comes from the requested reading area,
@@ -14,8 +16,7 @@ phonetic labels and preserved notice/packaging source repair.
 Native GUI/IME/capture/save-reopen traces, package notice verification, paired performance,
 platform/installer execution and app publication remain separate gates. This records local
 work, not publication or complete platform acceptance. Historical notes below remain history.
-**Scope:** the WordCraft checkout at
-`/home/codex/work/CraftApps/egui037-migration-20261022/wordcraft-implementation`.
+**Scope:** this WordCraft repository; source paths are relative to its root.
 **Baseline source:** `3a4770ef8ce037d2650c93e2d5764536549357c7` ("Merge pull request #3286 from
 matstrange/fix/protection-inspect-tracking"), workspace version 0.10.0, edition 2024,
 `rust-version = "1.95"`, resolver 3. Baseline `Cargo.lock` SHA-256
@@ -298,7 +299,7 @@ Proposed checks, to run through the managed `task.py` workflow after the plans l
 ## 4. Concrete 0.37 API and behavior refactors
 
 The historical compiler audit at
-`/home/codex/work/ssd2/task-evidence/egui037-audit-20261022/{fork,stock}/wordcraft.errors`
+`egui037-audit-20261022/{fork,stock}/wordcraft.errors` (external evidence identifiers, not repository files)
 lists 42 diagnostics, identical for stock and fork. They are clues, not current acceptance and
 not an exhaustive list. The concrete fixes are:
 
@@ -941,11 +942,10 @@ fail the named assertion:
 
 ## 7. Validation matrix and managed execution
 
-No command below was run for this planning document. Every new host build/test and owned-VM
-command must use `/home/codex/work/maintenance/task.py run`, then `status`, and `finish` after
-all checks and evidence are complete, with a unique `--task`, a fresh `--job-id`, exact
-`--source`, durable `--evidence`, and the allocator's target. Do not run Cargo directly outside
-the allocated target; do not reuse another worker's target/job.
+The initial planning document did not run the commands below. Historical acceptance used an
+external `task.py` runner with unique task/job identifiers, source and evidence records, and
+allocated build targets. That runner is not shipped in this repository. The command bodies below
+record that historical plan; new work follows the checks in `AGENTS.md`.
 
 ### 7.1 Host gates (Linux)
 
@@ -1237,9 +1237,11 @@ Immutable or primary sources used for the API and behavior statements above:
   <https://github.com/emilk/egui/pull/8657>,
   <https://github.com/emilk/egui/pull/8577>.
 - Historical compiler diagnostics used only as clues:
-  `/home/codex/work/ssd2/task-evidence/egui037-audit-20261022/fork/wordcraft.errors`.
+  `egui037-audit-20261022/fork/wordcraft.errors` (external evidence identifier).
 
 ## 12. Revision history
+
+- 2026-11-23: Flatpak installs the nine notice and licence files referenced above. Compiler-audit paths are stable external evidence identifiers, not files shipped in this repository. The 27-language catalog count describes the migration baseline; it is not a current language inventory.
 
 - 2026-10-23: initial plan. Inventory and source anchors from the assigned checkout; dependency
   target, API refactors, lifecycle/root-`Ui` audit, behavior/evidence matrix, performance
