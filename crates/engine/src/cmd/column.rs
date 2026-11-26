@@ -182,6 +182,9 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         _ if cells && (id.starts_with("table.") || matches!(id, "text.tab" | "text.backTab")) => run(s, v),
         // Copy and Cut of whole cells take a table of them (#1744).
         "edit.copy" | "edit.cut" if cells => run(s, v),
+        // Paste can lay a copied table over the selected cells. Let it inspect the selection
+        // before the ordinary column replacement deletes it.
+        "edit.paste" if cells => run(s, v),
         "edit.copy" => copy(s, &segs),
         "edit.cut" => {
             let r = copy(s, &segs)?;
@@ -207,6 +210,16 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         }
         _ => run(s, v),
     }
+}
+
+/// Delete the pieces of a selected cell rectangle for an ordinary Paste replacement.
+pub(super) fn delete_cell_segments(s: &mut Session) -> Result<(), CmdError> {
+    if s.cell_range().is_some()
+        && let Some(segments) = s.column_segments().map(<[(Pos, Pos)]>::to_vec)
+    {
+        delete(s, &segments)?;
+    }
+    Ok(())
 }
 
 /// Copy: one paragraph per block row (formatting kept); the plain text joins rows with newlines.

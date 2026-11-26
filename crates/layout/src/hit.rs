@@ -7,7 +7,7 @@ use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
-use crate::para::{PARA_MARK_WIDTH, ParaLayout};
+use crate::para::{PARA_MARK_WIDTH, ParaLayout, StyleRun};
 use crate::{DocLayout, Page, Placed};
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
@@ -279,6 +279,19 @@ fn story_items(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed>
     }
 }
 
+/// The topmost uncovered table cell in `story` under `(x, y)` on `page`.
+fn story_cell_at(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<(&Path, usize, usize)> {
+    let pt = Point::new(x, y);
+    story_items(page, story)
+        .filter_map(|it| match it {
+            Placed::Cell { rect, table, row, cell, story: s, covered: false, .. } if *s == story && rect.contains(pt) => Some((table, *row, *cell)),
+            _ => None,
+        })
+        // Nested tables emit their cells before the enclosing cell, so prefer the deepest match
+        // and keep the last (topmost) cell on ties at the same nesting level.
+        .max_by_key(|(table, _, _)| table.0.len())
+}
+
 /// Whether header/footer part `id` has text near (x, y) on the page (its header or footer
 /// lines). Used so an object behind the header text is only grabbed where there's no text,
 /// mirroring `text_at` for the body.
@@ -292,9 +305,13 @@ fn hf_text_at(p: &Page, id: u32, x: f32, y: f32) -> bool {
             _ => None,
         })
         .any(|(para, l0, l1, lx, ly)| {
-            let (Some(first), Some(last)) = (para.lines.get(*l0), para.lines.get(l1.checked_sub(1).unwrap_or(0))) else { return false };
-            let bottom = ly + last.top + last.height - first.top;
-            y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0
+            let Some(first) = para.lines.get(*l0) else { return false };
+            // Each line has its own band and extent: lines beside a float are shorter than the
+            // ones above them, and a click on a long line past a short one's end is still text.
+            (*l0..*l1).filter_map(|li| para.lines.get(li)).any(|l| {
+                let top = ly + l.top - first.top;
+                y >= top - 2.0 && y <= top + l.height + 2.0 && x >= lx + l.left - 40.0 && x <= lx + l.right + 40.0
+            })
         })
 }
 
@@ -313,6 +330,14 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
                 let top = y + (l.top - first.top);
                 v.push(LineHit { story: *s, path, para, li, x: *x, top, bottom: top + l.height, left: x + l.left, right: x + l.right });
             }
+        }
+    }
+    // A paragraph going on from the last line of one whose mark is hidden shares that line
+    // (#3986): the first one's part of it ends where the second one's text starts.
+    let joins: Vec<(f32, f32, f32)> = v.iter().filter(|l| l.para.shares_line() && l.li == 0).map(|l| (l.top, l.bottom, l.left)).collect();
+    for (top, bottom, left) in joins {
+        for l in v.iter_mut().filter(|l| l.top < bottom && top < l.bottom && l.left < left && left < l.right) {
+            l.right = left;
         }
     }
     v
@@ -439,17 +464,31 @@ impl DocLayout {
         // other text on the page: below one, it goes to the text beside or after it (#2038).
         let floats = if story == StoryRef::Body { float_table_areas(p) } else { Vec::new() };
         let away = |path: &Path| floats.iter().any(|(t, r)| path.0.len() > t.0.len() && path.0.starts_with(&t.0) && !r.contains(Point::new(x, y)));
-        // Turned cell text takes a click up to 2pt outside it, so outside a floating table too.
-        if let Some(pos) = turned_hit(p, story, x, y, &away) {
+        let cell = story_cell_at(p, story, x, y);
+        let in_cell = |path: &Path, table: &Path, row: usize, col: usize| {
+            path.0.starts_with(&table.0) && path.0.get(table.0.len()) == Some(&(row as u32)) && path.0.get(table.0.len() + 1) == Some(&(col as u32))
+        };
+        // Turned cell text takes a click up to 2pt outside it, so outside a floating table too,
+        // but a click inside one table cell must never be stolen by a neighbouring cell's text.
+        let skip_turned = |path: &Path| away(path) || cell.is_some_and(|(table, row, col)| !in_cell(path, table, row, col));
+        if let Some(pos) = turned_hit(p, story, x, y, &skip_turned) {
             return Some(pos);
         }
         let lines = page_lines(p, story);
+        let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
+        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        if let Some((table, row, col)) = cell {
+            if let Some(best) = lines.iter().filter(|l| in_cell(l.path, table, row, col)).min_by(nearest) {
+                return Some(at(best));
+            }
+            if let Some(pos) = nearest_turned(p, story, x, y, &|path| !in_cell(path, table, row, col)) {
+                return Some(pos);
+            }
+        }
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
-        let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
-        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
         if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
             return Some(at(best));
         }
@@ -719,6 +758,30 @@ impl DocLayout {
             let ctop = (base - asc).max(top);
             let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
             return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
+        }
+        None
+    }
+
+    /// The style run text typed at `pos` would take (the character's before it, or at the start
+    /// of a paragraph the first character's) and the baseline it sits on, on the page: `pos`'s
+    /// line's, raised or lowered by the run's shift (superscript, `w:position`). An input method's
+    /// composition is drawn with them, as Word draws it in the text's own font and size. `None` in
+    /// turned text, whose lines aren't horizontal.
+    pub fn typing_style(&self, pos: &Pos, page_hint: usize) -> Option<(StyleRun, f32)> {
+        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+            let Placed::Lines { para, l0, l1, y, turn, .. } = it else { continue };
+            let li = para.line_of(pos.off);
+            if li < *l0 || li >= *l1 {
+                continue;
+            }
+            if *turn != TextDirection::Horizontal {
+                return None;
+            }
+            let first = para.lines.get(*l0)?;
+            let line = para.lines.get(li)?;
+            let at = |off: usize| para.clusters.iter().find(|c| c.start <= off && off < c.end).and_then(|c| para.styles.get(c.style as usize));
+            let run = pos.off.checked_sub(1).and_then(at).or_else(|| at(pos.off)).or_else(|| para.styles.first())?;
+            return Some((run.clone(), y + line.baseline - first.top - run.shift));
         }
         None
     }

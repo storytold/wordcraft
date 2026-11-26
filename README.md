@@ -206,14 +206,15 @@ Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?s
 WordCraft was designed to be driven by people *and* by AI agents.
 
 ```sh
-claude mcp add wordcraft -- wordcraft-cli mcp                  # headless documents
-# confine the agent to folders: wordcraft-cli mcp --automation-read-root DIR --automation-write-root DIR
-wordcraft --control 7981 &                                     # or drive the running app…
-claude mcp add wordcraft-app -- wordcraft-cli mcp --connect 127.0.0.1:7981
+# headless documents; the agent reads only inside the first folder and writes only inside the second
+claude mcp add wordcraft -- wordcraft-cli mcp --automation-read-root DIR --automation-write-root DIR
 ```
 
+Both roots are required. Bridging an agent to the running app (`mcp --connect`) is refused until
+the app confines its control channel to the same roots (#3695).
+
 Tools include `list_commands`, `execute`, `batch`, `type_text`, `select_text`, `inspect_document`,
-`render_page`, `save_document`, and, with a running app, `screenshot`, `click` and `key`. Agents
+`render_page` and `save_document`. Agents
 can check their work through `inspect_document` without screenshots. See [docs/mcp.md](docs/mcp.md)
 and the [control protocol](docs/control-protocol.md). Macros record any sequence of commands and
 play it back (`tools.recordMacro`, `tools.macros`).
@@ -451,8 +452,10 @@ Copyright (c) 2026 ArtCraft Team and the WordCraft contributors. Required notice
 Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
 with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 
-The English spelling dictionary and hyphenation come from Grady Ward's public-domain Moby
-Hyphenator II word list. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled), as
+English spelling first tries a matching Hunspell dictionary from the Dictionaries folder.
+Otherwise it uses dialect-specific SCOWL 2026 dictionaries when built with language data;
+without it, spelling falls back to system Hunspell dictionaries or Grady Ward's public-domain
+Moby Hyphenator II word list. English hyphenation uses the Moby list and patterns trained from it. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled), as
 do Russian, Portuguese, Czech, Italian, Croatian and Turkish spelling (how to install them:
 [docs/spelling-dictionaries.md](docs/spelling-dictionaries.md)), and
 Polish hyphenation the TeX patterns by Hanna Kołodziejska, Bogusław Jackowski and Marek Ryćko (MIT
