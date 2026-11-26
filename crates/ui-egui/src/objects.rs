@@ -110,6 +110,9 @@ pub(crate) struct ObjectGesture {
     /// copy's axis lock). Alt is not part of it: letting Alt go just before the release must not snap an
     /// object that was placed freely while Alt was held.
     last_mods: (bool, bool),
+    /// The pointer position and Alt state at the last move: releasing Alt with the pointer still
+    /// must not re-snap the object when a modifier change stirs the pass.
+    last_at: (Pos2, bool),
     /// Moving an In Line with Text object: where it lands.
     drop_at: Option<Drop>,
     preview: Option<Preview>,
@@ -472,6 +475,7 @@ impl ObjectGesture {
             pending_behind: false,
             copy: false,
             last_mods: (false, false),
+            last_at: (Pos2::ZERO, false),
             drop_at: None,
             preview: None,
         }
@@ -604,6 +608,11 @@ impl ObjectGesture {
             // The text click path has been tracking the pointer until it became a drag.
             app.canvas.cancel_text_drag();
             self.pending_behind = false;
+        }
+        let alt_released = self.moved && self.last_at == (p.pos, true) && !p.mods.alt && self.last_mods == (p.mods.shift, p.mods.cmd);
+        self.last_at = (p.pos, p.mods.alt);
+        if alt_released {
+            return;
         }
         self.moved = true;
         self.last_mods = (p.mods.shift, p.mods.cmd);

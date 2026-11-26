@@ -898,8 +898,8 @@ fn replace_all_with_regex_groups_from_the_dialog() {
         h.run_steps(2);
         h.state_mut().run("ui.dialog", json!({"name": "replace"})).unwrap();
         h.run_steps(2);
-        set_field(&mut h, "find", "query", json!(r"(?<last>\w+), (\w+)")); // PLAN: assumed key `find` for the Find and Replace dialog
-        set_field(&mut h, "find", "with", json!(with));
+        set_field(&mut h, "find", "find", json!(r"(?<last>\w+), (\w+)")); // PLAN: assumed key `find` for the Find and Replace dialog
+        set_field(&mut h, "find", "replace", json!(with));
         set_field(&mut h, "find", "regex", json!(true));
         h.get_by_label("Replace All").click();
         h.run_steps(2);

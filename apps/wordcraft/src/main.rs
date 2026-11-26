@@ -38,7 +38,7 @@ use craft::platform::appearance::SystemReader;
 use craft::platform::clipboard::{Clipboard, ClipboardImage, SystemClipboard};
 use craft::platform::default_app::{DefaultApp, DefaultAppError};
 use craft::platform::logs::{self, LogNames, crash};
-use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
+use craft::platform::open::{DroppedFile, FileIntake, IntakeSender};
 use craft::print::spool::Spool;
 use craft::settings::SharedSettings;
 use craft::ui::InstallSpec;
@@ -121,7 +121,7 @@ impl eframe::App for App {
         // Once per frame, before any pass; the files stay in `raw` for the runtime's own reading.
         let files = dropped_files(raw);
         if !files.is_empty() {
-            self.drops.dropped(files, DropTarget::Elsewhere);
+            self.drops.dropped(files);
         }
         embed::before_input(ctx, |out| self.app.frame_input(out));
     }
@@ -1036,7 +1036,7 @@ mod smoke {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("dropped.txt");
         std::fs::write(&path, "Dropped words").unwrap();
-        run.sender.dropped(vec![DroppedFile { path: Some(path), name: "dropped.txt".into(), bytes: None }], DropTarget::Elsewhere);
+        run.sender.dropped(vec![DroppedFile { path: Some(path), name: "dropped.txt".into(), bytes: None }]);
         run.settle();
         assert!(run.app.app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Dropped words"), "the dropped file opened");
         let _ = std::fs::remove_dir_all(dir);
