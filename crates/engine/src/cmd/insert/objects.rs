@@ -104,6 +104,14 @@ pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
 /// script's next typing doesn't replace it (#965); Picture Format commands still act on it. The
 /// app selects a picture the person inserts (`WordApp::run`).
 fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str) -> CmdResult {
+    let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    place_picture_within(s, bytes, width, alt, max_w)
+}
+
+/// [`place_picture`] fitted to `max_w` points rather than the first section's text width: a
+/// picture drawn for the caret's own column (Paste Special › Picture of WordCraft's copy, #7743)
+/// keeps the size it was drawn at there.
+pub(crate) fn place_picture_within(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str, max_w: f32) -> CmdResult {
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }
@@ -119,7 +127,6 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     };
     let key = s.doc.add_media(bytes, ext);
     // Fitted to the text width.
-    let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let (mut w, mut h) = (natural_w, natural_h);
     if let Some(want) = width {
         // At most 22 inches, as for icons: a huge width made the height of a tall picture infinite.

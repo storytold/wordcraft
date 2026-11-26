@@ -8,6 +8,7 @@ use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::runtime::env::Label;
 use serde::{Deserialize, Serialize};
 
+use super::dialogs_insert::select_index;
 use super::host::{Asks, WordForm, open_form};
 use super::{Value, WordApp};
 use egui::Ui;
@@ -25,6 +26,10 @@ pub(crate) struct PasteSpecialForm {
     payload: Value,
     /// Why nothing can be pasted, when `formats` is empty.
     note: String,
+    /// The resolution of a picture of WordCraft's own copy, DPI; 0 is the default
+    /// (`paste::PICTURE_DEFAULT_DPI`).
+    #[serde(default)]
+    dpi: u32,
 }
 
 impl PasteSpecialForm {
@@ -41,7 +46,18 @@ impl PasteSpecialForm {
             kept["privateClipboard"] = json!(own);
         }
         let note = if formats.is_empty() { crate::system_clipboard::nothing_to_paste(app) } else { String::new() };
-        PasteSpecialForm { formats, choice: 0, payload: kept, note }
+        PasteSpecialForm { formats, choice: 0, payload: kept, note, dpi: 0 }
+    }
+
+    /// Whether `format` pastes a picture drawn of WordCraft's own copy (#7743): Picture with no
+    /// picture on the system clipboard.
+    fn draws_our_copy(&self, format: &str) -> bool {
+        format == "picture" && self.payload.get("picture").and_then(Value::as_str).is_none_or(str::is_empty)
+    }
+
+    /// The resolution picked for a picture of our own copy, DPI.
+    fn dpi(&self) -> u32 {
+        if self.dpi == 0 { wordcraft_engine::cmd::paste::PICTURE_DEFAULT_DPI } else { self.dpi }
     }
 
     /// The text under the list when the clipboard holds nothing: the engine's wording, sentence-cased.
@@ -83,10 +99,21 @@ impl WordForm for PasteSpecialForm {
                 "formatted" => "Keeps the fonts and formatting of the copied text.",
                 "rtf" => "Reads the clipboard's rich text and keeps its formatting.",
                 "html" => "Reads the clipboard's web content and keeps its formatting.",
+                "picture" if self.draws_our_copy(f) => "Pastes the copied text and tables as a picture.",
                 "picture" => "Pastes the clipboard's picture.",
                 _ => "Drops all formatting and pastes plain text.",
             };
             Text::new(Label::from(tl!(hint))).show(ui);
+            if self.draws_our_copy(f) {
+                let choices = wordcraft_engine::cmd::paste::PICTURE_DPI_CHOICES;
+                let rows: Vec<Label> = choices.iter().map(|d| Label::from(crate::i18n::fmt(tl!("{dpi} DPI"), &[("dpi", &d.to_string())]))).collect();
+                let current = choices.iter().position(|&d| d == self.dpi());
+                if let Some(at) = select_index(ui, &Label::from(tl!("Resolution:")), &rows, current)
+                    && let Some(&d) = choices.get(at)
+                {
+                    self.dpi = d;
+                }
+            }
         }
         true
     }
@@ -97,6 +124,9 @@ impl WordForm for PasteSpecialForm {
         };
         let mut params = self.payload.clone();
         params["as"] = json!(f);
+        if self.draws_our_copy(f) {
+            params["dpi"] = json!(self.dpi());
+        }
         vec![("edit.pasteSpecial".to_string(), params)]
     }
 }
@@ -105,4 +135,25 @@ impl WordForm for PasteSpecialForm {
 pub(crate) fn open(app: &mut WordApp, _name: &str, params: &Value, parent: Option<DialogId>) -> Option<DialogId> {
     let form = PasteSpecialForm::read(app, params);
     Some(open_form(app, parent, form))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #7743: Picture of WordCraft's own copy pastes at the resolution picked (300 DPI to start);
+    /// a picture on the system clipboard is pasted as it is, with no resolution to pick.
+    #[test]
+    fn a_picture_of_our_copy_takes_the_resolution_picked() {
+        let paste = |params: Value| vec![("edit.pasteSpecial".to_string(), params)];
+        let mut f = PasteSpecialForm { formats: vec!["formatted".into(), "picture".into()], choice: 1, payload: json!({}), ..Default::default() };
+        assert_eq!(f.commands(), paste(json!({"as": "picture", "dpi": 300})));
+        f.dpi = 1200;
+        assert_eq!(f.commands(), paste(json!({"as": "picture", "dpi": 1200})));
+        f.choice = 0;
+        assert_eq!(f.commands(), paste(json!({"as": "formatted"})), "only a picture of the copy has a resolution");
+        f.choice = 1;
+        f.payload = json!({"picture": "iVBORw0KGgo="});
+        assert_eq!(f.commands(), paste(json!({"picture": "iVBORw0KGgo=", "as": "picture"})));
+    }
 }
