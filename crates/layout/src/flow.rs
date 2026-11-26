@@ -300,8 +300,9 @@ impl<'a> Flow<'a> {
     fn merge_gap(&self, ctx: &Ctx, pb: &mut PageBuilder, mut before: f32, prev: (String, bool, f32, bool, bool)) -> f32 {
         let (style, ctxl, mut after, after_auto, listed) = prev;
         let rp = &self.pl.rp;
-        // Contextual spacing suppresses each paragraph's own side of the gap.
-        if style == rp.style {
+        // Contextual spacing suppresses each paragraph's own side of the gap. A style the document
+        // doesn't define is Normal, as the mark ending a table row is (see `place_table`).
+        if crate::table::known_style(ctx.doc, &style) == crate::table::known_style(ctx.doc, &rp.style) {
             if ctxl {
                 pb.y -= after;
                 before = (before - after).max(0.0);
@@ -1050,14 +1051,25 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     if after <= 0.0 {
         return 0.0;
     }
-    if let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) {
-        let nrp = ctx.doc.styles.resolve_para(&next.props);
-        if nrp.style == rp.style && rp.contextual_spacing {
+    match ctx.doc.body.get(block + 1).map(|b| &**b) {
+        Some(Block::Para(next)) => {
+            let nrp = ctx.doc.styles.resolve_para(&next.props);
+            if nrp.style == rp.style && rp.contextual_spacing {
+                return 0.0;
+            }
+            if listed && rp.after_auto && ctx.has_label(next) {
+                return 0.0;
+            }
+        }
+        // A table's first paragraph is the next one (see `place_table`).
+        Some(Block::Table(t))
+            if t.props.float.is_none()
+                && rp.contextual_spacing
+                && crate::table::first_style(ctx.doc, t) == Some(crate::table::known_style(ctx.doc, &rp.style)) =>
+        {
             return 0.0;
         }
-        if listed && rp.after_auto && ctx.has_label(next) {
-            return 0.0;
-        }
+        _ => {}
     }
     after
 }
