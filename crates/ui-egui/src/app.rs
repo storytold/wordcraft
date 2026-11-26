@@ -102,6 +102,8 @@ impl WordApp {
             command_catalog_lang: "",
             key_overrides: Default::default(),
             command_states: Default::default(),
+            command_states_cache: None,
+            keytip_cache: None,
             fonts_frames: 0,
             clipboard_published: false,
             printing: Default::default(),

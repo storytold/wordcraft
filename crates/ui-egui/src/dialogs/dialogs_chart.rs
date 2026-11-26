@@ -291,12 +291,12 @@ fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bo
     let mut activated = false;
     for event in out.response.events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(kind) = keys.last().and_then(|k| kinds.get(*k)) {
                     form.kind = *kind;
                 }
             }
-            CollectionEvent::Selection(SelectionChange::Toggle(key)) => {
+            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => {
                 if let Some(kind) = kinds.get(key) {
                     form.kind = *kind;
                 }
