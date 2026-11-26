@@ -55,7 +55,8 @@ pub(super) fn caps_expands(c: char) -> bool {
 }
 
 /// Combining marks and joiners (bidi classes NSM, BN: harakat, ZWNJ, ZWJ) belong to the
-/// character before them: same font, same shaping run, so Arabic joining isn't broken.
+/// character before them: same font, same shaping run, so Arabic joining isn't broken. A mark
+/// that font can't draw takes its character to a face that draws both (`segment_keys`, #7865).
 pub(super) fn is_mark(c: char) -> bool {
     use unicode_bidi::BidiClass::{BN, NSM};
     // No ASCII character is a mark (its BN characters are controls).
