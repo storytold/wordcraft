@@ -11358,6 +11358,372 @@ fn keep_with_next_chain_carries_over_when_the_last_paragraph_cannot_start() {
     assert_eq!(pages(fit, false), [0, 0, 0, 1], "without the control one line stays: {fit}");
 }
 
+/// Pages of A, of B's first and last line, of C's first and last line, and of D for the run of
+/// the synthetic documents measured in Word for Windows 16.0 (Letter, 1 inch margins, lines of
+/// exactly 20 pt, widow control on): `fillers` one-line paragraphs, then A (1 line), B (8 lines),
+/// C (8 lines) and D (1 line). A, B and C are kept with the next when `kept`; B also keeps its
+/// lines together when `b_lines`.
+fn kept_run_pages(fillers: usize, kept: bool, b_lines: bool) -> Vec<usize> {
+    let mut d = Document::new();
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+        widow_control: Some(true),
+        ..Default::default()
+    };
+    let para = |text: &str, p: &ParaProps| {
+        let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        x.props = p.clone();
+        wordcraft_doc::para_block(x)
+    };
+    d.body = (0..fillers).map(|i| para(&format!("F{i}"), &plain)).collect();
+    let k = ParaProps { keep_next: Some(kept), ..plain.clone() };
+    let kb = ParaProps { keep_lines: Some(b_lines), ..k.clone() };
+    let eight = |label: &str| {
+        (1..=8).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+            "
+",
+        )
+    };
+    d.body.push(para("A1", &k));
+    d.body.push(para(&eight("B"), &kb));
+    d.body.push(para(&eight("C"), &k));
+    d.body.push(para("D1", &plain));
+    let l = lay(&d);
+    let page = |block: usize, offset: usize| l.caret(&Pos::body(fillers + block, offset)).unwrap().page;
+    // Eight lines of two characters and a break: the last line starts at offset 21.
+    vec![page(0, 0), page(1, 0), page(1, 21), page(2, 0), page(2, 21), page(3, 0)]
+}
+
+/// A run of kept paragraphs whose last kept one is too long for the room left breaks there, as
+/// one kept paragraph that does not fit breaks as usual, instead of moving over whole. Measured
+/// in Word (see [`kept_run_pages`]): with 16 to 21 fillers A and B stay on the first page and C
+/// splits; with 24 or 25 A stays and B splits.
+#[test]
+fn keep_with_next_run_breaks_at_the_kept_paragraph_that_does_not_fit() {
+    crate::test_fonts();
+    // C splits: A and B and C's first lines on the first page, its last lines on the second.
+    let split_c = (10..100).find(|n| kept_run_pages(*n, false, false) == [0, 0, 0, 0, 1, 1]).expect("a count that splits the last paragraph");
+    assert_eq!(kept_run_pages(split_c, true, false), [0, 0, 0, 0, 1, 1], "C splits and the run stays: {split_c}");
+    // B splits: A and B's first line on the first page, B's last line on the second.
+    let split_b = (10..100).find(|n| kept_run_pages(*n, false, false)[..3] == [0, 0, 1]).expect("a count that splits the middle paragraph");
+    assert_eq!(kept_run_pages(split_b, true, false), kept_run_pages(split_b, false, false), "B splits and A stays: {split_b}");
+}
+
+/// Guards, the same before the fix: when the room holds the kept paragraphs whole but then
+/// cannot start the one after them, or holds all but the last kept paragraph's first lines, the
+/// run moves over together (Word, 15 and 22 to 23 fillers).
+#[test]
+fn keep_with_next_run_that_cannot_be_followed_moves_together() {
+    crate::test_fonts();
+    // Room for A, B and C whole but not for D after them.
+    let whole = (10..100).rev().find(|n| kept_run_pages(*n, false, false)[..5] == [0, 0, 0, 0, 0]).expect("a count that holds all three");
+    assert_eq!(kept_run_pages(whole, true, false)[..5], [1, 1, 1, 1, 1], "the run that fits whole moves together: {whole}");
+    // Room for A and B whole, C cannot even start there.
+    let tight = (10..100).find(|n| kept_run_pages(*n, false, false)[..4] == [0, 0, 0, 1]).expect("a count where C starts on the next page");
+    assert_eq!(kept_run_pages(tight, true, false)[..5], [1, 1, 1, 1, 1], "A and B move with C: {tight}");
+}
+
+/// Guard, the same before the fix: keep lines together on a kept paragraph in the middle of the
+/// run moves it, and the kept paragraph before it, when it does not fit in the room left.
+#[test]
+fn keep_with_next_run_moves_with_a_middle_paragraph_that_keeps_its_lines() {
+    crate::test_fonts();
+    let split_b = (10..100).find(|n| kept_run_pages(*n, false, false)[..3] == [0, 0, 1]).expect("a count that splits the middle paragraph");
+    let pages = kept_run_pages(split_b, true, true);
+    assert_eq!(pages[..3], [1, 1, 1], "A moves with B, which does not split: {split_b} {pages:?}");
+}
+
+/// A run of kept paragraphs longer than a page is given up on, as before: the room-limited count
+/// must not move a paragraph whose whole run fits on no page. A is one line, B to H are ten-line
+/// paragraphs (Letter, 1 inch margins, lines of exactly 20 pt, widow control on), all kept with
+/// the next, then I. A to D (620 pt) stay on the first page. Before the fix the shortened count
+/// (B and the two paragraphs after it whole, then two lines of E: 640 pt) moved B, and C after
+/// it, to the second page and left the first one with A alone.
+#[test]
+fn keep_with_next_run_longer_than_a_page_stays_where_it_is() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    let props = |kept: bool| ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+        widow_control: Some(true),
+        keep_next: Some(kept),
+        ..Default::default()
+    };
+    let para = |text: String, kept: bool| {
+        let mut x = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+        x.props = props(kept);
+        wordcraft_doc::para_block(x)
+    };
+    let lines = |label: &str, n: usize| {
+        (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+            "
+",
+        )
+    };
+    // The new document's one empty paragraph would shift the blocks.
+    d.body = vec![para("A1".to_string(), true)];
+    for label in ["B", "C", "D", "E", "F", "G", "H"] {
+        d.body.push(para(lines(label, 10), true));
+    }
+    d.body.push(para(lines("I", 10), false));
+    assert_eq!(d.body.len(), 9);
+    let l = lay(&d);
+    let page = |block: usize| l.caret(&Pos::body(block, 0)).unwrap().page;
+    assert_eq!([page(0), page(1), page(2), page(3)], [0, 0, 0, 0], "A to D stay on the first page");
+}
+
+#[test]
+fn keep_with_next_final_paragraph_stays_when_its_line_fits() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    let para = |text, keep_next, space_after| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(space_after),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            keep_next: Some(keep_next),
+            ..Default::default()
+        };
+        wordcraft_doc::para_block(p)
+    };
+    // In the default 648 pt body, the last line reaches 640 pt. Its 20 pt after-spacing would overflow.
+    d.body = (0..31).map(|_| para("Filler", false, 0.0)).collect();
+    d.body.push(para("Final line", true, 20.0));
+
+    let l = lay(&d);
+    assert_eq!(l.caret(&Pos::body(31, 0)).unwrap().page, 0);
+}
+
+/// A kept paragraph with space after that fits in the room left keeps the run before it together
+/// with it: the space after is not part of the paragraph's own fit (placement measures it
+/// without), so it must not end the chain. A is one line, B nine lines with 40 pt after it, C
+/// five lines (Letter, 1 inch margins, lines of exactly 20 pt, widow control on); A and B are
+/// kept with the next. Whatever the room, A is on B's page: before the fix, with 188 or 208 pt
+/// left after A, the 220 pt of B and its space after ended the chain at B, A stayed and B moved
+/// alone.
+#[test]
+fn keep_with_next_run_counts_the_space_after_of_a_kept_paragraph_after_its_fit() {
+    crate::test_fonts();
+    let pages = |fillers: usize| -> (usize, usize) {
+        let mut d = Document::new();
+        let props = |kept: bool, after: f32| ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(after),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            widow_control: Some(true),
+            keep_next: Some(kept),
+            ..Default::default()
+        };
+        let para = |text: String, p: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+            x.props = p;
+            wordcraft_doc::para_block(x)
+        };
+        let lines = |label: &str, n: usize| {
+            (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+                "
+",
+            )
+        };
+        d.body = (0..fillers).map(|i| para(format!("F{i}"), props(false, 0.0))).collect();
+        d.body.push(para("A1".to_string(), props(true, 0.0)));
+        d.body.push(para(lines("B", 9), props(true, 40.0)));
+        d.body.push(para(lines("C", 5), props(false, 0.0)));
+        let l = lay(&d);
+        let page = |block: usize| l.caret(&Pos::body(fillers + block, 0)).unwrap().page;
+        (page(0), page(1))
+    };
+    // A and B on the first page, C not (it cannot start there): the counts that matter.
+    for fillers in 18..=24 {
+        let (a, b) = pages(fillers);
+        assert_eq!(a, b, "A stays with B: {fillers} fillers");
+    }
+    // The window of the fix exists: some count moves A and B over together.
+    assert!((18..=24).any(|n| pages(n) == (1, 1)), "a count moves the pair");
+}
+
+#[test]
+fn keep_with_next_run_ignores_contextual_space_before_between_matching_styles() {
+    crate::test_fonts();
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+        widow_control: Some(true),
+        ..Default::default()
+    };
+    let para = |text: &str, props: ParaProps| {
+        let mut paragraph = Paragraph::with_text(text, Default::default());
+        paragraph.props = props;
+        wordcraft_doc::para_block(paragraph)
+    };
+    let kept = ParaProps { keep_next: Some(true), ..plain.clone() };
+    let mut doc = Document::new();
+    doc.body = (0..22).map(|_| para("Filler", plain.clone())).collect();
+    doc.body.push(para("A", kept.clone()));
+    doc.body.push(para("B1\nB2\nB3\nB4\nB5\nB6\nB7\nB8\nB9", ParaProps { space_before: Some(80.0), contextual_spacing: Some(true), ..kept }));
+    doc.body.push(para("C1\nC2\nC3\nC4\nC5", plain));
+    // B fits below A once its contextual gap is dropped, but C cannot start there.
+    let layout = lay(&doc);
+    let page = |block| layout.caret(&Pos::body(block, 0)).unwrap().page;
+    assert_eq!([page(22), page(23), page(24)], [1, 1, 1]);
+}
+
+fn kept_run_start_pages(mut doc: Document, fillers: usize, run: &[(&str, ParaProps)]) -> Vec<usize> {
+    let para = |text: &str, props: &ParaProps| {
+        let mut paragraph = Paragraph::with_text(text, Default::default());
+        paragraph.props = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            widow_control: Some(true),
+            ..Default::default()
+        };
+        paragraph.props.overlay(props);
+        wordcraft_doc::para_block(paragraph)
+    };
+    doc.body = (0..fillers).map(|_| para("Filler", &ParaProps::default())).collect();
+    doc.body.extend(run.iter().map(|(text, props)| para(text, props)));
+    let layout = lay(&doc);
+    (fillers..doc.body.len()).map(|block| layout.caret(&Pos::body(block, 0)).unwrap().page).collect()
+}
+
+#[test]
+fn keep_with_next_run_respects_collapsed_and_additive_spacing() {
+    crate::test_fonts();
+    let kept = ParaProps { keep_next: Some(true), ..Default::default() };
+    let run = [
+        ("A", ParaProps { space_after: Some(40.0), ..kept.clone() }),
+        ("B1\nB2\nB3\nB4\nB5\nB6\nB7\nB8\nB9", ParaProps { space_before: Some(40.0), ..kept }),
+        ("C1\nC2\nC3\nC4\nC5", ParaProps::default()),
+    ];
+    let mut doc = Document::new();
+    doc.settings.sum_paragraph_spacing = false;
+    // 268 pt left: A and B fit with a single 40 pt gap, but C cannot start below them.
+    assert_eq!(kept_run_start_pages(doc.clone(), 19, &run), [1, 1, 1]);
+    // With an 80 pt gap B splits, so the start of the run stays on the first page.
+    doc.settings.sum_paragraph_spacing = true;
+    assert_eq!(kept_run_start_pages(doc, 19, &run), [0, 0, 1]);
+}
+
+#[test]
+fn keep_with_next_run_ignores_contextual_space_after_between_matching_styles() {
+    crate::test_fonts();
+    let kept = ParaProps { keep_next: Some(true), ..Default::default() };
+    let mut run = [
+        ("A", kept.clone()),
+        ("B1\nB2\nB3\nB4\nB5\nB6\nB7\nB8\nB9", ParaProps { space_after: Some(80.0), contextual_spacing: Some(true), ..kept.clone() }),
+        ("C1\nC2\nC3\nC4\nC5\nC6\nC7\nC8\nC9", kept),
+        ("D1\nD2\nD3\nD4\nD5", ParaProps::default()),
+    ];
+    // 408 pt left: with B's trailing space suppressed, A, B and C fit and D cannot start.
+    assert_eq!(kept_run_start_pages(Document::new(), 12, &run), [1, 1, 1, 1]);
+    // With actual trailing space, C splits and the start of the run stays.
+    run[1].1.contextual_spacing = Some(false);
+    assert_eq!(kept_run_start_pages(Document::new(), 12, &run), [0, 0, 0, 1]);
+}
+
+#[test]
+fn keep_with_next_run_ignores_automatic_space_after_between_list_items() {
+    crate::test_fonts();
+    let mut doc = Document::new();
+    let num = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    let numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    let kept = ParaProps { keep_next: Some(true), ..Default::default() };
+    let mut run = [
+        ("A", kept.clone()),
+        ("B1\nB2\nB3\nB4\nB5\nB6\nB7\nB8\nB9", ParaProps { numbering, space_after_auto: Some(true), ..kept.clone() }),
+        ("C1\nC2\nC3\nC4\nC5\nC6\nC7\nC8\nC9", ParaProps { numbering, ..kept }),
+        ("D1\nD2\nD3\nD4\nD5", ParaProps::default()),
+    ];
+    // 388 pt left: removing B's 14 pt after-space lets C fit but leaves no room to start D.
+    assert_eq!(kept_run_start_pages(doc.clone(), 13, &run), [1, 1, 1, 1]);
+    // An unlisted C keeps the automatic gap, so C splits.
+    run[2].1.numbering = None;
+    assert_eq!(kept_run_start_pages(doc, 13, &run), [0, 0, 0, 1]);
+}
+
+/// A kept paragraph that also keeps its lines together and has a bottom border needs the border
+/// room to be placed whole; the paragraph before it must count that room (the same placement
+/// check), or it stays while the kept paragraph moves alone. A is one line, B nine lines with a
+/// bottom border and Keep lines together (Letter, 1 inch margins, lines of exactly 20 pt), A and
+/// B kept with the next, then C.
+#[test]
+fn keep_with_next_run_counts_the_bottom_border_of_a_paragraph_that_keeps_its_lines() {
+    crate::test_fonts();
+    let pages = |fillers: usize| -> (usize, usize) {
+        let mut d = Document::new();
+        let props = |kept: bool| ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)),
+            widow_control: Some(true),
+            keep_next: Some(kept),
+            ..Default::default()
+        };
+        let para = |text: String, p: ParaProps| {
+            let mut x = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+            x.props = p;
+            wordcraft_doc::para_block(x)
+        };
+        let lines = |label: &str, n: usize| {
+            (1..=n).map(|i| format!("{label}{i}")).collect::<Vec<_>>().join(
+                "
+",
+            )
+        };
+        d.body = (0..fillers).map(|i| para(format!("F{i}"), props(false))).collect();
+        d.body.push(para("A1".to_string(), props(true)));
+        let bordered = ParaProps {
+            keep_lines: Some(true),
+            borders: Some(Borders {
+                bottom: Some(Border { style: BorderStyle::Single, width: 1.0, space: 12.0, color: None }),
+                ..Default::default()
+            }),
+            ..props(true)
+        };
+        d.body.push(para(lines("B", 9), bordered));
+        d.body.push(para(lines("C", 5), props(false)));
+        let l = lay(&d);
+        let page = |block: usize| l.caret(&Pos::body(fillers + block, 0)).unwrap().page;
+        (page(0), page(1))
+    };
+    for fillers in 18..=24 {
+        let (a, b) = pages(fillers);
+        assert_eq!(a, b, "A stays with B: {fillers} fillers");
+    }
+    assert!((18..=24).any(|n| pages(n) == (1, 1)), "a count moves the pair");
+}
+
+/// Guard, the same before the fix: balanced columns still count a run of kept paragraphs whole
+/// (they grow to hold it) instead of cutting it at the trial height.
+#[test]
+fn balanced_columns_hold_a_run_of_kept_paragraphs() {
+    crate::test_fonts();
+    use wordcraft_doc::section::SectionStart;
+    let mut d = two_column_section(SectionStart::Continuous, vec![]);
+    for i in [3, 4, 5] {
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(i)) {
+            p.props.keep_next = Some(true);
+        }
+    }
+    let l = lay(&d);
+    let (nl, bl, nr, br, (page, after)) = column_bottoms(&l);
+    // The kept paragraphs and the paragraph that follows them share a column.
+    let boxes = para_boxes(&l);
+    let col = |i: usize| boxes.get(i).map(|e| e.1);
+    assert!(col(3).is_some() && (4..=6).all(|i| col(i) == col(3)), "kept paragraphs split over columns: {:?}", boxes.get(3..7));
+    assert_eq!((nl + nr, nl.abs_diff(nr)), (10, 4), "{nl} left, {nr} right");
+    assert_eq!(page, 0);
+    let bottom = bl.max(br);
+    assert!(after >= bottom - 0.5 && after < bottom + 30.0, "next section at {after}, columns end at {bottom}");
+}
+
 /// Keep lines together on the paragraph after a kept heading: when the whole paragraph does
 /// not fit below the heading, both move over. Word does not leave a kept heading holding part
 /// of a paragraph that keep lines together will not split (#966).
