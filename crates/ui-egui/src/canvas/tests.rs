@@ -2113,6 +2113,183 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
 }
 
 #[test]
+fn only_pages_follow_the_systems_text_settings() {
+    use crate::screen_text::ScreenText;
+    // Previews and thumbnails are cached without the system's settings in their keys: they are
+    // drawn the platform's fixed way. Thumbnails are not baseline-snapped either.
+    let (screen, thumb) = (screen_render_options(), thumbnail_render_options());
+    for opts in [&screen, &thumb] {
+        assert_eq!((opts.text_darkening, opts.hinting, opts.lcd), (ScreenText::PLATFORM.darkening, ScreenText::PLATFORM.hinting, None));
+    }
+    assert!(screen.baseline_snap && !thumb.baseline_snap);
+    // A page takes the same until the app has asked the system (tests never do).
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let page = page_render_options(&a, false);
+    assert_eq!((page.text_darkening, page.hinting, page.baseline_snap), (screen.text_darkening, screen.hinting, true));
+}
+
+#[test]
+fn subpixel_text_follows_the_choice_the_system_and_the_screen() {
+    use super::pages::lcd_for;
+    use crate::screen_text::SubpixelOrder::{Bgr, Rgb};
+    use wordcraft_engine::cmd::view::TextSmoothing::{Grayscale, Subpixel, System};
+    use wordcraft_render::LcdOrder;
+    // Use system setting: where the system asks for it, in its order, below 2x only.
+    assert_eq!(lcd_for(System, Some(Rgb), Some(Rgb), 1.0), Some(LcdOrder::Rgb));
+    assert_eq!(lcd_for(System, Some(Bgr), Some(Bgr), 1.5), Some(LcdOrder::Bgr));
+    assert_eq!(lcd_for(System, Some(Rgb), Some(Rgb), 2.0), None, "a high-density screen");
+    assert_eq!(lcd_for(System, Some(Rgb), Some(Rgb), f32::NAN), None);
+    assert_eq!(lcd_for(System, None, None, 1.0), None, "the system asks for greyscale, or says nothing");
+    assert_eq!(lcd_for(System, None, Some(Bgr), 1.0), None, "a known stripe order is not a request");
+    // The user's own choice wins on any screen; RGB when the system names no order.
+    assert_eq!(lcd_for(Subpixel, None, None, 2.0), Some(LcdOrder::Rgb));
+    assert_eq!(lcd_for(Subpixel, Some(Bgr), Some(Bgr), 3.0), Some(LcdOrder::Bgr));
+    // A BGR panel whose system has smoothing off (ClearType off on Windows, greyscale on a
+    // Linux desktop) still gets BGR edges, not RGB ones.
+    assert_eq!(lcd_for(Subpixel, None, Some(Bgr), 1.0), Some(LcdOrder::Bgr));
+    let cleartype_off = crate::screen_text::ScreenText::from_windows(Some("0"), Some(2), Some(0));
+    assert_eq!(lcd_for(Subpixel, cleartype_off.subpixel, cleartype_off.stripes, 1.0), Some(LcdOrder::Bgr));
+    assert_eq!(lcd_for(System, cleartype_off.subpixel, cleartype_off.stripes, 1.0), None);
+    for (asked, stripes) in [(None, None), (Some(Rgb), Some(Rgb)), (None, Some(Bgr))] {
+        assert_eq!(lcd_for(Grayscale, asked, stripes, 1.0), None);
+    }
+}
+
+#[test]
+fn a_page_picture_is_rasterised_at_the_screens_own_scale_where_the_view_accounts_for_it() {
+    use super::pages::raster_scale;
+    // An A4 page (841.89 pt) at 100 % on a 2x screen: 2245.04 device pixels, asked for as 2256 (the next multiple
+    // of 16). At 2256 every glyph would be shrunk by half a percent on its way to the screen.
+    let longest = 841.89_f32;
+    let native = 96.0 / 72.0 * 2.0;
+    assert_eq!(raster_scale(2256, 16, longest, Some(native)), (native, true));
+    assert_eq!(raster_scale(2256, 16, longest, None), (2256.0 / longest, false), "a view with no scale of its own");
+    // US Letter (792 pt) at the same zoom is 2112 pixels, a multiple of 16: the same either way.
+    let (scale, own) = raster_scale(2112, 16, 792.0, Some(native));
+    assert!(own && (scale - 2112.0 / 792.0).abs() < 1e-6);
+    // A side the view's scale doesn't account for: another zoom's request, a side lowered to the largest texture,
+    // a part of the page shown reduced. Rasterised as asked for, and not the screen's own.
+    for side in [2240, 2272, 1024, 16] {
+        assert_eq!(raster_scale(side, 16, longest, Some(native)), (side as f32 / longest, false), "{side}");
+    }
+    // Numbers that aren't: as asked for.
+    for (longest, native, step) in
+        [(longest, f32::NAN, 16), (longest, f32::INFINITY, 16), (longest, -1.0, 16), (longest, 0.0, 16), (longest, native, 0)]
+    {
+        assert!(!raster_scale(2256, step, longest, Some(native)).1, "{longest} {native} {step}");
+    }
+    assert!(!raster_scale(2256, 16, f32::NAN, Some(native)).1 && !raster_scale(2256, 16, 0.0, Some(native)).1);
+}
+
+#[test]
+fn a_page_picture_is_made_as_many_pixels_as_its_place_on_screen() {
+    use super::pages::picture_pixels;
+    use egui::{pos2, vec2};
+    // An A4 page at 110 % on a 2x screen, centred in a window: 1746.155 × 2469.544 pixels starting at 642.923.
+    // Its place rounds to 643..2389 across and 356..2826 down.
+    let page = Rect::from_min_size(pos2(321.4615, 178.0), vec2(873.0775, 1234.772));
+    let expected = (1746.155, 2469.544);
+    assert_eq!(picture_pixels(page, None, 2.0, expected), Some((1746, 2470)));
+    // The same page half a pixel further right ends on the next pixel and starts on the same one: 1747 across.
+    assert_eq!(picture_pixels(page.translate(vec2(0.25, 0.0)), None, 2.0, expected), Some((1747, 2470)));
+    // The upper half of it, as the page view asks for a part: the part's own place, rounded the same way.
+    let half = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 0.5));
+    assert_eq!(picture_pixels(page, Some(half), 2.0, (1746.155, 1234.772)), Some((1746, 1235)));
+    // A place left from another zoom, or a part shown reduced, is not this picture's: no size.
+    assert_eq!(picture_pixels(page, None, 2.0, (1587.4, 2245.0)), None);
+    assert_eq!(picture_pixels(page, Some(half), 2.0, (873.0, 617.0)), None);
+    // Numbers that aren't.
+    for (page, ppp, expected) in [
+        (Rect::from_min_size(pos2(f32::NAN, 0.0), vec2(800.0, 1100.0)), 2.0, expected),
+        (Rect::from_min_size(pos2(0.0, 0.0), vec2(f32::INFINITY, 1100.0)), 2.0, expected),
+        (page, f32::NAN, expected),
+        (page, 0.0, expected),
+        (page, 2.0, (f32::NAN, 2469.5)),
+        (Rect::NOTHING, 2.0, expected),
+    ] {
+        assert_eq!(picture_pixels(page, None, ppp, expected), None, "{page:?} {ppp} {expected:?}");
+    }
+}
+
+#[test]
+fn page_pictures_fill_the_place_the_view_last_rested_at() {
+    use super::source::WordPages;
+    use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
+    use egui::{pos2, vec2};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let layout = a.session.layout();
+    let (pw, ph) = (layout.pages[0].w, layout.pages[0].h);
+    let view_scale = 96.0 / 72.0 * 1.1;
+    let request = ThumbRequest::for_cell(pw.max(ph) * view_scale, 2.0);
+    // Before the view has rested anywhere: one scale, a whole pixel up each way.
+    let fresh = WordPages::new(&mut a, &layout, false, None, Some(view_scale));
+    let plan = fresh.plan(0, &request).unwrap();
+    assert_eq!((plan.pixels, plan.scale), (None, view_scale * 2.0));
+    let fresh_revision = fresh.revision(&0, &request);
+    a.canvas.page_keys = fresh.into_keys();
+    // At rest, a third of a pixel into a pixel: the picture is its place's size, and another picture than before.
+    let place = Rect::from_min_size(pos2(321.4615, 178.0), vec2(pw * view_scale, ph * view_scale));
+    a.canvas.settled_pages = vec![(0, place)];
+    let rested = WordPages::new(&mut a, &layout, false, None, Some(view_scale));
+    let plan = rested.plan(0, &request).unwrap();
+    let (w, h) = plan.pixels.expect("a place to fill");
+    assert_eq!(w as f32, (place.max.x * 2.0).round() - (place.min.x * 2.0).round());
+    assert_eq!(h as f32, (place.max.y * 2.0).round() - (place.min.y * 2.0).round());
+    assert_ne!(rested.revision(&0, &request), fresh_revision);
+    assert!(rested.plan(1, &request).is_none_or(|plan| plan.pixels.is_none()), "a page with no place");
+    a.canvas.page_keys = rested.into_keys();
+    // A place from another zoom is not this zoom's; Read Mode's columns use none.
+    let zoomed = WordPages::new(&mut a, &layout, false, None, Some(view_scale * 1.3));
+    assert_eq!(zoomed.plan(0, &ThumbRequest::for_cell(pw.max(ph) * view_scale * 1.3, 2.0)).unwrap().pixels, None);
+    a.canvas.page_keys = zoomed.into_keys();
+    let reading = WordPages::new(&mut a, &layout, false, None, None);
+    assert_eq!(reading.plan(0, &request).unwrap().pixels, None);
+    a.canvas.page_keys = reading.into_keys();
+}
+
+#[test]
+fn page_pictures_take_subpixel_text_only_at_the_screens_own_scale() {
+    use super::source::WordPages;
+    use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
+    use wordcraft_render::LcdOrder;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let layout = a.session.layout();
+    let longest = layout.pages[0].w.max(layout.pages[0].h);
+    let view_scale = 96.0 / 72.0 * 1.1;
+    let request = |ppp: f32| ThumbRequest::for_cell(longest * view_scale, ppp);
+    let pages = |a: &mut WordApp, scale: Option<f32>| WordPages::new(a, &layout, false, None, scale);
+    // Greyscale until chosen (tests never ask the system), at the screen's own scale.
+    let grey = pages(&mut a, Some(view_scale));
+    let plan = grey.plan(0, &request(2.0)).unwrap();
+    assert_eq!((plan.scale, plan.options.lcd), (view_scale * 2.0, None));
+    assert!(plan.options.baseline_snap);
+    let grey_revision = grey.revision(&0, &request(2.0));
+    a.canvas.page_keys = grey.into_keys();
+    // The user's choice, a command: subpixel text on the picture that is the screen's own...
+    a.run("view.textSmoothing", json!({"value": "subpixel"})).unwrap();
+    let sub = pages(&mut a, Some(view_scale));
+    assert_eq!(sub.plan(0, &request(2.0)).unwrap().options.lcd, Some(LcdOrder::Rgb));
+    assert_eq!(sub.plan(0, &request(1.0)).unwrap().options.lcd, Some(LcdOrder::Rgb));
+    assert_ne!(sub.revision(&0, &request(2.0)), grey_revision, "a page drawn the other way is another picture");
+    let sub_revision = sub.revision(&0, &request(2.0));
+    // ...and not on one that will be scaled: a request the view's zoom doesn't account for, a part shown reduced.
+    let other = ThumbRequest::for_cell(longest * view_scale * 1.3, 2.0);
+    let plan = sub.plan(0, &other).unwrap();
+    assert_eq!((plan.scale, plan.options.lcd), (other.side as f32 / longest, None));
+    a.canvas.page_keys = sub.into_keys();
+    // Read Mode's columns size their pages themselves: as asked for, greyscale.
+    let reading = pages(&mut a, None);
+    let plan = reading.plan(0, &request(2.0)).unwrap();
+    assert_eq!((plan.scale, plan.options.lcd), (request(2.0).side as f32 / longest, None));
+    a.canvas.page_keys = reading.into_keys();
+    // Another zoom is another picture, even where the side asked for is the same.
+    let nudged = pages(&mut a, Some(view_scale * 1.0005));
+    assert_eq!(ThumbRequest::for_cell(longest * view_scale * 1.0005, 2.0).side, request(2.0).side);
+    assert_ne!(nudged.revision(&0, &request(2.0)), sub_revision);
+    assert!(nudged.plan(99, &request(2.0)).is_none());
+}
+
+#[test]
 fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
     use wordcraft_doc::props::Rgb;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -2318,4 +2495,98 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let s = &h.state().session;
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
+}
+
+/// The pictures drawn in the last pass that are at least 300 texels wide (a page's, not an icon's or the font
+/// atlas's glyphs): how many device pixels each is drawn across and down, and how many texels it shows.
+fn drawn_pictures(
+    shapes: &[egui::epaint::ClippedShape],
+    sizes: &std::collections::HashMap<egui::TextureId, [usize; 2]>,
+    ppp: f32,
+) -> Vec<([f32; 2], [f32; 2])> {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(egui::TextureId, Rect, Rect)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, found)),
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                let (mut at, mut uv) = (Rect::NOTHING, Rect::NOTHING);
+                for v in &mesh.vertices {
+                    at.extend_with(v.pos);
+                    uv.extend_with(v.uv);
+                }
+                found.push((mesh.texture_id, at, uv));
+            }
+            egui::Shape::Rect(rect) => {
+                if let Some(brush) = &rect.brush
+                    && brush.fill_texture_id != egui::TextureId::default()
+                {
+                    found.push((brush.fill_texture_id, rect.rect, brush.uv));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    shapes.iter().for_each(|clipped| walk(&clipped.shape, &mut found));
+    found
+        .into_iter()
+        .filter_map(|(id, at, uv)| {
+            let size = sizes.get(&id).filter(|size| size[0] >= 300)?;
+            let texels = [uv.width() * size[0] as f32, uv.height() * size[1] as f32];
+            (texels[0] >= 300.0).then_some(([at.width() * ppp, at.height() * ppp], texels))
+        })
+        .collect()
+}
+
+/// The page view scales a picture into its place, so a page's picture has to be exactly as many pixels each way
+/// as that place: a pixel more (what one scale and rounding up give) squeezes it by a twentieth of a percent and
+/// the text slides off the pixel grid and back down the page, which reads as blur. Run through the real page view
+/// and its picture store, at several zooms and screen densities, on the passes a renderer would draw.
+#[test]
+fn a_page_at_rest_is_drawn_one_texel_per_device_pixel() {
+    for ppp in [1.0_f32, 2.0] {
+        let ctx = crate::test_harness::context();
+        crate::test_harness::cjk_stand_in(&ctx);
+        ctx.set_pixels_per_point(ppp);
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "The quick brown fox jumps over the lazy dog."})).unwrap();
+        app.run("layout.size", json!({"name": "A4"})).unwrap();
+        let mut sizes = std::collections::HashMap::new();
+        for (step, zoom) in [100, 110, 137].into_iter().enumerate() {
+            app.run("view.zoom", json!({"value": zoom})).unwrap();
+            // Until the view has come to rest and the worker has made the picture for where it rests.
+            let mut seen = Vec::new();
+            let exact = |pictures: &[([f32; 2], [f32; 2])]| {
+                !pictures.is_empty()
+                    && pictures.iter().all(|(drawn, texels)| (drawn[0] - texels[0]).abs() < 0.01 && (drawn[1] - texels[1]).abs() < 0.01)
+            };
+            for frame in 0..600 {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 950.0))),
+                    time: Some(step as f64 * 100.0 + frame as f64 * 0.05),
+                    max_texture_side: Some(8192),
+                    ..Default::default()
+                };
+                if let Some(viewport) = input.viewports.get_mut(&egui::ViewportId::ROOT) {
+                    viewport.native_pixels_per_point = Some(ppp);
+                }
+                craft::ui::shell::embed::before_input(&ctx, |out| app.frame_input(out));
+                let mut out = ctx.run_ui(input, |ui| {
+                    crate::test_harness::logic(ui.ctx(), &mut app);
+                    app.ui(ui);
+                });
+                for (id, deltas) in &out.textures_delta.set {
+                    for delta in deltas.iter().filter(|delta| delta.pos.is_none()) {
+                        sizes.insert(*id, delta.image.size());
+                    }
+                }
+                seen = drawn_pictures(&out.shapes, &sizes, ppp);
+                out.textures_delta.clear();
+                if frame > 3 && exact(&seen) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(exact(&seen), "{zoom} % at {ppp}x: (pixels drawn, texels shown) {seen:?}");
+        }
+    }
 }

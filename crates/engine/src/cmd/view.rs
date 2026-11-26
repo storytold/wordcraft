@@ -52,6 +52,15 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({"paperColor": color}))
         }).params(r#"{"value": "document" | "green" | "cream" | "gray"}"#).pure(),
+        // How the edges of page text are smoothed on screen. Screen only; never in the document.
+        CommandSpec::new("view.textSmoothing", "Screen Text Smoothing", "View › Display", |s, v| {
+            let smoothing: TextSmoothing = serde_json::from_value(v.get("value").cloned().unwrap_or(Value::Null))
+                .map_err(|_| CmdError::Params("screen text smoothing must be system, grayscale, or subpixel".into()))?;
+            s.prefs.text_smoothing = smoothing;
+            Ok(json!({"textSmoothing": smoothing}))
+        })
+        .params(r#"{"value": "system" | "grayscale" | "subpixel"}"#)
+        .pure(),
         // Print Layout: hide the white space (margins, headers, footers) between pages. Screen only.
         CommandSpec::new("view.hideWhiteSpace", "Hide White Space", "View › Show", |s, v| toggle(s, v, |x| &mut x.hide_white_space))
             .params(r#"{"value"?: bool}"#)
@@ -347,6 +356,35 @@ fn read_line_spacing(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.view.read_line_spacing = spacing;
     Ok(json!({"spacing": spacing}))
+}
+
+/// How the edges of page text are smoothed on screen, saved with user preferences, never in the
+/// document. Exports, prints and PDFs are not affected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextSmoothing {
+    /// As the system is set: subpixel where it asks for it (ClearType on Windows, `rgba`
+    /// antialiasing on a Linux desktop) and the screen is not a high-density one, else
+    /// greyscale. macOS never asks for it.
+    #[default]
+    System,
+    /// Greyscale antialiasing: grey edges, no colour.
+    Grayscale,
+    /// Subpixel (LCD) antialiasing, whatever the system says: edges three times as fine
+    /// sideways, with faint colour in them. In the system's stripe order, RGB when it gives none.
+    Subpixel,
+}
+
+impl TextSmoothing {
+    pub const ALL: [Self; 3] = [Self::System, Self::Grayscale, Self::Subpixel];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "Use system setting",
+            Self::Grayscale => "Grayscale",
+            Self::Subpixel => "Subpixel (LCD)",
+        }
+    }
 }
 
 /// Screen-only paper presets, saved with user preferences, never in the document.

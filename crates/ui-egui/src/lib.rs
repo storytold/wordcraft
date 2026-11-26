@@ -68,6 +68,7 @@ pub mod read_aloud;
 mod restrict_pane;
 pub mod ribbon;
 mod save_types;
+pub mod screen_text;
 pub mod scroll;
 pub use scroll::ScrollSpeed;
 pub mod desktop_theme; // owed by ribbon batch 2 (S-L348)
