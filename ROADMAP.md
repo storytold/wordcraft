@@ -153,6 +153,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-24: Pasting a plain table over selected cells overwrites from the selection's top-left, even when the copy is wider than the selection (#6742).
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
 - 2026-11-20: `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root` (shared rule 18, #7124); without them it stops with an error naming the two flags, where it used to serve with access to every file the user can reach. `mcp --connect` is refused until the desktop app confines its control channel to the same roots (#3695, #5819). The help, `docs/mcp.md`, the README and `AGENTS.md` pass both roots in every example.
@@ -170,6 +171,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 
 - 2026-11-15: Get the Missing Fonts. A document opened from a file that is missing fonts their publisher gives away (Microsoft's Aptos family, the default in recent Word documents; Cascadia Code and Mono) brings up a box naming each font, the font drawn instead, the publisher's download page and how to install the download, with Don't show this again. `font.missing` reports the same page, so agents get it without the box. WordCraft links to the page only; it downloads and bundles nothing.
+- 2026-10-30: Track Changes: a list item deleted whole, text and paragraph mark, shows its number as deleted text, in the deletion's colour and with its mark (struck through by default, or caret, #, bold, italic, underline), and hides it with No Markup or when Track Changes Options hide deletions (#4828). Readiness unchanged.
+- 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 
 - 2026-11-15: Layout: from Word 2013's layout (compatibility mode 15), balancing the columns before a continuous break keeps the last two, three or five lines of a paragraph that began on the page before together, keeps a two- or three-line paragraph that begins the last page whole, and holds a paragraph with keep lines together (or keep with next) whole in the first column when the strict rules fit. Synthetic tests also cover a footnote and a float (#6821); mode 14 splits them as before. Readiness estimates unchanged.
 - 2026-11-15: Layout: the first paragraph of a table cell on a page can split even when only one line fits, if the row starts at the top (possibly below its own headers) or continues from the previous page, and a non-exact row marked Can't Split that is taller than a page splits at the page's end, as in Word, instead of the row running off the bottom of the page (#6823). Readiness estimates unchanged.
