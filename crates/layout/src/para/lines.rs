@@ -97,8 +97,10 @@ struct Scan {
     pending_tab: Option<(usize, TabStop, f32)>,
     /// The text after a pending decimal tab looked at so far for its '.'.
     decimal: Option<DecimalScan>,
-    /// The width of the spaces so far on this line.
+    /// The width of the spaces so far on this line ...
     space_w: f32,
+    /// ... and how many there are.
+    space_n: u32,
     has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
@@ -294,6 +296,7 @@ impl<'e> Breaker<'e> {
             pending_tab: None,
             decimal: None,
             space_w: 0.0,
+            space_n: 0,
             has_tab: false,
             skip: false,
         }
@@ -902,7 +905,7 @@ impl Scan {
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
         let shrink = if bk.shrink_spaces && !self.has_tab {
-            space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
+            space_room(self.space_w, self.space_n, self.x + advance - pl.auto_space_after(j) - self.word_from)
         } else {
             0.0
         };
@@ -918,6 +921,7 @@ impl Scan {
         self.x += c.adv;
         if c.kind == ClKind::Space {
             self.space_w += c.adv;
+            self.space_n = self.space_n.saturating_add(1);
         }
         self.shift_pending_tab(pl);
         if is_display {

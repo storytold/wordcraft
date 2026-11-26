@@ -6704,9 +6704,50 @@ fn leading_spaces_keep_their_width_in_justified_lines() {
 /// Measured in Word for Mac (compatibility mode 15, justified paragraphs of one repeated word,
 /// the right indent leaving room for N words plus one more that fits only if the spaces shrink):
 /// the spaces give up at most a quarter of their width, and a word with the space before it may
-/// overrun the line by at most 0.355 of its own width ("nn" fitted with its line's spaces 14.5%
-/// shrunk, "nnnn" with 25%). WordCraft allowed 20% whatever the word, so long words wrapped too
+/// overrun the line by at most 0.3337 + 0.215 / n of its own width, n the line's spaces ("nn"
+/// fitted with its line's spaces 14.5% shrunk, "nnnn" with 25%). WordCraft allowed 20% whatever the word, so long words wrapped too
 /// early and short ones too late.
+/// On a justified line of many spaces a word may overrun it by less of its width than on one of
+/// few: Word for Mac 16.114.4, Georgia 11 pt, "the" after 50 one-letter words fits up to 0.3388
+/// of its width with the space before it, after 13 four-letter words up to 0.349.
+#[test]
+fn a_word_overruns_a_justified_line_of_many_spaces_by_less() {
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let para = |text: &str, align: Align, right: f32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = 15;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(align), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first = |d: &Document| {
+        let l = lay(d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &para.lines[0];
+        d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop].split_whitespace().count()
+    };
+    // Widths of "a", "the" and a space, from a left-aligned line.
+    let probe = para("a the", Align::Left, 0.0);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let a = pl.x_of(0, 1).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, 2).unwrap() - pl.x_of(0, 1).unwrap();
+    let the = pl.x_of(0, 5).unwrap() - pl.x_of(0, 2).unwrap();
+    let n = 48;
+    // n words "a", then "the": n spaces in all, the one before "the" included.
+    let natural = n as f32 * a + n as f32 * sw + the;
+    let full = probe.last_section.text_width();
+    let text = format!("{} the {}", vec!["a"; n].join(" "), vec!["tail"; 30].join(" "));
+    let share = 0.3337 + 0.215 / n as f32;
+    assert!(share < 0.34 && n as f32 * sw * 0.25 > 0.36 * (the + sw), "the word, not the spaces, sets the limit");
+    // 0.345 of the word overruns by more than Word allows here (0.338), less than the old 0.355.
+    for (overrun, words) in [((share - 0.004) * (the + sw), n + 1), (0.345 * (the + sw), n)] {
+        let d = para(&text, Align::Justify, full - (natural - overrun));
+        assert_eq!(first(&d), words, "overrun {overrun:.2} of the word's {:.2}", the + sw);
+    }
+}
+
 #[test]
 fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
     let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
@@ -6734,7 +6775,7 @@ fn justified_spaces_shrink_a_quarter_at_most_and_by_the_word() {
         let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
         let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
         let spaces = n as f32 * sw;
-        let room = (0.25 * spaces).min(0.355 * (w + sw));
+        let room = (0.25 * spaces).min((0.3337 + 0.215 / n as f32) * (w + sw));
         let width = |overrun: f32| (n + 1) as f32 * w + spaces - overrun;
         let text = vec![word; 3 * n].join(" ");
         let full = probe.last_section.text_width();

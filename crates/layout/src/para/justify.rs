@@ -10,16 +10,26 @@ pub(super) const HYPHENATION_ZONE: f32 = wordcraft_doc::DEFAULT_HYPHENATION_ZONE
 const MAX_SPACE_SHRINK: f32 = 0.25;
 
 /// How far a word (with the space before it) may overrun a justified line and still be fitted
-/// onto it by shrinking the line's spaces, as a share of its own width.
-const MAX_WORD_OVERRUN: f32 = 0.355;
+/// onto it by shrinking the line's spaces, as a share of its own width: a little over a third,
+/// more on a line of few spaces ([`word_share`]).
+const WORD_SHARE: f32 = 0.3337;
+const WORD_SHARE_PER_SPACE: f32 = 0.215;
+
+/// The share of a word's width (with the space before it) that may overrun a justified line of
+/// `spaces` spaces, the one before the word included.
+fn word_share(spaces: u32) -> f32 {
+    WORD_SHARE + WORD_SHARE_PER_SPACE / spaces.max(1) as f32
+}
 
 /// How far a justified line's text may run past its right edge, its spaces (`spaces` wide in
-/// all) shrinking to make room, when the word now ending the line is `word` wide with the space
-/// before it. Measured in Word for Mac (compatibility mode 15, synthetic justified paragraphs):
-/// at most a quarter of the spaces' width, and at most 0.355 of the word's own (0.351 to 0.360
-/// across words of 2.7 to 80 pt and spaces of 3.3 and 6.7 pt).
-pub(super) fn space_room(spaces: f32, word: f32) -> f32 {
-    (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * MAX_WORD_OVERRUN)
+/// all, `n` of them, the one before the word included) shrinking to make room, when the word now
+/// ending the line is `word` wide with the space before it. Measured in Word for Mac 16.114.4
+/// (compatibility mode 15; Georgia 11 and 20 pt, Times New Roman 12 pt, Arial 11 and 20 pt; words
+/// of 8 to 123 pt on lines of 14 to 51 spaces, the right indent stepped a twip at a time): at most
+/// a quarter of the spaces' width, and at most 0.3337 + 0.215 / n of the word's own (0.350 with 13
+/// spaces, 0.338 with 50; all 23 sweeps within 0.0002 of the word's width).
+pub(super) fn space_room(spaces: f32, n: u32, word: f32) -> f32 {
+    (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * word_share(n))
 }
 
 /// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
