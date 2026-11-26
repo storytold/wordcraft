@@ -62,6 +62,12 @@ pub(super) fn is_mark(c: char) -> bool {
     !c.is_ascii() && matches!(unicode_bidi::bidi_class(c), NSM | BN) && !c.is_control()
 }
 
+/// A Private Use Area code (BMP or planes 15–16). Its meaning is the font's own: another face's
+/// glyph at the same code is an unrelated icon, so it is never drawn from a fallback face.
+pub(super) fn is_private_use(c: char) -> bool {
+    matches!(u32::from(c), 0xE000..=0xF8FF | 0xF0000..=0x10FFFF)
+}
+
 /// A digit Word's Numeral modes substitute: ASCII or Arabic-Indic (U+0660–U+0669).
 pub(super) fn is_numeral_digit(c: char) -> bool {
     c.is_ascii_digit() || ('\u{660}'..='\u{669}').contains(&c)
