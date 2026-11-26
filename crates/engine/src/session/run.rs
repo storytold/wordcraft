@@ -120,9 +120,8 @@ impl Session {
         let guard = if spec.mutates { crate::cmd::protect::check_before(self, id, params)? } else { false };
         // Quick Parts aren't part of the document, so a refused edit puts them back itself (the Spike).
         let blocks_before = guard.then(|| self.building_blocks.clone());
-        if spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") {
-            self.doc.settings.track_changes = true;
-        }
+        let forced_tracking = spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") && !self.doc.settings.track_changes;
+        self.doc.settings.track_changes |= forced_tracking;
         // Macro recording and Repeat.
         let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
             && (spec.mutates || id.starts_with("caret.") || id.starts_with("select."));
@@ -148,7 +147,7 @@ impl Session {
         // Commands may leave an equation (a whole-body replacement) even after they fail; put
         // the editing session back with the document.
         let math_before = spec.mutates.then(|| self.math.clone());
-        let before_doc: Option<RunSnapshot> = if spec.mutates {
+        let mut before_doc: Option<RunSnapshot> = if spec.mutates {
             Some((
                 self.doc.clone(),
                 self.sel.clone(),
@@ -235,19 +234,29 @@ impl Session {
                 Err(CmdError::Failed(format!("{id} panicked: {msg}")))
             }
         };
-        if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
-            return self.finish_elsewhere(
-                ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
-                result,
-            );
-        }
+        let elsewhere = self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark));
         // Restrict Editing: outside the exceptions nothing may change.
-        if result.is_ok()
+        if !elsewhere
+            && result.is_ok()
             && guard
             && let Some((before, ..)) = &before_doc
             && !crate::cmd::protect::outside_unchanged(before, &self.doc, &self.author)
         {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
+        }
+        // The undo baseline includes enforced tracking for a successful command.
+        // When the command fails, restore the document's original tracking setting.
+        if forced_tracking
+            && result.is_err()
+            && let Some((doc, ..)) = &mut before_doc
+        {
+            doc.settings.track_changes = false;
+        }
+        if elsewhere {
+            return self.finish_elsewhere(
+                ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
+                result,
+            );
         }
         match &result {
             Ok(_) => self.finish_success(SuccessContext {
