@@ -1109,9 +1109,10 @@ mod smoke {
 mod command_line_tests {
     use super::split_at_delimiter;
 
-    /// The argv the Launcher starts a nightly with, as `prepare_launch` hands it on.
+    /// The argv the Launcher starts a nightly with, as `prepare_launch` hands it on. The root is the one this
+    /// platform would pass: `/nightly-data/...` has no drive prefix, so on Windows `parse` rightly refuses it.
     fn launcher_argv(tail: &[&str]) -> Vec<String> {
-        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", "/nightly-data/profiles/wordcraft", "--"]
+        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", super::launch_profile::launcher_root(), "--"]
             .iter()
             .map(std::ffi::OsString::from)
             .collect();
@@ -1133,6 +1134,9 @@ mod command_line_tests {
         assert_eq!(files, ["a.file"]);
         let (_, files) = split_at_delimiter(launcher_argv(&["a.file", "--version", "--sample"]));
         assert_eq!(files, ["a.file", "--version", "--sample"], "after -- every word is a document");
+        // A real document path, as Windows hands one on: kept whole, in order, backslashes and spaces intact.
+        let (_, files) = split_at_delimiter(launcher_argv(&[r"C:\Users\user\Holiday letter.docx", "a.file"]));
+        assert_eq!(files, [r"C:\Users\user\Holiday letter.docx", "a.file"], "a real path after -- stays a document, in order");
     }
 
     #[test]
