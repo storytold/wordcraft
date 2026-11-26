@@ -242,6 +242,9 @@ pub const RTL_FALLBACKS: &[&str] = &[
 pub const RTL_FALLBACKS: &[&str] =
     &["Noto Naskh Arabic", "Noto Sans Arabic", "Noto Sans Hebrew", "Vazirmatn", "Segoe UI", "Arial", "Tahoma", "DejaVu Sans"];
 
+/// The ballot boxes ☐ ☑ ☒: a check box's unchecked symbol and its two usual checked ones.
+pub(super) const BALLOT_BOXES: [char; 3] = ['\u{2610}', '\u{2611}', '\u{2612}'];
+
 /// Families tried (when installed) for characters the loaded fonts lack: CJK, symbols, emoji.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const SYSTEM_FALLBACKS: &[&str] = &[
