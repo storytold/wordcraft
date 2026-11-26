@@ -353,6 +353,23 @@ fn default_chords_fire_their_commands() {
     }
 }
 
+/// Issue #772: the Find and Replace dialog left focus on the document, so typing didn't go into
+/// Find what. (Ctrl/⌘+F now searches in the Navigation pane, as in Word (#712), so this opens
+/// the dialog with Ctrl/⌘+H.)
+#[test]
+fn find_shortcut_focuses_find_what() {
+    let mut h = blank_rig();
+    press(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("find")), "Find and Replace is open");
+    h.event(egui::Event::Text("abc".into()));
+    h.step();
+    h.step();
+    assert!(body_text(h.state()).is_empty(), "nothing was typed into the document");
+    let (key, fields) = open_dialog(h.state()).expect("Find dialog open");
+    assert_eq!(key, "find");
+    assert!(fields["find"].as_str().unwrap_or_default().ends_with("abc"), "typing went into Find what: {fields:?}");
+}
+
 /// The key of the dialog a command opened, read off its reply.
 fn pending_of(reply: &Value) -> Option<&str> {
     reply.get("pending").and_then(Value::as_str)
