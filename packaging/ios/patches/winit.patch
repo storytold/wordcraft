@@ -27,10 +27,10 @@ index 72be2b0..6997c4b 100644
      "UIOrientation",
 diff --git a/src/platform_impl/ios/input.rs b/src/platform_impl/ios/input.rs
 new file mode 100644
-index 0000000..25174f1
+index 0000000..057a318
 --- /dev/null
 +++ b/src/platform_impl/ios/input.rs
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,290 @@
 +//! Hardware keyboard keys on iOS: `UIKey`'s USB HID usage as a winit [`KeyCode`], the named key
 +//! it produces, and its modifier flags as [`ModifiersState`].
 +
@@ -232,6 +232,25 @@ index 0000000..25174f1
 +    state
 +}
 +
++/// The held modifier keys that `state` still has: a key whose release never arrived (Command-Tab
++/// to another app) is dropped once UIKit's flags say its modifier is up.
++pub(crate) fn held_within(held: u8, state: ModifiersState) -> u8 {
++    let mut kept = held;
++    if !state.shift_key() {
++        kept &= !0b11;
++    }
++    if !state.control_key() {
++        kept &= !0b1100;
++    }
++    if !state.alt_key() {
++        kept &= !0b11_0000;
++    }
++    if !state.super_key() {
++        kept &= !0b1100_0000;
++    }
++    kept
++}
++
 +/// UIKit's modifier flags as winit's: Command is Super, as on macOS.
 +pub(crate) fn flags_state(flags: UIKeyModifierFlags) -> ModifiersState {
 +    let mut state = ModifiersState::empty();
@@ -315,7 +334,7 @@ index 69e79c9..40bce19 100644
  mod monitor;
  mod notification_center;
 diff --git a/src/platform_impl/ios/view.rs b/src/platform_impl/ios/view.rs
-index 418968c..7373f07 100644
+index 418968c..e6ec22d 100644
 --- a/src/platform_impl/ios/view.rs
 +++ b/src/platform_impl/ios/view.rs
 @@ -1,22 +1,35 @@
@@ -501,7 +520,7 @@ index 418968c..7373f07 100644
 +        fn hover_gesture(&self, recognizer: &UIHoverGestureRecognizer) {
 +            let location = unsafe { recognizer.locationInView(None) };
 +            let position = self.physical(location);
-+            self.update_modifiers(input::flags_state(unsafe { recognizer.modifierFlags() }));
++            self.sync_modifiers(input::flags_state(unsafe { recognizer.modifierFlags() }));
 +            let mut events = Vec::new();
 +            match recognizer.state() {
 +                UIGestureRecognizerState::Began => {
@@ -574,7 +593,7 @@ index 418968c..7373f07 100644
          });
          let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
  
-@@ -377,9 +547,280 @@ impl WinitView {
+@@ -377,9 +547,288 @@ impl WinitView {
              this.setContentScaleFactor(scale_factor as _);
          }
  
@@ -663,6 +682,14 @@ index 418968c..7373f07 100644
 +        }
 +    }
 +
++    /// The modifiers UIKit reports with a key, pointer or touch event: they also settle which
++    /// modifier keys are still down.
++    fn sync_modifiers(&self, flags: ModifiersState) {
++        let held = self.ivars().held_modifier_keys.get();
++        self.ivars().held_modifier_keys.set(input::held_within(held, flags));
++        self.update_modifiers(flags);
++    }
++
 +    fn update_modifiers(&self, state: ModifiersState) {
 +        if self.ivars().modifiers.replace(state) != state {
 +            self.send([WindowEvent::ModifiersChanged(state.into())]);
@@ -749,7 +776,7 @@ index 418968c..7373f07 100644
 +                continue;
 +            }
 +            if pressed {
-+                self.update_modifiers(flags);
++                self.sync_modifiers(flags);
 +            }
 +            let named = input::named_key(code);
 +            let shortcut = flags.intersects(ModifiersState::CONTROL | ModifiersState::SUPER);
@@ -855,7 +882,7 @@ index 418968c..7373f07 100644
      fn window(&self) -> Option<Retained<WinitUIWindow>> {
          // SAFETY: `WinitView`s are always installed in a `WinitUIWindow`
          (**self).window().map(|window| unsafe { Retained::cast(window) })
-@@ -474,13 +915,45 @@ impl WinitView {
+@@ -474,13 +923,45 @@ impl WinitView {
          }
      }
  
@@ -866,7 +893,7 @@ index 418968c..7373f07 100644
          let os_supports_force = app_state::os_capabilities().force_touch;
 +        self.stop_glide();
 +        if let Some(event) = event {
-+            self.update_modifiers(input::flags_state(unsafe { event.modifierFlags() }));
++            self.sync_modifiers(input::flags_state(unsafe { event.modifierFlags() }));
 +        }
          for touch in touches {
              let logical_location = touch.locationInView(None);
@@ -902,7 +929,7 @@ index 418968c..7373f07 100644
              let force = if os_supports_force {
                  let trait_collection = self.traitCollection();
                  let touch_capability = trait_collection.forceTouchCapability();
-@@ -544,6 +1017,17 @@ impl WinitView {
+@@ -544,6 +1025,17 @@ impl WinitView {
          let window = self.window().unwrap();
          let window_id = RootWindowId(window.id());
          let mtm = MainThreadMarker::new().unwrap();
@@ -920,7 +947,7 @@ index 418968c..7373f07 100644
          // send individual events for each character
          app_state::handle_nonuser_events(
              mtm,
-@@ -579,6 +1063,64 @@ impl WinitView {
+@@ -579,6 +1071,64 @@ impl WinitView {
      }
  
      fn handle_delete_backward(&self) {
@@ -985,7 +1012,7 @@ index 418968c..7373f07 100644
          let window = self.window().unwrap();
          let window_id = RootWindowId(window.id());
          let mtm = MainThreadMarker::new().unwrap();
-@@ -605,3 +1147,13 @@ impl WinitView {
+@@ -605,3 +1155,13 @@ impl WinitView {
          );
      }
  }
