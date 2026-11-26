@@ -186,6 +186,19 @@ fn page_setup_menus_mark_the_current_setting() {
     }
 }
 
+#[test]
+fn orientation_menu_offers_section_and_selected_text_scope() {
+    for (label, expected) in [("Landscape", vec![true]), ("Landscape for Selected Text", vec![false, true, false])] {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("First\nMiddle\nLast")), crate::Services::default());
+        app.run("select.text", json!({"text": "Middle"})).unwrap();
+        let mut h = tab_harness(app, "Layout");
+        click_button(&mut h, "Orientation");
+        click_row(&mut h, label);
+        let sections: Vec<_> = h.state().session.doc.sections().iter().map(|(_, section)| section.landscape).collect();
+        assert_eq!(sections, expected, "{label}");
+    }
+}
+
 /// The Language menu's built-in short list, as `language_checks` takes it.
 fn short() -> Vec<(String, String)> {
     PROOFING_LANGUAGES.iter().map(|(t, n)| ((*t).to_string(), (*n).to_string())).collect()

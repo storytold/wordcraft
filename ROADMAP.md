@@ -151,6 +151,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-22: Layout: the ordinary Orientation options apply to existing sections. WordCraft offers separate commands for selected text. A Word for Windows check confirmed that changing a Continuous boundary to a page start for mixed orientations persists when the orientations match again (#6421).
+
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
 - 2026-11-20: `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root` (shared rule 18, #7124); without them it stops with an error naming the two flags, where it used to serve with access to every file the user can reach. `mcp --connect` is refused until the desktop app confines its control channel to the same roots (#3695, #5819). The help, `docs/mcp.md`, the README and `AGENTS.md` pass both roots in every example.
@@ -1496,6 +1498,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
 | 2026-11-12 | minor | Progress log: layout.fitOnePage condenses a multi-page document by one page while preserving typography hierarchy (#6433) |
+| 2026-11-15 | trivial | Layout › Orientation offers explicit Portrait and Landscape options for selected text. The ordinary options apply to existing sections (#6421) |
 
 ### Format Painter integration refresh, 2026-10-30
 

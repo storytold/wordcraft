@@ -16,15 +16,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(
             r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool}"#,
         ),
-        CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", |s, v| {
-            let land = match p::str(v, "value") {
-                Some("landscape") => true,
-                Some("portrait") => false,
-                _ => !sect(s).landscape,
-            };
-            with_sect(s, |x| x.set_landscape(land))
-        })
-        .params(r#"{"value": "portrait|landscape"}"#),
+        CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", orientation)
+            .params(r#"{"value"?: "portrait|landscape" (toggles when left out), "apply"?: "section|selection"} (default: section, which turns existing sections. Selection turns eligible main text between next-page section breaks (#6421))"#),
         CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
@@ -98,6 +91,74 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
     ]
+}
+
+/// Orientation turns existing sections by default. Use `apply: "selection"` to turn
+/// only eligible body text between next-page section breaks (#6421).
+fn orientation(s: &mut Session, v: &Value) -> CmdResult {
+    let sectionable = selection_sectionable(s);
+    let apply = p::str(v, "apply").unwrap_or("section");
+    let land = match p::str(v, "value") {
+        Some("landscape") => true,
+        Some("portrait") => false,
+        // Toggling reads the text that turns: a selection that ends at the start of the next
+        // section does not include that section (the same rule `selection_to_sections` uses).
+        _ if apply == "selection" && sectionable => {
+            let (a, b) = effective_selection(s);
+            let focus = if s.sel.anchor <= s.sel.focus { &b } else { &a };
+            !s.doc.sections().get(s.doc.section_index_of(block_of(focus))).is_some_and(|(_, x)| x.landscape)
+        }
+        _ => !sect(s).landscape,
+    };
+    match apply {
+        "section" => {
+            let selected = selected_section_ends(s);
+            let changed: Vec<_> =
+                s.doc.sections().iter().filter_map(|(end, x)| (x.landscape != land && selected.binary_search(end).is_ok()).then_some(*end)).collect();
+            with_sect(s, |x| x.set_landscape(land))?;
+            if !changed.is_empty() {
+                pages_start_where_orientation_changes(s, Some(&changed));
+            }
+            Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
+        }
+        "selection" => {
+            // Text that already has this orientation gets no section breaks for nothing.
+            if sectionable {
+                let (a, b) = effective_selection(s);
+                let sections = s.doc.sections();
+                if section_ends_between(s, &a, &b).iter().all(|e| sections.iter().any(|(end, x)| end == e && x.landscape == land)) {
+                    return sel_result(s);
+                }
+            }
+            selection_to_sections(s, SectionStart::NextPage)?;
+            with_sect(s, |x| x.set_landscape(land))?;
+            pages_start_where_orientation_changes(s, None);
+            Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
+        }
+        x => Err(CmdError::Params(format!("unknown apply `{x}` (section or selection)"))),
+    }
+}
+
+/// Word always starts a new page where the page orientation changes. A selection that began or
+/// ended at an existing section boundary got no break of its own, so a neighbouring section that
+/// starts continuous would share a page with a differently turned one: the selected sections, and
+/// the one after them, start on a new page where their orientation differs from the section before.
+fn pages_start_where_orientation_changes(s: &mut Session, changed: Option<&[usize]>) {
+    let all: Vec<(usize, bool, SectionStart)> = s.doc.sections().iter().map(|(e, x)| (*e, x.landscape, x.start)).collect();
+    let selected = selected_section_ends(s);
+    let index_of = |end: Option<&usize>| end.and_then(|e| all.iter().position(|(a, _, _)| a == e));
+    let (Some(first), Some(last)) = (index_of(selected.first()), index_of(selected.last())) else {
+        return;
+    };
+    for i in first.max(1)..=last.saturating_add(1) {
+        let (Some(prev), Some((end, land, start))) = (i.checked_sub(1).and_then(|j| all.get(j)), all.get(i)) else {
+            break;
+        };
+        let changed_here = changed.is_none_or(|ends| ends.binary_search(&prev.0).is_ok() || ends.binary_search(end).is_ok());
+        if changed_here && *land != prev.1 && *start == SectionStart::Continuous {
+            s.doc.section_mut(*end).start = SectionStart::NextPage;
+        }
+    }
 }
 
 /// Line Numbers: on with a restart mode (`value`), or off (`none`). `start`, `countBy` and
@@ -258,15 +319,25 @@ pub fn sect(s: &Session) -> SectionProps {
 /// The last block of each section of the selection.
 fn selected_section_ends(s: &Session) -> Vec<usize> {
     let (a, b) = s.sel.ordered();
+    section_ends_between(s, &a, &b)
+}
+
+/// The last block of each section from `a` to `b` (an ordered range).
+fn section_ends_between(s: &Session, a: &Pos, b: &Pos) -> Vec<usize> {
     let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
     if a.story != wordcraft_doc::StoryRef::Body || b.story != wordcraft_doc::StoryRef::Body {
         let i = section_index_of_focus(s);
         return vec![ends.get(i).copied().unwrap_or(0)];
     }
-    let (i0, i1) = (a.path.0.first().copied().unwrap_or(0) as usize, b.path.0.first().copied().unwrap_or(0) as usize);
+    let (i0, i1) = (block_of(a), block_of(b));
     let first = ends.iter().position(|e| i0 <= *e).unwrap_or(0);
     let last = ends.iter().position(|e| i1 <= *e).unwrap_or(first);
     (first..=last).map(|k| ends.get(k).copied().unwrap_or(0)).collect()
+}
+
+/// The top-level block a position is in.
+fn block_of(p: &Pos) -> usize {
+    p.path.0.first().copied().unwrap_or(0) as usize
 }
 
 /// Apply to the section(s) of the selection.
@@ -625,7 +696,7 @@ fn columns(s: &mut Session, v: &Value) -> CmdResult {
             with_sect(s, |x| x.columns = cols.clone())
         }
         "selection" => {
-            selection_to_sections(s)?;
+            selection_to_sections(s, SectionStart::Continuous)?;
             with_sect(s, |x| x.columns = cols.clone())
         }
         x => Err(CmdError::Params(format!("unknown apply `{x}` (section, document, forward or selection)"))),
@@ -639,36 +710,50 @@ pub fn selection_sectionable(s: &Session) -> bool {
     !s.sel.is_collapsed() && [a, b].iter().all(|p| p.story == StoryRef::Body && p.path.depth() == 0)
 }
 
-/// Columns for the selected text (#2024), as Word does it: a continuous section break where the
-/// selection starts and one where it ends, splitting paragraphs there, unless that end already
+/// The selection's range as `selection_to_sections` treats it: a selection that took a section
+/// break with it (it ends at offset 0 of the section after that break) ends before that break,
+/// so the following section is not part of it.
+fn effective_selection(s: &Session) -> (Pos, Pos) {
+    let (a, mut b) = s.sel.ordered();
+    let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+    let after_break = |i: usize| i.checked_sub(1).is_some_and(|j| ends.contains(&j));
+    if b.off == 0 && block_of(&b) > block_of(&a) && after_break(block_of(&b)) {
+        let prev = Pos { path: wordcraft_doc::Path::top(block_of(&b) - 1), off: 0, ..b.clone() };
+        let len = s.doc.para_at(&prev).map(|q| q.len()).unwrap_or(0);
+        b = Pos { off: len, ..prev };
+    }
+    (a, b)
+}
+
+/// Columns or a page orientation for the selected text (#2024, #6421), as Word does it: a section
+/// break (`start_kind`: continuous or next page) where the selection starts and one where it ends,
+/// splitting paragraphs there, unless that end already
 /// meets a section boundary (the document's start or end, or a section break). The selection keeps
 /// its text, which is then the section(s) between.
-fn selection_to_sections(s: &mut Session) -> Result<(), CmdError> {
+fn selection_to_sections(s: &mut Session, start_kind: SectionStart) -> Result<(), CmdError> {
     if !selection_sectionable(s) {
         return Err(CmdError::Params("selected text in the main text, outside tables, is needed".into()));
     }
+    let kind = if start_kind == SectionStart::Continuous { "continuous" } else { "nextPage" };
     let old = s.sel.clone();
-    let (a, mut b) = old.ordered();
-    let block = |p: &Pos| p.path.0.first().copied().unwrap_or(0) as usize;
+    let (a, b) = effective_selection(s);
+    let block = block_of;
     let len = |s: &Session, p: &Pos| s.doc.para_at(p).map(|q| q.len()).unwrap_or(0);
     let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
     let after_break = |i: usize| i.checked_sub(1).is_some_and(|j| ends.contains(&j));
-    // A selection that took a section break with it ends before that break.
-    if b.off == 0 && block(&b) > block(&a) && after_break(block(&b)) {
-        let prev = Pos { path: wordcraft_doc::Path::top(block(&b) - 1), off: 0, ..b.clone() };
-        b = Pos { off: len(s, &prev), ..prev };
-    }
     let last_block = s.doc.body.len().saturating_sub(1);
     let end_break = !(b.off == len(s, &b) && (ends.contains(&block(&b)) || block(&b) == last_block));
     let start_break = !(a.off == 0 && (block(&a) == 0 || after_break(block(&a))));
     // The end first: the start's position doesn't move.
     if end_break {
         s.sel = Selection::caret(b.clone());
-        breaks(s, &json!({"kind": "continuous"}))?;
+        breaks(s, &json!({"kind": kind}))?;
+        continue_page_numbers(s);
     }
     let (first, last) = if start_break {
         s.sel = Selection::caret(a.clone());
-        breaks(s, &json!({"kind": "continuous"}))?;
+        breaks(s, &json!({"kind": kind}))?;
+        continue_page_numbers(s);
         let first = s.sel.focus.clone();
         let last = shifted_by_split(&b, &a, &first);
         (first, last)
@@ -677,6 +762,17 @@ fn selection_to_sections(s: &mut Session) -> Result<(), CmdError> {
     };
     s.sel = if old.anchor <= old.focus { Selection { anchor: first, focus: last } } else { Selection { anchor: last, focus: first } };
     Ok(())
+}
+
+/// A section made at a selection's edge carries on the page numbers of the one before it: `breaks`
+/// copies the section's properties, and a copied explicit start would restart the numbering in the
+/// selected text and again after it. Clears the start of the section the caret is in, the one
+/// `breaks` just began. The section that begins the original section keeps its start.
+fn continue_page_numbers(s: &mut Session) {
+    let i = s.doc.section_index_of(block_of(&s.sel.focus));
+    if let Some(end) = s.doc.sections().get(i).map(|(e, _)| *e) {
+        s.doc.section_mut(end).page_num_start = None;
+    }
 }
 
 /// `[[width, space after], …]` in points: 1–12 columns, each at least 0.25", that fit the text
