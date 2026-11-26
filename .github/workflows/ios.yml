@@ -31,15 +31,23 @@ jobs:
         id: i18n
         run: echo "rev=$(tr -d '[:space:]' < craft-i18n.rev)" >> "$GITHUB_OUTPUT"
 
-      # The translations and spelling data, at the revision the app pins.
-      - uses: actions/checkout@v4
+      # The translations and spelling data, at the revision the app pins. Optional: without them
+      # the app is English only, with fallback spelling.
+      - name: Check out craft-i18n
+        id: i18n-checkout
+        continue-on-error: true
+        uses: actions/checkout@v4
         with:
           repository: storytold/craft-i18n
           ref: ${{ steps.i18n.outputs.rev }}
           path: _deps/craft-i18n
 
-      # The embedded fonts, at the commit the desktop release uses.
-      - uses: actions/checkout@v4
+      # The embedded fonts, at the commit the desktop release uses. Optional: without them the
+      # app uses the iPad's own fonts.
+      - name: Check out craft-fonts
+        id: fonts-checkout
+        continue-on-error: true
+        uses: actions/checkout@v4
         with:
           repository: storytold/craft-fonts
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83
@@ -50,6 +58,7 @@ jobs:
           rustup toolchain install stable --profile minimal --target aarch64-apple-ios
           rustup default stable
           rustc --version
+          bash --version | head -1
 
       - uses: actions/cache@v4
         with:
@@ -63,13 +72,37 @@ jobs:
           restore-keys: ios-
 
       - name: Build the IPA
-        env:
-          CRAFT_I18N_DIR: ${{ github.workspace }}/_deps/craft-i18n
-          CRAFT_FONTS_DIR: ${{ github.workspace }}/_deps/craft-fonts
-        run: packaging/ios/package.sh
+        run: |
+          set -o pipefail
+          if [[ "${{ steps.i18n-checkout.outcome }}" == success ]]; then
+            export CRAFT_I18N_DIR="$GITHUB_WORKSPACE/_deps/craft-i18n"
+          else
+            echo "::warning::craft-i18n could not be checked out; the app is English only"
+          fi
+          if [[ "${{ steps.fonts-checkout.outcome }}" == success ]]; then
+            export CRAFT_FONTS_DIR="$GITHUB_WORKSPACE/_deps/craft-fonts"
+          else
+            echo "::warning::craft-fonts could not be checked out; the app uses the system fonts"
+          fi
+          packaging/ios/package.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - uses: actions/upload-artifact@v4
         with:
           name: wordcraft-ipados
           path: dist/release/*.ipa
           if-no-files-found: error
+
+      # The end of the build log as an annotation, readable from the run's checks without the log.
+      - name: Report the failure
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/build.log"
+          if [[ -f "$log" ]]; then
+            tail=$(grep -E "error|warning: unused|failed|Error" "$log" | tail -n 40; echo "-----"; tail -n 40 "$log")
+          else
+            tail="no build log: a step before the build failed"
+          fi
+          tail="${tail//'%'/'%25'}"
+          tail="${tail//$'\r'/}"
+          tail="${tail//$'\n'/'%0A'}"
+          echo "::error title=iPad build failed::$tail"
