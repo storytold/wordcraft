@@ -1021,26 +1021,23 @@ fn export_writes_a_copy_and_keeps_the_documents_file() {
 /// unsaved changes and save stamps alone.
 #[test]
 fn web_export_downloads_a_copy_and_keeps_unsaved_changes() {
-    let got: Rc<RefCell<Vec<(String, Vec<u8>)>>> = Rc::default();
-    let sink = got.clone();
-    let services = Services {
-        download: Some(Box::new(move |n: &str, b: &[u8]| {
-            sink.borrow_mut().push((n.to_string(), b.to_vec()));
-            Ok(())
-        })),
-        ..Default::default()
-    };
-    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    let files = Arc::new(ScriptedFiles::new().in_browser().saving_suggested());
+    let mut a = app_over(&files, wordcraft_doc::Document::new());
     typed(&mut a);
     for ext in ["docx", "odt", "rtf"] {
         let revision = a.session.doc.core.revision;
         let name = format!("copy.{ext}");
-        a.finish_pick(AfterPick::Export { ext: ext.into() }, Some(name.clone())).unwrap();
-        let (downloaded, bytes) = got.borrow_mut().pop().unwrap();
-        assert_eq!(downloaded, name);
+        let result = a.finish_pick(AfterPick::Export { ext: ext.into() }, Some(name.clone())).unwrap();
+        assert_eq!(result["downloaded"], name, "{ext}");
+        let request = files.requests().pop().unwrap();
+        assert_eq!(request.file_name.as_deref(), Some(name.as_str()), "{ext}");
+        assert!(!request.save_as, "{ext}: a copy is never Save As");
+        let bytes = files.file(std::path::Path::new(&name)).unwrap();
         let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
         assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body), UNSAVED, "{ext}: the copy has the text");
+        a.settle_saves();
         assert!(a.session.dirty, "{ext}: the document keeps its unsaved changes");
+        assert!(a.session.path.is_none(), "{ext}: the document keeps no file of its own");
         assert_eq!(a.session.doc.core.revision, revision, "{ext}: the document's save stamps are untouched");
     }
 }

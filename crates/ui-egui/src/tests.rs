@@ -2469,6 +2469,9 @@ fn host_copy_with_the_opened_name_is_refused() {
     assert!(got.borrow().is_empty(), "nothing reached the host");
     assert!(a.session.dirty);
     a.execute("file.saveAs", json!({"path": "other.docx", "copy": true})).unwrap();
+    a.settle_saves();
+    assert_eq!(got.borrow().first().map(|(n, s, _)| (n.as_str(), *s)), Some(("other.docx", false)));
+    assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("report.docx")));
     assert!(a.session.dirty);
 }
 
