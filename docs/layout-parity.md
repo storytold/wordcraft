@@ -19,6 +19,87 @@ Additive paragraph spacing retains the full before-space after a section page br
 
 Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. Synthetic control: `layout::tests::exact_math_keeps_run_baseline`.
 
+## Oversized rows marked cantSplit (#4736)
+
+An original synthetic Letter-size DOCX (half-inch margins, one short row followed
+by 100 one-line cell paragraphs at exactly 12 pt) was exported by Word for Mac
+16.114.2. With `w:cantSplit` on the long row, Word starts it on page 2 and continues
+on page 3: all 100 markers remain visible. WordCraft previously placed the row on
+one page and left later text outside the page. The exception now splits an
+automatic/minimum-height row only after it reaches a fresh page. A row that fits
+on a fresh page still moves whole; exact heights and repeated header rows are not
+made splittable by this exception. The DOCX cantSplit property is retained. Physical page freshness is checked separately from section starts; repeated headers are counted before deciding whether the first body fragment can split.
+
+The [OOXML description](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.cantsplit)
+allows oversized rows to continue. Microsoft's [implementation note](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/a55188f7-2443-4c17-ba5a-75999085bab4)
+describes clipping instead; the reference above therefore pins a specific observed
+Word version and synthetic input, not all versions. Word substituted Cambria for
+the requested Source Sans 3; fixed line heights and one-line paragraphs isolate
+the pagination decision, but font-metric and pixel parity with Word are not claimed.
+
+Synthetic regressions cover fresh/partly filled pages, retained minimum heights,
+fitting rows and exact-height clipping. Broader floating/nested/vertical tables,
+merged cells and native Windows Word comparisons remain unqualified. A fresh table page's usable space is below all repeating headers: a fitting cantSplit row stays whole there, while a row that fits only without those headers must continue. Two further synthetic controls cover both cases; they are not additional native Word observations.
+
+### A4 office corpus follow-up (2026-10-31)
+
+The existing #4840 fix was integrated with main e6a5cd05, retaining its newer
+kept-row-chain checks. Four independently generated synthetic A4 DOCX controls
+use installed Helvetica Neue: paragraphs/headings/lists (6 pages), a 90-row table
+with repeating headers (7), fitting and oversized rows followed by vertically
+merged cells (7), and headers/footers/footnotes (6). On unmodified main, 975
+non-whitespace characters in the oversized row are positioned below the physical
+page. With this fix, its 100 paragraphs continue across pages 4–5, inside the page;
+no header-only page remains. The other three controls are pixel-identical to the
+baseline at 96 dpi. All 360 diagnostic markers survive PDF export and DOCX
+save/reopen; the four DOCX body texts and row cantSplit/header/height properties
+are retained. A new source-level regression checks every line's body bounds after
+a preceding table; it fails on main and passes with the fix.
+
+Native Word Mac 16.114.3 (26102720) references use Helvetica Neue for every
+visible character, as do the WordCraft PDFs. Word page counts are 6/7/9/6 versus
+WordCraft 6/7/7/6. All diagnostic markers have the same page assignments in
+controls 1, 2 and 4; this does not mean pixel parity. Control 1 still strands
+headings 4 and 7 at the preceding page's bottom. In control 4, main-body content
+marker positions differ by up to 14.49 pt; footnote-marker positions differ by at
+most 0.40 pt. In control 2, marker origins differ vertically
+by at most 0.29 pt. The complex control differs materially: Word puts its heading
+alone on page 4 and its table header alone on page 5, then flows the 100 long-row
+paragraphs across pages 6–7 (57/43); WordCraft flows them across pages 4–5 (55/45).
+A second native export after visiting the document end is identical in text and
+character geometry. The WordCraft-saved complex DOCX reopened in Word produces
+all nine pages pixel-identically to the original native reference at 96 dpi.
+Thus the clipping repair preserves this DOCX's observed Word behavior, while
+direct WordCraft PDF pagination remains different. The earlier Letter-size
+observation above and these A4 results qualify specific inputs and Word versions;
+they do not establish general merged-cell, nested/floating-table or Windows parity.
+
+### Native repeated-header follow-up (2026-11-05)
+
+Four new local synthetic DOCX controls were exported with Word Mac 16.114.3
+(26102720), using Helvetica Neue in both engines. With a repeated header and a
+first body row marked cantSplit taller than the whole nominal text area, Word
+puts the original header before the first body fragment, omits repeated headers
+on intermediate fragments, and repeats them on the final fragment when they fit.
+The fresh-table and kept-caption controls have 6 and 8 native pages respectively.
+The two ordinarily splittable controls repeat their headers on every fragment
+and have 5 and 6 native pages. This supersedes the earlier assumption above that
+every oversized cantSplit fragment must carry a repeated header. Fitting rows,
+positive exact heights and non-header continuation retain their existing guards.
+The first-row behavior is pinned in a portable regression using the bundled font;
+a two-header-prefix regression is additional model coverage, not a new Word observation.
+
+A separate combined checkpoint (main 573b929a plus #4840, #5095 by @dfgodvan,
+#5166 and #5170, with this follow-up) gives the four long A4 controls 6/7/9/6
+pages and the four small controls 8/6/5/6. All 760 diagnostic markers share their
+native reference pages (maximum vertical origin delta 0.489 pt). These are joint
+results, not a claim that #4840 alone fixes kept-caption or note-separator behavior.
+All 106 direct/reopened pages were rendered. Seven controls reopen pixel-identical;
+the existing note fixture omits its nine footnoteRef marks and gains them on first
+save, so that control remains non-identical on first reopening. Native references,
+fonts and corpus files stay local. General Word/Windows, floating/nested-table and
+all multi-column/note combinations remain unqualified.
+
 ## Checklist
 
 ✅ matches Word as far as our tests show · 🟡 implemented, differs or untested against Word · ❌ missing
@@ -340,6 +421,9 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-11-05 | trivial | With multiple spacing a line of only in-line pictures is as tall as they reach, raised or lowered, and never less than its font's height (a list label's font counting too): a picture shorter than the font keeps the font's ascent and descent, as noted for ODT documents below; a taller one ends at the line's bottom with no descent under it. The spacing adds its share of the font's height, not of a lowered picture's. A legacy check box sizes its line as text of its size. Measured in Word with Arial at 10 and 20 pt, single, 1.15, 1.25 and 1.5 spacing, 156 synthetic lines (`tests::lowered_pictures_and_check_boxes_take_words_line_heights`). Known gap: a picture lowered further than its own height is limited to that height where Word's line keeps growing. |
 | 2026-11-14 | trivial | Word 2003's indent rules beside floating objects (`w:doNotSuppressIndentation`, a `.doc`'s `Copts.fWW11IndentRules`): below compatibility mode 15 an unnumbered paragraph indented past a floating object on its left starts its lines right after the object, its indent ignored (ECMA-376 Part 4 §14.8.3.12), as in Word's PDF of a Word 2003-mode `.doc`; below the object and in mode 15 the indent applies (#5939, `layout::tests::word_2003_indent_rules_start_lines_right_after_a_float_before_the_indent`); files turn it on only once craft-libs reads the setting from `.doc` and `.docx` |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
+| 2026-11-05 | trivial | #4736/#4840: native Word Mac controls pin the original header before an oversized cantSplit first body row and repeats on its final fragment; fitting and ordinarily splittable rows retain their contracts. Joint multi-PR corpus evidence is qualified separately; readiness estimates unchanged. |
+| 2026-11-04 | trivial | PR #4840 validation after integration: 2026-11-04 · Integrate #4736/#4840 with current main: preserve first-fragment non-empty-cell checks and physical-page freshness for oversized cantSplit continuation; readiness estimates unchanged. |
+| 2026-11-03 | trivial | Integrate #4736/#4840 with current main: preserve first-fragment non-empty-cell checks and physical-page freshness for oversized cantSplit continuation; readiness estimates unchanged. |
 | 2026-10-28 | trivial | Shared MATH construction records reuse variants and assembly data without changing glyph mappings or existing limits (#3630); readiness estimates unchanged |
 | 2026-10-29 | trivial | Page drawing indexes text-box warp lookups per paragraph (#3614); requested offsets only, bounded prefix traversal, original Linux display and persistence controls; readiness estimates unchanged |
 | 2026-10-31 | trivial | A floating object anchored right after a page break inside a paragraph, before text, is drawn on the new page, as in Word; only a cover page's anchors, with nothing taking room after them, stay on the page before (#4262) |
@@ -367,14 +451,20 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-10-31 | trivial | A list level above that hasn't counted yet takes its first number at the first deeper item, as measured in Word (1.1, 1.2, then 2.; 10.1–10.4, then 11.), whether or not the deeper level's text shows it |
 | 2026-11-01 | trivial | #5088: paragraph side borders lie outside the text; top and bottom reach the corners; shading fills to the outer edges (#5036) |
 | 2026-11-01 | trivial | #2485: Port header Margin body-boundary placement to current modules; use the existing text-height floor for inline Margin extents and correct historical control labels. Source checks only; primary qualification pending. |
+| 2026-10-31 | trivial | Office corpus validation: 2026-10-31 · A4 synthetic office corpus compared with Word Mac 16.114.3 using Helvetica Neue: clipping is fixed; 3/4 controls keep their marker-to-page assignments. Complex-table pagination, heading placement and footnote positions still differ. Readiness estimates unchanged. |
+| 2026-10-31 | trivial | Revalidate #4736/#4840 on current main with four synthetic A4 controls and Word Mac 16.114.3 / Helvetica Neue; add a preceding-table regression that fails before the fix. No complete pagination-parity claim. |
 | 2026-11-01 | trivial | #3915: preserve guarded whole-line ordinary-tab alignment with current main. Existing controls retained; source checks only, primary qualification pending. |
 | 2026-10-25 | trivial | Justified and distributed lines no longer stretch the spaces before a line's first character: Thai official letters indent paragraphs with ~20 spaces, and their first line moved right by up to the line's slack (86 pt in a measured case). Measured in Word with synthetic documents: left, `both`, `distribute` and `thaiDistribute` put the first character at the same place, for Thai and Latin text, at the paragraph start, after a line break and after a tab. A distributed line no longer counts the space it wrapped at, or the manual line break it ends with, so its text reaches the margin as in Word |
 | 2026-11-01 | trivial | #2437: Preserve finite paragraph-border flow extents and terminal-break keep preflight with current-main changes. Recursive terminal-successor lookahead remains outside scope. Source checks only; primary qualification pending. |
 | 2026-10-31 | trivial | Percentage cell widths size their columns whichever rows give them, as measured in Word: rows that disagree giving each column its largest and a merged cell's percentage shared by the columns under it; a header row of percentages over rows without cell widths, autofit or fixed, scaled to the table's width, the text width or a fixed table's grid width, and past 100% the columns taking their shares left to right until the width runs out (the ones after it 2 pt and clipped in a fixed table); conflicting percentages, unsized columns, spans and absolute widths keep the grid |
 | 2026-10-30 | trivial | Keep with next: a kept heading before a three-line paragraph under widow/orphan control needs room for all three lines, since that paragraph can only move over whole; with room for two, the heading goes to the next page with it instead of staying alone at the bottom, as in Word for Mac 16.93. `layout::tests::keep_with_next_carries_the_heading_when_a_three_line_paragraph_moves_whole` |
+| 2026-10-30 | trivial | Table pagination update: 2026-10-30 · Oversized automatic/minimum-height cantSplit rows start on a fresh page and continue without clipping (#4736); fitting rows, repeated header rows and exact-height clipping retain their contracts. Native synthetic Word Mac 16.114.2 reference; readiness estimates unchanged. |
+| 2026-10-30 | trivial | Add repeated-header budget controls: fitting cantSplit rows stay whole; header-induced oversized rows continue without header-only pages. No production pagination change. |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
 | 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
 | 2026-10-29 | trivial | A cell spanning columns shares its extra minimum width by the columns' preferred widths (equally in automatic tables); nested tables are measured with the same weights (#1883) |
+| 2026-10-29 | minor | Review follow-up for #4736: distinguish a physically fresh page from a mid-page continuous-section top, and keep repeated headers with the first oversized body fragment; synthetic regression coverage added. |
+| 2026-10-29 | minor | Oversized automatic/minimum-height cantSplit rows start on a fresh page and continue without clipping (#4736); fitting rows, repeated header rows and exact-height clipping retain their contracts. Native synthetic Word Mac 16.114.2 reference; readiness estimates unchanged. |
 | 2026-10-25 | trivial | Field results take the `\* DollarText`, `\* Hex` and `\* ArabicDash` switches in table formulas and in the page-number, SEQ, PAGEREF and count fields (#4226); readiness estimates unchanged |
 | 2026-10-25 | trivial | Header-cell pins and header-table obstacles share the rendered body-top override (#2485); model positioning and overlap controls, no new native comparison. |
 | 2026-10-19 | trivial | Header body-boundary adjustment applies only to the Margin anchor. TopMargin and InsideMargin keep their declared extent; synthetic alignment countercontrols are prepared, not yet executed. |
@@ -552,6 +642,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 | 2026-11-02 | trivial | A page break before the paragraph in a table's first row moves the whole table to the next page, as in Word (it was ignored); emphasis marks (Font › Emphasis mark) are drawn over or under each character and make the line taller |
 | 2026-11-12 | minor | Added layout.fitOnePage: heuristic search over discrete font half-point steps and spacing compression with anti-clutter safeguards (line-spacing floor and font-size floor) to condense multi-page documents by one page while preserving hierarchy |
 | 2026-10-31 | trivial | Web addresses: no line break after the `?` of a query (`/?type=`) or after a slash before an underscore (`/portal/_back`). Word for Mac 16.93 kept such an address whole and moved it to the next line; WordCraft broke it there (UAX #14 allows both). With the address moved along the line one word at a time (60 paragraphs, Times New Roman 12pt), WordCraft's lines now match Word's line for line; 23 (query) and 19 (underscore) paragraphs broke inside the address before. A `?` keeps its break before anything but an ASCII letter, digit or underscore (CJK text), and a path after a space (`caption /_back`) wraps whole. `layout::tests::no_line_break_inside_a_query_address`, `a_path_after_a_space_wraps_whole`, `a_question_mark_in_cjk_text_keeps_its_break` |
+| 2026-11-15 | trivial | #4840: retain oversized cantSplit/header contracts and keep fitting rows whole during column balancing using the uncapped body budget, including repeated headers; no new native measurements. |
 
 Maintenance on 2026-10-12 retains current tracked-deletion, endnote, footer-total, text-box
 and balloon layout while supplying explicit cell identity at every box call. The native Word
@@ -561,3 +652,12 @@ Repeated table-cell control, 12 October 2026: four same-style contextual paragra
 
 > 2026-10-29 · Port #3915 to split layout modules: ordinary LTR tab groups follow paragraph alignment. Positional tabs, lists, RTL and display math retain their alignment paths. Source port only; no test execution or new native measurements.
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
+
+### Kept rows during column balancing — 2026-11-15
+
+The oversized-row exception uses the unbalanced physical body budget after
+repeated headers. A balancing trial's smaller column height cannot make a kept
+row eligible to split when it fits that full budget. Synthetic 280-point rows
+with and without a repeated header exercise both balanced and unbalanced
+continuous-section endings. Local tests and native Word observations were not
+run for this follow-up; full hosted CI is required.

@@ -422,6 +422,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-11-20 | trivial | Progress log: `wordcraft-cli mcp` needs both automation roots; `--connect` refused (#7124) |
 | 2026-11-17 | trivial | Progress log: file formats, codecs and protocols come from craft-libs (#778) |
 | 2026-11-15 | trivial | Progress log: Get the Missing Fonts (download pages for missing fonts their publisher gives away) |
+| 2026-11-15 | #4840: retain oversized cantSplit/header contracts and keep fitting rows whole during column balancing using the uncapped body budget, including repeated headers; no new native measurements. |
 | 2026-11-07 | Narrow windows (#5886): the window can be made 600 pt wide (was 760 pt), enabling split-window layout and edge tiling on Wayland/GNOME and 1280 pt screens; the title bar's search box and Discord button condense, and status-bar texts (page, word count, language, Track Changes, Overtype) stop before the right controls or shorten ("…" for language) instead of overlapping Focus, views and zoom |
 | 2026-11-05 | trivial | Progress log: ODT documents keep their language (gap 19) |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
@@ -995,6 +996,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-05 | trivial | DOCX paragraph `w:adjustRightInd` is preserved with true, false and absent values; OOXML properties follow schema order. Grid layout remains open. |
 | 2026-11-04 | trivial | Progress log: RTF Unicode fallback counts; readiness estimates unchanged |
 | 2026-10-28 | trivial | Per-page ink object lookups, #3614. Drawing order, geometry and saved data retain their behavior; no readiness estimate change |
+| 2026-11-05 | trivial | #4736/#4840: native Word Mac controls pin the original header before an oversized cantSplit first body row and repeats on its final fragment; fitting and ordinarily splittable rows retain their contracts. Joint multi-PR corpus evidence is qualified separately; readiness estimates unchanged. |
 | 2026-11-05 | trivial | Progress log: ODT columns stating only their shares (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT font size for every script (gap 19) |
 | 2026-11-05 | trivial | Progress log: ODT text turning off what its style turns on (gap 19) |
@@ -1023,6 +1025,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: OpenDocument files shown in Microsoft Word style or LibreOffice style (gap 19) |
 | 2026-11-07 | trivial | Progress log: `.doc` brace and bracket shapes unfilled by default (#5943) |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
+| 2026-11-04 | trivial | PR #4840 validation after integration: 2026-11-04 · Integrate #4736/#4840 with current main: preserve first-fragment non-empty-cell checks and physical-page freshness for oversized cantSplit continuation; readiness estimates unchanged. |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-31 | trivial | Progress log: PDFs and prints show a table of contents' current page numbers |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
@@ -1043,6 +1046,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-03 | trivial | Progress log: an empty paragraph after a document's leading floating table takes no space before |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | Integrate #4736/#4840 with current main: preserve first-fragment non-empty-cell checks and physical-page freshness for oversized cantSplit continuation; readiness estimates unchanged. |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
@@ -1484,6 +1488,11 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-11-01 | trivial | Progress log: a list inside a Markdown block quote stays quoted |
+| 2026-10-31 | trivial | Office corpus validation: 2026-10-31 · A4 synthetic office corpus compared with Word Mac 16.114.3 using Helvetica Neue: clipping is fixed; 3/4 controls keep their marker-to-page assignments. Complex-table pagination, heading placement and footnote positions still differ. Readiness estimates unchanged. |
+| 2026-10-31 | trivial | Revalidate #4736/#4840 on current main with four synthetic A4 controls and Word Mac 16.114.3 / Helvetica Neue; add a preceding-table regression that fails before the fix. No complete pagination-parity claim. |
+| 2026-10-30 | trivial | Table pagination update: 2026-10-30 · Oversized automatic/minimum-height cantSplit rows start on a fresh page and continue without clipping (#4736); fitting rows, repeated header rows and exact-height clipping retain their contracts. Native synthetic Word Mac 16.114.2 reference; readiness estimates unchanged. |
+| 2026-10-29 | minor | Review follow-up for #4736: distinguish a physically fresh page from a mid-page continuous-section top, and keep repeated headers with the first oversized body fragment; synthetic regression coverage added. |
+| 2026-10-29 | minor | Oversized automatic/minimum-height cantSplit rows start on a fresh page and continue without clipping (#4736); fitting rows, repeated header rows and exact-height clipping retain their contracts. Native synthetic Word Mac 16.114.2 reference; readiness estimates unchanged. |
 | 2026-10-29 | trivial | Progress log: citation source and bibliography-number lookups (#4888) |
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
