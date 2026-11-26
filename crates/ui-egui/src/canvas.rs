@@ -645,7 +645,7 @@ fn sync_view_state(app: &WordApp, state: &mut PageViewState) {
     // A wheel or pinch zoom is the view's own, anchored at the pointer, and reaches the session rounded to a whole
     // percent (`show_pages`): the view keeps its exact zoom while it rounds to the session's, or the rounding would
     // move the place under the pointer on the next pass.
-    let session_zoom = f64::from(v.zoom.clamp(0.1, 5.0));
+    let session_zoom = f64::from(if v.zoom.is_finite() { v.zoom.clamp(0.1, 5.0) } else { 1.0 });
     if (state.zoom * 100.0).round() != (session_zoom * 100.0).round() {
         state.zoom = session_zoom;
     }
