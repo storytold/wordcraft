@@ -85,7 +85,8 @@ fn unknown_settings_keys_load_in_linear_time() {
     }
     map.insert("miniToolbar".into(), json!(false));
     let bytes = serde_json::to_vec(&serde_json::Value::Object(map)).unwrap();
-    let prefs: Prefs = serde_json::from_slice(&bytes).unwrap();
+    let (prefs, errors) = legacy_ui_json(&bytes).unwrap();
+    assert!(errors.is_empty());
     assert!(!prefs.mini_toolbar);
 }
 
