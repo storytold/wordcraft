@@ -481,11 +481,13 @@ fn main() -> eframe::Result {
     let mut flags = ControlOptions::default();
     let mut sample = false;
     let (args, other_files) = text_args(arguments);
-    // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
-    let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     // The Launcher's own hand-off: `--` ends the options, so nothing after it is read as one and
     // the separator itself never becomes a document.
     let (args, after_separator) = split_at_delimiter(args);
+    // Only macOS (Finder / LaunchServices) adds these, and only to the options: a Finder launch carries
+    // no separator for them to sit after, and the Launcher starts the app itself, so a document whose
+    // name merely looks like one of these (`-NSNotes.docx`) is still opened (#7849 review).
+    let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut documents: Vec<String> = Vec::new();
     let mut bad_control: Option<Option<String>> = None;
     let mut missing_value: Option<&'static str> = None;
@@ -1150,6 +1152,17 @@ mod command_line_tests {
         // A real document path, as Windows hands one on: kept whole, in order, backslashes and spaces intact.
         let (_, files) = split_at_delimiter(launcher_argv(&[r"C:\Users\user\Holiday letter.docx", "a.file"]));
         assert_eq!(files, [r"C:\Users\user\Holiday letter.docx", "a.file"], "a real path after -- stays a document, in order");
+    }
+
+    /// A document whose name looks like a LaunchServices option is one only after the separator: the strip
+    /// for macOS runs on the options, after the split, so `-- -NSNotes.docx report.docx` opens both.
+    #[test]
+    fn a_document_named_like_a_launch_argument_survives_the_separator() {
+        let (options, after) = split_at_delimiter(["-psn_0_12345", "--", "-NSNotes.docx", "report.docx"].map(String::from).to_vec());
+        assert!(super::without_launch_args(options).is_empty(), "the option before the separator goes");
+        let hazard: Vec<String> = ["-NSNotes.docx", "report.docx"].map(String::from).to_vec();
+        assert!(super::without_launch_args(hazard).is_empty(), "before the split the strip takes the document and the one after it");
+        assert_eq!(documents_to_open(Vec::new(), after), ["-NSNotes.docx", "report.docx"], "what follows the separator is opened, in order");
     }
 
     /// A stable line that carries its own separator: `a.file` before `--` opens before `b.file` after it.
