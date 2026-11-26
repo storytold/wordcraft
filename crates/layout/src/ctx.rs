@@ -106,6 +106,14 @@ pub(crate) struct Pin {
     pub(crate) seen: HashSet<(Vec<u32>, usize)>,
 }
 
+/// The text rectangle of shape `o` at its saved size ([`wordcraft_doc::connector::text_insets`]).
+pub(crate) fn shape_text_insets(o: &InlineObject) -> [f32; 4] {
+    match o {
+        InlineObject::Shape { kind, w, h, extra, .. } => wordcraft_doc::connector::text_insets(*kind, extra.corner, *w, *h),
+        _ => [0.0; 4],
+    }
+}
+
 /// Whether a float's position on both axes is measured on the page (from its edges or margins),
 /// not from its column, paragraph, character or line: one that can be placed on the page from
 /// anywhere.
@@ -345,7 +353,7 @@ impl Ctx<'_> {
             if float.wrap != Wrap::Inline || float.rot != 0.0 {
                 continue;
             }
-            if let Some(h) = self.fitted_height(*id, *w) {
+            if let Some(h) = self.fitted_height(*id, *w, shape_text_insets(o)) {
                 out.push((k, h));
             }
         }
@@ -353,12 +361,12 @@ impl Ctx<'_> {
     }
 
     /// The height of text box `id`, `w` wide, when it resizes to fit its text (once per layout).
-    fn fitted_height(&mut self, id: u32, w: f32) -> Option<f32> {
+    fn fitted_height(&mut self, id: u32, w: f32, inset: [f32; 4]) -> Option<f32> {
         let key = (id, w.to_bits(), self.fields.page_key());
         if let Some(h) = self.fitted.get(&key) {
             return *h;
         }
-        let h = textbox::fitted_height(self, id, w);
+        let h = textbox::fitted_height(self, id, w, inset);
         self.fitted.insert(key, h);
         h
     }
@@ -367,7 +375,7 @@ impl Ctx<'_> {
     /// fit its text is as tall as its text, anything else its own height.
     pub(crate) fn float_height(&mut self, o: &InlineObject, w: f32, h: f32) -> f32 {
         match o {
-            InlineObject::Shape { story: Some(id), .. } => self.fitted_height(*id, w).unwrap_or(h),
+            InlineObject::Shape { story: Some(id), .. } => self.fitted_height(*id, w, shape_text_insets(o)).unwrap_or(h),
             _ => h,
         }
     }
