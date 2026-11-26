@@ -2442,3 +2442,63 @@ fn hostile_numbers_are_ignored() {
     assert!(h.state().canvas.view.zoom.is_finite() && h.state().canvas.view.zoom > 0.0);
     assert!(h.state().canvas.view.offset.0.is_finite() && h.state().canvas.view.offset.1.is_finite());
 }
+
+/// A window in the background shows no caret and asks for no frames to blink one (#7674). The page keeps the keyboard
+/// focus, so the caret blinks again once the window is active again.
+#[test]
+fn the_caret_blinks_only_while_the_window_is_active() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    // No glide or fade: the caret's frames are the blink's alone.
+    a.ui.animations = crate::theme::Animations::Off;
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let ctx = h.ctx.clone();
+    h.state_mut().canvas.focus_page(&ctx);
+    for _ in 0..6 {
+        h.app_frame();
+    }
+    assert!(h.state().canvas.focused(&ctx), "the page has the keyboard focus");
+    let blink = std::time::Duration::from_millis(530);
+    let next_frame =
+        |h: &H| h.output().viewport_output.get(&egui::ViewportId::ROOT).map_or(std::time::Duration::MAX, |viewport| viewport.repaint_delay);
+    assert!(next_frame(&h) <= blink, "an active window asks for a frame within a blink");
+    // The caret is a stroke from its top to its bottom where the layout puts it. The blink runs on the wall clock:
+    // restarted, it is in its on half for the next 530 ms, so a caret the window draws at all is in the frame after.
+    let (top, bottom) = {
+        let app = h.state_mut();
+        let focus = app.session.sel.focus.clone();
+        let c = app.session.layout().caret(&focus).expect("the caret has a place");
+        let mut at = |y| crate::canvas::page_to_screen(app, c.page, c.x, y).expect("the caret's page is on screen");
+        (at(c.top), at(c.top + c.height))
+    };
+    let caret_drawn = |h: &mut H| {
+        h.state_mut().canvas.glide.restart(craft::platform::clock::monotonic_ms());
+        h.app_frame();
+        h.output().shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Path(path) => path.points.len() == 2 && path.points[0].distance(top) < 1.5 && path.points[1].distance(bottom) < 1.5,
+            _ => false,
+        })
+    };
+    assert!(caret_drawn(&mut h), "an active window draws the caret");
+
+    h.input_mut().focused = false;
+    h.event(egui::Event::WindowFocused(false));
+    for _ in 0..3 {
+        h.app_frame();
+    }
+    assert!(h.state().canvas.focused(&ctx), "the page keeps the keyboard focus");
+    assert!(next_frame(&h) > blink, "a window in the background asks for no frame to blink the caret");
+    assert!(!caret_drawn(&mut h), "a window in the background draws no caret");
+
+    h.input_mut().focused = true;
+    h.event(egui::Event::WindowFocused(true));
+    h.app_frame();
+    assert!(next_frame(&h) <= blink, "active again, the caret blinks again");
+}
