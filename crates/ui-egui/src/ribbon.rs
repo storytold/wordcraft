@@ -9,6 +9,9 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
+/// Word da Grazi: no Share button beside the tabs (exporting a copy is in File › Export).
+const SHOW_SHARE: bool = false;
+
 mod arrange;
 mod charts;
 mod common;
@@ -174,8 +177,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         let share_button = if level < 2 { share_full } else { 30.0 };
                         let editing = crate::widgets::icon_text_button_width(ui, editing_label, regular(12.0), true, labels);
                         let comment = crate::widgets::icon_text_button_width(ui, comments, regular(12.0), false, labels);
-                        // The gaps (6 + 4 + 8) and the strip's margin.
-                        spaced(share_button) + spaced(editing) + spaced(comment) + 18.0 + 12.0
+                        // Share and the gap after it (6), only when the button shows.
+                        let share_part = if SHOW_SHARE { spaced(share_button) + 6.0 } else { 0.0 };
+                        // The other gaps (4 + 8) and the strip's margin.
+                        share_part + spaced(editing) + spaced(comment) + 12.0 + 12.0
                     };
                     let button_levels = [button_widths(0), button_widths(1), button_widths(2)];
                     let labels: Vec<&str> = tabs.iter().map(|(tab, custom)| if *custom { tab.as_str() } else { tl!(tab) }).collect();
@@ -196,6 +201,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         // tabs took clicks that did nothing, so the empty window had no way back to
                         // the Start screen (#3045).
                         ui.add_enabled_ui(app.has_document(), |ui| {
+                            if SHOW_SHARE {
                             let (share_size, share_text) =
                                 if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
                             let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
@@ -223,6 +229,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                             }
                             ui.add_space(6.0);
+                            }
                             let track = app.session.doc.settings.track_changes;
                             let mode = if plan.buttons == 0 {
                                 crate::widgets::icon_text_menu_button(ui, "pencil", editing_label, regular(12.0))
