@@ -296,6 +296,38 @@ fn the_bookmark_dialog_goes_to_and_deletes_bookmarks() {
     assert!(h.state().session.doc.bookmarks().iter().any(|(n, _)| n == "Fresh"), "Add inserts the typed bookmark");
 }
 
+/// Inspect Document (File › Info › Check for Issues): Remove All for hidden text takes it out and
+/// the counts are read afresh; the document's visible text stays.
+#[test]
+fn inspect_document_removes_hidden_text() {
+    let mut app = app_with("Alpha beta");
+    let _ = app.run("select.text", json!({"text": "beta"}));
+    let _ = app.run("format.hidden", json!({}));
+    assert_eq!(app.session.selected_text(), "beta");
+    let mut h = app_harness(app);
+    h.run_steps(2);
+    open_named(&mut h, "inspectDocument", json!({}));
+    // The report shows the hidden text it found.
+    assert!(
+        fields_of(h.state(), "inspectDocument")["report"]["found"]["hiddenText"] == json!(true),
+        "the report shows hidden text: {:?}",
+        fields_of(h.state(), "inspectDocument")
+    );
+    // Remove All runs one file.inspect command; the report follows what it took out. The other
+    // categories have nothing to remove, so the one Remove All shown is the hidden text's.
+    press(&mut h, "Remove All");
+    let body = body_of(h.state());
+    assert!(!body.contains("beta"), "hidden text gone:\n{body}");
+    assert!(body.contains("Alpha"), "visible text stays:\n{body}");
+    let fields = fields_of(h.state(), "inspectDocument");
+    assert!(
+        fields["report"]["found"]["hiddenText"] == json!(false) && fields["message"].as_str().is_some_and(|m| m.contains("Removed")),
+        "the report and the message follow the removal: {fields}"
+    );
+    let _ = h.state_mut().run("edit.undo", json!({}));
+    assert!(body_of(h.state()).contains("beta"), "one undo brings it back");
+}
+
 /// #4327: View › Macros opens a dialog that runs and records macros by the exact name listed
 /// or typed; the command with a name to run or delete (what scripts send) still acts without one.
 #[test]

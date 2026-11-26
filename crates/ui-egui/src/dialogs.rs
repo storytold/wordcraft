@@ -17,6 +17,7 @@ mod find_replace;
 mod font;
 mod forms;
 pub(crate) mod host;
+mod inspect_document;
 mod link;
 mod macros;
 mod mailings;
@@ -93,6 +94,7 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         "commands" => search_commands::open(app, name, params, parent),
         "find" | "replace" | "goto" => find_replace::open(app, name, params, parent),
         "password" | "encryptPassword" | "discardRecovery" => prompts::open(app, name, params, parent),
+        "inspectDocument" => inspect_document::open(app, name, params, parent),
         "newStyle" | "modifyStyle" => style_forms::open(app, name, params, parent),
         "manageStyles" => styles::open(app, name, params, parent),
         "templates" | "organizer" => dialogs_templates::open(app, name, params, parent),

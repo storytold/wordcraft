@@ -82,10 +82,45 @@ pub(super) fn save_as(ui: &mut Ui, app: &mut WordApp) {
     }
 }
 
+/// The Info page's cached `file.info` report's key: which document, its revision, the password
+/// state (which `file.encrypt` changes without a document edit), and the path and dirty state
+/// (which `file.save` and `file.rename` change without one either).
+type InfoKey = (u64, u64, bool, Option<String>, bool);
+
+/// The Info page's cached `file.info` report.
+fn info_id() -> egui::Id {
+    egui::Id::unique("backstage_info")
+}
+
 /// Info: the document's properties beside its statistics.
 pub(super) fn info(ui: &mut Ui, app: &mut WordApp) {
     heading(ui, "Info");
-    let info = app.session.run("file.info", &json!({})).unwrap_or_default();
+    // The report is read when the document changes, not every pass: `file.info` walks the
+    // document for hidden text, which a pass has no business repeating while nothing changed.
+    // The key keeps the password state, which `file.encrypt` changes without a document edit,
+    // and the path and dirty state, which `file.save` and `file.rename` change without one
+    // either. The document id comes first: two documents can share a revision.
+    let key = (
+        app.session.document_id(),
+        app.session.rev(),
+        app.session.password.is_some(),
+        app.session.path.as_ref().map(|p| p.to_string_lossy().to_string()),
+        app.session.dirty,
+    );
+    let info = ui.ctx().data_mut(|d| match d.get_temp::<(InfoKey, serde_json::Value)>(info_id()) {
+        Some((k, v)) if k == key => v,
+        _ => {
+            // Only a successful read is cached: a failed one (Null) pinned under this key
+            // would blank the Info page until the document or its state changes again.
+            match app.session.run("file.info", &json!({})) {
+                Ok(v) => {
+                    d.insert_temp(info_id(), (key.clone(), v.clone()));
+                    v
+                }
+                Err(_) => serde_json::Value::Null,
+            }
+        }
+    });
     // The row starts at the reading start, so Properties are at the right in a mirrored interface.
     // Two equal columns across the page, as production's `ui.columns(2)`.
     let _ = Row::new().fill_width().gap(Gap::Section).show(ui, |ui, _| {
@@ -148,6 +183,19 @@ fn properties(ui: &mut Ui, app: &mut WordApp, _info: &serde_json::Value) {
             .show(ui),
     ) {
         let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
+    }
+    // Check for Issues › Inspect Document, as Word's: the Document Inspector finds comments,
+    // tracked changes, hidden text and other content you may want to remove before sharing.
+    if clicked(
+        &Button::new(label("Check for Issues…"))
+            .id_salt("info-inspect")
+            .sizing(Sizing::FillWidth)
+            .tooltip(
+                tl!("Find comments, tracked changes, hidden text and other content you may want to remove before sharing the document.").to_owned(),
+            )
+            .show(ui),
+    ) {
+        let _ = app.run("ui.dialog", json!({"name": "inspectDocument"}));
     }
 }
 

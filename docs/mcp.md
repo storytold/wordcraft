@@ -39,7 +39,9 @@ resent; inspect the document before deciding whether to repeat the operation you
 
 Read-only inspection and in-memory `ui.render` / `ui.screenshot` calls may retry once. With a
 string `path`, rendering or taking a screenshot writes a file and is not retried after an
-unknown outcome. Unreadable replies are reported as errors without replaying the request.
+unknown outcome. `inspect_document` with `remove` is a mutation, however: it is never
+automatically resent, and a lost reply reports `outcome unknown`. Unreadable replies are
+reported as errors without replaying the request.
 
 On stdio, an invalid UTF-8 request line returns JSON-RPC parse error `-32700`. It never reaches
 the backend, and the server continues with the next line instead of substituting characters
@@ -195,10 +197,11 @@ test source in File › Options › Language and on the bar's Install.
 | `list_documents` | the open documents: `id`, `title`, `path`, `dirty`, `active` |
 | `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs: one undo step; each break is the Enter it stands for, so AutoFormat and AutoCorrect run and a one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a control-channel or CLI call is held to it too) |
 | `select_text` | select the n-th occurrence of some text |
-| `get_text` / `inspect_document` | read the document back (verify without screenshots); a header or footer's `fields` mark those with `perPage` (PAGE, NUMPAGES, STYLEREF…), whose stored result isn't what every page shows (`render_page` shows that); `fieldsTruncated` means a part has more than the 200 listed; a field kept as a range (a TOC, a bibliography) gives at most 2000 characters of its result, with `resultTruncated` when it has more |
-| `render_page` | a page as PNG |
+| `get_text` / `inspect_document` | read the document back (verify without screenshots); a header or footer's `fields` mark those with `perPage` (PAGE, NUMPAGES, STYLEREF…), whose stored result isn't what every page shows (`render_page` shows that); `fieldsTruncated` means a part has more than the 200 listed; a field kept as a range (a TOC, a bibliography) gives at most 2000 characters of its result, with `resultTruncated` when it has more |; `inspect_document` with `remove` cleans the document (see below)| `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
+
+`inspect_document` with `remove` cleans the document instead (the Document Inspector): `["comments", "revisions", "properties", "hidden", "headers"]` — `"hidden"` takes hidden text out, whole hidden paragraphs with their marks, as the Word Document Inspector does; removals are refused while the document tracks changes. The reply's `residual` lists what a removal couldn't reach.
 
 ### Several documents
 
@@ -206,6 +209,11 @@ test source in File › Options › Language and on the bar's Install.
 document beside the ones already open and make it the active one; their reply carries its `id`.
 `open_document` replaces a blank document nobody has used, and a file that is already open becomes
 active again (`alreadyOpen`). `list_documents` lists the open documents with their ids.
+
+A file that carries hidden text warns on open: the reply carries `hiddenText` (the pieces and the
+characters they cover) and a `warning` telling the agent to inform the human — the text does not
+show on screen (the layout leaves it out), so an agent reading the file would see words the human
+doesn't. `inspect_document` with `"remove": ["hidden"]` removes it; `file.info` reports `hasHidden`.
 
 Tools work on the active document. `execute`, `batch`, `type_text`, `select_text`, `get_text`,
 `insert_table`, `inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open

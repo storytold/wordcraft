@@ -62,6 +62,23 @@ fn agent_writes_a_formatted_document() {
     assert!(p["percent"].as_f64().unwrap() > 50.0);
 }
 
+#[test]
+fn inspect_document_refuses_a_remove_that_names_nothing() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    // An explicit `remove` means a cleanup was asked for: an empty list is refused rather
+    // than answered with the structure read, which a client could mistake for a removal.
+    let r = call(&mut s, 20, "tools/call", json!({"name": "inspect_document", "arguments": {"remove": []}}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap_or("").contains("at least one category"), "{r}");
+    // A category outside the inspector's list is refused the same way, naming the valid ones.
+    let r = call(&mut s, 21, "tools/call", json!({"name": "inspect_document", "arguments": {"remove": ["hiddenText"]}}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    // Without `remove` the tool stays the read it is named for.
+    let r = call(&mut s, 22, "tools/call", json!({"name": "inspect_document", "arguments": {}}));
+    assert_eq!(r["result"]["isError"], false, "{r}");
+}
+
 /// The document's paragraphs as (text, in a list) from `inspect_document`.
 fn paragraphs(s: &mut Server) -> Vec<(String, bool)> {
     let doc = tool(s, "inspect_document", json!({}));
