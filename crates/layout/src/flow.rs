@@ -1164,7 +1164,7 @@ mod tests {
             pb.cap_columns();
             // A preceding floating object leaves a narrow strip of the first column, but does
             // not occupy the second column. The same kept paragraph fits there in one line.
-            pb.excl.push((Rect::new(pb.col_x(), top, pb.col_w() - 26.0, 100.0), false, None, WrapText::BothSides, false));
+            pb.excl.push((Rect::new(pb.col_x(), top, pb.col_w() - 26.0, 100.0), false, None, WrapText::BothSides, crate::floats::AreaKind::Object));
             place_para_in_flow(ctx, pb, p, 0, top);
 
             assert_eq!(pb.pages.len(), 1, "a fitting candidate kept the balance attempt on its page");
