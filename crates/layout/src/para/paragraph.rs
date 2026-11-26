@@ -286,16 +286,24 @@ impl<'a> Shaped<'a> {
 
     /// Drop cap: the first character, sized so its capital spans `lines` lines. Returns how much
     /// of the run's text it took.
+    ///
+    /// The size comes from the text the letter drops beside, never from the letter's own run: a
+    /// file Word saved gives the letter the big size it drew (`w:sz` on the framed letter, and a
+    /// `w:position` lowering it), and sizing from that again made the letter several times too big.
     fn drop_cap_letter(&mut self, cx: &Cx, rc: &Arc<ResolvedChar>, text: &str, start: usize) -> usize {
         let rp = cx.rp;
         let Some(c) = cx.drop_first.filter(|_| start == 0) else { return 0 };
         let Some(first) = text.get(..c.len_utf8()) else { return 0 };
-        let line_h = (rc.size * 1.2).max(1.0);
+        let text_rc = cx.res.char(cx.p.props_of_char(c.len_utf8()));
         let lines = rp.drop_cap as f32;
         // Capital height is ~0.7 em: the letter's cap spans from line 1's caps to line N's baseline.
-        let mut big = (**rc).clone();
         // `clamp` would panic here when the text itself is larger than 1000 pt.
-        big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
+        let cap = |size: f32| (((lines - 1.0) * (size * 1.2).max(1.0) + size * 0.7) / 0.7).min(1000.0).max(size);
+        let mut big = (**rc).clone();
+        (big.size, big.size_cs) = (cap(text_rc.size), cap(text_rc.size_cs));
+        // The letter hangs from the first line down to line N's baseline: a raise or lowering of
+        // its own would move it off those lines and stretch the first line.
+        big.position = 0.0;
         if let Some(f) = &rp.drop_cap_font {
             big.font = f.clone();
             big.font_cs = f.clone();

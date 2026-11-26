@@ -5410,6 +5410,30 @@ fn drop_cap_options_place_the_letter() {
     assert_ne!(text_style.as_deref(), Some("Liberation Mono"), "only the letter");
 }
 
+/// #6875: a .docx from Word gives the drop-cap letter the big size Word drew it at (`w:sz`) and a
+/// lowering (`w:position`). The letter is still sized from the text beside it: as big as a letter
+/// with no size of its own, not that size grown again, and the first line keeps its height.
+#[test]
+fn drop_cap_sizes_from_the_text_not_the_letter() {
+    crate::test_fonts();
+    let plain = drop_cap_layout(|_| {});
+    let mut p =
+        wordcraft_doc::Paragraph::with_text(&"Every line of this paragraph wraps around a large first letter. ".repeat(6), Default::default());
+    p.props.drop_cap = Some(3);
+    p.format(0, 1, &|c| (c.size, c.position) = (Some(55.0), Some(-4.5))).expect("the letter takes Word's size");
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let Some(word) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+        panic!("no lines")
+    };
+    let size = |pl: &crate::para::ParaLayout| pl.clusters.first().and_then(|c| pl.styles.get(c.style as usize)).map(|s| s.rc.size);
+    assert_eq!(size(&word), size(&plain), "the letter's own size is not grown again");
+    assert!((word.drop_cap_w - plain.drop_cap_w).abs() < 0.5, "as wide: {} vs {}", word.drop_cap_w, plain.drop_cap_w);
+    let h = |pl: &crate::para::ParaLayout| pl.lines.first().map(|l| l.height);
+    assert_eq!(h(&word), h(&plain), "the first line keeps its height");
+}
+
 /// #2601: the letter's own font applies to complex-script and East Asian first letters too. In
 /// margin, the letter sits in the left margin for any alignment or first-line indent: its right
 /// edge is the distance left of the text column (of the first line's start, if that hangs further
