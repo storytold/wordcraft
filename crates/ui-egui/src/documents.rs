@@ -82,6 +82,7 @@ impl WordApp {
         self.info_editing = None;
         // Caches keyed by the revision alone: another document's revision can be the same number.
         self.status_counts = crate::window_ui::NOT_COUNTED;
+        self.status_recount = None;
         self.previews.document_changed();
         // The Start screen's placeholder (#1129) goes once a document is open beside it.
         if let Some(placeholder) = self.no_document
@@ -161,6 +162,7 @@ impl WordApp {
     pub(crate) fn show_document(&mut self, id: u64) -> Result<(), String> {
         self.session.activate(id).map_err(|e| e.to_string())?;
         self.sync_document();
+        self.paginate_in_background();
         Ok(())
     }
 

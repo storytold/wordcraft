@@ -870,3 +870,28 @@ fn status_bar_view_mode_toggles_and_zoom_slider_proportions() {
     });
     assert!(has_14pt_knob, "Zoom slider should paint a {glyph_md} pt thumb (ControlSize::Md) matching 14 pt IconButton icons inside {slider:?}");
 }
+
+/// A recount made on another thread never shows a number that isn't the document's: after an edit the bar keeps the
+/// count it had, then comes to the count the engine gives, and a count that is still on its way says so.
+#[test]
+fn the_status_bar_count_catches_up_with_an_edit_without_waiting_for_it() {
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "one two three"})).unwrap();
+    let (first, current) = a.status_counts_shown();
+    assert!(current, "the first count of a document is made at once");
+    a.run("text.insert", json!({"text": " four five"})).unwrap();
+    let (mut shown, mut current) = a.status_counts_shown();
+    if !current {
+        assert_eq!(shown, first, "until the recount is in, the earlier count stays");
+    }
+    for _ in 0..2000 {
+        if current {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        (shown, current) = a.status_counts_shown();
+    }
+    assert!(current, "the recount came in");
+    assert!(shown.words > first.words, "the count is of the edited text");
+    assert_eq!(shown, a.cached_status_counts(), "and is what counting in place gives");
+}

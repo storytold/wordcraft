@@ -14552,3 +14552,69 @@ fn a_range_paste_formatting_keeps_the_targets_link_and_tracked_marks() {
     assert!(c.ins.is_some(), "Paste Formatting kept the insertion mark");
     assert_eq!(c.bold, Some(true));
 }
+
+/// Many paragraphs of text, so the layout runs onto several pages.
+fn long_session() -> Session {
+    let text = (0..400).map(|i| format!("Paragraph {i} of a long document, with enough words to fill a line or two.")).collect::<Vec<_>>().join("\n");
+    Session::new(wordcraft_doc::Document::from_text(&text))
+}
+
+/// Wait for the background layout, which a test doesn't want to depend on the speed of.
+fn wait_for_background_layout(s: &mut Session) {
+    while s.layout_pending() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_background_layout_is_the_layout_made_in_place() {
+    let mut background = long_session();
+    background.begin_background_layout();
+    wait_for_background_layout(&mut background);
+    let (made, in_place) = (background.layout(), long_session().layout());
+    assert!(made.pages.len() > 1, "the document runs onto several pages");
+    assert_eq!(made.pages.len(), in_place.pages.len());
+    // What is asked for after it is the one it made, not another layout of the same document.
+    assert!(Arc::ptr_eq(&made, &background.layout()));
+}
+
+/// #7653 (review): a second long document gets its own layout while the first one's is being made.
+#[test]
+fn each_document_has_its_own_background_layout() {
+    let mut s = long_session();
+    let first = s.document_id();
+    s.begin_background_layout();
+    let second = s.add_document(long_session().doc.clone());
+    assert!(!s.layout_pending(), "the new document does not wait for the other one's layout");
+    s.begin_background_layout();
+    assert!(s.has_background_layout(), "and gets its own");
+    s.activate(first).unwrap();
+    assert!(s.has_background_layout(), "the first one's is still there");
+    s.activate(second).unwrap();
+    wait_for_background_layout(&mut s);
+    assert!(s.layout().pages.len() > 1);
+}
+
+/// #7653 (review): a layout started before a relayout (the fonts changed) is not taken in.
+#[test]
+fn a_relayout_drops_the_layout_being_made() {
+    let mut s = long_session();
+    s.begin_background_layout();
+    s.relayout();
+    assert!(!s.has_background_layout());
+}
+
+#[test]
+fn a_layout_asked_for_while_one_is_being_made_waits_for_it_and_shows_later_edits() {
+    let unedited_pages = long_session().layout().pages.len();
+    let mut s = long_session();
+    s.begin_background_layout();
+    // Edited before the background layout is taken in: the layout of the old text is not shown.
+    run(&mut s, "caret.docStart", json!({}));
+    for _ in 0..400 {
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    let laid = s.layout();
+    assert!(laid.pages.len() > unedited_pages, "the pages are those of the edited document");
+    assert!(!s.layout_pending());
+}

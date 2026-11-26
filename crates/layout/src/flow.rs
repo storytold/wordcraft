@@ -1,4 +1,4 @@
-use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
+use super::boxes::{BoxInput, BoxLayout, Edges, joined, joined_around, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
 use super::floats::{
@@ -125,8 +125,7 @@ struct Rooms {
 
 impl Rooms {
     fn of(ctx: &Ctx, block: usize, pl: &ParaLayout) -> Self {
-        let above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
-        let below = joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None);
+        let (above, below) = joined_around(ctx.doc, &ctx.doc.body, block, None);
         let own = Edges::own(pl, 0, pl.lines.len());
         Rooms { above, below, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
     }

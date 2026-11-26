@@ -62,6 +62,7 @@ impl WordApp {
             nav_search_focus,
             escape_free,
             status_counts,
+            status_recount,
             missing_fonts,
             export_error,
             last_autosave,
@@ -149,6 +150,7 @@ impl WordApp {
             nav_search_focus,
             escape_free,
             status_counts,
+            status_recount,
             missing_fonts,
             export_error,
             last_autosave,
@@ -415,6 +417,20 @@ impl WordApp {
     /// Switch Windows) ends this window's drawing for the frame: the rest would be the other
     /// window's.
     pub(crate) fn window_ui(&mut self, ui: &mut egui::Ui) {
+        // The document is still being laid out on another thread: show that, and ask for the frame
+        // again. Drawing it would wait for the layout, which is the freeze this avoids.
+        if self.session.layout_pending() {
+            ui.centered_and_justified(|ui| {
+                let spinner = ui.spinner();
+                // A screen reader hears that the document is on its way, from a polite live region.
+                ui.ctx().accesskit_node_builder(spinner.id, |node| {
+                    node.set_label(tl!("Laying out the document…"));
+                    node.set_live(egui::accesskit::Live::Polite);
+                });
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+            return;
+        }
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         let t0 = monotonic_ms();

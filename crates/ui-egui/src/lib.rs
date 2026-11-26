@@ -478,6 +478,8 @@ pub struct WordApp {
     pub export_error: String,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    /// The count being made on another thread, and the revision key it is for ([`WordApp::status_counts_shown`]).
+    pub(crate) status_recount: Option<(u64, std::sync::mpsc::Receiver<StatusCounts>)>,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
