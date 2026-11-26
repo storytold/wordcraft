@@ -7599,6 +7599,10 @@ fn table_style_parts_format_every_table_using_the_style() {
     run(&mut s, "table.modifyStyle", json!({"style": "Parts", "firstRow": {"size": 1e30, "borders": {"edges": "top", "width": -5}}}));
     let head = s.doc.styles.get("Parts").unwrap().table_part(TablePart::FirstRow);
     assert_eq!((head.chr.size, head.borders.and_then(|b| b.top).map(|b| b.width)), (Some(1638.0), Some(0.25)));
+    // Width 0 stays 0: a hairline that takes no room, as a DOCX table border without `w:sz` reads.
+    run(&mut s, "table.modifyStyle", json!({"style": "Parts", "firstRow": {"borders": {"edges": "bottom", "width": 0}}}));
+    let head = s.doc.styles.get("Parts").unwrap().table_part(TablePart::FirstRow);
+    assert_eq!(head.borders.and_then(|b| b.bottom).map(|b| (b.style, b.width)), Some((BorderStyle::Single, 0.0)));
     // A null or empty font makes the part's font inherited again (#1288).
     assert_eq!(head.chr.font.as_deref(), Some("Liberation Serif"));
     run(&mut s, "table.modifyStyle", json!({"style": "Parts", "firstRow": {"font": null}}));
