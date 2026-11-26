@@ -1911,6 +1911,33 @@ fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
     }
 }
 
+/// #5833: Modify Style rejects a tab it does not draw and keeps the previous selection.
+#[test]
+fn modify_style_rejects_unsupported_tab() {
+    let mut h = app_harness(app_with("Body text."));
+    crate::test_harness::frames(&mut h, 2);
+    let try_tab = |h: &mut egui_kittest::Harness<'_, WordApp>, id: DialogId, tab: Json| {
+        let ctx = h.ctx.clone();
+        h.state_mut().dialog_host.set_json_field(&ctx, id, "tab", tab)
+    };
+
+    let id = open_named(&mut h, "modifyStyle", json!({"style": "FootnoteText"}));
+    assert!(try_tab(&mut h, id, json!(1)).is_ok());
+    assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(1));
+    for bad in [json!(2), json!(255), json!(-1), json!("1")] {
+        assert!(try_tab(&mut h, id, bad.clone()).is_err(), "{bad} is refused");
+        assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(1), "a refused tab keeps Paragraph selected");
+    }
+    let ctx = h.ctx.clone();
+    close_all(h.state_mut(), &ctx);
+    h.run_steps(2);
+
+    let id = open_named(&mut h, "modifyStyle", json!({"style": "FootnoteReference"}));
+    assert!(try_tab(&mut h, id, json!(1)).is_err(), "a character style has no Paragraph tab");
+    assert_eq!(fields_of(h.state(), "modifyStyle")["tab"], json!(0), "the Font tab stays selected");
+    assert!(try_tab(&mut h, id, json!(0)).is_ok());
+}
+
 /// #5833: Modify Style offers paragraph formatting (alignment, indents, first line, line spacing)
 /// on its Paragraph tab, allowing footnotes and styles to have indents without manually formatting
 /// each footnote paragraph.

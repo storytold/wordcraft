@@ -414,7 +414,11 @@ impl StackDialog for ModifyStyleDialog {
                 f.line = Some(value.as_f64().ok_or_else(wrong)?);
                 f.non_multiple_line = None;
             }
-            "tab" => f.tab = u8::try_from(value.as_u64().ok_or_else(wrong)?).map_err(|_| wrong())?,
+            "tab" => {
+                // Only the tabs the dialog draws: Font (0), and Paragraph (1) for paragraph styles.
+                let tab = value.as_u64().and_then(|t| u8::try_from(t).ok()).filter(|&t| t == 0 || (t == 1 && !f.is_char)).ok_or_else(wrong)?;
+                f.tab = tab;
+            }
             _ => return Err(format!("unknown field {field}")),
         }
         Ok(())
