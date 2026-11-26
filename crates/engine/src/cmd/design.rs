@@ -155,14 +155,20 @@ fn style_set(s: &mut Session, v: &Value) -> CmdResult {
         match name {
             "basic" if heading => {
                 st.chr.color = Some(TextColor::Rgb(Rgb(0x26, 0x26, 0x26)));
+                // Both scripts, as Word's own heading styles carry `w:b` with `w:bCs`: a Thai
+                // heading in a run marked `w:cs` is drawn bold too.
                 st.chr.bold = Some(true);
+                st.chr.bold_cs = Some(true);
             }
             "lines" if st.id == "Heading1" || st.id == "Title" => st.para.borders = Some(Borders { bottom: Some(line), ..Default::default() }),
             "shaded" if st.id == "Heading1" => {
                 st.para.shading = Some(accent);
                 st.chr.color = Some(TextColor::Rgb(Rgb::WHITE));
             }
-            "casual" if heading => st.chr.italic = Some(true),
+            "casual" if heading => {
+                st.chr.italic = Some(true);
+                st.chr.italic_cs = Some(true);
+            }
             "centered" if heading => st.para.align = Some(wordcraft_doc::Align::Center),
             "minimalist" if heading => {
                 st.chr.caps = Some(true);
