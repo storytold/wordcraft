@@ -1414,6 +1414,9 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
             if cell.props.vmerge != VMerge::Continue {
                 let text = style.map(|st| region_text(st, region_of(t, style, ri, g, cell.span(), cols.len())));
                 let (lo, hi) = blocks_content(ctx, &cell.blocks, text.as_ref(), depth);
+                // A cell set not to wrap (`w:noWrap`) whose preferred width is not a fixed one, in
+                // a table without fixed layout (a nested one is measured here too).
+                let lo = if cell.props.no_wrap && cell.props.width.is_none() && !t.props.fixed { hi } else { lo };
                 any |= hi > 0.0;
                 let m = cell.props.resolved_margins(margins_def);
                 let need = (lo + m[1] + m[3], hi + m[1] + m[3]);
