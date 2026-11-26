@@ -280,46 +280,73 @@ pub(super) fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({"runs": count}))
 }
 
-/// Tools › Customize Keyboard: read and change the custom keyboard shortcuts ([`crate::KeyMap`]).
-/// Without params it opens the dialog; with any, it only does what they ask (no dialog).
+/// Tools › Customize Keyboard: read and change the custom keyboard shortcuts (the session's
+/// [`craft_keymap::Overrides`] over the registry's keys). Without params it opens the dialog; with
+/// any, it only does what they ask (no dialog).
 pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
     let reg = s.registry.clone();
-    let pair = |x: &Value| -> Result<(String, String), CmdError> { Ok((p::req_str(x, "command")?.to_string(), p::req_str(x, "key")?.to_string())) };
+    let mut keymap = crate::keymap::registry_keymap(&reg, s.keymap());
     let mut out = serde_json::Map::new();
+    let asked = keyboard_changes(&mut keymap, &reg, v, &mut out);
+    // Each part is a request of its own: what the parts before a failing one changed stays.
+    *s.keymap_mut() = keymap.overrides().clone();
+    let asked = asked?;
+    out.insert("custom".into(), serde_json::to_value(s.keymap()).unwrap_or(Value::Null));
+    if !asked {
+        s.push_ui_request(json!({"open": "customizeKeyboard"}));
+    }
+    Ok(Value::Object(out))
+}
+
+/// The parts of a `tools.customizeKeyboard` call, applied to `keymap` in order, with their results
+/// in `out`. Returns whether any part was asked for.
+fn keyboard_changes(
+    keymap: &mut craft_keymap::Keymap,
+    reg: &crate::Registry,
+    v: &Value,
+    out: &mut serde_json::Map<String, Value>,
+) -> Result<bool, CmdError> {
+    use craft_keymap::{AssignError, Binding, Chord, CommandRef, Policy, Scope};
+    let not_a_key = |key: &str| CmdError::Params(format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)"));
+    let pair = |x: &Value| -> Result<(CommandRef, Binding), CmdError> {
+        let key = p::req_str(x, "key")?;
+        let binding = Binding::parse(key).map_err(|_| not_a_key(key))?;
+        Ok((CommandRef::new(p::req_str(x, "command")?), binding))
+    };
     let mut asked = false;
     if p::bool(v, "reset") == Some(true) {
         asked = true;
-        s.keymap.reset();
+        keymap.reset_all();
     }
     if let Some(a) = v.get("assign") {
         asked = true;
-        let (id, key) = pair(a)?;
-        let previous = s.keymap.assign(&reg, &id, &key).map_err(CmdError::Params)?;
-        out.insert("replaced".into(), json!(previous));
+        let (command, binding) = pair(a)?;
+        let assigned = keymap.assign(&command, binding, Policy::Steal).map_err(|e| match e {
+            AssignError::UnknownCommand => CmdError::Params(format!("unknown command `{}`", command.id)),
+            e => CmdError::Params(e.to_string()),
+        })?;
+        out.insert("replaced".into(), json!(assigned.taken_from.first().map(|h| h.command.id.as_str())));
     }
     if let Some(r) = v.get("remove") {
         asked = true;
-        let (id, key) = pair(r)?;
-        out.insert("removed".into(), json!(s.keymap.remove(&reg, &id, &key).map_err(CmdError::Params)?));
+        let (command, binding) = pair(r)?;
+        out.insert("removed".into(), json!(keymap.remove(&command, &binding)));
     }
     if let Some(id) = p::str(v, "command") {
         asked = true;
         if reg.get(id).is_none() {
             return Err(CmdError::Params(format!("unknown command `{id}`")));
         }
-        out.insert("keys".into(), json!(s.keymap.keys_for(&reg, id)));
+        let keys: Vec<String> = keymap.bindings(&CommandRef::new(id)).iter().map(|b| b.text(&Scope::app())).collect();
+        out.insert("keys".into(), json!(keys));
     }
     if let Some(key) = p::str(v, "key") {
         asked = true;
-        let key = crate::keymap::normalize(key).ok_or_else(|| CmdError::Params(format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)")))?;
-        out.insert("assignedTo".into(), json!(s.keymap.resolve(&reg, &key).map(|c| c.id)));
-        out.insert("key".into(), json!(key));
+        let chord = Chord::parse(key).map_err(|_| not_a_key(key))?;
+        out.insert("assignedTo".into(), json!(keymap.holder(&chord).map(|c| c.id)));
+        out.insert("key".into(), json!(chord.portable()));
     }
-    out.insert("custom".into(), serde_json::to_value(&s.keymap).unwrap_or(Value::Null));
-    if !asked {
-        s.push_ui_request(json!({"open": "customizeKeyboard"}));
-    }
-    Ok(Value::Object(out))
+    Ok(asked)
 }
 
 /// `tools.search`: the commands whose label, location or id hold every word of `query`, or,
