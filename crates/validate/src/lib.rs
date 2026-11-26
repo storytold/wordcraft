@@ -2687,8 +2687,8 @@ impl StoreConsumption {
     fn from_document(pkg: &Package, xml: &XmlScan, roles: &HashMap<String, scan::PartRole>) -> Self {
         observation_contract! {
             rules: "-";
-            collections: "access.into_complete_set*1,field.binding_ids*3,field.bound*1,field.bound_properties*1,field.incomplete*1,field.items*2,field.parts*2,field.rels*3,type.HashMap*4,type.HashSet*5,type.Observed*1,type.Vec*1";
-            scope: "Recognized custom XML relationships, local usage and bindings from every targeting source, and store GUID consumption from all observed stories";
+            collections: "access.into_complete_set*1,field.binding_ids*3,field.bound*1,field.bound_properties*1,field.incomplete*1,field.items*3,field.parts*2,field.rels*5,type.HashMap*4,type.HashSet*5,type.Observed*1,type.Vec*1";
+            scope: "Custom XML item identities, local usage and bindings from every incoming internal relationship source, and GUID consumption from all observed stories";
             loss: "Incomplete source syntax, unavailable or uncertain usage, relationship discovery, or allocation budget";
             fallback: "Retain positive bindings; withhold the unused-store exemption when consumption is uncertain";
             package_loss: "independent";
@@ -2710,31 +2710,37 @@ impl StoreConsumption {
             }
         }
         let mut properties = HashMap::new();
-        let mut local_bindings: HashMap<PartId, Vec<&[String]>> = HashMap::new();
         for rp in &pkg.rels {
             if let Some(owner) = rels_owner_name(&rp.name) {
                 properties.insert(PartId::new(&owner), rp);
             }
+            for rel in &rp.rels {
+                if rel.role.kind() == Some("customXml")
+                    && let Some(target) = &rel.target_abs
+                {
+                    stores.items.insert(PartId::new(target));
+                }
+            }
+        }
+        let mut local_bindings: HashMap<PartId, Vec<&[String]>> = HashMap::new();
+        for rp in &pkg.rels {
             let source = relationship_source(xml, rp);
+            let source_complete =
+                source.is_some_and(|source| source.syntax == Completeness::Complete && !source.usage.capped && !source.usage.uncertain_binding);
             let bindings = package::relationship_bindings(rp);
             for rel in &rp.rels {
                 let Some(target) = &rel.target_abs else { continue };
-                if rel.role.kind() == Some("customXml") {
-                    let item = PartId::new(target);
-                    if !source
-                        .is_some_and(|source| source.syntax == Completeness::Complete && !source.usage.capped && !source.usage.uncertain_binding)
-                    {
-                        excluded.insert(item.clone());
-                    }
-                    if let Some(source) = source
-                        && !source.usage.binding_ids.is_empty()
-                    {
-                        local_bindings.entry(item.clone()).or_default().push(&source.usage.binding_ids);
-                    }
-                    stores.items.insert(item);
+                let Some(item) = stores.items.get(&PartId::new(target)) else { continue };
+                if let Some(source) = source
+                    && !source.usage.binding_ids.is_empty()
+                {
+                    local_bindings.entry(item.clone()).or_default().push(&source.usage.binding_ids);
                 }
-                if implicit_relationship(pkg, rp, rel) || bindings.is_first(rel) && source.is_some_and(|source| source.usage.uses(&rel.id)) {
-                    excluded.insert(PartId::new(target));
+                if !source_complete
+                    || implicit_relationship(pkg, rp, rel)
+                    || bindings.is_first(rel) && source.is_some_and(|source| source.usage.uses(&rel.id))
+                {
+                    excluded.insert(item.clone());
                 }
             }
         }
@@ -8368,24 +8374,33 @@ mod round5_completeness_tests {
 
     #[test]
     fn empty_custom_xml_store_requires_usage_coverage_from_every_targeting_source() {
+        check_custom_xml_store_usage_coverage("customXml");
+    }
+
+    #[test]
+    fn empty_custom_xml_store_checks_targeting_source_with_image_relationship() {
+        check_custom_xml_store_usage_coverage("image");
+    }
+
+    fn check_custom_xml_store_usage_coverage(settings_edge: &str) {
         let complete = format!(r#"<w:settings xmlns:w="{NS_W}"/>"#);
         let incomplete = format!(r#"<w:settings xmlns:w="{NS_W}">"#);
         let uncertain = format!(r#"<w:settings xmlns:w="{NS_W}"><w:dataBinding/></w:settings>"#);
         let capped = format!(r#"<w:settings xmlns:w="{NS_W}"><w:dataBinding w:storeItemID="B"/><w:dataBinding w:storeItemID="A"/></w:settings>"#);
         let binding = |id| format!(r#"<w:settings xmlns:w="{NS_W}"><w:dataBinding w:storeItemID="{id}"/></w:settings>"#);
         let props = format!(r#"<ds:datastoreItem xmlns:ds="{NS_DS}" ds:itemID="A"/>"#);
-        let settings_rels = relationships(&rel("customXml", "data.xml"));
+        let settings_rels = relationships(&rel(settings_edge, "data.xml"));
         let item_rels = relationships(&rel("customXmlProps", "props.xml"));
         let main_rels = rel("settings", "settings.xml") + &rel("customXml", "data.xml");
 
-        for (settings, limits, report_malformed) in [
-            (None, Limits::default(), true),
-            (Some(incomplete), Limits::default(), true),
-            (Some(uncertain), Limits::default(), true),
-            (Some(capped), Limits { facts: 1, ..Limits::default() }, true),
-            (Some(complete), Limits::default(), false),
-            (Some(binding("B")), Limits::default(), false),
-            (Some(binding("A")), Limits::default(), true),
+        for (case, settings, limits, report_malformed) in [
+            ("absent owner", None, Limits::default(), true),
+            ("incomplete syntax", Some(incomplete), Limits::default(), true),
+            ("uncertain binding", Some(uncertain), Limits::default(), true),
+            ("capped usage", Some(capped), Limits { facts: 1, ..Limits::default() }, true),
+            ("no binding", Some(complete), Limits::default(), false),
+            ("nonmatching binding", Some(binding("B")), Limits::default(), false),
+            ("matching binding", Some(binding("A")), Limits::default(), true),
         ] {
             let mut parts = vec![
                 ("word/data.xml", "application/xml", String::new()),
@@ -8400,7 +8415,7 @@ mod round5_completeness_tests {
             assert_eq!(
                 report.findings.iter().any(|finding| finding.rule == "XML-MALFORMED" && finding.part.as_deref() == Some("word/data.xml")),
                 report_malformed,
-                "{report:?}"
+                "{case} via {settings_edge}: {report:?}"
             );
         }
     }
