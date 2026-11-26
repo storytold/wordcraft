@@ -110,7 +110,17 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     assert!(!s.contains("trackRevisions"), "{s}");
     assert_eq!(s.matches("compatibilityMode").count(), 1, "{s}");
     assert!(s.contains("mailMerge"), "{s}");
-    assert!(text(&files, "word/_rels/settings.xml.rels").contains("file:///__wordcraft_missing_source__/letters.xlsx"));
+    let rel_id = s
+        .split("<w:dataSource")
+        .nth(1)
+        .and_then(|after| after.split("r:id=\"").nth(1))
+        .and_then(|after| after.split('"').next())
+        .expect("dataSource r:id");
+    let rels = text(&files, "word/_rels/settings.xml.rels");
+    let expected_rel = format!(
+        r#"<Relationship Id="{rel_id}" Type="{REL}/mailMergeSource" Target="file:///__wordcraft_missing_source__/letters.xlsx" TargetMode="External"/>"#
+    );
+    assert!(rels.contains(&expected_rel), "missing matching relationship for {rel_id}: {rels}");
     // The privacy options are the model's (#1062): written once each, and gone when turned off.
     assert_eq!(s.matches("removePersonalInformation").count(), 1, "{s}");
     assert_eq!(s.matches("removeDateAndTime").count(), 1, "{s}");
@@ -130,6 +140,37 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     // A second generation is identical.
     let again = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
     assert_eq!(text(&save(&again), "word/settings.xml"), s);
+}
+
+#[test]
+fn changed_zoom_survives_merged_settings_and_reads_back_as_page_width() {
+    let old_zoom = r#"<w:zoom w:percent="120"/>"#;
+    let updated_zoom = r#"<w:zoom w:val="bestFit" w:percent="145"/>"#;
+    for original in [SETTINGS.to_string(), SETTINGS.replace(old_zoom, "")] {
+        let mut doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+        assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+        doc.settings.zoom = Some(wordcraft_doc::Zoom { percent: 145, fit: Some(wordcraft_doc::ZoomFit::PageWidth) });
+        let bytes = wordcraft_docx::write(&doc).unwrap();
+        let settings = text(&unzip(&bytes), "word/settings.xml");
+        assert_eq!(settings.matches("<w:zoom ").count(), 1, "{settings}");
+        assert!(settings.contains(updated_zoom), "{settings}");
+        // The retained root and unrelated child bytes still belong to the original file.
+        let root_end = original.find("><w:").unwrap() + 1;
+        assert!(settings.starts_with(&original[..root_end]), "{settings}");
+        for kept in [
+            r#"<w:proofState w:spelling="clean" w:grammar="clean"/>"#,
+            r#"<w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars>"#,
+            r#"<w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/></w:rsids>"#,
+        ] {
+            assert!(settings.contains(kept), "{kept} lost: {settings}");
+        }
+        assert!(pos(&settings, "<w:zoom ") < pos(&settings, "<w:proofState"));
+        let again = wordcraft_docx::read(&bytes).unwrap();
+        let zoom = again.settings.zoom.unwrap();
+        assert_eq!(zoom.percent, 145);
+        assert!(matches!(zoom.fit, Some(wordcraft_doc::ZoomFit::PageWidth)));
+        assert_eq!(text(&save(&again), "word/settings.xml"), settings);
+    }
 }
 
 #[test]

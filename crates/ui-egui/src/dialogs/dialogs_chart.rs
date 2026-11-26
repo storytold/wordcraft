@@ -14,7 +14,7 @@ use craft::ui::contract::{
 use craft::ui::dialog::DialogId;
 use craft::ui::display::Text;
 use craft::ui::layout_components::Row;
-use craft::ui::list::{ListRow, ThumbAspect};
+use craft::ui::list::{ListRow, ThumbAspect, ThumbSize};
 // PLAN: assumed `FormCx::accept` (dialogs-w5, S-L285)
 use craft::ui::patterns::form_dialogs::FormCx;
 use craft::ui::primitives::DataWidth;
@@ -22,7 +22,7 @@ use craft::ui::runtime::env::Label;
 use craft::ui::style::DataColor;
 use craft::ui::table::Table;
 use craft::ui::text::TextField;
-use craft::ui::tile_grid::{Tile, TileGrid};
+use craft::ui::tile_grid::{GridZoom, Tile, TileGrid};
 use egui::{Color32, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -272,6 +272,9 @@ fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bo
     let current = kinds.iter().position(|k| *k == form.kind).unwrap_or(0);
     let source = keyed(&positions, |i| *i);
     let out = TileGrid::<usize>::new(tl!("Chart types").to_string())
+        .thumb_size(ThumbSize::Large)
+        .zoom(GridZoom::Fixed(1.6))
+        .aspect(19.0 / 15.0)
         .select(SelectMode::Single)
         .card_columns(3)
         // Every type shows, as in production, so the dialog's body is the one scroll.
@@ -288,12 +291,12 @@ fn chart_grid(ui: &mut Ui, colors: [Color32; 3], form: &mut ChartTypeForm) -> bo
     let mut activated = false;
     for event in out.response.events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(kind) = keys.last().and_then(|k| kinds.get(*k)) {
                     form.kind = *kind;
                 }
             }
-            CollectionEvent::Selection(SelectionChange::Toggle(key)) => {
+            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => {
                 if let Some(kind) = kinds.get(key) {
                     form.kind = *kind;
                 }
