@@ -284,6 +284,31 @@ fn copied_bold_app() -> WordApp {
     a
 }
 
+/// #5616: after Mod+Shift+V (Paste Formatting) and a paired browser paste event, a later
+/// menu-bar paste (`Event::Paste`) with no key or pointer press in between still keeps source
+/// formatting instead of reading the earlier Mod+Shift as Keep Text Only.
+#[test]
+fn the_ignored_paste_uses_up_its_paste_modifiers() {
+    let mut h = app_harness(copied_bold_app());
+    let chord = Modifiers { shift: true, ..mod_held() };
+    batch_frame(&mut h, vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord), egui::Event::Paste("x".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(body(h.state()), "source target");
+    assert!(is_bold(&mut h));
+    run(&mut h, "select.text", json!({"text": "target"}));
+    offer(&h, vec![ClipItem::Html("<p><i>menu</i></p>".into()), ClipItem::Text("menu".into())]);
+    batch_frame(&mut h, vec![egui::Event::Paste("menu".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(body(h.state()), "source menu");
+    let state = run(&mut h, "format.state", json!({}));
+    assert_ne!(
+        state.get("bold").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "a later menu-bar paste does not inherit target's bold via Keep Text Only: {state}"
+    );
+    assert_eq!(state.get("italic").and_then(serde_json::Value::as_bool), Some(true), "a later menu-bar paste keeps clipboard formatting: {state}");
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {

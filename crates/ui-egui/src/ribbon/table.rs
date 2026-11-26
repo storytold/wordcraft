@@ -1,10 +1,11 @@
-use craft::behavior::IconId;
+use craft::behavior::{ColumnWidth, IconId};
 use craft::keymap::CommandRef;
 use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, IconButton, ToggleButton};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
-use craft::ui::layout_components::{Row, Stack};
+use craft::ui::layout::{GridFit, empty_cell};
+use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::menu::MenuItem;
 use craft::ui::text::NumberField;
 
@@ -17,25 +18,33 @@ use crate::undo_marks::apply_edits;
 /// The row height and column width a Cell Size field accepts, in points (0.02 to 22 inches).
 const CELL_SIZE_RANGE: std::ops::RangeInclusive<f64> = 1.44..=1584.0;
 
+/// Two checkbox columns separated by two empty gutter cells: `Grid::gap` sets both axes, so the
+/// empty gutter widens the column gap to `3 * Gap::Tight` (at least `Gap::Stack`) while keeping
+/// rows `Gap::Tight` apart inside the ribbon group.
+const TABLE_STYLE_OPTION_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content; 4];
+
 pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
     if let Some(l) = look {
-        // Three rows of two, so Tab runs Header Row, First Column, Total Row, Last Column, Banded Rows, Banded Columns.
+        // Row-major pairs, so Tab runs Header Row, First Column, Total Row, Last Column, Banded Rows, Banded Columns.
         let options = [
-            [("Header Row", "headerRow", l.header_row), ("First Column", "firstColumn", l.first_column)],
-            [("Total Row", "totalRow", l.total_row), ("Last Column", "lastColumn", l.last_column)],
-            [("Banded Rows", "bandedRows", l.banded_rows), ("Banded Columns", "bandedColumns", l.banded_columns)],
+            ("Header Row", "headerRow", l.header_row),
+            ("First Column", "firstColumn", l.first_column),
+            ("Total Row", "totalRow", l.total_row),
+            ("Last Column", "lastColumn", l.last_column),
+            ("Banded Rows", "bandedRows", l.banded_rows),
+            ("Banded Columns", "bandedColumns", l.banded_columns),
         ];
         row.group(RibbonGroup::new("tableStyleOptions", tl!("Table Style Options").to_string(), IconId::new("tableStyleOptions").into()), |ui| {
-            Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-                for line in options {
-                    Row::new().show(ui, |ui, _| {
-                        for (label, key, value) in line {
-                            let out = Checkbox::new(Bind::given(value)).label(tl!(label).to_string()).show(ui);
-                            apply_edits(app, out.events, |app, v| {
-                                let _ = app.run("table.look", json!({ key: v }));
-                            });
-                        }
+            Grid::new(&TABLE_STYLE_OPTION_COLUMNS).fit(GridFit::Fixed).gap(Gap::Tight).show(ui, |ui, _| {
+                for (index, (label, key, value)) in options.into_iter().enumerate() {
+                    if index % 2 == 1 {
+                        empty_cell(ui);
+                        empty_cell(ui);
+                    }
+                    let out = Checkbox::new(Bind::given(value)).label(tl!(label).to_string()).show(ui);
+                    apply_edits(app, out.events, |app, v| {
+                        let _ = app.run("table.look", json!({ key: v }));
                     });
                 }
             });
@@ -57,25 +66,31 @@ pub(super) fn table_design(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("tableStyles", tl!("Table Styles").to_string(), IconId::new("tableStyles").into()), |ui| {
         super::galleries::table_styles(ui, app);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            let _ = menu_button(ui, Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")), tl!("Styles").to_string(), None, |ui, _| {
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
-                    .label(tl!("New Table Style…").to_string())
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
-                    .label(tl!("Modify Table Style…").to_string())
-                    .enabled(can_modify)
-                    .show(ui);
-                MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
-                    .label(tl!("Delete Table Style").to_string())
-                    .enabled(can_delete)
-                    .show(ui);
-            });
+            let _ = menu_button(
+                ui,
+                Button::new(tl!("Styles").to_string()).icon(IconId::new("styles")),
+                tl!("Styles").to_string(),
+                Some("table.style"),
+                |ui, _| {
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "newTableStyle"})))
+                        .label(tl!("New Table Style…").to_string())
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("ui.dialog", json!({"name": "modifyTableStyle"})))
+                        .label(tl!("Modify Table Style…").to_string())
+                        .enabled(can_modify)
+                        .show(ui);
+                    MenuItem::command(CommandRef::with_params("table.deleteStyle", json!({})))
+                        .label(tl!("Delete Table Style").to_string())
+                        .enabled(can_delete)
+                        .show(ui);
+                },
+            );
             let _ = crate::colors::shading_split(ui, app, tl!("Shading").to_string(), Target::cmd("table.shading").remember(Remember::Shading));
         });
     });
     row.group(RibbonGroup::new("borders", tl!("Borders").to_string(), IconId::new("borders").into()), |ui| {
         let face = Button::new(tl!("Borders").to_string()).icon(IconId::new("borders")).arrangement(Arrangement::Stacked);
-        let _ = menu_button(ui, face, tl!("Borders").to_string(), None, |ui, _| {
+        let _ = menu_button(ui, face, tl!("Borders").to_string(), Some("table.borders"), |ui, _| {
             for (label, kind) in [
                 ("All Borders", "all"),
                 ("Outside Borders", "outside"),
@@ -146,8 +161,12 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
 pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     row.group(RibbonGroup::new("table", tl!("Table").to_string(), IconId::new("table").into()), |ui| {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            let _ =
-                menu_button(ui, Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")), tl!("Select").to_string(), None, |ui, _| {
+            let _ = menu_button(
+                ui,
+                Button::new(tl!("Select").to_string()).icon(IconId::new("selectTable")),
+                tl!("Select").to_string(),
+                Some("table.selectTable"),
+                |ui, _| {
                     for (label, id) in [
                         ("Select Cell", "table.selectCell"),
                         ("Select Column", "table.selectColumn"),
@@ -156,7 +175,8 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     ] {
                         MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);
                     }
-                });
+                },
+            );
             ToggleButton::command(CommandRef::new("table.viewGridlines"))
                 .label(tl!("View Gridlines").to_string())
                 .icon(IconId::new("gridlines"))
@@ -181,7 +201,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(RibbonGroup::new("rowsColumns", tl!("Rows & Columns").to_string(), IconId::new("insertAbove").into()), |ui| {
         let face = Button::new(tl!("Delete").to_string()).icon(IconId::new("deleteTable")).arrangement(Arrangement::Stacked);
-        let _ = menu_button(ui, face, tl!("Delete").to_string(), None, |ui, _| {
+        let _ = menu_button(ui, face, tl!("Delete").to_string(), Some("table.deleteTable"), |ui, _| {
             for (label, id) in [
                 ("Delete Cells", "table.deleteCells"),
                 ("Delete Columns", "table.deleteColumn"),
@@ -214,7 +234,7 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     });
     row.group(RibbonGroup::new("cellSize", tl!("Cell Size").to_string(), IconId::new("autofit").into()), |ui| {
         let face = Button::new(tl!("AutoFit").to_string()).icon(IconId::new("autofit")).arrangement(Arrangement::Stacked);
-        let _ = menu_button(ui, face, tl!("AutoFit").to_string(), None, |ui, _| {
+        let _ = menu_button(ui, face, tl!("AutoFit").to_string(), Some("table.autofit"), |ui, _| {
             for (label, mode) in [("AutoFit Contents", "contents"), ("AutoFit Window", "window"), ("Fixed Column Width", "fixed")] {
                 MenuItem::command(CommandRef::with_params("table.autofit", json!({"mode": mode}))).label(tl!(label).to_string()).show(ui);
             }
