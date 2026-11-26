@@ -94,6 +94,17 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
         return fmt(s, &|p| p.borders = Some(b));
     }
     let kind = p::str(v, "kind").unwrap_or("bottom");
+    let cell = s.sel.focus.path.cell();
+    let cells_selected = s.cell_range().is_some() || s.sel.anchor.story != s.sel.focus.story || s.sel.anchor.path.cell() != cell;
+    if kind != "horizontalLine" && cell.is_some() && (s.sel.is_collapsed() || cells_selected) {
+        // Reuse Table Design's cell scoping, but let the outer para.borders command own
+        // undo, revision recording and macros. A nested Session::run would record it twice.
+        let run = s.registry.get("table.borders").ok_or_else(|| CmdError::Unknown("table.borders".into()))?.run;
+        let mut params = v.as_object().cloned().unwrap_or_default();
+        // Home defaults to Bottom Border; table.borders defaults to All Borders.
+        params.insert("kind".into(), Value::String(kind.into()));
+        return run(s, &Value::Object(params));
+    }
     let width = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
     let color = p::str(v, "color").and_then(Rgb::parse);
     let style = p::str(v, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);

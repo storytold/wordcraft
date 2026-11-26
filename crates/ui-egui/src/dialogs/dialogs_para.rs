@@ -24,7 +24,9 @@ use egui::Ui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, Rgb, TabAlign, TabLeader, TabStop};
+use wordcraft_engine::cmd::table::BORDER_WIDTHS as WIDTHS;
 
+use super::dialogs_table_style::LINE_STYLES as STYLES;
 use super::host::{Asks, ChildAnswer, DialogHooks, Keyed, Settle, WordForm, open_form, open_with};
 use crate::WordApp;
 use crate::colors::{AutoFace, ColorFieldEmpty, Palette, color_field};
@@ -235,19 +237,6 @@ const BOTTOM: usize = 1;
 const LEFT: usize = 2;
 const RIGHT: usize = 3;
 const BETWEEN: usize = 4;
-
-const STYLES: [(BorderStyle, &str); 8] = [
-    (BorderStyle::Single, "Single"),
-    (BorderStyle::Dotted, "Dotted"),
-    (BorderStyle::Dashed, "Dashed"),
-    (BorderStyle::DotDash, "Dot dash"),
-    (BorderStyle::Double, "Double"),
-    (BorderStyle::Triple, "Triple"),
-    (BorderStyle::Thick, "Thick"),
-    (BorderStyle::Wave, "Wave"),
-];
-
-const WIDTHS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
 
 /// The presets, in the order the Setting radio buttons list them.
 const SETTINGS: [Setting; 5] = [Setting::None, Setting::Box, Setting::Shadow, Setting::ThreeD, Setting::Custom];
