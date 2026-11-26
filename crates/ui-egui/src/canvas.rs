@@ -255,6 +255,17 @@ pub struct CanvasState {
     /// selection, and the document's own layout, which a view change replaces), so a still pointer
     /// doesn't lay the document out every frame. Set only while the page shows the preview.
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, Arc<DocLayout>)>,
+    /// On the web, Mod+Shift+V pasted formatting from its key press: the browser's paste event
+    /// that follows is the same keystroke and pastes nothing (#5616). Any other key press, pointer
+    /// press, focus change, or wait past `PASTE_WAIT` clears it.
+    pub(crate) ignore_next_paste: bool,
+    /// Input time (seconds) when `ignore_next_paste` was armed.
+    pub(crate) paste_wait_since: Option<f64>,
+    /// Whether the platform sends a paste event after Mod+Shift+V's key (true on the web).
+    pub(crate) paste_event_follows_chord: bool,
+    /// The paired browser paste arrived and was dropped in the same frame as Mod+Shift+V, before
+    /// `run_fired` runs in the next frame.
+    pub(crate) paste_event_consumed_same_frame: bool,
 }
 
 type TablePreviewKey = ((String, serde_json::Value, u64, u64, wordcraft_engine::Selection), Arc<DocLayout>);
@@ -452,6 +463,10 @@ impl Default for CanvasState {
             list_preview: None,
             preview_scroll: None,
             table_preview_layout: None,
+            ignore_next_paste: false,
+            paste_wait_since: None,
+            paste_event_follows_chord: cfg!(target_arch = "wasm32"),
+            paste_event_consumed_same_frame: false,
         }
     }
 }

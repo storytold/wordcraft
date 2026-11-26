@@ -75,6 +75,13 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
         if stale_composition(app, e, &mut batch) {
             continue;
         }
+        if ignored_paste(app, ctx, e) {
+            continue;
+        }
+        if is_key_input(e) || matches!(e, EditorInput::Text(_)) {
+            app.canvas.ignore_next_paste = false;
+            app.canvas.paste_wait_since = None;
+        }
         if is_key_input(e) {
             app.canvas.ime_join_text = None;
             // A key between a deletion and its text means that text is fresh input, not the
@@ -103,6 +110,70 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
     if std::mem::take(&mut app.canvas.ime_interrupt_now) {
         pass.ime_interrupt(ctx);
     }
+}
+
+/// How long the browser paste event paired with Mod+Shift+V is waited for (#5616).
+const PASTE_WAIT: f64 = 1.0;
+
+fn is_modifier_key(key: Key) -> bool {
+    matches!(
+        key,
+        Key::ShiftLeft | Key::ShiftRight | Key::ControlLeft | Key::ControlRight | Key::AltLeft | Key::AltRight | Key::SuperLeft | Key::SuperRight
+    )
+}
+
+/// Ends the wait for the browser paste event paired with Mod+Shift+V when a key press, pointer
+/// press, focus change, or `PASTE_WAIT` passes without one (#5616).
+pub(crate) fn tick_paste_wait(app: &mut WordApp, ctx: &egui::Context) {
+    if !app.canvas.ignore_next_paste {
+        app.canvas.paste_wait_since = None;
+        return;
+    }
+    let (now, clear) = ctx.input(|i| {
+        let clear = i.events.iter().any(|e| {
+            matches!(e, egui::Event::PointerButton { pressed: true, .. } | egui::Event::WindowFocused(_))
+                || matches!(e, egui::Event::Key { key, pressed: true, .. } if !is_modifier_key(*key))
+        });
+        (i.time, clear)
+    });
+    if clear || app.canvas.paste_wait_since.is_some_and(|t| now - t > PASTE_WAIT) {
+        app.canvas.ignore_next_paste = false;
+        app.canvas.paste_wait_since = None;
+    }
+}
+
+fn mod_shift_v_pressed_this_frame(ctx: &egui::Context) -> bool {
+    let chord_pressed = ctx.input(|i| {
+        i.events.iter().any(|ev| {
+            matches!(ev, egui::Event::Key { key: Key::V, pressed: true, modifiers, .. } if modifiers.command && modifiers.shift && !modifiers.alt)
+        })
+    });
+    if !chord_pressed {
+        return false;
+    }
+    craft::keymap::Chord::parse("Mod+Shift+V").ok().is_some_and(|chord| {
+        craft::ui::runtime::commands::holder(ctx, &chord) == Some(craft::ui::runtime::commands::CommandRef::new("edit.pasteFormat"))
+    })
+}
+
+/// The browser's paste event that follows a Mod+Shift+V that pasted formatting is the same
+/// keystroke: ignored before an equation or document paste can take it (#5616).
+fn ignored_paste(app: &mut WordApp, ctx: &egui::Context, e: &EditorInput) -> bool {
+    if !matches!(e, EditorInput::Edit(EditCommand::Paste)) {
+        return false;
+    }
+    if std::mem::take(&mut app.canvas.ignore_next_paste) {
+        app.canvas.paste_wait_since = None;
+        return true;
+    }
+    if app.canvas.paste_event_follows_chord
+        && (app.session.painter.is_some() || app.session.copied_format.is_some())
+        && mod_shift_v_pressed_this_frame(ctx)
+    {
+        app.canvas.paste_event_consumed_same_frame = true;
+        return true;
+    }
+    false
 }
 
 /// Whether the input is a key's, not text or an input method's.

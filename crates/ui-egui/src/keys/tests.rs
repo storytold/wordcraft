@@ -350,17 +350,38 @@ fn an_unrelated_keys_modifiers_do_not_steer_a_later_paste() {
 }
 
 /// #5616: the browser paste event after a formatting paste is dropped before an open equation
-/// can type it.
+/// can type it (while the same paste without Mod+Shift+V first reaches the equation).
 #[test]
 fn the_ignored_paste_event_never_reaches_an_open_equation() {
-    let mut h = app_harness(copied_bold_app());
-    run(&mut h, "insert.equation", json!({"linear": "abc"}));
-    let chord = Modifiers { shift: true, ..mod_held() };
-    mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
-    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
-    let before = h.state().session.math.clone();
-    mods_frame(&mut h, mod_held(), vec![egui::Event::Paste("zzz".into())]);
-    assert_eq!(h.state().session.math, before, "the ignored paste typed nothing into the equation");
+    // Control: without Mod+Shift+V first, the paste reaches the open equation.
+    let mut control = app_harness(copied_bold_app());
+    control.state_mut().canvas.paste_event_follows_chord = true;
+    offer(&control, vec![ClipItem::Text("zzz".into())]);
+    run(&mut control, "insert.equation", json!({"linear": "abc"}));
+    mods_frame(&mut control, mod_held(), vec![egui::Event::Paste("zzz".into())]);
+    assert_eq!(linear(&mut control), "abczzz", "control: Paste reaches an open equation without Mod+Shift+V first");
+
+    // Same-frame and delayed browser paste after Mod+Shift+V (Paste Formatting) are both ignored.
+    for same_frame in [false, true] {
+        let mut h = app_harness(copied_bold_app());
+        h.state_mut().canvas.paste_event_follows_chord = true;
+        offer(&h, vec![ClipItem::Text("zzz".into())]);
+        run(&mut h, "insert.equation", json!({"linear": "abc"}));
+        let chord = Modifiers { shift: true, ..mod_held() };
+        let before = h.state().session.math.clone();
+        assert!(before.is_some());
+        if same_frame {
+            batch_frame(&mut h, vec![key_event(Key::V, true, chord), egui::Event::Paste("zzz".into())]);
+            crate::test_harness::frame(&mut h);
+        } else {
+            mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
+            mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+            mods_frame(&mut h, mod_held(), vec![egui::Event::Paste("zzz".into())]);
+        }
+        assert_eq!(h.state().session.math, before, "same_frame={same_frame}: Paste Formatting keeps the equation open");
+        assert_eq!(linear(&mut h), "abc", "same_frame={same_frame}: the ignored paste typed nothing into the equation");
+        assert_eq!(body(h.state()), "source abc", "same_frame={same_frame}: the ignored paste did not paste into the body");
+    }
 }
 
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
