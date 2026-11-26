@@ -1,10 +1,14 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use craft::font_manager::Catalog;
 use craft::font_manager::craft_font_catalog::{Limits, Source};
+use craft::font_manager::picker::FontPickerSettings;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Props as _, Show as _};
-use egui::Key;
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use egui::accesskit::Role;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui::{Key, vec2};
+use egui_kittest::kittest::{By, NodeT, Queryable};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
@@ -221,4 +225,44 @@ fn drawn_buttons_fade_in_on_hover_and_darken_while_pressed() {
     h.run_steps(4);
     let fill_after = find_button_fill(&h.output().shapes, rect);
     assert_eq!(fill_after, None, "Save button must clear hover fill after unhovering");
+}
+
+/// Fixed font catalog restricted to the repo's pinned `assets/fonts/` set (no host system fonts).
+fn fixed_font_catalog() -> Arc<Catalog> {
+    let catalog = Arc::new(Catalog::new(Default::default()).with_font_service(false));
+    let fonts_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    catalog.set_app_dirs(vec![fonts_dir]);
+    catalog.rescan();
+    catalog
+}
+
+/// #6722: clicking the dropdown arrow in `font_picker` opens Recently Used Fonts and All Fonts;
+/// clicking inside the field keeps the dropdown open; clicking the arrow again closes it.
+#[test]
+fn clicking_the_font_arrow_toggles_dropdown_and_field_click_keeps_it_open() {
+    let catalog = fixed_font_catalog();
+    assert!(catalog.families().iter().any(|f| f == "Inter"), "fixed catalog loaded assets/fonts");
+    let recent_family = "Source Serif 4".to_string();
+    let mut settings = FontPickerSettings::default();
+    settings.recent = vec![recent_family.clone()];
+    let mut family = "Source Sans 3".to_string();
+
+    let mut h = crate::test_harness::builder().with_size(vec2(400.0, 600.0)).build_ui(move |ui| {
+        let _ = super::font_picker("Font", Bind::bound(&mut family), &catalog, Bind::bound(&mut settings), &[], None).show(ui);
+    });
+    h.run_steps(2);
+
+    h.get(By::new().role(Role::Button).label_contains("Font")).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Recently Used Fonts").is_some(), "recently used fonts show up on arrow click");
+    assert!(h.query_by_label("All Fonts").is_some(), "all fonts show up on arrow click");
+    assert!(h.query_all_by_label(&recent_family).next().is_some(), "the recent fixed font shows up on arrow click");
+
+    h.get(By::new().role(Role::TextInput)).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Fonts").is_some(), "dropdown remains open on click inside field");
+
+    h.get(By::new().role(Role::Button).label_contains("Font")).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Fonts").is_none(), "dropdown closes on arrow click toggle");
 }
