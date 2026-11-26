@@ -401,7 +401,7 @@ fn list_table(ui: &mut Ui, name: &str, rows: &[(String, String)], second: bool, 
         });
     let mut picked = None;
     for event in out.events {
-        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
             && let Some(key) = keys.into_iter().last()
         {
             picked = Some(key);
@@ -560,7 +560,7 @@ impl WordForm for AutoCorrectForm {
                 .natural_height(true)
                 .show_items(ui, &source, &mut |key, _| Tab::new(tab_name(*key)));
             for event in strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     self.tab = key.min(2);

@@ -5,7 +5,7 @@ use craft::automation::control::{ControlRequest, Reply};
 use craft::host::{PickId, PickKind, PickRequest, Picked, ScriptedFiles};
 use craft::platform::clock::monotonic_ms;
 use craft::platform::default_app::{DefaultApp, DefaultAppError};
-use craft::platform::open::{DropTarget, DroppedFile, FileIntake};
+use craft::platform::open::{DroppedFile, FileIntake};
 use craft::ui::shell::ScreenMode;
 use std::sync::Arc;
 
@@ -102,6 +102,7 @@ type Rig = egui_kittest::Harness<'static, WordApp>;
 /// runs it before the second (`raw_input_hook`), as on the desktop.
 fn press(h: &mut Rig, key: egui::Key, modifiers: egui::Modifiers) {
     h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
     h.step();
     h.step();
 }
@@ -283,10 +284,12 @@ fn row_mod_shift_0_resets_the_interface_size_unless_bound() {
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: altgr });
     h.event(egui::Event::ModifiersChanged(altgr));
     h.event(egui::Event::Text("}".into()));
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: false, repeat: false, modifiers: altgr });
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+0 doesn't reset");
     assert_eq!(body_text(h.state()), "}", "AltGr+0 types the character");
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: false, repeat: false, modifiers: chord });
     h.step();
     h.step();
     assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
@@ -295,6 +298,7 @@ fn row_mod_shift_0_resets_the_interface_size_unless_bound() {
     // PLAN(shell-w7): sh.A11 `Session::keymap_mut` over `Overrides::insert`.
     h.state_mut().session.keymap_mut().insert("view.focus", vec!["Mod+Shift+0".into()]);
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: false, repeat: false, modifiers: chord });
     h.step();
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
@@ -612,7 +616,7 @@ impl craft::platform::clipboard::ClipboardBackend for LatePaste {
 fn drop_files(a: &mut WordApp, files: Vec<DroppedFile>) {
     let (intake, sender) = FileIntake::new(craft::host::Wake::none());
     a.services.intake = Some(intake);
-    sender.dropped(files, DropTarget::Elsewhere);
+    sender.dropped(files);
 }
 
 /// An in-memory dropped file.
@@ -2574,7 +2578,7 @@ impl WebSaves {
         let answered = self.0.answer_to(
             id,
             match ended {
-                Ended::Saved => Picked::Paths(vec![std::path::PathBuf::from("novel.docx")]),
+                Ended::Saved => Picked::Saved { path: std::path::PathBuf::from("novel.docx"), file_type: None },
                 Ended::Cancelled => Picked::Cancelled,
                 Ended::Failed(why) => Picked::Failed(why),
             },
@@ -3381,7 +3385,6 @@ fn f11_and_escape_toggle_full_screen() {
     for _ in 0..6 {
         h.step();
     }
-    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     // Run frames and return the full-screen requests the window got.
     let sent = |h: &mut egui_kittest::Harness<WordApp>| {
         let mut out = Vec::new();
@@ -3392,25 +3395,25 @@ fn f11_and_escape_toggle_full_screen() {
         out
     };
     assert_eq!(sent(&mut h), vec![], "a normal window to start with");
-    h.event(key(egui::Key::F11));
+    h.key_press(egui::Key::F11);
     assert_eq!(sent(&mut h), vec![Fullscreen(true)], "F11");
     assert!(h.state().session.view.full_screen);
-    h.event(key(egui::Key::F11));
+    h.key_press(egui::Key::F11);
     assert_eq!(sent(&mut h), vec![Fullscreen(false)], "F11 again");
     assert!(!h.state().session.view.full_screen);
     // The command (ribbon, command search, agents), then Escape.
     assert_eq!(h.state_mut().run("view.fullScreen", json!({})).unwrap(), json!({"value": true}));
     assert_eq!(sent(&mut h), vec![Fullscreen(true)], "the command");
-    h.event(key(egui::Key::Escape));
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![Fullscreen(false)], "Escape");
     // Escape in a normal window doesn't touch the window.
-    h.event(key(egui::Key::Escape));
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![]);
     // Escape closing a dialog leaves full screen alone.
     h.state_mut().run("view.fullScreen", json!({"value": true})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "zoom"})).unwrap();
     assert_eq!(sent(&mut h), vec![Fullscreen(true)]);
-    h.event(key(egui::Key::Escape));
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![]);
     assert!(open_dialog(h.state()).is_none(), "Escape closed the dialog");
     assert!(h.state().session.view.full_screen, "and only that");
@@ -3481,7 +3484,6 @@ fn escape_collapses_a_selection_before_leaving_full_screen() {
     for _ in 0..6 {
         h.step();
     }
-    let esc = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     let sent = |h: &mut egui_kittest::Harness<WordApp>| {
         let mut out = Vec::new();
         for _ in 0..2 {
@@ -3497,11 +3499,11 @@ fn escape_collapses_a_selection_before_leaving_full_screen() {
     h.state_mut().run("view.fullScreen", json!({"value": true})).unwrap();
     assert_eq!(sent(&mut h), vec![Fullscreen(true)]);
     assert!(!h.state().session.sel.is_collapsed());
-    h.event(esc.clone());
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![], "Escape with a selection stays in full screen");
     assert!(h.state().session.sel.is_collapsed(), "and collapses the selection");
     assert!(h.state().session.view.full_screen);
-    h.event(esc);
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![Fullscreen(false)], "Escape with nothing selected leaves");
     assert!(!h.state().session.view.full_screen);
 }
