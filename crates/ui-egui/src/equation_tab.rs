@@ -67,6 +67,13 @@ impl DisplayOrder<usize> for Indexes {
 
 impl ItemSource<usize> for Indexes {}
 
+struct TileSpec {
+    columns: usize,
+    caption: CaptionPlace,
+    thumb_size: Option<ThumbSize>,
+    current: Option<usize>,
+}
+
 /// A grid of `count` tiles in `columns` columns, `current` marked; returns the tile the user activated this
 /// pass (a click or Enter). Arrow keys only move the lead, so a keyboard user can browse the grid without
 /// running a tile.
@@ -77,19 +84,25 @@ pub(crate) fn pick_tile<'r>(
     caption: CaptionPlace,
     current: Option<usize>,
     count: usize,
-    mut tile: impl FnMut(usize) -> Tile<'r> + 'r,
+    tile: impl FnMut(usize) -> Tile<'r> + 'r,
 ) -> Option<usize> {
-    let selection = Selection::<usize>::new(current.into_iter().collect(), current, current);
-    let grid = TileGrid::<usize>::new(label.to_string())
+    pick_tile_spec(ui, label, TileSpec { columns, caption, thumb_size: None, current }, count, tile)
+}
+
+fn pick_tile_spec<'r>(ui: &mut Ui, label: &str, spec: TileSpec, count: usize, mut tile: impl FnMut(usize) -> Tile<'r> + 'r) -> Option<usize> {
+    let selection = Selection::<usize>::new(spec.current.into_iter().collect(), spec.current, spec.current);
+    let mut grid = TileGrid::<usize>::new(label.to_string())
         .select(SelectMode::Single)
         .selection(Bind::given(selection))
         .activate(ActivateOn::Click)
         .arrows_select(false)
-        .caption(caption)
-        .card_columns(columns)
-        .thumb_size(ThumbSize::Small)
+        .caption(spec.caption)
+        .card_columns(spec.columns)
         // Shown in a menu whose body is the one scroll (production scrolls the whole menu, not each grid).
         .natural_height(true);
+    if let Some(size) = spec.thumb_size {
+        grid = grid.thumb_size(size);
+    }
     let out = grid.show_items(ui, &Indexes(count), &mut |key, _| tile(*key));
     let mut picked = None;
     for event in out.response.events {
@@ -164,10 +177,18 @@ fn symbol_source(c: char, ink: Color32) -> MathSource {
 
 /// A grid of rendered math tiles, `(name, picture key)` each over its own source, shaped as the sources are;
 /// returns the tile picked.
-fn math_grid(ui: &mut Ui, label: &str, columns: usize, caption: CaptionPlace, tiles: &[(String, String)], sources: &[MathSource]) -> Option<usize> {
+fn math_grid(
+    ui: &mut Ui,
+    label: &str,
+    columns: usize,
+    caption: CaptionPlace,
+    thumb_size: Option<ThumbSize>,
+    tiles: &[(String, String)],
+    sources: &[MathSource],
+) -> Option<usize> {
     let aspect = sources.first().map(MathSource::thumb_aspect)?;
     let thumbs = math_thumbnails(ui.ctx());
-    pick_tile(ui, label, columns, caption, None, tiles.len(), |at| match (tiles.get(at), sources.get(at)) {
+    pick_tile_spec(ui, label, TileSpec { columns, caption, thumb_size, current: None }, tiles.len(), |at| match (tiles.get(at), sources.get(at)) {
         (Some((name, key)), Some(source)) => Tile::new(name.clone()).picture(aspect, math_picture(name.clone(), math_key(key), &thumbs, source)),
         _ => Tile::new(String::new()),
     })
@@ -180,10 +201,10 @@ fn structure_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp, gallery_i
     for (name, templates) in g.sections {
         MenuItem::heading(tl!(name).to_string()).show(ui);
         let wide = name.starts_with("Common") || templates.iter().all(|t| !t.linear.contains('⬚')) && templates.len() <= 3;
-        let (shape, columns, pt) = if wide { ([79, 30], 2, 13.0) } else { ([15, 14], 5, 14.0) };
+        let (shape, columns, pt, thumb_size) = if wide { ([79, 30], 2, 13.0, None) } else { ([15, 14], 5, 14.0, Some(ThumbSize::Large)) };
         let sources: Vec<MathSource> = templates.iter().map(|t| MathSource::new(t.nodes(), true, pt, shape, ink)).collect();
         let tiles: Vec<(String, String)> = templates.iter().map(|t| (tl!(t.label).to_string(), format!("tpl:{}:{pt}", t.id))).collect();
-        if let Some(tpl) = math_grid(ui, name, columns, CaptionPlace::None, &tiles, &sources).and_then(|i| templates.get(i)) {
+        if let Some(tpl) = math_grid(ui, name, columns, CaptionPlace::None, thumb_size, &tiles, &sources).and_then(|i| templates.get(i)) {
             let _ = app.run("equation.insertStructure", json!({"id": tpl.id}));
             app.canvas.focus_page(ui.ctx());
             cx.request_close();
@@ -197,7 +218,7 @@ fn builtin_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
     let ink = ink(ui);
     let sources: Vec<MathSource> = BUILT_INS.iter().map(|(_, _, lin)| MathSource::new(parse_linear(lin), true, 11.0, [175, 32], ink)).collect();
     let tiles: Vec<(String, String)> = BUILT_INS.iter().map(|(id, label, _)| (tl!(label).to_string(), format!("builtin:{id}"))).collect();
-    if let Some((id, _, _)) = math_grid(ui, "Built-In", 1, CaptionPlace::Below, &tiles, &sources).and_then(|i| BUILT_INS.get(i)) {
+    if let Some((id, _, _)) = math_grid(ui, "Built-In", 1, CaptionPlace::Below, None, &tiles, &sources).and_then(|i| BUILT_INS.get(i)) {
         let _ = app.run("insert.equation", json!({"builtin": id}));
         app.canvas.focus_page(ui.ctx());
         cx.request_close();
@@ -251,7 +272,9 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
         let sources: Vec<MathSource> = chars.iter().map(|c| symbol_source(*c, ink)).collect();
         let tiles: Vec<(String, String)> =
             chars.iter().map(|c| (symbol_tooltip(*c, &math_placeholder(ui, &c.to_string())), format!("sym:{c}"))).collect();
-        if let Some(c) = math_grid(ui, "All symbol sets", 15, CaptionPlace::None, &tiles, &sources).and_then(|i| chars.get(i)) {
+        if let Some(c) =
+            math_grid(ui, "All symbol sets", 15, CaptionPlace::None, Some(ThumbSize::Medium), &tiles, &sources).and_then(|i| chars.get(i))
+        {
             let _ = app.run("equation.insertSymbol", json!({"char": c.to_string()}));
             app.canvas.focus_page(ui.ctx());
         }
@@ -397,9 +420,26 @@ mod placeholder_tests {
         assert!(super::placeholder_linears().any(|linear| linear == "lim┬(n→∞)"));
     }
 
-    /// #7455: the 15-column symbol grid and structure template galleries in the Equation tab
-    /// render compact preview tiles (≤ 30 pt symbol cells, ~50×22 pt templates) instead of expanding
-    /// each thumbnail to default card dimensions (~132 pt) and overflowing the menu (~2,000 pt wide).
+    /// Asserts that `math_image` renders non-empty ink with no pixels touching the 1px outer border (not clipped).
+    fn assert_math_not_clipped(label: &str, nodes: &wordcraft_doc::math::Arg, display: bool, pt: f32, w: f32, h: f32) {
+        let img = crate::previews::math_image(nodes, display, pt, w, h, 1.0).unwrap_or_else(|| panic!("{label}: math_image returned None"));
+        let [iw, ih] = img.size;
+        assert!(iw > 2 && ih > 2, "{label}: image too small: {iw}x{ih}");
+        let mut ink_count = 0usize;
+        for y in 0..ih {
+            for x in 0..iw {
+                let a = img.pixels[y * iw + x].a();
+                if a > 0 {
+                    ink_count += 1;
+                    assert!(x > 0 && x + 1 < iw && y > 0 && y + 1 < ih, "{label}: ink clipped at ({x}, {y}) in {iw}x{ih} ({w:.1}x{h:.1} pt)");
+                }
+            }
+        }
+        assert!(ink_count > 0, "{label}: rendered image has no ink");
+    }
+
+    /// #7455: the 15-column symbol grid and narrow structure galleries use compact `ThumbSize`
+    /// presets without clipping previews, while wide structure galleries and Built-In keep card size.
     #[test]
     fn equation_symbol_and_structure_grids_render_compact_tiles() {
         use crate::WordApp;
@@ -416,7 +456,7 @@ mod placeholder_tests {
                     let ink = ui.visuals().text_color();
                     let sources: Vec<super::MathSource> = chars.iter().map(|c| super::symbol_source(*c, ink)).collect();
                     let tiles: Vec<(String, String)> = chars.iter().map(|c| (c.to_string(), format!("sym:{c}"))).collect();
-                    super::math_grid(ui, "All symbol sets", 15, super::CaptionPlace::None, &tiles, &sources);
+                    super::math_grid(ui, "All symbol sets", 15, super::CaptionPlace::None, Some(super::ThumbSize::Medium), &tiles, &sources);
                 });
             },
             a,
@@ -424,9 +464,14 @@ mod placeholder_tests {
         h.run_steps(2);
 
         let tile = h.get_by_role_and_label(Role::ListItem, "+").rect();
-        assert!(tile.width() <= 30.0 && tile.height() <= 30.0, "symbol tile is compact (≤ 30 pt), got {:?}", tile.size());
+        assert!(tile.width() <= 40.0 && tile.height() <= 40.0, "symbol tile is compact (≤ 40 pt), got {:?}", tile.size());
         let grid = h.get_by_role_and_label(Role::ListBox, "All symbol sets").rect();
-        assert!(grid.width() <= 450.0, "15-column symbol grid stays compact within viewport budget, got {:?}", grid.size());
+        assert!(grid.width() <= 550.0, "15-column symbol grid stays compact within viewport budget, got {:?}", grid.size());
+
+        for sym in ['+', '∑', '∫', '∬', '∮', '√'] {
+            let nodes = vec![super::MNode::Run(super::MRun { text: sym.to_string(), lit: true, ..Default::default() })];
+            assert_math_not_clipped(&format!("symbol {sym}"), &nodes, false, 11.0, 24.0, 24.0);
+        }
 
         let mut h_struct = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -439,8 +484,50 @@ mod placeholder_tests {
         h_struct.run_steps(2);
 
         let frac_tile = h_struct.get_by_role_and_label(Role::ListItem, "Stacked Fraction").rect();
-        assert!(frac_tile.width() <= 35.0 && frac_tile.height() <= 35.0, "stacked fraction tile is compact, got {:?}", frac_tile.size());
+        assert!(
+            frac_tile.width() >= 48.0 && frac_tile.width() <= 75.0 && frac_tile.height() >= 44.0,
+            "narrow structure tile uses Large thumb (~48x45 pt), got {:?}",
+            frac_tile.size()
+        );
         let diff_tile = h_struct.get_by_role_and_label(Role::ListItem, "Differential").rect();
-        assert!(diff_tile.width() <= 80.0 && diff_tile.height() <= 35.0, "differential tile is compact, got {:?}", diff_tile.size());
+        assert!(
+            diff_tile.width() >= 120.0 && diff_tile.width() <= 165.0 && diff_tile.height() >= 45.0,
+            "wide structure tile keeps card width (~128x49 pt), got {:?}",
+            diff_tile.size()
+        );
+
+        let frac_tpl = wordcraft_engine::math_gallery::templates().find(|t| t.label == "Stacked Fraction").expect("Stacked Fraction template");
+        assert_math_not_clipped("Stacked Fraction", &frac_tpl.nodes(), true, 14.0, 48.0, 48.0 * 14.0 / 15.0);
+        let diff_tpl = wordcraft_engine::math_gallery::templates().find(|t| t.label == "Differential").expect("Differential template");
+        assert_math_not_clipped("Differential", &diff_tpl.nodes(), true, 13.0, 128.0, 128.0 * 30.0 / 79.0);
+
+        let mut h_builtin = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, _app: &mut WordApp| {
+                craft::ui::menu::Menu::inline("Built-In").show(ui, |ui, _cx| {
+                    let ink = ui.visuals().text_color();
+                    let sources = vec![super::MathSource::new(super::parse_linear("A=πr^2"), true, 11.0, [175, 32], ink)];
+                    let tiles = vec![("Area of Circle".to_string(), "builtin:area_circle".to_string())];
+                    super::math_grid(ui, "Built-In", 1, super::CaptionPlace::Below, None, &tiles, &sources);
+                });
+            },
+            WordApp::new(Session::new(wordcraft_doc::Document::from_text("Math")), crate::Services::default()),
+        );
+        h_builtin.run_steps(2);
+
+        let builtin_tile = h_builtin.get_by_role_and_label(Role::ListItem, "Area of Circle").rect();
+        assert!(builtin_tile.width() >= 120.0, "Built-In equations keep card width (not shrunk to Small), got {:?}", builtin_tile.size());
+
+        let mut h_pick = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, _app: &mut WordApp| {
+                super::pick_tile(ui, "Layouts", 4, super::CaptionPlace::None, None, 1, |_| {
+                    super::Tile::new("Basic Block List".to_string()).thumb(craft::ui::list::ThumbAspect::new(46, 31), |_, _| {})
+                });
+            },
+            WordApp::new(Session::new(wordcraft_doc::Document::from_text("Math")), crate::Services::default()),
+        );
+        h_pick.run_steps(2);
+
+        let layout_tile = h_pick.get_by_role_and_label(Role::ListItem, "Basic Block List").rect();
+        assert!(layout_tile.width() >= 120.0, "pick_tile default keeps card width for SmartArt Layouts, got {:?}", layout_tile.size());
     }
 }
