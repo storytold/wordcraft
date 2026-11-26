@@ -73,17 +73,27 @@ impl PasteOptionsUi {
     }
 }
 
-/// Where the button sits (below the caret) while the engine offers paste options and the caret is
-/// in view; `None` when there is no offer, Esc hid it, or the caret is scrolled out of the page
+/// Where the button sits (below the caret, or above it at the bottom of the view) while the engine
+/// offers paste options and the caret is in view; `None` when there is no offer, Esc hid it, or the caret is scrolled out of the page
 /// area (under the ribbon or the status bar), where the button must not float over other panes.
 fn button_pos(app: &mut WordApp, ctx: &Context) -> Option<egui::Pos2> {
     if wordcraft_engine::cmd::paste::paste_options(&app.session).is_empty() || app.paste_options.hidden_rev == Some(app.session.rev()) {
         return None;
     }
     let (caret, height) = crate::canvas::caret_screen(app)?;
-    let at = pos2(caret.x, caret.y + height + 4.0);
     let view = app.canvas.canvas_rect().unwrap_or_else(|| ctx.content_rect());
-    view.contains_rect(egui::Rect::from_min_size(at, vec2(BUTTON_W + 6.0, BUTTON_H + 6.0))).then_some(at)
+    // The caret itself must be in view: scrolled away, there is nothing to point at.
+    if !view.contains(caret) {
+        return None;
+    }
+    let size = vec2(BUTTON_W + 6.0, BUTTON_H + 6.0);
+    // Below the caret's line, or above it when the line is at the bottom of the view (where a long
+    // paste leaves the caret); kept inside the view across, near the right edge.
+    let x = caret.x.min(view.right() - size.x).max(view.left());
+    [caret.y + height + 4.0, caret.y - size.y - 4.0]
+        .into_iter()
+        .map(|y| pos2(x, y))
+        .find(|at| view.contains_rect(egui::Rect::from_min_size(*at, size)))
 }
 
 /// Whether the Paste Options button is showing, so that Escape closes it first and does nothing
