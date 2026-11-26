@@ -34,6 +34,46 @@ fn body_left(l: &DocLayout) -> Vec<f32> {
 }
 
 #[test]
+fn top_gutter_uses_the_full_text_width_and_reserves_room_on_each_page() {
+    crate::test_fonts();
+    let mut d = Document::new();
+    d.body = paras("Body line", 160);
+    d.last_section.gutter = 50.0;
+    let header = d.add_part(PartKind::Header, paras("Header line", 1));
+    let footer = d.add_part(PartKind::Footer, paras("Footer line", 1));
+    d.last_section.headers.default = Some(header);
+    d.last_section.footers.default = Some(footer);
+    for (w, h) in [(595.0, 842.0), (842.0, 595.0)] {
+        d.last_section.page_w = w;
+        d.last_section.page_h = h;
+        d.settings.gutter_at_top = false;
+        let side = lay(&d);
+        d.settings.gutter_at_top = true;
+        let top = lay(&d);
+        let s = &d.last_section;
+        let first_page_lines = |l: &DocLayout| {
+            l.pages[0]
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Placed::Lines { story: StoryRef::Body, l0, l1, .. } => Some(l1 - l0),
+                    _ => None,
+                })
+                .sum::<usize>()
+        };
+        assert!(first_page_lines(&top) < first_page_lines(&side), "{w} x {h}: the top gutter leaves less vertical room");
+        assert!(body_left(&top).iter().all(|x| (*x - s.margin_left).abs() < 0.01));
+        for p in &top.pages {
+            assert!((p.body.x - s.margin_left).abs() < 0.01, "{:?}", p.body);
+            assert!((p.body.y - s.margin_top - s.gutter).abs() < 0.01, "{:?}", p.body);
+            assert!((p.body.w - (w - s.margin_left - s.margin_right)).abs() < 0.01, "{:?}", p.body);
+            assert_eq!(extent(&p.header, StoryRef::Part(header)), extent(&side.pages[0].header, StoryRef::Part(header)));
+            assert_eq!(extent(&p.footer, StoryRef::Part(footer)), extent(&side.pages[0].footer, StoryRef::Part(footer)));
+        }
+    }
+}
+
+#[test]
 fn mirrored_margins_put_the_inside_margin_toward_the_binding() {
     crate::test_fonts();
     // #452: inside 108 (plus a 10pt gutter), outside 36. Odd pages: inside on the left; even
@@ -45,6 +85,8 @@ fn mirrored_margins_put_the_inside_margin_toward_the_binding() {
     let plain = body_left(&lay(&d));
     assert!(plain.len() >= 2 && plain.iter().all(|x| (x - 118.0).abs() < 0.01), "not mirrored: {plain:?}");
     d.settings.mirror_margins = true;
+    // Mirrored margins keep the inside gutter even if the file also declares a top gutter.
+    d.settings.gutter_at_top = true;
     let l = lay(&d);
     let lefts = body_left(&l);
     for (i, (x, p)) in lefts.iter().zip(&l.pages).enumerate() {
