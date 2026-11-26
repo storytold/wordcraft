@@ -376,10 +376,13 @@ fn handle_request(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) 
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.parity" => ok(wordcraft_engine::catalog::parity(&app.session.registry)),
         "ui.clickText" => click_text(app, ctx, p),
-        "ui.screenshot" => {
-            let token = app.next_capture_token();
-            Reply::screenshot(token, s("path").map(str::to_string), app.active_viewport())
-        }
+        "ui.screenshot" => match craft::automation::screenshot::ScreenshotParams::from_params(p) {
+            Ok(params) => {
+                let token = app.next_capture_token();
+                Reply::screenshot(token, params, app.active_viewport())
+            }
+            Err(e) => err(e),
+        },
         "ui.render" => {
             let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
             let scale = p.get("scale").and_then(Value::as_f64).map_or(2.0, |v| v as f32);

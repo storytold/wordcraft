@@ -3,7 +3,7 @@
 # exports VERSION and NFPM_ARCH.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
-name: wordcraft
+name: ${NFPM_NAME}
 arch: ${NFPM_ARCH}
 platform: linux
 version: ${VERSION}
@@ -67,26 +67,29 @@ overrides:
       - espeak-ng
 
 contents:
-  - src: ${STAGE}/usr/bin/wordcraft
-    dst: /usr/bin/wordcraft
+  - src: ${STAGE}/usr/bin/${NFPM_BIN}
+    dst: /usr/bin/${NFPM_BIN}
     file_info: { mode: 0755 }
-  - src: ${STAGE}/usr/bin/wordcraft-cli
-    dst: /usr/bin/wordcraft-cli
+  - src: ${STAGE}/usr/bin/${NFPM_CLI}
+    dst: /usr/bin/${NFPM_CLI}
     file_info: { mode: 0755 }
+  - src: ${STAGE}/usr/lib/
+    dst: /usr/lib/
+    type: tree
   # Named one by one rather than as a tree of /usr/share: a tree would also own shared directories
   # such as /usr/share/mime, which openSUSE's filesystem package owns with other modes, and RPM
   # refuses to install a package that conflicts with it.
-  - src: ${STAGE}/usr/share/applications/ai.storyteller.wordcraft.desktop
-    dst: /usr/share/applications/ai.storyteller.wordcraft.desktop
-  - src: ${STAGE}/usr/share/mime/packages/ai.storyteller.wordcraft.xml
-    dst: /usr/share/mime/packages/ai.storyteller.wordcraft.xml
-  - src: ${STAGE}/usr/share/metainfo/ai.storyteller.wordcraft.metainfo.xml
-    dst: /usr/share/metainfo/ai.storyteller.wordcraft.metainfo.xml
+  - src: ${STAGE}/usr/share/applications/${NFPM_APP_ID}.desktop
+    dst: /usr/share/applications/${NFPM_APP_ID}.desktop
+  - src: ${STAGE}/usr/share/mime/packages/${NFPM_APP_ID}.xml
+    dst: /usr/share/mime/packages/${NFPM_APP_ID}.xml
+  - src: ${STAGE}/usr/share/metainfo/${NFPM_APP_ID}.metainfo.xml
+    dst: /usr/share/metainfo/${NFPM_APP_ID}.metainfo.xml
   - src: ${STAGE}/usr/share/icons/hicolor/
     dst: /usr/share/icons/hicolor/
     type: tree
-  - src: ${STAGE}/usr/share/doc/wordcraft/
-    dst: /usr/share/doc/wordcraft/
+  - src: ${STAGE}/usr/share/doc/${NFPM_NAME}/
+    dst: /usr/share/doc/${NFPM_NAME}/
     type: tree
 
 scripts:
