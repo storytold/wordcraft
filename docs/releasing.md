@@ -31,6 +31,8 @@ Stable releases still come only from `refs/heads/release`.
 Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windows/package.ps1`,
 `packaging/linux/package.sh` (then `packaging/linux/flatpak-bundle.sh` for the Flatpak), `packaging/web/package.sh`.
 
+Local notarization can use `APPLE_KEYCHAIN_PROFILE` with a real `MACOS_SIGN_IDENTITY`. The profile replaces `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` for submission and failure-log requests; the three-variable form remains supported.
+
 A scheduled dry run runs on `main` nightly at 03:00 UTC. It builds every release target except
 macOS, without signing, entering the `release` environment, pushing Flatpak images or making a
 draft release. Manual dispatch uses the normal release path (`dry-run` is false).
@@ -79,3 +81,9 @@ passes an already-supplied Launcher form (`--launch-profile`, and `--version`/`-
 through, so the ArtCraft Launcher's own root is used and its version check opens no window. The
 remaining activation steps are described in
 [nightly-release-preparation.md](nightly-release-preparation.md).
+
+## Revision history
+
+| Date | Impact | Change |
+|---|---|---|
+| 2026-11-05 | trivial | PR #5266: macOS notarization accepts a Keychain profile for submit and rejection logs, with legacy authentication retained. Synthetic authentication controls; no new Apple notarization run. |
