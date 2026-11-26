@@ -27,6 +27,7 @@ impl Session {
         self.typing = None;
         self.also_selected.clear();
         self.member = None;
+        self.accent_prefix = None;
         self.column = None;
         self.column_mode = false;
         self.widened = None;
@@ -95,6 +96,7 @@ impl Session {
             author: _,
             initials: _,
             painter: _,
+            accent_prefix: _,
             copied_format: _,
             status: _,
             // Headers just created to edit: closing checks they still exist and are empty.

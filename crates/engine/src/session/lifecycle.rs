@@ -112,6 +112,7 @@ impl Session {
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
+            accent_prefix: None,
             copied_format: None,
             status: String::new(),
             new_header_parts,

@@ -9,6 +9,7 @@ use super::ime::{
     MAX_IME_COMMIT_BYTES, MAX_IME_PREEDIT_BYTES, delete_in_equation, delete_surrounding, delete_surrounding_bytes, ime_report, ime_stamp,
     note_automatic_change,
 };
+use super::shortcuts::ends_accent;
 use super::{Key, Modifiers, WordApp, json};
 
 /// What a refused or interrupted IME replacement still has to drop from the same input list.
@@ -60,6 +61,7 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
     if !app.session.ime_text_join_pending() {
         app.canvas.ime_join_text = None;
     }
+    end_accent_on_raw_keys(app, ctx);
     let mut batch = Batch {
         drop_equation_replacement: ReplacementDrop::None,
         interrupted_preedit: std::mem::take(&mut app.canvas.ime_interrupted_preedit),
@@ -80,6 +82,14 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
             // A key between a deletion and its text means that text is fresh input, not the
             // replacement the deletion promised (even when the key runs no command).
             app.session.clear_ime_text_join();
+            // A waiting accent key (Ctrl+' …) ends on a key that types nothing; Escape only
+            // cancels it (#6328).
+            if app.session.accent_waiting().is_some() {
+                app.session.cancel_accent();
+                if matches!(e, EditorInput::Cancel) {
+                    continue;
+                }
+            }
         }
         // Escape stops a running Ink Replay before anything else takes it.
         if matches!(e, EditorInput::Cancel) && crate::ink::stop_replay(app) {
@@ -102,6 +112,25 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
     // cause (the old canvas set the interrupt directly).
     if std::mem::take(&mut app.canvas.ime_interrupt_now) {
         pass.ime_interrupt(ctx);
+    }
+}
+
+/// Ends a waiting accent key (Ctrl+' …, #6328) on the pass's key presses that reach no command and
+/// no editor input ([`ends_accent`]), and when the window loses the focus.
+fn end_accent_on_raw_keys(app: &mut WordApp, ctx: &egui::Context) {
+    if app.session.accent_waiting().is_none() {
+        return;
+    }
+    // The events are copied out first: `ends_accent` reads the context, which can't be done
+    // while its input is locked.
+    let events = ctx.input(|i| i.events.clone());
+    let ends = events.iter().any(|e| match e {
+        egui::Event::Key { key, pressed: true, modifiers, .. } => ends_accent(ctx, *key, modifiers),
+        egui::Event::WindowFocused(false) => true,
+        _ => false,
+    });
+    if ends {
+        app.session.cancel_accent();
     }
 }
 

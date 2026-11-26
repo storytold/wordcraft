@@ -1264,3 +1264,73 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&h.state().session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
 }
+
+/// #6328: Ctrl+' then e types é through the page's key handling, as in Word for Windows; Shift
+/// for a capital keeps the accent waiting; Escape and an unbound shortcut cancel it, so the
+/// letter after is plain. The keys are egui's logical keys: on a French layout the comma has its
+/// own key (where the US M is), and Ctrl+, then c still types ç. Ctrl+Alt+Shift+? types ¿.
+#[test]
+fn accent_keys_then_a_letter_type_the_accented_letter_on_the_page() {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let mut h = alt_frame_app();
+    let ctrl = mod_held();
+    let shift = Modifiers::SHIFT;
+    let press = |key, physical, pressed, modifiers| egui::Event::Key { key, physical_key: Some(physical), pressed, repeat: false, modifiers };
+    // Ctrl+<key> pressed, then let go.
+    let accent = |h: &mut H, k: Key, physical: Key, m: Modifiers| {
+        mods_frame(h, m, vec![press(k, physical, true, m)]);
+        mods_frame(h, Modifiers::NONE, vec![press(k, physical, false, Modifiers::NONE)]);
+    };
+    // A letter's key and its text in one frame, as a platform delivers them.
+    let letter = |h: &mut H, k: Key, text: &str, m: Modifiers| {
+        batch_frame(h, vec![press(k, k, true, m), egui::Event::Text(text.into()), press(k, k, false, m)]);
+    };
+
+    accent(&mut h, Key::Quote, Key::Quote, ctrl);
+    assert!(h.state().session.accent_waiting().is_some(), "Ctrl+' waits for the letter");
+    letter(&mut h, Key::E, "e", Modifiers::NONE);
+    letter(&mut h, Key::E, "e", Modifiers::NONE);
+    assert_eq!(body(h.state()), "ée", "one letter takes the accent");
+
+    // Shift pressed for the capital doesn't cancel.
+    accent(&mut h, Key::Backtick, Key::Backtick, ctrl);
+    mods_frame(&mut h, shift, vec![press(Key::ShiftLeft, Key::ShiftLeft, true, shift)]);
+    letter(&mut h, Key::A, "A", shift);
+    mods_frame(&mut h, Modifiers::NONE, vec![press(Key::ShiftLeft, Key::ShiftLeft, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "éeÀ");
+
+    // Escape cancels and does nothing else; so does a shortcut bound to nothing (Ctrl+;).
+    accent(&mut h, Key::Quote, Key::Quote, ctrl);
+    alt_frame(&mut h, vec![press(Key::Escape, Key::Escape, true, Modifiers::NONE), press(Key::Escape, Key::Escape, false, Modifiers::NONE)]);
+    assert_eq!(h.state().session.accent_waiting(), None);
+    letter(&mut h, Key::E, "e", Modifiers::NONE);
+    accent(&mut h, Key::Quote, Key::Quote, ctrl);
+    accent(&mut h, Key::Semicolon, Key::Semicolon, ctrl);
+    assert_eq!(h.state().session.accent_waiting(), None, "an unbound shortcut ends the wait");
+    letter(&mut h, Key::E, "e", Modifiers::NONE);
+    assert_eq!(body(h.state()), "éeÀee");
+
+    // French AZERTY: the comma is on the US M key.
+    accent(&mut h, Key::Comma, Key::M, ctrl);
+    letter(&mut h, Key::C, "c", Modifiers::NONE);
+    // US Ctrl+Shift+; reports the colon; Ctrl+Shift+6 has no ^ key in egui and arrives as 6.
+    accent(&mut h, Key::Colon, Key::Semicolon, Modifiers { shift: true, ..ctrl });
+    letter(&mut h, Key::U, "u", Modifiers::NONE);
+    accent(&mut h, Key::Num6, Key::Num6, Modifiers { shift: true, ..ctrl });
+    letter(&mut h, Key::O, "o", Modifiers::NONE);
+    accent(&mut h, Key::Questionmark, Key::Slash, Modifiers { shift: true, alt: true, ..ctrl });
+    assert_eq!(body(h.state()), "éeÀeeçüô¿");
+
+    // The keys are the commands' on the board, and Customize Keyboard can give them to others.
+    assert_eq!(holder_of(&h, "Mod+'"), Some(craft::keymap::CommandRef::new("text.accentAcute")));
+    let mut keymap = craft::ui::runtime::commands::keymap(&h.ctx).map(|board| (*board).clone()).expect("the board has a keymap");
+    let chord = craft::keymap::Binding::parse("Mod+'").unwrap();
+    keymap.assign(&craft::keymap::CommandRef::new("text.accentStroke"), chord, craft::keymap::Policy::Steal).unwrap();
+    *h.state_mut().session.keymap_mut() = keymap.overrides().clone();
+    crate::test_harness::frame(&mut h);
+    accent(&mut h, Key::Quote, Key::Quote, ctrl);
+    letter(&mut h, Key::O, "o", Modifiers::NONE);
+    assert_eq!(body(h.state()), "éeÀeeçüô¿ø");
+}

@@ -96,6 +96,10 @@ pub struct Session {
     pub initials: String,
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
+    /// An accent key (Ctrl+', Ctrl+`…) waiting for its letter, with the selection and the id of
+    /// the document it was pressed in: the next `text.insert` there accents its first character
+    /// (#6328). It survives a front end making another document active only to draw it.
+    pub(crate) accent_prefix: Option<(crate::cmd::text::Accent, Selection, u64)>,
     /// Formatting picked up by Copy Formatting (Mod+Shift+C): Paste Formatting applies it as often
     /// as asked, as in Word, until the next Copy Formatting. A Format Painter pick is stored here
     /// as well.

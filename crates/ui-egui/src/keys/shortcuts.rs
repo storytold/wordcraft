@@ -97,3 +97,19 @@ pub fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
     s.push_str(key);
     s
 }
+
+/// Whether a key press ends a waiting accent key (Ctrl+' …, #6328) without the page seeing it: a
+/// function key, or a key held with Ctrl, Alt or ⌘, that no command holds (Ctrl+;). A held
+/// shortcut runs its command, which ends the wait in the engine (another accent key starts over);
+/// keys the page takes as editor input (arrows, Enter, Escape…) end it there; Shift and the other
+/// modifier keys on their own don't (Shift types the capital).
+pub(super) fn ends_accent(ctx: &egui::Context, key: Key, m: &Modifiers) -> bool {
+    use craft::keymap::{Chord, Key as ChordKey, Mods};
+    // Modifier keys have no chord key.
+    let Some(k) = ChordKey::from_egui(key) else { return false };
+    let mods = Mods::from_egui(m, craft::keymap::egui::platform(ctx));
+    if !(mods.cmd || mods.ctrl || mods.alt || k.is_function_key()) {
+        return false;
+    }
+    craft::ui::runtime::commands::holder(ctx, &Chord::new(mods, k)).is_none()
+}
