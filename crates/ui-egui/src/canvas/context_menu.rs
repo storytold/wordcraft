@@ -27,6 +27,13 @@ pub(super) fn context_suggestions(app: &mut WordApp) {
     app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
 }
 
+/// Hands the keyboard back to the page from a menu action, in this same pass, and asks for a
+/// repaint so the page redraws with the focused caret (#6715).
+fn refocus_canvas(app: &mut WordApp, ui: &Ui) {
+    app.canvas.focus_page(ui.ctx());
+    ui.ctx().request_repaint();
+}
+
 /// The heading of a proofing issue's context menu, in the interface language like the rest of
 /// the menu: a spelling issue's own message is in the text's language (craft-proof's, "Faute
 /// d'orthographe possible" for French text), so it says Possible spelling mistake instead.
@@ -80,7 +87,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
         let pick = menu.pick(ui, &rows);
         if let Some(act) = pick.picked {
             super::equation_frame::run_equation_act(app, &act);
-            app.canvas.focus_page(ui.ctx());
+            refocus_canvas(app, ui);
         }
     } else {
         // The companion bar and the rows both need the app; they run one after the other, never nested.
@@ -106,8 +113,10 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
 
 /// A row labelled `label` that runs command `id` with `params`; its chord, enabled state and
 /// action come from the command, its wording from the menu (one command id serves several rows).
-fn item(ui: &mut Ui, label: &str, id: &str, params: Value) {
-    let _ = MenuItem::new(tl!(label).to_string()).command(CommandRef::with_params(id, params)).show(ui);
+fn item(app: &mut WordApp, ui: &mut Ui, label: &str, id: &str, params: Value) {
+    if MenuItem::new(tl!(label).to_string()).command(CommandRef::with_params(id, params)).show(ui).ran && !id.starts_with("ui.") {
+        refocus_canvas(app, ui);
+    }
 }
 
 fn rule(ui: &mut Ui) {
@@ -129,22 +138,23 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
         for sgt in sugg {
             if MenuItem::new(sgt.clone()).show(ui).ran {
                 let _ = app.run("review.applySuggestion", json!({"text": sgt}));
+                refocus_canvas(app, ui);
             }
         }
         if issue.get("kind").and_then(|k| k.as_str()) == Some("spelling") {
-            item(ui, "Ignore All", "review.ignoreAll", json!({}));
-            item(ui, "Add to Dictionary", "review.addToDictionary", json!({}));
+            item(app, ui, "Ignore All", "review.ignoreAll", json!({}));
+            item(app, ui, "Add to Dictionary", "review.addToDictionary", json!({}));
         }
         rule(ui);
     }
-    item(ui, "Cut", "edit.cut", json!({}));
-    item(ui, "Copy", "edit.copy", json!({}));
+    item(app, ui, "Cut", "edit.cut", json!({}));
+    item(app, ui, "Copy", "edit.copy", json!({}));
     // How to paste, chosen before pasting (#2583): the ribbon's Paste menu, item for item. Paste
     // keeps the clipboard's formatting (Word's Keep Source Formatting).
-    item(ui, "Paste", "edit.paste", json!({}));
-    item(ui, "Keep Text Only", "edit.pasteText", json!({}));
-    item(ui, "Merge Formatting", "edit.pasteMerge", json!({}));
-    item(ui, "Paste Special…", "edit.pasteSpecial", json!({}));
+    item(app, ui, "Paste", "edit.paste", json!({}));
+    item(app, ui, "Keep Text Only", "edit.pasteText", json!({}));
+    item(app, ui, "Merge Formatting", "edit.pasteMerge", json!({}));
+    item(app, ui, "Paste Special…", "edit.pasteSpecial", json!({}));
     rule(ui);
     if let Some(syn) = app.canvas.context_synonyms.clone().and_then(|v| v.as_array().cloned()).filter(|a| !a.is_empty()) {
         let _ = Menu::submenu_row(ui, tl!("Synonyms").to_string(), |ui, _cx| {
@@ -156,28 +166,29 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
                     let end = wordcraft_doc::Pos { off: a.off + trimmed, ..b };
                     app.session.set_selection(wordcraft_engine::Selection { anchor: a, focus: end });
                     let _ = app.run("text.insert", json!({"text": w, "raw": true}));
+                    refocus_canvas(app, ui);
                 }
             }
         });
     }
-    item(ui, "Font…", "ui.dialog", json!({"name": "font"}));
-    item(ui, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
-    item(ui, "Link…", "ui.dialog", json!({"name": "link"}));
-    item(ui, "New Comment", "review.newComment", json!({}));
+    item(app, ui, "Font…", "ui.dialog", json!({"name": "font"}));
+    item(app, ui, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
+    item(app, ui, "Link…", "ui.dialog", json!({"name": "link"}));
+    item(app, ui, "New Comment", "review.newComment", json!({}));
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {
         rule(ui);
-        item(ui, "Update Field", "references.updateFields", json!({}));
-        item(ui, "Edit Field…", "fields.setCode", json!({}));
-        item(ui, "Toggle Field Codes", "fields.toggleCode", json!({}));
+        item(app, ui, "Update Field", "references.updateFields", json!({}));
+        item(app, ui, "Edit Field…", "fields.setCode", json!({}));
+        item(app, ui, "Toggle Field Codes", "fields.toggleCode", json!({}));
     } else if wordcraft_engine::cmd::references::caret_in_toc(&app.session) {
         // The TOC field sits in the table's heading; its entries are plain paragraphs.
         rule(ui);
-        item(ui, "Update Field", "references.updateToc", json!({}));
-        item(ui, "Remove Table of Contents", "references.removeToc", json!({}));
+        item(app, ui, "Update Field", "references.updateToc", json!({}));
+        item(app, ui, "Remove Table of Contents", "references.removeToc", json!({}));
     }
     let selected_object = wordcraft_engine::cmd::objects::selected(&app.session).is_some();
     if selected_object || app.session.sel.focus.path.cell().is_some() {
-        item(ui, "View Alt Text…", "view.altTextPane", json!({"value": true}));
+        item(app, ui, "View Alt Text…", "view.altTextPane", json!({"value": true}));
     }
     // A selected picture, shape, text box or chart: its own items, then Wrap Text (#513).
     let picture = crate::ribbon::has_picture_selected(&app.session);
@@ -186,61 +197,61 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
         rule(ui);
     }
     if picture {
-        item(ui, "Change Picture…", "ui.changePicture", json!({}));
-        item(ui, "Reset Picture", "picture.reset", json!({}));
-        item(ui, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
-        item(ui, "Crop", "ui.crop", json!({}));
+        item(app, ui, "Change Picture…", "ui.changePicture", json!({}));
+        item(app, ui, "Reset Picture", "picture.reset", json!({}));
+        item(app, ui, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
+        item(app, ui, "Crop", "ui.crop", json!({}));
     }
     if picture || object {
         // A numbered caption under (or over) the picture, shape, text box or chart (#1230).
-        item(ui, "Insert Caption…", "references.caption", json!({}));
+        item(app, ui, "Insert Caption…", "references.caption", json!({}));
     }
     if object {
         let _ = Menu::submenu_row(ui, tl!("Wrap Text").to_string(), |ui, _cx| crate::ribbon::wrap_text_items(ui, app));
     }
     if craft::ui::runtime::commands::resolve(ui.ctx(), CommandRef::new("shape.fill")).enabled {
-        item(ui, "Format Shape…", "view.formatShapePane", json!({"value": true}));
+        item(app, ui, "Format Shape…", "view.formatShapePane", json!({"value": true}));
     }
     if app.session.sel.focus.path.cell().is_some() {
         // The table's items follow what is selected, as in Word (2019, Windows).
         let pick = table_pick(&app.session);
         rule(ui);
         let _ = Menu::submenu_row(ui, tl!("Insert").to_string(), |ui, _cx| {
-            item(ui, "Insert Columns to the Left", "table.insertColumnLeft", json!({}));
-            item(ui, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
-            item(ui, "Insert Rows Above", "table.insertRowAbove", json!({}));
-            item(ui, "Insert Rows Below", "table.insertRowBelow", json!({}));
+            item(app, ui, "Insert Columns to the Left", "table.insertColumnLeft", json!({}));
+            item(app, ui, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
+            item(app, ui, "Insert Rows Above", "table.insertRowAbove", json!({}));
+            item(app, ui, "Insert Rows Below", "table.insertRowBelow", json!({}));
         });
         // Every Delete is there whatever is selected, as on Word's Delete button: with the caret
         // in a cell, Delete Table is how the table goes (#1198).
         let _ = Menu::submenu_row(ui, tl!("Delete").to_string(), |ui, _cx| {
-            item(ui, "Delete Cells", "table.deleteCells", json!({}));
-            item(ui, "Delete Columns", "table.deleteColumn", json!({}));
-            item(ui, "Delete Rows", "table.deleteRow", json!({}));
-            item(ui, "Delete Table", "table.deleteTable", json!({}));
+            item(app, ui, "Delete Cells", "table.deleteCells", json!({}));
+            item(app, ui, "Delete Columns", "table.deleteColumn", json!({}));
+            item(app, ui, "Delete Rows", "table.deleteRow", json!({}));
+            item(app, ui, "Delete Table", "table.deleteTable", json!({}));
         });
         if pick == TablePick::Cell {
-            item(ui, "Split Cells", "table.split", json!({}));
+            item(app, ui, "Split Cells", "table.split", json!({}));
         }
         if matches!(pick, TablePick::Cells | TablePick::Rows | TablePick::Columns) {
-            item(ui, "Merge Cells", "table.merge", json!({}));
+            item(app, ui, "Merge Cells", "table.merge", json!({}));
         }
         if matches!(pick, TablePick::Rows | TablePick::Columns | TablePick::Table) {
-            item(ui, "Distribute Rows", "table.distributeRows", json!({}));
-            item(ui, "Distribute Columns", "table.distributeColumns", json!({}));
+            item(app, ui, "Distribute Rows", "table.distributeRows", json!({}));
+            item(app, ui, "Distribute Columns", "table.distributeColumns", json!({}));
         }
         if pick == TablePick::Table {
             let _ = Menu::submenu_row(ui, tl!("AutoFit").to_string(), |ui, _cx| {
-                item(ui, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
-                item(ui, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
-                item(ui, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
+                item(app, ui, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
+                item(app, ui, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
+                item(app, ui, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
             });
         }
-        item(ui, "Text Direction", "table.textDirection", json!({}));
+        item(app, ui, "Text Direction", "table.textDirection", json!({}));
         if pick == TablePick::Table {
-            item(ui, "Insert Caption…", "references.caption", json!({}));
+            item(app, ui, "Insert Caption…", "references.caption", json!({}));
         }
-        item(ui, "Table Properties…", "table.properties", json!({}));
+        item(app, ui, "Table Properties…", "table.properties", json!({}));
     }
 }
 

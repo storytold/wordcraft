@@ -2325,7 +2325,7 @@ fn context_menu_spelling_suggestion_opens_with_shift_f10_and_keeps_focus() {
     use egui_kittest::kittest::Queryable;
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("teh")), Default::default());
     a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 1));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -2334,7 +2334,7 @@ fn context_menu_spelling_suggestion_opens_with_shift_f10_and_keeps_focus() {
         a,
     );
     steps(&mut h, 6);
-    assert!(h.state().canvas.focused, "canvas starts focused");
+    assert!(h.state().canvas.focused(&h.ctx), "canvas starts focused");
     // Shift+F10 opens the context menu with spelling suggestions.
     h.event(egui::Event::Key { key: egui::Key::F10, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT });
     steps(&mut h, 3);
@@ -2355,17 +2355,73 @@ fn context_menu_spelling_suggestion_opens_with_shift_f10_and_keeps_focus() {
     steps(&mut h, 2);
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: btn, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
-        h.step();
+        h.app_frame();
     }
     // The very next pass is the one that has to keep the keyboard: the page was drawn before the
     // menu, so it only takes focus back then, and a character typed before that used to be lost.
     h.event(egui::Event::Text("x".into()));
-    h.step();
+    h.app_frame();
     assert!(!h.state().canvas.context_menu_open, "applying a suggestion closes the context menu");
     assert_eq!(
         h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body),
         format!("{suggestion}x"),
         "a character typed in the frame after the click lands in the document"
     );
-    assert!(h.state().canvas.focused, "canvas keeps focus after applying a spelling suggestion so the caret remains visible");
+    assert!(h.state().canvas.focused(&h.ctx), "canvas keeps focus after applying a spelling suggestion so the caret remains visible");
+}
+
+#[test]
+fn context_menu_spelling_suggestion_returns_focus_when_opened_unfocused() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("teh")), Default::default());
+    a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 1));
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let size_box =
+        h.get_all_by_role(Role::TextInput).find(|n| n.value().is_some_and(|v| v.trim().parse::<f64>().is_ok())).expect("the font size box").rect();
+    h.event(egui::Event::PointerMoved(size_box.center()));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: size_box.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.app_frame();
+    }
+    h.app_frame();
+    assert!(!h.state().canvas.focused(&h.ctx), "canvas starts unfocused before opening the menu");
+    h.state_mut().canvas.context_request = Some(super::context_menu::ContextAsk::AtCaret);
+    steps(&mut h, 3);
+    assert!(h.state().canvas.context_menu_open, "context menu opens");
+    let suggestion = h
+        .state()
+        .canvas
+        .context_issue
+        .as_ref()
+        .and_then(|v| v.get("suggestions"))
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .expect("spelling suggestion for 'teh'")
+        .to_string();
+    let btn = h.get_by_label(&suggestion).rect().center();
+    h.event(egui::Event::PointerMoved(btn));
+    steps(&mut h, 2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: btn, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.app_frame();
+    }
+    h.event(egui::Event::Text("x".into()));
+    h.app_frame();
+    assert!(!h.state().canvas.context_menu_open, "applying a suggestion closes the context menu");
+    assert_eq!(
+        h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body),
+        format!("{suggestion}x"),
+        "a character typed in the frame after the click lands in the document"
+    );
+    assert!(h.state().canvas.focused(&h.ctx), "canvas takes focus after applying a spelling suggestion even when opened unfocused");
 }
