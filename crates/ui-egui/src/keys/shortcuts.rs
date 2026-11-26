@@ -97,14 +97,3 @@ pub fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
     s.push_str(key);
     s
 }
-
-/// F1–F12: shortcuts on these work without the canvas focused.
-pub fn is_function_key(key: Key) -> bool {
-    matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 | Key::F11 | Key::F12)
-}
-
-/// Whether a key runs its shortcut with the canvas unfocused (after a ribbon click, say): Mod and
-/// Alt shortcuts (Alt+Q reaches Search from anywhere, as in Word, #819) and the function keys.
-pub fn is_global_shortcut(key: Key, m: Modifiers) -> bool {
-    m.command || m.alt || is_function_key(key)
-}
