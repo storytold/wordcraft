@@ -3178,6 +3178,32 @@ fn task_panes_share_an_edge_close_and_keep_the_styles_place() {
     assert!(junk.session.view.nav_pane, "the rest of the file still loads");
 }
 
+/// #2526: the Navigation pane stays as the person left it at the next launch, and a
+/// `ui.json` from before the setting leaves it closed.
+#[test]
+fn navigation_pane_visibility_survives_restart() {
+    let mut first = app();
+    assert!(!first.session.view.nav_pane);
+    first.session.view.nav_pane = true;
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(second.session.view.nav_pane, "the pane is open again");
+
+    let mut closed = app();
+    closed.session.view.nav_pane = true;
+    closed.session.view.nav_pane = false;
+    let saved = serde_json::to_vec(&closed.prefs()).unwrap();
+    let mut third = app();
+    third.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!third.session.view.nav_pane, "a closed pane stays closed");
+
+    let mut old = app();
+    old.apply_prefs(serde_json::from_str(r#"{"navTab": "headings"}"#).unwrap());
+    assert!(!old.session.view.nav_pane, "no saved value: closed");
+}
+
 /// The same across windows: Check spelling as you type turned off in a second window on a document
 /// stays off when the first window's own view of it comes back, in a window on another document,
 /// back in the second window, and in the saved settings (#5740).
