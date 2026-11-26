@@ -433,6 +433,7 @@ pub(super) fn make_face(
     let upem = m.units_per_em.max(1) as f64;
     Some(FontFace {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        owner: 0,
         family,
         style,
         legacy_family,

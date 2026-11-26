@@ -506,3 +506,20 @@ fn a_woff2_collection_font_listing_a_table_twice_is_refused() {
     let file = woff2_collection(3, &[vec![0, 1, 2], vec![0, 1, 2]]);
     assert_ne!(decode_font_file(&file), Err(UserFontError::BadWebFont(BAD_COLLECTION.into())));
 }
+
+/// A family some open document embeds can still be installed: that copy is the document's own,
+/// so without the installed font other documents would go on substituting it. The embedding
+/// document keeps its copy.
+#[test]
+fn a_family_a_document_embeds_can_still_be_installed() {
+    let db = db();
+    let owner = crate::DocumentFonts::new_owner();
+    let font = renamed("SourceSans3-Regular.ttf", FAMILY);
+    db.add_document_fonts(vec![(font.clone(), FAMILY.to_string())], owner);
+    assert!(!db.has_family(FAMILY));
+    db.install_font("Userfont-Regular.ttf", &font).unwrap();
+    assert!(db.has_family(FAMILY), "installed for every document");
+    assert_eq!(db.face(FAMILY, "Regular").owner, 0);
+    let _doc = crate::DocumentFonts::enter(owner);
+    assert_eq!(db.face(FAMILY, "Regular").owner, owner, "the embedding document keeps its copy");
+}
