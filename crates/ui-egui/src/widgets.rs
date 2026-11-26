@@ -2,8 +2,9 @@
 
 pub(crate) mod font_box;
 mod hint;
-#[cfg(test)]
-mod tests;
 
 pub(crate) use font_box::{font_box, font_picker};
 pub(crate) use hint::command_hint;
+
+#[cfg(test)]
+mod tests;
