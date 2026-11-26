@@ -94,9 +94,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         let carried = deleted_char_props(s, &a, &f);
         s.sel = Selection { anchor: a.clone(), focus: f };
         let effect = delete_selection_effect(s)?;
-        if let Some(l) = lead_in {
-            super::lead_in::keep_after_deleting(s, l);
-        }
+        let lead_in_goes_on = lead_in.is_some_and(|l| super::lead_in::keep_after_deleting(s, l));
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
             classified: true,
             content_changed: effect.content_changed,
@@ -106,7 +104,8 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         });
         // As in Word, text typed next takes the deleted character's formatting until the caret
         // moves (#6518): it applies here only, so whatever puts the caret elsewhere drops it.
-        if effect.content_changed && s.sel.is_collapsed() && s.sel.focus == a {
+        // A lead-in that goes on keeps its own formatting.
+        if !lead_in_goes_on && effect.content_changed && s.sel.is_collapsed() && s.sel.focus == a {
             s.pending_at = carried.as_ref().map(|_| a.clone());
             s.pending = carried;
         }
@@ -310,6 +309,9 @@ pub(super) fn delete_sentence_back(s: &mut Session, v: &Value) -> CmdResult {
     let Some((previous, _)) = para.text.get(..f.off).and_then(|text| text.char_indices().next_back()) else { return sel_result(s) };
     let start = para.sentence_at(previous).0;
     let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
+    // Formatting a Backspace just carried over belongs to that deletion, not this one.
+    s.pending = None;
+    s.pending_at = None;
     s.sel = Selection { anchor: Pos { off: start, ..f.clone() }, focus: f };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;

@@ -165,14 +165,17 @@ pub(crate) fn resync(s: &mut Session) {
 }
 
 /// After Backspace or Delete in a lead-in that was being typed: the lead-in goes on at the caret
-/// while that is in the lead-in's paragraph with no punctuation character before it.
-pub(super) fn keep_after_deleting(s: &mut Session, l: LeadIn) {
+/// while that is in the lead-in's paragraph with no punctuation character before it. Returns
+/// whether the lead-in goes on.
+pub(super) fn keep_after_deleting(s: &mut Session, l: LeadIn) -> bool {
     let f = s.sel.focus.clone();
     let punctuated = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).is_none_or(|t| t.chars().any(is_punctuation));
-    if s.sel.is_collapsed() && !punctuated && l.at.story == f.story && l.at.path == f.path {
+    let kept = s.sel.is_collapsed() && !punctuated && l.at.story == f.story && l.at.path == f.path;
+    if kept {
         s.pending = Some(l.lead.clone());
         s.lead_in = Some(LeadIn { at: f, ..l });
     }
+    kept
 }
 
 /// Put back the lead-in of a window's view. When the document changed since the view was taken,
@@ -189,10 +192,13 @@ pub(crate) fn put_back(s: &mut Session, lead_in: Option<LeadIn>, current: bool) 
 }
 
 /// A lead-in that no longer applies at the caret: when typing still uses its formatting,
-/// typing goes back to the formatting picked before the lead-in started.
+/// typing goes back to the formatting picked before the lead-in started, or to the formatting it
+/// would have had without the option when none was picked. A caret that has moved away from the
+/// lead-in takes the formatting where it lands.
 fn drop_lead(s: &mut Session, l: LeadIn) {
     if s.pending.as_ref() == Some(&l.lead) {
-        s.pending = l.before;
+        let at_lead_in = s.sel.is_collapsed() && s.sel.focus == l.at;
+        s.pending = if at_lead_in { l.before.or(Some(l.body)) } else { None };
     }
 }
 

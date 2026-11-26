@@ -1809,6 +1809,69 @@ fn backspace_or_delete_in_a_lead_in_keeps_the_lead_in() {
 }
 
 #[test]
+fn delete_previous_sentence_after_backspace_keeps_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext Wrong");
+    run(&mut s, "text.backspace", json!({}));
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    typ(&mut s, "Item: more");
+    let text = s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).unwrap_or_default();
+    assert_eq!(text, "Item: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, text.len() - 1).bold), (Some(true), None));
+}
+
+#[test]
+fn turning_the_option_off_mid_lead_in_types_the_body_formatting() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNe");
+    run(&mut s, "tools.autocorrect", json!({"formatListItemStart": false}));
+    typ(&mut s, "xt more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 1).bold, char_at(&s, 1, 5).bold), (Some(true), Some(true), None));
+}
+
+#[test]
+fn backspace_in_a_lead_in_typed_in_another_language_keeps_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    crate::cmd::type_text_with_lang(&mut s, "Nex", Some("fr-FR")).unwrap();
+    typ(&mut s, "\u{8}xt: more");
+    let text = s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).unwrap_or_default();
+    assert_eq!(text, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+}
+
+#[test]
+fn a_caret_moved_out_of_the_lead_in_types_the_formatting_where_it_lands() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    format_then_end(&mut s, "explanation", "format.italic", json!({}), 0);
+    typ(&mut s, "\nNe");
+    let inside = json!({"block": 0, "off": 12});
+    run(&mut s, "select.range", json!({"anchor": inside, "focus": inside}));
+    typ(&mut s, "x");
+    assert_eq!(char_at(&s, 0, 12).italic, Some(true));
+}
+
+#[test]
+fn formatting_picked_before_a_lead_in_does_not_follow_a_moved_caret() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    run(&mut s, "format.underline", json!({}));
+    typ(&mut s, "\nNe");
+    s.set_selection(crate::doc_state::Selection::caret(Pos::body(0, 12)));
+    typ(&mut s, "x");
+    assert_eq!(char_at(&s, 0, 12).underline, None);
+}
+
+#[test]
 fn a_tracked_lead_in_is_an_insertion_and_locked_formatting_is_not_repeated() {
     let mut s = with_list_lead_in();
     typ(&mut s, "* Label: explanation");
