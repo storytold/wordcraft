@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-21 · **Change:** trivial (table rows split across pages: a cell's first paragraph on the page can split even when only one line fits, if the row starts at the top, with or without its own headers, or continues from the previous page (#6823)); previously trivial (release wrap areas when strict column balancing moves the anchor line, #6821); previously trivial (balanced columns keep lines together from Word 2013's layout, #6821); previously trivial (progress log: TIFF picture chooser, drop and pasted-path routing, #6704); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-23 · **Change:** trivial (#4309: Visual-diff rejects unknown options before opening inputs or creating output, including a misspelled --private; explicit -- separates option-like paths.); previously trivial (table rows split across pages: a cell's first paragraph on the page can split even when only one line fits, if the row starts at the top, with or without its own headers, or continues from the previous page (#6823)); previously trivial (release wrap areas when strict column balancing moves the anchor line, #6821); previously trivial (balanced columns keep lines together from Word 2013's layout, #6821); previously trivial (progress log: TIFF picture chooser, drop and pasted-path routing, #6704); previously minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -150,6 +150,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-11-23: Visual-diff rejects unknown options before opening inputs or creating output, including a misspelled --private; explicit -- separates option-like paths. (#4309). Readiness estimates unchanged.
 
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
@@ -930,6 +932,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 - 2026-11-15: Layout: the first paragraph of a table cell on a page can split even when only one line fits, if the row starts at the top (possibly below its own headers) or continues from the previous page, and a non-exact row marked Can't Split that is taller than a page splits at the page's end, as in Word, instead of the row running off the bottom of the page (#6823). Readiness estimates unchanged.
 
 ## Revision history
+
+- 2026-11-23: Visual-diff rejects unknown options before opening inputs or creating output, including a misspelled --private; explicit -- separates option-like paths. (#4309).
 
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >
