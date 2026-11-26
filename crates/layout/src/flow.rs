@@ -67,7 +67,7 @@ fn place_para_joined(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, (block,
     q.props.space_before = Some(0.0);
     q.props.space_before_auto = Some(false);
     let outer = ctx.joined.replace(Joining::new(q.rev, 0.0));
-    let (gap, area) = j.fit(ctx, &q, pb.col_w(), None);
+    let (gap, areas) = j.fit(ctx, &q, pb.col_w(), None);
     if gap > 0.0 {
         q.props.space_before = Some(gap);
         ctx.joined = Some(Joining::new(q.rev, gap));
@@ -75,12 +75,10 @@ fn place_para_joined(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, (block,
     pb.y = j.top;
     pb.prev = None;
     pb.unmark_block();
-    pb.excl.push(area.clone());
+    pb.excl.extend(areas.iter().cloned());
     place_para_alone(ctx, pb, &q, block, body_top);
     ctx.joined = outer;
-    if let Some(k) = pb.excl.iter().position(|a| a.0 == area.0 && !a.1 && a.2.is_none() && a.3 == area.3) {
-        pb.excl.remove(k);
-    }
+    Joint::unfit(&areas, &mut pb.excl);
     // The shared line is at least as tall as the first paragraph's, with its bottom border: what
     // follows starts below it.
     if (pb.pages.len(), pb.col) == (j.page, j.col) {

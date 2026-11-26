@@ -792,21 +792,37 @@ impl Joint {
 
     /// How the next paragraph `q`, laid out `width` wide, goes on from here: how far below the
     /// shared line's top it starts (its first line's text sits on this paragraph's baseline, not
-    /// above it), and the area its first line keeps clear of, this paragraph's text, down to the
-    /// bottom of that line only.
-    pub(crate) fn fit(&self, ctx: &mut Ctx, q: &Paragraph, width: f32, table: Option<&para::CellText>) -> (f32, WrapArea) {
+    /// above it), and the areas it keeps clear of: its first line, this paragraph's text, down to
+    /// the bottom of that line only; its later lines, the rest of the shared line (a heading's,
+    /// taller than the text going on from it), with the room for its bottom border (Word).
+    pub(crate) fn fit(&self, ctx: &mut Ctx, q: &Paragraph, width: f32, table: Option<&para::CellText>) -> (f32, Vec<WrapArea>) {
         let eq = ctx.eq_count;
         let probe = again(ctx, eq, |ctx| ctx.para_labelled(q, width, table, &[], None));
         let (gap, height) = probe.lines.first().map_or((0.0, self.height), |l| ((self.baseline - (l.baseline - l.top)).max(0.0), l.height));
         let rect = Rect::new(self.left, self.top, (self.end - self.left).max(0.0), (gap + height - 0.01).max(0.01));
-        (gap, (rect, false, None, WrapText::Right, false))
+        let mut areas = vec![(rect, false, None, WrapText::Right, false)];
+        // Just below the first line, so that line never meets it; a row it meets moves below it.
+        let below = self.top + gap + height + 0.01;
+        if self.bottom() > below {
+            areas.push((Rect::new(self.left, below, width.max(0.01), self.bottom() - below), true, None, WrapText::BothSides, false));
+        }
+        (gap, areas)
+    }
+
+    /// The areas [`Joint::fit`] gave taken out of `excl` again, the paragraph laid out.
+    pub(crate) fn unfit(areas: &[WrapArea], excl: &mut Vec<WrapArea>) {
+        for area in areas {
+            if let Some(k) = excl.iter().position(|a| a.0 == area.0 && a.1 == area.1 && a.2.is_none() && a.3 == area.3) {
+                excl.remove(k);
+            }
+        }
     }
 
     /// Paragraph `p` of a box `width` wide going on from here, unless a page break comes before
     /// it, it runs right to left or it is a text frame (`frames`: placed apart, sharing no line):
     /// without its space before, as [`Joint::fit`] lays it out.
     fn take_up(self, ctx: &mut Ctx, p: &Paragraph, (width, frames): (f32, bool), table: Option<&para::CellText>) -> Option<TakenUp> {
-        let own = ctx.doc.styles.resolve_para(&p.props);
+        let own = ctx.doc.styles.resolve_para_in(&p.props, table.map(|t| &t.para));
         if own.page_break_before || own.bidi || (frames && own.frame.is_some()) {
             return None;
         }
@@ -814,33 +830,32 @@ impl Joint {
         para.props.space_before = Some(0.0);
         para.props.space_before_auto = Some(false);
         ctx.joined = Some(Joining::new(para.rev, 0.0));
-        let (gap, area) = self.fit(ctx, &para, width, table);
-        Some(TakenUp { joint: self, para, gap, area })
+        let (gap, areas) = self.fit(ctx, &para, width, table);
+        Some(TakenUp { joint: self, para, gap, areas })
     }
 }
 
 /// A paragraph of a box going on from a [`Joint`]: the paragraph without its space before, how
-/// far below the shared line's top it starts and the area its first line keeps clear of.
+/// far below the shared line's top it starts and the areas its lines keep clear of.
 struct TakenUp {
     joint: Joint,
     para: Paragraph,
     gap: f32,
-    area: WrapArea,
+    areas: Vec<WrapArea>,
 }
 
 impl TakenUp {
-    /// Where it starts: `y` below the shared line's top, its first line keeping clear of that text.
+    /// Where it starts: `y` below the shared line's top, its lines keeping clear of that line.
     fn start(taken: Option<&TakenUp>, y: &mut f32, excl: &mut Vec<WrapArea>) {
         let Some(t) = taken else { return };
         *y = t.joint.top + t.gap;
-        excl.push(t.area.clone());
+        excl.extend(t.areas.iter().cloned());
     }
 
-    /// Its first line laid out: the area that line kept clear of comes out of `excl`.
+    /// Its lines laid out: the areas they kept clear of come out of `excl`.
     fn clear(taken: Option<&TakenUp>, excl: &mut Vec<WrapArea>) {
-        let Some(t) = taken else { return };
-        if let Some(k) = excl.iter().position(|a| a.0 == t.area.0 && !a.1 && a.2.is_none() && a.3 == t.area.3) {
-            excl.remove(k);
+        if let Some(t) = taken {
+            Joint::unfit(&t.areas, excl);
         }
     }
 

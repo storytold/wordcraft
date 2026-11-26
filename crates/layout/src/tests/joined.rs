@@ -92,23 +92,58 @@ fn a_joined_paragraphs_drawings_are_relative_to_the_shared_line() {
 #[test]
 fn a_text_frame_after_a_hidden_mark_is_not_joined() {
     // A framed paragraph is placed apart, so it shares no line with the one before: its number is
-    // drawn (it is counted either way).
-    let mut d = Document::from_text("Alpha\n7");
-    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
-    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 1), &|p| p.numbering = Some(NumRef { num: id, level: 0 })).unwrap();
-    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
-    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.frame = Some(TextFrame {
-        x_align: Some("right".into()),
-        h_anchor: "text".into(),
-        v_anchor: "text".into(),
-        wrap: "around".into(),
-        ..Default::default()
-    });
-    in_cell(&mut d);
-    let l = lay(&d);
-    let label = l.pages[0].items.iter().find_map(|it| match it {
-        Placed::Lines { path, para, .. } if path.0 == [0, 0, 0, 1] => Some(para.label.is_some()),
-        _ => None,
-    });
-    assert_eq!(label, Some(true), "the framed paragraph keeps its number");
+    // drawn (it is counted either way). The frame is its own, or given by the table's style.
+    let frame =
+        TextFrame { x_align: Some("right".into()), h_anchor: "text".into(), v_anchor: "text".into(), wrap: "around".into(), ..Default::default() };
+    for from_style in [false, true] {
+        let mut d = Document::from_text("Alpha\n7");
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 1), &|p| p.numbering = Some(NumRef { num: id, level: 0 })).unwrap();
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+        // From the table's style, the frame is given to "Alpha" too: zero dimensions cancel it there.
+        let (at, own) = if from_style { (0, TextFrame { w: Some(0.0), h: Some(0.0), ..frame.clone() }) } else { (1, frame.clone()) };
+        d.para_mut(StoryRef::Body, &Path::top(at)).unwrap().props.frame = Some(own);
+        in_cell(&mut d);
+        if from_style {
+            Arc::make_mut(&mut d.styles).get_mut("TableGrid").expect("Table Grid").para.frame = Some(frame.clone());
+            if let Some(Block::Table(t)) = d.body.first_mut().map(Arc::make_mut) {
+                t.props.style = Some("TableGrid".into());
+            }
+        }
+        let l = lay(&d);
+        let label = l.pages[0].items.iter().find_map(|it| match it {
+            Placed::Lines { path, para, .. } if path.0 == [0, 0, 0, 1] => Some(para.label.is_some()),
+            _ => None,
+        });
+        assert_eq!(label, Some(true), "the framed paragraph keeps its number (frame from the table style: {from_style})");
+    }
+}
+
+#[test]
+fn a_joined_paragraphs_later_lines_start_below_a_taller_shared_line() {
+    // A heading whose mark is hidden, then body text going on from it: the text's first line
+    // shares the heading's line; its later lines start below that line, not inside it (Word).
+    for cell in [false, true] {
+        let mut d = Document::from_text(&format!("Heading\n{}", "body text ".repeat(40)));
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, 7), &|c| c.size = Some(40.0)).unwrap();
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+        if cell {
+            in_cell(&mut d);
+        }
+        let l = lay(&d);
+        let lines = hit::page_lines(&l.pages[0], StoryRef::Body);
+        let heading = lines.iter().find(|h| h.path.0.last() == Some(&0)).unwrap();
+        let body: Vec<_> = lines.iter().filter(|h| h.path.0.last() == Some(&1)).collect();
+        assert!(body.len() > 2, "setup: the body text runs to several lines ({cell})");
+        assert!(body[0].top < heading.bottom - 1.0, "the first line shares the heading's line ({cell})");
+        for line in &body[1..] {
+            assert!(
+                line.top >= heading.bottom - 0.01,
+                "line {} at {} starts inside the heading's line, ending {} ({cell})",
+                line.li,
+                line.top,
+                heading.bottom
+            );
+        }
+    }
 }
