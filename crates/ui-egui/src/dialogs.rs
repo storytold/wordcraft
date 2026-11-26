@@ -69,7 +69,7 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         "tabs" | "borders" | "pageBorders" | "shading" => dialogs_para::open(app, name, params, parent),
         "defineList" | "trackChangesOptions" => dialogs_lists::open(app, name, params, parent),
         "dateTime" | "columns" | "symbol" | "specialCharacters" | "field" | "insertSmartArt" | "changeChartType" | "insertChart" | "chartData"
-        | "dropCap" => dialogs_insert::open(app, name, params, parent),
+        | "dropCap" | "formatAxis" | "formatSeries" => dialogs_insert::open(app, name, params, parent),
         "pageSetup" => page_setup::open(app, name, params, parent),
         "link" => link::open(app, name, params, parent),
         "bookmark" | "icons" => bookmarks::open(app, name, params, parent),
