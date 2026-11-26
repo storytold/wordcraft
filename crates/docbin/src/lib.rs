@@ -1,7 +1,8 @@
-//! WordCraft adapter for reading Word 97-2003 binary documents (`.doc`, [MS-DOC]).
+//! WordCraft adapter for reading and writing Word 97-2003 binary documents (`.doc`, [MS-DOC]).
 //!
 //! The file-format implementation lives in `craft-doc-binary`. This crate adapts the shared
-//! model to WordCraft's application model while keeping the public read and password APIs stable.
+//! model to WordCraft's application model, both ways, while keeping the public read, write and
+//! password APIs stable.
 //! Stories are converted paragraph by paragraph, and embedded media buffers are moved without a
 //! full-document serialization copy.
 //!
@@ -10,7 +11,7 @@
 mod model_bridge;
 
 pub use craft_doc_binary::DocbinError;
-pub use model_bridge::from_shared_model;
+pub use model_bridge::{from_shared_model, to_shared_model};
 
 /// Whether the input is a readable Word 97-2003 document protected by a password.
 pub fn is_encrypted(bytes: &[u8]) -> bool {
@@ -26,6 +27,12 @@ pub fn read(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocbinError> {
 pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<wordcraft_doc::Document, DocbinError> {
     let shared = craft_doc_binary::read_with_password(bytes, password)?;
     from_shared_model(shared)
+}
+
+/// Write WordCraft's document as a Word 97-2003 binary document. What the format keeps, and
+/// what it leaves out (logged once per kind), is `craft_doc_binary::write`'s.
+pub fn write(doc: &wordcraft_doc::Document) -> Result<Vec<u8>, DocbinError> {
+    craft_doc_binary::write(&to_shared_model(doc)?)
 }
 
 #[cfg(test)]
