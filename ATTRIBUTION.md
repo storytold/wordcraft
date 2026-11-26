@@ -86,7 +86,15 @@ The UI icons are SVG files in `crates/ui-egui/icons/`, one row each below. Gener
 | `crates/ui-egui/icons/blockAuthors.svg` | WordCraft contributors | original: exported from WordCraft's own code-drawn icons (`crates/ui-egui/src/icons.rs` before the craft port), text glyphs redrawn as paths | MIT OR Apache-2.0 | UI icon |
 | `crates/ui-egui/icons/bold.svg` | WordCraft contributors | original: exported from WordCraft's own code-drawn icons (`crates/ui-egui/src/icons.rs` before the craft port), text glyphs redrawn as paths | MIT OR Apache-2.0 | UI icon |
 | `crates/ui-egui/icons/bookmark.svg` | WordCraft contributors | original: exported from WordCraft's own code-drawn icons (`crates/ui-egui/src/icons.rs` before the craft port), text glyphs redrawn as paths | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderAll.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderBottom.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderInside.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderLeft.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderNone.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderOutside.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
 | `crates/ui-egui/icons/borderPainter.svg` | WordCraft contributors | original: exported from WordCraft's own code-drawn icons (`crates/ui-egui/src/icons.rs` before the craft port), text glyphs redrawn as paths | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderRight.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
+| `crates/ui-egui/icons/borderTop.svg` | WordCraft contributors | original: 20×20 SVG icon drawn for WordCraft (#2718) | MIT OR Apache-2.0 | UI icon |
 | `crates/ui-egui/icons/borders.svg` | WordCraft contributors | original: exported from WordCraft's own code-drawn icons (`crates/ui-egui/src/icons.rs` before the craft port), text glyphs redrawn as paths | MIT OR Apache-2.0 | UI icon |
 | `crates/ui-egui/icons/breaks.svg` | WordCraft contributors | original: exported from WordCraft's own code-drawn icons (`crates/ui-egui/src/icons.rs` before the craft port), text glyphs redrawn as paths | MIT OR Apache-2.0 | UI icon |
 | `crates/ui-egui/icons/bringForward.svg` | WordCraft contributors | original: exported from WordCraft's own code-drawn icons (`crates/ui-egui/src/icons.rs` before the craft port), text glyphs redrawn as paths | MIT OR Apache-2.0 | UI icon |

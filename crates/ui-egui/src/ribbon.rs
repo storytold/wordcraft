@@ -41,6 +41,7 @@ pub(crate) use common::weight_menu;
 pub(crate) use context_menu::command_menu;
 use design::design;
 use draw::draw;
+pub(crate) use home::border_kind;
 use home::home;
 use insert::insert;
 #[cfg(test)]
