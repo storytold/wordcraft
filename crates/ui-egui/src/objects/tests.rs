@@ -1053,6 +1053,287 @@ fn a_dragged_objects_snap_lines_include_the_page_margins_and_a_neighbouring_obje
     assert!(!has_target(&targets, Axis::Y, SnapKind::LayerEdge, me.rect.x), "the dragged object is no target of its own drag: {targets:?}");
 }
 
+/// #7749: empty targets, negative tolerance, disabled alignment guides, and hostile non-finite
+/// page/margin/object/moving geometry never produce non-finite snap targets, emit snap lines, or
+/// move a dragged object.
+#[test]
+fn nothing_to_snap_to() {
+    use craft::behavior::geometry::SnapTargets;
+    use egui::{Event, PointerButton};
+    use wordcraft_geom::{Point as GeomPoint, Rect as GeomRect, Spin};
+    use wordcraft_layout::{Page, Placed};
+
+    let moving = DocRect::new(100.0, 200.0, 150.0, 220.0);
+    // Empty target set and negative tolerance never move anything.
+    assert_eq!(SnapTargets::new().snap_rect(moving, 6.0), (Vec2::ZERO, Vec::new()));
+    let mut single = SnapTargets::new();
+    single.add(SnapTarget::new(Axis::Y, 99.0, SnapKind::Guide));
+    assert_eq!(single.snap_rect(moving, -1.0), (Vec2::ZERO, Vec::new()));
+
+    // Non-finite page dimensions or markup yield no targets.
+    for (w, h, markup) in [
+        (f32::NAN, 792.0, 0.0),
+        (f32::INFINITY, 792.0, 0.0),
+        (612.0, f32::NAN, 0.0),
+        (612.0, f32::INFINITY, 0.0),
+        (612.0, 792.0, f32::NAN),
+        (612.0, 792.0, f32::NEG_INFINITY),
+    ] {
+        let pg = Page { w, h, markup, body: GeomRect::new(72.0, 72.0, 468.0, 648.0), ..Page::default() };
+        assert!(snap_targets(&pg, None).is_empty(), "non-finite page ({w}, {h}, {markup}) must yield no targets");
+    }
+
+    // Non-finite margins or floating objects on an otherwise valid page are dropped so they cannot
+    // poison snapping onto valid targets on the same page.
+    let placed_obj = |rect: GeomRect, spin: Spin, off: usize| Placed::Object {
+        rect,
+        spin,
+        story: StoryRef::Body,
+        path: wordcraft_doc::Path::top(0),
+        off,
+        text_box: None,
+        wrap: Wrap::InFrontOfText,
+        origin: GeomPoint::default(),
+        group_boxes: Vec::new(),
+    };
+    let mut pg = Page { w: 612.0, h: 792.0, markup: 0.0, body: GeomRect { x: f32::NAN, y: 72.0, w: 468.0, h: f32::INFINITY }, ..Page::default() };
+    pg.items.push(placed_obj(GeomRect { x: f32::NAN, y: 200.0, w: 50.0, h: 20.0 }, Spin::default(), 0));
+    pg.items.push(placed_obj(GeomRect { x: 100.0, y: f32::INFINITY, w: 50.0, h: 20.0 }, Spin::default(), 1));
+    pg.header.push(placed_obj(GeomRect::new(100.0, 200.0, 50.0, 20.0), Spin { deg: f32::NAN, ..Spin::default() }, 2));
+    pg.footer.push(placed_obj(GeomRect::new(10.0, 20.0, 3e38, 3e38), Spin::new(45.0, false, false), 3));
+    // Valid neighbouring floating object at x = 300..380, y = 400..440.
+    pg.items.push(placed_obj(GeomRect::new(300.0, 400.0, 80.0, 40.0), Spin::default(), 4));
+
+    let targets = snap_targets(&pg, None);
+    assert!(!targets.is_empty(), "valid page and neighbour targets remain");
+    assert!(!has_target(&targets, Axis::X, SnapKind::Guide, 72.0), "non-finite body margin dropped: {targets:?}");
+    assert!(!has_target(&targets, Axis::Y, SnapKind::LayerEdge, 100.0), "non-finite objects dropped: {targets:?}");
+    assert!(!has_target(&targets, Axis::X, SnapKind::LayerEdge, 200.0), "non-finite objects dropped: {targets:?}");
+    assert!(!has_target(&targets, Axis::Y, SnapKind::LayerEdge, 0.0), "rotated-bounds overflow dropped: {targets:?}");
+    assert!(!has_target(&targets, Axis::X, SnapKind::LayerEdge, 0.0), "rotated-bounds overflow dropped: {targets:?}");
+    assert!(
+        targets.iter().all(|t| t.position.is_finite() && t.span.is_none_or(|(a, b)| a.is_finite() && b.is_finite() && a <= b)),
+        "all emitted snap targets and spans must be finite: {targets:?}"
+    );
+    let mut snap_set = SnapTargets::new();
+    for t in targets {
+        snap_set.add(t);
+    }
+    let (delta, lines) = snap_set.snap_rect(DocRect::new(297.0, 402.0, 347.0, 422.0), 6.0);
+    assert!(delta.x.is_finite() && delta.y.is_finite(), "snap delta must stay finite: {delta:?}");
+    assert!((delta.x - 3.0).abs() < 1e-6 && (delta.y + 2.0).abs() < 1e-6, "valid neighbour still snaps: {delta:?}");
+    assert!(lines.iter().all(|l| l.position.is_finite()), "snap lines must be finite: {lines:?}");
+
+    // Turning alignment guides off via `ui.alignmentGuides` disables snapping on a live drag.
+    let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+    app.run("view.commentsPane", json!({"value": false})).unwrap();
+    app.run("ui.alignmentGuides", json!({"value": false})).unwrap();
+    app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
+    app.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    let page = h.state_mut().session.layout().pages.first().map(|p| p.w - p.markup).unwrap();
+    let centre = page / 2.0;
+    let r = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let from = crate::canvas::page_to_screen(h.state_mut(), 0, cx, cy).unwrap();
+    let to = crate::canvas::page_to_screen(h.state_mut(), 0, centre + 1.5, cy).unwrap();
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.event(Event::PointerMoved(from));
+    h.event(button(from, true));
+    h.run_steps(1);
+    for at in [from + egui::vec2(0.0, 40.0), to + egui::vec2(0.0, 40.0), to] {
+        h.event(Event::PointerMoved(at));
+        h.run_steps(1);
+    }
+    assert!(h.state().canvas.object_gesture().is_some(), "dragging");
+    h.event(button(to, false));
+    h.run_steps(3);
+    let landed = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+    assert!((landed.x + landed.w / 2.0 - (centre + 1.5)).abs() < 0.01, "disabled guides leave drop unsnapped: {landed:?}");
+
+    assert_snap_move_guards_non_finite_moving_bounds();
+}
+
+/// #7749: `ObjectGesture::snap_move` leaves `self.rect` unchanged and emits no snap lines when the
+/// moving object's bounds or mapped corners are non-finite, while snapping finite bounds onto the
+/// same page targets.
+fn assert_snap_move_guards_non_finite_moving_bounds() {
+    use std::collections::VecDeque;
+
+    use craft::behavior::geometry::SnapLine;
+    use craft::behavior::kurbo::Size;
+    use craft::behavior::value::CancelReason;
+    use craft::pages::ui::{PageSnap, PageSource, PageView, PageViewState};
+    use craft::ui::canvas::{CanvasTool, ToolAction, ToolHost, ToolPath};
+    use craft::ui::primitives::textures::{Revision, ThumbRender, ThumbRequest, ThumbSource};
+    use craft::ui::style::DataColor;
+    use egui::{Color32, Event, PointerButton};
+    use wordcraft_geom::{Point as GeomPoint, Rect as GeomRect, Spin};
+
+    struct BlankPage;
+    impl ThumbSource<usize> for BlankPage {
+        fn revision(&self, _: &usize, _: &ThumbRequest) -> Revision {
+            Revision::new(0)
+        }
+        fn render(&self, _: &usize, _: &ThumbRequest) -> ThumbRender {
+            ThumbRender::Blank
+        }
+    }
+    impl PageSource for BlankPage {
+        fn page_count(&self) -> usize {
+            1
+        }
+        fn page_size(&self, _: usize) -> Size {
+            Size::new(612.0, 792.0)
+        }
+    }
+
+    struct Case {
+        label: &'static str,
+        rect: GeomRect,
+        spin: Spin,
+        should_snap: bool,
+    }
+    struct Outcome {
+        label: &'static str,
+        before: GeomRect,
+        after: GeomRect,
+        snapped: Vec<SnapLine>,
+        should_snap: bool,
+    }
+    struct ProbeState {
+        view: PageViewState,
+        page_center: Option<Pos2>,
+        pending: VecDeque<Case>,
+        outcomes: Vec<Outcome>,
+    }
+
+    struct SnapMoveProbe<'a, 'b> {
+        body: &'b PageBody<'b>,
+        pending: &'a mut VecDeque<Case>,
+        ran: Option<(&'static str, GeomRect, GeomRect, bool)>,
+    }
+    impl CanvasTool for SnapMoveProbe<'_, '_> {
+        fn press(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+            if let Some(case) = self.pending.pop_front() {
+                let mut gesture = ObjectGesture { to_page: 0, rect: case.rect, ..ObjectGesture::inert() };
+                let hit = ObjectHit {
+                    page: 0,
+                    rect: case.rect,
+                    spin: case.spin,
+                    story: StoryRef::Body,
+                    path: wordcraft_doc::Path::top(0),
+                    off: 0,
+                    text_box: None,
+                    wrap: Wrap::InFrontOfText,
+                    origin: GeomPoint::default(),
+                    member: None,
+                };
+                gesture.snap_move(self.body, cx, &hit, None);
+                self.ran = Some((case.label, case.rect, gesture.rect, case.should_snap));
+            }
+            ToolAction::Done
+        }
+        fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+        fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+        fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+        fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+        fn command_form(&self) -> ToolPath {
+            ToolPath::Command("snap_move probe")
+        }
+    }
+
+    let cases = VecDeque::from([
+        Case { label: "finite control snaps", rect: GeomRect::new(297.0, 402.0, 50.0, 20.0), spin: Spin::default(), should_snap: true },
+        Case {
+            label: "nan spin",
+            rect: GeomRect::new(297.0, 402.0, 50.0, 20.0),
+            spin: Spin { deg: f32::NAN, ..Spin::default() },
+            should_snap: false,
+        },
+        Case { label: "nan x", rect: GeomRect { x: f32::NAN, y: 402.0, w: 50.0, h: 20.0 }, spin: Spin::default(), should_snap: false },
+        Case { label: "inf y", rect: GeomRect { x: 297.0, y: f32::INFINITY, w: 50.0, h: 20.0 }, spin: Spin::default(), should_snap: false },
+        Case { label: "nan w", rect: GeomRect { x: 297.0, y: 402.0, w: f32::NAN, h: 20.0 }, spin: Spin::default(), should_snap: false },
+        Case { label: "neg inf h", rect: GeomRect { x: 297.0, y: 402.0, w: 50.0, h: f32::NEG_INFINITY }, spin: Spin::default(), should_snap: false },
+        Case { label: "overflow right", rect: GeomRect::new(2e38, 402.0, 2e38, 20.0), spin: Spin::default(), should_snap: false },
+        Case {
+            label: "rotated extent overflow",
+            rect: GeomRect::new(10.0, 20.0, 3e38, 3e38),
+            spin: Spin::new(45.0, false, false),
+            should_snap: false,
+        },
+        Case {
+            label: "rotated origin overflow",
+            rect: GeomRect::new(-3e38, 0.0, 0.0, 3e38),
+            spin: Spin::new(90.0, false, false),
+            should_snap: false,
+        },
+    ]);
+    let case_count = cases.len();
+    let state = ProbeState { view: PageViewState::default(), page_center: None, pending: cases, outcomes: Vec::new() };
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+        |ui, state: &mut ProbeState| {
+            let snap = PageSnap::new(SnapOptions::default()).page(
+                0,
+                vec![
+                    SnapTarget::new(Axis::Y, 0.0, SnapKind::Bounds),
+                    SnapTarget::new(Axis::X, 0.0, SnapKind::Bounds),
+                    SnapTarget::new(Axis::Y, 300.0, SnapKind::LayerEdge),
+                    SnapTarget::new(Axis::X, 400.0, SnapKind::LayerEdge),
+                ],
+            );
+            PageView::new("SnapProbe", &BlankPage, &mut state.view, DataColor::new(Color32::WHITE)).snap(Some(snap)).show(ui, |ui, body| {
+                if state.page_center.is_none() {
+                    state.page_center = body.pages.first().map(|p| p.rect.center());
+                }
+                if let Some(pass) = body.pass {
+                    let mut probe = SnapMoveProbe { body, pending: &mut state.pending, ran: None };
+                    let reply = ToolHost::new().run(ui, pass, &mut probe);
+                    if let Some((label, before, after, should_snap)) = probe.ran {
+                        state.outcomes.push(Outcome { label, before, after, snapped: reply.snapped, should_snap });
+                    }
+                }
+            });
+        },
+        state,
+    );
+    h.run_steps(3);
+    let at = h.state().page_center.expect("probe page placed");
+    let button = |pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.event(Event::PointerMoved(at));
+    for _ in 0..case_count {
+        h.event(button(true));
+        h.run_steps(1);
+        h.event(button(false));
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().outcomes.len(), case_count, "all snap_move probe cases ran");
+    for o in &h.state().outcomes {
+        if o.should_snap {
+            assert!(!o.snapped.is_empty(), "{}: expected snap lines on finite control", o.label);
+            assert!((o.after.x - 300.0).abs() < 1e-4 && (o.after.y - 400.0).abs() < 1e-4, "{}: snapped to target, got {:?}", o.label, o.after);
+        } else {
+            assert!(o.snapped.is_empty(), "{}: expected no snap lines, got {:?}", o.label, o.snapped);
+            assert_eq!(
+                [o.after.x.to_bits(), o.after.y.to_bits(), o.after.w.to_bits(), o.after.h.to_bits()],
+                [o.before.x.to_bits(), o.before.y.to_bits(), o.before.w.to_bits(), o.before.h.to_bits()],
+                "{}: moving rect must stay unchanged ({:?} -> {:?})",
+                o.label,
+                o.before,
+                o.after,
+            );
+        }
+    }
+}
+
 /// #2277: the actual picture pixels follow the rotation handle before release, including
 /// pictures whose cached preview already contains a rotation and either reflection.
 #[test]
@@ -1131,11 +1412,20 @@ fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
                 }
             }
         }
-        // A second angle reuses the raster rather than regenerating it on pointer moves.
+        // A second angle reuses the raster rather than regenerating it on pointer moves. Only the preview texture
+        // counts: it is the one mesh painted faded (PREVIEW_SHARE), while page pictures are opaque and may be
+        // uploaded between the two moves.
         let textures = |h: &H| {
-            h.output().shapes.iter().filter_map(|s| if let egui::Shape::Mesh(m) = &s.shape { Some(m.texture_id) } else { None }).collect::<Vec<_>>()
+            h.output()
+                .shapes
+                .iter()
+                .filter_map(|s| if let egui::Shape::Mesh(m) = &s.shape { Some(m) } else { None })
+                .filter(|m| m.texture_id != egui::TextureId::default() && m.vertices.first().is_some_and(|v| v.color.a() < 255))
+                .map(|m| m.texture_id)
+                .collect::<Vec<_>>()
         };
         let before_move = textures(&h);
+        assert_eq!(before_move.len(), 1, "{initial}/{flip_h}/{flip_v}: exactly one faded preview mesh");
         let next = handle(target + 15.0);
         h.event(egui::Event::PointerMoved(next));
         steps(&mut h, 2);

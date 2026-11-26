@@ -113,6 +113,16 @@ fn batch_frame(h: &mut H, events: Vec<egui::Event>) {
     crate::test_harness::frame(h);
 }
 
+/// The modifiers of the platform's Mod key as egui reports them: Cmd on macOS (`mac_cmd` with `command`, and no
+/// Control), Ctrl elsewhere.
+fn mod_held() -> Modifiers {
+    if cfg!(target_os = "macos") {
+        Modifiers { mac_cmd: true, command: true, ..Default::default() }
+    } else {
+        Modifiers { ctrl: true, command: true, ..Default::default() }
+    }
+}
+
 /// One frame with `modifiers` held, then `events`.
 fn mods_frame(h: &mut H, modifiers: Modifiers, events: Vec<egui::Event>) {
     let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
@@ -224,7 +234,7 @@ fn user_assignments_become_overrides() {
 /// bold HTML, whichever of Shift and V is released first.
 #[test]
 fn mod_shift_v_released_shift_first_pastes_once() {
-    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let chord = Modifiers { shift: true, ..mod_held() };
     let ctrl = Modifiers { shift: false, ..chord };
     let mut h = alt_frame_app();
     run(&mut h, "text.insert", json!({"text": "source target"}));
@@ -241,7 +251,7 @@ fn mod_shift_v_released_shift_first_pastes_once() {
 #[test]
 fn a_global_mod_shift_v_leaves_the_next_mod_v_picture_paste_alone() {
     let mut h = picture_app();
-    let chord = Modifiers { ctrl: true, command: true, shift: true, ..Default::default() };
+    let chord = Modifiers { shift: true, ..mod_held() };
     mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
     let ctrl = Modifiers { shift: false, ..chord };
     mods_frame(&mut h, ctrl, vec![key_event(Key::V, false, ctrl)]);
@@ -274,6 +284,31 @@ fn copied_bold_app() -> WordApp {
     a
 }
 
+/// #5616: after Mod+Shift+V (Paste Formatting) and a paired browser paste event, a later
+/// menu-bar paste (`Event::Paste`) with no key or pointer press in between still keeps source
+/// formatting instead of reading the earlier Mod+Shift as Keep Text Only.
+#[test]
+fn the_ignored_paste_uses_up_its_paste_modifiers() {
+    let mut h = app_harness(copied_bold_app());
+    let chord = Modifiers { shift: true, ..mod_held() };
+    batch_frame(&mut h, vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord), egui::Event::Paste("x".into())]);
+    batch_frame(&mut h, vec![key_event(Key::V, false, Modifiers::NONE), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source target");
+    assert!(is_bold(&mut h));
+    run(&mut h, "select.text", json!({"text": "target"}));
+    offer(&h, vec![ClipItem::Html("<p><i>menu</i></p>".into()), ClipItem::Text("menu".into())]);
+    batch_frame(&mut h, vec![egui::Event::Paste("menu".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(body(h.state()), "source menu");
+    let state = run(&mut h, "format.state", json!({}));
+    assert_ne!(
+        state.get("bold").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "a later menu-bar paste does not inherit target's bold via Keep Text Only: {state}"
+    );
+    assert_eq!(state.get("italic").and_then(serde_json::Value::as_bool), Some(true), "a later menu-bar paste keeps clipboard formatting: {state}");
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
@@ -296,7 +331,7 @@ fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> egui::Event {
 /// whether V or Ctrl is released first, and a plain V is no paste.
 #[test]
 fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
-    let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+    let ctrl = mod_held();
 
     let mut h = alt_frame_app();
     run(&mut h, "text.insert", json!({"text": "x"}));
