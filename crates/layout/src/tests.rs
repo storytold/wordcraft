@@ -2472,10 +2472,14 @@ fn a_private_use_bullet_its_installed_font_lacks_draws_that_fonts_missing_glyph(
     }
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
     let l = lay(&d);
-    let label = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { para.label.clone() } else { None }).unwrap();
+    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let label = para.label.as_ref().unwrap();
     assert_eq!(label.text, pua.to_string(), "{:#X} in {font}", u32::from(pua));
     assert_eq!(label.glyphs.len(), 1);
     assert_eq!(label.glyphs[0].gid, 0, "the font's missing glyph");
+    // The missing glyph is the level font's own, not another face's glyph 0.
+    let run = label.runs.iter().find(|r| r.glyphs.contains(&0)).expect("a run over the bullet");
+    assert_eq!(para.styles[run.style as usize].face.id(), r.face.id(), "drawn from {font}");
 }
 
 #[test]
@@ -2504,6 +2508,39 @@ fn a_private_use_character_its_font_lacks_is_not_drawn_from_another_face() {
     assert_eq!(face.id(), text_face.id(), "{:#X} drawn from another face", u32::from(pua));
     assert!(glyphs.iter().any(|g| g.0 == 0), "{:#X} draws as the font's missing glyph", u32::from(pua));
     assert_eq!(d.plain_text(StoryRef::Body), format!("ab{pua}cd"));
+}
+
+#[test]
+fn a_private_use_character_its_run_font_lacks_draws_that_fonts_missing_glyph() {
+    crate::test_fonts();
+    // The missing glyph comes from the run's own font, not the document's default font: a run in
+    // Source Serif 4 (bundled, so always installed) inside a document whose body font differs.
+    let font = "Source Serif 4";
+    let serif = wordcraft_fonts::word::resolve(font, false, false);
+    assert!(!serif.substituted);
+    let default = wordcraft_fonts::word::resolve(&Document::default().settings.minor_font, false, false).face;
+    assert_ne!(default.id(), serif.face.id(), "the document's default font is another face");
+    let db = wordcraft_fonts::FontDb::global();
+    // Prefer a code another installed face has, so a fallback would be visible.
+    let pua = ('\u{F020}'..='\u{F0FF}')
+        .chain('\u{E000}'..='\u{F8FF}')
+        .find(|c| !serif.face.covers(*c) && db.fallback_styled(*c, serif.face.id(), false, false).is_some())
+        .unwrap_or('\u{F0A7}'); // Wingdings' square bullet
+    assert!(!serif.face.covers(pua));
+    let text = format!("ab{pua}cd");
+    let mut d = Document::from_text(&text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.font = Some(font.into())).unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let (face, glyphs) = items
+        .iter()
+        .find_map(|i| match i {
+            display::Draw::Glyphs { face, glyphs, text, .. } if text.contains(pua) => Some((*face, glyphs.clone())),
+            _ => None,
+        })
+        .expect("the private-use character is drawn");
+    assert_eq!(face.id(), serif.face.id(), "{:#X} drawn from {font}, not the default font or another face", u32::from(pua));
+    assert!(glyphs.iter().any(|g| g.0 == 0), "{:#X} draws as {font}'s missing glyph", u32::from(pua));
 }
 
 #[test]
