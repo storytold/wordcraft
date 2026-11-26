@@ -150,7 +150,9 @@ fn split_keeping_nested(doc: &wordcraft_doc::Document, row: &table::RowLayout, r
 }
 
 fn row_can_start(doc: &wordcraft_doc::Document, row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
-    if laid.height <= room + 0.01 {
+    // With the room for the border that closes the table part if the page ends after it, as
+    // `place_table` checks it.
+    if laid.height + laid.edge <= room + 0.01 {
         return true;
     }
     if row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)) {
