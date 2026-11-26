@@ -185,6 +185,9 @@ struct Flow<'a> {
     /// The space before it at the top of the piece being placed (a paragraph starting with a page
     /// break has it on the new page): late floats there are positioned from above it.
     space_here: f32,
+    /// A paragraph kept with the next one split as in Word for Mac (`keep_together`): how many
+    /// of its lines go over with the next one.
+    keep_carry: Option<usize>,
 }
 
 impl<'a> Flow<'a> {
@@ -223,6 +226,7 @@ impl<'a> Flow<'a> {
             rechecked: false,
             forced: Vec::new(),
             space_here: 0.0,
+            keep_carry: None,
         }
     }
 
@@ -332,9 +336,12 @@ impl<'a> Flow<'a> {
 
     /// Keep lines together: if it doesn't fit but would on an empty column, move it. Keep with
     /// next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
-    /// that doesn't breaks as usual, its last lines going over with the next paragraph. Returns
-    /// the space before applied (`before`, or what is left of it at the top of the next column).
-    fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
+    /// that doesn't breaks as usual, its last lines going over with the next paragraph. Word for
+    /// Mac splits one that fits too, when it can be split: its last lines (two with widow
+    /// control) go over with the next paragraph, and the rest stays (observed in Word for Mac
+    /// 16.114, #3850; `LayoutOptions::keep_next_splits`; `keep_carry`). Returns the space before
+    /// applied (`before`, or what is left of it at the top of the next column).
+    fn keep_together(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
         // A terminal page-break mark stays with the break and draws no bottom border there.
         let break_mark = !pb.web
@@ -351,7 +358,9 @@ impl<'a> Flow<'a> {
         let closes_page = pb.next_starts_page && self.p.section.is_some();
         let need = height
             + if rp.keep_next && !closes_page {
-                next_first_line(ctx, self.block, self.laid_width, 0, pb.next_starts_page, &mut ctx.counters.clone())
+                // With its own space after, which stands between it and the next paragraph.
+                let after = space_after_kept(ctx, self.block, rp, self.label.is_some());
+                next_first_line(ctx, self.block, self.laid_width, after, 0, pb.next_starts_page, &mut ctx.counters.clone())
             } else {
                 0.0
             };
@@ -359,6 +368,11 @@ impl<'a> Flow<'a> {
         // With the 0.01 pt of slack the other fit checks take. Balancing from Word 2013's layout
         // keeps the lines and the next paragraph together at the top of a column too (#6821).
         if pb.y + need > pb.bottom + 0.01 && (!pb.fresh() || Self::strict_widow_control(ctx, pb)) && need <= pb.next_room(self.body_top) {
+            let carry = if rp.widow_control { 2 } else { 1 };
+            if ctx.opts.keep_next_splits && !rp.keep_lines && self.pl.lines.len() >= 2 * carry {
+                self.keep_carry = Some(carry);
+                return before;
+            }
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);
@@ -438,13 +452,18 @@ impl<'a> Flow<'a> {
 
     /// The lines from `l0` that go on this page (`lead`: the room above the first line, from a
     /// float pushing it down or its border), with the footnotes on them.
-    fn fit_lines(&self, ctx: &mut Ctx, pb: &PageBuilder, notes: &[(usize, u32)], lead: f32) -> Fit {
+    /// `carry`: how many of the paragraph's last lines go over with the next paragraph instead.
+    fn fit_lines(&self, ctx: &mut Ctx, pb: &PageBuilder, notes: &[(usize, u32)], lead: f32, carry: Option<usize>) -> Fit {
         let (pl, n, l0) = (&self.pl, self.n(), self.l0);
         let first_top = pl.lines.get(l0).map_or(0.0, |f| f.top);
         let mut fit = Fit { l1: l0, forced: None, mark_with_break: false, notes: Vec::new() };
         // Worked out only for a last line on a page with notes.
         let mut after_on_page: Option<f32> = None;
         while let Some(l) = pl.lines.get(fit.l1) {
+            // Against `n` now: laying the paragraph out again may have changed its line count.
+            if carry.is_some_and(|c| fit.l1 + c >= n) {
+                break;
+            }
             let line_notes = notes_on_line(ctx, pb, l, notes, &fit.notes);
             let limit = notes_limit(pb, &fit.notes, &line_notes);
             let free = pb.notes.is_empty() && fit.notes.is_empty() && line_notes.is_empty();
@@ -913,8 +932,12 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         // A paragraph's first line may start below its top (pushed down by a floating object).
         let Some(first) = f.pl.lines.get(f.l0) else { break };
         let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { 0.0 };
+        // A kept paragraph split so its last lines go over with the next one: only its first
+        // piece, on this page, stops short. Moved to the next page before any of its lines is
+        // placed (a footnote on its first line leaving no room), it is no longer split there.
+        let carry = f.keep_carry.take();
         let notes = para_notes(ctx.doc, p, &f.pl);
-        let mut fit = f.fit_lines(ctx, pb, &notes, lead);
+        let mut fit = f.fit_lines(ctx, pb, &notes, lead, carry);
         let (end, widowed) = f.settled_end(ctx, pb, &fit);
         fit.l1 = end;
         // On a fresh column an unfitting line can overflow. Strict widow control instead moves
@@ -1069,14 +1092,18 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966). `new_page`: the next section starts
-/// on a new page, so the chain ends at the paragraph closing this one.
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_page: bool, counters: &mut Counters) -> f32 {
+/// on a new page, so the chain ends at the paragraph closing this one. `after`: the space after
+/// paragraph `block` left below it ([`space_after_kept`]). It comes between the two as in
+/// `merge_gap`, the larger of it and the next one's space before unless paragraph spacing adds
+/// up, and in full above a table.
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, after: f32, depth: usize, new_page: bool, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
             let label =
                 p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+            let listed = label.is_some();
             let pl = match ctx.para_ahead(p, width, label.clone()) {
                 Some(pl) => pl,
                 None => {
@@ -1105,16 +1132,14 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
+            let before = pl.rp.space_before;
+            let between = if before > 0.0 && after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing { after.max(before) } else { after + before };
             // The paragraph closing the section, when the next section starts a new page, keeps
             // with nothing on this page (Word ignores its Keep with next).
             if pl.rp.keep_next && depth < 8 && !(new_page && p.section.is_some()) {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before
-                    + top
-                    + pl.height
-                    + bottom
-                    + pl.rp.space_after
-                    + next_first_line(ctx, block + 1, width, depth + 1, new_page, counters)
+                let after = space_after_kept(ctx, block + 1, &pl.rp, listed);
+                between + top + pl.height + bottom + next_first_line(ctx, block + 1, width, after, depth + 1, new_page, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -1122,7 +1147,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                     (Some(first), Some(last)) => last.top + last.height - first.top,
                     _ => 0.0,
                 };
-                pl.rp.space_before
+                between
                     + top
                     + if pl.rp.keep_lines {
                         pl.height
@@ -1134,7 +1159,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                     }
             }
         }
-        Some(Block::Table(_)) => 24.0,
+        Some(Block::Table(_)) => after + 24.0,
         None => 0.0,
     }
 }
@@ -1210,7 +1235,7 @@ mod tests {
             flow.place_due_late(ctx, pb);
             assert_eq!(pb.excl.len(), 1, "the anchor line fits before widow control");
 
-            let fit = flow.fit_lines(ctx, pb, &[], 0.0);
+            let fit = flow.fit_lines(ctx, pb, &[], 0.0, None);
             assert_eq!(fit.l1, 2);
             let (end, widowed) = flow.settled_end(ctx, pb, &fit);
             assert_eq!((end, widowed), (1, true));
