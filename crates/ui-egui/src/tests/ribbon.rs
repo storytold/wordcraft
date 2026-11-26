@@ -160,3 +160,25 @@ fn citations_provider_menu_has_zotero_checked() {
     let checked = items.first().map(|n| n.accesskit_node().toggled().is_some() || n.accesskit_node().is_selected().is_some());
     assert_eq!(checked, Some(true), "and it is marked as the chosen one");
 }
+/// Draw › Pens › Action Pen (#5984): the tile is the shared ribbon toggle bound to
+/// `draw.actionPen`, so a click puts the pen down and its on-state follows the mode.
+/// Track Changes, which the pen's own drop-down toggled before the UI port, is Review ›
+/// Tracking's toggle: the gesture edits are revisions whenever it is on.
+#[test]
+fn the_action_pen_tile_turns_the_action_pen_on() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_engine::cmd::draw::DrawMode;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    a.run("ui.tab", json!({ "tab": "Draw" })).unwrap();
+    let mut h = harness(a);
+    h.run_steps(6);
+    h.get_by_role_and_label(Role::Button, "Action Pen").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.view.draw.mode, DrawMode::ActionPen, "the tile put the Action Pen down");
+    // The tile is a toggle: a second press puts it away again.
+    h.get_by_role_and_label(Role::Button, "Action Pen").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.view.draw.mode, DrawMode::Select, "the tile took the Action Pen up");
+}

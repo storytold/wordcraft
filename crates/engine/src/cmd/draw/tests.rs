@@ -5,6 +5,7 @@ use wordcraft_doc::para::{InlineObject, ShapeKind, Wrap};
 
 use crate::Session;
 
+mod action_pen;
 mod page_lookup;
 
 fn session() -> Session {

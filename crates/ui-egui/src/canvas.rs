@@ -690,7 +690,7 @@ fn run_page_tool(app: &mut WordApp, ui: &Ui, layout: &Arc<DocLayout>, body: &Pag
     // PLAN: assumed `keys::page_input(app: &mut WordApp, input: &[EditorInput], pass: &ToolPass, ctx: &egui::Context)` (canvas-w10).
     crate::keys::page_input(app, &pass.editor_input, pass, ui.ctx());
     let host = ToolHost::new().enabled(!app.modal_open());
-    if let Some(mut tool) = crate::ink::active_tool(app, body) {
+    if let Some(mut tool) = crate::ink::active_tool(app, body, layout) {
         return host.run(ui, pass, &mut tool);
     }
     if let Some(mut tool) = crate::table_pen::active_tool(app, body) {

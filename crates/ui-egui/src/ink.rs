@@ -32,11 +32,13 @@ use wordcraft_layout::DocLayout;
 
 use crate::WordApp;
 
-/// A stroke being drawn: its page and points (page points).
+/// A stroke being drawn: its page and points (page points), and whether the Action Pen drew it
+/// (its release is read as a gesture) or a pen did (it is committed as ink).
 pub struct InkDrag {
     page: usize,
     tool: InkTool,
     pts: Vec<[f32; 2]>,
+    action: bool,
 }
 
 /// The lasso in use: a loop being drawn, or the selection being dragged (page points).
@@ -134,12 +136,14 @@ fn screen_of(pg: &PlacedPage, p: [f32; 2]) -> Pos2 {
 pub(crate) struct InkCanvasTool<'a> {
     app: &'a mut WordApp,
     body: &'a PageBody<'a>,
+    /// This pass's layout, which the Action Pen reads its live feedback from.
+    layout: &'a DocLayout,
 }
 
-/// The ink tool for this pass while a pen, the eraser or the lasso is in use; `body` is this
-/// pass's page body.
-pub(crate) fn active_tool<'a>(app: &'a mut WordApp, body: &'a PageBody<'a>) -> Option<InkCanvasTool<'a>> {
-    (app.session.view.draw.mode != DrawMode::Select).then_some(InkCanvasTool { app, body })
+/// The ink tool for this pass while a pen, the Action Pen, the eraser or the lasso is in use;
+/// `body` is this pass's page body and `layout` its layout.
+pub(crate) fn active_tool<'a>(app: &'a mut WordApp, body: &'a PageBody<'a>, layout: &'a DocLayout) -> Option<InkCanvasTool<'a>> {
+    (app.session.view.draw.mode != DrawMode::Select).then_some(InkCanvasTool { app, body, layout })
 }
 
 impl InkCanvasTool<'_> {
@@ -170,7 +174,9 @@ impl CanvasTool for InkCanvasTool<'_> {
         let Some(pg) = page_under(self.body.pages, pointer.pos) else { return ToolAction::Ignored };
         let (page, at) = (pg.page, page_xy(pg, pointer.pos));
         match self.app.session.view.draw.mode {
-            DrawMode::Pen(tool) => self.app.canvas.ink = Some(InkDrag { page, tool, pts: vec![at] }),
+            DrawMode::Pen(tool) => self.app.canvas.ink = Some(InkDrag { page, tool, pts: vec![at], action: false }),
+            // The Action Pen draws like the pen; its release is read as a gesture.
+            DrawMode::ActionPen => self.app.canvas.ink = Some(InkDrag { page, tool: InkTool::Pen, pts: vec![at], action: true }),
             DrawMode::Eraser => {
                 self.app.canvas.erasing = Some(false);
                 self.erase_at(page, at);
@@ -234,7 +240,10 @@ impl CanvasTool for InkCanvasTool<'_> {
 
     fn release(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
         if let Some(d) = self.app.canvas.ink.take() {
-            let _ = self.app.run("draw.stroke", json!({"page": d.page, "points": d.pts, "tool": d.tool.name()}));
+            // The Action Pen's stroke is classified: a gesture edits the text, anything else stays
+            // ink, all in one command and one undo step.
+            let cmd = if d.action { "draw.actionPenStroke" } else { "draw.stroke" };
+            let _ = self.app.run(cmd, json!({"page": d.page, "points": d.pts, "tool": d.tool.name()}));
         }
         self.app.canvas.erasing = None;
         match self.app.canvas.ink_ui.lasso.take() {
@@ -283,9 +292,35 @@ impl CanvasTool for InkCanvasTool<'_> {
         }
     }
 
-    fn paint(&self, draw: &Draw<'_>, _cx: &ToolContext<'_>) {
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
         let Some(d) = &self.app.canvas.ink else { return };
         let Some(pg) = placed(self.body.pages, d.page) else { return };
+        // The Action Pen's live feedback while the stroke is still drawn: the words a loop would
+        // select, the range a cross-out or join would cover, or the caret a swipe would put down.
+        // Its colours are the theme's accent, so it reads the same in both themes.
+        if d.action
+            && let Some(style) = cx.style()
+            && let Some(g) = wordcraft_engine::cmd::draw::action_pen::preview(&self.app.session, self.layout, d.page, &d.pts)
+        {
+            if let Some((a, b)) = g.range() {
+                let tint = style.color(style.tokens.color.accent.soft);
+                for (page, r) in self.layout.selection_rects(&self.app.session.doc, a, b, d.page) {
+                    if page != d.page {
+                        continue;
+                    }
+                    let (lo, hi) = (screen_of(pg, [r.x, r.y]), screen_of(pg, [r.right(), r.bottom()]));
+                    draw.fill(&PaintShape::Rect(egui::Rect::from_min_max(lo, hi), egui::CornerRadius::ZERO), tint);
+                }
+            }
+            if let Some(pos) = g.point()
+                && let Some(c) = self.layout.caret_on(pos, d.page)
+            {
+                let h = c.height.max(6.0);
+                let (top, bottom) = (screen_of(pg, [c.x, c.top - h * 0.1]), screen_of(pg, [c.x, c.top + h * 1.1]));
+                let caret = style.color(style.tokens.color.accent.solid);
+                draw.stroke(&PaintShape::Path(vec![top, bottom]), DataStrokeWidth::Data(DataWidth::points(2.0)), StrokeColor::Theme(caret));
+            }
+        }
         let set = self.app.session.view.draw.settings(d.tool);
         let alpha = (d.tool.alpha() * 255.0).round() as u8;
         let color = screen_ink(crate::canvas::dark_page(self.app), set.color, alpha);

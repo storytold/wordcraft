@@ -14,6 +14,7 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("accept", include_bytes!("../icons/accept.svg")),
     ("accessibility", include_bytes!("../icons/accessibility.svg")),
+    ("actionPen", include_bytes!("../icons/actionPen.svg")),
     ("addNote", include_bytes!("../icons/addNote.svg")),
     ("addPen", include_bytes!("../icons/addPen.svg")),
     ("addShape", include_bytes!("../icons/addShape.svg")),

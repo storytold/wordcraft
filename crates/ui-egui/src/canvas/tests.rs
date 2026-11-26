@@ -2319,3 +2319,125 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// Draw › Pens › Action Pen (#5984): a loop drawn with the pointer around a word selects the
+/// word exactly as dragging a selection does, so the formatting commands work on it; the
+/// gesture leaves no ink behind.
+#[test]
+fn the_action_pen_loop_selects_words_with_the_pointer() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("document.setText", json!({"text": "alpha beta gamma\nsecond line"})).unwrap();
+    a.run("draw.actionPen", json!({"value": true})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.app_frame();
+    }
+    // The boxes of the first line's first five characters ("alpha").
+    let cells = {
+        let layout = h.state_mut().session.layout();
+        let map = wordcraft_engine::cmd::draw::action_pen::page_text(&h.state().session, &layout, 0);
+        map.rows.first().map(|r| r.cells.iter().map(|c| c.rect).collect::<Vec<_>>()).unwrap_or_default()
+    };
+    assert_eq!(cells.len(), 16, "the first line \"alpha beta gamma\" is laid out");
+    let word = cells[0].union(&cells[4]).expand(5.0);
+    let stroke: Vec<[f32; 2]> = (0..=40)
+        .map(|i| {
+            let t = i as f32 / 40.0 * std::f32::consts::TAU;
+            [word.x + word.w / 2.0 + (word.w / 2.0 + 4.0) * t.cos(), word.y + word.h / 2.0 + (word.h / 2.0 + 4.0) * t.sin()]
+        })
+        .collect();
+    let screen = |h: &mut H, p: [f32; 2]| page_to_screen(h.state_mut(), 0, p[0], p[1]).expect("on screen");
+    let start = screen(&mut h, stroke[0]);
+    h.event(Event::PointerMoved(start));
+    h.app_frame();
+    h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.app_frame();
+    for p in stroke.iter().skip(1) {
+        let at = screen(&mut h, *p);
+        h.event(Event::PointerMoved(at));
+        h.app_frame();
+    }
+    let end = screen(&mut h, *stroke.last().unwrap());
+    h.event(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    for _ in 0..3 {
+        h.app_frame();
+    }
+    let sel = h.state().session.sel.clone();
+    assert_eq!((sel.anchor.off.min(sel.focus.off), sel.anchor.off.max(sel.focus.off)), (0, 5), "the loop selected the word");
+    assert_eq!(body_ink(h.state()), 0, "the gesture left no ink");
+    // The selection is a normal one: Bold applies to it.
+    h.state_mut().run("format.bold", json!({})).unwrap();
+    let s = &h.state().session;
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "alpha beta gamma\nsecond line");
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).expect("paragraph");
+    assert!(para.runs.first().is_some_and(|r| r.props.bold == Some(true)), "the selected word is bold: {:?}", para.runs);
+}
+
+/// Draw › Pens › Action Pen (#5984): a line drawn through text with the pointer deletes the
+/// characters it crosses, in one undo step, and commits no ink.
+#[test]
+fn the_action_pen_line_through_text_deletes_with_the_pointer() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("document.setText", json!({"text": "alpha beta gamma\nsecond line"})).unwrap();
+    a.run("draw.actionPen", json!({"value": true})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.app_frame();
+    }
+    let cells = {
+        let layout = h.state_mut().session.layout();
+        let map = wordcraft_engine::cmd::draw::action_pen::page_text(&h.state().session, &layout, 0);
+        map.rows.first().map(|r| r.cells.iter().map(|c| c.rect).collect::<Vec<_>>()).unwrap_or_default()
+    };
+    assert_eq!(cells.len(), 16, "the first line \"alpha beta gamma\" is laid out");
+    let y = cells[0].y + cells[0].h / 2.0;
+    let (x0, x1) = (cells[0].x - 2.0, cells[4].right() + 2.0);
+    let screen = |h: &mut H, x: f32, y: f32| page_to_screen(h.state_mut(), 0, x, y).expect("on screen");
+    let start = screen(&mut h, x0, y);
+    h.event(Event::PointerMoved(start));
+    h.app_frame();
+    h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.app_frame();
+    for i in 1..=10 {
+        let at = screen(&mut h, x0 + (x1 - x0) * i as f32 / 10.0, y);
+        h.event(Event::PointerMoved(at));
+        h.app_frame();
+    }
+    let end = screen(&mut h, x1, y);
+    h.event(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    for _ in 0..3 {
+        h.app_frame();
+    }
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), " beta gamma\nsecond line", "the crossed word went");
+    assert_eq!(body_ink(h.state()), 0, "no ink was committed");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "alpha beta gamma\nsecond line", "one undo step");
+}
+
+/// Ink strokes in the body.
+fn body_ink(a: &WordApp) -> usize {
+    a.session
+        .doc
+        .para_paths(StoryRef::Body)
+        .iter()
+        .filter_map(|p| a.session.doc.para(StoryRef::Body, p))
+        .flat_map(|p| p.objects.iter())
+        .filter(|o| o.ink().is_some())
+        .count()
+}

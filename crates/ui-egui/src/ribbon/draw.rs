@@ -30,6 +30,9 @@ pub(super) fn draw(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             ("pen", "Pen", "draw.pen", mode == DrawMode::Pen(InkTool::Pen) && custom.is_none()),
             ("pencil", "Pencil", "draw.pencil", mode == DrawMode::Pen(InkTool::Pencil) && custom.is_none()),
             ("highlight", "Highlighter", "draw.highlighter", mode == DrawMode::Pen(InkTool::Highlighter) && custom.is_none()),
+            // The Action Pen reads a stroke as a gesture. Track Changes, which the old drop-down
+            // toggled, is Review › Tracking's toggle (the gesture edits are revisions when it is on).
+            ("actionPen", "Action Pen", "draw.actionPen", mode == DrawMode::ActionPen),
         ] {
             ToggleButton::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
