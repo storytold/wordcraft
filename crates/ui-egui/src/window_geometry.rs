@@ -76,4 +76,27 @@ mod tests {
         // Scales above 150% (e.g. 175% where half width is ~548.5 pt) clamp up to the 600 pt minimum width.
         assert_eq!(requested_size(egui::vec2(548.0, 480.0), 8192.0), Some(egui::vec2(600.0, 480.0)));
     }
+
+    /// #7317: insane values in requested window geometry are clamped or dropped.
+    #[test]
+    fn insane_values_are_clamped_or_dropped() {
+        // Zero or non-positive width/height are dropped.
+        assert_eq!(requested_size(egui::vec2(0.0, 800.0), 16384.0), None);
+        assert_eq!(requested_size(egui::vec2(800.0, 0.0), 16384.0), None);
+        assert_eq!(requested_size(egui::vec2(-5.0, 800.0), 16384.0), None);
+
+        // NaN and infinite values are dropped.
+        assert_eq!(requested_size(egui::vec2(f32::NAN, 800.0), 16384.0), None);
+        assert_eq!(requested_size(egui::vec2(800.0, f32::NAN), 16384.0), None);
+        assert_eq!(requested_size(egui::vec2(f32::INFINITY, 800.0), 16384.0), None);
+        assert_eq!(requested_size(egui::vec2(800.0, f32::NEG_INFINITY), 16384.0), None);
+
+        // Tiny side clamps up to MIN_SIZE, huge side clamps down to MAX_SIZE (16384.0).
+        let tiny_and_huge = requested_size(egui::vec2(10.0, 1.0e9), 16384.0);
+        assert_eq!(tiny_and_huge, Some(egui::vec2(MIN_SIZE.x, 16384.0)));
+
+        // Sane values within bounds are preserved as-is.
+        let sane = egui::vec2(1200.0, 800.0);
+        assert_eq!(requested_size(sane, 16384.0), Some(sane));
+    }
 }

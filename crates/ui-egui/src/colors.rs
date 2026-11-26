@@ -13,7 +13,7 @@ use craft::color_ui::ui::{ColorPickerDialog, ColorPickerDialogLayout, ColorPicke
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
 use craft::ui::buttons::{SplitButton, SplitMenu};
-use craft::ui::choice::SwatchTable;
+use craft::ui::choice::{CellMarks, SwatchTable};
 use craft::ui::contract::{BodyCx, Hover, NoValue, Props as _, Show as _, clicked};
 use craft::ui::dialog::{DialogId, DialogResult};
 use craft::ui::menu::{MenuItem, MenuItemOutput};
@@ -307,7 +307,7 @@ fn swatch_table(
     let out = SwatchTable::new(name.to_string(), &swatches)
         .per_row(per_row)
         .tips(true)
-        .marked(|i: &usize| colors.get(*i).copied() == current && current.is_some())
+        .marks(|i: &usize| CellMarks::default().edge(colors.get(*i).copied() == current && current.is_some()))
         .show_all(ui);
     let picked = out.selected.and_then(|i| colors.get(i).copied());
     let preview = match out.preview {
@@ -490,7 +490,7 @@ fn highlight_body(ui: &mut Ui, app: &mut WordApp, cx: &mut BodyCx<'_>) -> ColorP
     let out = SwatchTable::new("Highlight Colors".to_string(), &swatches)
         .per_row(5)
         .tips(true)
-        .marked(|i: &usize| shown.get(*i).is_some_and(|(h, _)| h.ooxml() == in_effect))
+        .marks(|i: &usize| CellMarks::default().edge(shown.get(*i).is_some_and(|(h, _)| h.ooxml() == in_effect)))
         .show_all(ui);
     let mut picked = None;
     if let Some((h, c)) = out.selected.and_then(|i| shown.get(i)) {
@@ -540,7 +540,7 @@ pub fn more_colors(current: Option<Rgb>, key: String, tab: ColorPickerTab) -> Co
 }
 
 /// Opens the Colors dialog for `target`, remembering where its answer goes.
-fn open_for(app: &mut WordApp, target: &Target, current: Option<Rgb>, tab: ColorPickerTab) -> DialogId {
+pub(crate) fn open_for(app: &mut WordApp, target: &Target, current: Option<Rgb>, tab: ColorPickerTab) -> DialogId {
     app.more_colors.insert(MORE_KEY.to_string(), target.clone());
     crate::dialogs::host::open_with(app, None, more_colors(current, MORE_KEY.to_string(), tab), DialogHooks { prepare: None, settle: settle_more })
 }
