@@ -90,7 +90,11 @@ impl<'a> Builder<'a> {
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
                 }
             };
-            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            // Small Caps draws lowercase letters, and the space and ideographic space, at the
+            // small-caps size, as Word does; a no-break space, digits and punctuation keep the
+            // full size (#7062).
+            let small = c.is_lowercase() || c == ' ' || c == '\u{3000}';
+            let key = SegKey { face, small: rc.small_caps && !rc.caps && small, complex, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
                 Some(previous) => {
@@ -134,14 +138,18 @@ impl<'a> Builder<'a> {
                 return i;
             }
         }
-        let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
+        // Small capitals are set at 80% of the size rounded to the half point, as Word does
+        // (16 pt → 13, 14 → 11, 12 → 9.5, #7062).
+        let size = if small { (rc.draw_size() * 0.8 * 2.0).round() / 2.0 } else { rc.draw_size() };
         // A symbol font that isn't installed, or is installed one em tall (Apple's Symbol), takes
         // the height Word gives it.
         let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r) {
             Some((a, d)) => (a * face.upem, d * face.upem),
             None => wordcraft_fonts::word::line_metrics(&face),
         };
-        let k = size as f64 / face.upem.max(1.0);
+        // A small-caps piece is drawn at 80% but measured for the line at the full size: a Small
+        // Caps line is as tall as without Small Caps, as in Word (#7063).
+        let k = rc.draw_size() as f64 / face.upem.max(1.0);
         // A fallback face (letters the requested font lacks) is emboldened or slanted when it has
         // no bold or italic of its own.
         let (synth_bold, synth_italic) = match face_override {
