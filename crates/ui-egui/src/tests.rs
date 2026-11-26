@@ -1986,6 +1986,79 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// All title-bar inputs have accessible names. Clicking the title opens Rename Document, and
+/// clicking Account opens Backstage options.
+#[test]
+fn title_and_account_buttons_work() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(app());
+    h.run_steps(2);
+    for (role, label) in [
+        (Role::Switch, "AutoSave"),
+        (Role::Button, "Save"),
+        (Role::Button, "Undo"),
+        (Role::Button, "Redo"),
+        (Role::Button, "Undo History"),
+        (Role::Button, "Customize Quick Access Toolbar"),
+        (Role::Button, "Document1 \u{2014} Not saved"),
+        (Role::Button, "Discord"),
+        (Role::Button, "WordCraft User"),
+    ] {
+        assert!(h.query_by_role_and_label(role, label).is_some(), "title bar missing {role:?} {label:?}");
+    }
+    assert!(h.query_by_label("Search commands and help").is_some(), "title bar missing Search commands and help");
+
+    h.get_by_role_and_label(Role::Button, "Document1 \u{2014} Not saved").click();
+    h.step();
+    let id = craft::ui::dialog::dialog_id("renameDocument");
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.id == id), "renameDocument dialog is open");
+    h.get_by_role_and_label(Role::Button, "Rename").click();
+    h.run_steps(2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert!(h.state().session.file_name.is_none());
+    assert!(!h.state().session.dirty);
+
+    h.get_by_role_and_label(Role::Button, "Document1 \u{2014} Not saved").click();
+    h.step();
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.id == id), "renameDocument dialog is open");
+    h.event(egui::Event::Key {
+        key: egui::Key::A,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers { command: true, ..Default::default() },
+    });
+    h.event(egui::Event::Text("Project notes".into()));
+    h.step();
+    h.get_by_role_and_label(Role::Button, "Rename").click();
+    h.run_steps(2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(h.state().title_stem(), "Project notes");
+    assert_eq!(h.state().default_save_name(), "Project notes.docx");
+    assert!(h.state().session.doc.core.title.is_empty());
+    assert!(!h.state().session.dirty);
+
+    // A long name remains clickable, and Escape leaves it unchanged.
+    let long_name = "Notes ".repeat(25);
+    h.state_mut().run("file.rename", json!({"name": long_name})).unwrap();
+    h.step();
+    h.get_by_role_and_label(Role::Button, &format!("{} \u{2014} Not saved", long_name.trim())).click();
+    h.step();
+    assert!(h.state().dialog_host.open_dialogs().iter().any(|d| d.key.as_deref() == Some("renameDocument")));
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert!(h.state().dialog_host.open_dialogs().is_empty());
+    assert_eq!(h.state().title_stem(), long_name.trim());
+
+    h.get_by_role_and_label(Role::Button, "WordCraft User").click();
+    h.run_steps(2);
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.backstage_page, "options");
+    assert_eq!(h.state().ui.options_pane, "general");
+    assert!(h.query_by_label("User name:").is_some());
+}
+
 /// #3172: the Paste button is named "Paste": its tooltip adds the key as the platform writes it,
 /// so its name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
 #[test]
