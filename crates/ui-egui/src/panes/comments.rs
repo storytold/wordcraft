@@ -124,6 +124,80 @@ pub(crate) fn state_has_drafts(state: &CommentsPanelState) -> bool {
     state.editing.is_some() || !state.reply.is_empty()
 }
 
+/// Drop the shown document's drafts: after a reload from disk (#5623) they were written into the
+/// content as it was (one Undo away), or refused, and the new content isn't theirs.
+pub(crate) fn discard_comment_drafts(app: &mut WordApp) {
+    let d = drafts(app);
+    d.editing = None;
+    d.reply.clear();
+}
+
+/// [`flush_comment_drafts`] for parked document `id` (#5623): before an agent reloads it, its
+/// drafts are written into the content as it was, which the reload keeps one Undo away. Refused
+/// drafts stay parked, and the first refusal is returned.
+pub(crate) fn flush_parked_comment_drafts(app: &mut WordApp, id: u64) -> Result<(), String> {
+    let Some(mut state) = app.take_parked_comment_drafts(id) else { return Ok(()) };
+    let mut first = Ok(());
+    if let Some((thread, index, text)) = state.editing.clone() {
+        let r = app.session.with_document(id, |s| {
+            let root = u32::try_from(thread.0).ok();
+            let message = root.and_then(|root| match index {
+                0 => Some(root),
+                _ => {
+                    let mut replies: Vec<u32> = s.doc.comments.iter().filter(|(_, c)| c.parent == Some(root)).map(|(id, _)| *id).collect();
+                    replies.sort_unstable();
+                    replies.get(index - 1).copied()
+                }
+            });
+            match message.and_then(|m| s.doc.comments.get(&m).map(|c| (m, c.part))) {
+                Some((m, part)) if text != s.doc.plain_text(StoryRef::Part(part)) => {
+                    s.run("review.editComment", &json!({"id": m, "text": text})).map(|_| ()).map_err(|e| e.to_string())
+                }
+                _ => Ok(()),
+            }
+        });
+        match r.map_err(|e| e.to_string()).and_then(|r| r) {
+            Ok(()) => state.editing = None,
+            Err(e) => first = Err(e),
+        }
+    }
+    if let Some(thread) = state.selected
+        && !state.reply.trim().is_empty()
+    {
+        let text = state.reply.clone();
+        let r = app.session.with_document(id, |s| {
+            let root = u32::try_from(thread.0).ok().filter(|root| s.doc.comments.contains_key(root));
+            let Some(root) = root else { return Ok(()) };
+            s.run("review.reply", &json!({"id": root, "text": text.trim_end()})).map(|_| ()).map_err(|e| e.to_string())
+        });
+        match r.map_err(|e| e.to_string()).and_then(|r| r) {
+            Ok(()) => state.reply.clear(),
+            Err(e) => {
+                if first.is_ok() {
+                    first = Err(e);
+                }
+            }
+        }
+    }
+    app.put_parked_comment_drafts(id, state);
+    first
+}
+
+/// Drop parked document `id`'s drafts after its reload (#5623): what is left (a draft the
+/// document refused) went with the content as it was, and none waits for the new content.
+pub(crate) fn discard_parked_comment_drafts(app: &mut WordApp, id: u64) {
+    let _ = app.take_parked_comment_drafts(id);
+}
+
+/// Tests: a reply typed under comment `id` and not written yet.
+#[cfg(test)]
+pub(crate) fn draft_reply(app: &mut WordApp, id: u32, text: &str) {
+    let thread = thread_of(app, id);
+    let d = drafts(app);
+    d.selected = Some(thread);
+    d.reply = text.to_string();
+}
+
 /// Lines of a comment's text that its card or balloon shows; longer text scrolls in its field and
 /// is cut off in a balloon that isn't selected (#3382).
 pub(crate) const COMMENT_ROWS: usize = 10;

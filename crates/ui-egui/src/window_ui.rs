@@ -37,6 +37,8 @@ pub(crate) struct WindowUi {
     /// This window's refused or failed export, shown on its Export and Print pages (Backstage hides the status bar).
     pub(crate) export_error: String,
     pub(crate) last_autosave: f64,
+    /// Whether the window had the focus in the last frame ([`crate::disk_change`]).
+    pub(crate) window_focused: bool,
     pub(crate) equation_prev_tab: Option<String>,
     pub(crate) smart_art_item: Option<usize>,
     pub(crate) outline_prev_tab: Option<String>,
@@ -87,6 +89,7 @@ impl WindowUi {
             missing_fonts: Default::default(),
             export_error: String::new(),
             last_autosave: 0.0,
+            window_focused: false,
             equation_prev_tab: None,
             smart_art_item: None,
             outline_prev_tab: None,
@@ -179,6 +182,8 @@ impl WordApp {
             no_document: _,
             windows: _,
             print_document: _,
+            disk_check_at: _,
+            disk_notices: _,
             clipboard_published: _,
             // Per document: the shown document's, swapped with `parked` on a document switch.
             autosave_path: _,
@@ -200,6 +205,7 @@ impl WordApp {
             missing_fonts,
             export_error,
             last_autosave,
+            window_focused,
             equation_prev_tab,
             smart_art_item,
             outline_prev_tab,
@@ -298,6 +304,7 @@ impl WordApp {
             missing_fonts,
             export_error,
             last_autosave,
+            window_focused,
             equation_prev_tab,
             smart_art_item,
             outline_prev_tab,
