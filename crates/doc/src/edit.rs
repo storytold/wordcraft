@@ -1088,9 +1088,7 @@ impl Document {
                 // Empty paragraphs at the edges of a cell carry no selected text. Treat a
                 // selection from the first to the last non-empty paragraph as the whole table,
                 // rather than copying each cell's paragraphs without their table structure.
-                if let (Some(first), Some(last)) =
-                    (first_with_text.or(first), last_with_text.or(last))
-                {
+                if let (Some(first), Some(last)) = (first_with_text.or(first), last_with_text.or(last)) {
                     let end = self.para(a.story, last).map_or(0, Paragraph::len);
                     if *first == a.path && *last == b.path && b.off >= end {
                         return Some(tp);
