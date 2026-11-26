@@ -11,7 +11,12 @@ fn installed() -> egui::Context {
 
 /// The app in a headless harness that runs `logic` and `ui` and installs the runtime.
 fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
-    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    harness_with(app, crate::test_harness::install_spec)
+}
+
+/// [`harness`] with the runtime installed from `spec` (a memory clipboard, say).
+fn harness_with(app: WordApp, spec: impl FnOnce() -> craft::ui::InstallSpec + 'static) -> egui_kittest::Harness<'static, WordApp> {
+    let mut h = crate::test_harness::builder_with(spec).with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, a: &mut WordApp| {
             let ctx = ui.ctx().clone();
             crate::test_harness::logic(&ctx, a);
@@ -346,6 +351,44 @@ fn control_keyboard_preserves_native_focus_and_document_protection() {
     send(&mut h, "ui.type", json!({"text": "Refused"}));
     frames(&mut h, 8);
     assert_eq!(h.state().session.doc, doc, "control input respects the same protection as real keys");
+}
+
+/// #3628 review: input the control channel sends is automation too. Mod+V sent with `ui.key`
+/// (MCP's `key` tool) runs Paste, which can't bring a field Word acts on into a document
+/// that doesn't hold it; the same key from the keyboard pastes it.
+#[test]
+fn control_keys_cannot_paste_a_field_word_acts_on() {
+    /// The fields in the document's body.
+    fn fields(a: &WordApp) -> usize {
+        a.session.doc.body.iter().map(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.objects.len() } else { 0 }).sum()
+    }
+    use craft::platform::clipboard::{Clipboard, MemoryClipboard};
+    let mut h = harness_with(app(), || crate::test_harness::install_spec().clipboard(Clipboard::new(MemoryClipboard::default())));
+    let ctx = h.ctx.clone();
+    // Copied with the runtime installed, so the copy is on the clipboard Paste reads.
+    let a = h.state_mut();
+    // Text beside the field, so the copy puts text on the clipboard for Paste to find.
+    a.run("document.setText", json!({"text": "Copied "})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("select.collapse", json!({"end": true})).unwrap();
+    a.run("insert.field", json!({"instr": r#"DDEAUTO cmd "/c calc""#})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    let copied = a.run("edit.copy", json!({})).unwrap();
+    crate::system_clipboard::put_result(a, &ctx, &copied);
+    assert_eq!(fields(a), 1);
+    // The field leaves the document: pasting it is bringing it in.
+    a.run("document.setText", json!({"text": "Mine"})).unwrap();
+    assert_eq!(fields(a), 0);
+    h.state_mut().canvas.focus_page(&ctx);
+    frames(&mut h, 4);
+    send(&mut h, "ui.key", json!({"key": "V", "command": true}));
+    frames(&mut h, 8);
+    assert_eq!(fields(h.state()), 0, "the paste was refused");
+    assert_eq!(body_text(h.state()), "Mine");
+    // From the keyboard, the same key pastes it: the key does reach Paste.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::V);
+    frames(&mut h, 4);
+    assert_eq!(fields(h.state()), 1, "{:?}", status_text(h.state()));
 }
 
 /// A script's `engine.execute` of a command that only asks for its dialog opens it, as production did (`format.fontDialog`

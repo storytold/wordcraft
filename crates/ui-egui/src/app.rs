@@ -415,6 +415,19 @@ impl WordApp {
     /// Switch Windows) ends this window's drawing for the frame: the rest would be the other
     /// window's.
     pub(crate) fn window_ui(&mut self, ui: &mut egui::Ui) {
+        // Input the control channel sent (`ui.key`, `ui.text`, `ui.click`…, which MCP's `key`,
+        // `type` and `click` tools send) is automation as much as its requests are: the commands
+        // it runs this pass, from a shortcut, a ribbon button or a dialog, can't add fields Word
+        // acts on (#3628). A real click in the same pass as injected input errs the safe way.
+        if WindowHost::of(ui.ctx()).injected_pass() {
+            wordcraft_engine::active_fields::from_automation(|| self.window_pass(ui));
+        } else {
+            self.window_pass(ui);
+        }
+    }
+
+    /// [`Self::window_ui`]'s pass.
+    fn window_pass(&mut self, ui: &mut egui::Ui) {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         let t0 = monotonic_ms();

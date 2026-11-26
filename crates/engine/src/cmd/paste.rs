@@ -367,6 +367,8 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
 
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
 pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+    // Automation can't paste in fields Word acts on that the document doesn't have (#3628).
+    crate::active_fields::check_incoming(crate::active_fields::fragment_content(&frag), &s.doc)?;
     // The pasted text keeps its own formatting; what Backspace carried over is not for after it (#6518).
     s.forget_carried();
     super::controls::prepare_edit(s)?;

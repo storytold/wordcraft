@@ -32,7 +32,8 @@ impl WordApp {
         // A request run before the fonts are warm would see a layout with no usable atlas.
         if self.fonts_frames >= 2 {
             while let Some(req) = channel.next_request() {
-                let reply = control::handle(self, ctx, &req);
+                // A control request is automation: no active fields (#3628).
+                let reply = wordcraft_engine::active_fields::from_automation(|| control::handle(self, ctx, &req));
                 let document = self.capture_document();
                 channel.settle(req, reply, document, f64::from(ctx.global_style().animation_time) * 1000.0);
             }
