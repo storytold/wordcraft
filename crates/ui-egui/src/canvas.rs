@@ -12,7 +12,7 @@ use std::sync::Arc;
 use craft::behavior::kurbo::{Point, Size};
 use craft::pages::layout::{Fit, LayoutOptions, PageDisplay, SCREEN_POINTS_PER_POINT};
 use craft::pages::ui::reading::{ReadingMetrics, reading_size};
-use craft::pages::ui::{MarkArea, MarkKind, PageBody, PageView, PageViewState, PlacedPage, ReadingNav, ReadingState, ReadingView, TextMarks};
+use craft::pages::ui::{GoTo, MarkArea, MarkKind, PageBody, PageView, PageViewState, PlacedPage, ReadingNav, ReadingState, ReadingView, TextMarks};
 use craft::ui::canvas::{Autoscroll, ContextSource, MiddleButton, NavigationOptions, ToolHost, ToolHostResponse, ToolPass, WheelScheme};
 use craft::ui::contract::Show as _;
 
@@ -156,6 +156,10 @@ pub struct CanvasState {
     pub(crate) read_force_reflow: bool,
     /// Web Layout's width follows the window once a drag has settled, not on every frame of it.
     web_viewport: reading::Settle,
+    /// Side gutter the last `PageView` pass laid pages out with (`PageSpacing::side`), in screen points.
+    pub(crate) page_side: Option<f32>,
+    /// `PageView`'s side gutter changed since the last Web Layout pass, so Web Layout must reflow at once.
+    web_force_reflow: bool,
     /// First text position on the column currently leading the reading view, captured from the last
     /// pass's layout. Survives changing page sizes, even when the caret stays elsewhere.
     pub(crate) read_first_visible: Option<Pos>,
@@ -371,7 +375,7 @@ impl CanvasState {
 
     /// The comment whose balloon is selected, as the document's comment id.
     pub fn selected_balloon(&self) -> Option<u32> {
-        self.comments.selected.and_then(|id| u32::try_from(id.0).ok())
+        self.comments.selected.lead.and_then(|id| u32::try_from(id.0).ok())
     }
 }
 
@@ -405,6 +409,8 @@ impl Default for CanvasState {
             nav_to_caret: false,
             read_force_reflow: false,
             web_viewport: Default::default(),
+            page_side: None,
+            web_force_reflow: false,
             read_first_visible: None,
             dragging: false,
             column_drag: None,
@@ -465,16 +471,19 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
             // Without an anchor (Read Mode was just entered) the view starts at the caret.
             app.canvas.scroll_to_caret |= reflow_anchor.is_none();
         }
+        app.canvas.web_force_reflow = false;
     } else {
         if app.session.view.mode == wordcraft_layout::ViewMode::Web {
             // Web Layout wraps to the work area (#1876).
             let scale = app.session.view.zoom.clamp(0.1, 5.0) * PX_PER_PT;
-            // The page view keeps its side gutter (the rail width) clear on both sides of a page, so the page
+            // The page view keeps its side gutter (`PageSpacing::side`) clear on both sides of a page, so the page
             // fits the window only when its width leaves that room.
             let w = web_layout_width((full.width() - 2.0 * side).max(0.0), scale);
             let changed = (app.session.view.web_width - w).abs() > 0.5;
-            // At once on entry or a zoom (the viewport holds still), after a window drag has settled.
-            if app.canvas.web_viewport.apply(full.size(), ctx.input(|i| i.time), changed, false) {
+            let forced = std::mem::take(&mut app.canvas.web_force_reflow);
+            // At once on entry, a zoom, or a page-spacing change (the viewport holds still), after a window drag
+            // has settled.
+            if app.canvas.web_viewport.apply(full.size(), ctx.input(|i| i.time), changed, forced) {
                 app.session.view.web_width = w;
                 // The pixel offset no longer points at the same text: keep the caret's line in view.
                 app.canvas.scroll_to_caret = true;
@@ -483,6 +492,7 @@ fn update_viewport(app: &mut WordApp, full: Rect, metrics: &ReadingMetrics, side
             }
         } else {
             app.canvas.web_viewport.leave();
+            app.canvas.web_force_reflow = false;
         }
         app.canvas.read_force_reflow = false;
         app.canvas.read_first_visible = None;
@@ -609,7 +619,7 @@ fn mark_areas(app: &mut WordApp, layout: &DocLayout, selected: &[(usize, wordcra
 fn navigation_options() -> NavigationOptions {
     let mut options = NavigationOptions::default();
     options.middle_button =
-        if cfg!(any(target_os = "macos", target_os = "ios", target_arch = "wasm32")) { MiddleButton::Pan } else { MiddleButton::Autoscroll };
+        if cfg!(any(target_os = "macos", target_os = "ios", target_arch = "wasm32")) { MiddleButton::Pan } else { MiddleButton::AutoScroll };
     options.wheel = WheelScheme::Document;
     options
 }
@@ -732,7 +742,8 @@ fn show_reading(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: R
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
     let Some(metrics) = reading_metrics::read(ui) else { return };
-    let layout = prepare_layout(app, full, &metrics, Env::of(ui).tokens.size.rail.width, ui.ctx());
+    let side = app.canvas.page_side.unwrap_or(0.0);
+    let layout = prepare_layout(app, full, &metrics, side, ui.ctx());
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
     } else {
@@ -754,7 +765,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         if let Some(c) = c
             && let Some(page) = layout.pages.get(c.page)
         {
-            state.go_to = Some((c.page, f64::from(c.top / page.h.max(1.0))));
+            state.go_to = Some(GoTo::Top { page: c.page, fraction: f64::from(c.top / page.h.max(1.0)) });
             state.current = c.page;
         }
     }
@@ -871,6 +882,20 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         });
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
+    let side = out.spacing.side as f32;
+    if side.is_finite() {
+        let side = side.max(0.0);
+        if app.canvas.page_side.is_none_or(|prev| (prev - side).abs() > 0.01) {
+            app.canvas.page_side = Some(side);
+            if app.session.view.mode == wordcraft_layout::ViewMode::Web {
+                app.canvas.web_force_reflow = true;
+                ui.ctx().request_discard("page view side gutter changed");
+                if !ui.ctx().will_discard() {
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
     // This pass's own input changed the document under the pages it drew: run the pass again, so the frame that
     // delivers a key paints its text (production laid out and painted in the one pass) rather than the next frame.
     if ran && !Arc::ptr_eq(&laid_before, &app.session.layout()) {
@@ -908,7 +933,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         ui.ctx().request_repaint();
     }
     if let Some(go) = fix.go_to {
-        state.go_to = Some(go);
+        state.go_to = Some(GoTo::Top { page: go.0, fraction: go.1 });
         ui.ctx().request_repaint();
     }
     // Dragging a selection past the view's edge scrolls on.
@@ -920,7 +945,9 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
         let per_unit = v.zoom.max(f64::EPSILON);
         let size = Size::new(out.layout.size.width / per_unit, out.layout.size.height / per_unit);
         if Autoscroll::scroll(&mut v, step, size).is_some() {
-            out.adopt(&mut state, &v);
+            // The view moved in document units; the state keeps screen points.
+            state.offset.0 += (v.center.x - view.center.x) * view.zoom;
+            state.offset.1 += (v.center.y - view.center.y) * view.zoom;
             ui.ctx().request_repaint();
         }
     }
