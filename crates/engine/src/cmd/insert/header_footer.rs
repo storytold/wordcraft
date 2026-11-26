@@ -77,11 +77,10 @@ pub(crate) fn link_to_previous(s: &mut Session, v: &Value) -> CmdResult {
         layout.pages.get(page).map(|pg| pg.hf_slot).unwrap_or(wordcraft_layout::HfSlot::Default)
     };
 
-    let currently_linked = {
-        let sect = s.doc.section_mut_at(si);
+    let currently_linked = s.doc.sections().get(si).is_none_or(|(_, sect)| {
         let set = if header { &sect.headers } else { &sect.footers };
         slot_of(slot, set).is_none()
-    };
+    });
 
     let target_linked = p::bool(v, "linked").unwrap_or(!currently_linked);
     if target_linked == currently_linked {
@@ -117,6 +116,8 @@ pub(crate) fn link_to_previous(s: &mut Session, v: &Value) -> CmdResult {
 
         let kind = if header { PartKind::Header } else { PartKind::Footer };
         let new_id = s.doc.add_part(kind, blocks);
+        // Unlinked parts are intentional section overrides; clear any stale tracking entry if `add_part` reused an id.
+        s.new_header_parts.retain(|id| *id != new_id);
 
         let sect = s.doc.section_mut_at(si);
         let set = if header { &mut sect.headers } else { &mut sect.footers };

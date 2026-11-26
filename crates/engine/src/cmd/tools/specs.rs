@@ -238,7 +238,20 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.linkToPrevious", "Link to Previous", "Header & Footer › Navigation", |s, v| {
             crate::cmd::insert::link_to_previous(s, v)
         })
-        .when(|s| if crate::cmd::page::section_index_for_hf(s) == 0 { Some("first section") } else { None })
+        .when(|s| {
+            let in_hf = matches!(
+                s.sel.focus.story,
+                wordcraft_doc::StoryRef::Part(id)
+                    if s.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer))
+            );
+            if !in_hf {
+                Some("not in a header or footer")
+            } else if crate::cmd::page::section_index_for_hf(s) == 0 {
+                Some("first section")
+            } else {
+                None
+            }
+        })
         .key(crate::cmd::non_mac("Alt+Shift+R"))
         .params(r#"{"linked"?: bool, "footer"?: bool}"#),
         CommandSpec::new("hf.next", "Next Section", "Header & Footer › Navigation", |s, _| hf_nav(s, 1)).pure(),

@@ -475,11 +475,11 @@ fn relinking_when_previous_has_no_header_moves_caret_to_body() {
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
 
-    // Unlink Section 2 and give it a header
-    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    // Give Section 2 an independent header while Section 1 has none, then edit it
+    let s2_id = s.doc.add_part(PartKind::Header, vec![para_block(Paragraph::new().styled("Header"))]);
+    s.doc.last_section.headers.default = Some(s2_id);
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
     assert!(!crate::cmd::page::is_hf_linked(&s));
-    s.run("insert.editHeader", &json!({})).unwrap();
-    let s2_id = s.doc.last_section.headers.default.unwrap();
     assert!(matches!(s.sel.focus.story, StoryRef::Part(id) if id == s2_id));
 
     // Re-link Section 2 to previous: previous has no header, so caret moves back to Body
@@ -501,13 +501,13 @@ fn link_to_previous_is_idempotent_when_explicitly_setting_same_state() {
     s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
 
     // Explicit linked: true when already linked is a no-op
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
     let res = s.run("layout.linkToPrevious", &json!({"linked": true})).unwrap();
     assert_eq!(res["linked"], true);
     assert!(crate::cmd::page::is_hf_linked(&s));
 
     // Unlink Section 2
     s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
-    s.run("insert.editHeader", &json!({})).unwrap();
     s.run("select.all", &json!({})).unwrap();
     s.run("text.insert", &json!({"text": "Custom Content"})).unwrap();
     let original_part = s.doc.last_section.headers.default.unwrap();
@@ -561,6 +561,44 @@ fn unlinked_empty_footer_does_not_silently_relink_on_close_or_save() {
 }
 
 #[test]
+fn unlinked_header_does_not_relink_when_part_id_reused_after_empty_footer_strip() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    // 1. Give section 1 the header "Header 1", then add a next-page break.
+    s.run("text.insert", &json!({"text": "Section 1"})).unwrap();
+    s.run("insert.header", &json!({"text": "Header 1"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
+
+    // 2. Edit section 1's footer area and close it without typing; empty footer id is stripped
+    // from doc.parts while staying in new_header_parts.
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    let stripped_footer_id = match s.sel.focus.story {
+        StoryRef::Part(id) => id,
+        other => panic!("expected footer part, got {other:?}"),
+    };
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    assert!(!s.doc.parts.contains_key(&stripped_footer_id));
+    assert!(s.new_header_parts.contains(&stripped_footer_id));
+
+    // 3. Edit section 2's header and unlink it; Document::add_part reuses the stripped id.
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    let res = s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    let unlinked_id = res["story"].as_u64().unwrap() as u32;
+    assert_eq!(unlinked_id, stripped_footer_id, "repro relies on add_part reusing the stripped id");
+    assert!(!s.new_header_parts.contains(&unlinked_id), "unlinked part id must be cleared from new_header_parts");
+
+    // 4. Select all, delete, and close; section 2 must stay unlinked and saved_copy must not strip it.
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.delete", &json!({})).unwrap();
+    assert!(super::header_footer::saved_copy(&s).is_none(), "save must not strip unlinked empty header");
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    assert_eq!(s.doc.sections()[1].1.headers.default, Some(unlinked_id));
+    assert!(s.doc.parts.contains_key(&unlinked_id));
+}
+
+#[test]
 fn unlinking_duplicates_text_boxes_into_independent_stories() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("text.insert", &json!({"text": "Section 1"})).unwrap();
@@ -590,7 +628,7 @@ fn unlinking_duplicates_text_boxes_into_independent_stories() {
     s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
 
     // Unlink Section 2's header
-    s.page_hint = 1;
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
     s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
 
     let s2_hid = s.doc.last_section.headers.default.unwrap();
@@ -771,8 +809,8 @@ fn hf_nav_synchronizes_page_hint() {
 
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s.run("text.insert", &json!({"text": "Section 2"})).unwrap();
-    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("select.all", &json!({})).unwrap();
     s.run("text.insert", &json!({"text": "Header 2"})).unwrap();
 
@@ -840,8 +878,8 @@ fn even_page_resolves_inherited_even_header_before_default() {
     // Section 2: unlinked default header, but even header linked (None)
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s.run("text.insert", &json!({"text": "Sec 2 Page 3"})).unwrap();
-    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("insert.editHeader", &json!({"page": 2})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("select.all", &json!({})).unwrap();
     s.run("text.insert", &json!({"text": "S2 Default"})).unwrap();
     s.run("insert.closeHeader", &json!({})).unwrap();
@@ -888,8 +926,8 @@ fn hf_nav_prefers_nearest_section_in_navigation_direction() {
     // Section 2: independent header (Header 2)
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s.run("text.insert", &json!({"text": "Sec 2"})).unwrap();
-    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("select.all", &json!({})).unwrap();
     s.run("text.insert", &json!({"text": "Header 2"})).unwrap();
     let h2_id = s.doc.last_section.headers.default.unwrap();
@@ -903,8 +941,8 @@ fn hf_nav_prefers_nearest_section_in_navigation_direction() {
     // Section 4: independent header (Header 4)
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
     s.run("text.insert", &json!({"text": "Sec 4"})).unwrap();
-    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("insert.editHeader", &json!({"page": 3})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
     s.run("select.all", &json!({})).unwrap();
     s.run("text.insert", &json!({"text": "Header 4"})).unwrap();
 
