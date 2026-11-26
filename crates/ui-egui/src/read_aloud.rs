@@ -177,3 +177,35 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui) {
         ui.ctx().request_repaint();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+
+    fn harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+        crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        )
+    }
+
+    /// #1885: The Read Aloud player opens as a modeless dialog and closes from its title bar close action.
+    #[test]
+    fn read_aloud_player_closes_from_title_bar() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.session.read_aloud.open = true;
+        let mut h = harness(app);
+        h.run_steps(4);
+        assert!(h.state().session.read_aloud.open, "the player is open");
+        let close = h.query_all(By::new().role(Role::Button).label("Close")).next().expect("close button on player");
+        close.click();
+        h.run_steps(3);
+        assert!(!h.state().session.read_aloud.open, "the player stops and closes");
+    }
+}

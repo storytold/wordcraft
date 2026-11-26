@@ -274,7 +274,7 @@ fn body(ui: &mut Ui, form: &mut ModifyStyleForm, catalog: &Arc<Catalog>, setting
             &mut |t, _| Tab::new(label(if *t == 0 { tl!("Font") } else { tl!("Paragraph") })),
         );
         for event in out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(t) = keys.last()
             {
                 form.tab = *t;

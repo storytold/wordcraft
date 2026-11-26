@@ -5,7 +5,7 @@ use craft::automation::control::{ControlRequest, Reply};
 use craft::host::{PickId, PickKind, PickRequest, Picked, ScriptedFiles};
 use craft::platform::clock::monotonic_ms;
 use craft::platform::default_app::{DefaultApp, DefaultAppError};
-use craft::platform::open::{DropTarget, DroppedFile, FileIntake};
+use craft::platform::open::{DroppedFile, FileIntake};
 use craft::ui::shell::ScreenMode;
 use std::sync::Arc;
 
@@ -55,6 +55,24 @@ fn save_as_suggests_the_first_words_of_a_new_document() {
     assert_eq!(app.default_save_name(), "kept.docm", "a saved file keeps its name and format");
 }
 
+/// #3634: every source of the title (path, file name, document title) drops NUL.
+#[test]
+fn title_stem_omits_nul_from_each_title_source() {
+    let mut app = app();
+    let fallback = app.title_stem();
+    for title in ["Résumé\u{0} notes", "\u{0}"] {
+        let expected = if title == "\u{0}" { fallback.as_str() } else { "Résumé notes" };
+        app.session.doc.core.title = title.into();
+        assert_eq!(app.title_stem(), expected);
+        app.session.file_name = Some(title.into());
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = Some(std::path::PathBuf::from(format!("{title}.docx")));
+        assert_eq!(app.title_stem(), expected);
+        app.session.path = None;
+        app.session.file_name = None;
+    }
+}
+
 /// A harness on a document with text whose page has the keyboard.
 fn canvas_harness() -> egui_kittest::Harness<'static, WordApp> {
     let mut a = app();
@@ -84,6 +102,7 @@ type Rig = egui_kittest::Harness<'static, WordApp>;
 /// runs it before the second (`raw_input_hook`), as on the desktop.
 fn press(h: &mut Rig, key: egui::Key, modifiers: egui::Modifiers) {
     h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
     h.step();
     h.step();
 }
@@ -265,10 +284,12 @@ fn row_mod_shift_0_resets_the_interface_size_unless_bound() {
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: true, repeat: false, modifiers: altgr });
     h.event(egui::Event::ModifiersChanged(altgr));
     h.event(egui::Event::Text("}".into()));
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: None, pressed: false, repeat: false, modifiers: altgr });
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "AltGr+0 doesn't reset");
     assert_eq!(body_text(h.state()), "}", "AltGr+0 types the character");
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: false, repeat: false, modifiers: chord });
     h.step();
     h.step();
     assert!(h.state().ui.interface_size.is_auto(), "Ctrl+Shift+0 returns to Auto");
@@ -277,6 +298,7 @@ fn row_mod_shift_0_resets_the_interface_size_unless_bound() {
     // PLAN(shell-w7): sh.A11 `Session::keymap_mut` over `Overrides::insert`.
     h.state_mut().session.keymap_mut().insert("view.focus", vec!["Mod+Shift+0".into()]);
     h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: true, repeat: false, modifiers: chord });
+    h.event(egui::Event::Key { key: egui::Key::Num0, physical_key: Some(egui::Key::Num0), pressed: false, repeat: false, modifiers: chord });
     h.step();
     h.step();
     assert_eq!(h.state().ui.interface_size.percent(), Some(300), "the size stays");
@@ -594,7 +616,7 @@ impl craft::platform::clipboard::ClipboardBackend for LatePaste {
 fn drop_files(a: &mut WordApp, files: Vec<DroppedFile>) {
     let (intake, sender) = FileIntake::new(craft::host::Wake::none());
     a.services.intake = Some(intake);
-    sender.dropped(files, DropTarget::Elsewhere);
+    sender.dropped(files);
 }
 
 /// An in-memory dropped file.
@@ -1932,6 +1954,21 @@ fn save_prompt_shows_why_the_save_failed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #3172: the ribbon's combo boxes name themselves: a screen reader reads their label (Font,
+/// Font Size), and the drop-down arrows say what they drop down.
+#[test]
+fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(6);
+    for (role, name) in [(Role::ComboBox, "Font"), (Role::ComboBox, "Font Size"), (Role::Button, "Font Color")] {
+        assert!(h.query_by_role_and_label(role, name).is_some(), "nothing on the ribbon is called {name:?} with {role:?}");
+    }
+}
+
 /// #3172: the Paste button is named "Paste": its tooltip adds the key as the platform writes it,
 /// so its name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
 #[test]
@@ -2541,7 +2578,7 @@ impl WebSaves {
         let answered = self.0.answer_to(
             id,
             match ended {
-                Ended::Saved => Picked::Paths(vec![std::path::PathBuf::from("novel.docx")]),
+                Ended::Saved => Picked::Saved { path: std::path::PathBuf::from("novel.docx"), file_type: None },
                 Ended::Cancelled => Picked::Cancelled,
                 Ended::Failed(why) => Picked::Failed(why),
             },
@@ -3348,7 +3385,6 @@ fn f11_and_escape_toggle_full_screen() {
     for _ in 0..6 {
         h.step();
     }
-    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     // Run frames and return the full-screen requests the window got.
     let sent = |h: &mut egui_kittest::Harness<WordApp>| {
         let mut out = Vec::new();
@@ -3359,28 +3395,84 @@ fn f11_and_escape_toggle_full_screen() {
         out
     };
     assert_eq!(sent(&mut h), vec![], "a normal window to start with");
-    h.event(key(egui::Key::F11));
+    h.key_press(egui::Key::F11);
     assert_eq!(sent(&mut h), vec![Fullscreen(true)], "F11");
     assert!(h.state().session.view.full_screen);
-    h.event(key(egui::Key::F11));
+    h.key_press(egui::Key::F11);
     assert_eq!(sent(&mut h), vec![Fullscreen(false)], "F11 again");
     assert!(!h.state().session.view.full_screen);
     // The command (ribbon, command search, agents), then Escape.
     assert_eq!(h.state_mut().run("view.fullScreen", json!({})).unwrap(), json!({"value": true}));
     assert_eq!(sent(&mut h), vec![Fullscreen(true)], "the command");
-    h.event(key(egui::Key::Escape));
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![Fullscreen(false)], "Escape");
     // Escape in a normal window doesn't touch the window.
-    h.event(key(egui::Key::Escape));
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![]);
     // Escape closing a dialog leaves full screen alone.
     h.state_mut().run("view.fullScreen", json!({"value": true})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "zoom"})).unwrap();
     assert_eq!(sent(&mut h), vec![Fullscreen(true)]);
-    h.event(key(egui::Key::Escape));
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![]);
     assert!(open_dialog(h.state()).is_none(), "Escape closed the dialog");
     assert!(h.state().session.view.full_screen, "and only that");
+}
+
+/// The Full Screen button tells assistive technology what the command can do: it is enabled
+/// exactly when the command is, so the browser build (which keeps full screen to itself)
+/// does not announce a control that cannot be activated.
+#[test]
+fn the_full_screen_button_reports_the_commands_own_enabled_state() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use wordcraft_engine::{CommandSpec, Registry};
+
+    // The browser build's reason for refusing full screen, forced here so the test says
+    /// something on every platform.
+    fn unavailable(_: &wordcraft_engine::Session) -> Option<&'static str> {
+        Some("Use the browser's full screen (F11)")
+    }
+
+    let mut a = app();
+    let specs: Vec<CommandSpec> = a
+        .session
+        .registry
+        .all()
+        .iter()
+        .map(|s| {
+            if s.id == "view.fullScreen" {
+                CommandSpec {
+                    id: s.id,
+                    label: s.label,
+                    location: s.location,
+                    shortcut: s.shortcut,
+                    params: s.params,
+                    mutates: s.mutates,
+                    enabled: unavailable,
+                    run: s.run,
+                }
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
+    a.session.registry = std::sync::Arc::new(Registry::new(specs));
+
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1920.0, 900.0)).build_eframe(|_| a);
+    for _ in 0..6 {
+        h.step();
+    }
+    h.state_mut().run("ui.tab", json!({ "tab": "View" })).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    let node = h
+        .query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button))
+        .into_iter()
+        .find(|n| n.accesskit_node().label().as_deref().is_some_and(|l| l.replace('\n', " ").contains("Full Screen")))
+        .expect("the Full Screen button is on the View tab");
+    assert!(!crate::app::command_board::command_enabled(h.state(), "view.fullScreen"), "the command is unavailable, as the test arranged it",);
+    assert!(node.accesskit_node().is_disabled(), "a control the command refuses is announced as disabled",);
 }
 
 /// #980: in full screen, Escape with text selected collapses the selection (as in a normal
@@ -3392,7 +3484,6 @@ fn escape_collapses_a_selection_before_leaving_full_screen() {
     for _ in 0..6 {
         h.step();
     }
-    let esc = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     let sent = |h: &mut egui_kittest::Harness<WordApp>| {
         let mut out = Vec::new();
         for _ in 0..2 {
@@ -3408,11 +3499,11 @@ fn escape_collapses_a_selection_before_leaving_full_screen() {
     h.state_mut().run("view.fullScreen", json!({"value": true})).unwrap();
     assert_eq!(sent(&mut h), vec![Fullscreen(true)]);
     assert!(!h.state().session.sel.is_collapsed());
-    h.event(esc.clone());
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![], "Escape with a selection stays in full screen");
     assert!(h.state().session.sel.is_collapsed(), "and collapses the selection");
     assert!(h.state().session.view.full_screen);
-    h.event(esc);
+    h.key_press(egui::Key::Escape);
     assert_eq!(sent(&mut h), vec![Fullscreen(false)], "Escape with nothing selected leaves");
     assert!(!h.state().session.view.full_screen);
 }
@@ -3433,6 +3524,33 @@ fn full_screen_follows_the_window() {
     a.follow_screen_mode(ScreenMode::Standard);
     assert!(!a.session.view.focus_mode, "Focus ended with the window's full screen");
     assert!(!a.session.view.full_screen);
+}
+
+/// #1678: Focus and Full Screen View put the window in full screen, asked of the system once
+/// per change (switching between the two keeps it), and the usual window comes back after.
+#[test]
+fn focus_and_full_screen_view_ask_for_full_screen_once_per_change() {
+    use egui::ViewportCommand::Fullscreen;
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(|_| app());
+    for _ in 0..6 {
+        h.step();
+    }
+    let sent = |h: &mut egui_kittest::Harness<WordApp>| {
+        let mut out = Vec::new();
+        for _ in 0..2 {
+            h.step();
+            out.extend(h.output().viewport_output.values().flat_map(|v| v.commands.iter()).filter(|c| matches!(c, Fullscreen(_))).cloned());
+        }
+        out
+    };
+    assert_eq!(sent(&mut h), vec![], "a normal window to start with");
+    h.state_mut().run("view.focus", json!({})).unwrap();
+    assert_eq!(sent(&mut h), vec![Fullscreen(true)]);
+    assert_eq!(sent(&mut h), vec![]);
+    h.state_mut().run("view.fullScreenView", json!({})).unwrap();
+    assert_eq!(sent(&mut h), vec![], "Focus to Full Screen View stays full screen");
+    h.state_mut().run("view.fullScreenView", json!({})).unwrap();
+    assert_eq!(sent(&mut h), vec![Fullscreen(false)]);
 }
 
 /// #312: Dark page darkens only the pages; the interface keeps following its own setting.
