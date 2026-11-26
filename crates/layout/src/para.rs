@@ -144,13 +144,17 @@ impl ParaLayout {
     fn auto_space_after(&self, k: usize) -> f32 {
         self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)
     }
-    /// The line the list label is drawn on: the first, unless the paragraph opens with a page
-    /// break, when Word draws it with the text on the next page.
+    /// The line the list label is drawn on: the first, unless the paragraph opens with a page or
+    /// column break, when Word draws it with the text on the next page or in the next column
+    /// (#7057).
     pub fn label_line(&self) -> usize {
         let opens_with_break = self.lines.len() > 1
             && self.lines.first().is_some_and(|l| {
-                l.end == LineEnd::PageBreak
-                    && self.clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker)))
+                matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
+                    && self
+                        .clusters
+                        .get(l.c0..l.c1)
+                        .is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::ColumnBreak | ClKind::Marker)))
             });
         usize::from(opens_with_break)
     }
