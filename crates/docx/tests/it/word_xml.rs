@@ -131,6 +131,17 @@ fn word_2003_xml_picture_keeps_washout() {
     assert!(matches!(pic, Some(InlineObject::Image { fx, .. }) if (fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2), "{pic:?}");
 }
 
+/// Word 2003 XML has no document defaults, so its paragraphs get no space after, as in Word 2003:
+/// not Word's own 8 pt that a `.docx` without `w:pPrDefault` gets.
+#[test]
+fn word_2003_xml_paragraphs_have_no_default_space_after() {
+    let doc = read_xml(wordml_2003_sample().as_bytes()).unwrap();
+    assert!(doc.styles.default_para_present);
+    assert_eq!(doc.styles.para_defaults().space_after, None);
+    let p = paras(&doc).into_iter().find(|p| p.plain_text() == "bean guide").expect("a plain paragraph");
+    assert_eq!(doc.styles.resolve_para(&p.props).space_after, 0.0);
+}
+
 #[test]
 fn imports_word_2003_xml() {
     let xml = wordml_2003_sample();
