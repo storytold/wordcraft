@@ -1,5 +1,5 @@
 //! Localized print-page wording around the shared, backend-independent controls.
-pub use craft::print::ui::{Discover, Duplex, Feedback, Printer, Settings, State};
+pub use craft::print::ui::{Destination, Discover, Duplex, Feedback, Printer, Settings, State};
 use serde_json::{Value, json};
 
 use crate::print_page::{NO_SCALING, ORIENTATIONS, PAGES_PER_SHEET, PARITIES, PrintPage, RANGES};
@@ -43,7 +43,7 @@ pub fn settings(state: &mut State, params: &Value, discover: Option<&Discover>) 
         if !state.printers.iter().any(|available| available.name == printer) {
             return Err("printer must be a name from the discovered list".into());
         }
-        next.printer = printer.to_owned();
+        next.destination = Destination::Printer(printer.to_owned());
     }
     if let Some(value) = object.get("copies") {
         let copies = value.as_u64().filter(|copies| (1..=999).contains(copies)).ok_or("copies must be an integer from 1 to 999")?;
@@ -82,7 +82,7 @@ pub fn settings(state: &mut State, params: &Value, discover: Option<&Discover>) 
         Some(_) => ("idle", ""),
     };
     Ok(json!({
-        "printer": state.settings.printer, "copies": state.settings.copies,
+        "printer": printer_name(&state.settings), "copies": state.settings.copies,
         "duplex": match state.settings.duplex { None => "printerDefault", Some(Duplex::LongEdge) => "longEdge", Some(Duplex::ShortEdge) => "shortEdge", Some(_) => "off" },
         "grayscale": state.settings.grayscale,
         "printers": state.printers.iter().map(|printer| json!({"name": printer.name, "default": printer.default})).collect::<Vec<Value>>(),
@@ -228,11 +228,19 @@ pub fn pwg_media(paper: &str) -> Option<&'static str> {
     })
 }
 
+/// The chosen printer's name; empty when none is chosen or the destination is not a printer.
+pub(crate) fn printer_name(settings: &Settings) -> &str {
+    match &settings.destination {
+        Destination::Printer(name) => name,
+        _ => "",
+    }
+}
+
 /// The spooler's job for `settings`: the app's choices, shrink-to-fit paper and the options list.
 // PLAN: assumed `craft::print` is reachable from ui-egui (the Job is built here, as apps/wordcraft/src/print.rs did).
 fn job_of(settings: &Settings, collate: bool, options: Vec<(String, String)>) -> craft::print::Job {
     craft::print::Job {
-        printer: (!settings.printer.is_empty()).then(|| settings.printer.clone()),
+        printer: Some(printer_name(settings)).filter(|name| !name.is_empty()).map(str::to_owned),
         copies: settings.copies.clamp(1, 999),
         collate,
         duplex: settings.duplex.map(|value| match value {
@@ -254,6 +262,11 @@ pub fn submit(app: &mut crate::WordApp, params: &Value) -> Result<Value, String>
     let Some(spool) = app.services.print.clone() else {
         return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
     };
+    // Save as PDF is WordCraft's own route, not the spooler's.
+    if app.printing.settings.destination == Destination::File {
+        app.print_pdf_dialog();
+        return Ok(json!({"saveAsPdf": true}));
+    }
     let chooses = spool.chooses_printer();
     if chooses && !app.printing.ready() {
         return Err("Select an available printer in File > Print before submitting.".into());
