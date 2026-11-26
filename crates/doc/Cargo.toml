@@ -16,6 +16,7 @@ workspace = true
 test-support = ["craft-zip/test-support"]
 
 [dependencies]
+craft-codepage = { workspace = true }
 wordcraft-geom = { workspace = true }
 craft-zip = { workspace = true }
 base64 = { workspace = true }

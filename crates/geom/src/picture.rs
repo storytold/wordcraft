@@ -9,7 +9,8 @@ use std::borrow::Cow;
 
 use craft_image_codecs::{
     ChannelLayout, CodecError, DecodeOptions, EncodeOptions, Format as CodecFormat, Image as CodecImage, Limits as CodecLimits, RasterColorType,
-    SampleType, decode_as_with, detect, encode as codec_encode, inspect_raster, probe_size,
+    SampleType, bmp_probe, decode_as_with, detect, encode as codec_encode, inspect_raster, jpeg_worst_case_coefficients, png_probe, probe_size,
+    webp_probe,
 };
 use image::{DynamicImage, ImageBuffer, ImageFormat};
 
@@ -147,7 +148,7 @@ pub fn encode_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8) -> Result<V
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let format = detect(bytes)?;
     match format {
-        CodecFormat::Png => png_chunks(bytes).map(|(w, h, _, _)| (w, h)),
+        CodecFormat::Png => png_probe::pixel_model(bytes).ok().map(|m| (m.width, m.height)),
         CodecFormat::Jpeg | CodecFormat::Tiff | CodecFormat::Gif | CodecFormat::Bmp => {
             inspect_raster(bytes).ok().flatten().map(|i| (i.width, i.height))
         }
@@ -197,7 +198,7 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     let format = from_codec_format(codec_fmt).ok_or(Refusal::NotAPicture)?;
     let held = match format {
         ImageFormat::Png | ImageFormat::Gif | ImageFormat::WebP | ImageFormat::Bmp => 0,
-        ImageFormat::Jpeg => jpeg_coefficients(bytes),
+        ImageFormat::Jpeg => jpeg_worst_case_coefficients(bytes),
         ImageFormat::Tiff => {
             if !tiff_compression(bytes).is_some_and(|c| TIFF_COMPRESSIONS.contains(&c)) {
                 return Err(Refusal::Unsupported("TIFF pictures with JPEG or an unknown compression can't be read"));
@@ -207,14 +208,17 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
         _ => return Err(Refusal::NotAPicture),
     };
     if format == ImageFormat::Png {
-        let (width, height, native, alpha) = png_chunks(bytes).ok_or_else(|| Refusal::Broken("its PNG header can't be read".into()))?;
+        // Measured from `IHDR` and the chunk headers: an ICC profile (`iCCP`) isn't inflated, though the
+        // decoder's own header read inflates one up to its 512 MiB limit.
+        let m = png_probe::pixel_model(bytes).map_err(|_| Refusal::Broken("its PNG header can't be read".into()))?;
+        let (width, height, native, alpha) = (m.width, m.height, u64::from(m.bytes_per_pixel()), m.has_alpha());
         let (width, height, peak) = sized(width, height, native, 0)?;
         return Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha });
     }
     if format == ImageFormat::WebP {
         let (width, height) = probe_size(bytes).map_err(broken)?;
         let (width, height, peak) = sized(width, height, 4, 0)?;
-        let alpha = bytes.get(12..16) == Some(b"VP8X") && bytes.get(20).is_some_and(|b| b & 0x10 != 0);
+        let alpha = webp_probe::has_alpha(bytes).unwrap_or(false);
         return Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha });
     }
     let info = inspect_raster(bytes).map_err(broken)?.ok_or_else(|| Refusal::Broken("its header can't be read".into()))?;
@@ -225,84 +229,26 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     Ok(Probe { bytes: Cow::Borrowed(bytes), format, width, height, peak, alpha })
 }
 
-/// A PNG's width, height, the bytes a pixel its decoder gives (samples under 8 bits widened to 8,
-/// a palette to RGB, `tRNS` to an alpha channel) and whether it has transparency, from `IHDR` and
-/// the chunk headers before the image data. The decoder's own header read inflates an ICC profile
-/// (`iCCP`) up to its 512 MiB default limit, for a picture that may only be measured.
-fn png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
-    let be = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
-    // The 8-byte signature, then IHDR: length, type, width, height, bit depth, colour type.
-    if bytes.get(12..16) != Some(b"IHDR".as_slice()) {
-        return None;
-    }
-    let (width, height) = (be(16)?, be(20)?);
-    let (depth, color) = (*bytes.get(24)?, *bytes.get(25)?);
-    let mut trns = false;
-    let mut at = 8usize;
-    loop {
-        let len = usize::try_from(be(at)?).ok()?;
-        match bytes.get(at.checked_add(4)?..at.checked_add(8)?)? {
-            b"IDAT" => break,
-            b"IEND" => return None,
-            b"tRNS" => trns = true,
-            _ => {}
-        }
-        at = at.checked_add(12)?.checked_add(len)?;
-    }
-    let (channels, alpha) = match color {
-        0 => (1 + u64::from(trns), trns),
-        2 | 3 => (3 + u64::from(trns), trns),
-        4 => (2, true),
-        6 => (4, true),
-        _ => return None,
-    };
-    Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
-}
-
-/// Prepend a 14-byte `BITMAPFILEHEADER` to a normalized DIB so `craft-image-codecs` can inspect and decode it as BMP.
-fn dib_to_bmp(dib: &[u8]) -> Vec<u8> {
-    let u16_at = |at: usize| dib.get(at..at + 2).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
-    let u32_at = |at: usize| dib.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-    let bi_size = u32_at(0).unwrap_or(40);
-    let offset = if bi_size == 12 {
-        let bpp = u16_at(10).unwrap_or(24);
-        let palette = if bpp <= 8 { (1u32 << bpp) * 3 } else { 0 };
-        14 + bi_size + palette
-    } else {
-        let bpp = u16_at(14).unwrap_or(24);
-        let compression = u32_at(16).unwrap_or(0);
-        let clr_used = u32_at(32).unwrap_or(0);
-        let palette_entries = if clr_used != 0 {
-            clr_used
-        } else if bpp <= 8 {
-            1u32 << bpp
-        } else {
-            0
-        };
-        let masks = if compression == 3 && bi_size >= 40 { 12 } else { 0 };
-        14u32.saturating_add(bi_size).saturating_add(masks).saturating_add(palette_entries.saturating_mul(4))
-    };
-    let file_size = u32::try_from(14 + dib.len()).unwrap_or(u32::MAX);
-    let mut bmp = Vec::with_capacity(14 + dib.len());
-    bmp.extend_from_slice(b"BM");
-    bmp.extend_from_slice(&file_size.to_le_bytes());
-    bmp.extend_from_slice(&[0u8; 4]);
-    bmp.extend_from_slice(&offset.to_le_bytes());
-    bmp.extend_from_slice(dib);
-    bmp
+/// [`bmp_probe::dib_to_bmp`], its failure (the BMP's bytes can't be allocated) as the refusal a
+/// picture too large to hold gets, with the size its header declares (0 × 0 when it can't be read).
+fn dib_to_bmp(dib: &[u8]) -> Result<Vec<u8>, Refusal> {
+    bmp_probe::dib_to_bmp(dib).map_err(|_| {
+        let (width, height) = dib_header_dims(dib).unwrap_or((0, 0));
+        Refusal::TooLarge { width, height }
+    })
 }
 
 /// Read a DIB's header: a BMP without its 14-byte file header, as the Windows clipboard holds
 /// one (`CF_DIB`, `CF_DIBV5`). Its layout is first made the one the decoder reads (see
-/// [`dib_layout`]).
+/// [`bmp_probe::dib_layout`]).
 ///
 /// # Errors
 ///
 /// Returns `Refusal::Broken` for an invalid DIB header and `Refusal::TooLarge` on size arithmetic
 /// overflow.
 pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
-    let dib = dib_layout(dib);
-    let bmp = dib_to_bmp(&dib);
+    let dib = bmp_probe::dib_layout(dib);
+    let bmp = dib_to_bmp(&dib)?;
     let (width, height, native, alpha) = match inspect_raster(&bmp) {
         Ok(Some(info)) => {
             let native = u64::from(info.channels.max(1)) * u64::from(info.bits_per_sample.max(8) / 8);
@@ -329,7 +275,7 @@ fn dib_header_dims(dib: &[u8]) -> Option<(u32, u32)> {
     }
     // Only the first 12 header bytes are read, so only they are wrapped: this runs for DIBs too
     // big to decode, which must not be copied whole.
-    craft_image_codecs::bmp_probe::dimensions(&dib_to_bmp(dib.get(..12).unwrap_or(dib)))
+    craft_image_codecs::bmp_probe::dimensions(&bmp_probe::dib_to_bmp(dib.get(..12).unwrap_or(dib)).ok()?)
 }
 
 /// A `width` × `height` picture of `native` bytes a pixel, with its peak (see [`peak_bytes`]).
@@ -474,100 +420,11 @@ fn peak_bytes(width: u32, height: u32, native: u64, held: u64) -> Option<u64> {
     Some(decoding.max(converting).max(premultiplying))
 }
 
-/// Bytes of DCT coefficients a progressive JPEG's decoder keeps for the whole picture while it
-/// reads the scans: zune-jpeg holds an `i16` per coefficient of every component, in whole MCUs.
-/// 0 for a baseline JPEG, decoded an MCU row at a time. Each frame header before the first scan
-/// counts and the largest wins; headers this can't follow are charged as the costliest frame.
-fn jpeg_coefficients(bytes: &[u8]) -> u64 {
-    let mut at = 2;
-    let mut most = 0u64;
-    loop {
-        if bytes.get(at) != Some(&0xFF) {
-            return worst_coefficients(bytes).max(most);
-        }
-        while bytes.get(at) == Some(&0xFF) {
-            at += 1;
-        }
-        let Some(&code) = bytes.get(at) else { return worst_coefficients(bytes).max(most) };
-        at += 1;
-        match code {
-            // Markers without a length: start of image, TEM, restarts.
-            0xD8 | 0x01 | 0xD0..=0xD7 => continue,
-            // End of image, start of scan: every frame header is behind.
-            0xD9 | 0xDA => return most,
-            _ => {}
-        }
-        let len = match (bytes.get(at), bytes.get(at + 1)) {
-            (Some(&hi), Some(&lo)) => usize::from(u16::from_be_bytes([hi, lo])),
-            _ => 0,
-        };
-        let Some(segment) = bytes.get(at + 2..at + len).filter(|_| len >= 2) else { return worst_coefficients(bytes).max(most) };
-        // SOF2, SOF6, SOF10 and SOF14 are the progressive frames.
-        if matches!(code, 0xC2 | 0xC6 | 0xCA | 0xCE) {
-            let Some(held) = frame_coefficients(segment) else { return worst_coefficients(bytes).max(most) };
-            most = most.max(held);
-        }
-        at += len;
-    }
-}
-
-/// [`jpeg_coefficients`] of one progressive frame header (after its length): the components'
-/// blocks per MCU (horizontal × vertical sampling) times the MCUs that cover the picture.
-fn frame_coefficients(sof: &[u8]) -> Option<u64> {
-    let height = u64::from(u16::from_be_bytes([*sof.get(1)?, *sof.get(2)?]));
-    let width = u64::from(u16::from_be_bytes([*sof.get(3)?, *sof.get(4)?]));
-    let n = usize::from(*sof.get(5)?);
-    let sampling: Vec<(u64, u64)> =
-        sof.get(6..6 + 3 * n)?.as_chunks::<3>().0.iter().map(|&[_, s, _]| (u64::from(s >> 4).clamp(1, 4), u64::from(s & 15).clamp(1, 4))).collect();
-    let (h_max, v_max) = sampling.iter().fold((1, 1), |(h, v), &(a, b)| (h.max(a), v.max(b)));
-    let mcus = width.div_ceil(8 * h_max).checked_mul(height.div_ceil(8 * v_max))?;
-    sampling.iter().try_fold(0u64, |sum, &(h, v)| sum.checked_add(mcus.checked_mul(2 * 64 * h * v)?))
-}
-
-/// The coefficients of the costliest progressive frame of the size the image crate reads from
-/// `bytes`: four components, each sampled 4 × 4, in MCUs of 32 pixels a side.
-fn worst_coefficients(bytes: &[u8]) -> u64 {
-    let Some((w, h)) = dimensions(bytes) else { return 0 };
-    let mcus = u64::from(w).div_ceil(32) * u64::from(h).div_ceil(32);
-    mcus.saturating_mul(2 * 64 * 16 * 4)
-}
-
 /// The compression of a classic TIFF's first image (the one the image crate decodes): 1 when the
 /// tag is missing. None when the header can't be read, or when the tag appears more than once:
 /// the decoder keeps the last copy, so a harmless first one must not hide a JPEG one after it.
 fn tiff_compression(bytes: &[u8]) -> Option<u16> {
     craft_tiff::probe::first_image_compression(bytes)
-}
-
-/// A DIB with a V4 or V5 header in the layout the decoder reads. A 32-bit one whose alpha mask
-/// is set but whose compression says `BI_RGB` is marked `BI_BITFIELDS` (with the usual colour
-/// masks when it gives none), so its alpha is kept as Windows programs mean it; arboard makes the
-/// same change. Bit fields then need the colour masks after the header too, where Windows puts a
-/// copy and the decoder skips them; a DIB without that copy (arboard writes one) gets it.
-fn dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
-    let u32_at = |d: &[u8], at: usize| d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-    let Some(size) = u32_at(&dib, 0).filter(|&s| s >= 108).and_then(|s| usize::try_from(s).ok()) else { return dib };
-    let put = |d: &mut Vec<u8>, at: usize, v: u32| {
-        if let Some(b) = d.get_mut(at..at + 4) {
-            b.copy_from_slice(&v.to_le_bytes());
-        }
-    };
-    if dib.get(14..16) == Some(&[32, 0]) && u32_at(&dib, 16) == Some(0) && u32_at(&dib, 52) == Some(0xFF00_0000) {
-        put(&mut dib, 16, 3);
-        if (40..52).step_by(4).all(|at| u32_at(&dib, at) == Some(0)) {
-            put(&mut dib, 40, 0x00FF_0000);
-            put(&mut dib, 44, 0x0000_FF00);
-            put(&mut dib, 48, 0x0000_00FF);
-        }
-    }
-    if u32_at(&dib, 16) == Some(3)
-        && size <= dib.len()
-        && let Some(masks) = dib.get(40..52).map(<[u8]>::to_vec)
-        && dib.get(size..size + 12) != Some(masks.as_slice())
-    {
-        dib.splice(size..size, masks);
-    }
-    dib
 }
 
 #[cfg(test)]
@@ -768,33 +625,120 @@ mod tests {
         assert_eq!(probe(&baseline).unwrap().peak_bytes(), 64 * 64 * 8);
     }
 
+    /// A JPEG's headers up to the first scan: frames `(marker, precision, w, h, components)`, then
+    /// a scan of `scan` components (none: no scan, the end of the image).
+    fn jpeg_headers(frames: &[(u8, u8, u16, u16, &[u8])], scan: Option<u8>) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0];
+        for &(marker, prec, w, h, comps) in frames {
+            b.extend_from_slice(&[0xFF, marker]);
+            #[expect(clippy::cast_possible_truncation, reason = "Fixtures hold at most four components.")]
+            let (n, len) = ((comps.len() / 3) as u8, (8 + comps.len()) as u16);
+            b.extend(len.to_be_bytes());
+            b.push(prec);
+            b.extend(h.to_be_bytes());
+            b.extend(w.to_be_bytes());
+            b.push(n);
+            b.extend_from_slice(comps);
+        }
+        if let Some(n) = scan {
+            b.extend_from_slice(&[0xFF, 0xDA, 0, 6 + 2 * n, n]);
+            (1..=n).for_each(|c| b.extend_from_slice(&[c, 0]));
+            b.extend_from_slice(&[0, 63, 0]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
+    const C444: &[u8] = &[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0];
+    const C420: &[u8] = &[1, 0x22, 0, 2, 0x11, 0, 3, 0x11, 0];
+    const GREY: &[u8] = &[1, 0x11, 0];
+
+    /// The JPEG budget before the cutover to the shared rule, as the oracle: the shared charge is
+    /// never less, and is equal wherever it adds nothing.
     #[test]
-    fn coefficients_follow_sampling_and_mcu_padding() {
-        // P, height, width, components (id, sampling, table).
-        let sof = |w: u16, h: u16, comps: &[u8]| {
-            let mut s = vec![8];
-            s.extend(h.to_be_bytes());
-            s.extend(w.to_be_bytes());
-            #[expect(clippy::cast_possible_truncation, reason = "These fixtures contain at most four three-byte component records.")]
-            s.push((comps.len() / 3) as u8);
-            s.extend(comps);
-            s
-        };
-        // Four components, no subsampling: 2 bytes a coefficient, 8 a pixel.
-        assert_eq!(frame_coefficients(&sof(64, 64, &[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0])), Some(64 * 64 * 8));
-        // 4:2:0: MCUs of 16 × 16 holding 4 + 1 + 1 blocks; a 1-pixel-wide picture still takes one.
-        assert_eq!(frame_coefficients(&sof(1, 16, &[1, 0x22, 0, 2, 0x11, 0, 3, 0x11, 0])), Some(128 * 6));
-        let mut short = sof(1, 16, &[1, 0x22, 0, 2, 0x11, 0]);
-        short[5] = 3;
-        assert_eq!(frame_coefficients(&short), None, "three components declared, two there");
-        // A marker walk over SOI, an APP0 segment, SOF2, then the scan.
-        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2];
-        let f = sof(64, 64, &[1, 0x11, 0]);
-        #[expect(clippy::cast_possible_truncation, reason = "This fixture's nine-byte frame header and length field fit u16.")]
-        jpeg.extend(((f.len() + 2) as u16).to_be_bytes());
-        jpeg.extend(&f);
-        jpeg.extend([0xFF, 0xDA]);
-        assert_eq!(jpeg_coefficients(&jpeg), 64 * 64 * 2);
+    fn jpeg_charge_is_never_less_than_the_local_one_it_replaced() {
+        let wide = &[1, 0xFF, 0, 2, 0xFF, 0, 3, 0xFF, 0];
+        let cmyk = &[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0];
+        let zero = &[1, 0x00, 0, 2, 0x00, 0, 3, 0x00, 0];
+        // (case, whether the shared rule is expected to charge more).
+        let cases: Vec<(Vec<u8>, bool)> = vec![
+            (jpeg_headers(&[(0xC0, 8, 640, 480, C420)], Some(3)), false),
+            (jpeg_headers(&[(0xC0, 8, 640, 480, GREY)], Some(1)), false),
+            (jpeg_headers(&[(0xC0, 8, 640, 480, C444)], Some(1)), true),
+            (jpeg_headers(&[(0xC1, 8, 640, 480, C420)], Some(2)), true),
+            (jpeg_headers(&[(0xC0, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, C420)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, C444)], Some(3)), false),
+            (jpeg_headers(&[(0xC2, 12, 640, 480, C444)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, cmyk)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, wide)], None), true),
+            (jpeg_headers(&[(0xC2, 8, 640, 480, zero)], None), false),
+            (jpeg_headers(&[(0xC6, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xCA, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xCE, 8, 640, 480, C444)], None), false),
+            (jpeg_headers(&[(0xC0, 8, 64, 64, GREY), (0xC2, 8, 6000, 4000, C444), (0xC2, 8, 100, 100, C444)], Some(1)), false),
+            (jpeg_headers(&[(0xC2, 8, 65535, 65535, cmyk)], None), false),
+            (jpeg_headers(&[], None), false),
+            (vec![0xFF, 0xD8], false),
+            (vec![], false),
+            (b"not a jpeg at all".to_vec(), false),
+        ];
+        let mut grew = 0;
+        for (b, expect_more) in &cases {
+            let (old, new) = (oracle_jpeg_coefficients(b), jpeg_worst_case_coefficients(b));
+            assert!(new >= old, "{b:02x?}: {new} < {old}");
+            assert_eq!(new > old, *expect_more, "{b:02x?}: {old} -> {new}");
+            grew += usize::from(new > old);
+        }
+        assert_eq!(grew, 3);
+        // Every prefix of a frame with a cut header, and pseudo-random damage: never less.
+        let full = jpeg_headers(&[(0xC2, 8, 3000, 2000, C420), (0xC0, 8, 100, 100, C444)], Some(1));
+        for n in 0..=full.len() {
+            assert!(jpeg_worst_case_coefficients(&full[..n]) >= oracle_jpeg_coefficients(&full[..n]), "prefix {n}");
+        }
+        let mut seed = 0x9e37_79b9u32;
+        for _ in 0..3000 {
+            let mut f = full.clone();
+            for _ in 0..3 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let (i, v) = ((seed >> 8) as usize % f.len(), (seed >> 24) as u8);
+                f[i] = v;
+            }
+            assert!(jpeg_worst_case_coefficients(&f) >= oracle_jpeg_coefficients(&f), "{f:02x?}");
+        }
+    }
+
+    #[test]
+    fn a_baseline_jpeg_with_a_short_first_scan_is_charged_its_coefficients() {
+        // 3-component 4:4:4 SOF0 of 8000 x 8000 (64 Mpx) whose first scan has one component: the
+        // decoder holds 2 bytes a coefficient of all three until the other scans, 6 bytes a pixel.
+        let b = jpeg_headers(&[(0xC0, 8, 8000, 8000, C444)], Some(1));
+        let (old, new) = (oracle_jpeg_coefficients(&b), jpeg_worst_case_coefficients(&b));
+        assert_eq!((old, new), (0, 8000 * 8000 * 6));
+        // 3 + 6 bytes a pixel beside the output passes the 512 MiB budget; it fit as 7 (the RGBA8 conversion).
+        let (before, after) = (peak_bytes(8000, 8000, 3, old), peak_bytes(8000, 8000, 3, new));
+        assert_eq!((before, after), (Some(8000 * 8000 * 8), Some(8000 * 8000 * 9)));
+        assert!(before.is_some_and(|p| p <= crate::MAX_DECODED_BYTES) && after.is_some_and(|p| p > crate::MAX_DECODED_BYTES));
+        // The same through `probe`, on a real JPEG whose headers are made so.
+        let mut jpeg = encode(image::RgbImage::from_pixel(16, 16, image::Rgb([200, 30, 30])), ImageFormat::Jpeg);
+        let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+        jpeg[sof + 5..sof + 7].copy_from_slice(&8000u16.to_be_bytes());
+        jpeg[sof + 7..sof + 9].copy_from_slice(&8000u16.to_be_bytes());
+        (0..3).for_each(|c| jpeg[sof + 11 + 3 * c] = 0x11);
+        let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+        jpeg.splice(sos..sos + 14, [0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 63, 0]);
+        let p = probe(&jpeg).unwrap();
+        assert_eq!((p.width, p.height, p.peak_bytes()), (8000, 8000, 8000 * 8000 * 9));
+        assert!(!p.fits(crate::MAX_DECODED_BYTES));
+    }
+
+    #[test]
+    fn jpeg_coefficients_follow_a_marker_walk() {
+        // SOI, an APP0 segment, SOF2, then the scan.
+        let jpeg = jpeg_headers(&[(0xC2, 8, 64, 64, GREY)], Some(1));
+        assert_eq!(jpeg_worst_case_coefficients(&jpeg), 64 * 64 * 2);
+        // 4:2:0: MCUs of 16 x 16 holding 4 + 1 + 1 blocks; a 1-pixel-wide picture still takes one.
+        assert_eq!(jpeg_worst_case_coefficients(&jpeg_headers(&[(0xC2, 8, 1, 16, C420)], None)), 128 * 6);
     }
 
     /// A little-endian TIFF header whose first IFD holds just a compression tag.
@@ -896,6 +840,518 @@ mod tests {
         lying[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
         for d in [short, lying] {
             assert!(probe_dib(d).and_then(|p| p.decode(1 << 20)).is_err());
+        }
+    }
+
+    // The local JPEG budget before it moved to `craft_image_codecs::jpeg_worst_case_coefficients` (#778), kept as the oracle.
+    /// Bytes of DCT coefficients a progressive JPEG's decoder keeps for the whole picture while it
+    /// reads the scans: zune-jpeg holds an `i16` per coefficient of every component, in whole MCUs.
+    /// 0 for a baseline JPEG, decoded an MCU row at a time. Each frame header before the first scan
+    /// counts and the largest wins; headers this can't follow are charged as the costliest frame.
+    fn oracle_jpeg_coefficients(bytes: &[u8]) -> u64 {
+        let mut at = 2;
+        let mut most = 0u64;
+        loop {
+            if bytes.get(at) != Some(&0xFF) {
+                return oracle_worst_coefficients(bytes).max(most);
+            }
+            while bytes.get(at) == Some(&0xFF) {
+                at += 1;
+            }
+            let Some(&code) = bytes.get(at) else { return oracle_worst_coefficients(bytes).max(most) };
+            at += 1;
+            match code {
+                // Markers without a length: start of image, TEM, restarts.
+                0xD8 | 0x01 | 0xD0..=0xD7 => continue,
+                // End of image, start of scan: every frame header is behind.
+                0xD9 | 0xDA => return most,
+                _ => {}
+            }
+            let len = match (bytes.get(at), bytes.get(at + 1)) {
+                (Some(&hi), Some(&lo)) => usize::from(u16::from_be_bytes([hi, lo])),
+                _ => 0,
+            };
+            let Some(segment) = bytes.get(at + 2..at + len).filter(|_| len >= 2) else { return oracle_worst_coefficients(bytes).max(most) };
+            // SOF2, SOF6, SOF10 and SOF14 are the progressive frames.
+            if matches!(code, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+                let Some(held) = oracle_frame_coefficients(segment) else { return oracle_worst_coefficients(bytes).max(most) };
+                most = most.max(held);
+            }
+            at += len;
+        }
+    }
+
+    /// `oracle_jpeg_coefficients` of one progressive frame header (after its length): the components'
+    /// blocks per MCU (horizontal × vertical sampling) times the MCUs that cover the picture.
+    fn oracle_frame_coefficients(sof: &[u8]) -> Option<u64> {
+        let height = u64::from(u16::from_be_bytes([*sof.get(1)?, *sof.get(2)?]));
+        let width = u64::from(u16::from_be_bytes([*sof.get(3)?, *sof.get(4)?]));
+        let n = usize::from(*sof.get(5)?);
+        let sampling: Vec<(u64, u64)> = sof
+            .get(6..6 + 3 * n)?
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[_, s, _]| (u64::from(s >> 4).clamp(1, 4), u64::from(s & 15).clamp(1, 4)))
+            .collect();
+        let (h_max, v_max) = sampling.iter().fold((1, 1), |(h, v), &(a, b)| (h.max(a), v.max(b)));
+        let mcus = width.div_ceil(8 * h_max).checked_mul(height.div_ceil(8 * v_max))?;
+        sampling.iter().try_fold(0u64, |sum, &(h, v)| sum.checked_add(mcus.checked_mul(2 * 64 * h * v)?))
+    }
+
+    /// The coefficients of the costliest progressive frame of the size the image crate reads from
+    /// `bytes`: four components, each sampled 4 × 4, in MCUs of 32 pixels a side.
+    fn oracle_worst_coefficients(bytes: &[u8]) -> u64 {
+        let Some((w, h)) = dimensions(bytes) else { return 0 };
+        let mcus = u64::from(w).div_ceil(32) * u64::from(h).div_ceil(32);
+        mcus.saturating_mul(2 * 64 * 16 * 4)
+    }
+
+    // The local DIB wrapping before it moved to `craft_image_codecs::bmp_probe` (#778), kept as the oracle.
+    /// Prepend a 14-byte `BITMAPFILEHEADER` to a normalized DIB so `craft-image-codecs` can inspect and decode it as BMP.
+    fn oracle_dib_to_bmp(dib: &[u8]) -> Vec<u8> {
+        let u16_at = |at: usize| dib.get(at..at + 2).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
+        let u32_at = |at: usize| dib.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        let bi_size = u32_at(0).unwrap_or(40);
+        let offset = if bi_size == 12 {
+            let bpp = u16_at(10).unwrap_or(24);
+            let palette = if bpp <= 8 { (1u32 << bpp) * 3 } else { 0 };
+            14 + bi_size + palette
+        } else {
+            let bpp = u16_at(14).unwrap_or(24);
+            let compression = u32_at(16).unwrap_or(0);
+            let clr_used = u32_at(32).unwrap_or(0);
+            let palette_entries = if clr_used != 0 {
+                clr_used
+            } else if bpp <= 8 {
+                1u32 << bpp
+            } else {
+                0
+            };
+            let masks = if compression == 3 && bi_size >= 40 { 12 } else { 0 };
+            14u32.saturating_add(bi_size).saturating_add(masks).saturating_add(palette_entries.saturating_mul(4))
+        };
+        let file_size = u32::try_from(14 + dib.len()).unwrap_or(u32::MAX);
+        let mut bmp = Vec::with_capacity(14 + dib.len());
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&file_size.to_le_bytes());
+        bmp.extend_from_slice(&[0u8; 4]);
+        bmp.extend_from_slice(&offset.to_le_bytes());
+        bmp.extend_from_slice(dib);
+        bmp
+    }
+
+    /// A DIB with a V4 or V5 header in the layout the decoder reads. A 32-bit one whose alpha mask
+    /// is set but whose compression says `BI_RGB` is marked `BI_BITFIELDS` (with the usual colour
+    /// masks when it gives none), so its alpha is kept as Windows programs mean it; arboard makes the
+    /// same change. Bit fields then need the colour masks after the header too, where Windows puts a
+    /// copy and the decoder skips them; a DIB without that copy (arboard writes one) gets it.
+    fn oracle_dib_layout(mut dib: Vec<u8>) -> Vec<u8> {
+        let u32_at = |d: &[u8], at: usize| d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        let Some(size) = u32_at(&dib, 0).filter(|&s| s >= 108).and_then(|s| usize::try_from(s).ok()) else { return dib };
+        let put = |d: &mut Vec<u8>, at: usize, v: u32| {
+            if let Some(b) = d.get_mut(at..at + 4) {
+                b.copy_from_slice(&v.to_le_bytes());
+            }
+        };
+        if dib.get(14..16) == Some(&[32, 0]) && u32_at(&dib, 16) == Some(0) && u32_at(&dib, 52) == Some(0xFF00_0000) {
+            put(&mut dib, 16, 3);
+            if (40..52).step_by(4).all(|at| u32_at(&dib, at) == Some(0)) {
+                put(&mut dib, 40, 0x00FF_0000);
+                put(&mut dib, 44, 0x0000_FF00);
+                put(&mut dib, 48, 0x0000_00FF);
+            }
+        }
+        if u32_at(&dib, 16) == Some(3)
+            && size <= dib.len()
+            && let Some(masks) = dib.get(40..52).map(<[u8]>::to_vec)
+            && dib.get(size..size + 12) != Some(masks.as_slice())
+        {
+            dib.splice(size..size, masks);
+        }
+        dib
+    }
+
+    /// The size and peak `probe_dib` reported before the cutover, as `(width, height, peak, alpha, bytes)`.
+    fn oracle_probe_dib(dib: Vec<u8>) -> Result<(u32, u32, u64, bool, Vec<u8>), Refusal> {
+        let dib = oracle_dib_layout(dib);
+        let bmp = oracle_dib_to_bmp(&dib);
+        let (width, height, native, alpha) = match inspect_raster(&bmp) {
+            Ok(Some(info)) => {
+                let native = u64::from(info.channels.max(1)) * u64::from(info.bits_per_sample.max(8) / 8);
+                (info.width, info.height, native, matches!(info.color_type, RasterColorType::GrayAlpha | RasterColorType::Rgba))
+            }
+            Ok(None) => return Err(Refusal::Broken("its DIB header can't be read".into())),
+            Err(CodecError::LimitExceeded(_)) => {
+                let (w, h) = dib_header_dims(&dib).ok_or_else(|| Refusal::Broken("its DIB header can't be read".into()))?;
+                (w, h, 4, false)
+            }
+            Err(e) => return Err(broken(e)),
+        };
+        let (width, height, peak) = sized(width, height, native, 0)?;
+        Ok((width, height, peak, alpha, bmp))
+    }
+
+    /// A DIB with a header of `size` bytes (12, 40, 52, 56, 64, 108 or 124), `bpp`, `compression`
+    /// and `clr_used`, followed by `tail` bytes.
+    fn dib_with(size: u32, bpp: u16, compression: u32, clr_used: u32, alpha_mask: u32, tail: &[u8]) -> Vec<u8> {
+        let mut d = vec![0u8; usize::try_from(size).unwrap()];
+        d[0..4].copy_from_slice(&size.to_le_bytes());
+        if size == 12 {
+            d[4..6].copy_from_slice(&3u16.to_le_bytes());
+            d[6..8].copy_from_slice(&2u16.to_le_bytes());
+            d[8..10].copy_from_slice(&1u16.to_le_bytes());
+            d[10..12].copy_from_slice(&bpp.to_le_bytes());
+        } else {
+            d[4..8].copy_from_slice(&3i32.to_le_bytes());
+            d[8..12].copy_from_slice(&2i32.to_le_bytes());
+            d[12..14].copy_from_slice(&1u16.to_le_bytes());
+            d[14..16].copy_from_slice(&bpp.to_le_bytes());
+            d[16..20].copy_from_slice(&compression.to_le_bytes());
+            d[32..36].copy_from_slice(&clr_used.to_le_bytes());
+            if size >= 56 {
+                d[52..56].copy_from_slice(&alpha_mask.to_le_bytes());
+            }
+            if size >= 52 {
+                for (at, m) in [(40, 0x00FF_0000u32), (44, 0x0000_FF00), (48, 0x0000_00FF)] {
+                    d[at..at + 4].copy_from_slice(&m.to_le_bytes());
+                }
+            }
+        }
+        d.extend_from_slice(tail);
+        d
+    }
+
+    fn crafted_dibs() -> Vec<Vec<u8>> {
+        let px = [[0u8, 0, 255, 128]; 6].concat();
+        let masks = [0x00u8, 0, 0xFF, 0, 0, 0xFF, 0, 0, 0xFF, 0, 0, 0];
+        let mut v = Vec::new();
+        for size in [12u32, 40, 52, 56, 64, 108, 124] {
+            for bpp in [1u16, 4, 8, 16, 24, 32] {
+                for compression in [0u32, 1, 2, 3, 6] {
+                    for clr_used in [0u32, 2, 300, u32::MAX] {
+                        for alpha_mask in [0u32, 0xFF00_0000] {
+                            for tail in [&[][..], &px[..], &masks[..], &[&masks[..], &px[..]].concat()[..]] {
+                                v.push(dib_with(size, bpp, compression, clr_used, alpha_mask, tail));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Clipboard layouts: the V5 helper's three, and a lying header size.
+        let q = [[0, 0, 255, 128], [255, 0, 0, 255]];
+        for (bitfields, copy) in [(false, false), (true, false), (true, true)] {
+            v.push(dib(2, 1, 0xFF00_0000, bitfields, copy, &q));
+            v.push(dib(2, 1, 0, bitfields, copy, &q));
+        }
+        v.push(dib(60_000, 60_000, 0xFF00_0000, false, false, &[]));
+        let mut lying = dib(2, 1, 0xFF00_0000, true, false, &q);
+        lying[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        v.push(lying);
+        v
+    }
+
+    // craft-image-codecs fixed two DIB behaviours after the cutover (craft-libs #2062); the oracle
+    // keeps the old ones, so these predicates name the inputs where the two must differ.
+
+    fn le32(d: &[u8], at: usize) -> Option<u32> {
+        d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
+    }
+
+    /// A 52- or 56-byte `BI_BITFIELDS` header: its masks are inside the header, so the pixel offset
+    /// no longer counts 12 appended mask bytes. Returns the new, independently computed offset.
+    fn v2v3_bitfields_offset(d: &[u8]) -> Option<u32> {
+        let size = le32(d, 0).unwrap_or(40);
+        if !matches!(size, 52 | 56) || le32(d, 16).unwrap_or(0) != 3 {
+            return None;
+        }
+        let bpp = d.get(14..16).and_then(|b| b.try_into().ok()).map_or(24, u16::from_le_bytes);
+        let clr_used = le32(d, 32).unwrap_or(0);
+        let entries = if clr_used != 0 {
+            clr_used
+        } else if bpp <= 8 {
+            1u32 << bpp
+        } else {
+            0
+        };
+        Some(14u32.saturating_add(size).saturating_add(entries.saturating_mul(4)))
+    }
+
+    /// A V4/V5 bit-fields DIB whose 12 bytes after the header equal the masks but whose payload is
+    /// no longer than the pixel rows need: those bytes are pixels, not a copy, so a copy is inserted.
+    /// Returns the masks the shared code inserts at `size`.
+    fn exact_payload_equal_to_masks(d: &[u8]) -> Option<(usize, [u8; 12])> {
+        let size = usize::try_from(le32(d, 0).filter(|&s| s >= 108)?).ok()?;
+        if size > d.len() {
+            return None;
+        }
+        let promote = d.get(14..16) == Some(&[32, 0][..]) && le32(d, 16) == Some(0) && le32(d, 52) == Some(0xFF00_0000);
+        let mut masks: [u8; 12] = d.get(40..52)?.try_into().ok()?;
+        if promote && masks == [0; 12] {
+            masks = [0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00];
+        }
+        if !(promote || le32(d, 16) == Some(3)) || d.get(size..size + 12) != Some(masks.as_slice()) {
+            return None;
+        }
+        let w = u64::try_from(i32::from_le_bytes(d.get(4..8)?.try_into().ok()?)).ok()?;
+        let h = u64::from(i32::from_le_bytes(d.get(8..12)?.try_into().ok()?).unsigned_abs());
+        let bpp = u64::from(u16::from_le_bytes(d.get(14..16)?.try_into().ok()?));
+        let need = usize::try_from(w.checked_mul(bpp)?.div_ceil(32).checked_mul(4)?.checked_mul(h)?).ok()?;
+        (d.len() - size <= need).then_some((size, masks))
+    }
+
+    #[test]
+    fn dib_wrapping_is_byte_equal_to_the_local_one_it_replaced() {
+        let (mut n, mut v2v3, mut exact) = (0, 0, 0);
+        for d in crafted_dibs() {
+            // Every truncation point of the header region, then the whole.
+            let cuts = (0..=d.len().min(140)).chain([d.len()]);
+            for cut in cuts {
+                let d = &d[..cut];
+                n += 1;
+                let (new, old) = (dib_to_bmp(d).unwrap(), oracle_dib_to_bmp(d));
+                if let Some(offset) = v2v3_bitfields_offset(d) {
+                    // New behaviour: only the offset differs, and it no longer counts the 12 mask bytes.
+                    v2v3 += 1;
+                    let mut expected = old;
+                    expected[10..14].copy_from_slice(&offset.to_le_bytes());
+                    assert_eq!(new, expected, "wrap, 52/56-byte bit fields, cut {cut}");
+                } else {
+                    assert_eq!(new, old, "wrap, cut {cut}");
+                }
+                let (new, old) = (bmp_probe::dib_layout(d.to_vec()), oracle_dib_layout(d.to_vec()));
+                if let Some((size, masks)) = exact_payload_equal_to_masks(d) {
+                    // New behaviour: the bytes after the header are pixels, so a mask copy is inserted.
+                    exact += 1;
+                    let mut expected = old;
+                    expected.splice(size..size, masks);
+                    assert_eq!(new, expected, "layout, exact payload equal to the masks, cut {cut}");
+                } else {
+                    assert_eq!(new, old, "layout, cut {cut}");
+                }
+            }
+        }
+        assert!(n > 100_000, "{n}");
+        // The exclusions are small and present: a predicate that matched nothing would hide a regression.
+        eprintln!("DIB corpus: {n} cases, {v2v3} excluded as 52/56-byte bit fields, {exact} as exact payload equal to the masks");
+        assert!(v2v3 > 0 && exact > 0 && v2v3 + exact < n / 10, "{v2v3} {exact}");
+    }
+
+    #[test]
+    fn probe_dib_is_unchanged_by_the_shared_wrapping() {
+        for d in crafted_dibs() {
+            for cut in [0, 4, 11, 12, 14, 40, 52, 100, 124, 130, d.len()] {
+                let d = d[..cut.min(d.len())].to_vec();
+                // The two DIB fixes change the bytes handed to the decoder; the wrapping test above pins
+                // them, so skip those inputs here.
+                if v2v3_bitfields_offset(&d).is_some() || exact_payload_equal_to_masks(&d).is_some() {
+                    continue;
+                }
+                let new = probe_dib(d.clone());
+                match (new, oracle_probe_dib(d.clone())) {
+                    (Ok(p), Ok((w, h, peak, alpha, bmp))) => {
+                        assert_eq!((p.width, p.height, p.peak, p.alpha), (w, h, peak, alpha), "{d:02x?}");
+                        assert_eq!(&*p.bytes, bmp.as_slice());
+                    }
+                    (Err(a), Err(b)) => assert_eq!(a, b, "{d:02x?}"),
+                    (a, b) => panic!("{d:02x?}: {:?} vs {:?}", a.map(|p| p.width), b.map(|o| o.0)),
+                }
+            }
+        }
+    }
+
+    // The local PNG header read before it moved to `craft_image_codecs::png_probe` (#778), kept as the oracle.
+    /// A PNG's width, height, the bytes a pixel its decoder gives (samples under 8 bits widened to 8,
+    /// a palette to RGB, `tRNS` to an alpha channel) and whether it has transparency, from `IHDR` and
+    /// the chunk headers before the image data. The decoder's own header read inflates an ICC profile
+    /// (`iCCP`) up to its 512 MiB default limit, for a picture that may only be measured.
+    fn oracle_png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
+        let be = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
+        // The 8-byte signature, then IHDR: length, type, width, height, bit depth, colour type.
+        if bytes.get(12..16) != Some(b"IHDR".as_slice()) {
+            return None;
+        }
+        let (width, height) = (be(16)?, be(20)?);
+        let (depth, color) = (*bytes.get(24)?, *bytes.get(25)?);
+        let mut trns = false;
+        let mut at = 8usize;
+        loop {
+            let len = usize::try_from(be(at)?).ok()?;
+            match bytes.get(at.checked_add(4)?..at.checked_add(8)?)? {
+                b"IDAT" => break,
+                b"IEND" => return None,
+                b"tRNS" => trns = true,
+                _ => {}
+            }
+            at = at.checked_add(12)?.checked_add(len)?;
+        }
+        let (channels, alpha) = match color {
+            0 => (1 + u64::from(trns), trns),
+            2 | 3 => (3 + u64::from(trns), trns),
+            4 => (2, true),
+            6 => (4, true),
+            _ => return None,
+        };
+        Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
+    }
+
+    /// WordCraft's WebP alpha rule before the cutover: the `VP8X` flag, nothing else.
+    fn oracle_webp_alpha(bytes: &[u8]) -> bool {
+        bytes.get(12..16) == Some(b"VP8X") && bytes.get(20).is_some_and(|b| b & 0x10 != 0)
+    }
+
+    fn new_png(b: &[u8]) -> Option<(u32, u32, u64, bool)> {
+        png_probe::pixel_model(b).ok().map(|m| (m.width, m.height, u64::from(m.bytes_per_pixel()), m.has_alpha()))
+    }
+
+    /// A PNG with the given IHDR fields and chunks before a (junk) `IDAT`.
+    fn png_with(width: u32, height: u32, depth: u8, color: u8, before_idat: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let chunk = |out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]| {
+            out.extend((data.len() as u32).to_be_bytes());
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            out.extend_from_slice(&[0; 4]);
+        };
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = [width.to_be_bytes(), height.to_be_bytes()].concat();
+        ihdr.extend_from_slice(&[depth, color, 0, 0, 0]);
+        chunk(&mut b, b"IHDR", &ihdr);
+        for (k, d) in before_idat {
+            chunk(&mut b, k, d);
+        }
+        chunk(&mut b, b"IDAT", &[1, 2, 3]);
+        chunk(&mut b, b"IEND", &[]);
+        b
+    }
+
+    #[test]
+    fn png_pixel_model_matches_the_local_header_read_for_every_valid_header() {
+        let valid: [(u8, &[u8]); 5] = [(0, &[1, 2, 4, 8, 16]), (2, &[8, 16]), (3, &[1, 2, 4, 8]), (4, &[8, 16]), (6, &[8, 16])];
+        let mut n = 0;
+        for (color, depths) in valid {
+            for &depth in depths {
+                for (trns, icc) in [(false, false), (true, false), (true, true), (false, true)] {
+                    let mut extra: Vec<(&[u8; 4], Vec<u8>)> = vec![];
+                    if icc {
+                        extra.push((b"iCCP", vec![0xAB; 300]));
+                    }
+                    if trns {
+                        extra.push((b"tRNS", vec![0, 0]));
+                    }
+                    let b = png_with(5, 7, depth, color, &extra);
+                    assert!(new_png(&b).is_some(), "colour {color} depth {depth}");
+                    assert_eq!(new_png(&b), oracle_png_chunks(&b), "colour {color} depth {depth} trns {trns}");
+                    // And `probe` reports what the old read gave it: the size and the peak.
+                    let (w, h, native, alpha) = oracle_png_chunks(&b).unwrap();
+                    let p = probe(&b).unwrap();
+                    assert_eq!((p.width, p.height, p.has_alpha(), Some(p.peak_bytes())), (w, h, alpha, peak_bytes(w, h, native, 0)));
+                    assert_eq!(dimensions(&b), Some((5, 7)));
+                    n += 1;
+                }
+            }
+        }
+        assert_eq!(n, 4 * 15);
+        // Real encoder output, every layout the image types give.
+        for img in [
+            DynamicImage::ImageLuma8(image::GrayImage::new(3, 2)),
+            DynamicImage::ImageLumaA8(image::GrayAlphaImage::new(3, 2)),
+            DynamicImage::ImageRgb8(image::RgbImage::new(3, 2)),
+            DynamicImage::ImageRgba8(image::RgbaImage::new(3, 2)),
+            DynamicImage::ImageRgb16(image::ImageBuffer::new(3, 2)),
+            DynamicImage::ImageRgba16(image::ImageBuffer::new(3, 2)),
+        ] {
+            let b = encode(img, ImageFormat::Png);
+            assert_eq!(new_png(&b), oracle_png_chunks(&b));
+        }
+    }
+
+    /// What the old read accepted and `pixel_model` refuses is a header the decoder can't use
+    /// either; `probe` then says the PNG header can't be read (`Broken`) and `dimensions` is None.
+    #[test]
+    fn png_pixel_model_is_stricter_only_on_headers_that_are_not_valid_pngs() {
+        let ok = png_with(5, 7, 8, 2, &[]);
+        let mut cases: Vec<(&str, Vec<u8>)> = vec![
+            ("depth 3 for RGB", png_with(5, 7, 3, 2, &[])),
+            ("depth 16 for palette", png_with(5, 7, 16, 3, &[])),
+            ("depth 4 for RGBA", png_with(5, 7, 4, 6, &[])),
+            ("zero width", png_with(0, 7, 8, 2, &[])),
+            ("zero height", png_with(5, 0, 8, 2, &[])),
+            ("width past i32::MAX", png_with(1 << 31, 1, 8, 2, &[])),
+            ("height past i32::MAX", png_with(1, u32::MAX, 8, 2, &[])),
+        ];
+        let many: Vec<(&[u8; 4], Vec<u8>)> = (0..70_000).map(|_| (b"tEXt", Vec::new())).collect();
+        cases.push(("70,000 chunks before the image data", png_with(5, 7, 8, 2, &many)));
+        for (what, b) in &cases {
+            assert!(oracle_png_chunks(b).is_some(), "{what}: the old read accepted it");
+            assert_eq!(new_png(b), None, "{what}");
+            assert_eq!(dimensions(b), None, "{what}");
+            assert!(matches!(probe(b), Err(Refusal::Broken(_))), "{what}");
+            assert!(!header_has_alpha(b), "{what}");
+        }
+        // Everything else the old read refused (no IHDR, unknown colour, a wrong IHDR length that
+        // throws its chunk walk off, no image data) is still refused.
+        let mut short_ihdr = ok.clone();
+        short_ihdr[8..12].copy_from_slice(&12u32.to_be_bytes());
+        for b in [png_with(5, 7, 8, 5, &[]), b"\x89PNG\r\n\x1a\n".to_vec(), ok[..33].to_vec(), short_ihdr] {
+            assert_eq!(new_png(&b), None);
+            assert_eq!(oracle_png_chunks(&b), None);
+        }
+        // Truncations and damage: where the new read answers, it answers as the old one did.
+        let full = png_with(5, 7, 8, 6, &[(b"tRNS", vec![0]), (b"gAMA", vec![0; 4])]);
+        for n in 0..=full.len() {
+            if new_png(&full[..n]).is_some() {
+                assert_eq!(new_png(&full[..n]), oracle_png_chunks(&full[..n]), "prefix {n}");
+            }
+        }
+        let mut seed = 0x9e37_79b9u32;
+        for _ in 0..3000 {
+            let mut f = full.clone();
+            for _ in 0..3 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let (i, v) = ((seed >> 8) as usize % f.len(), (seed >> 24) as u8);
+                f[i] = v;
+            }
+            if new_png(&f).is_some() {
+                assert_eq!(new_png(&f), oracle_png_chunks(&f), "{f:02x?}");
+            }
+        }
+    }
+
+    /// A RIFF WebP with one chunk.
+    fn riff_webp(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut b = b"RIFF".to_vec();
+        b.extend((4 + 8 + payload.len() as u32).to_le_bytes());
+        b.extend_from_slice(b"WEBP");
+        b.extend_from_slice(kind);
+        b.extend((payload.len() as u32).to_le_bytes());
+        b.extend_from_slice(payload);
+        b
+    }
+
+    #[test]
+    fn webp_alpha_follows_vp8x_and_now_vp8l() {
+        // VP8X: the flag, as before.
+        for flags in [0u8, 0x10, 0x20, 0x30] {
+            let mut payload = vec![flags, 0, 0, 0];
+            payload.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // 1 x 1 canvas
+            let b = riff_webp(b"VP8X", &payload);
+            assert_eq!(webp_probe::has_alpha(&b).unwrap(), oracle_webp_alpha(&b), "flags {flags:#x}");
+            assert_eq!(oracle_webp_alpha(&b), flags & 0x10 != 0);
+        }
+        // A bare lossless picture (VP8L) says so in its header: 1 x 1, `alpha_is_used` (bit 28).
+        let with = riff_webp(b"VP8L", &[0x2f, 0, 0, 0, 0x10, 0, 0, 0]);
+        let without = riff_webp(b"VP8L", &[0x2f, 0, 0, 0, 0x00, 0, 0, 0]);
+        assert!(!oracle_webp_alpha(&with), "the old rule never saw it");
+        assert!(webp_probe::has_alpha(&with).unwrap());
+        assert!(!webp_probe::has_alpha(&without).unwrap());
+        // A real encoder's lossless RGBA WebP.
+        let enc = encode(image::RgbaImage::from_pixel(4, 4, image::Rgba([9, 8, 7, 100])), ImageFormat::WebP);
+        assert_eq!(probe(&enc).unwrap().has_alpha(), webp_probe::has_alpha(&enc).unwrap());
+        // Lossy VP8 never has alpha; and input that isn't a RIFF WebP reads as none, as before.
+        assert!(!webp_probe::has_alpha(&riff_webp(b"VP8 ", &[0; 10])).unwrap());
+        for junk in [&b"not a webp at all"[..], b"", b"RIFF", b"RIFF\0\0\0\0WEBPVP8L"] {
+            assert!(!webp_probe::has_alpha(junk).unwrap_or(false));
         }
     }
 }
