@@ -13,6 +13,7 @@ use wordcraft_engine::DocInfo;
 use craft::ui::contract::Show as _;
 use craft::ui::menu::MenuItem;
 
+use crate::split::SplitPane;
 use crate::{WordApp, panes};
 
 /// What the window keeps for an open document while another one is shown.
@@ -23,6 +24,8 @@ pub(crate) struct Parked {
     /// The comment panel's selection and the comment and reply text typed in this document and not
     /// yet written to it.
     comments: craft::review::ui::CommentsPanelState,
+    /// View › Split's other pane (#3254), so the document comes back with both of its panes.
+    split: Option<Box<SplitPane>>,
 }
 
 impl WordApp {
@@ -58,10 +61,12 @@ impl WordApp {
             return;
         }
         let left = std::mem::replace(&mut self.shown_document, id);
-        let seen = self.carry_document_state(left, id);
+        let leaving = self.canvas.split.take();
+        let (seen, split) = self.carry_document_state(left, id, leaving);
         self.window_shows(id);
 
         self.canvas.show_other_document(seen);
+        crate::split::resume(self, split);
         // A Save Changes prompt asked about the document that left: it goes, and its answer with it. The
         // operation stays (a quit closing documents one by one moves on), and an answer that arrives anyway
         // is refused as being about a replaced document (`apply_close_answer`).
@@ -95,17 +100,18 @@ impl WordApp {
 
     /// The active document is `to` and no longer `from`: `from`'s own state is put aside (or
     /// dropped, if it was closed or replaced) and `to`'s comes back. Makes `to` the session's
-    /// active document. Returns whether `to` had state put aside.
-    pub(crate) fn carry_document_state(&mut self, from: u64, to: u64) -> bool {
+    /// active document. `split` is `from`'s View › Split pane in a window that shows one document
+    /// at a time (#3254). Returns whether `to` had state put aside, and its split pane.
+    pub(crate) fn carry_document_state(&mut self, from: u64, to: u64, split: Option<Box<SplitPane>>) -> (bool, Option<Box<SplitPane>>) {
         if self.session.document_id() != to
             && let Err(e) = self.session.switch_document(to)
         {
             log::error!("couldn't show document {to}: {e}");
         }
         if from == to {
-            return false;
+            return (false, split);
         }
-        let leaving = Parked { autosave_path: self.autosave_path.take(), comments: std::mem::take(&mut self.canvas.comments) };
+        let leaving = Parked { autosave_path: self.autosave_path.take(), comments: std::mem::take(&mut self.canvas.comments), split };
         if self.session.is_open(from) {
             self.parked.insert(from, leaving);
         }
@@ -116,7 +122,7 @@ impl WordApp {
         self.canvas.comments = back.comments;
         let session = &self.session;
         self.parked.retain(|d, _| session.is_open(*d));
-        seen
+        (seen, back.split)
     }
 
     /// Open the file at `path` for the window showing document `into` (`None`: the active

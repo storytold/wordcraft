@@ -1,4 +1,4 @@
-use super::{Status, WordApp, canvas, chrome, documents, panes, read_aloud, ribbon, updates_ui, zotero};
+use super::{Status, WordApp, chrome, documents, panes, read_aloud, ribbon, split, updates_ui, zotero};
 use craft::platform::clock::monotonic_ms;
 use craft::theme::variant::Tone;
 use craft::ui::bars::StatusMessage;
@@ -115,7 +115,9 @@ impl WordApp {
                     if app.session.md_source.is_some() {
                         crate::md_source::show(app, ui);
                     } else {
-                        canvas::show(app, ui);
+                        // One pane, or two with View › Split (Focus and Full Screen View show one).
+                        let normal = chrome::Screen::of(&app.session.view) == chrome::Screen::Normal;
+                        split::show(app, ui, normal);
                     }
                 });
                 if app.session.read_aloud.open && !stale(app) {

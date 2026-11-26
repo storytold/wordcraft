@@ -139,8 +139,10 @@ pub(super) fn view(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .icon(IconId::new("arrangeAll"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
+        // Split becomes Remove Split while the window has two panes, as in Word (#3254).
+        let split = if app.session.view.split { tl!("Remove\nSplit") } else { tl!("Split") };
         Button::command(CommandRef::new("view.split"))
-            .label(tl!("Split").to_string())
+            .label(split.to_string())
             .icon(IconId::new("wordcraft.split"))
             .arrangement(Arrangement::Stacked)
             .show(ui);

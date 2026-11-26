@@ -104,6 +104,12 @@ pub struct ViewState {
     /// carries it to the window.
     #[serde(default)]
     pub full_screen: bool,
+    /// View › Window › Split (#3254): the window shows the document in two panes, one above the
+    /// other, each scrolled on its own and with its own caret, zoom and view
+    /// ([`ViewState::with_pane_settings`]). A window's arrangement, not the document's: a new
+    /// document or window starts with one pane.
+    #[serde(default)]
+    pub split: bool,
 }
 
 /// Where the Styles pane sits (`view.stylesPaneDock`, #1756).
@@ -170,6 +176,26 @@ impl ViewState {
         self.read_page_color = prefs.read_page_color;
         self.proofing = prefs.check_spelling;
     }
+
+    /// This window's view with the settings each pane of a split window keeps for itself taken
+    /// from `pane` (#3254), as each of Word's panes has its own view: the view mode, the zoom
+    /// and its fit, Show/Hide ¶, field codes, Hide White Space and what Outline view shows.
+    /// Everything else (the task panes, the ruler, markup, Read Mode, Focus, the split itself…)
+    /// belongs to the window and stays as it is here.
+    pub fn with_pane_settings(&self, pane: &ViewState) -> ViewState {
+        ViewState {
+            zoom: pane.zoom,
+            mode: pane.mode,
+            marks: pane.marks,
+            multi_page: pane.multi_page,
+            single_column: pane.single_column,
+            fit: pane.fit.clone(),
+            field_codes: pane.field_codes,
+            hide_white_space: pane.hide_white_space,
+            outline: pane.outline.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 impl Default for ViewState {
@@ -216,6 +242,7 @@ impl Default for ViewState {
             outline: Default::default(),
             design_mode: false,
             full_screen: false,
+            split: false,
         }
     }
 }

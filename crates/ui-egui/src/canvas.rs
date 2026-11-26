@@ -254,6 +254,9 @@ pub struct CanvasState {
     /// selection, and the document's own layout, which a view change replaces), so a still pointer
     /// doesn't lay the document out every frame. Set only while the page shows the preview.
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, Arc<DocLayout>)>,
+    /// View › Split is on (#3254): the other pane ([`crate::split`]). Kept with the page state, so it goes with the
+    /// window and is dropped when the window shows another document.
+    pub(crate) split: Option<Box<crate::split::SplitPane>>,
 }
 
 type TablePreviewKey = ((String, serde_json::Value, u64, u64, wordcraft_engine::Selection), Arc<DocLayout>);
@@ -280,6 +283,40 @@ impl CanvasState {
             ime_reset,
             ..CanvasState::default()
         };
+    }
+
+    /// The page state of a new pane split off this one (View › Split, [`crate::split`]): the same place (the page
+    /// view's zoom, fit and offset) and what belongs to the window or the user (the colours last applied, the ruler's
+    /// tab kind); nothing dragged, composed or shown yet. It asks for the keyboard once it shows.
+    pub(crate) fn split_off(&self) -> CanvasState {
+        let mut view = self.view.clone();
+        view.go_to = None;
+        CanvasState {
+            view,
+            last_highlight: self.last_highlight.clone(),
+            last_font_color: self.last_font_color.clone(),
+            last_shading: self.last_shading.clone(),
+            tab_kind: self.tab_kind,
+            scroll_to_caret: false,
+            ..CanvasState::default()
+        }
+    }
+
+    /// The other pane of a split window becomes the one worked in (View › Split, [`crate::split`]): `self` held it and
+    /// `other` held the pane worked in until now. What belongs to the window stays with the pane worked in: the
+    /// comment panel's state, the colours last applied and the ruler's tab kind. The pane left gives up its menus and
+    /// its request for the keyboard; the pane worked in asks for it.
+    pub(crate) fn take_window_state(&mut self, other: &mut CanvasState) {
+        std::mem::swap(&mut self.comments, &mut other.comments);
+        std::mem::swap(&mut self.last_highlight, &mut other.last_highlight);
+        std::mem::swap(&mut self.last_font_color, &mut other.last_font_color);
+        std::mem::swap(&mut self.last_shading, &mut other.last_shading);
+        std::mem::swap(&mut self.tab_kind, &mut other.tab_kind);
+        other.context_menu_open = false;
+        other.context_menu_at = None;
+        other.mini_anchor = None;
+        other.focus_pending = false;
+        self.focus_pending = true;
     }
 
     /// Stop a text-selection drag when the pointer gesture becomes an object drag.
@@ -451,6 +488,7 @@ impl Default for CanvasState {
             list_preview: None,
             preview_scroll: None,
             table_preview_layout: None,
+            split: None,
         }
     }
 }
@@ -747,12 +785,48 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if app.session.view.read_mode {
         show_reading(app, ui, &layout, full, &metrics);
     } else {
-        show_pages(app, ui, &layout, full);
+        show_pages(app, ui, &layout, full, Pane::Whole);
     }
 }
 
+/// The area the page view of a window with one pane shows in: the room left once the reading-metrics probe, shown
+/// first in the flow, has taken its place. The panes of View › Split (#3254) share this area, so splitting the window
+/// moves neither its top nor its bottom edge.
+pub(crate) fn page_area(ui: &mut Ui) -> Rect {
+    let _ = reading_metrics::read(ui);
+    ui.available_rect_before_wrap()
+}
+
+/// Where the page view shows: over the room left (a window with one pane), or at a rect as one pane of View › Split
+/// (#3254, [`crate::split`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Pane {
+    /// The room left in the ui: the window shows one pane.
+    Whole,
+    /// The split window's pane being worked in, at this rect: the full page, with the caret, the page tool, the
+    /// keyboard and the input method.
+    Active(Rect),
+    /// The split window's other pane, at this rect: its pages, selection, rulers and scrolling, and nothing that
+    /// takes the keyboard, the input method or a press (craft-ui's `SplitViews` takes a press on it to make it the
+    /// pane worked in).
+    Other(Rect),
+}
+
+/// One pane of a split window (View › Split, #3254): the page view at `pane`'s rect. Read Mode shows one pane, so it
+/// draws the pages only.
+pub(crate) fn show_pane(app: &mut WordApp, ui: &mut Ui, pane: Pane) {
+    let full = match pane {
+        Pane::Active(rect) | Pane::Other(rect) => rect,
+        Pane::Whole => ui.available_rect_before_wrap(),
+    };
+    let Some(metrics) = reading_metrics::read(ui) else { return };
+    let layout = prepare_layout(app, full, &metrics, Env::of(ui).tokens.size.rail.width, ui.ctx());
+    show_pages(app, ui, &layout, full, pane);
+}
+
 /// The page view and everything shown over it.
-fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect) {
+fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rect, pane: Pane) {
+    let active = !matches!(pane, Pane::Other(_));
     // The document's layout the pages are drawn from: the pass's keys and press run inside the page view, after the
     // pages took it.
     let laid_before = app.session.layout();
@@ -808,78 +882,88 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let mut fix = ScrollFix::default();
     // The caret the follow wants whose page the pass did not place: its page, the page's height and the caret.
     let mut unplaced = None;
-    let out = PageView::new(tl!("Document"), &source, &mut state, paper)
+    let view = PageView::new(tl!("Document"), &source, &mut state, paper)
         .options(options)
         // Hide White Space cuts each page to its text area: without the bodies the pages show whole.
         .bodies(&bodies)
         .navigation(navigation_options())
-        .editor(craft::ui::primitives::EditorPurpose::Text)
         .rulers(show_rulers)
         .snap(crate::objects::snap(app, layout))
         .tool_regions(regions)
-        .access(&describer)
-        .show(ui, |ui, body| {
-            body_rect = body.rect;
-            body_view = Some(body.view);
-            // Canvas controls take their presses first, then the tool host runs, then the caret shows over them.
-            TextMarks::over(body.pages).areas(&areas).show_at(ui, body.rect);
-            gridlines::show(app, ui, layout, body);
-            crate::content_controls::show(app, ui, layout, body);
-            strip_click = equation_frame::show(app, ui, layout, body);
-            crate::crop::show(app, ui, layout, body);
-            crate::objects::show(app, ui, layout, body);
-            // Shown after the selection areas: across controls the later one is on top of a press, and a border
-            // beats the area it lies in (the engine's `target_at` answers none where a border is).
-            crate::table_mouse::show(app, ui, layout, body);
-            crate::table_resize::show(app, ui, layout, body);
-            crate::ink::show(app, ui, layout, body);
-            crate::dialogs_smart_art::frame_button(app, ui, body.pages, layout);
-            if let Some(pass) = body.pass {
-                ran = true;
-                let response = run_page_tool(app, ui, layout, body, pass);
-                // A right click the page tool left asks for the menu: what it clicked becomes the selection first, so
-                // the menu acts on it (the page tool takes the primary button only).
-                if let Some(request) = response.context.filter(|r| !matches!(r.source, ContextSource::Key)) {
-                    input::handle_secondary_selection(app, body, layout, request.at);
-                }
-                tool_response = Some(response);
-                caret::paint_caret(app, ui, pass, body, Env::of(ui).motion.mode);
-                // This pass's keys and press have moved the caret: follow it, not the one from before the pass.
-                let fresh = app.session.layout();
-                caret_after = fresh.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
-                if app.canvas.scroll_to_caret
-                    && !held
-                    && let Some(c) = &caret_after
-                {
-                    match body.pages.iter().find(|p| p.page == c.page) {
-                        Some(placed) => {
-                            let s = placed.scale as f32;
-                            let top_left = placed.to_screen(Point::new(f64::from(c.x), f64::from(c.top)));
-                            let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s)).expand2(vec2(40.0, 60.0));
-                            fix.delta = (
-                                overshoot((r.min.x, r.max.x), (body.rect.min.x, body.rect.max.x)),
-                                overshoot((r.min.y, r.max.y), (body.rect.min.y, body.rect.max.y)),
-                            );
-                        }
-                        None => {
-                            let h = fresh.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
-                            fix.go_to = Some((c.page, f64::from(c.top / h)));
-                            unplaced = Some((c.page, h, *c));
-                        }
+        .access(&describer);
+    // The other pane of a split window registers no editor: the keyboard and the input method are the active pane's.
+    let view = if active { view.editor(craft::ui::primitives::EditorPurpose::Text) } else { view };
+    let body = |ui: &mut Ui, body: &PageBody<'_>| {
+        body_rect = body.rect;
+        body_view = Some(body.view);
+        // Canvas controls take their presses first, then the tool host runs, then the caret shows over them.
+        TextMarks::over(body.pages).areas(&areas).show_at(ui, body.rect);
+        gridlines::show(app, ui, layout, body);
+        // The other pane of a split window shows its pages and selection only: no caret, no canvas controls, no
+        // page tool.
+        if !active {
+            return;
+        }
+        crate::content_controls::show(app, ui, layout, body);
+        strip_click = equation_frame::show(app, ui, layout, body);
+        crate::crop::show(app, ui, layout, body);
+        crate::objects::show(app, ui, layout, body);
+        // Shown after the selection areas: across controls the later one is on top of a press, and a border
+        // beats the area it lies in (the engine's `target_at` answers none where a border is).
+        crate::table_mouse::show(app, ui, layout, body);
+        crate::table_resize::show(app, ui, layout, body);
+        crate::ink::show(app, ui, layout, body);
+        crate::dialogs_smart_art::frame_button(app, ui, body.pages, layout);
+        if let Some(pass) = body.pass {
+            ran = true;
+            let response = run_page_tool(app, ui, layout, body, pass);
+            // A right click the page tool left asks for the menu: what it clicked becomes the selection first, so
+            // the menu acts on it (the page tool takes the primary button only).
+            if let Some(request) = response.context.filter(|r| !matches!(r.source, ContextSource::Key)) {
+                input::handle_secondary_selection(app, body, layout, request.at);
+            }
+            tool_response = Some(response);
+            caret::paint_caret(app, ui, pass, body, Env::of(ui).motion.mode);
+            // This pass's keys and press have moved the caret: follow it, not the one from before the pass.
+            let fresh = app.session.layout();
+            caret_after = fresh.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+            if app.canvas.scroll_to_caret
+                && !held
+                && let Some(c) = &caret_after
+            {
+                match body.pages.iter().find(|p| p.page == c.page) {
+                    Some(placed) => {
+                        let s = placed.scale as f32;
+                        let top_left = placed.to_screen(Point::new(f64::from(c.x), f64::from(c.top)));
+                        let r = Rect::from_min_size(top_left, vec2((c.width * s).max(2.0), c.height * s)).expand2(vec2(40.0, 60.0));
+                        fix.delta = (
+                            overshoot((r.min.x, r.max.x), (body.rect.min.x, body.rect.max.x)),
+                            overshoot((r.min.y, r.max.y), (body.rect.min.y, body.rect.max.y)),
+                        );
+                    }
+                    None => {
+                        let h = fresh.pages.get(c.page).map_or(1.0, |p| p.h.max(1.0));
+                        fix.go_to = Some((c.page, f64::from(c.top / h)));
+                        unplaced = Some((c.page, h, *c));
                     }
                 }
-                // The mini toolbar's anchor is settled in the pass that shows it. Anchor only to visible
-                // selection geometry, and to the live selection while a preview moves the text.
-                let anchor_rects = if app.canvas.command_previewed.is_some() {
-                    live_selection_screen_rects(app, body.pages)
-                } else {
-                    screen_rects(&selected, body.pages)
-                };
-                app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, body.view.rect, crate::mini_toolbar::starts_rtl(app));
-                // The bar is its own floating layer: shown after the host, it keeps its buttons' presses (S-L410).
-                crate::mini_toolbar::show(app, ui, body);
             }
-        });
+            // The mini toolbar's anchor is settled in the pass that shows it. Anchor only to visible
+            // selection geometry, and to the live selection while a preview moves the text.
+            let anchor_rects = if app.canvas.command_previewed.is_some() {
+                live_selection_screen_rects(app, body.pages)
+            } else {
+                screen_rects(&selected, body.pages)
+            };
+            app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, body.view.rect, crate::mini_toolbar::starts_rtl(app));
+            // The bar is its own floating layer: shown after the host, it keeps its buttons' presses (S-L410).
+            crate::mini_toolbar::show(app, ui, body);
+        }
+    };
+    let out = match pane {
+        Pane::Whole => view.show(ui, body),
+        Pane::Active(rect) | Pane::Other(rect) => view.show_at(ui, rect, body),
+    };
     let caret = caret_after.or(caret);
     app.canvas.page_keys = source.into_keys();
     let side = out.spacing.side as f32;
@@ -953,7 +1037,7 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     }
     // The partner window follows this window's own scrolling, not a zoom's.
     let zoomed = (state.zoom - before.0).abs() > 1e-9 || state.fit != before.1;
-    if !zoomed && scale > 0.0 {
+    if active && !zoomed && scale > 0.0 {
         app.canvas.sync_out += (moved_by_user / scale) as f32;
     }
     // A zoom the framework made (wheel, pinch) goes to the session; a fit shows its own zoom.
@@ -981,16 +1065,22 @@ fn show_pages(app: &mut WordApp, ui: &mut Ui, layout: &Arc<DocLayout>, full: Rec
     let view_rect = body_view.map_or(body_rect, |v| v.rect);
     app.canvas.shown =
         ShownPages { rect: body_rect, pages: out.pages.clone(), laid: laid_rects(&out), view: view_rect, canvas: Some(out.canvas.response.id) };
-    if app.canvas.focus_pending && !app.modal_open() {
+    if active && app.canvas.focus_pending && !app.modal_open() {
         let ctx = ui.ctx().clone();
         app.canvas.focus_page(&ctx);
     }
     app.canvas.resident_pictures = out.resident_pictures();
     app.canvas.view = state;
-    if out.toggle_white_space {
+    if active && out.toggle_white_space {
         let _ = app.run("view.hideWhiteSpace", json!({"value": !app.session.view.hide_white_space}));
     }
 
+    if !active {
+        // The other pane's rulers show its own margins and indents; its balloons, menus and mini toolbar are the
+        // active pane's.
+        rulers::page_rulers(app, ui, &out, layout);
+        return;
+    }
     dismiss_balloon_on_canvas_click(app, &out);
     // A press in the document brings back a mini toolbar a click outside it put away (S-L414).
     if let craft::behavior::PressPhase::Down { start, .. } = &out.canvas.press.phase

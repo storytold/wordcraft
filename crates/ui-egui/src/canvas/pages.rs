@@ -66,6 +66,12 @@ pub(crate) struct PageKeys {
 }
 
 impl PageKeys {
+    /// The layout the pages were last drawn from.
+    #[cfg(test)]
+    pub(crate) fn drawn_layout(&self) -> Option<&std::sync::Arc<DocLayout>> {
+        self.layout.as_ref()
+    }
+
     pub(super) fn content(&mut self, layout: &std::sync::Arc<DocLayout>, i: usize) -> u64 {
         if !self.layout.as_ref().is_some_and(|l| std::sync::Arc::ptr_eq(l, layout)) {
             self.layout = Some(layout.clone());
