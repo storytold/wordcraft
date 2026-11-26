@@ -50,15 +50,32 @@ fn anchor_skips_rects_scrolled_offscreen_and_clips_partial_ones() {
     assert_eq!(visible_anchor([nan], clip, false), None);
 }
 
-/// #7317: a viewport narrower than the selection or bar still yields a positive anchor rect.
+/// #7317: a viewport narrower than the selection or bar still yields a positive anchor rect
+/// and places the bar cleanly at finite coordinates without panicking.
 #[test]
 fn a_viewport_narrower_than_the_bar_still_yields_a_rect() {
     let clip = Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(20.0, 20.0));
     let sel = Rect::from_min_size(pos2(5.0, 5.0), Vec2::new(300.0, 15.0));
-    let r = visible_anchor([sel], clip).unwrap_or(Rect::EVERYTHING);
+    let r = visible_anchor([sel], clip, false).unwrap_or(Rect::EVERYTHING);
     assert!(r.width() > 0.0 && r.height() > 0.0, "a tiny viewport must still place a positive-size bar");
     assert!(r.min.x.is_finite() && r.min.y.is_finite());
     assert!(clip.contains_rect(r), "the anchor must stay inside the viewport");
+
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "The quick brown fox"})).unwrap();
+    a.run("select.text", json!({"text": "quick"})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(Vec2::new(220.0, 480.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h);
+    let bold = h.get_all_by_label("Bold").map(|n| n.rect()).max_by(|a, b| a.min.y.total_cmp(&b.min.y)).expect("bar Bold");
+    assert!(bold.min.x.is_finite() && bold.min.y.is_finite() && bold.width() > 0.0 && bold.height() > 0.0, "bar control placed at {bold:?}");
+    assert!(bold.min.x >= 0.0 && bold.min.y >= 0.0, "bar stays inside tiny viewport top-left: {bold:?}");
 }
 
 /// The whole window over a document with `pick` selected, run until the bar is up.
