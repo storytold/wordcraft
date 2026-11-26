@@ -88,7 +88,7 @@ pub fn page_input(app: &mut WordApp, inputs: &[EditorInput], pass: &ToolPass, ct
         // Enter and Escape leave crop mode keeping the crop (`crop` docs). The canvas takes the page's
         // keys as editor input before the crop overlay's own pass reads its Submit and Cancel, so they
         // end it here, and neither types a paragraph over the selected picture.
-        if matches!(e, EditorInput::Newline | EditorInput::Cancel) && crate::crop::active(app).is_some() {
+        if matches!(e, EditorInput::Newline { .. } | EditorInput::Cancel) && crate::crop::active(app).is_some() {
             crate::crop::leave(app);
             continue;
         }
@@ -112,7 +112,7 @@ fn is_key_input(e: &EditorInput) -> bool {
         EditorInput::Move(..)
             | EditorInput::Delete { .. }
             | EditorInput::Edit(_)
-            | EditorInput::Newline
+            | EditorInput::Newline { .. }
             | EditorInput::Tab
             | EditorInput::BackTab
             | EditorInput::Cancel
@@ -306,7 +306,7 @@ fn equation_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &E
             let _ = app.run(if *forward { "equation.delete" } else { "equation.backspace" }, json!({}));
             true
         }
-        EditorInput::Newline => {
+        EditorInput::Newline { .. } => {
             let _ = app.run("equation.enter", json!({}));
             true
         }
@@ -518,7 +518,7 @@ fn handle_input(app: &mut WordApp, ctx: &egui::Context, pass: &ToolPass, e: &Edi
             };
             let _ = app.run(id, json!({}));
         }
-        EditorInput::Newline => {
+        EditorInput::Newline { .. } => {
             if !crate::objects::key(app, Key::Enter, Modifiers::NONE) {
                 let _ = app.run("text.newParagraph", json!({}));
             }
