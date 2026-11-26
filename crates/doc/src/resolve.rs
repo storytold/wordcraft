@@ -74,6 +74,10 @@ pub struct ResolvedChar {
     pub size_cs: f32,
     pub bold_cs: bool,
     pub italic_cs: bool,
+    /// Horizontal in vertical (`w:eastAsianLayout/@w:vert`): *tate-chu-yoko*. `combine` wins over
+    /// it, as Word ignores `vert` when both are set.
+    #[serde(default)]
+    pub vert: bool,
 }
 
 impl ResolvedChar {
@@ -125,6 +129,7 @@ impl ResolvedChar {
             // `w:szCs` (#4197).
             bold_cs: c.bold_cs.or(c.bold.filter(|_| c.cs != Some(true))).unwrap_or(false),
             italic_cs: c.italic_cs.or(c.italic.filter(|_| c.cs != Some(true))).unwrap_or(false),
+            vert: c.east_asian_layout.as_ref().is_some_and(|l| l.vert == Some(true) && l.combine != Some(true)),
         }
     }
     /// The formatting complex-script text in this run is drawn with: the complex-script font,
