@@ -24,7 +24,7 @@ const MAX_PIXELS: usize = 50_000_000;
 
 /// The commands that paste the clipboard.
 pub(crate) fn is_paste(id: &str) -> bool {
-    matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteSpecial")
+    matches!(id, "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteNestedTable" | "edit.pasteSpecial")
 }
 
 /// Most format names an error lists.
