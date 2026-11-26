@@ -1,0 +1,20 @@
+[package]
+name = "wordcraft-ios-pasteboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "UIPasteboard for the WordCraft iPad app: the few UIKit calls objc2 marks unsafe, behind a safe API"
+
+# The workspace forbids `unsafe`; this crate is where the iPad app's UIKit calls live, so it
+# denies it instead, and the one module that needs it allows it (each block has a SAFETY note).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+wildcard_imports = "deny"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSString"] }
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIPasteboard"] }

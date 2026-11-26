@@ -8972,6 +8972,7 @@ dependencies = [
  "craft-proof",
  "eframe",
  "egui",
+ "image",
  "log",
  "rfd",
  "serde_json",
@@ -8985,6 +8986,7 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-fonts",
  "wordcraft-geom",
+ "wordcraft-ios-pasteboard",
  "wordcraft-ui-egui",
  "x11-dl",
  "xkbcommon-dl",
@@ -9149,6 +9151,15 @@ dependencies = [
  "craft-tiff",
  "image",
  "serde",
+]
+
+[[package]]
+name = "wordcraft-ios-pasteboard"
+version = "0.18.1"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
 ]
 
 [[package]]

@@ -19,6 +19,8 @@ mod build_channel;
 mod build_flavor;
 mod control_server;
 mod default_apps;
+#[cfg(target_os = "ios")]
+mod ios;
 mod launch_profile;
 mod nightly_session;
 mod prefs;
@@ -35,7 +37,9 @@ use craft::dialogs::service::{FilePanels, FileService};
 use craft::host::target::{Backend, ShellInfo};
 use craft::host::{Host, Wake};
 use craft::platform::appearance::SystemReader;
-use craft::platform::clipboard::{Clipboard, ClipboardImage, SystemClipboard};
+use craft::platform::clipboard::Clipboard;
+#[cfg(not(target_os = "ios"))]
+use craft::platform::clipboard::{ClipboardImage, SystemClipboard};
 use craft::platform::default_app::{DefaultApp, DefaultAppError};
 use craft::platform::logs::{self, LogNames, crash};
 use craft::platform::open::{DropTarget, DroppedFile, FileIntake, IntakeSender};
@@ -161,7 +165,7 @@ fn dropped_files(raw: &egui::RawInput) -> Vec<DroppedFile> {
 /// recommended by the packages, so when `x11_libraries` reports some missing (it's asked only when
 /// X11 would be forced) the app stays on Wayland: forced X11 without them failed to start, and
 /// winit panicked without libxkbcommon-x11.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 fn uses_x11(
     setting: wordcraft_ui_egui::DisplayServer,
     env: impl Fn(&str) -> Option<std::ffi::OsString>,
@@ -197,7 +201,7 @@ fn uses_x11(
 
 /// `Err` naming the libraries winit's X11 backend opens at startup that can't be loaded: libX11,
 /// libXcursor, libX11-xcb (which brings in libxcb), libXi, and libxkbcommon-x11 for the keyboard.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 fn x11_libraries() -> Result<(), String> {
     use x11_dl::{xcursor::Xcursor, xinput2::XInput2, xlib::Xlib, xlib_xcb::Xlib_xcb};
     let mut missing: Vec<String> = [Xlib::open().err(), Xcursor::open().err(), Xlib_xcb::open().err(), XInput2::open().err()]
@@ -221,7 +225,7 @@ fn services(spool: Spool, intake: FileIntake, nightly: bool) -> Services {
     // Nightly never claims the stable app's file associations: the button would rewrite the same
     // OS registration the stable WordCraft owns.
     #[cfg(any(unix, windows))]
-    let make_default_app = (!cfg!(target_os = "macos") && !nightly)
+    let make_default_app = (!cfg!(target_vendor = "apple") && !nightly)
         .then(|| -> MakeDefault { Box::new(|| craft::platform::default_app::make_default(&default_apps::identity())) });
     #[cfg(not(any(unix, windows)))]
     let make_default_app: Option<MakeDefault> = None;
@@ -236,9 +240,19 @@ fn services(spool: Spool, intake: FileIntake, nightly: bool) -> Services {
 
 /// A PNG as the pixels the system clipboard takes, `None` for anything that doesn't decode within
 /// the picture decoder's limits.
+#[cfg(not(target_os = "ios"))]
 fn decode_png(bytes: &[u8]) -> Option<ClipboardImage> {
     let rgba = wordcraft_geom::picture::decode_memory(bytes).ok()?.to_rgba8();
     Some(ClipboardImage { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+}
+
+/// The system clipboard: arboard on the desktop, UIPasteboard on iPadOS.
+fn system_clipboard() -> Clipboard {
+    #[cfg(not(target_os = "ios"))]
+    let clipboard = Clipboard::new(SystemClipboard::new().decoder(decode_png));
+    #[cfg(target_os = "ios")]
+    let clipboard = Clipboard::new(ios::Pasteboard);
+    clipboard
 }
 
 /// Window, Dock and taskbar icon.
@@ -419,6 +433,8 @@ fn main() -> eframe::Result {
         std::process::exit(code);
     }
     let Some(arguments) = prepare_launch() else { return Ok(()) };
+    #[cfg(target_os = "ios")]
+    ios::prepare_folders();
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     // A Nightly never updates itself: the Launcher owns its updates.
     #[cfg(windows)]
@@ -549,18 +565,18 @@ fn main() -> eframe::Result {
         Some(_) => wordcraft_ui_egui::os_window::app_id().to_string(),
         None => std::env::var("FLATPAK_ID").ok().filter(|id| !id.is_empty()).unwrap_or_else(|| wordcraft_ui_egui::os_window::APP_ID.to_string()),
     };
-    let mut options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(wordcraft_ui_egui::os_window::name_for(wordcraft_ui_egui::os_window::identity()))
-            .with_app_id(app_id)
-            .with_inner_size([1440.0, 920.0])
-            .with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE)
-            .with_drag_and_drop(true)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false),
-        ..Default::default()
-    };
+    let viewport = egui::ViewportBuilder::default()
+        .with_title(wordcraft_ui_egui::os_window::name_for(wordcraft_ui_egui::os_window::identity()))
+        .with_app_id(app_id)
+        .with_drag_and_drop(true)
+        .with_fullsize_content_view(true)
+        .with_titlebar_shown(false)
+        .with_title_shown(false);
+    // On iPadOS the window is the screen (or its Split View share): a size would make UIKit's
+    // window that size instead.
+    #[cfg(not(target_os = "ios"))]
+    let viewport = viewport.with_inner_size([1440.0, 920.0]).with_min_inner_size(wordcraft_ui_egui::window_geometry::MIN_SIZE);
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
@@ -581,7 +597,7 @@ fn main() -> eframe::Result {
         log::warn!("preferences: {report:?}");
     }
     let placement = Arc::new(Mutex::new(placement));
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(target_vendor = "apple")))]
     let x11 = {
         let display_server = settings.lock().get().display_server;
         let (x11, why) = uses_x11(display_server, |name| std::env::var_os(name), x11_libraries);
@@ -594,7 +610,7 @@ fn main() -> eframe::Result {
         }
         x11
     };
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(not(all(unix, not(target_vendor = "apple"))))]
     let x11 = false;
     // What the OS asks of a running app arrives here; its wake repaints once the window exists.
     let repaint: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
@@ -663,7 +679,7 @@ fn main() -> eframe::Result {
             let spec = InstallSpec::new(shell, Arc::new(SystemWindows))
                 .app_id(wordcraft_ui_egui::os_window::app_id())
                 .system(SystemReader::start(wake))
-                .clipboard(Clipboard::new(SystemClipboard::new().decoder(decode_png)))
+                .clipboard(system_clipboard())
                 .placement(placement);
             // PLAN: assumed `wordcraft_ui_egui::ui_fonts` re-exports sh.A10's `app::fonts::ui_fonts` (`mod app` is private; app-hub/shell-w11).
             embed::install(&ctx, spec, &wordcraft_ui_egui::ui_fonts(lang)).map_err(|e| format!("the runtime could not be installed: {e}"))?;
@@ -683,7 +699,9 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(spool.clone(), intake, nightly)).with_host(host).with_settings(settings.clone());
             // PLAN: writer note 9 puts `with_settings` after `with_control`; it comes first here because
             // the region check below reads the saved region the settings apply.
-            if std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
+            // iPadOS has no file panel a running app can block on: the built-in chooser browses the
+            // app's Documents folder, which the Files app shares.
+            if cfg!(target_os = "ios") || std::env::var("WORDCRAFT_FILE_DIALOG").is_ok_and(|v| v.trim().eq_ignore_ascii_case("builtin")) {
                 app = app.with_fallback_chooser(true);
             }
             if nightly {
@@ -692,7 +710,8 @@ fn main() -> eframe::Result {
             } else {
                 app.set_startup_update_check(true);
                 // After the preferences, so the reason it gives is in the interface language.
-                if updates_unsafe {
+                // An iPad app is installed and replaced by the system, never by itself.
+                if updates_unsafe || cfg!(target_os = "ios") {
                     app.disable_self_update();
                 }
             }

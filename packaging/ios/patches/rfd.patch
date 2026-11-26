@@ -1,0 +1,94 @@
+diff --git a/src/backend.rs b/src/backend.rs
+index a4edf24..f237035 100755
+--- a/src/backend.rs
++++ b/src/backend.rs
+@@ -30,6 +30,8 @@ mod linux;
+ mod gtk3;
+ #[cfg(target_os = "macos")]
+ mod macos;
++#[cfg(target_os = "ios")]
++mod ios;
+ #[cfg(target_arch = "wasm32")]
+ mod wasm;
+ #[cfg(target_os = "windows")]
+diff --git a/src/backend/ios.rs b/src/backend/ios.rs
+new file mode 100644
+index 0000000..f5a7b23
+--- /dev/null
++++ b/src/backend/ios.rs
+@@ -0,0 +1,75 @@
++//! iOS: no native dialogs. UIKit's document picker cannot run as a blocking modal loop, so
++//! every file and folder dialog answers "cancelled" and the app uses its own file chooser.
++//! A message dialog is logged and answers `Cancel`, the answer that changes nothing.
++
++use std::path::PathBuf;
++
++use crate::backend::{
++    AsyncFilePickerDialogImpl, AsyncFileSaveDialogImpl, AsyncFolderPickerDialogImpl,
++    AsyncMessageDialogImpl, DialogFutureType, FilePickerDialogImpl, FileSaveDialogImpl,
++    FolderPickerDialogImpl, MessageDialogImpl,
++};
++use crate::file_dialog::FileDialog;
++use crate::message_dialog::{MessageDialog, MessageDialogResult};
++use crate::FileHandle;
++
++impl FilePickerDialogImpl for FileDialog {
++    fn pick_file(self) -> Option<PathBuf> {
++        None
++    }
++    fn pick_files(self) -> Option<Vec<PathBuf>> {
++        None
++    }
++}
++
++impl FileSaveDialogImpl for FileDialog {
++    fn save_file(self) -> Option<PathBuf> {
++        None
++    }
++}
++
++impl FolderPickerDialogImpl for FileDialog {
++    fn pick_folder(self) -> Option<PathBuf> {
++        None
++    }
++    fn pick_folders(self) -> Option<Vec<PathBuf>> {
++        None
++    }
++}
++
++impl AsyncFilePickerDialogImpl for FileDialog {
++    fn pick_file_async(self) -> DialogFutureType<Option<FileHandle>> {
++        Box::pin(std::future::ready(None))
++    }
++    fn pick_files_async(self) -> DialogFutureType<Option<Vec<FileHandle>>> {
++        Box::pin(std::future::ready(None))
++    }
++}
++
++impl AsyncFolderPickerDialogImpl for FileDialog {
++    fn pick_folder_async(self) -> DialogFutureType<Option<FileHandle>> {
++        Box::pin(std::future::ready(None))
++    }
++    fn pick_folders_async(self) -> DialogFutureType<Option<Vec<FileHandle>>> {
++        Box::pin(std::future::ready(None))
++    }
++}
++
++impl AsyncFileSaveDialogImpl for FileDialog {
++    fn save_file_async(self) -> DialogFutureType<Option<FileHandle>> {
++        Box::pin(std::future::ready(None))
++    }
++}
++
++impl MessageDialogImpl for MessageDialog {
++    fn show(self) -> MessageDialogResult {
++        log::warn!("message dialog (not shown on iOS): {}: {}", self.title, self.description);
++        MessageDialogResult::Cancel
++    }
++}
++
++impl AsyncMessageDialogImpl for MessageDialog {
++    fn show_async(self) -> DialogFutureType<MessageDialogResult> {
++        Box::pin(std::future::ready(self.show()))
++    }
++}

@@ -12,6 +12,8 @@ Apple's grid, an 824/1024 body with a transparent margin.
 
 - `wordcraft.svg`: canonical master (also the hicolor scalable icon).
 - `wordcraft-1024.png`: 1024 px full-bleed render.
+- `wordcraft-ios-1024.png`: the full-bleed render flattened onto the blue field, opaque and square
+  (iPadOS masks the corners); the iPad app icon.
 - `wordcraft-macos-512.png`: the padded macOS render (Dock, window icon; embedded by the app).
 - `wordcraft.icns`: macOS bundle icon (`CFBundleIconFile`), padded frames.
 - `wordcraft.ico`: Windows icon, 16–256 px, embedded in `wordcraft.exe` by

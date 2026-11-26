@@ -1,0 +1,75 @@
+name: iPad IPA
+
+# Builds WordCraft for iPad and uploads an IPA for sideloading (packaging/ios/README.md).
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios-ipad]
+    paths:
+      - ".github/workflows/ios.yml"
+      - "packaging/ios/**"
+      - "apps/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the craft-i18n revision
+        id: i18n
+        run: echo "rev=$(tr -d '[:space:]' < craft-i18n.rev)" >> "$GITHUB_OUTPUT"
+
+      # The translations and spelling data, at the revision the app pins.
+      - uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-i18n
+          ref: ${{ steps.i18n.outputs.rev }}
+          path: _deps/craft-i18n
+
+      # The embedded fonts, at the commit the desktop release uses.
+      - uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: _deps/craft-fonts
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-apple-ios
+          rustup default stable
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/aarch64-apple-ios
+            target/release
+          key: ios-${{ hashFiles('Cargo.lock', 'packaging/ios/patches/*') }}
+          restore-keys: ios-
+
+      - name: Build the IPA
+        env:
+          CRAFT_I18N_DIR: ${{ github.workspace }}/_deps/craft-i18n
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/_deps/craft-fonts
+        run: packaging/ios/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wordcraft-ipados
+          path: dist/release/*.ipa
+          if-no-files-found: error

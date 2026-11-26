@@ -1,0 +1,1022 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 72be2b0..6997c4b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -193,6 +193,9 @@ features = [
+     "NSProcessInfo",
+     "NSThread",
+     "NSSet",
++    "NSDate",
++    "NSTimer",
++    "NSValue",
+ ]
+ 
+ [target.'cfg(target_os = "ios")'.dependencies.objc2-ui-kit]
+@@ -203,6 +206,12 @@ features = [
+     "UIEvent",
+     "UIGeometry",
+     "UIGestureRecognizer",
++    "UICommand",
++    "UIHoverGestureRecognizer",
++    "UIKey",
++    "UIKeyConstants",
++    "UIPress",
++    "UIPressesEvent",
+     "UITextInput",
+     "UITextInputTraits",
+     "UIOrientation",
+diff --git a/src/platform_impl/ios/input.rs b/src/platform_impl/ios/input.rs
+new file mode 100644
+index 0000000..25174f1
+--- /dev/null
++++ b/src/platform_impl/ios/input.rs
+@@ -0,0 +1,271 @@
++//! Hardware keyboard keys on iOS: `UIKey`'s USB HID usage as a winit [`KeyCode`], the named key
++//! it produces, and its modifier flags as [`ModifiersState`].
++
++use objc2_ui_kit::UIKeyModifierFlags;
++
++use crate::keyboard::{KeyCode, KeyLocation, ModifiersState, NamedKey};
++
++/// The physical key of a HID usage (USB HID Usage Tables, keyboard page 0x07).
++pub(crate) fn key_code(usage: isize) -> Option<KeyCode> {
++    use KeyCode::*;
++    const LETTERS: [KeyCode; 26] = [
++        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
++        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
++    ];
++    const DIGITS: [KeyCode; 10] =
++        [Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Digit0];
++    const F1_12: [KeyCode; 12] = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
++    const F13_24: [KeyCode; 12] = [F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24];
++    const NUMPAD: [KeyCode; 10] = [
++        Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9, Numpad0,
++    ];
++    let index = |start: isize| (usage - start) as usize;
++    Some(match usage {
++        0x04..=0x1d => LETTERS[index(0x04)],
++        0x1e..=0x27 => DIGITS[index(0x1e)],
++        0x28 => Enter,
++        0x29 => Escape,
++        0x2a => Backspace,
++        0x2b => Tab,
++        0x2c => Space,
++        0x2d => Minus,
++        0x2e => Equal,
++        0x2f => BracketLeft,
++        0x30 => BracketRight,
++        0x31 | 0x32 => Backslash,
++        0x33 => Semicolon,
++        0x34 => Quote,
++        0x35 => Backquote,
++        0x36 => Comma,
++        0x37 => Period,
++        0x38 => Slash,
++        0x39 => CapsLock,
++        0x3a..=0x45 => F1_12[index(0x3a)],
++        0x46 => PrintScreen,
++        0x47 => ScrollLock,
++        0x48 => Pause,
++        0x49 => Insert,
++        0x4a => Home,
++        0x4b => PageUp,
++        0x4c => Delete,
++        0x4d => End,
++        0x4e => PageDown,
++        0x4f => ArrowRight,
++        0x50 => ArrowLeft,
++        0x51 => ArrowDown,
++        0x52 => ArrowUp,
++        0x53 => NumLock,
++        0x54 => NumpadDivide,
++        0x55 => NumpadMultiply,
++        0x56 => NumpadSubtract,
++        0x57 => NumpadAdd,
++        0x58 => NumpadEnter,
++        0x59..=0x62 => NUMPAD[index(0x59)],
++        0x63 => NumpadDecimal,
++        0x64 => IntlBackslash,
++        0x65 => ContextMenu,
++        0x66 => Power,
++        0x67 => NumpadEqual,
++        0x68..=0x73 => F13_24[index(0x68)],
++        0x85 => NumpadComma,
++        0x87 => IntlRo,
++        0x89 => IntlYen,
++        0x90 => Lang1,
++        0x91 => Lang2,
++        0xe0 => ControlLeft,
++        0xe1 => ShiftLeft,
++        0xe2 => AltLeft,
++        0xe3 => SuperLeft,
++        0xe4 => ControlRight,
++        0xe5 => ShiftRight,
++        0xe6 => AltRight,
++        0xe7 => SuperRight,
++        _ => return None,
++    })
++}
++
++/// The key a physical key produces when it isn't a character: arrows, editing and function keys,
++/// and the modifiers. `None` for the character keys, whose character the layout decides.
++pub(crate) fn named_key(code: KeyCode) -> Option<NamedKey> {
++    use KeyCode as C;
++    use NamedKey as N;
++    Some(match code {
++        C::Enter | C::NumpadEnter => N::Enter,
++        C::Escape => N::Escape,
++        C::Backspace => N::Backspace,
++        C::Tab => N::Tab,
++        C::Space => N::Space,
++        C::CapsLock => N::CapsLock,
++        C::F1 => N::F1,
++        C::F2 => N::F2,
++        C::F3 => N::F3,
++        C::F4 => N::F4,
++        C::F5 => N::F5,
++        C::F6 => N::F6,
++        C::F7 => N::F7,
++        C::F8 => N::F8,
++        C::F9 => N::F9,
++        C::F10 => N::F10,
++        C::F11 => N::F11,
++        C::F12 => N::F12,
++        C::F13 => N::F13,
++        C::F14 => N::F14,
++        C::F15 => N::F15,
++        C::F16 => N::F16,
++        C::F17 => N::F17,
++        C::F18 => N::F18,
++        C::F19 => N::F19,
++        C::F20 => N::F20,
++        C::F21 => N::F21,
++        C::F22 => N::F22,
++        C::F23 => N::F23,
++        C::F24 => N::F24,
++        C::PrintScreen => N::PrintScreen,
++        C::ScrollLock => N::ScrollLock,
++        C::Pause => N::Pause,
++        C::Insert => N::Insert,
++        C::Home => N::Home,
++        C::PageUp => N::PageUp,
++        C::Delete => N::Delete,
++        C::End => N::End,
++        C::PageDown => N::PageDown,
++        C::ArrowRight => N::ArrowRight,
++        C::ArrowLeft => N::ArrowLeft,
++        C::ArrowDown => N::ArrowDown,
++        C::ArrowUp => N::ArrowUp,
++        C::NumLock => N::NumLock,
++        C::ContextMenu => N::ContextMenu,
++        C::Power => N::Power,
++        C::ControlLeft | C::ControlRight => N::Control,
++        C::ShiftLeft | C::ShiftRight => N::Shift,
++        C::AltLeft | C::AltRight => N::Alt,
++        C::SuperLeft | C::SuperRight => N::Super,
++        _ => return None,
++    })
++}
++
++/// Where the key is: left or right modifier, the numeric keypad, or anywhere else.
++pub(crate) fn location(code: KeyCode) -> KeyLocation {
++    use KeyCode as C;
++    match code {
++        C::ControlLeft | C::ShiftLeft | C::AltLeft | C::SuperLeft => KeyLocation::Left,
++        C::ControlRight | C::ShiftRight | C::AltRight | C::SuperRight => KeyLocation::Right,
++        C::NumLock
++        | C::NumpadDivide
++        | C::NumpadMultiply
++        | C::NumpadSubtract
++        | C::NumpadAdd
++        | C::NumpadEnter
++        | C::Numpad0
++        | C::Numpad1
++        | C::Numpad2
++        | C::Numpad3
++        | C::Numpad4
++        | C::Numpad5
++        | C::Numpad6
++        | C::Numpad7
++        | C::Numpad8
++        | C::Numpad9
++        | C::NumpadDecimal
++        | C::NumpadEqual
++        | C::NumpadComma => KeyLocation::Numpad,
++        _ => KeyLocation::Standard,
++    }
++}
++
++/// One bit per modifier key held, left and right apart.
++pub(crate) fn modifier_bit(code: KeyCode) -> Option<u8> {
++    use KeyCode as C;
++    Some(match code {
++        C::ShiftLeft => 1 << 0,
++        C::ShiftRight => 1 << 1,
++        C::ControlLeft => 1 << 2,
++        C::ControlRight => 1 << 3,
++        C::AltLeft => 1 << 4,
++        C::AltRight => 1 << 5,
++        C::SuperLeft => 1 << 6,
++        C::SuperRight => 1 << 7,
++        _ => return None,
++    })
++}
++
++/// The modifiers the held modifier keys make.
++pub(crate) fn held_state(held: u8) -> ModifiersState {
++    let mut state = ModifiersState::empty();
++    state.set(ModifiersState::SHIFT, held & 0b11 != 0);
++    state.set(ModifiersState::CONTROL, held & 0b1100 != 0);
++    state.set(ModifiersState::ALT, held & 0b11_0000 != 0);
++    state.set(ModifiersState::SUPER, held & 0b1100_0000 != 0);
++    state
++}
++
++/// UIKit's modifier flags as winit's: Command is Super, as on macOS.
++pub(crate) fn flags_state(flags: UIKeyModifierFlags) -> ModifiersState {
++    let mut state = ModifiersState::empty();
++    state.set(ModifiersState::SHIFT, flags.contains(UIKeyModifierFlags::UIKeyModifierShift));
++    state.set(ModifiersState::CONTROL, flags.contains(UIKeyModifierFlags::UIKeyModifierControl));
++    state.set(ModifiersState::ALT, flags.contains(UIKeyModifierFlags::UIKeyModifierAlternate));
++    state.set(ModifiersState::SUPER, flags.contains(UIKeyModifierFlags::UIKeyModifierCommand));
++    state
++}
++
++/// The US-layout character of a character key, for a shortcut whose `UIKey` gave no characters.
++pub(crate) fn us_character(code: KeyCode) -> Option<char> {
++    use KeyCode as C;
++    let letters = "abcdefghijklmnopqrstuvwxyz";
++    let letter_codes = [
++        C::KeyA,
++        C::KeyB,
++        C::KeyC,
++        C::KeyD,
++        C::KeyE,
++        C::KeyF,
++        C::KeyG,
++        C::KeyH,
++        C::KeyI,
++        C::KeyJ,
++        C::KeyK,
++        C::KeyL,
++        C::KeyM,
++        C::KeyN,
++        C::KeyO,
++        C::KeyP,
++        C::KeyQ,
++        C::KeyR,
++        C::KeyS,
++        C::KeyT,
++        C::KeyU,
++        C::KeyV,
++        C::KeyW,
++        C::KeyX,
++        C::KeyY,
++        C::KeyZ,
++    ];
++    if let Some(i) = letter_codes.iter().position(|c| *c == code) {
++        return letters.chars().nth(i);
++    }
++    Some(match code {
++        C::Digit0 => '0',
++        C::Digit1 => '1',
++        C::Digit2 => '2',
++        C::Digit3 => '3',
++        C::Digit4 => '4',
++        C::Digit5 => '5',
++        C::Digit6 => '6',
++        C::Digit7 => '7',
++        C::Digit8 => '8',
++        C::Digit9 => '9',
++        C::Minus => '-',
++        C::Equal => '=',
++        C::BracketLeft => '[',
++        C::BracketRight => ']',
++        C::Backslash => '\\',
++        C::Semicolon => ';',
++        C::Quote => '\'',
++        C::Backquote => '`',
++        C::Comma => ',',
++        C::Period => '.',
++        C::Slash => '/',
++        _ => return None,
++    })
++}
+diff --git a/src/platform_impl/ios/mod.rs b/src/platform_impl/ios/mod.rs
+index 69e79c9..40bce19 100644
+--- a/src/platform_impl/ios/mod.rs
++++ b/src/platform_impl/ios/mod.rs
+@@ -1,6 +1,7 @@
+ #![allow(clippy::let_unit_value)]
+ 
+ mod app_state;
++mod input;
+ mod event_loop;
+ mod monitor;
+ mod notification_center;
+diff --git a/src/platform_impl/ios/view.rs b/src/platform_impl/ios/view.rs
+index 418968c..7373f07 100644
+--- a/src/platform_impl/ios/view.rs
++++ b/src/platform_impl/ios/view.rs
+@@ -1,22 +1,35 @@
+ #![allow(clippy::unnecessary_cast)]
+ use std::cell::{Cell, RefCell};
++use std::collections::HashMap;
++use std::ptr::NonNull;
+ 
+-use objc2::rc::Retained;
++use block2::RcBlock;
++use objc2::rc::{Retained, Weak};
+ use objc2::runtime::{NSObjectProtocol, ProtocolObject};
+ use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+-use objc2_foundation::{CGFloat, CGPoint, CGRect, MainThreadMarker, NSObject, NSSet, NSString};
++use objc2_foundation::{
++    CGFloat, CGPoint, CGRect, CGSize, MainThreadMarker, NSArray, NSNumber, NSObject, NSSet, NSString, NSTimer,
++};
+ use objc2_ui_kit::{
+-    UICoordinateSpace, UIEvent, UIForceTouchCapability, UIGestureRecognizer,
+-    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIKeyInput, UIPanGestureRecognizer,
+-    UIPinchGestureRecognizer, UIResponder, UIRotationGestureRecognizer, UITapGestureRecognizer,
+-    UITextInputTraits, UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
++    UICoordinateSpace, UIEvent, UIEventButtonMask, UIForceTouchCapability, UIGestureRecognizer,
++    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIHoverGestureRecognizer, UIKeyInput,
++    UIPanGestureRecognizer, UIPinchGestureRecognizer, UIPress, UIPressesEvent, UIResponder,
++    UIRotationGestureRecognizer, UIScrollTypeMask, UITapGestureRecognizer, UITextInputTraits,
++    UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
+ };
+ 
+ use super::app_state::{self, EventWrapper};
++use super::input;
+ use super::window::WinitUIWindow;
+ use crate::dpi::PhysicalPosition;
+-use crate::event::{ElementState, Event, Force, KeyEvent, Touch, TouchPhase, WindowEvent};
+-use crate::keyboard::{Key, KeyCode, KeyLocation, NamedKey, NativeKeyCode, PhysicalKey};
++use crate::event::{
++    ElementState, Event, Force, KeyEvent, MouseButton, MouseScrollDelta, Touch, TouchPhase,
++    WindowEvent,
++};
++use crate::keyboard::{
++    Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKey, NativeKeyCode, PhysicalKey,
++};
++use smol_str::SmolStr;
+ use crate::platform_impl::platform::DEVICE_ID;
+ use crate::platform_impl::KeyEventExtra;
+ use crate::window::{WindowAttributes, WindowId as RootWindowId};
+@@ -31,8 +44,42 @@ pub struct WinitViewState {
+     rotation_last_delta: Cell<CGFloat>,
+     pinch_last_delta: Cell<CGFloat>,
+     pan_last_delta: Cell<CGPoint>,
++
++    // Trackpad and mouse: the pointer hovering, two-finger scrolling and its glide after the
++    // fingers lift, and the buttons of the clicks in progress (by touch).
++    hover_gesture_recognizer: RefCell<Option<Retained<UIHoverGestureRecognizer>>>,
++    scroll_gesture_recognizer: RefCell<Option<Retained<UIPanGestureRecognizer>>>,
++    scroll_last_translation: Cell<CGPoint>,
++    scroll_momentum: RefCell<Option<(Retained<NSTimer>, Cell<CGPoint>)>>,
++    pointer_buttons: RefCell<HashMap<u64, MouseButton>>,
++
++    // Hardware keyboard: the modifiers, the modifier keys held, the keys this view handles itself
++    // (not the text system) that are down, and the repeat of the last one.
++    modifiers: Cell<ModifiersState>,
++    held_modifier_keys: Cell<u8>,
++    held_keys: RefCell<Vec<KeyCode>>,
++    repeat: RefCell<Option<(Retained<NSTimer>, KeyEvent)>>,
++    // Return, Tab or Backspace from the text system, held back a moment in case the hardware key
++    // that typed it arrives as a key event too.
++    pending_text_key: RefCell<Option<(Retained<NSTimer>, KeyCode)>>,
++
++    // The view stays first responder so the hardware keyboard always reaches it; while text input
++    // isn't wanted, an empty input view keeps the on-screen keyboard away.
++    ime_allowed: Cell<bool>,
++    empty_input_view: RefCell<Option<Retained<UIView>>>,
+ }
+ 
++/// The delay before a held key repeats and the time between repeats, in seconds.
++const KEY_REPEAT_DELAY: f64 = 0.45;
++const KEY_REPEAT_INTERVAL: f64 = 1.0 / 30.0;
++/// How long Return, Tab or Backspace from the text system waits for its hardware key event.
++const TEXT_KEY_WAIT: f64 = 0.03;
++/// The scroll glide's frame time, the share of its speed it keeps per frame, and the speed it
++/// stops at, in points per second.
++const GLIDE_FRAME: f64 = 1.0 / 60.0;
++const GLIDE_DECAY: f64 = 0.94;
++const GLIDE_STOP: f64 = 15.0;
++
+ declare_class!(
+     pub(crate) struct WinitView;
+ 
+@@ -149,23 +196,23 @@ declare_class!(
+         }
+ 
+         #[method(touchesBegan:withEvent:)]
+-        fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+-            self.handle_touches(touches)
++        fn touches_began(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
++            self.handle_touches(touches, event)
+         }
+ 
+         #[method(touchesMoved:withEvent:)]
+-        fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+-            self.handle_touches(touches)
++        fn touches_moved(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
++            self.handle_touches(touches, event)
+         }
+ 
+         #[method(touchesEnded:withEvent:)]
+-        fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+-            self.handle_touches(touches)
++        fn touches_ended(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
++            self.handle_touches(touches, event)
+         }
+ 
+         #[method(touchesCancelled:withEvent:)]
+-        fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+-            self.handle_touches(touches)
++        fn touches_cancelled(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
++            self.handle_touches(touches, event)
+         }
+ 
+         #[method(pinchGesture:)]
+@@ -321,6 +368,114 @@ declare_class!(
+         fn can_become_first_responder(&self) -> bool {
+             true
+         }
++
++        #[method(didMoveToWindow)]
++        fn did_move_to_window(&self) {
++            let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
++            // First responder from the start, so the hardware keyboard reaches the app before
++            // anything asks for text input.
++            if (**self).window().is_some() {
++                unsafe { self.becomeFirstResponder() };
++            }
++        }
++
++        #[method_id(inputView)]
++        fn input_view(&self) -> Option<Retained<UIView>> {
++            if self.ivars().ime_allowed.get() {
++                None
++            } else {
++                self.ivars().empty_input_view.borrow().clone()
++            }
++        }
++
++        #[method(pressesBegan:withEvent:)]
++        fn presses_began(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
++            let rest = self.handle_presses(presses, ElementState::Pressed);
++            // UIKit gets back the presses this view didn't take.
++            if rest.len() == presses.count() {
++                let _: () = unsafe { msg_send![super(self), pressesBegan: presses, withEvent: event] };
++            } else if !rest.is_empty() {
++                let rest = set_of(rest);
++                let _: () = unsafe { msg_send![super(self), pressesBegan: &*rest, withEvent: event] };
++            }
++        }
++
++        #[method(pressesEnded:withEvent:)]
++        fn presses_ended(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
++            let rest = self.handle_presses(presses, ElementState::Released);
++            // UIKit gets back the presses this view didn't take.
++            if rest.len() == presses.count() {
++                let _: () = unsafe { msg_send![super(self), pressesEnded: presses, withEvent: event] };
++            } else if !rest.is_empty() {
++                let rest = set_of(rest);
++                let _: () = unsafe { msg_send![super(self), pressesEnded: &*rest, withEvent: event] };
++            }
++        }
++
++        #[method(pressesCancelled:withEvent:)]
++        fn presses_cancelled(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
++            let rest = self.handle_presses(presses, ElementState::Released);
++            // UIKit gets back the presses this view didn't take.
++            if rest.len() == presses.count() {
++                let _: () = unsafe { msg_send![super(self), pressesCancelled: presses, withEvent: event] };
++            } else if !rest.is_empty() {
++                let rest = set_of(rest);
++                let _: () = unsafe { msg_send![super(self), pressesCancelled: &*rest, withEvent: event] };
++            }
++        }
++
++        #[method(hoverGesture:)]
++        fn hover_gesture(&self, recognizer: &UIHoverGestureRecognizer) {
++            let location = unsafe { recognizer.locationInView(None) };
++            let position = self.physical(location);
++            self.update_modifiers(input::flags_state(unsafe { recognizer.modifierFlags() }));
++            let mut events = Vec::new();
++            match recognizer.state() {
++                UIGestureRecognizerState::Began => {
++                    events.push(WindowEvent::CursorEntered { device_id: DEVICE_ID });
++                    events.push(WindowEvent::CursorMoved { device_id: DEVICE_ID, position });
++                }
++                UIGestureRecognizerState::Changed => {
++                    events.push(WindowEvent::CursorMoved { device_id: DEVICE_ID, position });
++                }
++                UIGestureRecognizerState::Ended | UIGestureRecognizerState::Cancelled => {
++                    // A click ends the hover; the pointer is still over the window.
++                    if self.ivars().pointer_buttons.borrow().is_empty() {
++                        events.push(WindowEvent::CursorLeft { device_id: DEVICE_ID });
++                    }
++                }
++                _ => {}
++            }
++            self.send(events);
++        }
++
++        #[method(scrollGesture:)]
++        fn scroll_gesture(&self, recognizer: &UIPanGestureRecognizer) {
++            let translation = recognizer.translationInView(Some(self));
++            let last = self.ivars().scroll_last_translation.get();
++            let (phase, dx, dy) = match recognizer.state() {
++                UIGestureRecognizerState::Began => {
++                    self.stop_glide();
++                    self.ivars().scroll_last_translation.set(translation);
++                    (TouchPhase::Started, 0.0, 0.0)
++                }
++                UIGestureRecognizerState::Changed => {
++                    self.ivars().scroll_last_translation.set(translation);
++                    (TouchPhase::Moved, translation.x - last.x, translation.y - last.y)
++                }
++                UIGestureRecognizerState::Ended => {
++                    self.ivars().scroll_last_translation.set(CGPoint { x: 0.0, y: 0.0 });
++                    let velocity = recognizer.velocityInView(Some(self));
++                    self.start_glide(velocity);
++                    (TouchPhase::Ended, translation.x - last.x, translation.y - last.y)
++                }
++                _ => {
++                    self.ivars().scroll_last_translation.set(CGPoint { x: 0.0, y: 0.0 });
++                    (TouchPhase::Cancelled, 0.0, 0.0)
++                }
++            };
++            self.send([self.wheel(dx as f64, dy as f64, phase)]);
++        }
+     }
+ 
+     unsafe impl NSObjectProtocol for WinitView {}
+@@ -368,6 +523,21 @@ impl WinitView {
+             rotation_last_delta: Cell::new(0.0),
+             pinch_last_delta: Cell::new(0.0),
+             pan_last_delta: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
++
++            hover_gesture_recognizer: RefCell::new(None),
++            scroll_gesture_recognizer: RefCell::new(None),
++            scroll_last_translation: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
++            scroll_momentum: RefCell::new(None),
++            pointer_buttons: RefCell::new(HashMap::new()),
++
++            modifiers: Cell::new(ModifiersState::empty()),
++            held_modifier_keys: Cell::new(0),
++            held_keys: RefCell::new(Vec::new()),
++            repeat: RefCell::new(None),
++            pending_text_key: RefCell::new(None),
++
++            ime_allowed: Cell::new(false),
++            empty_input_view: RefCell::new(None),
+         });
+         let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
+ 
+@@ -377,9 +547,280 @@ impl WinitView {
+             this.setContentScaleFactor(scale_factor as _);
+         }
+ 
++        this.install_pointer_recognizers(mtm);
++        let empty = UIView::initWithFrame(
++            mtm.alloc(),
++            CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 0.0, height: 0.0 } },
++        );
++        this.ivars().empty_input_view.replace(Some(empty));
++
+         this
+     }
+ 
++    /// The pointer's hover and the two-finger scroll of a trackpad or mouse. Neither sees finger
++    /// touches on the screen: hovering needs a pointer, and the scroll recognizer takes no touches.
++    fn install_pointer_recognizers(&self, mtm: MainThreadMarker) {
++        let hover = unsafe {
++            UIHoverGestureRecognizer::initWithTarget_action(
++                mtm.alloc(),
++                Some(self),
++                Some(sel!(hoverGesture:)),
++            )
++        };
++        unsafe { hover.setCancelsTouchesInView(false) };
++        hover.setDelegate(Some(ProtocolObject::from_ref(self)));
++        self.addGestureRecognizer(&hover);
++        self.ivars().hover_gesture_recognizer.replace(Some(hover));
++
++        let scroll = unsafe {
++            UIPanGestureRecognizer::initWithTarget_action(
++                mtm.alloc(),
++                Some(self),
++                Some(sel!(scrollGesture:)),
++            )
++        };
++        unsafe {
++            scroll.setAllowedScrollTypesMask(UIScrollTypeMask::All);
++            // Scroll events only: no touch type, so a finger drag on the screen isn't a scroll.
++            scroll.setAllowedTouchTypes(&NSArray::<NSNumber>::new());
++        }
++        unsafe { scroll.setCancelsTouchesInView(false) };
++        scroll.setDelegate(Some(ProtocolObject::from_ref(self)));
++        self.addGestureRecognizer(&scroll);
++        self.ivars().scroll_gesture_recognizer.replace(Some(scroll));
++    }
++
++    /// Text input on or off: the on-screen keyboard shows only while it's on. The view stays first
++    /// responder either way, so a hardware keyboard keeps working.
++    pub(crate) fn set_ime_allowed(&self, allowed: bool) {
++        if self.ivars().ime_allowed.replace(allowed) != allowed {
++            unsafe { self.reloadInputViews() };
++        }
++        unsafe { self.becomeFirstResponder() };
++    }
++
++    fn physical(&self, logical: CGPoint) -> PhysicalPosition<f64> {
++        let scale_factor = self.contentScaleFactor();
++        PhysicalPosition::from_logical::<(f64, f64), f64>(
++            (logical.x as _, logical.y as _),
++            scale_factor as f64,
++        )
++    }
++
++    fn wheel(&self, dx: f64, dy: f64, phase: TouchPhase) -> WindowEvent {
++        let scale_factor = self.contentScaleFactor() as f64;
++        WindowEvent::MouseWheel {
++            device_id: DEVICE_ID,
++            delta: MouseScrollDelta::PixelDelta(PhysicalPosition::new(
++                dx * scale_factor,
++                dy * scale_factor,
++            )),
++            phase,
++        }
++    }
++
++    fn send(&self, events: impl IntoIterator<Item = WindowEvent>) {
++        let Some(window) = self.window() else { return };
++        let window_id = RootWindowId(window.id());
++        let mtm = MainThreadMarker::from(self);
++        let events: Vec<_> = events
++            .into_iter()
++            .map(|event| EventWrapper::StaticEvent(Event::WindowEvent { window_id, event }))
++            .collect();
++        if !events.is_empty() {
++            app_state::handle_nonuser_events(mtm, events);
++        }
++    }
++
++    fn update_modifiers(&self, state: ModifiersState) {
++        if self.ivars().modifiers.replace(state) != state {
++            self.send([WindowEvent::ModifiersChanged(state.into())]);
++        }
++    }
++
++    /// After a two-finger scroll, the content keeps gliding and slows down, as a scroll view does.
++    fn start_glide(&self, velocity: CGPoint) {
++        self.stop_glide();
++        if velocity.x.hypot(velocity.y) < GLIDE_STOP * 4.0 {
++            return;
++        }
++        let weak = Weak::from_retained(&self.retain());
++        let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
++            if let Some(view) = weak.load() {
++                view.glide_frame();
++            }
++        });
++        let timer = unsafe {
++            NSTimer::scheduledTimerWithTimeInterval_repeats_block(GLIDE_FRAME, true, &block)
++        };
++        self.ivars().scroll_momentum.replace(Some((timer, Cell::new(velocity))));
++    }
++
++    fn glide_frame(&self) {
++        let step = {
++            let momentum = self.ivars().scroll_momentum.borrow();
++            let Some((_, velocity)) = momentum.as_ref() else { return };
++            let v = velocity.get();
++            let v = CGPoint { x: v.x * GLIDE_DECAY, y: v.y * GLIDE_DECAY };
++            velocity.set(v);
++            (v.x.hypot(v.y) >= GLIDE_STOP).then_some(v)
++        };
++        match step {
++            Some(v) => {
++                let (dx, dy) = (v.x * GLIDE_FRAME, v.y * GLIDE_FRAME);
++                self.send([self.wheel(dx as f64, dy as f64, TouchPhase::Moved)]);
++            }
++            None => self.stop_glide(),
++        }
++    }
++
++    fn stop_glide(&self) {
++        if let Some((timer, _)) = self.ivars().scroll_momentum.take() {
++            unsafe { timer.invalidate() };
++        }
++    }
++
++    /// Hardware key presses: the keys the text system has no use for (arrows, Return, Tab,
++    /// Escape, Backspace, function keys, modifiers) and every key pressed with Command or
++    /// Control become key events here. The rest go back to UIKit (returned), whose text system
++    /// types them through `insertText:` with the layout's characters, dead keys and repeat.
++    fn handle_presses(&self, presses: &NSSet<UIPress>, state: ElementState) -> Vec<Retained<UIPress>> {
++        let mtm = MainThreadMarker::from(self);
++        let pressed = state == ElementState::Pressed;
++        let mut rest = Vec::new();
++        for press in presses {
++            let Some(key) = (unsafe { press.key(mtm) }) else {
++                rest.push(press.retain());
++                continue;
++            };
++            let usage = unsafe { key.keyCode() }.0 as isize;
++            let Some(code) = input::key_code(usage) else {
++                rest.push(press.retain());
++                continue;
++            };
++            let flags = input::flags_state(unsafe { key.modifierFlags() });
++            if let Some(bit) = input::modifier_bit(code) {
++                let held = self.ivars().held_modifier_keys.get();
++                let held = if pressed { held | bit } else { held & !bit };
++                self.ivars().held_modifier_keys.set(held);
++                self.update_modifiers(input::held_state(held));
++                self.stop_repeat();
++                let named = input::named_key(code).unwrap_or(NamedKey::Shift);
++                self.send([key_input(KeyEvent {
++                    physical_key: PhysicalKey::Code(code),
++                    logical_key: Key::Named(named),
++                    text: None,
++                    location: input::location(code),
++                    state,
++                    repeat: false,
++                    platform_specific: KeyEventExtra {},
++                })]);
++                continue;
++            }
++            if pressed {
++                self.update_modifiers(flags);
++            }
++            let named = input::named_key(code);
++            let shortcut = flags.intersects(ModifiersState::CONTROL | ModifiersState::SUPER);
++            let handled = self.ivars().held_keys.borrow().contains(&code);
++            let ours = handled
++                || shortcut
++                || matches!(named, Some(n) if n != NamedKey::Space);
++            if !ours {
++                rest.push(press.retain());
++                continue;
++            }
++            let logical_key = match named {
++                Some(named) => Key::Named(named),
++                None => {
++                    let characters = unsafe { key.charactersIgnoringModifiers() }.to_string();
++                    let characters = if characters.is_empty() || characters.chars().any(char::is_control) {
++                        input::us_character(code).map(String::from).unwrap_or_default()
++                    } else {
++                        characters.to_lowercase()
++                    };
++                    if characters.is_empty() {
++                        Key::Unidentified(NativeKey::Unidentified)
++                    } else {
++                        Key::Character(SmolStr::new(characters))
++                    }
++                }
++            };
++            let event = KeyEvent {
++                physical_key: PhysicalKey::Code(code),
++                logical_key,
++                text: None,
++                location: input::location(code),
++                state,
++                repeat: false,
++                platform_specific: KeyEventExtra {},
++            };
++            if pressed {
++                self.cancel_text_key(code);
++                let mut held = self.ivars().held_keys.borrow_mut();
++                if !held.contains(&code) {
++                    held.push(code);
++                }
++                drop(held);
++                self.start_repeat(event.clone());
++            } else {
++                self.ivars().held_keys.borrow_mut().retain(|c| *c != code);
++                if self.ivars().repeat.borrow().as_ref().is_some_and(|(_, e)| e.physical_key == event.physical_key) {
++                    self.stop_repeat();
++                }
++            }
++            self.send([key_input(event)]);
++        }
++        rest
++    }
++
++    fn start_repeat(&self, event: KeyEvent) {
++        self.stop_repeat();
++        // Modifier-only and toggle keys don't repeat.
++        if matches!(event.logical_key, Key::Named(NamedKey::CapsLock | NamedKey::Escape)) {
++            return;
++        }
++        let weak = Weak::from_retained(&self.retain());
++        let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
++            if let Some(view) = weak.load() {
++                view.repeat_key();
++            }
++        });
++        let timer = unsafe {
++            NSTimer::scheduledTimerWithTimeInterval_repeats_block(KEY_REPEAT_DELAY, false, &block)
++        };
++        self.ivars().repeat.replace(Some((timer, event)));
++    }
++
++    /// The first repeat after the delay, then one every interval while the key is down.
++    fn repeat_key(&self) {
++        let event = {
++            let mut repeat = self.ivars().repeat.borrow_mut();
++            let Some((timer, event)) = repeat.as_mut() else { return };
++            if !event.repeat {
++                event.repeat = true;
++                unsafe { timer.invalidate() };
++                let weak = Weak::from_retained(&self.retain());
++                let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
++                    if let Some(view) = weak.load() {
++                        view.repeat_key();
++                    }
++                });
++                *timer = unsafe {
++                    NSTimer::scheduledTimerWithTimeInterval_repeats_block(KEY_REPEAT_INTERVAL, true, &block)
++                };
++            }
++            event.clone()
++        };
++        self.send([key_input(event)]);
++    }
++
++    fn stop_repeat(&self) {
++        if let Some((timer, _)) = self.ivars().repeat.take() {
++            unsafe { timer.invalidate() };
++        }
++    }
++
+     fn window(&self) -> Option<Retained<WinitUIWindow>> {
+         // SAFETY: `WinitView`s are always installed in a `WinitUIWindow`
+         (**self).window().map(|window| unsafe { Retained::cast(window) })
+@@ -474,13 +915,45 @@ impl WinitView {
+         }
+     }
+ 
+-    fn handle_touches(&self, touches: &NSSet<UITouch>) {
++    fn handle_touches(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+         let window = self.window().unwrap();
+         let mut touch_events = Vec::new();
+         let os_supports_force = app_state::os_capabilities().force_touch;
++        self.stop_glide();
++        if let Some(event) = event {
++            self.update_modifiers(input::flags_state(unsafe { event.modifierFlags() }));
++        }
+         for touch in touches {
+             let logical_location = touch.locationInView(None);
+             let touch_type = touch.r#type();
++            // A trackpad or mouse click (`UIApplicationSupportsIndirectInputEvents`): mouse
++            // buttons at the pointer, not a finger on the screen.
++            if touch_type == UITouchType::IndirectPointer {
++                let window_id = RootWindowId(window.id());
++                let position = self.physical(logical_location);
++                let touch_id = touch as *const UITouch as u64;
++                let mut pointer = vec![WindowEvent::CursorMoved { device_id: DEVICE_ID, position }];
++                match touch.phase() {
++                    UITouchPhase::Began => {
++                        let mask = event.map(|e| unsafe { e.buttonMask() }).unwrap_or(UIEventButtonMask::Primary);
++                        let button = if mask.contains(UIEventButtonMask::Secondary) {
++                            MouseButton::Right
++                        } else {
++                            MouseButton::Left
++                        };
++                        self.ivars().pointer_buttons.borrow_mut().insert(touch_id, button);
++                        pointer.push(WindowEvent::MouseInput { device_id: DEVICE_ID, state: ElementState::Pressed, button });
++                    }
++                    UITouchPhase::Ended | UITouchPhase::Cancelled => {
++                        if let Some(button) = self.ivars().pointer_buttons.borrow_mut().remove(&touch_id) {
++                            pointer.push(WindowEvent::MouseInput { device_id: DEVICE_ID, state: ElementState::Released, button });
++                        }
++                    }
++                    _ => {}
++                }
++                touch_events.extend(pointer.into_iter().map(|event| EventWrapper::StaticEvent(Event::WindowEvent { window_id, event })));
++                continue;
++            }
+             let force = if os_supports_force {
+                 let trait_collection = self.traitCollection();
+                 let touch_capability = trait_collection.forceTouchCapability();
+@@ -544,6 +1017,17 @@ impl WinitView {
+         let window = self.window().unwrap();
+         let window_id = RootWindowId(window.id());
+         let mtm = MainThreadMarker::new().unwrap();
++        let string = text.to_string();
++        // Return and Tab: as keys. A hardware key this view already sent as a key event comes
++        // here too on some systems; it isn't sent twice.
++        if string.chars().all(char::is_control) {
++            match string.as_str() {
++                "\n" | "\r" => self.text_key(KeyCode::Enter),
++                "\t" => self.text_key(KeyCode::Tab),
++                _ => {}
++            }
++            return;
++        }
+         // send individual events for each character
+         app_state::handle_nonuser_events(
+             mtm,
+@@ -579,6 +1063,64 @@ impl WinitView {
+     }
+ 
+     fn handle_delete_backward(&self) {
++        self.text_key(KeyCode::Backspace);
++    }
++
++    /// Return, Tab or Backspace from the text system (the on-screen keyboard, or a hardware key
++    /// that UIKit also typed): a key press, unless the hardware key's own key event is down or
++    /// comes within `TEXT_KEY_WAIT`.
++    fn text_key(&self, code: KeyCode) {
++        let held = self.ivars().held_keys.borrow();
++        if held.contains(&code) || (code == KeyCode::Enter && held.contains(&KeyCode::NumpadEnter)) {
++            return;
++        }
++        drop(held);
++        self.cancel_text_key(code);
++        let weak = Weak::from_retained(&self.retain());
++        let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
++            if let Some(view) = weak.load() {
++                if view.ivars().pending_text_key.take().is_some() {
++                    view.send_text_key(code);
++                }
++            }
++        });
++        let timer = unsafe {
++            NSTimer::scheduledTimerWithTimeInterval_repeats_block(TEXT_KEY_WAIT, false, &block)
++        };
++        self.ivars().pending_text_key.replace(Some((timer, code)));
++    }
++
++    /// Drops a held-back text-system key that the hardware key event `code` stands for.
++    fn cancel_text_key(&self, code: KeyCode) {
++        let code = if code == KeyCode::NumpadEnter { KeyCode::Enter } else { code };
++        let matches = self.ivars().pending_text_key.borrow().as_ref().is_some_and(|(_, c)| *c == code);
++        if matches {
++            if let Some((timer, _)) = self.ivars().pending_text_key.take() {
++                unsafe { timer.invalidate() };
++            }
++        }
++    }
++
++    fn send_text_key(&self, code: KeyCode) {
++        if code != KeyCode::Backspace {
++            let named = input::named_key(code).unwrap_or(NamedKey::Enter);
++            self.send([ElementState::Pressed, ElementState::Released].map(|state| {
++                key_input(KeyEvent {
++                    physical_key: PhysicalKey::Code(code),
++                    logical_key: Key::Named(named),
++                    text: None,
++                    location: KeyLocation::Standard,
++                    state,
++                    repeat: false,
++                    platform_specific: KeyEventExtra {},
++                })
++            }));
++            return;
++        }
++        self.send_backspace();
++    }
++
++    fn send_backspace(&self) {
+         let window = self.window().unwrap();
+         let window_id = RootWindowId(window.id());
+         let mtm = MainThreadMarker::new().unwrap();
+@@ -605,3 +1147,13 @@ impl WinitView {
+         );
+     }
+ }
++
++fn key_input(event: KeyEvent) -> WindowEvent {
++    WindowEvent::KeyboardInput { device_id: DEVICE_ID, event, is_synthetic: false }
++}
++
++/// A set of `presses`.
++fn set_of(presses: Vec<Retained<UIPress>>) -> Retained<NSSet<UIPress>> {
++    let array = NSArray::from_vec(presses);
++    unsafe { msg_send_id![NSSet::<UIPress>::class(), setWithArray: &*array] }
++}
+diff --git a/src/platform_impl/ios/window.rs b/src/platform_impl/ios/window.rs
+index a386eca..f02ce72 100644
+--- a/src/platform_impl/ios/window.rs
++++ b/src/platform_impl/ios/window.rs
+@@ -372,15 +372,7 @@ impl Inner {
+     /// [objc2_ui_kit::UIKeyInput], the keyboard will be shown.
+     /// <https://developer.apple.com/documentation/uikit/uiresponder/1621113-becomefirstresponder>
+     pub fn set_ime_allowed(&self, allowed: bool) {
+-        if allowed {
+-            unsafe {
+-                self.view.becomeFirstResponder();
+-            }
+-        } else {
+-            unsafe {
+-                self.view.resignFirstResponder();
+-            }
+-        }
++        self.view.set_ime_allowed(allowed);
+     }
+ 
+     pub fn set_ime_purpose(&self, _purpose: ImePurpose) {

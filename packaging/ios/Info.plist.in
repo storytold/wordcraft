@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: packaging/ios/package.sh substitutes @VERSION@, @SHORT_VERSION@, @BUILD_SHA@,
+     @MIN_IOS@, @SDK_VERSION@, @SDK_BUILD@, @XCODE_VERSION@ and @XCODE_BUILD@, then merges in
+     the icon keys actool writes. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>WordCraft</string>
+  <key>CFBundleName</key>
+  <string>WordCraft</string>
+  <key>CFBundleExecutable</key>
+  <string>WordCraft</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.storyteller.wordcraft</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@SHORT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@SHORT_VERSION@</string>
+  <key>WordCraftVersion</key>
+  <string>@VERSION@</string>
+  <key>WordCraftBuildCommit</key>
+  <string>@BUILD_SHA@</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>iPhoneOS</string>
+  </array>
+  <key>DTPlatformName</key>
+  <string>iphoneos</string>
+  <key>DTPlatformVersion</key>
+  <string>@SDK_VERSION@</string>
+  <key>DTPlatformBuild</key>
+  <string>@SDK_BUILD@</string>
+  <key>DTSDKName</key>
+  <string>iphoneos@SDK_VERSION@</string>
+  <key>DTSDKBuild</key>
+  <string>@SDK_BUILD@</string>
+  <key>DTXcode</key>
+  <string>@XCODE_VERSION@</string>
+  <key>DTXcodeBuild</key>
+  <string>@XCODE_BUILD@</string>
+  <key>DTCompiler</key>
+  <string>com.apple.compilers.llvm.clang.1_0</string>
+  <!-- Must match IPHONEOS_DEPLOYMENT_TARGET in package.sh. -->
+  <key>MinimumOSVersion</key>
+  <string>@MIN_IOS@</string>
+  <key>LSRequiresIPhoneOS</key>
+  <true/>
+  <!-- iPad only: the ribbon needs a tablet's width. -->
+  <key>UIDeviceFamily</key>
+  <array>
+    <integer>2</integer>
+  </array>
+  <key>UIRequiredDeviceCapabilities</key>
+  <array>
+    <string>arm64</string>
+    <string>metal</string>
+  </array>
+  <!-- A launch screen makes the app run at the display's own size, not in a letterboxed
+       compatibility mode. -->
+  <key>UILaunchScreen</key>
+  <dict/>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+  </array>
+  <!-- Split View, Slide Over and Stage Manager resize the window like a desktop window. -->
+  <key>UIRequiresFullScreen</key>
+  <false/>
+  <!-- The app draws its own title bar and ribbon from the top edge. -->
+  <key>UIStatusBarHidden</key>
+  <true/>
+  <key>UIViewControllerBasedStatusBarAppearance</key>
+  <false/>
+  <!-- Trackpad and mouse clicks arrive as pointer touches (mouse buttons), not as finger taps. -->
+  <key>UIApplicationSupportsIndirectInputEvents</key>
+  <true/>
+  <!-- The Documents folder shows in the Files app as On My iPad > WordCraft. -->
+  <key>UIFileSharingEnabled</key>
+  <true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key>
+  <true/>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>WordCraft contributors. MIT OR Apache-2.0.</string>
+</dict>
+</plist>

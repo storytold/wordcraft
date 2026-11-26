@@ -124,6 +124,16 @@ impl WordApp {
             return Asked::Busy;
         }
         let fallback = req.fallback || self.fallback_chooser;
+        // iPadOS: a first pick starts in the app's Documents folder, the one the Files app shows
+        // as "On My iPad › WordCraft", not the container's root.
+        #[cfg(target_os = "ios")]
+        let req = {
+            let mut req = req;
+            if req.default_directory.is_none() {
+                req.default_directory = std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("Documents"));
+            }
+            req
+        };
         let id = self.host.files().pick(req.fallback(fallback));
         self.file_dialog = Some(PendingDialog { id, after });
         // A service that answered at once is handled right away.
