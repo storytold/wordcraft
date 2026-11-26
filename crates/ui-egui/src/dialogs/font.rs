@@ -121,7 +121,7 @@ impl FontRequest {
 }
 
 /// The preview's size: the Size box's points between 6 and 72, else 12.
-pub(crate) fn preview_size(size: Option<f64>) -> f32 {
+fn preview_size(size: Option<f64>) -> f32 {
     size.map(|pt| pt as f32).filter(|pt| pt.is_finite()).unwrap_or(12.0).clamp(6.0, 72.0)
 }
 

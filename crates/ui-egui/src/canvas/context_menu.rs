@@ -67,7 +67,7 @@ pub(crate) fn show(app: &mut WordApp, ui: &mut Ui, opener: &Response, ask: Optio
         }
         None => {}
     }
-    if !open || !app.dialog_host.open_dialogs().is_empty() {
+    if !open || app.modal_open() {
         app.canvas.context_menu_open = false;
         app.canvas.context_menu_at = None;
         return;
