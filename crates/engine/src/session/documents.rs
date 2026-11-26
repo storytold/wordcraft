@@ -655,15 +655,16 @@ impl Session {
     }
 
     /// The open document saved at `path`, if any: the same file reached by another spelling
-    /// (`./a.docx`, a symbolic link) counts on desktop.
+    /// (`./a.docx`, a symbolic link) counts on desktop. A document opened from bytes that only
+    /// names `path` (`path_names_only`) does not count: its text is not the file's.
     pub fn find_open(&self, path: &FsPath) -> Option<u64> {
         let wanted = crate::io::canonical(path);
         let same = |p: &FsPath| p == path || wanted.is_some() && crate::io::canonical(p) == wanted;
         self.order.iter().copied().find(|&id| {
             if id == self.document_id {
-                self.path.as_deref().is_some_and(same)
+                !self.path_names_only && self.path.as_deref().is_some_and(same)
             } else {
-                self.others.iter().find(|d| d.document_id == id).and_then(|d| d.path.as_deref()).is_some_and(same)
+                self.others.iter().find(|d| d.document_id == id).filter(|d| !d.path_names_only).and_then(|d| d.path.as_deref()).is_some_and(same)
             }
         })
     }
