@@ -422,6 +422,36 @@ fn mod_v_pastes_rich_only_clipboard_and_preserves_picture_routing() {
     assert_eq!(body(h.state()), "", "picture file paste does not fall back to HTML text");
 }
 
+/// #819: Alt+Q reaches Search/commands even when the canvas does not hold focus.
+#[test]
+fn alt_shortcuts_work_without_the_canvas_focused() {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Text")), Default::default());
+    app.run("view.focus", json!({})).unwrap();
+    let mut h = crate::test_harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    crate::test_harness::frames(&mut h, 4);
+    if let Some(focused_id) = h.ctx.memory(|m| m.focused()) {
+        h.ctx.memory_mut(|m| m.surrender_focus(focused_id));
+    }
+    crate::test_harness::frames(&mut h, 1);
+    assert!(!h.state().canvas.focused(&h.ctx.clone()), "canvas is unfocused");
+
+    let alt = egui::Modifiers { alt: true, ..Default::default() };
+    mods_frame(&mut h, alt, vec![key_event(Key::Q, true, alt)]);
+    crate::test_harness::frames(&mut h, 2);
+    use egui_kittest::kittest::Queryable as _;
+    assert!(h.query_by_role(egui::accesskit::Role::Dialog).is_some(), "Alt+Q opens Search/commands with canvas unfocused");
+}
+
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
 /// aren't, and keytips stay off (#961). Linux sends each digit's text too; Windows may send the
 /// composed character.
