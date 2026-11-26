@@ -783,6 +783,12 @@ mod tests {
             },
             false,
         );
+        // Give the craft runtime the test's mode (#3589 keeps the curve `super::apply` set on that mode's style).
+        let mode = if dark { craft::theme::ModeChoice::Dark } else { craft::theme::ModeChoice::Light };
+        craft::ui::shell::embed::before_input(&h.ctx, |_| {
+            craft::ui::runtime::frame::FrameInput::new(craft::ui::runtime::env::RootEnv::new().mode(mode))
+        });
+        h.step();
         h.run();
         let img = h.render().unwrap();
         // Ink: how far each pixel, laid over the background (the window outside the frame is

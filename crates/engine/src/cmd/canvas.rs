@@ -35,6 +35,32 @@ pub fn selected_member(s: &Session) -> Option<(Pos, usize, &InlineObject)> {
     Some((pos, m.index, &c.obj))
 }
 
+/// The canvas member whose text box story the caret is in (when no inner object is selected):
+/// the canvas's position, the member's index and the member.
+pub fn text_box_member(s: &Session) -> Option<(Pos, usize, &InlineObject)> {
+    if super::objects::selected(s).is_some() {
+        return None;
+    }
+    let StoryRef::Part(id) = s.sel.focus.story else { return None };
+    if !s.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox) {
+        return None;
+    }
+    let after = s.doc.text_box_anchor(id)?;
+    let pos = Pos { off: after.off.checked_sub(wordcraft_doc::para::OBJ.len_utf8())?, ..after };
+    let InlineObject::Group { children, canvas: Some(_), .. } = s.doc.para_at(&pos)?.object_at(pos.off)? else {
+        return None;
+    };
+    let (index, c) =
+        children.iter().enumerate().find(|(_, c)| pickable(c) && matches!(&c.obj, InlineObject::Shape { story: Some(sid), .. } if *sid == id))?;
+    Some((pos, index, &c.obj))
+}
+
+/// The canvas member object commands act on: one picked with `select.member`, or the text box
+/// member whose text the caret is in.
+pub(crate) fn active_member(s: &Session) -> Option<(Pos, usize, &InlineObject)> {
+    selected_member(s).or_else(|| text_box_member(s))
+}
+
 /// Whether a member can be picked on its own: a picture, shape or text box that is drawn (a
 /// group inside a canvas isn't, nor a hidden member).
 pub fn pickable(c: &GroupChild) -> bool {
@@ -295,7 +321,13 @@ pub(crate) fn member_command(s: &mut Session, id: &str, _: &Value) -> Option<Cmd
     let replaces = (id.starts_with("text.") && id != "text.overtype")
         || matches!(
             id,
-            "edit.paste" | "edit.pasteText" | "edit.pasteMerge" | "edit.pasteSpecial" | "edit.pasteClipboardItem" | "edit.pasteAllClipboard"
+            "edit.paste"
+                | "edit.pasteText"
+                | "edit.pasteMerge"
+                | "edit.pasteNestedTable"
+                | "edit.pasteSpecial"
+                | "edit.pasteClipboardItem"
+                | "edit.pasteAllClipboard"
         );
     if !replaces && !matches!(id, "edit.cut" | "edit.copy") {
         return None;
@@ -350,7 +382,7 @@ fn remove_member(s: &mut Session, pos: &Pos, index: usize) -> Result<(), CmdErro
 /// Move or Resize with a member picked: `x`/`y` (the page point of its top-left, as dragging its
 /// frame gives it) and the size become its place and size in the canvas. `None`: no member.
 pub(crate) fn member_bounds(s: &mut Session, v: &Value) -> Option<CmdResult> {
-    let (pos, index, obj) = selected_member(s)?;
+    let (pos, index, obj) = active_member(s)?;
     let (w0, h0, _) = obj.frame()?;
     let min = super::objects::min_size(obj);
     let to = match (p::f32(v, "x"), p::f32(v, "y")) {
@@ -381,7 +413,7 @@ pub(crate) fn member_bounds(s: &mut Session, v: &Value) -> Option<CmdResult> {
 
 /// Nudge with a member picked: it moves inside the canvas. `None`: no member.
 pub(crate) fn member_nudge(s: &mut Session, dx: f32, dy: f32) -> Option<CmdResult> {
-    let (pos, index, _) = selected_member(s)?;
+    let (pos, index, _) = active_member(s)?;
     Some(edit_member(s, &pos, index, |_, (sx, sy), c| {
         c.x = (c.x + dx / sx).clamp(-MAX_SIDE, MAX_SIDE);
         c.y = (c.y + dy / sy).clamp(-MAX_SIDE, MAX_SIDE);
@@ -406,10 +438,10 @@ fn edit_member(s: &mut Session, pos: &Pos, index: usize, f: impl FnOnce(wordcraf
     Ok(json!({"object": member, "pos": super::pos_json(pos), "member": index}))
 }
 
-/// Change the picked member's own object (Shape Format, Size, Rotate, Alt Text) when `pos` is its
-/// canvas. `None`: no member picked there.
+/// Change the active member's own object (Shape Format, Size, Rotate, Alt Text) when `pos` is its
+/// canvas. `None`: no active member there.
 pub(crate) fn edit_member_object(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Option<Result<InlineObject, CmdError>> {
-    let (at, index, _) = selected_member(s).filter(|(at, ..)| at == pos)?;
+    let (at, index, _) = active_member(s).filter(|(at, ..)| at == pos)?;
     let mut out = None;
     let r = edit_canvas(s, &at, |_, _, children| {
         if let Some(c) = children.get_mut(index) {

@@ -108,12 +108,19 @@ pub(crate) fn settle(app: &mut WordApp, ctx: &Context) {
 /// More Colors targets, so none outlives its dialog.
 pub(crate) fn close_all(app: &mut WordApp, ctx: &Context) {
     let ids: Vec<DialogId> = app.dialog_host.open_dialogs().into_iter().rev().map(|dialog| dialog.id).collect();
+    let had_dialogs = !ids.is_empty();
     for id in ids {
         app.dialog_host.cancel_by_id(ctx, id);
     }
     settle(app, ctx);
     // PLAN: assumed `WordApp::more_colors` with `clear()` (ribbon-w11, rb.A4's target map)
     app.more_colors.clear();
+    if had_dialogs && !app.file_dialog_open() && !app.ui.backstage {
+        app.canvas.focus_page(ctx);
+        app.canvas.focus_pending = true;
+        app.canvas.focus_page_after_pass();
+        ctx.request_repaint();
+    }
 }
 
 /// Opens the About dialog on `tab`. A second About while one is open opens nothing: the first keeps the input.

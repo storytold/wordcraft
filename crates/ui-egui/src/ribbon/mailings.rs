@@ -7,7 +7,6 @@ use craft::ui::buttons::{Arrangement, Button, IconButton};
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::menu::MenuItem;
-use craft::ui::primitives::IconSpec;
 use craft::ui::text::NumberField;
 
 pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
@@ -15,7 +14,7 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         for (key, label, id) in [("envelope", "Envelopes", "mailings.envelopes"), ("labels", "Labels", "mailings.labels")] {
             Button::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
-                .icon(crate::icons::id(key))
+                .icon(crate::icons::spec(key))
                 .arrangement(Arrangement::Stacked)
                 .show(ui);
         }
@@ -70,7 +69,7 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .arrangement(Arrangement::Stacked)
             .show(ui);
     });
-    row.group(RibbonGroup::new("Write & Insert Fields", crate::tl!("Write & Insert Fields"), IconId::new("mergeField").into()), |ui| {
+    row.group(RibbonGroup::new("Write & Insert Fields", crate::tl!("Write & Insert Fields"), crate::icons::spec("mergeField")), |ui| {
         for (key, label, id) in [
             ("highlightFields", "Highlight\nMerge Fields", "mailings.highlightFields"),
             ("addressBlock", "Address\nBlock", "mailings.addressBlock"),
@@ -79,7 +78,7 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         ] {
             Button::command(CommandRef::with_params(id, json!({})))
                 .label(crate::tl!(label))
-                .icon(crate::icons::id(key))
+                .icon(crate::icons::spec(key))
                 .arrangement(Arrangement::Stacked)
                 .show(ui);
         }
@@ -87,7 +86,7 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             // The merge rules the engine knows; If and Skip Record If ask for their condition.
             menu_button(
                 ui,
-                Button::new(crate::tl!("Rules")).icon(IconId::new("rules")).tooltip(crate::tl!("Rules")),
+                Button::new(crate::tl!("Rules")).icon(crate::icons::spec("rules")).tooltip(crate::tl!("Rules")),
                 crate::tl!("Rules"),
                 Some("mailings.rules"),
                 |ui, _| {
@@ -100,20 +99,20 @@ pub(super) fn mailings(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             );
             Button::command(CommandRef::with_params("mailings.matchFields", json!({})))
                 .label(crate::tl!("Match Fields"))
-                .icon(IconId::new("matchFields"))
+                .icon(crate::icons::spec("matchFields"))
                 .show(ui);
         });
     });
-    row.group(RibbonGroup::new("Preview Results", crate::tl!("Preview Results"), IconId::new("preview").into()), |ui| {
+    row.group(RibbonGroup::new("Preview Results", crate::tl!("Preview Results"), crate::icons::spec("preview")), |ui| {
         Button::command(CommandRef::with_params("mailings.preview", json!({})))
             .label(crate::tl!("Preview\nResults"))
-            .icon(IconId::new("preview"))
+            .icon(crate::icons::spec("preview"))
             .arrangement(Arrangement::Stacked)
             .show(ui);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 let nav = |ui: &mut egui::Ui, key: &'static str, tip: &'static str, id: &'static str| {
-                    IconButton::command(IconSpec::from(crate::icons::id(key)), CommandRef::with_params(id, json!({})))
+                    IconButton::command(crate::icons::spec(key), CommandRef::with_params(id, json!({})))
                         .label(crate::tl!(tip))
                         .tooltip(crate::tl!(tip))
                         .show(ui);
