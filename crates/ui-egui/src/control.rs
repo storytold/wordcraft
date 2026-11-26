@@ -10,7 +10,7 @@
 //! - `ui.clickText {page, x, y}`: click at a page position (points from the page's top-left)
 //! - `ui.dialog.set`, `ui.dialog.confirm`, `ui.dialog.cancel`: the open dialogs' fields and answers
 //! - `ui.screenshot {path?, region?}`: PNG of the window (or of `region` `[x0, y0, x1, y1]` in points); `ui.render {path?, page?, scale?}`: page PNG
-//!   (without `path`, both reply with the PNG as base64 `png`)
+//!   (without `path`, the reply carries the PNG as base64: `base64` for a screenshot, `png` for a render)
 //! - `ui.resize`, `ui.focus`, `ui.closeWindow`, `ui.clipboard`, `ui.replayAt`, `ui.accessTree`
 //! - `ui.parity`: feature catalog parity
 //!

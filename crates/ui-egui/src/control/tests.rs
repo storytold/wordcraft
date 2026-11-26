@@ -365,3 +365,28 @@ fn a_script_opens_the_dialog_a_launcher_command_asks_for() {
     assert!(r["result"]["icons"].is_array(), "{r}");
     assert!(b.dialog_host.open_dialogs().is_empty(), "a script's Insert Icon without an id opens no picker");
 }
+
+/// Every method the Methods table of `docs/control-protocol.md` lists is one the control channel answers: none falls
+/// through to the commands as an unknown id. The input methods moved to the framework's names in #7101, and the table
+/// kept `ui.press`, `ui.drag` and `ui.text`.
+#[test]
+fn every_method_the_protocol_doc_lists_is_answered() {
+    let doc = include_str!("../../../../docs/control-protocol.md");
+    // `lines`, so a checkout with CRLF line endings (Windows) reads the table too.
+    let methods: Vec<&str> = doc
+        .lines()
+        .skip_while(|line| *line != "## Methods")
+        .skip_while(|line| !line.starts_with('|'))
+        .take_while(|line| line.starts_with('|'))
+        .filter_map(|row| row.strip_prefix("| `")?.split(" |").next())
+        .flat_map(|cell| cell.split(" / "))
+        .map(|name| name.trim_matches('`'))
+        .collect();
+    assert!(methods.contains(&"engine.execute"), "the Methods table: {methods:?}");
+    let ctx = installed();
+    for method in methods {
+        let r = call(&mut app(), &ctx, method, json!({}));
+        let unknown = wordcraft_engine::CmdError::Unknown(method.to_string()).to_string();
+        assert_ne!(r["error"].as_str(), Some(unknown.as_str()), "the doc lists `{method}`, which the control channel doesn't answer");
+    }
+}
