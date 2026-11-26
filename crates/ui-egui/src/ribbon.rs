@@ -20,6 +20,7 @@ mod context_menu;
 mod design;
 mod draw;
 mod galleries;
+mod glow;
 mod home;
 mod insert;
 mod language;
@@ -165,17 +166,30 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
     // The context menu's body captures these, never `app`, which the row body borrows.
     let qat: Vec<String> = app.session.ribbon.qat().into_iter().map(str::to_string).collect();
     let qat_shown = app.ui.quick_access_toolbar;
-    // The collapse state is written through `ui.collapseRibbon`, the one write path, when the strip toggles it.
-    let mut collapsed = app.ui.ribbon_collapsed;
+    let open = tabs::ribbon_openness(
+        ui.ctx(),
+        !app.ui.ribbon_collapsed,
+        ui.input(|i| i.time),
+        app.resolved_root().motion == craft::behavior::MotionMode::Full,
+    );
+    let size_id = ui.scope_id().with(("wordcraft.ribbon_size", ui.ctx().viewport_id()));
+    let (full, strip) = ui.data(|d| d.get_temp::<(f32, f32)>(size_id)).unwrap_or((0.0, 0.0));
+    let mut content = ui.new_child(egui::UiBuilder::new().id_salt("wordcraft.ribbon").max_rect(ui.available_rect_before_wrap()));
+    if open > 0.0 && open < 1.0 && full > strip {
+        let bottom = content.max_rect().top() + strip + (full - strip) * open;
+        content.set_clip_rect(
+            content.clip_rect().intersect(egui::Rect::from_min_max(content.max_rect().min, egui::pos2(content.max_rect().right(), bottom))),
+        );
+    }
     let out = Ribbon::new(tl!("Ribbon").to_string(), &tabs, Bind::given(app.ui.tab.clone()))
         .trailing(&ends)
-        .minimised(Bind::bound(&mut collapsed))
+        .minimised(Bind::given(open <= 0.0))
         .context_menu(&mut |ui, request, _| context_menu::rows(ui, request, &qat, qat_shown))
         // The old ribbon drew its large icons 32 points square and every other icon 17, and its
         // dialog launcher as a small corner arrow.
         .look(RIBBON_LOOK)
         .launcher_icon(IconId::new("launcher"))
-        .show(ui, |row, key| {
+        .show(&mut content, |row, key| {
             let entry = user_tabs.iter().find(|e| e.name == *key);
             match entry {
                 // Every tab hidden: nothing to show.
@@ -188,14 +202,38 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
                 custom_groups(row, app, &e.groups);
             }
         });
-    if collapsed != app.ui.ribbon_collapsed {
-        let _ = app.run("ui.collapseRibbon", json!({}));
+    if let Some(recorded) = &out.controls {
+        glow::paint(&content, recorded);
     }
-    // A click on a tab is reported as `shown`, a pick from the overflow menu as `picked`.
-    if let Some(tab) = out.picked.clone().or_else(|| out.shown.clone())
-        && tab != app.ui.tab
-    {
-        let _ = app.run("ui.tab", json!({"tab": tab}));
+    let rect = content.min_rect();
+    let strip_height = out.tabs.map_or(strip, |tabs| tabs.bottom() - rect.top());
+    if open >= 1.0 {
+        ui.data_mut(|d| d.insert_temp(size_id, (rect.height(), strip_height)));
+    }
+    let height = if full > strip && open > 0.0 && open < 1.0 { strip + (full - strip) * open } else { rect.height() };
+    ui.advance_cursor_after_rect(egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), height)));
+    // The shared strip reports a changed selection, but an active-tab click is also meaningful here.
+    // Read that pointer target from its record. Keyboard and overflow selection keep their normal path.
+    let press_id = size_id.with("tab_at_press");
+    if out.controls.is_some() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+        ui.data_mut(|d| d.insert_temp(press_id, app.ui.tab.clone()));
+    }
+    let pointer_tab = out.controls.as_ref().and_then(|recorded| {
+        if !ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary)) {
+            return None;
+        }
+        out.tab_ids.iter().find_map(|(tab, id)| {
+            let index = recorded.elements.iter().position(|element| element.node() == *id)?;
+            let rect = recorded.rect_in(ui.ctx(), index, ui.layer_id())?;
+            ui.rect_contains_pointer(rect).then_some(tab)
+        })
+    });
+    let selected = pointer_tab.or(out.picked.as_ref()).or(out.shown.as_ref());
+    if let Some(tab) = selected.filter(|tab| pointer_tab.is_some() || **tab != app.ui.tab) {
+        // The shared strip can select a different tab on press. Only toggle if this tab
+        // was already active when the click began.
+        let toggle = pointer_tab.is_some() && ui.data(|d| d.get_temp::<String>(press_id)).as_ref() == Some(tab);
+        let _ = app.run("ui.tab", json!({"tab": tab, "toggle": toggle}));
         // A click on a tab name keeps typing in the document (#1093): the press moves focus off the page when the pass
         // ends, so the page takes the keyboard back after it. A tab reached with the keys keeps it, and File's page has
         // its own focus.

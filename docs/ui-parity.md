@@ -124,6 +124,16 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
+## File page transitions and ribbon highlights
+
+Visual examples: [File transitions](images/file-transitions.gif) and [ribbon hover before/after](images/ribbon-group-hover.png).
+
+File pages fade in with a 10 pt upward settle over 180 ms when opening File or changing its page. The side menu selection and hover fills fade in place. Animation effects Off, or the system's reduced-motion setting, show pages immediately. Each window keeps its own transition state, and choosing another page during a transition takes effect immediately. Print retains its own scrolling and preview layout. Entering and leaving File crossfade the outgoing screen over the new one for 220 ms with a short slide toward the navigation edge (mirrored in RTL). Only paint is retained: outgoing controls never run again or stay in the accessibility tree. A quick reversal starts from the composed frame; resizing, scale changes and reduced motion discard the cached screen. Released preview textures are not replayed.
+
+Ribbon groups use the theme accent in an inset glow, a 20%-opacity core below the group label and a soft tail extending 2 pt into the ribbon padding, fading to transparent on all four edges. Its bright core stays above the ribbon border instead of being cut off by it. These are WordCraft visual choices, not a Word parity claim.
+
+Clicking the active ribbon tab once hides its controls; clicking any ribbon tab reveals them. The controls slide vertically over 200 ms in both directions, with continuous reversal and immediate settling for reduced motion. Tab labels remain visible. Programmatic `ui.tab` navigation opens the ribbon; pointer clicks pass `toggle: true`. The File transition cache counts nested shapes before cloning and reserves outgoing paint before capturing the live screen, sharing a 4096-shape cap even during reversal. Dense incoming paint does not evict the outgoing screen at the transition boundary.
+
 ## Revision history
 
 | Date | Change | Summary |
@@ -141,6 +151,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-11-14 | trivial | Language dialog: Apply to the whole document sets the proofing language or Do not check for every story (body, headers, footers, notes, comments, text boxes, tables, glossary) in one undo step; `review.language` takes `scope: "document"` (#3518) |
 | 2026-11-10 | trivial | Home Styles gallery previews invalidate cached raster textures when the font database changes (#5957) |
 | 2026-10-26 | trivial | Dialog sections: 13 dialogs group related controls in theme-aware panels with indented settings; tall dialogs scroll only when needed (#4035, #4038) |
+| 2026-11-21 | trivial | File transitions and group highlights ported onto the shared shell and ribbon. Cached compositions remain complete on reversal; oversized compositions settle immediately. Reduced motion and per-window state supported; readiness unchanged. |
 | 2026-11-12 | trivial | File › Print's preview pages as the print job prints: without Print Markup it lays out the final text, marks tracked changes with the Track Changes Options (including Hidden deletions), and draws headers and footers at full strength (#5232, #6267). MCP/control-screenshot rendering (#6266) and the preview cache's numeral key (#6265) remain. |
 | 2026-11-12 | trivial | Clipboard: a copied picture is published as PNG (and HTML where the host writes it); WordCraft's own paste still keeps the original fragment, and a copy of only shapes carries no HTML or RTF (#6205). Native external-app paste remains untested. |
 | 2026-11-07 | trivial | Vertical scrollbar track: clicking above the elevator moves one screen up and clicking below it moves one screen down, as in Word, instead of jumping to that position in the document (#5853) |

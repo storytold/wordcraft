@@ -17,6 +17,34 @@ pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
     matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Image { .. })))
 }
 
+/// Per-viewport slide state; reversal starts at the last displayed height.
+#[derive(Clone)]
+struct RibbonSlide {
+    open: bool,
+    from: f32,
+    value: f32,
+    start: f64,
+}
+
+pub(super) fn ribbon_openness(ctx: &egui::Context, open: bool, now: f64, animate: bool) -> f32 {
+    let id = egui::Id::unique(("ribbon_slide", ctx.viewport_id()));
+    let target = if open { 1.0 } else { 0.0 };
+    let previous = ctx.data(|d| d.get_temp::<RibbonSlide>(id));
+    let mut slide = match previous {
+        Some(p) if animate && p.open != open => RibbonSlide { open, from: p.value, value: p.value, start: now },
+        Some(p) if animate => p,
+        _ => RibbonSlide { open, from: target, value: target, start: now },
+    };
+    let t = ((now - slide.start) / 0.20).clamp(0.0, 1.0) as f32;
+    slide.value = slide.from + (target - slide.from) * (1.0 - (1.0 - t).powi(3));
+    let value = slide.value;
+    ctx.data_mut(|d| d.insert_temp(id, slide));
+    if value != target {
+        ctx.request_repaint();
+    }
+    value
+}
+
 /// Whether the selection is a shape, text box or Drawing Canvas (so Shape Format is shown).
 pub fn has_shape_selected(s: &wordcraft_engine::Session) -> bool {
     match wordcraft_engine::cmd::objects::selected(s) {

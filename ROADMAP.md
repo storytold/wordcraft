@@ -151,6 +151,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-21: Ported File transitions and ribbon hover lighting onto the shared craft-libs shell/ribbon after #7101. Dense screen compositions settle instead of caching an incomplete reversal frame. System reduced motion disables the app's travel effects. Readiness unchanged.
+
 - 2026-11-21: Layout: strict column balancing measures a kept paragraph again in each candidate column, so a float in one column does not make the paragraph skip another where it fits (#6821). Readiness estimates unchanged.
 
 - 2026-11-20: `wordcraft-cli mcp` starts only with both `--automation-read-root` and `--automation-write-root` (shared rule 18, #7124); without them it stops with an error naming the two flags, where it used to serve with access to every file the user can reach. `mcp --connect` is refused until the desktop app confines its control channel to the same roots (#3695, #5819). The help, `docs/mcp.md`, the README and `AGENTS.md` pass both roots in every example.
@@ -158,6 +160,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-19: Layout: when strict column balancing moves an anchor line to the next column, it releases the floating object's wrap area from the abandoned column (#6821). Readiness estimates unchanged.
 - 2026-11-16: Layout: a row of hyphens after a gap wraps at any hyphen, as in Word (it fills the line and its rest goes on the next), where the whole row moved to the next line.
 - 2026-11-15: Native, built-in and web Insert/Change Picture choosers offer both TIFF extensions (`.tif`, `.tiff`) alongside other supported pictures; native drops, picked-file inbox dispatch and pasted picture paths recognize the same suffixes (#6704). TIFF decoding remains limited to supported compression.
+- 2026-11-14: File pages fade and lift over 180 ms; entering and leaving File crossfade over 220 ms with a short slide and paint-only outgoing screens. Both respect reduced motion and keep state per window. Ribbon group highlights have a lower, 20%-opacity core with a soft tail in the ribbon padding. Readiness estimates unchanged.
 - 2026-10-31: Screen readers hear what the dialogs and their drawn controls are: a dialog is a dialog, where it was only a window, so NVDA says so and reads the text in it (Word Count's figures); a dialog's tabs (Paragraph, Find and Replace, About) are tabs, the one shown selected, as in Word, where they were buttons read as pressed toggles; a colour field says its label and colour ("Font color: #104861"), where its text alone was the colour's hex digits; and each swatch of the colour grid says its colour, where it had no name. Readiness estimates unchanged.
 
 - 2026-11-01: Screen readers: the formatting shortcuts say what they did, as Word does (Bold On, Bold Off, Center On, Font 14 pt), through a polite live region (checked with NVDA); before, Ctrl+B said nothing.
@@ -930,6 +933,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 - 2026-11-15: Layout: the first paragraph of a table cell on a page can split even when only one line fits, if the row starts at the top (possibly below its own headers) or continues from the previous page, and a non-exact row marked Can't Split that is taller than a page splits at the page's end, as in Word, instead of the row running off the bottom of the page (#6823). Readiness estimates unchanged.
 
 ## Revision history
+
+> 2026-11-15 · File page transitions, animated single-click ribbon folding and softer group highlights. Outgoing transition paint reserves capacity before live capture within the shared 4096-shape cap, preserving dense screens at entry and reversal; readiness unchanged.
 
 > 2026-11-08 · Progress log: `convert --strict` refuses a PDF or PNG that would silently lack a character or a picture (#6005).
 >

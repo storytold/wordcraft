@@ -81,6 +81,11 @@ impl WordApp {
         let mode = self.screen_mode();
         let dropped = self.ribbon_dropped;
         let key = self.windows.window_key();
+        let file = self.ui.backstage;
+        let first = crate::backstage::shell_shape_count(ui.painter());
+        if !file {
+            crate::backstage::reset_transition(ui.ctx());
+        }
         let ribbon_out = std::cell::RefCell::new(None);
         let shell = AppShell::new(key)
             .mode_set(ScreenModeSet::Document)
@@ -133,6 +138,13 @@ impl WordApp {
             self.follow_screen_mode(out.screen_mode);
         }
         self.ribbon_dropped = out.dropped;
+        crate::backstage::paint_shell_transition(
+            ui.painter(),
+            first,
+            file,
+            self.resolved_root().motion == craft::behavior::MotionMode::Full,
+            crate::chrome::interface_direction().is_rtl(),
+        );
         // Keytips run outside the ribbon slots so legacy sequences and their hint still work when
         // no ribbon shows (Focus, Full Screen View) and anchor under the slim screen bar.
         let ribbon = ribbon_out.into_inner().unwrap_or_else(ribbon::no_ribbon);

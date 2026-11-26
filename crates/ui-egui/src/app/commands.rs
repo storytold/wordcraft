@@ -565,6 +565,10 @@ impl WordApp {
                 if tab == "File" {
                     self.ui.backstage = true;
                 } else {
+                    self.ui.ribbon_collapsed = p.get("toggle").and_then(Value::as_bool).unwrap_or(false)
+                        && self.ui.tab == tab
+                        && !self.ui.backstage
+                        && !self.ui.ribbon_collapsed;
                     self.ui.tab = tab;
                     self.ui.backstage = false;
                 }

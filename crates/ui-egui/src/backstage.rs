@@ -3,7 +3,12 @@
 mod home;
 mod new_page;
 mod pages;
+mod shell;
 mod thumbs;
+mod transition;
+
+pub(crate) use shell::{paint as paint_shell_transition, shape_count as shell_shape_count};
+pub(crate) use transition::reset as reset_transition;
 
 use std::cell::{Cell, RefCell};
 
@@ -205,7 +210,14 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         }
         let _ = body.show(ui, |ui, _| {
             ui.add_space(page_band);
-            page_body(ui, app, &current);
+            let progress =
+                transition::progress(ui.ctx(), &current, ui.input(|i| i.time), app.resolved_root().motion == craft::behavior::MotionMode::Full);
+            let offset = egui::vec2(0.0, (1.0 - progress) * 10.0);
+            let mut content = ui.new_child(egui::UiBuilder::new().id_salt("backstage_content").max_rect(ui.max_rect().translate(offset)));
+            content.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+            content.multiply_opacity(0.3 + 0.7 * progress);
+            page_body(&mut content, app, &current);
+            ui.advance_cursor_after_rect(content.min_rect().translate(-offset));
         });
     });
     if let Some(id) = choice.page.take() {
