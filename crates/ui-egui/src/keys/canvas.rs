@@ -1,7 +1,7 @@
 // PLAN: the Insert key has no editor input, so the overtype switch is the shortcut layer's (shell-w6).
 use craft::behavior::editor::{EditorInput, SurroundingUnit};
 use craft::behavior::intent::{EditCommand, Granularity, MoveMods, NavMove};
-use craft::platform::clipboard::{RGBA8, URI_LIST};
+use craft::platform::clipboard::{HTML, RGBA8, RTF, URI_LIST};
 use craft::ui::canvas::ToolPass;
 use craft::ui::runtime::commands::{ClipItem, ClipboardHandle};
 
@@ -585,12 +585,12 @@ fn edit_command(app: &mut WordApp, ctx: &egui::Context, cmd: EditCommand) {
     }
 }
 
-/// Paste from the clipboard: copied picture files insert as pictures (#45), text and a clipboard
-/// picture go through `edit.paste`.
+/// Paste from the clipboard: copied picture files insert as pictures (#45), text, rich text
+/// (HTML/RTF) and a clipboard picture go through `edit.paste`.
 fn paste(app: &mut WordApp, ctx: &egui::Context) {
     let clip = ClipboardHandle::of(ctx);
     let text = clip.read_text().ok().flatten();
-    if text.is_none() && !clip.has(&[RGBA8, URI_LIST]) {
+    if text.is_none() && !clip.has(&[RGBA8, URI_LIST, HTML, RTF]) {
         return;
     }
     if let Some(t) = &text
