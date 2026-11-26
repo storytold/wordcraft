@@ -140,7 +140,7 @@ fn a_unit_chosen_before_regions_survives_the_rename() {
 #[test]
 fn options_panes_open_and_change_settings() {
     type Read = fn(&WordApp) -> bool;
-    let table: [(&str, Read); 14] = [
+    let table: [(&str, Read); 15] = [
         ("display.spaces", |a| a.session.prefs.marks.spaces),
         ("display.tabs", |a| a.session.prefs.marks.tabs),
         ("display.allMarks", |a| a.session.view.marks),
@@ -151,6 +151,8 @@ fn options_panes_open_and_change_settings() {
         ("general.darkPage", |a| a.session.view.dark_mode),
         ("proofing.ignoreUppercase", |a| a.session.prefs.ignore_uppercase),
         ("advanced.typingReplacesSelection", |a| a.session.prefs.typing_replaces_selection),
+        // Show document content › Show bookmarks (#3572).
+        ("advanced.showBookmarks", |a| a.session.prefs.show_bookmarks),
         ("advanced.alignmentGuides", |a| a.ui.alignment_guides),
         ("advanced.caretAnimation", |a| a.ui.caret_animation),
         ("accessibility.skipCitations", |a| a.session.read_aloud.skip_citations),

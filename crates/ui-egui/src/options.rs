@@ -282,6 +282,7 @@ impl<'a> OptionsModel<'a> {
                 ("advanced.insertKeyOvertype", Bool(prefs.insert_key_overtype)),
                 ("advanced.overtype", Bool(prefs.overtype)),
                 ("advanced.alignmentGuides", Bool(ui.alignment_guides)),
+                ("advanced.showBookmarks", Bool(prefs.show_bookmarks)),
                 ("advanced.recentCount", Int(ui.recent_shown() as i64)),
                 ("advanced.units", Choice("auto".to_string())),
                 ("advanced.region", Choice("auto".to_string())),
@@ -558,6 +559,10 @@ impl PreferencesModel for OptionsModel<'_> {
                     )),
                 ],
             ),
+            GroupSpec::new(
+                Some(tl!("Show document content")),
+                vec![b("advanced.showBookmarks", tl!("Show bookmarks"), prefs.show_bookmarks)],
+            ),
             GroupSpec::new(Some(tl!("Display")), display_group),
             GroupSpec::new(
                 Some(tl!("Animation")),
@@ -688,6 +693,7 @@ impl PreferencesModel for OptionsModel<'_> {
             ("advanced.typingReplacesSelection", Bool(v)) => self.options(json!({"typingReplacesSelection": v})),
             ("advanced.insertKeyOvertype", Bool(v)) => self.options(json!({"insertKeyOvertype": v})),
             ("advanced.overtype", Bool(v)) => self.options(json!({"overtype": v})),
+            ("advanced.showBookmarks", Bool(v)) => self.options(json!({"showBookmarks": v})),
             ("advanced.alignmentGuides", Bool(v)) => self.run("ui.alignmentGuides", json!({"value": v})),
             ("advanced.recentCount", Int(n)) => self.app.ui.recent_count = n.clamp(0, crate::MAX_RECENT as i64) as _,
             ("advanced.units", Choice(c)) => self.options(json!({"units": c})),

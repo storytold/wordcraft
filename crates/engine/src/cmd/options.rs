@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: clear the configured folder), "customDictionary"?: string (a custom-word dictionary file like custom.dic, saved; auto: the default custom-dictionary.txt in the settings folder), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "showBookmarks"?: bool (grey brackets round bookmarks on screen), "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: clear the configured folder), "customDictionary"?: string (a custom-word dictionary file like custom.dic, saved; auto: the default custom-dictionary.txt in the settings folder), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The on/off settings by their `file.options` name.
-fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 7] {
+fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 8] {
     [
         ("typingReplacesSelection", |p| &mut p.typing_replaces_selection),
         ("insertKeyOvertype", |p| &mut p.insert_key_overtype),
@@ -45,6 +45,7 @@ fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 7] {
         ("ignoreUppercase", |p| &mut p.ignore_uppercase),
         ("ignoreNumbers", |p| &mut p.ignore_numbers),
         ("ignoreInternet", |p| &mut p.ignore_internet),
+        ("showBookmarks", |p| &mut p.show_bookmarks),
     ]
 }
 
@@ -250,6 +251,7 @@ pub fn current(s: &Session) -> Value {
         "insertKeyOvertype": pr.insert_key_overtype,
         "overtype": pr.overtype,
         "marks": pr.marks,
+        "showBookmarks": pr.show_bookmarks,
         "checkSpelling": s.view.proofing,
         "markGrammar": pr.mark_grammar,
         "ignoreUppercase": pr.ignore_uppercase,
