@@ -349,6 +349,22 @@ impl<'a> Flow<'a> {
         // A paragraph closing a section that the next one starts on a new page keeps with
         // nothing: what follows is not on this page (Word ignores Keep with next there; measured for a next-page break, odd and even by analogy).
         let closes_page = pb.next_starts_page && self.p.section.is_some();
+        // Word moves a kept heading once when the inline table cannot start below it,
+        // even when an indivisible first body row is taller than a fresh page. Counting a
+        // fixed 24 pt strands the heading; demanding that the whole group fit also fails.
+        if rp.keep_next
+            && !closes_page
+            && !pb.web
+            && !pb.fresh()
+            && let Some(starts) = super::table_flow::kept_table_can_start(ctx, pb, self.block, pb.y + height + rp.space_after.max(0.0))
+        {
+            if !starts && height <= pb.next_room(self.body_top) {
+                pb.advance(self.block, self.body_top);
+                pb.y += rp.space_before.min(0.0);
+                return rp.space_before.min(0.0);
+            }
+            return before;
+        }
         let need = height
             + if rp.keep_next && !closes_page {
                 next_first_line(ctx, self.block, self.laid_width, 0, pb.next_starts_page, &mut ctx.counters.clone())
@@ -1134,7 +1150,13 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, new_pa
                     }
             }
         }
-        Some(Block::Table(_)) => 24.0,
+        Some(Block::Table(table)) => {
+            if super::table_flow::table_breaks_before(ctx.doc, table) {
+                0.0
+            } else {
+                24.0
+            }
+        }
         None => 0.0,
     }
 }

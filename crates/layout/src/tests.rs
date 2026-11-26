@@ -14,6 +14,7 @@ mod float_top;
 mod grid;
 mod header_legacy_float;
 mod keep_next_section;
+mod kept_table;
 mod ligature;
 pub(crate) mod linear;
 mod missing_glyphs;
