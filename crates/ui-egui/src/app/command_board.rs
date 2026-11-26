@@ -344,6 +344,7 @@ impl WordApp {
                 let mut host = std::mem::take(&mut self.edits);
                 host.before_undo(ctx, self);
                 self.edits = host;
+                self.edits_gesture = None;
             }
             let result = if fired.source == FireSource::Automation { self.execute(id, params) } else { self.run(id, params) };
             if from_key && result.is_ok() {
@@ -413,11 +414,13 @@ mod tests {
         app.run_fired(&ctx, &output);
         let after_undo = app.session.undo_depth();
         assert_eq!(after_undo + 1, before, "the gesture left no step, and Undo took the one from before it");
+        assert!(app.edits_gesture.is_none(), "Undo clears running edit gesture state");
 
         let mut end = EditEvents::new();
         end.push(EditEvent::commit(id, Mixed::Same(11.0_f32), 20.0_f32));
         crate::undo_marks::apply_edits(&mut app, end, apply);
         assert_eq!(app.session.undo_depth(), after_undo, "the late Commit of the taken-back gesture adds no step");
+        assert!(app.edits_gesture.is_none());
     }
 
     /// #7310: unimplemented Word feature catalog commands publish a disabled state so ribbon
