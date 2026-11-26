@@ -2404,6 +2404,30 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_eq!(body_text(h.state()), before, "typing went into the font size box, not the page");
 }
 
+/// #7757: Windows draws its system text I-beam in white over the app's surface, so the ribbon's font
+/// fields looked cursorless there. Like the page, they must ask for craft's painted I-beam on a
+/// native Windows shell; other shells keep the system text cursor.
+#[test]
+fn the_ribbon_font_fields_show_a_painted_ibeam_on_windows() {
+    use craft::host::target::{Os, Runtime, ShellInfo};
+    use egui::accesskit::Role;
+
+    let mut h = harness(app());
+    h.run_steps(4);
+    let size =
+        h.get_all_by_role(Role::TextInput).find(|n| n.value().is_some_and(|v| v.trim().parse::<f64>().is_ok())).expect("the font size box").rect();
+    h.hover_at(size.center());
+    h.step();
+    h.step();
+
+    let shell = ShellInfo::current();
+    if shell.os == Os::Windows && shell.runtime == Runtime::Native {
+        assert!(h.output().platform_output.cursor_image.is_some(), "the font size box asks for the painted I-beam on Windows native");
+    } else {
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "other shells keep the text cursor");
+    }
+}
+
 /// #1538: inserting WordArt leaves its text selected, so Delete erased only the text and the
 /// empty box stayed. Escape now selects the box itself, Delete removes it, and a second Escape
 /// is back to a caret in the body.
