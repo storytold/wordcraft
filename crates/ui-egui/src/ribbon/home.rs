@@ -157,6 +157,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("Paste", "edit.paste"),
                 ("Keep Text Only", "edit.pasteText"),
                 ("Merge Formatting", "edit.pasteMerge"),
+                ("Paste as Nested Table", "edit.pasteNestedTable"),
                 ("Paste Special…", "edit.pasteSpecial"),
             ] {
                 MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);

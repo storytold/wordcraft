@@ -20,6 +20,7 @@ mod fonts;
 mod ime_noop;
 mod page_number_formats_in_lists;
 mod para_tools;
+mod paste_table_in_cell;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -3141,11 +3142,19 @@ fn tables_nest_only_as_deep_as_a_json_save_reads() {
     let e = s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap_err();
     assert!(e.to_string().contains(&format!("{MAX_TABLE_DEPTH} deep")), "{e}");
     assert_eq!(s.doc, before);
-    run(&mut s, "edit.paste", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
+    // Paste as Nested Table is the path the depth guard sits on: the table's text comes as paragraphs.
+    run(&mut s, "edit.pasteNestedTable", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
     let cell = s.sel.focus.path.clone();
     let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
     assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
     assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('b'))), "the pasted text is there");
+    // Paste lays a one-cell table over the cell (#6739): no new level either.
+    run(&mut s, "edit.paste", json!({"text": "c", "html": "<table><tr><td>c</td></tr></table>"}));
+    let cell = s.sel.focus.path.clone();
+    let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
+    assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
+    assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('c'))), "the pasted text is there");
+    assert_eq!(s.sel.focus.path.depth(), MAX_TABLE_DEPTH);
 }
 
 /// #3618: a text box story sits two JSON levels below the body, and its deepest cell still reads

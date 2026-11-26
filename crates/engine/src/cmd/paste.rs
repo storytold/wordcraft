@@ -639,9 +639,20 @@ pub fn change_paste(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Replace the selection with `frag`, marking it as an insertion under Track Changes. This is a
-/// paste: the Paste Options button is offered after it when it had a choice.
+/// Paste `frag` at the selection. A copied table pasted with the caret in a table cell goes the way
+/// Word's Paste does it (rows inserted or cells overwritten, #6739; see [`super::paste_cells`]);
+/// anything else is [`insert_as_is`].
 pub fn insert(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
+    if super::paste_cells::paste_cells(s, &frag)? {
+        return Ok(());
+    }
+    insert_as_is(s, frag)
+}
+
+/// Replace the selection with `frag`, marking it as an insertion under Track Changes. A table pasted
+/// with the caret in a cell nests in that cell (Word's Paste as Nested Table). This is a paste: the
+/// Paste Options button is offered after it when it had a choice.
+pub fn insert_as_is(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
     insert_from(s, frag, None)
 }
 
