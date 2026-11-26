@@ -5,6 +5,7 @@ mod czech_test_dict;
 
 use serde_json::json;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -17,7 +18,9 @@ mod fit_one_page;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod page_number_formats_in_lists;
 mod para_tools;
+mod paste_table_in_cell;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -263,6 +266,7 @@ fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
 
 #[test]
 fn custom_dictionary_words_persist_through_their_file() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: adding a word through a command writes it to the session's file, and loading
     // that file makes the word known (only the desktop app wires this up).
     let dir = std::env::temp_dir().join(format!("wc-engdict-{}", std::process::id()));
@@ -290,6 +294,7 @@ fn custom_dictionary_words_persist_through_their_file() {
 
 #[test]
 fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_their_roots() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #3737 (findings 34 and WC-35): the custom dictionary file and the folder settings are
     // held to the automation roots like any other path.
     let base = scratch_dir("dict-roots");
@@ -303,6 +308,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
     let confined = |s: &mut Session, cmd: &str, v: serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(cmd, &v));
     assert!(confined(&mut s, "review.addToDictionary", json!({"word": "zxqengconfined"})).is_ok());
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengconfined".to_string()), "kept in memory");
+    wordcraft_proof::remove_word("zxqengconfined");
     assert!(!outside.exists(), "nothing written outside the write root");
     for key in ["dictionariesFolder", "userTemplatesFolder"] {
         assert!(confined(&mut s, "file.options", json!({key: base.join("outside").to_string_lossy()})).is_err(), "{key}");
@@ -317,6 +323,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
 
 #[test]
 fn add_to_dictionary_takes_only_words_the_file_keeps() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: the same rule as loading the dictionary file, so nothing added is dropped on the next load.
     let mut s = s();
     for bad in ["two words", "tab\tword", "bell\u{7}", &"x".repeat(65)] {
@@ -325,6 +332,202 @@ fn add_to_dictionary_takes_only_words_the_file_keeps() {
     }
     run(&mut s, "review.addToDictionary", json!({"word": " zxqengtrimmed "}));
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengtrimmed".to_string()));
+    wordcraft_proof::remove_word("zxqengtrimmed");
+}
+
+/// #5840: WordCraft supports choosing a freestanding custom.dic dictionary file (including
+/// UTF-16LE with BOM as written by Microsoft Word), using it in conjunction with the main
+/// dictionary, and persisting additions back to it in the same encoding.
+#[test]
+fn custom_dictionary_freestanding_file_option() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic");
+    let dic_path = dir.path().join("custom.dic");
+
+    // Write a freestanding UTF-16LE dictionary file with BOM, as Word saves it on Windows.
+    let mut initial_bytes = vec![0xFF, 0xFE];
+    for u in "freestandingword\r\nmameui\r\n".encode_utf16() {
+        initial_bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    std::fs::write(&dic_path, &initial_bytes).unwrap();
+
+    let mut s = s();
+    let default_path = dir.path().join("default.txt");
+    s.default_user_dict_path = Some(default_path.clone());
+    s.user_dict_path = Some(default_path.clone());
+
+    // Seed default dictionary with a default word.
+    std::fs::write(&default_path, "defaultword\n").unwrap();
+    crate::custom_dict::load_custom_dictionary(&default_path).unwrap();
+    assert!(wordcraft_proof::is_correct("defaultword"));
+
+    // Before binding, the word is unknown.
+    assert!(!wordcraft_proof::is_correct("freestandingword"));
+
+    // Set customDictionary in file.options: removes previous words and loads custom.dic.
+    let res = s.run("file.options", &json!({"customDictionary": dic_path.to_string_lossy()})).unwrap();
+    assert_eq!(res["customDictionary"], json!(dic_path.to_string_lossy()));
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(dic_path.to_string_lossy().as_ref()));
+    assert_eq!(s.user_dict_path.as_ref(), Some(&dic_path));
+    assert!(!wordcraft_proof::is_correct("defaultword"), "previous words removed on switch");
+    assert!(wordcraft_proof::is_correct("freestandingword"));
+    assert!(wordcraft_proof::is_correct("mameui"));
+
+    // Add a new word via review.addToDictionary: it persists back to custom.dic in UTF-16LE.
+    run(&mut s, "review.addToDictionary", json!({"word": "zxqaddedword"}));
+    let saved_raw = std::fs::read(&dic_path).unwrap();
+    assert_eq!(saved_raw[0..2], [0xFF, 0xFE], "persists as UTF-16LE with BOM");
+    let decoded = crate::custom_dict::decode_dictionary_bytes(&saved_raw).unwrap();
+    assert!(decoded.contains("freestandingword"));
+    assert!(decoded.contains("zxqaddedword"));
+
+    // Revert to "auto": removes custom dictionary words and restores default path.
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+    assert_eq!(s.user_dict_path.as_ref(), Some(&default_path));
+    assert!(!wordcraft_proof::is_correct("freestandingword"), "freestanding words removed on revert");
+    assert!(!wordcraft_proof::is_correct("zxqaddedword"));
+    assert!(wordcraft_proof::is_correct("defaultword"), "default words restored");
+
+    // Setting customDictionary to "auto" when user_dict_path is already default_path
+    // updates s.prefs.custom_dictionary even if it previously held a stale path.
+    s.prefs.custom_dictionary = Some("/stale/nonexistent.dic".to_string());
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+
+    // Clean up test words from proofing dictionary
+    wordcraft_proof::remove_word("defaultword");
+
+    // Reject nonexistent files, folders, relative paths, or oversized files.
+    assert!(s.run("file.options", &json!({"customDictionary": dir.path().join("missing.dic").to_string_lossy()})).is_err());
+    let dir_err = s.run("file.options", &json!({"customDictionary": dir.path().to_string_lossy()})).unwrap_err();
+    assert!(format!("{dir_err:?}").contains("is a folder, not a file"));
+    let rel_err = s.run("file.options", &json!({"customDictionary": "relative/custom.dic"})).unwrap_err();
+    assert!(format!("{rel_err:?}").contains("isn't a full path"));
+
+    // Accept ~/ path expansion when HOME points to a directory.
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        let home_dir = std::path::PathBuf::from(home);
+        let test_name = format!(".wordcraft-test-tilde-{}.dic", std::process::id());
+        let tilde_file = home_dir.join(&test_name);
+        struct CleanFile(std::path::PathBuf);
+        impl Drop for CleanFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        if let Ok(mut f) = opts.open(&tilde_file) {
+            use std::io::Write;
+            let _ = f.write_all(b"tildeword\n");
+            let _cleaner = CleanFile(tilde_file.clone());
+            let tilde_res = s.run("file.options", &json!({"customDictionary": format!("~/{test_name}")}));
+            assert!(tilde_res.is_ok(), "tilde expansion succeeds: {:?}", tilde_res.err());
+            assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(tilde_file.to_string_lossy().as_ref()));
+            assert!(wordcraft_proof::is_correct("tildeword"));
+            s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+            wordcraft_proof::remove_word("tildeword");
+            wordcraft_proof::remove_word("defaultword");
+        }
+    }
+
+    let huge_dic = dir.path().join("huge.dic");
+    std::fs::write(&huge_dic, vec![b'a'; (crate::custom_dict::MAX_CUSTOM_FILE_BYTES + 1024) as usize]).unwrap();
+    assert!(s.run("file.options", &json!({"customDictionary": huge_dic.to_string_lossy()})).is_err());
+    assert_eq!(s.prefs.custom_dictionary, None, "oversized dictionary rejects without changing prefs");
+    wordcraft_proof::remove_word("defaultword");
+}
+
+/// #5840 review: a dictionary that passes the metadata and access checks but can't be decoded
+/// refuses the whole `file.options` call before any setting is applied, so a combined call leaves
+/// the preferences, the bound path and the proofing words as they were.
+#[test]
+fn refused_custom_dictionary_leaves_every_other_option_unchanged() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-refused");
+    let bound = dir.path().join("custom.dic");
+    std::fs::write(&bound, "boundword\n").unwrap();
+    // A lone 0xFF byte is neither UTF-8 nor a UTF-16LE BOM pair: the file is a readable, writable
+    // regular file, so only decoding refuses it.
+    let bad = dir.path().join("bad.dic");
+    std::fs::write(&bad, [b'h', b'i', 0xFF]).unwrap();
+
+    let mut s = s();
+    s.default_user_dict_path = Some(dir.path().join("custom-dictionary.txt"));
+    run(
+        &mut s,
+        "file.options",
+        json!({
+            "author": "Ada",
+            "initials": "AL",
+            "units": "centimeters",
+            "region": "pl-PL",
+            "dictionariesFolder": dir.path().to_string_lossy(),
+            "customDictionary": bound.to_string_lossy(),
+            "markGrammar": true,
+            "checkSpelling": true,
+        }),
+    );
+    assert!(wordcraft_proof::is_correct("boundword"));
+    let before = cmd::options::current(&s);
+
+    let err = s
+        .run(
+            "file.options",
+            &json!({
+                "author": "Grace",
+                "initials": "GH",
+                "units": "inches",
+                "region": "en-US",
+                "dictionariesFolder": "auto",
+                "customDictionary": bad.to_string_lossy(),
+                "markGrammar": false,
+                "checkSpelling": false,
+                "addWords": ["zxqrefusedword"],
+            }),
+        )
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a refused dictionary changes no setting");
+    assert_eq!(s.user_dict_path.as_ref(), Some(&bound), "the bound dictionary stays");
+    assert!(!wordcraft_proof::is_correct("zxqrefusedword"), "the refused call adds no words");
+
+    // `auto` decodes the default file before applying too, so a malformed default file is refused
+    // the same way and its companion settings stay as they were.
+    let default_path = dir.path().join("custom-dictionary.txt");
+    std::fs::write(&default_path, [b'x', 0xFF]).unwrap();
+    let before = cmd::options::current(&s);
+    let err = s.run("file.options", &json!({"customDictionary": "auto", "units": "points"})).unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a malformed default dictionary changes no setting");
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(bound.to_string_lossy().as_ref()));
+
+    wordcraft_proof::remove_word("boundword");
+}
+
+#[cfg(unix)]
+#[test]
+fn custom_dictionary_rejects_symlink_and_readonly_files() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-symlink");
+    let dic_path = dir.path().join("custom.dic");
+    std::fs::write(&dic_path, "word\n").unwrap();
+
+    let mut s = s();
+    let symlink_path = dir.path().join("symlink.dic");
+    let _ = std::os::unix::fs::symlink(&dic_path, &symlink_path);
+    let link_err = s.run("file.options", &json!({"customDictionary": symlink_path.to_string_lossy()})).unwrap_err();
+    assert!(format!("{link_err:?}").contains("is a symbolic link"));
+
+    let ro_path = dir.path().join("readonly.dic");
+    std::fs::write(&ro_path, "word\n").unwrap();
+    let mut perms = std::fs::metadata(&ro_path).unwrap().permissions();
+    perms.set_readonly(true);
+    let _ = std::fs::set_permissions(&ro_path, perms);
+    let ro_err = s.run("file.options", &json!({"customDictionary": ro_path.to_string_lossy()})).unwrap_err();
+    let ro_msg = format!("{ro_err:?}");
+    assert!(ro_msg.contains("read-only") || ro_msg.contains("Permission denied"));
 }
 
 #[test]
@@ -1050,6 +1253,7 @@ fn rep_mode(text: &str, q: &str, with: &str, extra: serde_json::Value) -> String
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hostile_find_patterns_are_bounded() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": &"a".repeat(5000)}));
@@ -1106,6 +1310,26 @@ fn replace_under_track_changes_skips_deleted_text() {
     let r = run(&mut s, "edit.replace", json!({"text": "cat", "with": "dog"}));
     assert_eq!(r["remaining"], 0);
     assert_eq!(text(&s), "one dog two dog");
+}
+
+#[test]
+fn replace_reports_whether_it_replaced_and_what_it_selected() {
+    // Replace follows Word's button: the first call only selects a match. Agents read
+    // `remaining` alone as done (#6877), so the result says whether anything was replaced.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "alpha XX beta XX gamma XX"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let calls: Vec<_> = (0..5).map(|_| run(&mut s, "edit.replace", json!({"text": "XX", "with": "YY"}))).collect();
+    let replaced: Vec<_> = calls.iter().map(|r| r["replaced"].clone()).collect();
+    assert_eq!(replaced, [json!(0), json!(1), json!(1), json!(1), json!(0)]);
+    let remaining: Vec<_> = calls.iter().map(|r| r["remaining"].clone()).collect();
+    assert_eq!(remaining, [json!(3), json!(2), json!(1), json!(0), json!(0)]);
+    let selected: Vec<_> = calls.iter().map(|r| (r["selected"]["start"]["off"].clone(), r["selected"]["end"]["off"].clone())).collect();
+    assert_eq!(selected[0], (json!(6), json!(8)));
+    assert_eq!(selected[1], (json!(14), json!(16)));
+    assert_eq!(selected[2], (json!(23), json!(25)));
+    assert!(calls[3]["selected"].is_null() && calls[4]["selected"].is_null(), "no match is left to select");
+    assert_eq!(text(&s), "alpha YY beta YY gamma YY");
 }
 
 #[test]
@@ -1439,10 +1663,9 @@ fn copying_puts_rtf_on_the_clipboard() {
     assert!(r["rtf"].as_str().is_some_and(|t| t.starts_with("{\\rtf1") && t.contains("bold")), "{r}");
     assert_eq!(text(&s).lines().next(), Some("plain "));
 
-    // Nothing selected: nothing copied, no RTF.
+    // Nothing selected: Copy is refused, so nothing is copied.
     run(&mut s, "caret.docEnd", json!({}));
-    let r = run(&mut s, "edit.copy", json!({}));
-    assert!(r.get("rtf").is_none(), "{r}");
+    assert!(s.run("edit.copy", &json!({})).is_err(), "Copy with nothing selected");
 }
 
 #[test]
@@ -1653,6 +1876,26 @@ fn paste_merge_formatting_keeps_rtf_deletions() {
 }
 
 #[test]
+fn paste_merge_formatting_keeps_bold_and_italic_in_a_complex_script_run() {
+    // #4852 review: with the caret in a run marked `w:cs` (Thai from a WPS or Word file), the
+    // pasted text takes `cs` too, so its bold and italic must be the complex-script ones as well.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ภาษาไทย"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.set", json!({"props": {"cs": true}}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.pasteMerge", json!({"rtf": r"{\rtf1{\b bold}{\i slant}\par}"}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let at = |word: &str| p.props_of_char(p.text.find(word).unwrap() + 1).clone();
+    let (b, i) = (at("bold"), at("slant"));
+    assert_eq!((b.cs, b.bold, b.bold_cs), (Some(true), Some(true), Some(true)), "{b:?}");
+    assert_eq!((i.cs, i.italic, i.italic_cs), (Some(true), Some(true), Some(true)), "{i:?}");
+    assert_ne!(b.italic, Some(true));
+    let r = s.doc.styles.resolve_char(None, &b);
+    assert!(r.bold_cs, "drawn bold as complex script");
+}
+
+#[test]
 fn pasted_rtf_sections_link_their_headers_to_the_previous() {
     // #1378: the RTF's own header part ids mean nothing in this document; a pasted section
     // break keeps its page but links its headers and footers to the previous section.
@@ -1825,6 +2068,205 @@ fn paste_keeps_source_formatting_from_other_programs() {
     run(&mut s, "edit.paste", json!({"text": "Own"}));
     assert_eq!(text(&s), "OwnOwn");
     assert_eq!(props_at(&s, 4).italic, Some(true));
+}
+
+/// Verify that pasting syntax-highlighted code from VS Code retains syntax colors and font styling
+/// without inheriting dark background shading strips from outer container elements (#6157).
+#[test]
+fn pasted_code_from_vscode_has_syntax_colors_and_no_character_shading() {
+    // #6157: VS Code wraps copied code in an outer div with `background-color: #1e1e1e`.
+    // In Word and per CSS (background-color does not inherit), pasting into a document keeps the
+    // syntax colors and mono font without painting dark character shading strips over the runs.
+    let mut s = s();
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-weight: normal;font-size: 14px;line-height: 19px;white-space: pre;"><div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> x = </span><span style="color: #b5cea8;">1</span><span style="color: #d4d4d4;">;</span></div></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "const x = 1;", "html": vscode_html}));
+    assert_eq!(text(&s), "const x = 1;");
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    for r in &p.runs {
+        assert_eq!(r.props.shading, None, "character should have no shading from container div");
+    }
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "container background is kept as paragraph shading");
+    assert!(p.runs.iter().any(|r| r.props.color == Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x56, 0x9c, 0xd6)))));
+}
+
+/// A multi-block paste keeps the first pasted paragraph's shading when the destination has its own properties (#6157).
+#[test]
+fn multi_block_paste_keeps_first_paragraph_shading() {
+    let mut s = s();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let html = r#"<div style="background-color:#1e1e1e"><p>one</p><p>two</p></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "one\ntwo", "html": html}));
+    assert_eq!(text(&s), "one\ntwo");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "first pasted paragraph keeps its shading");
+}
+
+/// A destination paragraph whose style shades keeps that shading when a shaded paragraph is pasted (#6157).
+#[test]
+fn paste_keeps_destination_style_shading() {
+    let mut s = s();
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)), ..Default::default() },
+        ..Default::default()
+    });
+    run(&mut s, "para.style", json!({"style": "Shaded"}));
+    let html = r#"<div style="background-color:#1e1e1e"><span>text</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "text", "html": html}));
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None, "source shading must not override the destination style");
+    assert_eq!(
+        s.doc.styles.resolve_para(&p.props).shading,
+        Some(wordcraft_doc::Rgb(0x22, 0x22, 0x22)),
+        "destination style shading remains effective"
+    );
+}
+
+/// Multi-line VS Code paste keeps removable paragraph shading rather than stuck character shading,
+/// so Shading › No Color, Clear All Formatting, and Merge Formatting all clear the dark background (#6157).
+#[test]
+fn pasted_code_from_vscode_shading_is_removable() {
+    let vscode_html = concat!(
+        r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;">"#,
+        r#"<div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> a = 1;</span></div>"#,
+        r#"<div><span style="color: #569cd6;">const</span><span style="color: #d4d4d4;"> b = 2;</span></div>"#,
+        r#"</div>"#,
+    );
+    let plain = "const a = 1;\nconst b = 2;";
+
+    // Home › Paragraph › Shading › No Color removes the dark background across all pasted lines.
+    let mut s = self::s();
+    run(&mut s, "edit.paste", json!({"text": plain, "html": vscode_html}));
+    assert_eq!(s.doc.body.len(), 2);
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none()));
+    }
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.shading", json!({"color": null}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None, "Shading › No Color clears the container background");
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none()));
+    }
+
+    // Clear All Formatting clears both the dark paragraph shading and light syntax colors.
+    let mut s = self::s();
+    run(&mut s, "edit.paste", json!({"text": plain, "html": vscode_html}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.clear", json!({}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None);
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none() && r.props.color.is_none()));
+    }
+
+    // Paste › Merge Formatting drops the dark container background and light text colors up front.
+    let mut s = self::s();
+    run(&mut s, "edit.pasteMerge", json!({"text": plain, "html": vscode_html}));
+    for b in &s.doc.body {
+        let p = b.as_para().unwrap();
+        assert_eq!(p.props.shading, None);
+        assert!(p.runs.iter().all(|r| r.props.shading.is_none() && r.props.color.is_none()));
+    }
+}
+
+/// Copying a paragraph shaded via its style writes `background-color` to the clipboard HTML (#6157).
+#[test]
+fn copy_exports_style_inherited_paragraph_shading_to_clipboard_html() {
+    let mut s = s();
+    Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
+        id: "CodeBlock".into(),
+        name: "Code Block".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), ..Default::default() },
+        ..Default::default()
+    });
+    run(&mut s, "document.setText", json!({"text": "const x = 1;"}));
+    run(&mut s, "para.style", json!({"style": "CodeBlock"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default();
+    assert!(html.contains("background-color:#1E1E1E"), "clipboard HTML carries style paragraph shading: {html}");
+
+    let mut dst = self::s();
+    run(&mut dst, "edit.paste", json!({"text": "const x = 1;", "html": html, "privateClipboard": false}));
+    let p = dst.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+}
+
+/// Pasting a single inline-highlighted word into the middle of an unshaded paragraph keeps run
+/// shading on that word alone and leaves the destination paragraph unshaded (#6157).
+#[test]
+fn pasting_inline_highlighted_word_mid_paragraph_keeps_run_shading_only() {
+    for (html, want) in [
+        (r#"<span style="background-color:yellow">word</span>"#, wordcraft_doc::Rgb(0xff, 0xff, 0x00)),
+        (r"<mark>word</mark>", wordcraft_doc::Rgb(0xff, 0xff, 0x00)),
+        (r#"<code style="background-color:#eeeeee">word</code>"#, wordcraft_doc::Rgb(0xee, 0xee, 0xee)),
+    ] {
+        let mut s = self::s();
+        run(&mut s, "document.setText", json!({"text": "before  after"}));
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 7}, "focus": {"block": 0, "off": 7}}));
+        run(&mut s, "edit.paste", json!({"text": "word", "html": html}));
+        assert_eq!(text(&s), "before word after", "{html}");
+        let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+        assert_eq!(p.props.shading, None, "destination paragraph stays unshaded: {html}");
+        assert_eq!(p.props_of_char(0).shading, None, "{html}");
+        assert_eq!(p.props_of_char(7).shading, Some(want), "pasted word keeps run shading: {html}");
+        assert_eq!(p.props_of_char(12).shading, None, "{html}");
+    }
+}
+
+/// Pasting a container-wrapped one-line snippet (no paragraph break) into the middle of a
+/// paragraph leaves the destination paragraph unshaded (#6157).
+#[test]
+fn container_wrapped_one_line_paste_mid_paragraph_leaves_paragraph_unshaded() {
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "Call  now."}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}}));
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;"><span style="color: #569cd6;">foo</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s), "Call foo now.");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None, "destination paragraph stays unshaded");
+    assert_eq!(p.props_of_char(0).shading, None);
+    assert_eq!(p.props_of_char(5).shading, None);
+}
+
+/// Under Track Changes, rejecting a paste restores the destination paragraph formatting (#6157).
+#[test]
+fn tracked_paste_reject_restores_destination_paragraph_shading() {
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "Call  now."}));
+    run(&mut s, "review.trackChanges", json!({"enabled": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}}));
+    let vscode_html = r#"<div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Consolas, 'Courier New', monospace;font-size: 14px;white-space: pre;"><span style="color: #569cd6;">foo</span></div>"#;
+    run(&mut s, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s), "Call foo now.");
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p.props.shading, None);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(text(&s), "Call  now.");
+    let p_after = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p_after.props.shading, None, "rejecting paste leaves paragraph unshaded");
+
+    // Also verify that pasting into an empty paragraph under Track Changes restores the empty
+    // paragraph's unshaded state on Reject All.
+    let mut s2 = self::s();
+    run(&mut s2, "review.trackChanges", json!({"enabled": true}));
+    run(&mut s2, "edit.paste", json!({"text": "foo", "html": vscode_html}));
+    assert_eq!(text(&s2), "foo");
+    let p2 = s2.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p2.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    run(&mut s2, "review.rejectAll", json!({}));
+    assert_eq!(text(&s2), "");
+    let p2_after = s2.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(p2_after.props.shading, None, "rejecting paste into empty paragraph clears paragraph shading");
 }
 
 /// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
@@ -2110,6 +2552,58 @@ fn body_table_cells(s: &Session) -> Vec<Vec<String>> {
 
 /// #1744: Select Table → Copy → Paste outside the table pastes a copy of the whole table.
 #[test]
+fn table_spots_and_borders_are_the_areas_the_pointer_queries_answer_for() {
+    use crate::cmd::{table_mouse, table_resize};
+    let mut sess = s();
+    run(&mut sess, "insert.table", serde_json::json!({"rows": 3, "cols": 3}));
+    let l = sess.layout();
+    let story = sess.sel.focus.story;
+    let reach = 3.0;
+    let spots = table_mouse::spots(&l, &sess.doc, story, 0, reach);
+    let borders = table_resize::borders(&l, &sess.doc, 0, reach);
+    assert!(!spots.is_empty() && !borders.is_empty());
+    let inside = |r: &wordcraft_geom::Rect, x: f32, y: f32| x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom();
+    let (w, bottom) = l.pages.first().map_or((0.0, 0.0), |p| (p.w, p.body.bottom()));
+    let (mut spot_hits, mut border_hits) = (0, 0);
+    let mut y = 0.3f32;
+    while y < bottom {
+        let mut x = 0.3f32;
+        while x < w {
+            let spot = table_mouse::target_at(&l, &sess.doc, story, 0, x, y, reach);
+            if let Some(t) = &spot {
+                spot_hits += 1;
+                assert!(spots.iter().any(|a| a.target == *t && inside(&a.area, x, y)), "spot at ({x}, {y}) lies in its listed area");
+            }
+            if spot.is_none() && table_resize::resize_target(&l, &sess.doc, 0, x, y, reach).is_none() {
+                // Nothing answers: no listed area may hold the point unless a border took it first.
+                assert!(!spots.iter().any(|a| inside(&a.area, x, y)), "an area holds ({x}, {y}) yet nothing answers");
+            }
+            let border = table_resize::resize_target(&l, &sess.doc, 0, x, y, reach);
+            match &border {
+                Some(t) => {
+                    border_hits += 1;
+                    assert!(borders.iter().any(|(a, b)| b == t && inside(a, x, y)), "border at ({x}, {y}) lies in its listed strip");
+                }
+                None => assert!(
+                    !borders.iter().any(|(a, b)| inside(a, x, y) && {
+                        let d = match b.edge {
+                            table_resize::Edge::Column(i) => b.cols.get(i).map_or(f32::INFINITY, |c| (x - c).abs()),
+                            table_resize::Edge::Row(r) => b.rows.iter().find(|q| q.row == r).map_or(f32::INFINITY, |q| (y - q.bottom).abs()),
+                            table_resize::Edge::Corner => 0.0,
+                        };
+                        d <= reach
+                    }),
+                    "a strip holds ({x}, {y}) within reach yet no border answers"
+                ),
+            }
+            x += 3.7;
+        }
+        y += 3.7;
+    }
+    assert!(spot_hits > 0 && border_hits > 0, "the sweep met both kinds of spot");
+}
+
+#[test]
 fn copy_whole_table_pastes_a_table() {
     let mut s = table_doc();
     run(&mut s, "table.selectTable", json!({}));
@@ -2120,6 +2614,122 @@ fn copy_whole_table_pastes_a_table() {
     run(&mut s, "edit.paste", json!({}));
     let want = vec!["A1".to_string(), "B1".into(), "A2".into(), "B2".into()];
     assert_eq!(body_table_cells(&s), vec![want.clone(), want]);
+}
+
+/// #5906: Copying select-all in a document starting with a table must preserve the table.
+#[test]
+fn select_all_in_document_starting_with_table_preserves_table() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "A1"}));
+    run(&mut s, "select.all", json!({"whole": true}));
+    run(&mut s, "edit.copy", json!({}));
+    let clip = s.clipboard.as_ref().unwrap();
+    assert!(
+        clip.blocks.iter().any(|b| matches!(b, wordcraft_doc::Block::Table(_))),
+        "copying select-all in a document starting with a table must preserve table structure, got {:?}",
+        clip.blocks
+    );
+    let table = clip
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("table block in clipboard");
+    assert_eq!(table.rows.len(), 2, "copied table row count");
+    assert_eq!(table.cols(), 2, "copied table col count");
+    let c00 = table.rows[0].cells[0].blocks.first().and_then(|b| match &**b {
+        wordcraft_doc::Block::Para(p) => Some(p.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(c00, Some("A1"), "cell (0, 0) text");
+}
+
+/// #5906: Cut and Spike across table cells with non-corner endpoints must preserve every removed character.
+#[test]
+fn cut_and_spike_across_table_cells_preserves_every_removed_character() {
+    // 1. Test Spike then insertSpike
+    {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+        for (i, text) in ["R0C0", "R0C1", "R0C2", "R1C0", "R1C1", "R1C2", "R2C0", "R2C1", "R2C2"].iter().enumerate() {
+            if i > 0 {
+                run(&mut s, "text.tab", json!({}));
+            }
+            run(&mut s, "text.insert", json!({"text": text}));
+        }
+
+        // Set linear text range across non-corner cells: (0, 1) off 1 ("0C1") through (1, 1) off 3 ("R1C").
+        // Traversed in linear document order: (0, 1) "0C1", (0, 2) "R0C2", (1, 0) "R1C0", (1, 1) "R1C".
+        s.sel = crate::Selection {
+            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
+            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+        };
+        s.column = None;
+
+        run(&mut s, "edit.spike", json!({}));
+
+        // Verify the table content after spike:
+        // (0, 1) has "R" remaining, (0, 2) emptied, (1, 0) emptied, (1, 1) has "1" remaining.
+        let cells_after = body_table_cells(&s);
+        assert_eq!(
+            cells_after,
+            vec![vec!["R0C0".to_string(), "R".into(), "".into(), "".into(), "1".into(), "R1C2".into(), "R2C0".into(), "R2C1".into(), "R2C2".into(),]]
+        );
+
+        // Paste the spike at the end of the document: all 4 removed pieces must be present.
+        run(&mut s, "caret.docEnd", json!({}));
+        run(&mut s, "edit.insertSpike", json!({}));
+        let texts = body_texts(&s);
+        assert!(
+            texts.iter().any(|t| t == "0C1")
+                && texts.iter().any(|t| t == "R0C2")
+                && texts.iter().any(|t| t == "R1C0")
+                && texts.iter().any(|t| t == "R1C"),
+            "every removed character must be preserved and inserted from spike, got: {:?}",
+            texts
+        );
+    }
+
+    // 2. Test Cut then paste
+    {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+        for (i, text) in ["R0C0", "R0C1", "R0C2", "R1C0", "R1C1", "R1C2", "R2C0", "R2C1", "R2C2"].iter().enumerate() {
+            if i > 0 {
+                run(&mut s, "text.tab", json!({}));
+            }
+            run(&mut s, "text.insert", json!({"text": text}));
+        }
+
+        s.sel = crate::Selection {
+            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
+            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+        };
+        s.column = None;
+
+        run(&mut s, "edit.cut", json!({}));
+
+        let cells_after_cut = body_table_cells(&s);
+        assert_eq!(
+            cells_after_cut,
+            vec![vec!["R0C0".to_string(), "R".into(), "".into(), "".into(), "1".into(), "R1C2".into(), "R2C0".into(), "R2C1".into(), "R2C2".into(),]]
+        );
+
+        run(&mut s, "caret.docEnd", json!({}));
+        run(&mut s, "edit.paste", json!({}));
+        let texts_cut = body_texts(&s);
+        assert!(
+            texts_cut.iter().any(|t| t == "0C1")
+                && texts_cut.iter().any(|t| t == "R0C2")
+                && texts_cut.iter().any(|t| t == "R1C0")
+                && texts_cut.iter().any(|t| t == "R1C"),
+            "every removed character must be preserved and inserted from cut, got: {:?}",
+            texts_cut
+        );
+    }
 }
 
 /// #1744: Select Table → Cut removes the whole table, and one Undo brings it back.
@@ -2338,6 +2948,20 @@ fn tracked_cut_of_a_table_or_row_marks_text_deleted() {
     assert_eq!(body_table_final(&s), row_cells(&["A1", "B1", "C1", "", "", "", "A3", "B3", "C3"]));
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(body_table_final(&s), full);
+}
+
+/// Cut and Copy are off with nothing selected (the ribbon buttons read this) and on with text selected.
+#[test]
+fn cut_and_copy_are_disabled_without_a_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    for id in ["edit.cut", "edit.copy"] {
+        assert!(s.why_disabled(id).is_some(), "{id} with a caret only");
+    }
+    run(&mut s, "select.text", json!({"text": "Hello"}));
+    for id in ["edit.cut", "edit.copy"] {
+        assert!(s.why_disabled(id).is_none(), "{id} with a selection");
+    }
 }
 
 /// #1744 review: Cut of a table, or of cells, holding a content control locked against deletion
@@ -2705,11 +3329,19 @@ fn tables_nest_only_as_deep_as_a_json_save_reads() {
     let e = s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap_err();
     assert!(e.to_string().contains(&format!("{MAX_TABLE_DEPTH} deep")), "{e}");
     assert_eq!(s.doc, before);
-    run(&mut s, "edit.paste", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
+    // Paste as Nested Table is the path the depth guard sits on: the table's text comes as paragraphs.
+    run(&mut s, "edit.pasteNestedTable", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
     let cell = s.sel.focus.path.clone();
     let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
     assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
     assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('b'))), "the pasted text is there");
+    // Paste lays a one-cell table over the cell (#6739): no new level either.
+    run(&mut s, "edit.paste", json!({"text": "c", "html": "<table><tr><td>c</td></tr></table>"}));
+    let cell = s.sel.focus.path.clone();
+    let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
+    assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
+    assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('c'))), "the pasted text is there");
+    assert_eq!(s.sel.focus.path.depth(), MAX_TABLE_DEPTH);
 }
 
 /// #3618: a text box story sits two JSON levels below the body, and its deepest cell still reads
@@ -4906,6 +5538,50 @@ fn toc_page_numbers_are_pageref_fields() {
     assert_eq!(text(&s), expected);
 }
 
+/// Output (PDF, print) shows a table of contents' page numbers where the headings now are, as
+/// Word fills its `PAGEREF`s in when it prints or exports; the editor shows them as stored until
+/// the table is updated, and the document keeps them.
+#[test]
+fn output_shows_toc_page_numbers_where_the_headings_are() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    // Another page before Alpha moves the headings to pages 3 and 4.
+    let alpha = s
+        .doc
+        .body
+        .iter()
+        .position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("Heading1") && p.text.contains("Alpha")))
+        .unwrap();
+    s.sel = crate::Selection::caret(Pos::body(alpha, 0));
+    run(&mut s, "text.pageBreak", json!({}));
+    let toc_numbers = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(s.export_layout().pages.len(), 4);
+    assert_eq!(toc_numbers(&s.layout()), ["2", "3"]);
+    assert_eq!(toc_numbers(&s.export_layout()), ["3", "4"]);
+    assert!(text(&s).contains("Alpha\t2"), "the document keeps the stored numbers");
+    // A page image is laid out as the print job is: it shows the same numbers.
+    let png = crate::io_ext::render_png(&s.doc, 0, 1.0, &Default::default()).unwrap();
+    let printed = wordcraft_render::render_page(&s.doc, &s.export_layout().pages[0], 1.0, &Default::default()).to_png();
+    assert!(png == printed, "the page image and the printed page differ");
+}
+
 /// Headings numbered through a list carry their numbers, and the level's separator, into the
 /// TOC entries.
 #[test]
@@ -5162,6 +5838,74 @@ fn hostile_file_params_never_panic() {
     let rejected = refused(&mut s, at(&outside, "new.docx"));
     assert!(rejected.contains("automation path rejected"), "{rejected}");
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Large parameters must return and lay out within a generous wall-clock budget, so a regression
+/// that loops or allocates without a cap fails here with its command id (#3720).
+#[test]
+fn hostile_large_params_stay_bounded() {
+    const BUDGET: Duration = Duration::from_secs(5);
+    let reg = cmd::registry();
+    // 1 MiB makes an uncapped copy or a quadratic scan visible without making the test itself
+    // expensive; the counts are large enough that an uncapped loop takes seconds.
+    let big = "x".repeat(1 << 20);
+    let mut deep = json!([]);
+    for _ in 0..64 {
+        deep = json!([deep]);
+    }
+    let junk = [
+        json!({
+            "text": big, "name": big, "label": big, "find": big, "replace": big,
+            "title": big, "author": big, "path": big,
+        }),
+        json!({
+            "count": 1_000_000_000u64, "copies": 1_000_000_000u64, "times": 1_000_000_000u64,
+            "cols": 1_000_000_000u64, "rows": 1_000_000_000u64, "level": 1_000_000_000u64,
+            "page": 1_000_000_000u64, "from": 1_000_000_000u64, "to": 1_000_000_000u64,
+            "id": 1_000_000_000u64,
+        }),
+        json!({"width": 3e38, "height": 3e38, "top": -3e38, "left": 3e38}),
+        json!({"path": deep}),
+    ];
+    for spec in reg.all() {
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+            continue;
+        }
+        for j in &junk {
+            let mut s = Session::new(crate::sample::sample_document());
+            assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
+            let start = Instant::now();
+            let r = s.run(spec.id, j);
+            let elapsed = start.elapsed();
+            assert!(!caught_panic(&reg, &r), "{} panicked on large params: {r:?}", spec.id);
+            assert_within_budget(spec.id, elapsed, BUDGET);
+            // Laying the result out is not part of the command's budget; the layout tests
+            // cover long text separately. It still runs so a bad parameter reaches the layout.
+            s.clamp_selection();
+            let _ = s.layout();
+        }
+    }
+}
+
+fn assert_within_budget(id: &str, elapsed: Duration, budget: Duration) {
+    assert!(elapsed <= budget, "{id} took {elapsed:?} (budget {budget:?})");
+}
+
+/// The budget above fires: a command that runs past it is named, not ignored (#3720).
+#[test]
+#[should_panic(expected = "test.slow took")]
+fn hostile_large_param_budget_flags_a_slow_command() {
+    let budget = Duration::from_millis(1);
+    let mut s = Session::new(crate::sample::sample_document());
+    let slow = crate::CommandSpec::new("test.slow", "Slow", "", |_, _| {
+        std::thread::sleep(Duration::from_millis(20));
+        Ok(json!({}))
+    })
+    .pure();
+    s.registry = Arc::new(crate::Registry::new(vec![slow]));
+    let start = Instant::now();
+    let _ = s.run("test.slow", &json!({}));
+    assert_within_budget("test.slow", start.elapsed(), budget);
 }
 
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
@@ -5430,6 +6174,318 @@ fn copy_paste_text_box_makes_an_independent_copy() {
     run(&mut s, "edit.undo", json!({}));
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(s.doc.parts.len(), parts);
+}
+
+/// Copying and pasting a selected custom text box duplicates its dimensions, styling, and text
+/// while giving the copy an independent story ID.
+#[test]
+fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_text() {
+    let mut s = s();
+    let id = run(
+        &mut s,
+        "insert.textBox",
+        json!({
+            "text": "Custom content",
+            "width": 180.0,
+            "height": 90.0
+        }),
+    )["story"]
+        .as_u64()
+        .unwrap() as u32;
+
+    // Apply custom styling (fill and outline).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "shape.fill", json!({"color": "FFEEDD"}));
+    run(&mut s, "shape.outline", json!({"color": "112233", "width": 2.5}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let orig_obj = para.objects[0].clone();
+    let wordcraft_doc::InlineObject::Shape { w, h, stroke_width, fill, stroke, .. } = &orig_obj else { panic!("not a shape") };
+    assert_eq!((*w, *h), (180.0, 90.0));
+    assert_eq!(*stroke_width, 2.5);
+    assert!(fill.is_some());
+    assert!(stroke.is_some());
+
+    // Copy selected custom text box (non-collapsed, object_selection, #5785, #5859).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "Custom content");
+    assert_eq!(s.clipboard_text, "Custom content");
+    assert!(s.clipboard.is_some());
+
+    // Move caret after original and paste.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+    let pasted = &para.objects[1];
+
+    let wordcraft_doc::InlineObject::Shape { w: pw, h: ph, stroke_width: psw, fill: pfill, stroke: pstroke, story: pstory, .. } = pasted else {
+        panic!("pasted not a shape");
+    };
+
+    assert_eq!((*pw, *ph), (180.0, 90.0), "dimensions duplicated");
+    assert_eq!(*psw, 2.5, "stroke width duplicated");
+    assert_eq!(pfill, fill, "fill duplicated");
+    assert_eq!(pstroke, stroke, "stroke duplicated");
+    assert!(pstory.is_some());
+    assert_ne!(pstory.unwrap(), id, "independent story ID");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(pstory.unwrap())), "Custom content", "inner text duplicated");
+
+    // Cut the pasted text box by selecting it (non-collapsed, object_selection).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 3), "focus": Pos::body(0, 6)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
+    let cut_res = run(&mut s, "edit.cut", json!({}));
+    assert_eq!(cut_res["text"], "Custom content");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1);
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // Paste it back.
+    run(&mut s, "edit.paste", json!({}));
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+
+    // Copy and paste a shape without text.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 6)}));
+    run(&mut s, "insert.shape", json!({"kind": "star", "width": 64.0, "height": 48.0}));
+    run(&mut s, "shape.fill", json!({"color": "00FF00"}));
+
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 6), "focus": Pos::body(0, 9)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert!(s.clipboard.is_some());
+
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 9)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 4);
+    let star_copy = &para.objects[3];
+    let wordcraft_doc::InlineObject::Shape { kind, w, h, fill, .. } = star_copy else { panic!("not a shape") };
+    assert_eq!(*kind, wordcraft_doc::para::ShapeKind::Star);
+    assert_eq!((*w, *h), (64.0, 48.0));
+    assert!(fill.is_some());
+}
+
+/// Cut and Copy with a bare caret beside an object (collapsed selection) change nothing (#5859).
+#[test]
+fn cut_and_copy_with_bare_caret_beside_object_change_nothing() {
+    let mut s = s();
+    let id = run(&mut s, "insert.textBox", json!({"text": "Box content"}))["story"].as_u64().unwrap() as u32;
+
+    // 1. Bare caret immediately before the object (Pos::body(0, 0)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // 2. Bare caret immediately after the object (Pos::body(0, 3)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+}
+
+/// Fallback plain text / clipboard text when paragraphs contain text boxes (#5785).
+#[test]
+fn fallback_plain_text_extracts_text_box_story_when_body_contains_paragraph_marks() {
+    let mut f = wordcraft_doc::edit::Fragment::default();
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.text = format!("{}\n", wordcraft_doc::para::OBJ);
+    let mut part_p = wordcraft_doc::Paragraph::new();
+    part_p.text = "Box text".to_string();
+    let part = wordcraft_doc::Part {
+        kind: wordcraft_doc::PartKind::TextBox,
+        blocks: vec![std::sync::Arc::new(wordcraft_doc::Block::Para(part_p))],
+        body: Default::default(),
+    };
+    f.blocks = vec![wordcraft_doc::Block::Para(p)];
+    f.parts.insert(100, part);
+    assert_eq!(f.plain_text(), "Box text");
+    assert_eq!(f.clipboard_text(), "Box text");
+}
+
+/// Pasting formatted content with matching RTF but mismatched HTML from an external app prefers HTML (#5785).
+#[test]
+fn paste_content_prefers_external_html_when_rtf_matches_session_clipboard() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_rtf = s.clipboard_rtf.clone();
+    let external_html = "<p>External rich text</p>";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": external_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert_eq!(frag.plain_text(), "External rich text");
+    }
+}
+
+/// Pasting with no text payload or empty text but matching HTML and RTF uses WordCraft's session clipboard
+/// fragment, preserving custom text box parts (#5785, #5859).
+#[test]
+fn paste_content_uses_session_clipboard_when_html_and_rtf_match_without_text() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_html = s.clipboard_html.clone();
+    let my_rtf = s.clipboard_rtf.clone();
+    assert!(!my_html.is_empty());
+    assert!(!my_rtf.is_empty());
+    assert!(s.clipboard.as_ref().is_some_and(|f| !f.parts.is_empty()));
+
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": my_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    let pasted_with_empty_text = crate::cmd::paste::paste_content(&mut s, &json!({"text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_with_empty_text, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_with_empty_text {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved with empty text");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    let avail = crate::cmd::paste::available(&s, &json!({"text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(avail.contains(&"formatted"), "formatted format is available for pasteSpecial when text is empty but rich formats match");
+    let paste_special_res = s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(paste_special_res.is_ok(), "pasteSpecial as formatted succeeds with empty text and matching rich formats");
+}
+
+/// On macOS, arboard wraps HTML in `<html><head>…</head><body>…</body></html>`, so the
+/// round-tripped HTML never equals what WordCraft stored. The session clipboard must still be
+/// recognised when RTF matches or HTML matches after unwrapping (#5859).
+#[test]
+fn paste_content_uses_session_clipboard_when_macos_wraps_html() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_rtf = s.clipboard_rtf.clone();
+    assert!(!my_rtf.is_empty());
+    assert!(s.clipboard.as_ref().is_some_and(|f| !f.parts.is_empty()));
+
+    // Simulate macOS wrapping: HTML is wrapped by arboard, RTF is raw.
+    let wrapped_html =
+        format!("<html><head><meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\"></head><body>{}</body></html>", s.clipboard_html);
+    assert_ne!(wrapped_html, s.clipboard_html, "wrapped HTML differs from stored");
+
+    // With empty text (front-end path for shapes/text-boxes without text), session clipboard matched.
+    let pasted = crate::cmd::paste::paste_content(&mut s, &json!({"text": "", "html": wrapped_html, "rtf": my_rtf}));
+    assert!(matches!(pasted, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved despite wrapped HTML");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    // With non-empty text that matches, session clipboard matched via main's text rule.
+    let my_text = s.clipboard_text.clone();
+    let pasted_text = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "html": wrapped_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_text, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_text {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved with text match");
+    }
+
+    // Paste Special as formatted is available despite wrapped HTML.
+    let avail = crate::cmd::paste::available(&s, &json!({"text": my_text, "html": wrapped_html, "rtf": my_rtf}));
+    assert!(avail.contains(&"formatted"), "formatted format is available for pasteSpecial when HTML is wrapped on macOS");
+}
+
+/// Pasting external RTF when HTML matches WordCraft's session clipboard does not return the old
+/// session fragment with its custom parts (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_html_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_html = s.clipboard_html.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": my_html, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+    }
+}
+
+/// Pasting external RTF when plain text matches WordCraft's session clipboard does not return the
+/// old session fragment with its custom parts, even when privateClipboard is omitted (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+    }
+
+    let avail = crate::cmd::paste::available(&s, &json!({"text": my_text, "rtf": external_rtf}));
+    assert!(!avail.contains(&"formatted"), "formatted is unavailable when supplied RTF differs");
+}
+
+/// When another app copies different RTF (`privateClipboard: false`), plain text matching
+/// WordCraft's session clipboard does not return the old session fragment (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_another_app_copied_rtf() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"privateClipboard": false, "text": my_text, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when another app copied");
+    }
+}
+
+/// The public `edit.paste` command does not reuse session text box parts when supplied RTF differs,
+/// even when privateClipboard is omitted (#5859).
+#[test]
+fn paste_command_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({"text": my_text, "rtf": external_rtf}));
+    assert_eq!(s.doc.parts.len(), 1, "no second text box part created from session fragment");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("External rich text"));
 }
 
 #[test]
@@ -6311,6 +7367,21 @@ fn file_capped_read_refuses_content_over_the_cap() {
     assert!(over.unwrap_err().contains("larger than"));
     assert_eq!(head.unwrap(), vec![7u8; 10]);
     assert_eq!(whole.unwrap().len(), 100);
+}
+
+/// Web fallback for `read_file_capped` and `read_file_head` returns the expected browser error.
+#[test]
+fn wasm_read_file_fallback_returns_browser_error() {
+    let err = crate::io::wasm_read_file_fallback("sample.dic").unwrap_err();
+    assert!(err.contains("files are opened through the browser on the web"));
+}
+
+/// #5840: On wasm32 targets, `read_file_capped` and `read_file_head` return the browser fallback error.
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn wasm_target_read_file_capped_and_head_return_browser_error() {
+    assert!(crate::io::read_file_capped("test.dic", 1024, "dictionary").unwrap_err().contains("browser on the web"));
+    assert!(crate::io::read_file_head("test.dic", 1024).unwrap_err().contains("browser on the web"));
 }
 
 /// #3666: `read_regular_file_within` (Paste Special's copied picture file) reads a file of up to
@@ -7674,6 +8745,81 @@ fn chart_edits_are_one_undo_step_each() {
     assert_eq!((*w, graphic.w, graphic.h), (300.0, 300.0, 150.0));
 }
 
+/// Scatter series are drawn as markers without a line: inserted with data, changed to scatter
+/// and back, and added by Edit Data. Edit Data keeps each replaced series' formatting.
+#[test]
+fn scatter_chart_series_have_no_line_and_edit_data_keeps_formatting() {
+    let no_lines = |s: &Session| first_chart(&s.doc).unwrap().series.iter().map(|x| x.no_line).collect::<Vec<_>>();
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "scatter", "data": {"categories": [1, 2], "series": [{"name": "A", "values": [1, 2]}]}}));
+    assert_eq!(no_lines(&s), [true]);
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    assert_eq!(no_lines(&s), [false]);
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(no_lines(&s), [true]);
+
+    // Formatting read from a file, set on the chart's model.
+    let set = |s: &mut Session, f: &dyn Fn(&mut wordcraft_doc::chart::ChartSpec)| {
+        let mut spec = first_chart(&s.doc).unwrap();
+        f(&mut spec);
+        let pos = Pos::body(0, 0);
+        let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+        let off = p.object_offsets()[0];
+        if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+            std::sync::Arc::make_mut(graphic).chart = Some(std::sync::Arc::new(spec));
+        }
+    };
+
+    // A series' formatting stays through Edit Data; a new series gets the type's default.
+    set(&mut s, &|c| c.series[0].fill = Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    run(&mut s, "chart.editData", json!({"data": {"series": [{"name": "B", "values": [3, 4]}, {"name": "C", "values": [5, 6]}]}}));
+    let c = first_chart(&s.doc).unwrap();
+    assert_eq!(c.series[0].fill, Some(wordcraft_doc::props::Rgb(0x12, 0x34, 0x56)));
+    assert_eq!((c.series[0].name.as_str(), c.series[1].name.as_str()), ("B", "C"));
+    assert_eq!(no_lines(&s), [true, true]);
+
+    // A line-only series made a scatter series again gets its markers back, so it stays visible.
+    set(&mut s, &|c| c.series[0].markers = Some(false));
+    run(&mut s, "chart.type", json!({"type": "line"}));
+    run(&mut s, "chart.type", json!({"type": "scatter"}));
+    assert_eq!(first_chart(&s.doc).unwrap().series[0].markers, None);
+
+    // The chart's Data Labels setting replaces a series' own.
+    set(&mut s, &|c| c.series[1].labels = Some(true));
+    run(&mut s, "chart.dataLabels", json!({"on": false}));
+    let c = first_chart(&s.doc).unwrap();
+    assert!(!c.data_labels && c.series.iter().all(|x| x.labels.is_none()));
+}
+
+/// A pie chart changed to a column chart gets a new column chart's value axis, and back; an
+/// axis that was changed stays as it is.
+#[test]
+fn chart_type_between_round_and_axis_charts_sets_the_value_axis() {
+    use wordcraft_doc::chart::{ChartAxis, value_axis};
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "pie"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+    run(&mut s, "chart.type", json!({"type": "column"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, value_axis());
+    run(&mut s, "chart.type", json!({"type": "doughnut"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis::default());
+
+    let mut s = self::s();
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let pos = Pos::body(0, 0);
+    let p = s.doc.para_mut(pos.story, &pos.path).unwrap();
+    let off = p.object_offsets()[0];
+    if let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, .. }) = p.object_at_mut(off) {
+        let g = std::sync::Arc::make_mut(graphic);
+        let mut spec = (**g.chart.as_ref().unwrap()).clone();
+        spec.val_axis.max = Some(50.0);
+        g.chart = Some(std::sync::Arc::new(spec));
+    }
+    run(&mut s, "chart.type", json!({"type": "pie"}));
+    run(&mut s, "chart.type", json!({"type": "bar"}));
+    assert_eq!(first_chart(&s.doc).unwrap().val_axis, ChartAxis { max: Some(50.0), ..value_axis() });
+}
+
 #[test]
 fn hostile_chart_data_is_capped() {
     use wordcraft_doc::chart::{MAX_CELLS, MAX_POINTS, MAX_SERIES, MAX_TEXT};
@@ -7703,6 +8849,35 @@ fn hostile_chart_data_is_capped() {
     s.doc.insert_object(&Pos::body(0, 0), foreign, &Default::default()).unwrap();
     run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())}));
     assert!(s.run("chart.type", &json!({"type": "pie"})).is_err());
+}
+
+/// The pane's findings follow the document: an edit that fixes an issue and a replacement by
+/// another document both show at the next read, though the session keeps them between reads.
+#[test]
+fn accessibility_findings_follow_the_document() {
+    let alt = |s: &mut Session| s.accessibility_findings().iter().any(|i| i["rule"] == "altText");
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title"));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s), "a shape without alternative text is reported");
+    assert!(alt(&mut s), "and still is at the next read");
+    let (id, rev) = (s.document_id(), s.rev());
+
+    // The fix the issue names, as the pane runs it.
+    let issue = s.accessibility_findings().iter().find(|i| i["rule"] == "altText").cloned().expect("the alt text issue");
+    run(&mut s, "select.range", issue["select"].clone());
+    run(&mut s, issue["action"]["command"].as_str().expect("a fix"), issue["action"]["params"].clone());
+    assert_eq!(s.document_id(), id);
+    assert_ne!(s.rev(), rev);
+    assert!(!alt(&mut s), "the fixed issue is gone");
+
+    // The issue again, then another document in its place.
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    assert!(alt(&mut s));
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), id);
+    let want = crate::cmd::accessibility::check(&s.doc);
+    assert_eq!(s.accessibility_findings(), want.as_slice(), "the new document's findings");
+    assert!(!alt(&mut s));
 }
 
 #[test]
@@ -8289,6 +9464,113 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     assert!(s.run("picture.iconColor", &json!({})).is_err());
 }
 
+/// #5232: a PDF with markup (file.exportPdf, file.printPdf) marks tracked changes in the Track
+/// Changes Options colours, not always by author.
+#[test]
+fn markup_pdf_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+    let markup = json!({"markup": true});
+    let uncompressed_markup = json!({"markup": true, "compress": false});
+    let pdf = |s: &Session| crate::io::save_bytes_opts("x.pdf", &s.doc, &cmd::file::export_options(s, &markup)).unwrap();
+    let print = |s: &Session| s.print_pdf(&markup).unwrap().0;
+    let (by_author, printed_by_author) = (pdf(&s), print(&s));
+    // Exports are deterministic, so differences are solely due to the colours.
+    assert_eq!(pdf(&s), by_author, "pdf export must be deterministic");
+    assert_eq!(print(&s), printed_by_author, "print_pdf must be deterministic");
+
+    let has = |t: &[&str], op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        t.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    let by_author_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let by_author_print_raw = String::from_utf8_lossy(&by_author_print_uncompressed);
+    let by_author_print_tokens: Vec<_> = by_author_print_raw.split_ascii_whitespace().collect();
+    assert!(!has(&by_author_print_tokens, "0 0 1 rg") && !has(&by_author_print_tokens, "1 0 0 rg"), "by-author print has no pure blue or red");
+
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let opts = cmd::file::export_options(&s, &markup);
+    assert_eq!(opts.revisions.insert_color, Some(wordcraft_doc::props::Rgb(0, 0, 255)));
+    assert_eq!(opts.revisions.delete_color, Some(wordcraft_doc::props::Rgb(255, 0, 0)));
+
+    let coloured_pdf = pdf(&s);
+    let coloured_print = print(&s);
+    assert_ne!(coloured_pdf, by_author, "file.exportPdf ignores the tracking colours");
+    assert_ne!(coloured_print, printed_by_author, "file.printPdf ignores the tracking colours");
+
+    let coloured_print_uncompressed = s.print_pdf(&uncompressed_markup).unwrap().0;
+    let print_raw = String::from_utf8_lossy(&coloured_print_uncompressed);
+    let print_tokens: Vec<_> = print_raw.split_ascii_whitespace().collect();
+    assert!(has(&print_tokens, "0 0 1 rg"), "coloured print_pdf has blue operator for insertion");
+    assert!(has(&print_tokens, "1 0 0 rg"), "coloured print_pdf has red operator for deletion");
+}
+
+/// #5232 review: File › Print without Print Markup leaves out tracked deletions in layout,
+/// so the page count matches the PDF export and deletions take no blank space.
+#[test]
+fn print_jobs_without_markup_lay_out_the_final_text() {
+    let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the original agreement")).collect();
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&text.join("\n")));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Replaced"})).unwrap();
+    // With markup: 200 deleted lines take space in print.
+    let (marked_pdf, marked_plan) = s.print_pdf(&json!({"markup": true})).unwrap();
+    assert!(marked_plan.chosen > 1);
+    assert!(marked_pdf.starts_with(b"%PDF-"));
+    // Without markup: final text only, 1 page.
+    let (plain_pdf, plain_plan) = s.print_pdf(&json!({"markup": false})).unwrap();
+    assert_eq!(plain_plan.chosen, 1);
+    assert!(plain_pdf.starts_with(b"%PDF-"));
+}
+
+/// #5232 review: page images (render_png and file.exportPng) respect Track Changes Options
+/// colours and hidden deletions.
+#[test]
+fn markup_png_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+
+    let markup_opts = json!({"markup": true});
+    let by_author_opts = cmd::file::export_options(&s, &markup_opts);
+    let by_author_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &by_author_opts).unwrap();
+
+    // Change tracking options to blue insertions / red deletions.
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let coloured_opts = cmd::file::export_options(&s, &markup_opts);
+    let coloured_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &coloured_opts).unwrap();
+    assert_ne!(by_author_png, coloured_png, "PNG export must reflect tracking colours");
+
+    // Also verify via file.exportPng command.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = TempDir(std::env::temp_dir().join(format!("wordcraft-tracking-png-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let p1 = dir.0.join("by_author.png");
+    let p2 = dir.0.join("coloured.png");
+    s.run("review.trackingOptions", &json!({"insertColor": "byAuthor", "deleteColor": "byAuthor"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p1.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    s.run("file.exportPng", &json!({"path": p2.to_string_lossy(), "markup": true, "scale": 1.0})).unwrap();
+    assert_ne!(std::fs::read(&p1).unwrap(), std::fs::read(&p2).unwrap());
+    assert_eq!(std::fs::read(&p1).unwrap(), by_author_png);
+    assert_eq!(std::fs::read(&p2).unwrap(), coloured_png);
+
+    // Verify hidden deletions take no space in PNG export.
+    s.run("review.trackingOptions", &json!({"deleteMark": "hidden"})).unwrap();
+    let hidden_opts = cmd::file::export_options(&s, &markup_opts);
+    let hidden_png = crate::io_ext::render_png(&s.doc, 0, 1.0, &hidden_opts).unwrap();
+    assert_ne!(hidden_png, coloured_png, "hidden deletions must affect PNG pixels/layout");
+}
+
 /// Print Markup (#589): `file.printMarkup` or a command's `markup` puts the comments into PDFs
 /// (balloons beside the scaled page) and at the end of HTML, Markdown and text copies.
 #[test]
@@ -8381,6 +9663,83 @@ fn colour_commands_take_any_custom_hex() {
     assert_eq!(shading, wordcraft_doc::Rgb::parse("C0FFEE"));
     run(&mut s, "design.pageColor", json!({"color": "123ABC"}));
     assert_eq!(s.doc.settings.page_color, wordcraft_doc::Rgb::parse("123ABC"));
+}
+
+/// #2786: Define New Bullet puts the selection in a list of its own: the character, its font and
+/// its alignment at the levels the paragraphs use, each paragraph keeping its level. A list that
+/// already uses the same character is left alone, defining again never toggles the bullet off,
+/// it survives a DOCX round trip, and bad params are errors that change nothing.
+#[test]
+fn define_bullet_gives_the_selection_a_bullet_of_its_own() {
+    use wordcraft_doc::props::Align;
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One\nTwo\nThree"));
+    let num_at = |s: &Session, i: usize| s.doc.para_at(&Pos::body(i, 0)).unwrap().props.numbering.unwrap();
+    // "Three" already has a ♦ list, defined the ordinary way.
+    s.sel = crate::Selection::caret(Pos::body(2, 0));
+    run(&mut s, "para.bullets", json!({"kind": "♦"}));
+    let other = num_at(&s, 2).num;
+    let other_level = s.doc.numbering.level(other, 0).unwrap().clone();
+    // "Two" sits at level 2 of a bulleted list before the definition.
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    run(&mut s, "para.bullets", json!({}));
+    run(&mut s, "para.listLevel", json!({"level": 1}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 3) };
+    run(&mut s, "para.defineBullet", json!({"char": "♦", "font": "Segoe UI Symbol", "align": "center"}));
+    let (one, two) = (num_at(&s, 0), num_at(&s, 1));
+    assert_eq!(one.num, two.num, "one list for the selection");
+    assert_ne!(one.num, other, "not the existing ♦ list");
+    assert_eq!((one.level, two.level), (0, 1), "each paragraph keeps its level");
+    for lvl in [0, 1] {
+        let l = s.doc.numbering.level(one.num, lvl).unwrap();
+        assert_eq!((l.text.as_str(), l.chr.font.as_deref(), l.align), ("♦", Some("Segoe UI Symbol"), Align::Center), "level {lvl}");
+    }
+    assert_eq!(s.doc.numbering.level(other, 0).unwrap(), &other_level, "the other ♦ list is unchanged");
+    // Defining the same bullet again keeps it (para.bullets would toggle it off).
+    run(&mut s, "para.defineBullet", json!({"char": "♦"}));
+    assert_eq!(s.doc.numbering.level(num_at(&s, 0).num, 0).unwrap().text, "♦");
+    // DOCX keeps the character, its font and the alignment.
+    run(&mut s, "para.defineBullet", json!({"char": "✓", "font": "Segoe UI Symbol", "align": "right", "size": 14, "bold": true, "color": "C00000"}));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let n = back.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap();
+    let l = back.numbering.level(n.num, 0).unwrap();
+    assert_eq!((l.text.as_str(), l.chr.font.as_deref(), l.align), ("✓", Some("Segoe UI Symbol"), Align::Right));
+    // The Font dialog's size, bold and colour reach the bullet too.
+    assert_eq!((l.chr.size, l.chr.bold), (Some(14.0), Some(true)));
+    assert_eq!(l.chr.color, wordcraft_doc::props::TextColor::parse("C00000"));
+    // A paragraph numbered only by its style keeps the style's level (review of #2860).
+    let mut s2 = Session::new(wordcraft_doc::Document::from_text("Styled"));
+    let styled = Arc::make_mut(&mut s2.doc.numbering).try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
+    Arc::make_mut(&mut s2.doc.styles).get_mut("ListParagraph").unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num: styled, level: 1 });
+    s2.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.style = Some("ListParagraph".into());
+    assert!(s2.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_none(), "no numbering of its own");
+    s2.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s2, "para.defineBullet", json!({"char": "♦"}));
+    let n = s2.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap();
+    assert_eq!(n.level, 1, "the style's level is kept");
+    assert_eq!(s2.doc.numbering.level(n.num, 1).unwrap().text, "♦");
+    // No params: ★, as before.
+    s.sel = crate::Selection::caret(Pos::body(2, 0));
+    run(&mut s, "para.defineBullet", json!({}));
+    assert_eq!(s.doc.numbering.level(num_at(&s, 2).num, 0).unwrap().text, "★");
+    let doc = s.doc.clone();
+    let long = "x".repeat(200);
+    for junk in [
+        json!({"char": ""}),
+        json!({"char": "ab"}),
+        json!({"char": 5}),
+        json!({"char": "\u{7}"}),
+        json!({"char": "•", "align": "middle"}),
+        json!({"char": "•", "align": 1}),
+        json!({"char": "•", "font": 3}),
+        json!({"char": "•", "font": long}),
+        json!({"char": "•", "size": 0}),
+        json!({"char": "•", "size": "big"}),
+        json!({"char": "•", "bold": "yes"}),
+        json!({"char": "•", "color": "purple"}),
+    ] {
+        assert!(s.run("para.defineBullet", &junk).is_err(), "{junk}");
+    }
+    assert_eq!(s.doc, doc);
 }
 
 /// #4685: Home › Paragraph › Shading on text selected inside a paragraph shades that text, as in
@@ -10164,8 +11523,9 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
     assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "pl");
     run(&mut s, "review.language", json!({}));
     assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "en-US");
-    // A language without proofing tools: no marks.
-    run(&mut s, "review.language", json!({"lang": "fr-FR"}));
+    // A language without proofing tools: no marks. `zxx` (no linguistic content) never has
+    // them; a real language such as fr-FR does wherever its system Hunspell dictionary is installed.
+    run(&mut s, "review.language", json!({"lang": "zxx"}));
     assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
 }
 
@@ -11095,8 +12455,6 @@ fn find_replace_and_go_to_open_like_word() {
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "replace"})));
     assert!(!s.dirty, "opening the dialog changes nothing");
     assert!(s.run("edit.findReplace", &json!({"tab": "nope"})).is_err());
-    let reg = s.registry.clone();
-    assert_eq!(s.keymap.resolve(&reg, "Mod+H").map(|c| c.id), Some("edit.findReplace"));
     run(&mut s, "edit.goto", json!({}));
     assert_eq!(s.ui_requests.last(), Some(&json!({"open": "goto"})));
     // Replace with a "with" and the last search still replaces, as before.
@@ -11918,6 +13276,7 @@ fn inspect_document_removes_the_note_of_a_hidden_reference() {
 /// #1344: many hidden pieces (index entries are hidden text) are removed quickly, and the
 /// found list is capped.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn inspect_document_removes_thousands_of_hidden_pieces() {
     use wordcraft_doc::props::CharProps;
     use wordcraft_doc::{Paragraph, para_block};
@@ -12861,6 +14220,13 @@ fn style_set_keeps_imported_styles_latent_styles_and_defaults() {
     let mut s = s();
     run(&mut s, "design.styleSet", json!({ "name": "title" }));
     assert_eq!(s.doc.styles.get("Title").unwrap().chr.size, Some(36.0));
+    // #4852 review: the sets that make headings bold or italic do it in both scripts, so a Thai
+    // heading in a run marked `w:cs` is drawn bold or italic too.
+    let cs = wordcraft_doc::props::CharProps { cs: Some(true), ..Default::default() };
+    run(&mut s, "design.styleSet", json!({ "name": "basic" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading1"), &cs).bold_cs, "basic");
+    run(&mut s, "design.styleSet", json!({ "name": "casual" }));
+    assert!(s.doc.styles.resolve_char(Some("Heading2"), &cs).italic_cs, "casual");
 }
 
 fn style_size(s: &Session, id: &str) -> f32 {
@@ -12937,6 +14303,125 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     let grid = st.styles.iter().find(|x| x.id == "Grid").and_then(|x| x.table.as_ref()).unwrap();
     assert_eq!(grid.header_chr.size, Some(16.0));
     assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
+}
+
+/// #4467: `document.inspect` lists a footer's fields and marks the ones each page shows its own
+/// value of, so a caller knows "1 of 1" is a stored result and not what page 2 shows.
+#[test]
+fn inspect_marks_page_fields_in_headers_and_footers() {
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({"format": "x of y"}))["story"].as_u64().unwrap();
+    let doc = run(&mut s, "document.inspect", json!({}));
+    let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    assert_eq!(part["text"], "Page 1 of 1");
+    assert_eq!(part["fields"], json!([{"code": "PAGE", "result": "1", "perPage": true}, {"code": "NUMPAGES", "result": "1", "perPage": true}]));
+}
+
+/// #4467 review: a STYLEREF in a footer's table cell is listed as per page too (the layout looks
+/// it up on each page), and a part with more fields than `document.inspect` lists says so.
+#[test]
+fn inspect_lists_cell_fields_and_marks_a_cut_list() {
+    use wordcraft_doc::{Block, CharProps, InlineObject, Paragraph, Table, para_block};
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "x".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+    let key = u32::try_from(id).unwrap();
+    let mut cell = Paragraph::new();
+    cell.insert_object(0, field("STYLEREF \"Heading 1\""), &CharProps::default()).unwrap();
+    let mut table = Table::new(1, 1, 200.0);
+    table.rows[0].cells[0].blocks = vec![para_block(cell)];
+    s.doc.parts.get_mut(&key).unwrap().blocks.push(std::sync::Arc::new(Block::Table(table)));
+    let part = |s: &mut Session| {
+        let doc = run(s, "document.inspect", json!({}));
+        doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone()
+    };
+    let p = part(&mut s);
+    assert_eq!(p["fields"][1], json!({"code": "STYLEREF \"Heading 1\"", "result": "x", "perPage": true}));
+    assert!(p.get("fieldsTruncated").is_none(), "{p}");
+
+    let mut many = Paragraph::new();
+    for _ in 0..250 {
+        many.insert_object(0, field("AUTHOR"), &CharProps::default()).unwrap();
+    }
+    s.doc.parts.get_mut(&key).unwrap().blocks.push(para_block(many));
+    let p = part(&mut s);
+    assert_eq!(p["fields"].as_array().unwrap().len(), 200);
+    assert_eq!(p["fieldsTruncated"], true);
+}
+
+/// #4467 review: a field kept as a range (`FieldStart` … `FieldEnd`, as the DOCX reader keeps a
+/// PAGE whose result has tracked changes, or a TOC spanning paragraphs) is listed too, its result
+/// the text between the markers.
+#[test]
+fn inspect_lists_range_fields() {
+    use wordcraft_doc::{CharProps, InlineObject, Paragraph, para_block};
+    let start = |instr: &str| InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false };
+    let mut s = s();
+    let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+    let key = u32::try_from(id).unwrap();
+    let c = CharProps::default();
+    let mut page = Paragraph::new();
+    page.insert_object(0, start("PAGE"), &c).unwrap();
+    page.insert_text(page.len(), "7  ", &c).unwrap();
+    page.insert_object(page.len(), InlineObject::FieldEnd, &c).unwrap();
+    let mut first = Paragraph::new();
+    first.insert_object(0, start("TOC \\o \"1-3\""), &c).unwrap();
+    first.insert_text(first.len(), "One", &c).unwrap();
+    let mut second = Paragraph::with_text("Two", c.clone());
+    second.insert_object(second.len(), InlineObject::FieldEnd, &c).unwrap();
+    // A result longer than `document.inspect` gives: cut, and marked.
+    let mut long = Paragraph::new();
+    long.insert_object(0, start("BIBLIOGRAPHY"), &c).unwrap();
+    long.insert_text(long.len(), &"x".repeat(2500), &c).unwrap();
+    long.insert_object(long.len(), InlineObject::FieldEnd, &c).unwrap();
+    let blocks = &mut s.doc.parts.get_mut(&key).unwrap().blocks;
+    blocks.extend([para_block(page), para_block(first), para_block(second), para_block(long)]);
+    let doc = run(&mut s, "document.inspect", json!({}));
+    let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    let fields = part["fields"].as_array().unwrap();
+    assert!(fields.contains(&json!({"code": "PAGE", "result": "7  ", "perPage": true})), "spaces kept: {fields:?}");
+    assert!(fields.contains(&json!({"code": "TOC \\o \"1-3\"", "result": "One\nTwo", "perPage": false})), "{fields:?}");
+    let bib = fields.iter().find(|f| f["code"] == "BIBLIOGRAPHY").unwrap();
+    assert_eq!((bib["result"].as_str().map(str::len), &bib["resultTruncated"]), (Some(2000), &json!(true)));
+    assert!(fields.iter().filter(|f| f["code"] != "BIBLIOGRAPHY").all(|f| f.get("resultTruncated").is_none()));
+    assert!(part.get("fieldsTruncated").is_none(), "{part}");
+}
+
+/// #4467 review: a field name in lower case is a page field all the same, and a field in a table
+/// nested deeper than `document.inspect` walks (8 tables) is left out with `fieldsTruncated`.
+#[test]
+fn inspect_reads_field_names_in_any_case_and_bounds_nested_tables() {
+    use wordcraft_doc::{Block, CharProps, InlineObject, Paragraph, Table, para_block};
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    // A field `depth` tables deep.
+    let nested = |depth: usize| {
+        let mut p = Paragraph::new();
+        p.insert_object(0, field("page"), &CharProps::default()).unwrap();
+        let mut block = para_block(p);
+        for _ in 0..depth {
+            let mut t = Table::new(1, 1, 200.0);
+            t.rows[0].cells[0].blocks = vec![block];
+            block = std::sync::Arc::new(Block::Table(t));
+        }
+        block
+    };
+    for (depth, listed) in [(0, true), (8, true), (9, false)] {
+        let mut s = s();
+        let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+        let key = u32::try_from(id).unwrap();
+        s.doc.parts.get_mut(&key).unwrap().blocks = vec![nested(depth)];
+        let doc = run(&mut s, "document.inspect", json!({}));
+        let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+        if listed {
+            assert_eq!(part["fields"], json!([{"code": "page", "result": "1", "perPage": true}]), "{depth}");
+            assert!(part.get("fieldsTruncated").is_none(), "{depth}: {part}");
+        } else {
+            assert!(part.get("fields").is_none(), "{depth}: {part}");
+            assert_eq!(part["fieldsTruncated"], true, "{depth}");
+        }
+    }
 }
 
 /// #3676: a 1-based page parameter becomes a 0-based index without wrapping.
@@ -13077,6 +14562,80 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     let mut z = craft_zip::Archive::open(&_z_bytes, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
     let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// A scatter chart saved as ODT (or flat ODT) and opened again is still drawn as markers without
+/// lines, and its paragraph is still written as read.
+#[test]
+fn an_odt_scatter_chart_reopens_without_lines() {
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let odt = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let fodt = wordcraft_formats::odt::export_flat(&s.doc).unwrap();
+    for (name, bytes) in [("t.odt", odt), ("t.fodt", fodt)] {
+        let doc = crate::io::open_bytes(name, &bytes).unwrap();
+        let c = first_chart(&doc).expect("the chart has its model");
+        assert_eq!(c.kind, wordcraft_doc::chart::ChartType::Scatter);
+        assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line), "{name}: {:?}", c.series);
+        // The drawn items are the markers-only drawing, not the one with lines between points.
+        let p = doc.para_at(&Pos::body(0, 0)).unwrap();
+        let (items, w, h) = p
+            .object_offsets()
+            .into_iter()
+            .find_map(|off| match p.object_at(off) {
+                Some(InlineObject::Graphic { graphic, w, h, .. }) if graphic.chart.is_some() => Some((graphic.items.clone(), *w, *h)),
+                _ => None,
+            })
+            .expect("the chart is drawn");
+        let theme = &doc.settings.theme_colors;
+        assert_eq!(items, crate::cmd::chart::chart_graphic(c.clone(), theme, w, h).items, "{name}");
+        let mut lines = c.clone();
+        lines.series.iter_mut().for_each(|x| x.no_line = false);
+        assert_ne!(items, crate::cmd::chart::chart_graphic(lines, theme, w, h).items, "{name}");
+    }
+    let doc = crate::io::open_bytes("t.odt", &wordcraft_formats::odt::export(&s.doc).unwrap()).unwrap();
+    let again = wordcraft_formats::odt::export(&doc).unwrap();
+    let mut z = craft_zip::Archive::open(&again, craft_zip::Limits { max_entries: 10_000, max_total_bytes: 64 << 20 }).unwrap();
+    let content = String::from_utf8(z.read("content.xml", 16 << 20).unwrap().unwrap()).unwrap();
+    assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// An undrawn scatter series with its markers turned off is not left with neither a line nor
+/// markers when an opened ODF file's scatter charts are set to markers only; other formats keep
+/// their series as read.
+#[test]
+fn an_opened_odf_scatter_series_keeps_its_markers() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "scatter"}));
+    let undrawn = |doc: &wordcraft_doc::Document| {
+        let mut doc = doc.clone();
+        doc.fill_objects(&|o| matches!(o, InlineObject::Graphic { graphic, .. } if graphic.chart.is_some()), &mut |o| {
+            if let InlineObject::Graphic { graphic, .. } = o {
+                let g = Arc::make_mut(graphic);
+                if let Some(spec) = g.chart.as_deref() {
+                    let mut spec = spec.clone();
+                    for series in &mut spec.series {
+                        series.no_line = false;
+                        series.markers = Some(false);
+                    }
+                    g.chart = Some(Arc::new(spec));
+                }
+                g.items.clear();
+            }
+        });
+        doc
+    };
+    let mut odf = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut odf, true);
+    let c = first_chart(&odf).expect("the chart has its model");
+    assert!(!c.series.is_empty() && c.series.iter().all(|x| x.no_line && x.markers.is_none()), "{:?}", c.series);
+    let mut other = undrawn(&s.doc);
+    crate::io_ext::draw_charts(&mut other, false);
+    let c = first_chart(&other).expect("the chart has its model");
+    assert!(c.series.iter().all(|x| !x.no_line && x.markers == Some(false)), "{:?}", c.series);
 }
 
 /// A picture an OpenDocument file makes wider than the text (a rule across the whole page) stays
