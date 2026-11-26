@@ -201,6 +201,9 @@ fn user_assignments_become_overrides() {
             ),
             (Some(("Mod+F1", "view.focus")), "Mod+F1", command("view.focus")),
             (Some(("Alt+Q", "view.focus")), "Alt+Q", if mac { command("view.focus") } else { tell_me.clone() }),
+            (None, "Mod+R", command("para.alignRight")),
+            (None, "Alt+R", None),
+            (None, "Mod+Alt+Shift+R", None),
         ];
         for (assign, ask, want) in rows {
             let mut h = alt_frame_app();
@@ -284,6 +287,49 @@ fn copied_bold_app() -> WordApp {
     a
 }
 
+/// #5616: after Mod+Shift+V (Paste Formatting) and a paired browser paste event, a later
+/// menu-bar paste (`Event::Paste`) with no key or pointer press in between still keeps source
+/// formatting instead of reading the earlier Mod+Shift as Keep Text Only.
+#[test]
+fn the_ignored_paste_uses_up_its_paste_modifiers() {
+    let mut h = app_harness(copied_bold_app());
+    let chord = Modifiers { shift: true, ..mod_held() };
+    batch_frame(&mut h, vec![egui::Event::ModifiersChanged(chord), key_event(Key::V, true, chord), egui::Event::Paste("x".into())]);
+    batch_frame(&mut h, vec![key_event(Key::V, false, Modifiers::NONE), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source target");
+    assert!(is_bold(&mut h));
+    run(&mut h, "select.text", json!({"text": "target"}));
+    offer(&h, vec![ClipItem::Html("<p><i>menu</i></p>".into()), ClipItem::Text("menu".into())]);
+    batch_frame(&mut h, vec![egui::Event::Paste("menu".into())]);
+    crate::test_harness::frame(&mut h);
+    assert_eq!(body(h.state()), "source menu");
+    let state = run(&mut h, "format.state", json!({}));
+    assert_ne!(
+        state.get("bold").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "a later menu-bar paste does not inherit target's bold via Keep Text Only: {state}"
+    );
+    assert_eq!(state.get("italic").and_then(serde_json::Value::as_bool), Some(true), "a later menu-bar paste keeps clipboard formatting: {state}");
+}
+
+/// #5616: on a desktop no paste event follows Mod+Shift+V's key, so none is swallowed: a later
+/// `Mod+V` paste with a clipboard offer pastes.
+#[test]
+fn a_desktop_paste_after_mod_shift_v_is_not_swallowed() {
+    let mut h = app_harness(copied_bold_app());
+    let chord = Modifiers { shift: true, ..mod_held() };
+    mods_frame(&mut h, chord, vec![key_event(Key::V, true, chord)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source target");
+    assert!(is_bold(&mut h));
+    run(&mut h, "select.text", json!({"text": "target"}));
+    offer(&h, bold_flavours("later"));
+    let ctrl = mod_held();
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "source later");
+}
+
 /// Paste Formatting on a chord the user bound pastes the copied formatting once.
 #[test]
 fn paste_formatting_on_another_key_pastes_the_copied_formatting() {
@@ -326,6 +372,54 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, true, Modifiers::NONE)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
     assert_eq!(pictures(h.state_mut()), 1);
+}
+
+/// #5859: Mod+V admits a rich-only clipboard (HTML or RTF with no plain-text or picture flavor)
+/// and still routes an image+HTML clipboard with no plain-text flavor to picture paste.
+#[test]
+fn mod_v_pastes_rich_only_clipboard_and_preserves_picture_routing() {
+    let ctrl = mod_held();
+
+    let mut h = alt_frame_app();
+    offer(&h, vec![ClipItem::Html("<p><b>html-only</b></p>".into())]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "html-only", "Mod+V pastes HTML-only clipboard");
+    assert!(is_bold(&mut h), "HTML-only paste keeps formatting");
+
+    let mut h = alt_frame_app();
+    offer(&h, vec![ClipItem::Rtf(r"{\rtf1\ansi {\b rtf-only}}".into())]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(body(h.state()), "rtf-only", "Mod+V pastes RTF-only clipboard");
+    assert!(is_bold(&mut h), "RTF-only paste keeps formatting");
+
+    let mut h = alt_frame_app();
+    offer(
+        &h,
+        vec![
+            ClipItem::Image(std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([4, 4], &[200u8; 4 * 4 * 4]))),
+            ClipItem::Html("<p><b>fallback</b></p>".into()),
+        ],
+    );
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    assert_eq!(pictures(h.state_mut()), 1, "image+HTML with no plain text routes to picture paste");
+    assert_eq!(body(h.state()), "", "picture paste does not fall back to HTML text");
+
+    let dir = std::env::temp_dir().join(format!("wc-mod-v-uri-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("clip.png");
+    std::fs::write(&png, crate::paste_picture::png_from_rgba(4, 4, vec![200; 64]).unwrap()).unwrap();
+    let raw = png.to_string_lossy().replace('\\', "/").replace(' ', "%20");
+    let uri = if raw.starts_with('/') { format!("file://{raw}\r\n") } else { format!("file:///{raw}\r\n") };
+    let mut h = alt_frame_app();
+    offer(&h, vec![ClipItem::custom(craft::platform::clipboard::URI_LIST, uri.into_bytes()), ClipItem::Html("<p><b>fallback</b></p>".into())]);
+    mods_frame(&mut h, ctrl, vec![key_event(Key::V, true, ctrl)]);
+    mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(pictures(h.state_mut()), 1, "URI list+HTML with no plain text routes to picture file paste");
+    assert_eq!(body(h.state()), "", "picture file paste does not fall back to HTML text");
 }
 
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
@@ -1223,6 +1317,34 @@ fn oversized_ime_events_are_ignored() {
     alt_frame(&mut h, vec![commit(&long)]);
     assert_eq!(body(h.state()), "", "no equation prefix is committed");
     assert!(resynced(&h), "the refused commit starts the composition afresh");
+}
+
+#[test]
+fn observe_ime_drops_a_preedit_without_focus() {
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = crate::test_harness::builder().allow_missing_glyphs().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    crate::test_harness::frames(&mut h, 6);
+    assert!(h.state().canvas.focused(&h.ctx.clone()), "canvas starts focused");
+
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "に".into(), active_range_chars: Some(0..1) }));
+    crate::test_harness::frames(&mut h, 1);
+    assert_eq!(h.state().canvas.ime_preedit.as_str(), "に");
+    assert_eq!(h.state().canvas.ime_preedit_range, Some(0..1));
+
+    if let Some(focused_id) = h.ctx.memory(|m| m.focused()) {
+        h.ctx.memory_mut(|m| m.surrender_focus(focused_id));
+    }
+    crate::test_harness::frames(&mut h, 1);
+    assert!(!h.state().canvas.focused(&h.ctx.clone()), "focus moved off canvas");
+    assert!(h.state().canvas.ime_preedit.is_empty(), "no composition is kept for an unfocused editor");
+    assert_eq!(h.state().canvas.ime_preedit_range, None);
 }
 
 #[test]

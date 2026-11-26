@@ -46,8 +46,10 @@ pub(crate) fn screen(h: &mut H, x: f32, y: f32) -> Pos2 {
     crate::canvas::page_to_screen(h.state_mut(), 0, x, y).unwrap()
 }
 
+/// A primary button event carrying the modifiers held, as platforms send it.
 pub(crate) fn button(h: &H, at: Pos2, pressed: bool) {
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    let modifiers = h.ctx.input(|i| i.modifiers);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers });
 }
 
 pub(crate) fn steps(h: &mut H, n: usize) {

@@ -452,8 +452,8 @@ impl WordForm for LanguageForm {
             .show_items(ui, &source, &mut |i, _| ListRow::new(Label::from(list.get(*i).map(|(_, n)| n.clone()).unwrap_or_default())));
         // A language is always chosen: a Clear leaves it, and a Toggle of the chosen row picks it again.
         let picked = shown.events.into_iter().find_map(|event| match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.last().copied(),
-            CollectionEvent::Selection(SelectionChange::Toggle(key)) => Some(key),
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(),
+            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => Some(key),
             _ => None,
         });
         if let Some((tag, _)) = picked.and_then(|i| list.get(i)) {
