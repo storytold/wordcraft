@@ -53,7 +53,6 @@ const FILL_CHOICES: [(&str, &str); 2] = [("Inherit", INHERIT_FILL), ("No Color",
 /// empty when it sets none or says `nil` (both shown as Inherit, as both let the parts below
 /// show). [`INHERIT_FILL`] is never read from a style: only Inherit picked in the open dialog
 /// sets it, so that OK sends it.
-/// hex, empty for none.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableRegion {
