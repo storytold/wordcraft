@@ -63,6 +63,10 @@ pub(crate) struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     pub(crate) behind: Vec<usize>,
+    /// Per page: non-behind floating objects (#1993), each with where its block's items start
+    /// (counted like `block_marks`) and its resolved `relativeHeight` (`z`). They join the page's
+    /// items in `z` order when the page is left, after vertical alignment moves them with their block.
+    pub(crate) on_top: Vec<Vec<(usize, u32, Placed)>>,
     /// The bottom of the tallest column on the current page before the current one.
     pub(crate) max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -195,6 +199,7 @@ impl PageBuilder<'_> {
             self.carry.extend(rest.by_ref());
             break;
         }
+        let mut on_top = Vec::new();
         if let Some(pg) = self.pages.last_mut() {
             match if cont { &self.seps.cont } else { &self.seps.sep } {
                 Some((items, _)) => pg.items.extend(items.iter().cloned().map(|mut it| {
@@ -212,6 +217,11 @@ impl PageBuilder<'_> {
                     it.translate(x, ny);
                     pg.items.push(it);
                 }
+                // Non-behind floating objects go over notes after them too, keeping `z` order (#1993).
+                on_top.extend(n.on_top.into_iter().map(|(z, mut it)| {
+                    it.translate(x, ny);
+                    (z, it)
+                }));
             }
             if let (Some(ny), Some((items, _))) = (notice_y, &self.seps.notice) {
                 pg.items.extend(items.iter().cloned().map(|mut it| {
@@ -220,6 +230,10 @@ impl PageBuilder<'_> {
                 }));
             }
         }
+        // The page is aligned before its notes are placed: where they go in its items doesn't
+        // move them.
+        let at = self.pages.last().map_or(0, |pg| pg.items.len());
+        self.push_on_top(at, on_top);
     }
     /// A top-level block starts here (see `block_marks`).
     pub(crate) fn mark_block(&mut self) {
@@ -256,6 +270,12 @@ impl PageBuilder<'_> {
                 it.translate(0.0, gap * k as f32);
             }
         }
+        for (at, _, it) in self.on_top.last_mut().into_iter().flatten() {
+            let k = cuts.partition_point(|&c| c <= *at);
+            if k > 0 {
+                it.translate(0.0, gap * k as f32);
+            }
+        }
     }
     /// Section vertical alignment: move the page's body down (centre/bottom), or spread its
     /// blocks out (justified).
@@ -276,6 +296,29 @@ impl PageBuilder<'_> {
                 it.translate(0.0, space);
             }
         }
+        for (_, _, it) in self.on_top.last_mut().into_iter().flatten() {
+            it.translate(0.0, space);
+        }
+    }
+    /// Items for the current page's over-text layer, going with the block whose items start at
+    /// `pg.items[at]` (behind-text items counted out, as in `block_marks`). Objects without an
+    /// explicit `relativeHeight` (`None`) stack above those already pushed on the page.
+    pub(crate) fn push_on_top(&mut self, at: usize, items: impl IntoIterator<Item = (Option<u32>, Placed)>) {
+        if let Some(t) = self.on_top.last_mut() {
+            let mut floor = t.iter().map(|(_, z, _)| *z).max().unwrap_or(0);
+            for (explicit_z, it) in items {
+                let z = crate::floats::resolve_top_z(&mut floor, explicit_z);
+                t.push((at, z, it));
+            }
+        }
+    }
+    /// The page's non-behind floating objects go over its text in `relativeHeight` (`z`) order.
+    pub(crate) fn lift_on_top(&mut self) {
+        let mut top = self.on_top.last_mut().map(std::mem::take).unwrap_or_default();
+        top.sort_by_key(|(_, z, _)| *z);
+        if let Some(pg) = self.pages.last_mut() {
+            pg.items.extend(top.into_iter().map(|(_, _, it)| it));
+        }
     }
     /// Takes back the page a page break has just started while nothing is on it, so a page start
     /// that follows (a next-page section) doesn't leave it blank: Word keeps the break's mark on
@@ -285,12 +328,14 @@ impl PageBuilder<'_> {
             && self.at_top()
             && self.notes.is_empty()
             && self.pages.len() > 1
-            && self.pages.last().is_some_and(|p| p.items.len() == self.page_items_start);
+            && self.pages.last().is_some_and(|p| p.items.len() == self.page_items_start)
+            && self.on_top.last().is_none_or(Vec::is_empty);
         if !empty {
             return false;
         }
         self.pages.pop();
         self.behind.pop();
+        self.on_top.pop();
         self.number = self.number.saturating_sub(1);
         self.after_break_mark = false;
         // The page before was aligned when it was left: nothing on it moves again.
@@ -305,7 +350,9 @@ impl PageBuilder<'_> {
         self.apply_valign();
         // The page is aligned once: finishing it again before it is left moves nothing twice.
         self.page_valign = wordcraft_doc::section::PageVAlign::Top;
+        // Footnotes are text too: In Front of Text objects go over them.
         self.flush_notes();
+        self.lift_on_top();
     }
     pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
         self.finish_page();
@@ -333,6 +380,7 @@ impl PageBuilder<'_> {
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.behind.push(0);
+        self.on_top.push(Vec::new());
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;
