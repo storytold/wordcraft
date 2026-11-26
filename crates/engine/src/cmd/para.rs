@@ -18,6 +18,7 @@ mod styles;
 mod tabs_borders;
 mod tools;
 
+pub(super) use format::change_list_level;
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{cur as selection_para, fmt, indent, outdent};
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
@@ -168,15 +169,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.numbering", "Numbering", "Home › Paragraph", |s, v| list(s, v, ListKind::Numbered))
             .params(r#"{"kind"?: "numbered|numberedParen|upperLetter|lowerLetter|lowerRoman|outline", "off"?: bool}"#),
         CommandSpec::new("para.multilevel", "Multilevel List", "Home › Paragraph", |s, v| list(s, v, ListKind::Legal)).params(r#"{"kind"?: "legal|outline"}"#),
-        CommandSpec::new("para.listLevel", "Change List Level", "Home › Paragraph › Bullets", |s, v| {
-            let lvl = p::u64(v, "level").unwrap_or(0).min(8) as u8;
-            fmt(s, &|p| {
-                if let Some(n) = p.numbering.as_mut() {
-                    n.level = lvl;
-                }
-            })
-        })
-        .params(r#"{"level": 0-8}"#),
+        CommandSpec::new("para.listLevel", "Change List Level", "Home › Paragraph › Bullets", format::list_level)
+            .params(r#"{"level": 0-8}"#),
         CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering),
         CommandSpec::new("para.moveUp", "Move Paragraph Up", "Home › Paragraph", |s, _| move_paras(s, true))
             .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Up" } else { "Alt+Shift+Up" }),
