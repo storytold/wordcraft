@@ -273,6 +273,30 @@ fn build_sha() -> &'static str {
     option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("dev")
 }
 
+/// Split the command line at its first `--`: the options before it, the documents after it. The
+/// Launcher's nightly hand-off arrives as `--` followed by the file names (`launch_profile::parse`
+/// puts that separator first), so it is dropped here rather than opened as a document.
+fn split_at_delimiter(args: Vec<String>) -> (Vec<String>, Vec<String>) {
+    match args.iter().position(|a| a == "--") {
+        Some(i) => {
+            let mut options = args;
+            let files = options.split_off(i + 1);
+            options.pop();
+            (options, files)
+        }
+        None => (args, Vec::new()),
+    }
+}
+
+/// The documents to open, in the order the command line gave them: the words before `--` that the flag
+/// loop kept, then the ones after it. The separator moves no document, and the Launcher, which sends
+/// none before it, opens just its own file names in order.
+fn documents_to_open(before: Vec<String>, after: Vec<String>) -> Vec<String> {
+    let mut documents = before;
+    documents.extend(after);
+    documents
+}
+
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
 /// one (#1440). A `--control` port, a token or a token file that isn't is an error.
 fn text_args(arguments: Vec<std::ffi::OsString>) -> (Vec<String>, Vec<std::path::PathBuf>) {
@@ -342,14 +366,24 @@ fn initialize_nightly_process_identity() -> Result<(), process_identity::Identit
     )
 }
 
-/// Tell the person why a Launcher launch was refused, with a native message box on a desktop
-/// session (a Launcher start has no terminal to read standard error from).
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Tell the person why a Launcher launch was refused: on standard error always, and with a native
+/// message box on a desktop session whose modal renders without the app's run loop (Windows,
+/// X11/Wayland) — a Launcher start has no terminal to read standard error from, and on macOS a modal
+/// before the event loop never appears.
 fn report_launch_profile_error(error: &str) {
     complain(format_args!("launch profile: {error}"));
     let desktop_session = cfg!(windows)
         || cfg!(target_os = "macos")
         || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
         if let Err(identity) = initialize_nightly_process_identity() {
             complain(format_args!("launch profile: {identity}"));
             return;
@@ -445,11 +479,16 @@ fn main() -> eframe::Result {
         log::error!("couldn't start again without another program's AppImage variables, so the self-update is off in this window: {e}");
     }
     let mut flags = ControlOptions::default();
-    let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args(arguments);
-    // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
+    // The Launcher's own hand-off: `--` ends the options, so nothing after it is read as one and
+    // the separator itself never becomes a document.
+    let (args, after_separator) = split_at_delimiter(args);
+    // Only macOS (Finder / LaunchServices) adds these, and only to the options: a Finder launch carries
+    // no separator for them to sit after, and the Launcher starts the app itself, so a document whose
+    // name merely looks like one of these (`-NSNotes.docx`) is still opened (#7849 review).
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
+    let mut documents: Vec<String> = Vec::new();
     let mut bad_control: Option<Option<String>> = None;
     let mut missing_value: Option<&'static str> = None;
     let mut args = args.into_iter().peekable();
@@ -492,9 +531,12 @@ fn main() -> eframe::Result {
                 let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
                 return Ok(());
             }
-            _ => files.push(a),
+            _ => documents.push(a),
         }
     }
+    // After the loop, so a document before `--` opens before the ones after it (a stable launch's
+    // `a.docx -- b.docx` used to be reversed when the Launcher's list was the one collected first).
+    let files = documents_to_open(documents, after_separator);
     // After the loop, so `--version` later on the line still wins.
     if let Some(port) = bad_control {
         let got = port.map(|p| format!(", got {p:?}")).unwrap_or_default();
@@ -1075,5 +1117,73 @@ mod smoke {
         } else {
             assert!(closed, "Don't Save lets the close through");
         }
+    }
+}
+
+#[cfg(test)]
+mod command_line_tests {
+    use super::{documents_to_open, split_at_delimiter};
+
+    /// The argv the Launcher starts a nightly with, as `prepare_launch` hands it on. The root is the one this
+    /// platform would pass: `/nightly-data/...` has no drive prefix, so on Windows `parse` rightly refuses it.
+    fn launcher_argv(tail: &[&str]) -> Vec<String> {
+        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", super::launch_profile::launcher_root(), "--"]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        argv.extend(tail.iter().map(std::ffi::OsString::from));
+        super::launch_profile::parse(argv).unwrap().args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn the_launchers_separator_is_never_a_document() {
+        let (options, files) = split_at_delimiter(launcher_argv(&[]));
+        assert!(options.is_empty(), "{options:?}");
+        assert!(files.is_empty(), "the separator must not reach the documents: {files:?}");
+    }
+
+    #[test]
+    fn documents_after_the_separator_are_kept_in_order() {
+        let (options, files) = split_at_delimiter(launcher_argv(&["a.file"]));
+        assert!(options.is_empty(), "{options:?}");
+        assert_eq!(files, ["a.file"]);
+        let (_, files) = split_at_delimiter(launcher_argv(&["a.file", "--version", "--sample"]));
+        assert_eq!(files, ["a.file", "--version", "--sample"], "after -- every word is a document");
+        // A real document path, as Windows hands one on: kept whole, in order, backslashes and spaces intact.
+        let (_, files) = split_at_delimiter(launcher_argv(&[r"C:\Users\user\Holiday letter.docx", "a.file"]));
+        assert_eq!(files, [r"C:\Users\user\Holiday letter.docx", "a.file"], "a real path after -- stays a document, in order");
+    }
+
+    /// A document whose name looks like a LaunchServices option is one only after the separator: the strip
+    /// for macOS runs on the options, after the split, so `-- -NSNotes.docx report.docx` opens both.
+    #[test]
+    fn a_document_named_like_a_launch_argument_survives_the_separator() {
+        let (options, after) = split_at_delimiter(["-psn_0_12345", "--", "-NSNotes.docx", "report.docx"].map(String::from).to_vec());
+        assert!(super::without_launch_args(options).is_empty(), "the option before the separator goes");
+        let hazard: Vec<String> = ["-NSNotes.docx", "report.docx"].map(String::from).to_vec();
+        assert!(super::without_launch_args(hazard).is_empty(), "before the split the strip takes the document and the one after it");
+        assert_eq!(documents_to_open(Vec::new(), after), ["-NSNotes.docx", "report.docx"], "what follows the separator is opened, in order");
+    }
+
+    /// A stable line that carries its own separator: `a.file` before `--` opens before `b.file` after it.
+    /// The flag loop keeps `a.file` (its `_` arm, one push) and `documents_to_open` puts the two lists
+    /// back in command-line order; the reverse, appending the loop's list to the separator's, opened them
+    /// backwards (found in review of #7849).
+    #[test]
+    fn documents_before_the_separator_keep_their_place_before_the_ones_after_it() {
+        let (options, after) = split_at_delimiter(["--sample", "a.file", "--", "b.file"].map(String::from).to_vec());
+        assert_eq!(options, ["--sample", "a.file"], "--sample is a switch and a.file is left for the loop");
+        assert_eq!(documents_to_open(vec!["a.file".into()], after), ["a.file", "b.file"]);
+        let (_, after) = split_at_delimiter(launcher_argv(&["b.file"]));
+        assert_eq!(documents_to_open(Vec::new(), after), ["b.file"], "the Launcher sends nothing before the separator");
+    }
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        use crate::build_flavor::BuildFlavor;
+        assert!(super::refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!super::refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!super::refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!super::refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }
