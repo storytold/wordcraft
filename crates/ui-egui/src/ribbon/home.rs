@@ -183,16 +183,22 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     let out = crate::widgets::font_box(ui, app, tl!("Font").to_string(), &mut family);
                     if let Some(f) = out.picked {
                         let _ = app.run("format.font", json!({"name": f}));
+                        app.canvas.focus_page(ui.ctx());
+                        app.canvas.focus_page_after_pass();
                     }
                     let fmt = |s: f64| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") };
-                    let mut size = st.get("size").and_then(Value::as_f64).map(fmt).unwrap_or_default();
+                    let size = st.get("size").and_then(Value::as_f64).map(fmt).unwrap_or_default();
                     let sizes: Vec<Entry<String>> =
                         wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(fmt(f64::from(*s)), fmt(f64::from(*s)))).collect();
-                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes).show(ui);
-                    if let Some(v) = out.edit.events.committed()
+                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::given(size.clone()), &sizes).show(ui);
+                    let committed =
+                        out.edit.events.committed().cloned().or_else(|| out.edit.submitted.then(|| out.edit.value_text.clone()).flatten());
+                    if let Some(v) = committed
                         && let Ok(x) = v.trim().parse::<f64>()
                     {
                         let _ = app.run("format.size", json!({"size": x}));
+                        app.canvas.focus_page(ui.ctx());
+                        app.canvas.focus_page_after_pass();
                     }
                     for (icon, tip, id) in [("grow", "Increase Font Size", "format.growFont"), ("shrink", "Decrease Font Size", "format.shrinkFont")]
                     {
