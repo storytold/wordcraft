@@ -6,7 +6,7 @@ use super::headers::{header_items_cap, header_table_areas, placed_cost};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
-use super::{Anchor, Arc, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
+use super::{Anchor, Arc, Counters, HeightRule, Path, Rect, StoryRef, TableFloat, ViewMode, WrapText, table};
 
 /// Footer page tables wrap only the intersecting body lines, which resume below them.
 pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
@@ -92,6 +92,94 @@ fn row_keeps_next(row: &table::RowLayout) -> bool {
             _ => None,
         })
         .unwrap_or(false)
+}
+
+/// The room a table is counted as needing below a paragraph kept with it (keep with next) when
+/// the start of its first row is all that has to fit.
+pub(crate) const FIRST_ROW_START: f32 = 24.0;
+
+/// What a paragraph kept with table `t` (keep with next) needs below it on the page when the
+/// table's start can't be cut short: its repeated header rows, which never stay alone at the
+/// bottom of a page (#1705), with the start of the first row after them, or that row with the
+/// rows it is kept with and the start of the row ending that chain (#2494). Without that, a
+/// caption stays alone at the bottom of a page while its table moves on. `None` for a floating
+/// table, or one whose first row is neither a header row nor kept with the next: the caller's
+/// [`FIRST_ROW_START`] applies. The table is laid out ahead from `counters`, the layout's as they
+/// stand after the kept paragraphs measured before it, and the layout's own are given back, so
+/// its numbered paragraphs aren't counted twice.
+pub(crate) fn kept_start_height(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: usize, width: f32, counters: &Counters) -> Option<f32> {
+    if t.props.float.is_some() {
+        return None;
+    }
+    let first = t.rows.iter().take_while(|r| r.props.header).count();
+    let doc = ctx.doc;
+    // As the cell layout resolves it (over the table style's paragraph formatting), and as
+    // `row_keeps_next` reads it from the laid-out row: the first paragraph of the first cell.
+    let style = t.props.style.as_deref().and_then(|s| doc.styles.table_style(s));
+    let kept = t
+        .rows
+        .get(first)
+        .and_then(|r| r.cells.first())
+        .and_then(|c| c.blocks.first())
+        .and_then(|b| b.as_para())
+        .is_some_and(|p| doc.styles.resolve_para_in(&p.props, style.as_ref().map(|s| &s.para)).keep_next);
+    if first == 0 && !kept {
+        return None;
+    }
+    // Without the layout's linked text box flows and text box budget too: a flow worked out here
+    // would be reused later without counting its numbered paragraphs again.
+    let (counters, fields, grid, eq_start) = (std::mem::replace(&mut ctx.counters, counters.clone()), ctx.fields.clone(), ctx.grid, ctx.eq_count);
+    let (boxes, chains) = (std::mem::take(&mut ctx.boxes), std::mem::take(&mut ctx.chains));
+    let tl = again(ctx, eq_start, |ctx| table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1));
+    (ctx.counters, ctx.fields, ctx.grid, ctx.boxes, ctx.chains) = (counters, fields, grid, boxes, chains);
+    let mut need: f32 = tl.rows.iter().take(first).map(|r| r.height).sum();
+    for (ri, laid) in tl.rows.iter().enumerate().skip(first) {
+        if ri + 1 < tl.rows.len() && row_keeps_next(laid) {
+            need += laid.height;
+            continue;
+        }
+        if let Some(row) = t.rows.get(ri) {
+            need += row_start(doc, row, laid);
+        }
+        break;
+    }
+    Some(need)
+}
+
+/// The least room row `row` (laid out as `laid`) can start in by [`row_can_start`]: all of it,
+/// or the first part it splits at. On a page of any height, so an at-least row's minimum counts.
+fn row_start(doc: &wordcraft_doc::Document, row: &wordcraft_doc::Row, laid: &table::RowLayout) -> f32 {
+    let (mut lo, mut hi) = (0.0f32, laid.height.max(0.0));
+    for _ in 0..16 {
+        let mid = (lo + hi) / 2.0;
+        if row_can_start(doc, row, laid, mid, f32::MAX) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+/// Whether row `ri`, which fits where it would start, goes on to the next page with the rows it
+/// is kept with (keep with next, #2494): their chain fits on a page (`page_height`, under the
+/// repeated header rows) but the row ending it can't start in the `room` left below `ri`'s top.
+fn kept_chain_moves(
+    doc: &wordcraft_doc::Document,
+    t: &wordcraft_doc::Table,
+    tl: &table::TableLayout,
+    kept: &[(usize, f32)],
+    ri: usize,
+    room: f32,
+    page_height: f32,
+) -> bool {
+    kept.get(ri).is_some_and(|&(end, height)| {
+        if end == ri {
+            return false;
+        }
+        let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
+        height <= page_height + 0.01 && !row_can_start(doc, next, laid, room - height, page_height)
+    })
 }
 
 /// The cut that leaves every row of a nested table marked "can't split" whole: just below the
@@ -242,7 +330,17 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     {
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
-        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && split_keeping_nested(ctx.doc, row, room).is_some())) {
+        let cannot_start =
+            row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && split_keeping_nested(ctx.doc, row, room).is_some()));
+        // Nor when the first row fits but goes on with the rows it is kept with (keep with next),
+        // which a fresh page keeps together: the header rows go with it instead of staying alone
+        // above the gap. Where no page would keep them together, the rows stay under the headers.
+        let page_height = pb.bottom - body_top - repeated_height;
+        let kept_moves = !pb.web
+            && row.height <= room + 0.01
+            && kept_chain_moves(ctx.doc, t, &tl, &kept, first, room, page_height)
+            && !kept_chain_moves(ctx.doc, t, &tl, &kept, first, page_height, page_height);
+        if cannot_start || kept_moves {
             pb.advance(block, body_top);
         }
     }
@@ -272,20 +370,16 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             let cur = rest.as_ref().unwrap_or(row);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
+            // Not the first row under the table's own header rows: whether it goes on, with them,
+            // is settled above, and going on alone would leave them behind.
             let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
                 && !pb.web
                 && !pb.at_top()
                 && !fresh
+                && !(ri == first && first > 0)
                 && rest.is_none()
                 && ri.checked_sub(1).and_then(|prev| kept.get(prev)).is_none_or(|&(end, _)| end < ri)
-                && kept.get(ri).is_some_and(|&(end, height)| {
-                    if end == ri {
-                        return false;
-                    }
-                    let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
-                    let page_height = pb.bottom - body_top - repeated_height;
-                    height <= page_height + 0.01 && !row_can_start(ctx.doc, next, laid, pb.bottom - pb.y - height, page_height)
-                });
+                && kept_chain_moves(ctx.doc, t, &tl, &kept, ri, pb.bottom - pb.y, pb.bottom - body_top - repeated_height);
             // A row another row follows needs room for the border below it too (measured in Word).
             if pb.y + cur.height + cur.edge <= pb.bottom + 0.01 && !defer_kept {
                 break;
