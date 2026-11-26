@@ -900,6 +900,23 @@ fn a_check_box_draws_every_state_in_one_face() {
 }
 
 #[test]
+fn a_bold_check_box_draws_every_state_in_one_face() {
+    // The listed family's Regular face has all three boxes and its Bold face only ☐ and ☑: bold ☐
+    // and ☑ took the Bold face, and ☒ the Regular one.
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let primary = db.face("Inter", "Regular");
+    db.add_document_fonts(vec![
+        (with_every_ballot_box("DejaVu Sans"), "DejaVu Sans".to_string()),
+        (named_face("SourceSans3-Bold.ttf", "DejaVu Sans"), "DejaVu Sans".to_string()),
+    ]);
+    let faces: Vec<u32> = ['☐', '☑', '☒'].iter().map(|c| db.fallback_styled(*c, primary.id(), true, false).expect("a face has it").id()).collect();
+    assert!(faces.iter().all(|f| *f == faces[0]), "one face for every state: {faces:?}");
+    let run = db.fallback_for_run(&['☐', '☑'], primary.id(), true, false).expect("a face has them");
+    assert_eq!(run.id(), faces[0], "a bold run of them takes the same face");
+}
+
+#[test]
 fn ballot_boxes_load_an_installed_symbol_face() {
     let dir = font_dir("ballot-boxes");
     std::fs::write(dir.join("Symbols-Regular.ttf"), with_every_ballot_box("DejaVu Sans")).unwrap();

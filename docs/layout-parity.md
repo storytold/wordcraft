@@ -129,10 +129,12 @@ Symbols, Segoe UI Symbol, DejaVu Sans, Noto Sans Symbols, Noto Sans Symbols 2…
 three, loaded or installed, draws it before the UI sans fallback; a run of only ballot boxes takes
 the same face. The UI fallback has ☐ (with a drop shadow) and ☑ but no ☒, so a check box whose
 font (MS Gothic by default, [MS-DOCX] 2.6.3.28) isn't installed changed font when it was ticked
-(#7863). Without a listed face that has all three, the ordinary fallback is unchanged. A line
-holding a box takes that face's line height.
+(#7863). Without a listed face that has all three, the ordinary fallback is unchanged. In bold or
+italic text, the family's bold or italic face draws the boxes only when it has all three too. A
+line holding a box takes that face's line height.
 `fontdb::tests::sysfonts::a_check_box_draws_every_state_in_one_face`,
-`ballot_boxes_load_an_installed_symbol_face`; not compared with Word.
+`a_bold_check_box_draws_every_state_in_one_face`, `ballot_boxes_load_an_installed_symbol_face`; not
+compared with Word.
 
 ## Floating tables across header and body
 

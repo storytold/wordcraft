@@ -29,7 +29,11 @@ impl FontDb {
             _ => "Italic",
         };
         let styled = self.face(&base.family, style);
-        Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
+        Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled_covers(&styled, &base, &[c]) && styled.id != exclude {
+            styled
+        } else {
+            base
+        })
     }
 
     /// The fallback search, cached per (character, excluded face) until loaded faces or font
@@ -281,7 +285,7 @@ impl FontDb {
         if before_style == checked {
             checked = self.read_faces().len();
         }
-        let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
+        let face = if styled.family.eq_ignore_ascii_case(&base.family) && styled_covers(&styled, &base, chars) && styled.id != exclude {
             styled
         } else {
             base
@@ -597,4 +601,12 @@ impl FontDb {
         }
         false
     }
+}
+
+/// Can `styled`, a bold or italic face of `base`'s family, draw `chars` in its place? It must map
+/// them all, and all three ballot boxes when they are ballot boxes and `base` has all three, so a
+/// check box's states stay in one face in bold or italic text too (#7863).
+fn styled_covers(styled: &FontFace, base: &FontFace, chars: &[char]) -> bool {
+    let boxes = chars.iter().all(|c| BALLOT_BOXES.contains(c)) && BALLOT_BOXES.iter().all(|b| base.covers(*b));
+    chars.iter().chain(BALLOT_BOXES.iter().filter(|_| boxes)).all(|c| styled.covers(*c))
 }
