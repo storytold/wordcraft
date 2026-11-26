@@ -104,6 +104,7 @@ pub(crate) fn turn_page(page: &mut Page, turn: TextDirection, phys: &SectionProp
 /// in the section holds).
 fn bounds(it: &Placed) -> Option<Rect> {
     match it {
+        Placed::Overflow { .. } => None,
         Placed::Lines { para, l0, l1, x, y, turn, .. } if !turn.is_turned() => {
             let first = para.lines.get(*l0)?;
             let last = para.lines.get(l1.checked_sub(1)?)?;

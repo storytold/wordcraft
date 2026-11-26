@@ -293,6 +293,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     let float = frame_float(&fr);
                     let r = float_rect(frame, (0.0, width), y, fw, h, &float);
                     push_para(&mut items, (story, &path), &pf, (0, pf.lines.len()), (r.x, r.y), fw, Edges::own(&pf, 0, pf.lines.len()));
+                    if fr.h_exact && pf.height > h + 0.5 {
+                        let text: String = p.text.chars().filter(|&c| c != '\u{FFFC}').take(80).collect();
+                        items.push(Placed::Overflow { rect: r, kind: "frame", needed: pf.height, available: h, text });
+                    }
                     excl.extend(wrap_area(r, &float, None));
                     float_tables.push(r);
                     continue;

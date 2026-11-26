@@ -46,7 +46,8 @@ pub(super) fn page_content_key(page: &Page) -> u64 {
                     format!("{spin:?}").hash(&mut h)
                 }
                 Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
-                Placed::Cell { .. } | Placed::Object { .. } => {}
+                // drawn by nothing: a marker of text cut off doesn't change the page's look
+                Placed::Cell { .. } | Placed::Object { .. } | Placed::Overflow { .. } => {}
             }
         }
     }

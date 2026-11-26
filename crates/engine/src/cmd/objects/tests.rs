@@ -1797,3 +1797,21 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// `document.overflow` lists a text box that keeps its size and holds more text than it shows, and
+/// nothing for one tall enough.
+#[test]
+fn document_overflow_lists_a_text_box_that_cuts_its_text_off() {
+    let long = "Die Schranke öffnet sich automatisch und schließt danach wieder. Der Bedienablauf bleibt dabei unverändert.";
+    let items = |height: f64| {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.textBox", &json!({"text": long, "width": 120, "height": height})).unwrap();
+        s.run("document.overflow", &json!({})).unwrap()["items"].as_array().cloned().unwrap_or_default()
+    };
+    let small = items(30.0);
+    assert_eq!(small.len(), 1, "{small:?}");
+    assert_eq!(small[0]["kind"], "textbox");
+    assert!(small[0]["needed"].as_f64() > small[0]["available"].as_f64(), "{small:?}");
+    assert!(small[0]["text"].as_str().is_some_and(|t| t.starts_with("Die Schranke")), "{small:?}");
+    assert!(items(400.0).is_empty(), "a box tall enough cuts nothing off");
+}

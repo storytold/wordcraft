@@ -111,7 +111,18 @@ pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec
             ctx.boxes.leave();
             // Text that doesn't fit inside the margins is hidden, as in Word; a box that resizes
             // to fit its text shows it all (#743).
-            if body.auto_fit { inner } else { fit_box(inner, across) }
+            if body.auto_fit {
+                inner
+            } else {
+                let needed = extent(&inner);
+                let mut fitted = fit_box(inner, across);
+                if needed > across + 0.5 {
+                    let text = ctx.doc.parts.get(&id).map(|p| crate::placed::excerpt(&p.blocks)).unwrap_or_default();
+                    // in the box's own frame: `place` moves it onto the page with the text
+                    fitted.push(Placed::Overflow { rect: Rect::new(0.0, 0.0, rect.w, across), kind: "textbox", needed, available: across, text });
+                }
+                fitted
+            }
         }
     };
     place(items, &body, rect, across)
@@ -170,6 +181,8 @@ fn extent(items: &[Placed]) -> f32 {
     for it in items {
         let b = match it {
             _ if it.turned_bounds().is_some() => it.turned_bounds().map_or(0.0, |r| r.bottom()),
+            // a marker of text cut off takes no room
+            Placed::Overflow { .. } => continue,
             Placed::Lines { para, l0, l1, y, .. } => {
                 let (Some(first), Some(last)) = (para.lines.get(*l0), l1.checked_sub(1).and_then(|k| para.lines.get(k))) else { continue };
                 y + last.top + last.height - first.top

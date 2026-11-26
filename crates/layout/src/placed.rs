@@ -110,6 +110,34 @@ pub enum Placed {
         /// Empty for anything else.
         group_boxes: Vec<(Rect, u32)>,
     },
+    /// Text cut off where it is laid out, drawn by nothing: a text box that keeps its size, a cell
+    /// of an exactly tall row, an exactly tall text frame. For checks (`document.overflow`):
+    /// `rect` is the box on the page, `needed` and `available` the content's height and the room
+    /// for it (points), `text` the start of the text cut off.
+    Overflow {
+        rect: Rect,
+        kind: &'static str,
+        needed: f32,
+        available: f32,
+        text: String,
+    },
+}
+
+/// The start of a story's text, for an [`Placed::Overflow`] marker.
+pub(crate) fn excerpt(blocks: &wordcraft_doc::Blocks) -> String {
+    let mut out = String::new();
+    for b in blocks.iter() {
+        if let wordcraft_doc::Block::Para(p) = &**b {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.extend(p.text.chars().filter(|&c| c != '\u{FFFC}'));
+        }
+        if out.chars().count() >= 80 {
+            break;
+        }
+    }
+    out.chars().take(80).collect()
 }
 
 impl Placed {
@@ -123,6 +151,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::Overflow { rect, .. }
             | Placed::Cell { rect, .. } => {
                 rect.x += dx;
                 rect.y += dy;
@@ -179,6 +208,8 @@ impl Placed {
             | Placed::Cell { rect, .. }
             | Placed::Object { rect, .. } => (rect.y, rect.y + rect.h),
             Placed::Rule { y0, y1, .. } => (y0.min(*y1), y0.max(*y1)),
+            // takes no room: page breaks don't see it
+            Placed::Overflow { rect, .. } => (rect.y, rect.y),
         }
     }
 
@@ -201,6 +232,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::Overflow { rect, .. }
             | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
