@@ -342,6 +342,20 @@ fn language_names_resolve_aliases_and_tags() {
     assert!(c.extra.is_some() && !c.listed.contains(&true));
 }
 
+/// #1110: the strip's drawn buttons have names for screen readers: Share, and the "»" that
+/// holds the tabs that don't fit ("More tabs", not a glyph).
+#[test]
+fn the_tab_strip_buttons_have_names() {
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let mut h = app_harness(app, vec2(760.0, 700.0));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("Share"));
+    let more = h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("More tabs"));
+    more.click();
+    crate::test_harness::frames(&mut h, 2);
+    // The menu lists a tab that didn't fit (View is among the last on a narrow strip).
+    assert!(h.query(By::new().role(egui::accesskit::Role::MenuItem).label(tl!("View"))).is_some(), "the » menu lists the tabs left out");
+}
+
 /// Each contextual tab shows on the tab strip while its object is selected and leaves with the
 /// selection.
 #[test]
@@ -727,4 +741,493 @@ fn table_shading_split_keeps_palette_and_apply_separate() {
     assert_eq!(first_cell_shading(h.state()), None);
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(first_cell_shading(h.state()), Some(red), "No Color is undone in one step");
+}
+
+#[test]
+fn table_styles_gallery_uses_large_landscape_thumbnails() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let mut h = tab_harness(app, "Design");
+    let style_set_height = h
+        .query_all(By::new().role(Role::RadioButton).label_contains("Style set:"))
+        .next()
+        .expect("Design › Style Sets renders its large gallery tiles")
+        .rect()
+        .height();
+
+    h.state_mut().run("ui.tab", json!({"tab": "Table Design"})).unwrap();
+    crate::test_harness::frames(&mut h, 3);
+
+    let mut styles: Vec<(bool, String)> = h
+        .state()
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
+        .map(|s| (s.builtin, crate::i18n::style_name(s)))
+        .collect();
+    styles.sort_by_key(|(builtin, _)| *builtin);
+    let expected: Vec<String> = styles.into_iter().take(7).map(|(_, name)| name).collect();
+    assert_eq!(expected.len(), 7, "built-in document has at least seven table styles");
+
+    let tiles: Vec<(String, egui::Rect)> = expected
+        .iter()
+        .filter_map(|name| h.query_all(By::new().role(Role::RadioButton).label(name)).next().map(|node| (name.clone(), node.rect())))
+        .collect();
+    assert_eq!(tiles.len(), expected.len(), "all seven Table Styles tiles render at full ribbon width: {tiles:?}");
+
+    for (name, rect) in &tiles {
+        assert!(
+            rect.height() >= style_set_height - 1.0,
+            "Table Styles tile `{name}` height should be at least Design › Style Sets' Large thumbnail height ({style_set_height}), got {rect:?}"
+        );
+        let ratio = rect.width() / rect.height();
+        assert!(
+            (1.25..=1.75).contains(&ratio),
+            "Table Styles tile `{name}` should use a landscape aspect ratio matching its 3:2 table preview, got {ratio:.2} ({rect:?})"
+        );
+    }
+    assert!(tiles.windows(2).all(|w| w[0].1.max.x <= w[1].1.min.x + 0.01), "Table Styles tiles sit side by side without overlapping: {tiles:?}");
+}
+
+/// #7308: the compact menu and split buttons of Home › Font and Home › Paragraph show their icons
+/// alone (keeping their names for access and tooltips) even in a wide window, leaving room for all
+/// six tiles of the Styles gallery at 1920 pt.
+#[test]
+fn home_font_and_paragraph_buttons_stay_icon_only_and_styles_shows_six_tiles() {
+    use egui::accesskit::Role;
+
+    let button_width = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name)).next().unwrap_or_else(|| panic!("a button named {name}")).rect().width()
+    };
+
+    // Wide enough that the ribbon keeps every group at GroupLevel::Full: without `icon_only`, both
+    // Font and Paragraph render their full text labels, making longer names much wider than shorter
+    // ones and wider than text-labelled buttons like Replace.
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    let wide = tab_harness(app, "Home");
+    let replace_w = button_width(&wide, "Replace");
+
+    let menu_buttons = ["Change Case", "Text Effects and Typography", "Line and Paragraph Spacing"];
+    let menu_widths: Vec<(&str, f32)> = menu_buttons.iter().map(|&n| (n, button_width(&wide, n))).collect();
+    let base_menu_w = menu_widths[0].1;
+    for &(name, w) in &menu_widths {
+        assert!((w - base_menu_w).abs() < 1.0, "{name} ({w:.1} pt) differs from icon-only menu width ({base_menu_w:.1} pt): {menu_widths:?}");
+        assert!(w < replace_w, "{name} ({w:.1} pt) should be narrower than a labelled button like Replace ({replace_w:.1} pt)");
+    }
+
+    let split_buttons = ["Underline", "Text Highlight Color", "Font Color", "Bullets", "Numbering", "Multilevel List", "Shading", "Borders"];
+    let split_widths: Vec<(&str, f32)> = split_buttons.iter().map(|&n| (n, button_width(&wide, n))).collect();
+    let base_split_w = split_widths[0].1;
+    for &(name, w) in &split_widths {
+        assert!((w - base_split_w).abs() < 1.0, "{name} ({w:.1} pt) differs from icon-only split width ({base_split_w:.1} pt): {split_widths:?}");
+        assert!(w < replace_w, "{name} ({w:.1} pt) should be narrower than a labelled button like Replace ({replace_w:.1} pt)");
+    }
+
+    // At 1920 pt, Font no longer starves the Styles gallery: all six default quick styles show.
+    let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let full_hd = app_harness(app, vec2(1920.0, 900.0));
+    let shown = |name: &str| full_hd.query_all(By::new().label(name)).next().is_some();
+    for style in ["Normal", "No Spacing", "Heading 1", "Title", "Heading 2", "Subtitle"] {
+        assert!(shown(style), "Home › Styles should show {style} at 1920 pt");
+    }
+}
+
+/// #7323: the Home › Bullets dropdown renders the Bullet Library grid as compact
+/// square preview tiles (~22×22 pt), rather than expanding to full card dimensions (~132 pt).
+#[test]
+fn bullets_dropdown_renders_compact_bullet_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Home");
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+
+    // The SplitButton has two button nodes: the command part and the arrow part.
+    let arrow = h.query_all(By::new().role(Role::Button).label("Bullets")).nth(1).expect("Bullets split-button menu arrow");
+    arrow.click();
+    crate::test_harness::frames(&mut h, 3);
+
+    let bullet_tile = h.query_all(By::new().role(Role::ListItem).label("•")).next().expect("bullet tile •");
+    let rect = bullet_tile.rect();
+    assert!(
+        rect.width() >= 16.0 && rect.width() <= 32.0,
+        "bullet tile width ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.width()
+    );
+    assert!(
+        rect.height() >= 16.0 && rect.height() <= 32.0,
+        "bullet tile height ({:.1} pt) should be compact (expected ~22 pt, bound [16, 32])",
+        rect.height()
+    );
+    assert!((rect.width() - rect.height()).abs() <= 2.0, "bullet tile should be square: {}x{}", rect.width(), rect.height());
+}
+
+/// #7310: unimplemented stub ribbon buttons (Dictate, Ink to Math, Translate, Block Authors)
+/// resolve disabled in the ribbon UI and are known to the command catalog without warnings.
+#[test]
+fn unimplemented_stub_ribbon_buttons_are_disabled() {
+    use egui::accesskit::Role;
+
+    let cases = [
+        ("Home", "Dictate", "tools.dictate"),
+        ("Draw", "Ink to Math", "draw.inkToMath"),
+        ("Review", "Translate", "review.translate"),
+        ("Review", "Block Authors", "review.blockAuthors"),
+    ];
+
+    for (tab, expected_label, id) in cases {
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let h = tab_harness(app, tab);
+
+        let keymap = craft::ui::runtime::commands::keymap(&h.ctx).expect("command board has a keymap");
+        assert!(keymap.catalog().iter().any(|def| def.command.id == id), "{tab}: stub command {id} should be registered in the app catalog");
+
+        let button = h
+            .query_all(By::new().role(Role::Button))
+            .find(|n| n.accesskit_node().label().is_some_and(|l| l.split_whitespace().collect::<Vec<_>>().join(" ") == expected_label))
+            .unwrap_or_else(|| panic!("{tab}: ribbon button '{expected_label}' should exist"));
+        assert!(button.accesskit_node().is_disabled(), "{tab}: stub button {:?} ({id}) must be disabled", button.accesskit_node().label());
+    }
+}
+
+/// #7324, #7457: Table ribbon menu buttons (Styles, Borders, Select, Delete, AutoFit) bind their command IDs
+/// so they disable when editing is protected or when no table is active.
+#[test]
+fn table_ribbon_menu_buttons_disable_when_unselected_or_protected() {
+    use egui::accesskit::Role;
+
+    let is_disabled = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name))
+            .next()
+            .unwrap_or_else(|| panic!("button {name} not found"))
+            .accesskit_node()
+            .is_disabled()
+    };
+
+    let description = |h: &Harness, name: &str| {
+        h.query_all(By::new().role(Role::Button).label(name))
+            .next()
+            .unwrap_or_else(|| panic!("button {name} not found"))
+            .accesskit_node()
+            .description()
+            .map(|s| s.to_string())
+    };
+
+    // Configure Table Design & Table Layout as explicit ribbon tabs so they can be
+    // displayed even when the cursor is outside a table.
+    let make_table_tabs_app = |mut app: WordApp| {
+        app.session.ribbon.tabs = vec![
+            wordcraft_engine::ribbon::TabEntry { name: "Table Design".to_string(), custom: false, hidden: false, groups: Vec::new() },
+            wordcraft_engine::ribbon::TabEntry { name: "Table Layout".to_string(), custom: false, hidden: false, groups: Vec::new() },
+        ];
+        app
+    };
+
+    // 1. Without a table active:
+    let app_no_table = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
+    let h_design_empty = tab_harness(app_no_table, "Table Design");
+    assert!(is_disabled(&h_design_empty, "Styles"), "Styles button should be disabled when not in table");
+    assert!(is_disabled(&h_design_empty, "Borders"), "Borders button should be disabled when not in table");
+
+    let app_no_table2 = make_table_tabs_app(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default()));
+    let h_layout_empty = tab_harness(app_no_table2, "Table Layout");
+    assert!(is_disabled(&h_layout_empty, "Select"), "Select button should be disabled when not in table");
+    assert!(is_disabled(&h_layout_empty, "Delete"), "Delete button should be disabled when not in table");
+    assert!(is_disabled(&h_layout_empty, "AutoFit"), "AutoFit button should be disabled when not in table");
+    assert!(
+        description(&h_layout_empty, "Select").as_deref().unwrap_or("").to_ascii_lowercase().contains("the cursor isn't in a table"),
+        "Select should indicate outside table in disabled hint"
+    );
+
+    // 2. With an active table and no protection: buttons are enabled:
+    let mut app_table = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_table.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h_design = tab_harness(app_table, "Table Design");
+    assert!(!is_disabled(&h_design, "Styles"), "Styles button should be enabled in table");
+    assert!(!is_disabled(&h_design, "Borders"), "Borders button should be enabled in table");
+
+    let mut app_table2 = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_table2.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h_layout = tab_harness(app_table2, "Table Layout");
+    assert!(!is_disabled(&h_layout, "Select"), "Select button should be enabled in table");
+    assert!(!is_disabled(&h_layout, "Delete"), "Delete button should be enabled in table");
+    assert!(!is_disabled(&h_layout, "AutoFit"), "AutoFit button should be enabled in table");
+
+    // 3. With an active table under document protection (read-only): mutating buttons are disabled:
+    let mut app_protected_design = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_protected_design.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app_protected_design.session.doc.settings.protection = Some("readOnly".into());
+    let h_prot_design = tab_harness(app_protected_design, "Table Design");
+    assert!(is_disabled(&h_prot_design, "Styles"), "Styles button should be disabled under protection");
+    assert!(is_disabled(&h_prot_design, "Borders"), "Borders button should be disabled under protection");
+    assert!(
+        description(&h_prot_design, "Styles").as_deref().unwrap_or("").contains("protected"),
+        "Styles should indicate protection in disabled hint"
+    );
+
+    let mut app_protected_layout = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app_protected_layout.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    app_protected_layout.session.doc.settings.protection = Some("readOnly".into());
+    let h_prot_layout = tab_harness(app_protected_layout, "Table Layout");
+    assert!(!is_disabled(&h_prot_layout, "Select"), "Select button should remain enabled under protection");
+    assert!(is_disabled(&h_prot_layout, "Delete"), "Delete button should be disabled under protection");
+    assert!(is_disabled(&h_prot_layout, "AutoFit"), "AutoFit button should be disabled under protection");
+    assert!(
+        description(&h_prot_layout, "Delete").as_deref().unwrap_or("").contains("protected"),
+        "Delete should indicate protection in disabled hint"
+    );
+}
+
+/// #7374: the Decorative Text / WordArt Styles dropdown menu renders compact tiles (~40×36 pt)
+/// rather than expanding to default card thumbnail size (~132×119 pt).
+#[test]
+fn decorative_text_dropdown_renders_compact_wordart_tiles() {
+    use egui::accesskit::Role;
+
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+    let mut h = tab_harness(app, "Insert");
+    click_button(&mut h, "Decorative Text");
+
+    let tile = h.query_all(By::new().role(Role::ListItem).label("Solid Accent")).next().expect("Solid Accent WordArt tile");
+    let rect = tile.rect();
+    assert!(
+        rect.width() >= 32.0 && rect.width() <= 50.0,
+        "WordArt tile width ({:.1} pt) should be compact (expected ~40 pt, bound [32, 50]), got {:.1}",
+        rect.width(),
+        rect.width()
+    );
+    assert!(
+        rect.height() >= 28.0 && rect.height() <= 46.0,
+        "WordArt tile height ({:.1} pt) should be compact (expected ~36 pt, bound [28, 46]), got {:.1}",
+        rect.height(),
+        rect.height()
+    );
+}
+
+/// #7691: Table Design › Table Style Options aligns its six checkboxes in two columns with a gap
+/// between them and keeps all three rows above the group caption.
+#[test]
+fn table_style_options_align_in_two_columns() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let h = tab_harness(app, "Table Design");
+    let rect = |label: &str| h.get_by_role_and_label(Role::CheckBox, label).rect();
+    let header = rect("Header Row");
+    let first_col = rect("First Column");
+    let total = rect("Total Row");
+    let last_col = rect("Last Column");
+    let banded = rect("Banded Rows");
+    let banded_col = rect("Banded Columns");
+    // Left column checkboxes share one left edge, and right column checkboxes share another.
+    assert!(
+        (header.left() - total.left()).abs() < 0.5 && (header.left() - banded.left()).abs() < 0.5,
+        "left column misaligned: {header:?}, {total:?}, {banded:?}"
+    );
+    assert!(
+        (first_col.left() - last_col.left()).abs() < 0.5 && (first_col.left() - banded_col.left()).abs() < 0.5,
+        "right column misaligned: {first_col:?}, {last_col:?}, {banded_col:?}"
+    );
+    // Each row's pair shares the same top edge and stacks vertically with tight spacing.
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let tight_gap = env.tokens.space.gap.tight;
+    let min_col_gap = env.tokens.space.gap.stack;
+    assert!((header.top() - first_col.top()).abs() < 0.5, "row 1 misaligned: {header:?}, {first_col:?}");
+    assert!((total.top() - last_col.top()).abs() < 0.5, "row 2 misaligned: {total:?}, {last_col:?}");
+    assert!((banded.top() - banded_col.top()).abs() < 0.5, "row 3 misaligned: {banded:?}, {banded_col:?}");
+    assert!(header.bottom() <= total.top() && total.bottom() <= banded.top(), "rows overlap: {header:?}, {total:?}, {banded:?}");
+    let row_gap_1 = total.top() - header.bottom();
+    let row_gap_2 = banded.top() - total.bottom();
+    assert!(
+        (row_gap_1 - tight_gap).abs() <= 0.5 && (row_gap_2 - tight_gap).abs() <= 0.5,
+        "rows should remain Gap::Tight ({tight_gap} pt) apart, got {row_gap_1} and {row_gap_2}"
+    );
+    // A horizontal gap at least `space.gap.stack` separates the widest left-column label from the second column.
+    let text_rect = |label: &str| {
+        h.output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("painted text for {label:?}"))
+    };
+    let left_label_max_right =
+        ["Header Row", "Total Row", "Banded Rows"].into_iter().map(|label| text_rect(label).right()).fold(f32::NEG_INFINITY, f32::max);
+    let col_gap = first_col.left() - left_label_max_right;
+    assert!(
+        col_gap >= min_col_gap,
+        "column gap between widest left label and right column too narrow: got {col_gap:.2} pt, expected >= {min_col_gap:.2} pt (left_label_max_right={left_label_max_right}, first_col={first_col:?})"
+    );
+    // All three rows stay above the group's caption.
+    let caption = text_rect("Table Style Options");
+    assert!(banded.bottom() <= caption.top(), "checkboxes collide with group caption: {banded:?} vs {caption:?}");
+}
+
+struct StylesGalleryLayout {
+    gallery: egui::Rect,
+    tiles: Vec<(String, egui::Rect, Option<egui::accesskit::Toggled>)>,
+    up: egui::Rect,
+    down: egui::Rect,
+    more: egui::Rect,
+}
+
+/// Lay out the Home tab in LTR (`rtl == false`) or Arabic RTL (`rtl == true`) using `fixture_lang`
+/// so the test never skips when `CRAFT_I18N_DIR` is unset, and collect the Styles gallery's
+/// container, visible tiles, and stepper/More buttons.
+fn styles_gallery_layout(rtl: bool) -> StylesGalleryLayout {
+    use egui::accesskit::Role;
+
+    struct ResetLang;
+    impl Drop for ResetLang {
+        fn drop(&mut self) {
+            crate::i18n::apply_language(crate::i18n::Lang::EN);
+        }
+    }
+    let _reset = ResetLang;
+
+    let lang = if rtl {
+        crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n\tStyles\tالأنماط\n\tNormal\tعادي\n")
+    } else {
+        crate::i18n::Lang::EN
+    };
+
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.ui.language = "en".into();
+    app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+
+    let mut h = crate::test_harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            if rtl {
+                ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+                crate::i18n::apply_language(lang);
+                ctx.global_style_mut(|s| s.right_to_left = true);
+                craft::ui::runtime::env::with_env(ui, |o| o.direction = Some(craft::i18n::Direction::Rtl), |ui| app.ui(ui));
+                ctx.global_style_mut(|s| s.right_to_left = false);
+                crate::i18n::apply_language(crate::i18n::Lang::EN);
+            } else {
+                app.ui(ui);
+            }
+        },
+        app,
+    );
+    crate::test_harness::frames(&mut h, 4);
+
+    crate::i18n::apply_language(lang);
+    let gallery_label = crate::i18n::t("Styles").to_string();
+    let names: Vec<String> = h.state().session.doc.styles.gallery().iter().take(6).map(|s| crate::i18n::style_name(s)).collect();
+    crate::i18n::apply_language(crate::i18n::Lang::EN);
+
+    let gallery = h
+        .query_all(By::new().role(Role::RadioGroup).label(gallery_label.as_str()))
+        .next()
+        .unwrap_or_else(|| panic!("Styles radio group '{gallery_label}' not found"))
+        .rect();
+    assert!(gallery.is_positive(), "Styles gallery rect must be positive: {gallery:?}");
+
+    let in_gallery = |rect: egui::Rect| gallery.contains_rect(rect);
+    let tiles: Vec<_> = names
+        .iter()
+        .filter_map(|name| {
+            h.query_all(By::new().role(Role::RadioButton).label(name.as_str()))
+                .find(|node| in_gallery(node.rect()))
+                .map(|node| (name.clone(), node.rect(), node.accesskit_node().toggled()))
+        })
+        .collect();
+    assert_eq!(tiles.len(), names.len(), "expected all {} visible Styles tiles inside {gallery:?}: {tiles:?} vs {names:?}", names.len());
+
+    let button = |label: &str| {
+        h.query_all(By::new().role(Role::Button).label(label))
+            .find(|node| in_gallery(node.rect()))
+            .unwrap_or_else(|| panic!("gallery button '{label}' not found inside {gallery:?}"))
+            .rect()
+    };
+
+    StylesGalleryLayout { gallery, tiles, up: button("Previous row"), down: button("Next row"), more: button("More") }
+}
+
+/// #5566, #7753: in a right-to-left interface the Styles gallery starts at the right, as the rest
+/// of the ribbon does: the first style (Normal) is the rightmost tile, and the scroll arrows and
+/// More button sit in a column at the gallery's left end. Left to right is unchanged.
+#[test]
+fn the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface() {
+    use egui::accesskit::Toggled;
+
+    let assert_common = |layout: &StylesGalleryLayout, expected_first: &str, dir: &str| {
+        assert_eq!(layout.tiles.len(), 6, "{dir}: expected 6 visible gallery tiles: {:?}", layout.tiles);
+        let (first_name, first_rect, first_toggled) = &layout.tiles[0];
+        assert_eq!(first_name, expected_first, "{dir}: first tile should be localized Normal");
+        assert_eq!(*first_toggled, Some(Toggled::True), "{dir}: active Normal style should be checked");
+        assert!(
+            layout
+                .tiles
+                .iter()
+                .all(|(_, r, _)| r.is_positive() && layout.gallery.contains_rect(*r) && (r.center().y - first_rect.center().y).abs() <= 1.0),
+            "{dir}: gallery tiles must sit on one horizontal row inside {:?}: {:?}",
+            layout.gallery,
+            layout.tiles
+        );
+
+        let controls = [("Previous row", layout.up), ("Next row", layout.down), ("More", layout.more)];
+        for (name, rect) in controls {
+            assert!(rect.is_positive(), "{dir}: {name} rect must be positive: {rect:?}");
+            assert!(layout.gallery.contains_rect(rect), "{dir}: {name} {rect:?} must sit inside gallery {:?}", layout.gallery);
+        }
+        assert!(
+            (layout.up.center().x - layout.down.center().x).abs() <= 1.0 && (layout.down.center().x - layout.more.center().x).abs() <= 1.0,
+            "{dir}: up, down, and More buttons must align in one column: up={:?}, down={:?}, more={:?}",
+            layout.up,
+            layout.down,
+            layout.more
+        );
+        assert!(
+            layout.up.max.y <= layout.down.min.y + 1.0 && layout.down.max.y <= layout.more.min.y + 1.0,
+            "{dir}: buttons must stack top-to-bottom (up -> down -> More): up={:?}, down={:?}, more={:?}",
+            layout.up,
+            layout.down,
+            layout.more
+        );
+    };
+
+    // 1. Left-to-right (English)
+    let ltr = styles_gallery_layout(false);
+    assert_common(&ltr, "Normal", "LTR");
+    assert!(
+        ltr.tiles.windows(2).all(|w| w[0].1.center().x < w[1].1.center().x && w[0].1.max.x <= w[1].1.min.x + 1.0),
+        "LTR: tiles must run left to right: {:?}",
+        ltr.tiles
+    );
+    for (name, ctrl) in [("Previous row", ltr.up), ("Next row", ltr.down), ("More", ltr.more)] {
+        assert!(
+            ltr.tiles.iter().all(|(_, tile, _)| ctrl.min.x >= tile.max.x),
+            "LTR: {name} ({ctrl:?}) must sit to the right of every tile: {:?}",
+            ltr.tiles
+        );
+    }
+
+    // 2. Right-to-left (Arabic)
+    let rtl = styles_gallery_layout(true);
+    assert_common(&rtl, "عادي", "RTL");
+    assert!(
+        rtl.tiles.windows(2).all(|w| w[0].1.center().x > w[1].1.center().x && w[0].1.min.x + 1.0 >= w[1].1.max.x),
+        "RTL: tiles must run right to left from the rightmost Normal tile: {:?}",
+        rtl.tiles
+    );
+    for (name, ctrl) in [("Previous row", rtl.up), ("Next row", rtl.down), ("More", rtl.more)] {
+        assert!(
+            rtl.tiles.iter().all(|(_, tile, _)| ctrl.max.x <= tile.min.x),
+            "RTL: {name} ({ctrl:?}) must sit to the left of every tile: {:?}",
+            rtl.tiles
+        );
+    }
 }

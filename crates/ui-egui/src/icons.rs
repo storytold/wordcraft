@@ -88,6 +88,7 @@ static WORDCRAFT_ICONS_TABLE: &[(&str, &[u8])] = &[
     ("designMode", include_bytes!("../icons/designMode.svg")),
     ("dictate", include_bytes!("../icons/dictate.svg")),
     ("discord", include_bytes!("../icons/discord.svg")),
+    ("discordPill", include_bytes!("../icons/discordPill.svg")),
     ("distributeCols", include_bytes!("../icons/distributeCols.svg")),
     ("distributeRows", include_bytes!("../icons/distributeRows.svg")),
     ("docPrefs", include_bytes!("../icons/docPrefs.svg")),
@@ -427,16 +428,18 @@ pub fn for_command(id: &str) -> IconSpec<'static> {
 
 /// An Insert › Icons library icon as a value glyph, drawn from the same path data the inserted
 /// picture is rendered from (`wordcraft_render::icon_lib`).
-pub struct LibraryGlyph<'a> {
-    icon: &'a wordcraft_render::icon_lib::Icon,
+#[derive(craft::ui::contract::MemoProps)]
+pub struct LibraryGlyph {
+    #[memo_props(address = "library icons are items of the static `ICONS`")]
+    icon: &'static wordcraft_render::icon_lib::Icon,
 }
 
 /// The glyph of a library icon; bind it to a local so `IconSpec::glyph(&glyph)` can borrow it.
-pub fn library_glyph(icon: &wordcraft_render::icon_lib::Icon) -> impl Glyph + '_ {
+pub fn library_glyph(icon: &'static wordcraft_render::icon_lib::Icon) -> impl Glyph {
     LibraryGlyph { icon }
 }
 
-impl Glyph for LibraryGlyph<'_> {
+impl Glyph for LibraryGlyph {
     fn paint(&self, p: &Painter, _tokens: &UiTokens, r: Rect, c: Color32, _mirrored: bool) {
         use wordcraft_render::icon_lib::{GRID, STROKE};
         let s = r.width().min(r.height()) / GRID;
@@ -508,5 +511,28 @@ mod tests {
             let (ex, ey) = (3.0 + u * 14.0, 5.0 + v * 10.0);
             assert!((x - ex).abs() < 0.05 && (y - ey).abs() < 0.05, "({x}, {y}) vs ({ex}, {ey})");
         }
+    }
+
+    /// #7317: the `fitOnePage` app icon is a document the registry resolves and the rasteriser draws.
+    /// A document the engine fails to parse or draw gives no texture, and so no shape: the tile would
+    /// be blank. The pre-#7101 test painted the hand-written vector path; this checks the same icon
+    /// through the SVG set that replaced it.
+    #[test]
+    fn fit_one_page_icon_paints_without_panic() {
+        const KEY: &str = "fitOnePage";
+        use craft::theme::{Contrast, Mode};
+        use craft::ui::primitives::{Draw, DrawEnv, PaintRecord};
+        use craft::ui::testing::{Frames, style};
+
+        register();
+        let tokens = style::tokens(Mode::Light, Contrast::Standard);
+        let record = std::cell::RefCell::new(PaintRecord::default());
+        let mut frames = Frames::new();
+        let shapes = frames.frame_shapes(|ui| {
+            let env = DrawEnv { tokens: &tokens, direction: craft::i18n::Direction::Ltr, ink: craft::ui::style::Ink::OnPanel };
+            let icon = IconSpec::svg(IconId::new(KEY));
+            Draw::new(ui.painter(), &record, env).icon(Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), &icon);
+        });
+        assert!(!shapes.is_empty(), "{KEY} icon must paint");
     }
 }
