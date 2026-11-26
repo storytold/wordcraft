@@ -2405,11 +2405,11 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
 }
 
 /// #7757: Windows draws its system text I-beam in white over the app's surface, so the ribbon's font
-/// fields looked cursorless there. Like the page, they must ask for craft's painted I-beam on a
-/// native Windows shell; other shells keep the system text cursor.
+/// fields looked cursorless there. Like the page, the font size box must ask for craft's painted
+/// I-beam on a native Windows shell; other shells keep the system text cursor.
 #[test]
-fn the_ribbon_font_fields_show_a_painted_ibeam_on_windows() {
-    use craft::host::target::{Os, Runtime, ShellInfo};
+fn the_ribbon_font_size_box_shows_a_painted_ibeam_on_windows() {
+    use craft::host::target::{Os, Runtime};
     use egui::accesskit::Role;
 
     let mut h = harness(app());
@@ -2420,9 +2420,15 @@ fn the_ribbon_font_fields_show_a_painted_ibeam_on_windows() {
     h.step();
     h.step();
 
-    let shell = ShellInfo::current();
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let shell = env.view().shell();
     if shell.os == Os::Windows && shell.runtime == Runtime::Native {
         assert!(h.output().platform_output.cursor_image.is_some(), "the font size box asks for the painted I-beam on Windows native");
+        assert_eq!(
+            craft::ui::runtime::cursor::current(&h.ctx),
+            Some(craft::behavior::cursor::Cursor::Painted(craft::behavior::cursor::PaintedCursor::IBeam)),
+            "the font size box asks for the painted I-beam"
+        );
     } else {
         assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "other shells keep the text cursor");
     }
