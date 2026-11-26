@@ -281,6 +281,15 @@ impl WordApp {
         {
             self.autosave_path = self.session.path.clone();
         }
+        // A save the document didn't follow wrote a copy: the next Save As starts from it (#7772).
+        // A save to the document's own file forgets it.
+        if let Ok(v) = &r
+            && matches!(id, "file.save" | "file.saveAs")
+            && v.get("saved").and_then(Value::as_bool) == Some(true)
+        {
+            let written = v.get("path").and_then(Value::as_str).map(std::path::PathBuf::from);
+            self.last_copy = written.filter(|path| self.session.path.as_deref() != Some(path.as_path()));
+        }
         // A Markdown file edited in the formatted view was written out again, not kept as it was.
         if let Ok(v) = &r
             && matches!(id, "file.save" | "file.saveAs")

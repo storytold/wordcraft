@@ -502,6 +502,10 @@ pub struct WordApp {
     /// there. A file that was merely opened isn't rewritten until the user saves it: saving drops
     /// whatever WordCraft can't represent (content controls, charts, macros…).
     autosave_path: Option<std::path::PathBuf>,
+    /// The file the last save wrote a copy of the document to: a format that doesn't keep
+    /// everything (plain text, say) leaves the document as it was, untitled or on its own file
+    /// (#2376). The next Save As starts from the copy's folder, name and type (#7772).
+    last_copy: Option<std::path::PathBuf>,
     /// Web: saves the browser's picker hasn't finished yet (#1315).
     saves_in_flight: Vec<SaveInFlight>,
     /// The Save Changes prompt this window is running and the command it holds back.
