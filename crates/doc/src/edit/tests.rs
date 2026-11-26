@@ -118,6 +118,182 @@ fn copy_paste_round_trip() {
     assert!(d.plain_text(StoryRef::Body).starts_with("XYalpha"));
 }
 
+/// Shading a pasted paragraph gets from its style is kept as direct shading on an empty unshaded destination (#6157).
+#[test]
+fn paste_keeps_source_style_shading() {
+    let mut d = doc(&[""]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut src = Paragraph::with_text("X", CharProps::default());
+    src.props.style = Some("SourceShaded".into());
+    let one = Fragment { blocks: vec![Block::Para(src)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 0), &one).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.shading, Some(crate::Rgb(0x33, 0x33, 0x33)), "source style shading is kept on empty destination");
+}
+
+/// A one-line paste without a paragraph mark into a non-empty paragraph leaves destination shading unshaded (#6157).
+#[test]
+fn single_block_paste_into_non_empty_paragraph_leaves_destination_unshaded() {
+    let mut d = doc(&["plain"]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut src = Paragraph::with_text("X", CharProps::default());
+    src.props.style = Some("SourceShaded".into());
+    let one = Fragment { blocks: vec![Block::Para(src)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 5), &one).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.shading, None, "one-line paste without a paragraph mark must not shade destination paragraph");
+}
+
+/// An empty destination with direct properties keeps the first pasted paragraph's style shading (#6157).
+#[test]
+fn multi_block_paste_keeps_source_style_shading() {
+    let mut d = doc(&[""]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.style = Some("SourceShaded".into());
+    let b = Paragraph::with_text("B", CharProps::default());
+    let frag = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.align = Some(crate::props::Align::Center);
+    d.insert_fragment(&Pos::body(0, 0), &frag).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.shading, Some(crate::Rgb(0x33, 0x33, 0x33)), "first pasted paragraph keeps its style shading");
+}
+
+/// The destination's resolved (default) shading is not replaced by the source's direct shading (#6157).
+#[test]
+fn multi_block_paste_keeps_destination_default_shading() {
+    let mut d = doc(&["plain"]);
+    Arc::make_mut(&mut d.styles).default_para.shading = Some(crate::Rgb(0x22, 0x22, 0x22));
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.shading = Some(crate::Rgb(0x11, 0x11, 0x11));
+    let b = Paragraph::with_text("B", CharProps::default());
+    let frag = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 5), &frag).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.shading, None, "source direct shading must not override the destination default");
+    assert_eq!(d.styles.resolve_para(&p.props).shading, Some(crate::Rgb(0x22, 0x22, 0x22)));
+}
+
+/// An empty destination with inherited shading keeps its shading when pasting a differently shaded source style (#6157).
+#[test]
+fn multi_block_paste_keeps_destination_inherited_shading_over_source_style() {
+    let mut d = doc(&["plain"]);
+    Arc::make_mut(&mut d.styles).default_para.shading = Some(crate::Rgb(0x22, 0x22, 0x22));
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.style = Some("SourceShaded".into());
+    let b = Paragraph::with_text("B", CharProps::default());
+    let frag = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 5), &frag).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.shading, Some(crate::Rgb(0x22, 0x22, 0x22)), "destination inherited shading is preserved as a direct override");
+    assert_eq!(
+        d.styles.resolve_para(&p.props).shading,
+        Some(crate::Rgb(0x22, 0x22, 0x22)),
+        "resolved shading must match the destination background, not the source style"
+    );
+}
+
+/// Multi-block paste into an empty unshaded destination keeps a shaded source style without
+/// duplicating its color into direct paragraph shading (#6157).
+#[test]
+fn multi_block_paste_into_empty_destination_keeps_source_style_without_direct_shading() {
+    let mut d = doc(&[""]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.style = Some("SourceShaded".into());
+    let mut b = Paragraph::with_text("B", CharProps::default());
+    b.props.style = Some("SourceShaded".into());
+    let frag = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 0), &frag).unwrap();
+    for idx in [0, 1] {
+        let p = d.para(StoryRef::Body, &Path::top(idx)).unwrap();
+        assert_eq!(p.props.style.as_deref(), Some("SourceShaded"));
+        assert_eq!(p.props.shading, None, "paragraph {idx} inherits from its style without redundant direct shading");
+        assert_eq!(d.styles.resolve_para(&p.props).shading, Some(crate::Rgb(0x33, 0x33, 0x33)));
+    }
+}
+
+/// Paragraph shading inherited from an enclosing table's style is preserved as destination shading (#6157).
+#[test]
+fn paste_keeps_destination_table_style_shading() {
+    let mut d = doc(&["outside"]);
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "ShadedGrid".into(),
+        name: "Shaded Grid".into(),
+        kind: crate::StyleKind::Table,
+        para: ParaProps { shading: Some(crate::Rgb(0x22, 0x22, 0x22)), ..Default::default() },
+        ..Default::default()
+    });
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x44, 0x44, 0x44)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.style = Some("ShadedGrid".into());
+    d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(t)).unwrap();
+
+    // Single-block paste into cell (0, 0): table-style paragraph shading is not overridden.
+    let mut src = Paragraph::with_text("cell1", CharProps::default());
+    src.props.shading = Some(crate::Rgb(0x1e, 0x1e, 0x1e));
+    let one = Fragment { blocks: vec![Block::Para(src)], ..Default::default() };
+    let cell0 = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 };
+    d.insert_fragment(&cell0, &one).unwrap();
+    let p0 = d.para(StoryRef::Body, &cell0.path).unwrap();
+    assert_eq!(p0.props.shading, None);
+    let tp = &d.styles.table_style("ShadedGrid").unwrap().para;
+    assert_eq!(d.styles.resolve_para_in(&p0.props, Some(tp)).shading, Some(crate::Rgb(0x22, 0x22, 0x22)));
+
+    // Multi-block paste with a differently shaded source style into empty cell (0, 1).
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.style = Some("SourceShaded".into());
+    let b = Paragraph::with_text("B", CharProps::default());
+    let multi = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    let cell1 = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 0 };
+    d.insert_fragment(&cell1, &multi).unwrap();
+    let p1 = d.para(StoryRef::Body, &cell1.path).unwrap();
+    assert_eq!(d.styles.resolve_para_in(&p1.props, Some(tp)).shading, Some(crate::Rgb(0x22, 0x22, 0x22)));
+}
+
 /// The first paragraph of the deepest cell, following the first table at each level.
 fn deepest(d: &Document) -> Path {
     let (mut path, mut blocks) = (Vec::new(), &d.body);

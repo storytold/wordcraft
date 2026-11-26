@@ -221,6 +221,7 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     (s.clipboard_html, s.clipboard_rtf) = match &s.clipboard {
         Some(f) => {
             let mut d = f.to_document();
+            d.styles = s.doc.styles.clone();
             if d.media.is_empty() {
                 d.media = s.doc.media.clone();
             }
