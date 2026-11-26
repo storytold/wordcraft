@@ -1373,3 +1373,82 @@ fn symbol_tip_names_known_characters_and_falls_back_to_the_code_point() {
     assert!(unnamed.contains("2602") && unnamed.contains("Miscellaneous Symbols"), "unnamed character: {unnamed}");
     assert_eq!(symbol_tip("", ""), "");
 }
+
+/// #7317: the real ribbon `Font Size` combo box field and its dropdown arrow share one outer
+/// outline enclosing both parts across Light and Dark themes, in both focused and unfocused states.
+#[test]
+fn combo_field_and_arrow_share_one_outline() {
+    use egui::accesskit::Role;
+
+    fn collect_stroke_rects(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Vec(children) => {
+                for child in children {
+                    collect_stroke_rects(child, out);
+                }
+            }
+            egui::Shape::Rect(r) if r.stroke.width > 0.0 => out.push(r.rect),
+            _ => {}
+        }
+    }
+
+    for theme in ["light", "dark"] {
+        for focused in [false, true] {
+            let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Sample")), crate::Services::default());
+            app.run("ui.theme", json!({"value": theme})).unwrap();
+            let mut h = tab_harness(app, "Home");
+
+            let grow_rect =
+                h.query_all(By::new().role(Role::Button).label("Increase Font Size")).next().expect("ribbon Increase Font Size button").rect();
+            let input = h
+                .query_all(By::new().role(Role::TextInput))
+                .filter(|n| {
+                    let r = n.rect();
+                    r.max.x <= grow_rect.min.x + 2.0 && (r.center().y - grow_rect.center().y).abs() < 12.0
+                })
+                .max_by(|a, b| a.rect().max.x.total_cmp(&b.rect().max.x))
+                .expect("ribbon Font Size input");
+            let input_rect = input.rect();
+            if focused {
+                input.click();
+                h.run_steps(3);
+            }
+
+            let mut stroke_rects = Vec::new();
+            for clipped in &h.output().shapes {
+                collect_stroke_rects(&clipped.shape, &mut stroke_rects);
+            }
+            let local: Vec<egui::Rect> = stroke_rects
+                .into_iter()
+                .filter(|r| {
+                    r.min.y >= input_rect.min.y - 6.0
+                        && r.max.y <= input_rect.max.y + 6.0
+                        && r.min.x >= input_rect.min.x - 6.0
+                        && r.max.x <= input_rect.max.x + 40.0
+                })
+                .collect();
+
+            let outer = local
+                .iter()
+                .copied()
+                .filter(|r| r.min.x <= input_rect.min.x + 1.0 && r.max.x > input_rect.max.x + 6.0)
+                .max_by(|a, b| a.width().total_cmp(&b.width()))
+                .unwrap_or_else(|| panic!("{theme}, focused {focused}: no outer combo outline around {input_rect:?} in {local:?}"));
+
+            let arrow = local
+                .iter()
+                .copied()
+                .find(|r| r.width() < 30.0 && r.min.x > outer.min.x && r.min.x >= input_rect.max.x - 4.0)
+                .unwrap_or_else(|| panic!("{theme}, focused {focused}: no arrow button inside {outer:?} in {local:?}"));
+
+            assert!(
+                arrow.min.x >= outer.min.x && arrow.max.x <= outer.max.x,
+                "{theme}, focused {focused}: arrow x-bounds {arrow:?} stand outside outer {outer:?}"
+            );
+            assert!(
+                arrow.min.y >= outer.min.y && arrow.max.y <= outer.max.y,
+                "{theme}, focused {focused}: arrow y-bounds {arrow:?} stand outside outer {outer:?}"
+            );
+        }
+    }
+}
