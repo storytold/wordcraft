@@ -288,6 +288,15 @@ fn split_at_delimiter(args: Vec<String>) -> (Vec<String>, Vec<String>) {
     }
 }
 
+/// The documents to open, in the order the command line gave them: the words before `--` that the flag
+/// loop kept, then the ones after it. The separator moves no document, and the Launcher, which sends
+/// none before it, opens just its own file names in order.
+fn documents_to_open(before: Vec<String>, after: Vec<String>) -> Vec<String> {
+    let mut documents = before;
+    documents.extend(after);
+    documents
+}
+
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
 /// one (#1440). A `--control` port, a token or a token file that isn't is an error.
 fn text_args(arguments: Vec<std::ffi::OsString>) -> (Vec<String>, Vec<std::path::PathBuf>) {
@@ -476,7 +485,8 @@ fn main() -> eframe::Result {
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     // The Launcher's own hand-off: `--` ends the options, so nothing after it is read as one and
     // the separator itself never becomes a document.
-    let (args, mut files) = split_at_delimiter(args);
+    let (args, after_separator) = split_at_delimiter(args);
+    let mut documents: Vec<String> = Vec::new();
     let mut bad_control: Option<Option<String>> = None;
     let mut missing_value: Option<&'static str> = None;
     let mut args = args.into_iter().peekable();
@@ -519,9 +529,12 @@ fn main() -> eframe::Result {
                 let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
                 return Ok(());
             }
-            _ => files.push(a),
+            _ => documents.push(a),
         }
     }
+    // After the loop, so a document before `--` opens before the ones after it (a stable launch's
+    // `a.docx -- b.docx` used to be reversed when the Launcher's list was the one collected first).
+    let files = documents_to_open(documents, after_separator);
     // After the loop, so `--version` later on the line still wins.
     if let Some(port) = bad_control {
         let got = port.map(|p| format!(", got {p:?}")).unwrap_or_default();
@@ -1107,7 +1120,7 @@ mod smoke {
 
 #[cfg(test)]
 mod command_line_tests {
-    use super::split_at_delimiter;
+    use super::{documents_to_open, split_at_delimiter};
 
     /// The argv the Launcher starts a nightly with, as `prepare_launch` hands it on. The root is the one this
     /// platform would pass: `/nightly-data/...` has no drive prefix, so on Windows `parse` rightly refuses it.
@@ -1137,6 +1150,19 @@ mod command_line_tests {
         // A real document path, as Windows hands one on: kept whole, in order, backslashes and spaces intact.
         let (_, files) = split_at_delimiter(launcher_argv(&[r"C:\Users\user\Holiday letter.docx", "a.file"]));
         assert_eq!(files, [r"C:\Users\user\Holiday letter.docx", "a.file"], "a real path after -- stays a document, in order");
+    }
+
+    /// A stable line that carries its own separator: `a.file` before `--` opens before `b.file` after it.
+    /// The flag loop keeps `a.file` (its `_` arm, one push) and `documents_to_open` puts the two lists
+    /// back in command-line order; the reverse, appending the loop's list to the separator's, opened them
+    /// backwards (found in review of #7849).
+    #[test]
+    fn documents_before_the_separator_keep_their_place_before_the_ones_after_it() {
+        let (options, after) = split_at_delimiter(["--sample", "a.file", "--", "b.file"].map(String::from).to_vec());
+        assert_eq!(options, ["--sample", "a.file"], "--sample is a switch and a.file is left for the loop");
+        assert_eq!(documents_to_open(vec!["a.file".into()], after), ["a.file", "b.file"]);
+        let (_, after) = split_at_delimiter(launcher_argv(&["b.file"]));
+        assert_eq!(documents_to_open(Vec::new(), after), ["b.file"], "the Launcher sends nothing before the separator");
     }
 
     #[test]
