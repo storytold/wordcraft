@@ -33,6 +33,9 @@ const SYMBOL_GREY: Rgb = Rgb(0x6E, 0x6E, 0x6E);
 pub struct OutlineView {
     /// Collapsed headings (body block indices).
     pub collapsed: BTreeSet<usize>,
+    /// Headings whose own body text (the body paragraphs right after them) is hidden while their
+    /// sub-headings show: Expand reveals headings level by level and body text last.
+    pub text_hidden: BTreeSet<usize>,
     /// Show Level: 1–9 shows headings down to that level (no body text); anything else shows all.
     pub show_level: u8,
     /// Show First Line Only: body paragraphs show their first line.
@@ -85,10 +88,15 @@ pub fn hidden(levels: &[u8], view: &OutlineView) -> Vec<bool> {
     let deepest = view.deepest();
     // While inside a collapsed heading: its level (blocks deeper than it are hidden).
     let mut under: Option<u8> = None;
+    // The heading the current body paragraph follows.
+    let mut last_heading: Option<usize> = None;
     levels
         .iter()
         .enumerate()
         .map(|(i, &l)| {
+            if l < BODY {
+                last_heading = Some(i);
+            }
             if let Some(h) = under {
                 if l > h {
                     return true;
@@ -96,6 +104,9 @@ pub fn hidden(levels: &[u8], view: &OutlineView) -> Vec<bool> {
                 under = None;
             }
             if l > deepest {
+                return true;
+            }
+            if l >= BODY && last_heading.is_some_and(|h| view.text_hidden.contains(&h)) {
                 return true;
             }
             if l < BODY && view.collapsed.contains(&i) {
@@ -238,6 +249,9 @@ mod tests {
         // Collapsing the first heading hides its whole subtree, not the next Heading 1.
         let c = OutlineView { collapsed: [0].into_iter().collect(), ..Default::default() };
         assert_eq!(hidden(&levels, &c), vec![false, true, true, true, false, false]);
+        // A heading's own body text can be hidden while its sub-headings show.
+        let t = OutlineView { text_hidden: [0, 2].into_iter().collect(), ..Default::default() };
+        assert_eq!(hidden(&levels, &t), vec![false, true, false, true, false, false]);
         // Collapsing body text does nothing.
         let b = OutlineView { collapsed: [1].into_iter().collect(), ..Default::default() };
         assert_eq!(hidden(&levels, &b), vec![false; 6]);
