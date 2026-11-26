@@ -80,7 +80,9 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         "wordCount" | "zoom" => dialogs_view::open(app, name, params, parent),
         "tableProperties" | "customProperties" => forms::open(app, name, params, parent),
         "lineNumbers" | "hyphenation" | "manualHyphenation" | "language" | "envelopes" | "labels" | "tableFormula" | "tableSort" | "splitCells"
-        | "textToTable" | "tableToText" | "pictureSize" | "pageNumbers" => dialogs_layout::open(app, name, params, parent),
+        | "insertCells" | "deleteCells" | "textToTable" | "tableToText" | "pictureSize" | "pageNumbers" => {
+            dialogs_layout::open(app, name, params, parent)
+        }
         "caption" | "captionNumbering" | "newLabel" | "crossReference" | "index" | "markEntry" | "toc" | "tocOptions" | "tocStyles"
         | "tableOfFigures" | "sourceManager" | "editSource" | "createSource" => dialogs_refs::open(app, name, params, parent),
         "compare" | "combine" | "autoCorrect" => dialogs_review::open(app, name, params, parent),

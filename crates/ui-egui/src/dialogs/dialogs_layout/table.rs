@@ -329,6 +329,75 @@ impl WordForm for SplitCellsForm {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Insert Cells and Delete Cells
+
+/// The Insert Cells dialog (`insert`, from Table Layout › Rows & Columns' launcher and the table
+/// menu's Insert) or the Delete Cells dialog (Delete › Delete Cells…), as in Word (#6330): one of
+/// four ways, `shift`, for the selected cells or the caret's. Insert starts on Shift cells down,
+/// Delete on Shift cells left.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShiftCellsForm {
+    pub insert: bool,
+    pub shift: String,
+}
+
+impl ShiftCellsForm {
+    /// The dialog for the caret's table; none outside a table.
+    pub fn read(app: &WordApp, insert: bool) -> Option<ShiftCellsForm> {
+        app.session.sel.focus.path.cell()?;
+        Some(ShiftCellsForm { insert, shift: if insert { "down" } else { "left" }.to_string() })
+    }
+
+    /// The options in Word's order: the `shift` value and its label (English; the caller
+    /// translates it).
+    pub fn options(&self) -> [(&'static str, &'static str); 4] {
+        if self.insert {
+            [("right", "Shift cells right"), ("down", "Shift cells down"), ("row", "Insert entire row"), ("column", "Insert entire column")]
+        } else {
+            [("left", "Shift cells left"), ("up", "Shift cells up"), ("row", "Delete entire row"), ("column", "Delete entire column")]
+        }
+    }
+
+    /// The window title, translated.
+    pub fn title_text(&self) -> String {
+        tl!(if self.insert { "Insert Cells" } else { "Delete Cells" }).to_string()
+    }
+
+    /// The command OK runs and its parameters.
+    pub fn command(&self) -> (&'static str, Value) {
+        (if self.insert { "table.insertCells" } else { "table.deleteCells" }, json!({"shift": self.shift}))
+    }
+}
+
+impl WordForm for ShiftCellsForm {
+    fn key(&self) -> &'static str {
+        if self.insert { "insertCells" } else { "deleteCells" }
+    }
+
+    fn title(&self) -> Label {
+        self.title_text().into()
+    }
+
+    fn body(&mut self, ui: &mut Ui, _cx: &mut FormCx<'_, '_>, _asks: &mut Vec<Asks>) -> bool {
+        let (options, title) = (self.options(), self.title_text());
+        RadioGroup::new(title, Bind::bound(&mut self.shift)).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, cx| {
+                for (at, (v, l)) in options.iter().enumerate() {
+                    cx.labelled(ui, at, Label::from(tl!(*l)), SideLabel::new().layout(FieldLayout::After), Radio::new((*v).to_string()));
+                }
+            });
+        });
+        true
+    }
+
+    fn commands(&self) -> Vec<(String, Value)> {
+        let (id, params) = self.command();
+        vec![(id.to_string(), params)]
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Convert Text to Table
 
 /// The Convert Text to Table dialog's fields: the selected paragraphs (`lines`), where to

@@ -1,9 +1,10 @@
 //! Layout, Review and Mailings dialogs (#407): Line Numbers, Hyphenation (with Manual…), Language,
-//! Envelopes and Labels, Formula, Sort, Split Cells, Convert Text to Table and Convert to Text,
-//! Size and Format Page Numbers. Each is one [`WordForm`]; OK runs its command (`layout.lineNumbers`,
-//! `layout.hyphenation`, `review.language`, `table.formula`, `table.sort`, `table.split`,
-//! `table.fromText`, `table.toText`, `picture.size`, `layout.pageNumberFormat`), so scripts and
-//! agents get the same result without the dialog.
+//! Envelopes and Labels, Formula, Sort, Split Cells, Insert Cells and Delete Cells (#6330), Convert
+//! Text to Table and Convert to Text, Size and Format Page Numbers. Each is one [`WordForm`]; OK runs
+//! its command (`layout.lineNumbers`, `layout.hyphenation`, `review.language`, `table.formula`,
+//! `table.sort`, `table.split`, `table.insertCells`, `table.deleteCells`, `table.fromText`,
+//! `table.toText`, `picture.size`, `layout.pageNumberFormat`), so scripts and agents get the same
+//! result without the dialog.
 
 use std::ops::RangeInclusive;
 
@@ -28,7 +29,7 @@ pub(crate) use print::envelope_label;
 #[cfg(test)]
 use print::product_label;
 pub use print::{EnvelopeForm, LabelsForm};
-pub use table::{FORMULA_FUNCTIONS, FormulaForm, SortForm, SplitCellsForm, TableToTextForm, TextToTableForm};
+pub use table::{FORMULA_FUNCTIONS, FormulaForm, ShiftCellsForm, SortForm, SplitCellsForm, TableToTextForm, TextToTableForm};
 #[cfg(test)]
 use text::language_name;
 pub use text::{HyphenationForm, LANGUAGES, LanguageForm, LineNumbersForm, ManualForm};
@@ -64,6 +65,10 @@ pub(crate) fn open(app: &mut WordApp, name: &str, params: &Value, parent: Option
         }
         "splitCells" => {
             let form = SplitCellsForm::read(app)?;
+            open_form(app, parent, form)
+        }
+        "insertCells" | "deleteCells" => {
+            let form = ShiftCellsForm::read(app, name == "insertCells")?;
             open_form(app, parent, form)
         }
         "textToTable" => {

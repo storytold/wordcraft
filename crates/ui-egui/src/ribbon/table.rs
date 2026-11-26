@@ -199,7 +199,10 @@ pub(super) fn table_layout(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             .selected(app.canvas.table_tool == Some(TableTool::Erase))
             .show(ui);
     });
-    row.group(RibbonGroup::new("rowsColumns", tl!("Rows & Columns").to_string(), IconId::new("insertAbove").into()), |ui| {
+    // The launcher opens Insert Cells, as in Word.
+    let rows_columns = RibbonGroup::new("rowsColumns", tl!("Rows & Columns").to_string(), IconId::new("insertAbove").into())
+        .launcher(CommandRef::new("table.insertCells"));
+    row.group(rows_columns, |ui| {
         let face = Button::new(tl!("Delete").to_string()).icon(IconId::new("deleteTable")).arrangement(Arrangement::Stacked);
         let _ = menu_button(ui, face, tl!("Delete").to_string(), Some("table.deleteTable"), |ui, _| {
             for (label, id) in [

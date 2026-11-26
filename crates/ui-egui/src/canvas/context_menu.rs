@@ -210,6 +210,7 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
             item(ui, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
             item(ui, "Insert Rows Above", "table.insertRowAbove", json!({}));
             item(ui, "Insert Rows Below", "table.insertRowBelow", json!({}));
+            item(ui, "Insert Cells…", "table.insertCells", json!({}));
         });
         // Every Delete is there whatever is selected, as on Word's Delete button: with the caret
         // in a cell, Delete Table is how the table goes (#1198).

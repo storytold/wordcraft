@@ -825,6 +825,30 @@ fn a_right_click_in_a_cell_deletes_the_table() {
     assert_eq!(h.state().session.undo_depth(), depth + 1);
 }
 
+/// #6330: the table menu's Insert › Insert Cells… and Delete › Delete Cells open Word's
+/// dialogs instead of changing the table at once; Cancel leaves the table and OK runs the
+/// option shown (Delete starts on Shift cells left).
+#[test]
+fn the_table_menu_opens_insert_cells_and_delete_cells() {
+    let (mut h, at) = cell_target();
+    let before = h.state().session.doc.clone();
+    for (path, key, button) in [(["Insert", "Insert Cells…"], "insertCells", "Cancel"), (["Delete", "Delete Cells"], "deleteCells", "OK")] {
+        right_click(&mut h, at);
+        pick(&mut h, &path);
+        let open = h.state().dialog_host.open_dialogs();
+        assert!(open.iter().any(|d| d.key.as_deref() == Some(key)), "{key} is open");
+        assert!(h.state().session.doc == before, "{key}: the table changed before OK");
+        h.get_by_label(button).click();
+        steps(&mut h, 3);
+        assert!(h.state().dialog_host.open_dialogs().is_empty(), "{key}: {button} closes the dialog");
+    }
+    let rows = |h: &H| h.state().session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows.iter().map(|r| r.cells.len()).collect::<Vec<_>>();
+    let was: Vec<usize> = before.body.iter().find_map(|b| b.as_table()).unwrap().rows.iter().map(|r| r.cells.len()).collect();
+    let mut want = was.clone();
+    want[1] -= 1;
+    assert_eq!(rows(&h), want, "OK deleted the cell, shifting its row left");
+}
+
 /// With a column's cells selected, a right-click on one of them keeps them: the menu is a
 /// column's (Merge Cells, Distribute) and its Text Direction turns just the column, in one
 /// undo step; one on a cell beside them drops them, though that cell lies between the
