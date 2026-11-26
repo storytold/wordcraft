@@ -164,6 +164,31 @@ fn undo_list_row_returns_focus_to_the_document() {
     );
 }
 
+/// #1903: Cancel closes the undo list popover without undoing any steps.
+#[test]
+fn undo_list_cancel_closes_without_undoing() {
+    use egui::accesskit::Role;
+    let mut a = new_app();
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    let before: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+    assert!(!before.is_empty());
+    let text_before = a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).to_string();
+
+    let mut h = harness(a);
+    h.get_by_label("Undo History").click();
+    crate::test_harness::frames(&mut h, 3);
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 1, "one row for typing");
+
+    let cancel = h.get_by_role_and_label(Role::Button, "Cancel");
+    cancel.click();
+    crate::test_harness::frames(&mut h, 3);
+
+    let after: Vec<String> = h.state().session.undo_history().into_iter().map(str::to_string).collect();
+    assert_eq!(after, before, "nothing undone");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text_before, "document text unchanged");
+    assert_eq!(h.query_all_by_role(Role::ListBoxOption).count(), 0, "Cancel closes the list");
+}
+
 /// #1975: the zoom percentage gains and loses digits (9% → 100% → 500%); the controls to its
 /// left must not shift with it.
 #[test]
