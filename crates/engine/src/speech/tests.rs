@@ -102,6 +102,7 @@ fn tidy_matches_replacing_until_nothing_changes() {
 /// Nested empty brackets are removed in one pass: 40,000 pairs took seconds when each pass
 /// removed one level (#3680).
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn tidy_is_linear_on_nested_brackets() {
     let n = 40_000;
     let started = std::time::Instant::now();

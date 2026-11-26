@@ -1,7 +1,19 @@
 use super::{
     Block, CharProps, CmdError, CmdResult, Counters, FieldCode, InlineObject, LevelSuffix, NumFormat, OBJ, Paragraph, Path, Pos, Selection, Session,
-    StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, sel_result,
+    StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, page_at, page_formats, page_text, sel_result,
 };
+
+/// A table-of-contents title is a heading, not document body: longer titles are rejected
+/// instead of laying out megabytes of text (#3720).
+pub(super) const MAX_TOC_TITLE: usize = 1024;
+
+fn checked_title(v: &Value) -> Result<Option<&str>, CmdError> {
+    let Some(title) = p::str(v, "title") else { return Ok(None) };
+    if title.chars().count() > MAX_TOC_TITLE {
+        return Err(CmdError::Params(format!("`title` is longer than {MAX_TOC_TITLE} characters")));
+    }
+    Ok(Some(title))
+}
 
 /// A level range such as `1-3` (or one level, `2`), clamped to 1–9.
 pub fn level_range(s: &str) -> Option<(u8, u8)> {
@@ -382,6 +394,7 @@ pub(super) fn cached_toc_tabs(s: &Session) -> Vec<(String, Vec<TabStop>)> {
 }
 
 pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
+    let title = checked_title(v)?.unwrap_or("Contents").to_string();
     let tabs = cached_toc_tabs(s);
     range_toc_to_field(s)?;
     let replace = v.as_object().is_some_and(|m| !m.is_empty());
@@ -410,7 +423,6 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
         }
         None => delete_selection(s)?,
     };
-    let title = p::str(v, "title").unwrap_or("Contents").to_string();
     if at.story != StoryRef::Body || at.path.depth() > 0 {
         return Err(CmdError::Failed("a table of contents goes in the main text".into()));
     }
@@ -440,6 +452,7 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
 /// (`title_above_break`): the field takes `v`'s settings, the title `v`'s `title` if one is given
 /// (otherwise it is kept, as Word's Insert Table of Contents keeps it), and the entries are rebuilt.
 fn replace_toc_above_break(s: &mut Session, v: &Value, start: usize, tabs: &[(String, Vec<TabStop>)]) -> Result<(), CmdError> {
+    let new_title = checked_title(v)?;
     let instr = toc_instr(v);
     let field = s.doc.para_mut(StoryRef::Body, &Path::top(start))?;
     for o in &mut field.objects {
@@ -453,7 +466,7 @@ fn replace_toc_above_break(s: &mut Session, v: &Value, start: usize, tabs: &[(St
         }
     }
     field.touch();
-    if let (Some(title), Some(i)) = (p::str(v, "title"), start.checked_sub(1)) {
+    if let (Some(title), Some(i)) = (new_title, start.checked_sub(1)) {
         let old = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
         let mut head = Paragraph::with_text(title, old.props_of_char(0).clone());
         head.props = old.props.clone();
@@ -562,6 +575,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     };
     let no_pages = f.has('n').then(|| f.arg('n').and_then(level_range).unwrap_or((1, 9)));
     let sep = f.arg('p').map(str::to_string).unwrap_or_else(|| "\t".into());
+    let formats = page_formats(s);
     for pass in 0..2 {
         // Pass 1 lays out with the entries in place, so headings below the TOC sit `entries.len()`
         // blocks further down and their pages account for the TOC's own length.
@@ -581,8 +595,8 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             {
                 *top = top.saturating_add(u32::try_from(shift).unwrap_or(u32::MAX));
             }
-            let page =
-                l.caret(&Pos { story: StoryRef::Body, path: target, off: e.lead }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
+            let page = page_at(&l, &formats, &Pos { story: StoryRef::Body, path: target, off: e.lead })
+                .map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt));
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let link = links.get(k).cloned().flatten();
             // With a bookmark to point at, the page number is a `PAGEREF` field, as Word writes
@@ -596,7 +610,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             let props = CharProps { link, ..Default::default() };
             let mut para = Paragraph::with_text(&text, props.clone()).styled(&format!("TOC{}", e.level + 1));
             if let Some(instr) = pageref {
-                let field = InlineObject::Field { instr, result: page.to_string(), locked: false, dirty: false, code: false, form: String::new() };
+                let field = InlineObject::Field { instr, result: page.clone(), locked: false, dirty: false, code: false, form: String::new() };
                 para.insert_object(para.len(), field, &props)?;
             }
             para.mark = CharProps::default();
