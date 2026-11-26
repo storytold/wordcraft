@@ -263,6 +263,148 @@ fn text_box_pasted_into_another_document_brings_its_text() {
     assert_eq!(dst2.plain_text(StoryRef::Part(n2)), "From the source");
 }
 
+/// A comment saying `text` on `a..b` of the paragraph at `at` (offsets before its anchors go in).
+fn comment(d: &mut Document, at: &Pos, a: usize, b: usize, text: &str) -> u32 {
+    let id = d.comments.keys().next_back().map_or(0, |k| k + 1);
+    let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
+    d.comments.insert(id, crate::Comment { part, ..Default::default() });
+    d.insert_object(&Pos { off: b, ..at.clone() }, InlineObject::CommentEnd { id }, &CharProps::default()).unwrap();
+    d.insert_object(&Pos { off: a, ..at.clone() }, InlineObject::CommentStart { id }, &CharProps::default()).unwrap();
+    id
+}
+
+/// The text of each comment anchored in the paragraph at `at`, in anchor order.
+fn anchored(d: &Document, at: &Pos) -> Vec<String> {
+    let p = d.para_at(at).unwrap();
+    let text = |id: &u32| d.comments.get(id).map(|c| d.plain_text(StoryRef::Part(c.part))).unwrap_or_else(|| format!("none {id}"));
+    p.objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::CommentStart { id } => Some(format!("start {}", text(id))),
+            InlineObject::CommentEnd { id } => Some(format!("end {}", text(id))),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn comment_in_a_text_box_pasted_into_another_document_comes_along() {
+    // Review of #6096: the box's new story keeps its anchors, pointing at the comment the paste
+    // brings, never at the target's own comment of the same id.
+    let mut src = doc(&["x"]);
+    let id = text_box(&mut src, &Pos::body(0, 1), "In the box");
+    let inside = Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    comment(&mut src, &inside, 3, 6, "On the box");
+    let f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3));
+    for (f, what) in [(f, "a copy"), (src.body_fragment(), "the whole body")] {
+        let mut dst = doc(&["target"]);
+        comment(&mut dst, &Pos::body(0, 0), 0, 6, "Own");
+        dst.insert_fragment(&Pos::body(0, 8), &f).unwrap();
+        let [Some(new)] = boxes_in(&dst, &Path::top(0))[..] else { panic!("{what}") };
+        let story = Pos { story: StoryRef::Part(new), path: Path::top(0), off: 0 };
+        assert_eq!(anchored(&dst, &story), ["start On the box", "end On the box"], "{what}");
+        assert_eq!(anchored(&dst, &Pos::body(0, 0)), ["start Own", "end Own"], "{what}");
+        assert_eq!(dst.comments.len(), 2, "{what}");
+    }
+    // The source is left as it was.
+    assert_eq!(anchored(&src, &inside), ["start On the box", "end On the box"]);
+}
+
+#[test]
+fn whole_body_pasted_into_another_document_brings_its_comments() {
+    // Review of #6096: Insert > Text from File's fragment carries the body's comments too.
+    let mut src = doc(&["Alpha beta"]);
+    comment(&mut src, &Pos::body(0, 0), 6, 10, "Theirs");
+    let mut dst = doc(&["t"]);
+    comment(&mut dst, &Pos::body(0, 0), 0, 1, "Own");
+    dst.insert_fragment(&Pos::body(0, 7), &src.body_fragment()).unwrap();
+    assert_eq!(anchored(&dst, &Pos::body(0, 0)), ["start Own", "end Own", "start Theirs", "end Theirs"]);
+}
+
+#[test]
+fn paste_at_a_bad_offset_adds_no_comments() {
+    // Review of #6096: the offset is checked before the comments come, not after.
+    let mut src = doc(&["Alpha beta"]);
+    comment(&mut src, &Pos::body(0, 0), 6, 10, "Theirs");
+    text_box(&mut src, &Pos::body(0, 0), "Boxed");
+    let mut f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 19));
+    assert_eq!((f.comments.len(), f.parts.len()), (1, 1));
+    // Its media are checked too: one new here, one under a key the target already uses.
+    f.media.insert("image1.png".into(), Arc::new(vec![2]));
+    f.media.insert("image2.png".into(), Arc::new(vec![2]));
+    let mut dst = doc(&["\u{e9}t"]);
+    dst.media.insert("image2.png".into(), Arc::new(vec![1]));
+    let parts = dst.parts.len();
+    for off in [1, 99] {
+        assert!(matches!(dst.insert_fragment(&Pos::body(0, off), &f), Err(DocError::BadOffset(_))), "{off}");
+        assert!(dst.comments.is_empty(), "{off}");
+        assert_eq!(dst.parts.len(), parts, "{off}");
+        assert_eq!(dst.media.keys().collect::<Vec<_>>(), ["image2.png"], "{off}");
+    }
+}
+
+#[test]
+fn a_box_in_another_documents_comment_never_shows_a_story_of_this_one() {
+    // Review of #6096: the comment's box has no story in the fragment, and the target's text box
+    // of that id is unrelated: the copy in the comment gets none.
+    let mut dst = doc(&["t"]);
+    let own = dst.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Mine", CharProps::default()))]);
+    let mut text = Paragraph::with_text("Theirs", CharProps::default());
+    text.insert_object(0, box_shape(Some(own)), &CharProps::default()).unwrap();
+    let story = Part { kind: PartKind::Comment, blocks: vec![para_block(text)], ..Default::default() };
+    let mut p = Paragraph::with_text("ab", CharProps::default());
+    p.insert_object(2, InlineObject::CommentEnd { id: 7 }, &CharProps::default()).unwrap();
+    p.insert_object(0, InlineObject::CommentStart { id: 7 }, &CharProps::default()).unwrap();
+    let copied = CopiedComment { comment: crate::Comment { part: 50, ..Default::default() }, story };
+    let f = Fragment { blocks: vec![Block::Para(p)], comments: [(7, copied)].into(), ..Default::default() };
+    let parts = dst.parts.len();
+    dst.insert_fragment(&Pos::body(0, 1), &f).unwrap();
+    let [c] = dst.comments.values().collect::<Vec<_>>()[..] else { panic!("{:?}", dst.comments) };
+    let shapes: Vec<_> = dst
+        .para(StoryRef::Part(c.part), &Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Shape { story, .. } = o { Some(*story) } else { None })
+        .collect();
+    assert_eq!(shapes, [None]);
+    // Only the comment's own story is added.
+    assert_eq!(dst.parts.len(), parts + 1);
+}
+
+#[test]
+fn an_image_in_a_comment_pasted_into_another_document_comes_along() {
+    // The copy carries the comment's picture, which gets a key of its own where the target
+    // already has other media under that key.
+    let mut src = doc(&["Alpha beta"]);
+    let id = comment(&mut src, &Pos::body(0, 0), 6, 10, "Theirs");
+    src.media.insert("image1.png".into(), Arc::new(vec![2, 2, 2]));
+    let image = InlineObject::Image {
+        media: "image1.png".into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    let text = Pos { story: StoryRef::Part(src.comments[&id].part), path: Path::top(0), off: 0 };
+    src.insert_object(&text, image, &CharProps::default()).unwrap();
+    let end = src.para_at(&Pos::body(0, 0)).unwrap().len();
+    let f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, end));
+    assert!(f.media.contains_key("image1.png"));
+    let mut dst = doc(&["t"]);
+    dst.media.insert("image1.png".into(), Arc::new(vec![1, 1, 1]));
+    dst.insert_fragment(&Pos::body(0, 1), &f).unwrap();
+    let c = dst.comments.values().next().unwrap();
+    let p = dst.para(StoryRef::Part(c.part), &Path::top(0)).unwrap();
+    let key = p.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.clone()) } else { None }).unwrap();
+    assert_ne!(key, "image1.png");
+    assert_eq!(dst.media[&key].as_slice(), &[2, 2, 2]);
+    assert_eq!(dst.media["image1.png"].as_slice(), &[1, 1, 1]);
+}
+
 #[test]
 fn text_box_in_a_copied_table_gets_its_own_story() {
     let mut d = doc(&["before", "after"]);
@@ -973,7 +1115,7 @@ fn insert_fragment_remaps_conflicting_media_keys() {
         fx: Default::default(),
         ole: None,
     });
-    let frag = Fragment { blocks: vec![Block::Para(p)], parts: Default::default(), media: frag_media };
+    let frag = Fragment { blocks: vec![Block::Para(p)], media: frag_media, ..Default::default() };
 
     let pos = Pos::body(0, 0);
     d.insert_fragment(&pos, &frag).unwrap();
