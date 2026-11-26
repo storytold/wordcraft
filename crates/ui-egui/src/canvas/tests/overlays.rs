@@ -273,6 +273,38 @@ fn a_bordered_table_shows_no_gridlines() {
     assert_eq!(segs(&mut a), 6 * 4, "every edge of the six cells");
 }
 
+/// #5967: the gridlines of a table with very many rows are found in one pass over the rules, not
+/// by re-sorting every rule on a line for each cell edge on it (a long table repainted slowly).
+#[test]
+fn table_gridlines_of_a_many_row_table_are_fast() {
+    const ROWS: usize = 30_000;
+    let line = wordcraft_doc::props::Border::single(0.5);
+    let mut items = Vec::new();
+    for i in 0..ROWS {
+        let y = i as f32 * 10.0;
+        items.push(Placed::Cell {
+            rect: wordcraft_geom::Rect::new(0.0, y, 10.0, 10.0),
+            covered: false,
+            table: Default::default(),
+            row: i,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: false,
+        });
+        // One border piece per row on each side, so both vertical lines carry a rule per row.
+        for x in [0.0, 10.0] {
+            items.push(Placed::Rule { x0: x, y0: y, x1: x, y1: y + 10.0, border: line });
+        }
+    }
+    let page = Page { items, ..Default::default() };
+    let start = std::time::Instant::now();
+    let segs = gridline_segments(&page, true, None);
+    // Both sides are covered; the top and bottom of every cell are not.
+    assert_eq!(segs.len(), 2 * ROWS);
+    assert!(segs.iter().all(|(a, b)| a.y == b.y));
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
+}
+
 /// The drawing grid the page shows starts at the text area's top left, stays inside it, spaces
 /// its lines by the settings the same both ways or differently across and down, and falls back
 /// to the spec's 1/8 inch for a missing spacing.
