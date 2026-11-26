@@ -116,7 +116,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let (a, b) = (old.get(i), new.get(j));
                 // The revised block, with its formatting changes tracked.
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
-                    if !plain_revised && opts.formatting && section_presence_differs(pa, pb) {
+                    if section_incompatible(pa, pb, &opts, plain_revised) {
                         if let Some(x) = a {
                             out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
                             changes += 1;
@@ -161,7 +161,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let inss = run - dels;
                 let old_slice = old.get(i..i + dels).unwrap_or_default();
                 let new_slice = new.get(j..j + inss).unwrap_or_default();
-                let pairs = align_block_run(old_slice, new_slice, &opts, &mut align_budget);
+                let pairs = align_block_run(old_slice, new_slice, &opts, plain_revised, &mut align_budget);
                 changes += emit_run_pairs(&s.doc, &pairs, old_slice, new_slice, &mut ctx, &mut out);
                 i += dels;
                 j += inss;
@@ -295,7 +295,7 @@ fn emit_run_pairs(
         match pair {
             RunPair::Diff(u, v) => {
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (old_slice.get(u).map(|x| &**x), new_slice.get(v).map(|x| &**x)) {
-                    if !ctx.plain_revised && ctx.opts.formatting && section_presence_differs(pa, pb) {
+                    if section_incompatible(pa, pb, ctx.opts, ctx.plain_revised) {
                         if let Some(x) = old_slice.get(u) {
                             out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), 0)));
                             changes += 1;
@@ -542,11 +542,18 @@ pub(super) fn precompute_blocks<'a>(blocks: &'a [Arc<Block>], keys: &'a [Option<
 ///
 /// Pairs paragraph blocks at matching indices as `RunPair::Diff`, and emits any non-paragraph
 /// blocks (such as tables) or excess blocks as deletions and insertions.
-fn positional_fallback(n: usize, m: usize, old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>]) -> Vec<RunPair> {
+fn positional_fallback(
+    n: usize,
+    m: usize,
+    old_blocks: &[Arc<Block>],
+    new_blocks: &[Arc<Block>],
+    opts: &CompareOptions,
+    plain_revised: bool,
+) -> Vec<RunPair> {
     let mut pairs = Vec::with_capacity(n.max(m));
     for x in 0..n.max(m) {
         match (old_blocks.get(x), new_blocks.get(x)) {
-            (Some(a), Some(b)) if matches!((&**a, &**b), (Block::Para(_), Block::Para(_))) => {
+            (Some(a), Some(b)) if matches!((&**a, &**b), (Block::Para(pa), Block::Para(pb)) if !section_incompatible(pa, pb, opts, plain_revised)) => {
                 pairs.push(RunPair::Diff(x, x));
             }
             _ => {
@@ -568,18 +575,25 @@ fn positional_fallback(n: usize, m: usize, old_blocks: &[Arc<Block>], new_blocks
 /// so that edited paragraphs retain their partners rather than collapsing into wholesale replacements.
 ///
 /// Fallbacks and special cases:
-/// - Single-pair run (`n == 1 && m == 1`): If both are paragraphs, they are directly paired as
-///   `RunPair::Diff(0, 0)` without running alignment; non-paragraph blocks emit `Del(0)` and `Ins(0)`.
+/// - Single-pair run (`n == 1 && m == 1`): If both are section-compatible paragraphs, they are
+///   directly paired as `RunPair::Diff(0, 0)` without running alignment; non-paragraph or
+///   section-incompatible blocks emit `Del(0)` and `Ins(0)`.
 /// - Oversize run (`n * m > MAX_RUN_ALIGN_CELLS`) or exhausted work budget: Falls back to 1-to-1
 ///   positional pairing via [`positional_fallback`], bounding CPU time on untrusted input at the
 ///   cost of reintroducing mispairing risk for very large edit runs.
 /// - Zero-similarity equal-count run (`dp == 0 && n == m`): When no paragraph pair meets
-///   [`SIMILARITY_THRESHOLD`] and both sides have equal block counts, paragraph blocks are paired
-///   positionally so that whole-run rewrites preserve paragraph slots and accept/reject cleanly.
+///   [`SIMILARITY_THRESHOLD`] and both sides have equal block counts, compatible paragraph blocks are
+///   paired positionally so that whole-run rewrites preserve paragraph slots and accept/reject cleanly.
 ///   When counts differ, unpartnered blocks are emitted as independent deletions and insertions.
 /// - Non-paragraph blocks (such as tables): Do not participate in similarity scoring and are
 ///   emitted as deletions and insertions.
-pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &CompareOptions, budget: &mut u64) -> Vec<RunPair> {
+pub(super) fn align_block_run(
+    old_blocks: &[Arc<Block>],
+    new_blocks: &[Arc<Block>],
+    opts: &CompareOptions,
+    plain_revised: bool,
+    budget: &mut u64,
+) -> Vec<RunPair> {
     let n = old_blocks.len();
     let m = new_blocks.len();
     if n == 0 {
@@ -590,17 +604,19 @@ pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block
     }
     if n == 1 && m == 1 {
         return match (old_blocks.first().map(|x| &**x), new_blocks.first().map(|x| &**x)) {
-            (Some(Block::Para(_)), Some(Block::Para(_))) => vec![RunPair::Diff(0, 0)],
+            (Some(Block::Para(pa)), Some(Block::Para(pb))) if !section_incompatible(pa, pb, opts, plain_revised) => {
+                vec![RunPair::Diff(0, 0)]
+            }
             _ => vec![RunPair::Del(0), RunPair::Ins(0)],
         };
     }
     if n.saturating_mul(m) > MAX_RUN_ALIGN_CELLS {
-        return positional_fallback(n, m, old_blocks, new_blocks);
+        return positional_fallback(n, m, old_blocks, new_blocks, opts, plain_revised);
     }
 
-    let scores = match compute_align_scores(old_blocks, new_blocks, opts, budget) {
+    let scores = match compute_align_scores(old_blocks, new_blocks, opts, plain_revised, budget) {
         Some(s) => s,
-        None => return positional_fallback(n, m, old_blocks, new_blocks),
+        None => return positional_fallback(n, m, old_blocks, new_blocks, opts, plain_revised),
     };
 
     let stride = m.saturating_add(1);
@@ -628,7 +644,7 @@ pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block
     // wholesale replacements still preserve paragraph slots and reject cleanly.
     let final_dp = dp.get(n.saturating_mul(stride).saturating_add(m)).copied().unwrap_or(0);
     if final_dp == 0 && n == m {
-        return positional_fallback(n, m, old_blocks, new_blocks);
+        return positional_fallback(n, m, old_blocks, new_blocks, opts, plain_revised);
     }
 
     backtrack_align_dp(&scores, &dp, n, m)
@@ -637,7 +653,8 @@ pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block
 /// Computes pairwise similarity scores for all block pairs in an edit run.
 ///
 /// Stores scores in a flat `Vec<u32>` of length `n * m`. Pairs scoring below
-/// `SIMILARITY_THRESHOLD` or involving non-paragraph blocks are stored as zero.
+/// `SIMILARITY_THRESHOLD`, involving non-paragraph blocks, or differing in section
+/// presence when formatting comparison is enabled on rich documents are stored as zero.
 /// Paragraph keys and token samples are computed lazily on first use and cached for
 /// reuse across candidate pairs so unscored paragraphs never allocate if the budget
 /// is exhausted early.
@@ -645,7 +662,13 @@ pub(super) fn align_block_run(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block
 /// Returns `None` if the total similarity computation exceeds the available `budget`,
 /// signaling that alignment should fall back to 1-to-1 positional pairing.
 /// Runs in worst-case `O(n * m)` time and space.
-fn compute_align_scores(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], opts: &CompareOptions, budget: &mut u64) -> Option<Vec<u32>> {
+fn compute_align_scores(
+    old_blocks: &[Arc<Block>],
+    new_blocks: &[Arc<Block>],
+    opts: &CompareOptions,
+    plain_revised: bool,
+    budget: &mut u64,
+) -> Option<Vec<u32>> {
     let n = old_blocks.len();
     let m = new_blocks.len();
     let total_cells = n.saturating_mul(m);
@@ -658,12 +681,19 @@ fn compute_align_scores(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], op
         let Block::Para(pa) = &**old_block else {
             continue;
         };
-        let key_a = opts.key(&pa.plain_text());
-        let a = precompute_block(old_block, Some(&key_a));
+        let key_a_cell = std::cell::OnceCell::new();
+        let mut a_cache: Option<PrecomputedBlock<'_>> = None;
         for (v, new_block) in new_blocks.iter().enumerate() {
             let Block::Para(pb) = &**new_block else {
                 continue;
             };
+            if section_incompatible(pa, pb, opts, plain_revised) {
+                continue;
+            }
+            let a = a_cache.get_or_insert_with(|| {
+                let key_a = key_a_cell.get_or_init(|| opts.key(&pa.plain_text())).as_str();
+                precompute_block(old_block, Some(key_a))
+            });
             let Some(new_slot) = new_cache.get_mut(v) else {
                 continue;
             };
@@ -671,7 +701,7 @@ fn compute_align_scores(old_blocks: &[Arc<Block>], new_blocks: &[Arc<Block>], op
                 let key = new_keys.get(v).map(|cell| cell.get_or_init(|| opts.key(&pb.plain_text())).as_str());
                 precompute_block(new_block, key)
             });
-            let score = para_similarity(&a, b, opts, &mut dp_buf, budget)?;
+            let score = para_similarity(a, b, opts, &mut dp_buf, budget)?;
             if let Some(cell) = scores.get_mut(u.saturating_mul(m).saturating_add(v)) {
                 *cell = score;
             }
@@ -1389,13 +1419,13 @@ fn put_ins(p: &mut Paragraph, t: Option<&Tok<'_>>, ctx: &DiffCtx<'_>) {
     }
 }
 
-/// Returns `true` when only one of the paragraphs ends a section.
+/// Returns `true` when formatting-aware comparison sees differing section presence on `a` and `b`.
 ///
 /// A formatting revision on [`wordcraft_doc::SectionProps`] cannot represent an absent section,
-/// so these pairs are emitted as whole-block replacements instead: accepting keeps the revised
-/// presence and rejecting restores the original one.
-fn section_presence_differs(a: &Paragraph, b: &Paragraph) -> bool {
-    a.section.is_some() != b.section.is_some()
+/// so these pairs cannot be diffed in place and are emitted as whole-block replacements instead:
+/// accepting keeps the revised presence and rejecting restores the original one.
+fn section_incompatible(a: &Paragraph, b: &Paragraph, opts: &CompareOptions, plain_revised: bool) -> bool {
+    !plain_revised && opts.formatting && a.section.is_some() != b.section.is_some()
 }
 
 /// Strips non-formatting section attributes for formatting comparison.

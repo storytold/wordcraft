@@ -1096,7 +1096,7 @@ fn align_block_run_oversize_and_budget_fallbacks() {
     let opts = CompareOptions::default();
     let mut budget = 50_000_000u64;
 
-    let pairs = align_block_run(&old_blocks, &new_blocks, &opts, &mut budget);
+    let pairs = align_block_run(&old_blocks, &new_blocks, &opts, false, &mut budget);
 
     assert_eq!(pairs.len(), 1002);
     assert_eq!(pairs[0], RunPair::Diff(0, 0));
@@ -1114,7 +1114,7 @@ fn align_block_run_oversize_and_budget_fallbacks() {
         Arc::new(Block::Para(Paragraph::with_text("Second paragraph revised.", CharProps::default()))),
     ];
     let mut exhausted_budget = 0u64;
-    let pairs_budget = align_block_run(&old_small, &new_small, &opts, &mut exhausted_budget);
+    let pairs_budget = align_block_run(&old_small, &new_small, &opts, false, &mut exhausted_budget);
     assert_eq!(pairs_budget, vec![RunPair::Diff(0, 0), RunPair::Diff(1, 1)]);
 }
 
@@ -1760,6 +1760,71 @@ fn compare_removes_pre_existing_revisions_on_section_replacement_blocks() {
     s.run("review.acceptAll", &json!({})).unwrap();
     let text = s.doc.body[0].as_para().unwrap().plain_text();
     assert_eq!(text, "Replacement text.", "acceptAll must preserve the replacement paragraph text without deleting runs");
+}
+
+/// #5861: Verifies that during unequal-count alignment with formatting enabled, a section-ending
+/// original paragraph pairs with a section-ending edited paragraph rather than a newly added
+/// sectionless paragraph that shares more words, while plain-text comparison keeps text-only scoring.
+#[test]
+fn compare_prefers_section_compatible_match_over_higher_scoring_sectionless_addition() {
+    let mut orig = Document::from_text("Alpha beta gamma delta epsilon zeta.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        p.section = Some(Box::new(wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() }));
+    }
+
+    // rev[0] is a section-ending edit (3/6 matching words -> score 500 >= SIMILARITY_THRESHOLD).
+    // rev[1] is a newly added sectionless paragraph with more matching words (5/6 -> score 833).
+    let mut rev = Document::from_text("Alpha beta gamma theta iota kappa.\nAlpha beta gamma delta epsilon eta.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        p.section = Some(Box::new(wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() }));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-compete-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    // Rich comparison with formatting=true must pair orig[0] with rev[0] (within-paragraph diff)
+    // and insert rev[1] as a whole paragraph, instead of matching orig[0] to rev[1] and splitting both.
+    let mut s = Session::new(orig.clone());
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(s.doc.body.len(), 3, "section-compatible match must produce 1 diffed para, 1 inserted para, and 1 anchor");
+    let p0 = s.doc.body[0].as_para().unwrap();
+    let unmarked0: String = p0.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p0.text[r].to_string()).collect();
+    assert!(unmarked0.contains("Alpha beta gamma"), "section-ending match must retain unmarked shared text; got: {unmarked0}");
+    assert!(p0.section.is_some(), "paired paragraph must keep section break");
+
+    let p1 = s.doc.body[1].as_para().unwrap();
+    assert_eq!(p1.plain_text(), "Alpha beta gamma delta epsilon eta.");
+    assert!(p1.runs.iter().all(|r| r.props.ins.is_some()), "competing sectionless addition must be inserted whole");
+    assert!(p1.section.is_none());
+
+    let mut s_acc = Session::new(s.doc.clone());
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_acc.doc.plain_text(StoryRef::Body), rev.plain_text(StoryRef::Body));
+    assert!(s_acc.doc.body[0].as_para().unwrap().section.is_some());
+    assert!(s_acc.doc.body[1].as_para().unwrap().section.is_none());
+
+    let mut s_rej = Session::new(s.doc);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_rej.doc.plain_text(StoryRef::Body), orig.plain_text(StoryRef::Body));
+    assert!(s_rej.doc.body[0].as_para().unwrap().section.is_some());
+
+    // Plain-text comparison ignores sections, so text-only alignment still selects the higher-scoring rev[1].
+    let rev_text = rev.plain_text(StoryRef::Body);
+    let mut s_plain = Session::new(orig);
+    s_plain.run("review.compare", &json!({"text": rev_text, "formatting": true})).unwrap();
+    assert_eq!(s_plain.doc.body.len(), 3);
+    let p0_plain = s_plain.doc.body[0].as_para().unwrap();
+    assert_eq!(p0_plain.plain_text(), "Alpha beta gamma theta iota kappa.");
+    assert!(p0_plain.runs.iter().all(|r| r.props.ins.is_some()), "plain-text mode must leave rev[0] as whole insertion");
+    let p1_plain = s_plain.doc.body[1].as_para().unwrap();
+    let unmarked_plain: String =
+        p1_plain.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p1_plain.text[r].to_string()).collect();
+    assert!(
+        unmarked_plain.contains("Alpha beta gamma delta epsilon"),
+        "plain-text mode must still pair orig[0] with higher-scoring rev[1]; got: {unmarked_plain}"
+    );
 }
 
 /// #5861: Verifies that section formatting differences are tracked even when paragraph text differs
