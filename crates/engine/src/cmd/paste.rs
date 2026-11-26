@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
             .key("Mod+Alt+V")
-            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#),
+            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64, "privateClipboard"?: bool}"#),
     ]
 }
 
@@ -58,11 +58,18 @@ fn looks_like_html(t: &str) -> bool {
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
 }
 
+/// Whether the system clipboard still holds this window's copy. A front end that can check says
+/// so in `privateClipboard`; callers that cannot (an agent, the CLI) omit it, and the session's
+/// copy is used as before.
+fn owns_clipboard(v: &Value) -> bool {
+    p::bool(v, "privateClipboard").unwrap_or(true)
+}
+
 /// The source for a format, if the clipboard has it.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" => {
+        "formatted" if owns_clipboard(v) => {
             let f = s.clipboard.as_ref()?;
             // System clipboard text that isn't our own copy means someone else copied since.
             match p::str(v, "text") {
@@ -70,6 +77,7 @@ fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
                 _ => Some(String::new()),
             }
         }
+        "formatted" => None,
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
         "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty),
@@ -104,6 +112,10 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             if let Some(t) = p::str(v, k) {
                 req[k] = json!(t);
             }
+        }
+        // Keep the ownership result so the dialog's list is the same as this one.
+        if let Some(own) = p::bool(v, "privateClipboard") {
+            req["privateClipboard"] = json!(own);
         }
         // Only the newest dialog request matters; older ones would pin their payloads.
         s.ui_requests.retain(|r| r["open"] != "pasteSpecial");
@@ -265,10 +277,21 @@ pub enum Pasted {
 }
 
 /// What Paste inserts: WordCraft's own copy while the system clipboard still holds it, else
-/// another program's formatted copy (HTML, RTF), else the system clipboard's text.
+/// another program's formatted copy (HTML, RTF), else the system clipboard's text. A front end
+/// that knows another program owns the clipboard passes `privateClipboard: false`, which keeps
+/// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
+    let pasted = clipboard_content(s, v)?;
+    // Formatting Backspace carried over is for typing, not for what is pasted (#6518). An empty
+    // clipboard pastes nothing, so it stays.
+    s.forget_carried();
+    Ok(pasted)
+}
+
+fn clipboard_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
-    if let Some(f) = &s.clipboard
+    if owns_clipboard(v)
+        && let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
@@ -315,11 +338,16 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
             p.props = para.clone();
             for run in &mut p.runs {
                 let src = std::mem::replace(&mut run.props, base.clone());
-                if src.bold == Some(true) {
+                // Emphasis in either script is kept for both, as the Bold and Italic buttons set
+                // it: text pasted into a run marked `w:cs` (Thai from a WPS or Word file) is drawn
+                // with the complex-script bold and italic.
+                if src.bold == Some(true) || src.bold_cs == Some(true) {
                     run.props.bold = Some(true);
+                    run.props.bold_cs = Some(true);
                 }
-                if src.italic == Some(true) {
+                if src.italic == Some(true) || src.italic_cs == Some(true) {
                     run.props.italic = Some(true);
+                    run.props.italic_cs = Some(true);
                 }
                 if src.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None) {
                     run.props.underline = src.underline;
@@ -339,6 +367,8 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
 
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
 pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+    // The pasted text keeps its own formatting; what Backspace carried over is not for after it (#6518).
+    s.forget_carried();
     super::controls::prepare_edit(s)?;
     let at = delete_selection(s)?;
     let track = s.doc.settings.track_changes;

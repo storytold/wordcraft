@@ -149,12 +149,11 @@ fn docx_embedding(family: &str, font: Option<(&[u8], &str)>, text: &str) -> Vec<
     }
     table.push_str("</w:font></w:fonts>");
     files.push(("word/fontTable.xml".into(), table.into_bytes()));
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut zip = craft_zip::Writer::new();
     for (name, bytes) in files {
-        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut zip, &bytes).unwrap();
+        zip.add(&name, &bytes, craft_zip::Compression::Deflated).unwrap();
     }
-    zip.finish().unwrap().into_inner()
+    zip.finish().unwrap()
 }
 
 #[test]
@@ -370,6 +369,27 @@ fn missing_fonts_from_command_search_say_so_in_the_status_line() {
     let mut s = Session::new(doc_of((0..40).map(|i| para_in("x", &format!("Wordcraft Many Face {i}"))).collect()));
     s.run("font.missing", &json!({})).unwrap();
     assert!(s.status.ends_with(" and 35 more") && s.status.len() < 300, "{}", s.status);
+}
+
+/// A missing font its publisher gives away says where to get it; others don't.
+#[test]
+fn a_missing_font_its_publisher_gives_away_names_the_download_page() {
+    if wordcraft_fonts::FontDb::global().families().iter().any(|f| f.eq_ignore_ascii_case("Aptos")) {
+        return; // Installed here: not missing.
+    }
+    let mut s = Session::new(doc_of(vec![para_in("Text", "Aptos"), para_in("Text", "Wordcraft Nowhere Face")]));
+    let layout = s.layout();
+    let m = crate::cmd::font::missing_fonts(&s.doc, &layout);
+    let aptos = m.iter().find(|f| f.font == "Aptos").unwrap();
+    assert_eq!(aptos.download.map(|d| d.publisher.as_str()), Some("Microsoft"));
+    assert!(m.iter().find(|f| f.font == "Wordcraft Nowhere Face").unwrap().download.is_none());
+    let out = s.run("font.missing", &json!({})).unwrap();
+    let listed = out["missing"].as_array().unwrap();
+    let aptos = listed.iter().find(|f| f["font"] == "Aptos").unwrap();
+    assert!(aptos["download"]["url"].as_str().unwrap().starts_with("https://www.microsoft.com/"), "{aptos}");
+    assert_eq!(aptos["download"]["publisher"], "Microsoft");
+    assert_eq!(aptos["download"]["restricted"], false);
+    assert!(listed.iter().find(|f| f["font"] == "Wordcraft Nowhere Face").unwrap().get("download").is_none());
 }
 
 #[test]

@@ -5,12 +5,15 @@ use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, TextD
 use wordcraft_doc::{Pos, Table};
 
 mod autospace;
+mod balanced_tail;
 mod bidi;
 mod budget;
 mod cell_floats;
 mod complex;
 mod float_top;
 mod grid;
+mod header_legacy_float;
+mod keep_next_section;
 mod ligature;
 pub(crate) mod linear;
 mod missing_glyphs;
@@ -20,6 +23,7 @@ mod numeral;
 mod pages;
 mod styleref;
 mod table_contact;
+mod table_first_line;
 mod textbox;
 mod vertical;
 
@@ -914,6 +918,7 @@ fn long_word_beside_a_float(n: usize) -> Document {
 /// A word with no break opportunity in it: measuring the word for every line it takes scanned
 /// the whole paragraph each time, so the layout was quadratic in the word's length.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the time ratio")]
 fn a_long_unbreakable_word_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(long_word_beside_a_float, 50_000, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
@@ -922,6 +927,7 @@ fn a_long_unbreakable_word_lays_out_in_linear_time() {
 
 /// A word a megabyte long lays out in a fraction of a second: it used to take half a minute.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_megabyte_long_word_lays_out_quickly() {
     let d = long_word_beside_a_float(1_000_000);
     let t = std::time::Instant::now();
@@ -1134,6 +1140,7 @@ fn long_word_with_alternating_advances_beside_a_float(n: usize) -> Document {
 /// A word whose advances alternate in sign lays out in linear time: the measurement that asks
 /// whether it would fit the full line must not walk the word again for every line it takes.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the time ratio")]
 fn a_word_with_alternating_advances_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(long_word_with_alternating_advances_beside_a_float, 50_000, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
@@ -1141,6 +1148,7 @@ fn a_word_with_alternating_advances_lays_out_in_linear_time() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn hidden_separators_with_automatic_hyphenation_lay_out_in_linear_time() {
     crate::test_fonts();
     // "hyphenation " n times with every space hidden: one joined word of 11n letters reaches the
@@ -1173,6 +1181,7 @@ fn page_break_paragraphs(n: usize) -> Document {
 /// the section list by walking the whole body, so a document of n paragraphs paid n body-length
 /// scans: a two-megabyte file took half a minute before the first page was drawn.
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(page_break_paragraphs, 2_500, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
@@ -1180,6 +1189,7 @@ fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the measured time")]
 fn many_hidden_float_anchors_lay_out_in_linear_time() {
     crate::test_fonts();
     // n square-wrapped shapes, each anchored in its own hidden run (bold alternating, so runs do not
@@ -1421,6 +1431,93 @@ fn a_missing_roman_font_is_drawn_as_word_draws_it() {
     let cambria = wordcraft_fonts::word::resolve("Cambria", false, false).face;
     assert_eq!(face(true), cambria);
     assert_ne!(face(false), cambria);
+}
+
+#[test]
+fn a_missing_font_is_drawn_in_its_font_table_alternate() {
+    crate::test_fonts();
+    // Measured in Word 2024 and Word for Windows 16.0.20527 (#2702): a font that isn't installed is
+    // drawn in the alternate its font table names (`w:altName`), before the roman rule; an
+    // alternate that can't be drawn either leaves the family class in charge: Cambria for a roman
+    // or modern font, the generic substitutes (Calibri in Word) for a swiss one.
+    #[derive(Clone, Copy)]
+    enum Family {
+        Swiss,
+        Roman,
+        Modern,
+    }
+    let face_of = |alt: Option<&str>, family: Family| {
+        let mut d = Document::from_text("Lanterns");
+        if let Some(alt) = alt {
+            d.settings.font_alt_names = vec![("No Such Brand Font".into(), alt.into())];
+        }
+        match family {
+            Family::Roman => d.settings.roman_fonts = vec!["No Such Brand Font".into()],
+            Family::Modern => d.settings.modern_fonts = vec!["No Such Brand Font".into()],
+            Family::Swiss => {}
+        }
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.runs[0].props.font = Some("No Such Brand Font".into());
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let first = para.clusters.first().expect("a cluster");
+        para.styles[first.style as usize].face
+    };
+    let face = |alt: Option<&str>, roman: bool| face_of(alt, if roman { Family::Roman } else { Family::Swiss });
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face;
+    let (courier, times, calibri, cambria) = (resolve("Courier New"), resolve("Times New Roman"), resolve("Calibri"), resolve("Cambria"));
+    let generic = face(None, false);
+    // Serif and sans faces are bundled, so these differ on any machine.
+    assert_ne!(times, generic);
+    assert_ne!(cambria, generic);
+    // A, B: a missing font with an alternate.
+    assert_eq!(face(Some("Times New Roman"), false), times);
+    assert_eq!(face(Some("Courier New"), false), courier);
+    // go_math (docxide-pdf corpus): Museo Sans 300 → Calibri.
+    assert_eq!(face(Some("Calibri"), false), calibri);
+    // D: the alternate beats the roman rule.
+    assert_eq!(face(Some("Times New Roman"), true), times);
+    assert_eq!(face(Some("Courier New"), true), courier);
+    // E: an alternate that is missing too, with no substitutes of its own: the roman rule, or the
+    // generic substitutes for a font that isn't roman.
+    assert_eq!(face(Some("No Such Alternate"), true), cambria);
+    assert_eq!(face(Some("No Such Alternate"), false), generic);
+    // Word reads a value with a comma as one name, not a list (MS-OE376 2.1.264): no font is
+    // called that, so the roman rule or the generic substitutes draw it.
+    assert_eq!(face(Some("No Such Alternate, Times New Roman"), false), generic);
+    assert_eq!(face(Some("No Such Alternate, Times New Roman"), true), cambria);
+    // A modern font: its installed alternate draws it, a missing alternate leaves it in Cambria,
+    // and with no alternate at all it takes the generic substitutes (Calibri in Word).
+    assert_eq!(face_of(Some("Courier New"), Family::Modern), courier);
+    assert_eq!(face_of(Some("No Such Alternate"), Family::Modern), cambria);
+    assert_eq!(face_of(None, Family::Modern), generic);
+    // An alternate that names another missing font with an alternate of its own: the chain isn't
+    // followed.
+    let mut d = Document::from_text("Lanterns");
+    d.settings.font_alt_names = vec![("No Such Brand Font".into(), "No Such Alternate".into()), ("No Such Alternate".into(), "Courier New".into())];
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some("No Such Brand Font".into());
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let first = para.clusters.first().expect("a cluster");
+    assert_eq!(para.styles[first.style as usize].face, generic, "the chain isn't followed");
+}
+
+#[test]
+fn an_installed_font_ignores_its_font_table_alternate() {
+    // The alternate is only for a font that isn't there: an installed (here bundled) font keeps its
+    // own face.
+    let font = wordcraft_fonts::FALLBACK_FAMILY;
+    let mut d = Document::from_text("Lanterns");
+    d.settings.font_alt_names = vec![(font.into(), "Times New Roman".into())];
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some(font.into());
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let first = para.clusters.first().expect("a cluster");
+    let own = wordcraft_fonts::word::resolve(font, false, false).face;
+    assert_ne!(own, wordcraft_fonts::word::resolve("Times New Roman", false, false).face);
+    assert_eq!(para.styles[first.style as usize].face, own);
 }
 
 #[test]
@@ -1992,6 +2089,108 @@ fn break_only_list_has_no_label() {
             vec![(Path::top(0), label(1)), (Path::top(1), None), (Path::top(2), label(3)), (Path::top(3), label(4)), (Path::top(4), label(5)),],
             "{kind:?}"
         );
+    }
+}
+
+/// #4828: a list item deleted whole (its text and its mark) under Track Changes shows its number
+/// as deleted text, in the deletion's colour and struck through, with markup shown; without
+/// markup the number is drawn no more than the text.
+#[test]
+fn a_deleted_list_items_number_is_drawn_as_deleted_text() {
+    let mut d = Document::from_text("Intro\nChapter two\nBody");
+    d.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Delete,
+        author: "Ana".into(),
+        date: String::new(),
+        move_name: None,
+    });
+    let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 3), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    d.format_range(&Pos::body(1, 0), &Pos::body(1, 11), &|c| c.del = Some(0)).unwrap();
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
+    let l = lay(&d);
+    let draws = |markup: bool| display::page_display(&d, &l.pages[0], &display::DisplayOptions { markup, ..Default::default() });
+    let glyph_color = |items: &[display::Draw], want: &str| {
+        items.iter().find_map(|i| match i {
+            display::Draw::Glyphs { text, color, glyphs, .. } if text.contains(want) => Some((*color, glyphs.first().map_or(0.0, |g| g.1))),
+            _ => None,
+        })
+    };
+    let marked = draws(true);
+    let (number, nx) = glyph_color(&marked, "1.").expect("the number is drawn with markup");
+    let (text, _) = glyph_color(&marked, "Chapter").expect("the deleted text is drawn with markup");
+    assert_eq!(number, text, "the number takes the deletion's colour");
+    let struck = marked
+        .iter()
+        .any(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 && *x0 <= nx + 0.01 && *x1 > nx + 1.0));
+    assert!(struck, "the number is struck through");
+    // The number takes the other deletion marks as its text does.
+    let with_mark = |mark: display::DeleteMark| {
+        let mut o = display::DisplayOptions { markup: true, ..Default::default() };
+        o.revisions.delete_mark = mark;
+        display::page_display(&d, &l.pages[0], &o)
+    };
+    let caret = with_mark(display::DeleteMark::Caret);
+    assert!(glyph_color(&caret, "1.").is_none(), "a caret replaces the number");
+    assert!(caret.iter().any(|i| matches!(i, display::Draw::Line { x1, .. } if (*x1 - nx).abs() < 0.01)), "the caret is where the number was");
+    let bold = with_mark(display::DeleteMark::Bold);
+    assert!(bold.iter().any(|i| matches!(i, display::Draw::Glyphs { text, synth_bold: true, .. } if text.contains("1."))));
+    let hashed = with_mark(display::DeleteMark::Hash);
+    let ids = |items: &[display::Draw], want: &str| {
+        items.iter().find_map(|i| match i {
+            display::Draw::Glyphs { text, glyphs, .. } if text.contains(want) => Some(glyphs.iter().map(|g| g.0).collect::<Vec<_>>()),
+            _ => None,
+        })
+    };
+    let (numbers, hashes) = (ids(&marked, "1.").unwrap(), ids(&hashed, "1.").unwrap());
+    assert!(hashes.len() == numbers.len() && hashes.windows(2).all(|w| w[0] == w[1]) && hashes != numbers, "each character shows as #");
+    let plain_label = |items: &[display::Draw]| {
+        items.iter().any(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 && *x0 <= nx + 0.01 && *x1 > nx + 1.0))
+    };
+    assert!(!plain_label(&with_mark(display::DeleteMark::ColorOnly)), "colour only: no line through or under the number");
+    // Moved-away text marked (none) is plain, its number too.
+    let mut moved = d.clone();
+    if let Some(r) = moved.revisions.get_mut(0) {
+        r.move_name = Some("move1".into());
+    }
+    let mut o = display::DisplayOptions { markup: true, ..Default::default() };
+    o.revisions.move_from_mark = display::DeleteMark::None;
+    let shown = display::page_display(&moved, &l.pages[0], &o);
+    let (moved_number, _) = glyph_color(&shown, "1.").expect("the moved number is drawn");
+    let (moved_text, _) = glyph_color(&shown, "Chapter").expect("the moved text is drawn");
+    assert_eq!(moved_number, moved_text, "plain, like its text");
+    assert!(!plain_label(&shown));
+    // With markup but deletions hidden in Track Changes Options, the number isn't drawn either.
+    assert!(glyph_color(&with_mark(display::DeleteMark::Hidden), "1.").is_none(), "deletions marked hidden");
+    let mut o = display::DisplayOptions { markup: true, ..Default::default() };
+    o.revisions.insertions_deletions = false;
+    assert!(glyph_color(&display::page_display(&d, &l.pages[0], &o), "1.").is_none(), "insertions and deletions not shown");
+    // Without markup neither the text nor its number is drawn.
+    let plain = draws(false);
+    assert!(glyph_color(&plain, "Chapter").is_none() && glyph_color(&plain, "1.").is_none());
+    // A number whose paragraph mark isn't deleted is drawn as before.
+    let mut kept = Document::from_text("Intro\nChapter two\nBody");
+    let id = std::sync::Arc::make_mut(&mut kept.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    kept.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 3), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    let kl = lay(&kept);
+    let plain = display::page_display(&kept, &kl.pages[0], &display::DisplayOptions { markup: false, ..Default::default() });
+    assert!(glyph_color(&plain, "1.").is_some());
+    // #4828 review: only the paragraph mark deleted (Delete at the end of the item): the text
+    // stays, and so does its number, plain, with markup and without (and in print, where markup
+    // is off).
+    let mut joined = kept.clone();
+    joined.revisions = d.revisions.clone();
+    joined.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
+    let jl = lay(&joined);
+    for markup in [false, true] {
+        let shown = display::page_display(&joined, &jl.pages[0], &display::DisplayOptions { markup, ..Default::default() });
+        let (number, jx) = glyph_color(&shown, "1.").unwrap_or_else(|| panic!("markup {markup}: the number stays"));
+        let (text, _) = glyph_color(&shown, "Chapter").unwrap_or_else(|| panic!("markup {markup}: the text stays"));
+        assert_eq!(number, text, "markup {markup}: in the text's colour");
+        let struck = shown
+            .iter()
+            .any(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 && *x0 <= jx + 0.01 && *x1 > jx + 1.0));
+        assert!(!struck, "markup {markup}: not struck through");
     }
 }
 
@@ -2931,8 +3130,8 @@ fn cache_reuses_unchanged_paragraphs() {
 }
 
 /// The paragraph after a heading kept with it is measured before the heading is placed. That
-/// layout goes into the cache under the key it is placed with, so it is laid out once, and the
-/// pages are those of the uncached measurement (proofing on measures without the cache).
+/// layout goes into the cache under the key it is placed with, so it is laid out once, with
+/// proofing off or on, and proofing moves nothing.
 #[test]
 fn kept_headings_measure_the_next_paragraph_through_the_cache() {
     let mut d = Document::new();
@@ -2949,7 +3148,10 @@ fn kept_headings_measure_the_next_paragraph_through_the_cache() {
     assert!(l.pages.len() > 2, "{}", l.pages.len());
     assert_eq!(c.len(), d.body.len(), "one layout per paragraph");
     assert_eq!(c.misses, d.body.len() as u64, "each paragraph laid out once");
-    let proofed = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..Default::default() });
+    let mut c = LayoutCache::new();
+    let proofed = layout(&d, &mut c, &LayoutOptions { proofing: true, ..Default::default() });
+    assert_eq!(c.misses, d.body.len() as u64, "each paragraph laid out once with proofing on");
+    assert!(c.hits >= 40, "each kept heading should reuse its following paragraph layout with proofing on; got {} cache hits", c.hits);
     let starts = |l: &DocLayout| (0..d.body.len()).map(|i| l.caret(&Pos::body(i, 0)).map(|c| (c.page, c.top.to_bits()))).collect::<Vec<_>>();
     assert_eq!(starts(&l), starts(&proofed));
 }
@@ -3422,7 +3624,51 @@ fn character_border_draws_one_box_around_run() {
     assert_eq!(horiz.len(), 2);
     assert_eq!(vert.len(), 2);
     assert!(horiz.iter().any(|h| (h.1 - top).abs() < 0.01) && horiz.iter().any(|h| (h.1 - bottom).abs() < 0.01), "{lines:?}");
-    assert!(horiz.iter().all(|h| (h.0 - gx0).abs() < 0.01 && (h.2 - gx1).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+    // Top and bottom run on over half the 0.5 pt side lines, closing the corners.
+    assert!(horiz.iter().all(|h| (h.0 - (gx0 - 0.25)).abs() < 0.01 && (h.2 - (gx1 + 0.25)).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+}
+
+#[test]
+fn words_underline_draws_one_line_per_word() {
+    let mut d = Document::from_text("ab cd");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Words)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+    // A space condensed to no width still parts the words.
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.spacing = Some(-4.0)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+    // A bookmark between two letters doesn't part them.
+    let mut d = Document::from_text("ab cd");
+    d.insert_object(&Pos::body(0, 1), InlineObject::BookmarkStart { name: "x".into() }, &Default::default()).unwrap();
+    let end = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().text.len();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, end), &|c| c.underline = Some(wordcraft_doc::props::Underline::Words)).unwrap();
+    assert_eq!(border_lines(&d).len(), 2, "{:?}", border_lines(&d));
+}
+
+#[test]
+fn paragraph_border_lines_meet_in_square_corners() {
+    use wordcraft_doc::props::{Border, Borders};
+    let mut d = Document::from_text("Boxed");
+    let (thick, thin) = (Some(Border::single(3.0)), Some(Border::single(1.0)));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { top: thick, left: thin, bottom: thick, ..Borders::default() });
+    let lines = border_lines(&d);
+    let [left] = lines.iter().filter(|l| l.0 == l.2).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    let horiz: Vec<_> = lines.iter().filter(|l| l.1 == l.3).collect();
+    assert_eq!(horiz.len(), 2, "{lines:?}");
+    // Word: the 3 pt lines run on over half the 1 pt left line, and end half their own width past
+    // the right edge, where there is no line (docxide-pdf's samtale and english_town_council_report).
+    let right = d.last_section.page_w - d.last_section.margin_right;
+    for h in &horiz {
+        assert!((h.0 - (left.0 - 0.5)).abs() < 0.01 && (h.2 - (right + 1.5)).abs() < 0.01, "{lines:?} {right}");
+    }
+    // The left line runs on to the top and bottom lines' outer edges; with no top line it ends square.
+    assert!((left.1 - (horiz[0].1.min(horiz[1].1) - 1.5)).abs() < 0.01 && (left.3 - (horiz[0].1.max(horiz[1].1) + 1.5)).abs() < 0.01, "{lines:?}");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { left: thin, bottom: thick, ..Borders::default() });
+    let lines = border_lines(&d);
+    let [left] = lines.iter().filter(|l| l.0 == l.2).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    let [bottom] = lines.iter().filter(|l| l.1 == l.3).collect::<Vec<_>>()[..] else { panic!("{lines:?}") };
+    assert!((left.3 - (bottom.1 + 1.5)).abs() < 0.01, "{lines:?}");
+    let first = lay(&d).pages[0].items.iter().find_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).unwrap();
+    assert!((left.1 - (first - 0.5)).abs() < 0.01, "{lines:?} {first}");
 }
 
 #[test]
@@ -3705,6 +3951,113 @@ fn text_wraps_around_square_float() {
     assert!(l.pages[0].items.iter().any(|i| matches!(i, Placed::Shape { .. })));
 }
 
+/// The left edges of a paragraph's lines beside a 144 × 100 pt square-wrapped rectangle at the
+/// column's top left (9 pt from text), and of its first line below the rectangle, in
+/// compatibility `mode` with Word 2003's indent rules on or off. The paragraph is indented
+/// 216 pt; `float` adjusts the object, `para` the paragraph, and `numbered` makes it a list item.
+fn word_2003_indent_lefts(
+    mode: u32,
+    rules: bool,
+    float: &dyn Fn(&mut wordcraft_doc::para::Float),
+    numbered: bool,
+    para: &dyn Fn(&mut ParaProps),
+) -> (Vec<f32>, Option<f32>) {
+    let mut d = Document::from_text(&"Words beside the picture here. ".repeat(20));
+    d.settings.compat_mode = mode;
+    d.settings.do_not_suppress_indentation = rules;
+    let num = numbered.then(|| Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered));
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_left = Some(216.0);
+        p.indent_first = Some(0.0);
+        p.numbering = num.map(|num| wordcraft_doc::props::NumRef { num, level: 0 });
+        para(p);
+    })
+    .unwrap();
+    let mut f = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 9.0,
+        ..Default::default()
+    };
+    float(&mut f);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 144.0,
+        h: 100.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: f,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    // After the first word, so a drop cap takes the paragraph's first letter.
+    d.insert_object(&Pos::body(0, 6), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    let beside = para.lines.iter().filter(|ln| ln.top < 100.0).map(|ln| ln.left).collect();
+    let below = para.lines.iter().find(|ln| ln.top > 120.0).map(|ln| ln.left);
+    (beside, below)
+}
+
+/// Word 2003's indent rules (`w:doNotSuppressIndentation`, a `.doc`'s `Copts.fWW11IndentRules`): an
+/// unnumbered paragraph indented past a floating object on its left starts its lines right after
+/// the object, its indent ignored (ECMA-376 Part 4 §14.8.3.12). In a Word 2003-mode `.doc` saved
+/// by Word, empty paragraphs indented 216 pt sit right after a text box ending 165 pt into the
+/// column, in the 71 pt gap before a second box where the indent would leave under 20 pt. Below
+/// the object, and in Word 2013's layout, the indent applies.
+#[test]
+fn word_2003_indent_rules_start_lines_right_after_a_float_before_the_indent() {
+    let lefts = |mode: u32, rules: bool| word_2003_indent_lefts(mode, rules, &|_| {}, false, &|_| {});
+    for mode in [11, 12, 14] {
+        let (beside, below) = lefts(mode, true);
+        assert!(
+            !beside.is_empty() && beside.iter().all(|x| (x - 153.0).abs() < 0.01),
+            "mode {mode}: lines start after the object and its 9 pt distance: {beside:?}"
+        );
+        assert_eq!(below, Some(216.0), "mode {mode}: below the object the indent applies");
+    }
+    assert_eq!(lefts(11, false).0[0], 216.0, "without the option the indent applies beside the object");
+    assert_eq!(lefts(15, true).0[0], 216.0, "Word 2013's layout keeps the indent");
+}
+
+/// Under Word 2003's indent rules a line starts after a Tight or Through-wrapped object's outline
+/// where the line meets it, not after the outline's widest point: here a right triangle, its
+/// point at the top left, 144 pt wide (and 9 pt from text) only at its foot.
+#[test]
+fn word_2003_indent_rules_follow_a_tight_objects_outline() {
+    use wordcraft_doc::para::Wrap;
+    use wordcraft_doc::wrap::WrapPolygon;
+    let poly = WrapPolygon::new(true, [(0, 0), (0, 21_600), (21_600, 21_600)]).map(Arc::new);
+    for wrap in [Wrap::Tight, Wrap::Through] {
+        let (beside, _) = word_2003_indent_lefts(11, true, &|f| (f.wrap, f.wrap_polygon) = (wrap, poly.clone()), false, &|_| {});
+        assert!(beside.len() > 2 && beside[0] < 60.0, "{wrap:?}: the first line starts near the point: {beside:?}");
+        assert!(beside.windows(2).all(|w| w[0] < w[1]) && beside.iter().all(|&x| x <= 153.0 + 0.01), "{wrap:?}: each line further out: {beside:?}");
+    }
+}
+
+/// Word 2003's indent rules leave the indent alone for a numbered paragraph (its number sits at
+/// the indent) and for one with a drop cap (the letter does), and never start a line left of the
+/// paragraph's own edge after an object out in the margin.
+#[test]
+fn word_2003_indent_rules_keep_the_indent_where_they_do_not_apply() {
+    let (numbered, _) = word_2003_indent_lefts(11, true, &|_| {}, true, &|_| {});
+    assert!(numbered.iter().all(|&x| x >= 216.0 - 0.01), "a numbered paragraph keeps its indent: {numbered:?}");
+    let (dropped, _) = word_2003_indent_lefts(11, true, &|_| {}, false, &|p| p.drop_cap = Some(3));
+    assert!(dropped.iter().all(|&x| x >= 216.0 - 0.01), "lines beside a drop cap stay right of it: {dropped:?}");
+    // An object in the left margin, its right side and distance from text 44 pt short of the column.
+    let (margin, _) = word_2003_indent_lefts(11, true, &|f| f.x = -197.0, false, &|_| {});
+    assert!(margin.iter().all(|&x| x >= -0.01), "no line starts in the margin: {margin:?}");
+    assert!((margin[0] - 0.0).abs() < 0.01, "the line starts at the paragraph's edge: {margin:?}");
+}
+
 #[test]
 fn a_lines_arrowheads_sit_at_its_ends() {
     // A line runs from its frame's top left to its bottom right (DrawingML's `line`, as it is
@@ -3900,6 +4253,127 @@ fn hidden_drawings_are_neither_drawn_nor_take_room() {
     let l = lay(&d);
     let draws = flat(display::page_display(&d, &l.pages[0], &Default::default()));
     assert_eq!(draws.iter().filter(|x| matches!(x, display::Draw::Shape { .. })).count(), 1, "{draws:?}");
+}
+
+/// #6027: a text box inside a group (Word's cards of a coloured bar and a text box) is text to
+/// a click, as a text box on its own is: the click edits its text instead of grabbing the
+/// group. The group's other members still grab the group.
+#[test]
+fn a_grouped_text_box_is_text_to_a_click() {
+    crate::test_fonts();
+    let mut d = Document::from_text("body text");
+    let id = d.add_part(
+        wordcraft_doc::PartKind::TextBox,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("inside", Default::default()))],
+    );
+    let shape = |kind, w, h, story| InlineObject::Shape {
+        kind,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+        h_rel: wordcraft_doc::para::Anchor::Page,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        x: 100.0,
+        y: 300.0,
+        ..Default::default()
+    };
+    let group = InlineObject::Group {
+        w: 200.0,
+        h: 100.0,
+        float,
+        ch_w: 200.0,
+        ch_h: 100.0,
+        children: vec![
+            wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(wordcraft_doc::para::ShapeKind::Rectangle, 200.0, 30.0, None) },
+            wordcraft_doc::para::GroupChild { x: 0.0, y: 40.0, obj: shape(wordcraft_doc::para::ShapeKind::TextBox, 200.0, 60.0, Some(id)) },
+        ],
+        canvas: None,
+    };
+    d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
+    let l = lay(&d);
+    // Inside the text box: its story, and no object to grab.
+    assert_eq!(l.story_at(0, 200.0, 370.0), Some(StoryRef::Part(id)));
+    assert_eq!(l.object_at(0, 200.0, 370.0, 4.0), None);
+    assert_eq!(l.text_box_story(id, 0), Some(StoryRef::Body), "the box's text sits in the body");
+    // On the bar, and on the text box's border: the group.
+    for (x, y) in [(200.0, 315.0), (200.0, 340.5)] {
+        let hit = l.object_at(0, x, y, 4.0).unwrap_or_else(|| panic!("the group at {x}, {y}"));
+        assert_eq!((hit.path.clone(), hit.text_box), (Path::top(0), None));
+    }
+    assert_ne!(l.story_at(0, 200.0, 315.0), Some(StoryRef::Part(id)));
+    // The group keeps its text box's area relative to itself, so the area moves with it.
+    let Some(Placed::Object { rect, group_boxes, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Object { .. })) else { panic!() };
+    assert_eq!((rect.x, rect.y), (100.0, 300.0));
+    assert_eq!(group_boxes.as_slice(), [(wordcraft_geom::Rect::new(0.0, 40.0, 200.0, 60.0), id)]);
+}
+
+/// #6027: a group's text box areas turn with the group (a group in a cell or text box whose
+/// text runs down the page) and are found in headers and footers too.
+#[test]
+fn grouped_text_box_areas_turn_with_the_group_and_work_in_headers() {
+    let id = 7;
+    let group = |rect| Placed::Object {
+        rect,
+        spin: Default::default(),
+        story: StoryRef::Part(1),
+        path: Path::top(0),
+        off: 0,
+        text_box: None,
+        wrap: Default::default(),
+        origin: Default::default(),
+        group_boxes: vec![(wordcraft_geom::Rect::new(0.0, 40.0, 200.0, 60.0), id)],
+    };
+    let mut g = group(wordcraft_geom::Rect::new(0.0, 0.0, 200.0, 100.0));
+    g.turn(TextDirection::Down, 300.0, 50.0);
+    let Placed::Object { rect, group_boxes, .. } = &g else { panic!() };
+    let want = crate::placed::turn_rect(TextDirection::Down, 300.0, 50.0, wordcraft_geom::Rect::new(0.0, 40.0, 200.0, 60.0));
+    let (r, _) = group_boxes[0];
+    assert_eq!(wordcraft_geom::Rect::new(rect.x + r.x, rect.y + r.y, r.w, r.h), want);
+    // A header's group: its box is where a click in the header edits text.
+    let page = Page { header: vec![group(wordcraft_geom::Rect::new(100.0, 30.0, 200.0, 100.0))], ..Default::default() };
+    let l = DocLayout { pages: vec![page], ..Default::default() };
+    assert_eq!(l.header_footer_text_box_at(0, 150.0, 100.0), Some(id));
+    assert_eq!(l.header_footer_text_box_at(0, 150.0, 40.0), None, "the group's bar is not text");
+}
+
+/// #6027: where two text boxes of one group overlap, a click enters the one painted on top (the
+/// last member), in the body and in a header alike.
+#[test]
+fn click_in_overlapping_grouped_text_boxes_enters_the_top_one() {
+    let (low, top) = (3, 4);
+    let group = |rect| Placed::Object {
+        rect,
+        spin: Default::default(),
+        story: StoryRef::Part(1),
+        path: Path::top(0),
+        off: 0,
+        text_box: None,
+        wrap: Default::default(),
+        origin: Default::default(),
+        group_boxes: vec![(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 100.0), low), (wordcraft_geom::Rect::new(50.0, 50.0, 100.0, 100.0), top)],
+    };
+    let page = Page {
+        items: vec![group(wordcraft_geom::Rect::new(100.0, 100.0, 150.0, 150.0))],
+        header: vec![group(wordcraft_geom::Rect::new(100.0, 100.0, 150.0, 150.0))],
+        ..Default::default()
+    };
+    let l = DocLayout { pages: vec![page], ..Default::default() };
+    // Overlap (page 175, 175 is inside both boxes): the top box takes the click, and typing.
+    assert_eq!(l.story_at(0, 175.0, 175.0), Some(StoryRef::Part(top)));
+    assert_eq!(l.header_footer_text_box_at(0, 175.0, 175.0), Some(top));
+    // Outside the overlap each box still answers for itself.
+    assert_eq!(l.story_at(0, 110.0, 110.0), Some(StoryRef::Part(low)));
+    assert_eq!(l.story_at(0, 240.0, 240.0), Some(StoryRef::Part(top)));
 }
 
 #[test]
@@ -4194,7 +4668,8 @@ fn tall_rows_split_across_pages() {
         .find_map(|i| if let Placed::Lines { path, para, .. } = i { (path.0 == vec![1, 0, 0, 0]).then_some(para.lines.len()) } else { None })
         .unwrap_or(0);
     assert_eq!(total, n);
-    // "Can't split" rows move whole instead.
+    // A "can't split" row taller than a page splits too, from the top of a page, as in Word (#6823);
+    // a shorter one moves on whole (`table_first_line`).
     let mut d2 = Document::from_text("before\nafter");
     t.rows[0].props.cant_split = true;
     d2.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
@@ -7553,6 +8028,46 @@ fn a_page_break_at_the_bottom_of_a_full_page_leaves_no_blank_page() {
     assert!(last_on_2, "the text after the break is on page 2");
 }
 
+/// Measured in Word for Mac: a paragraph holding only a page break is an ordinary line. When it
+/// doesn't fit at the bottom of a full page it goes to the next one, and its break leaves that
+/// page blank. Only a break with text after it in its paragraph stays on the full page (#534).
+/// WordCraft kept both on the page, so a paper's references started a page early.
+#[test]
+fn a_paragraph_of_only_a_page_break_moves_when_it_does_not_fit() {
+    use wordcraft_doc::props::LineSpacing;
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let doc = |spacing: LineSpacing, room: f32, tail: &[&str]| {
+        let para = |text: &str| {
+            let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+            p.mark = chr.clone();
+            p.props = ParaProps { line_spacing: Some(spacing), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+            wordcraft_doc::para_block(p)
+        };
+        let mut d = Document::new();
+        d.body = (0..20).map(|i| para(&format!("Line {i}"))).chain(tail.iter().map(|t| para(t))).collect();
+        let l = lay(&d);
+        let pitch = l.caret(&Pos::body(1, 0)).unwrap().top - l.caret(&Pos::body(0, 0)).unwrap().top;
+        d.last_section.margin_bottom = d.last_section.page_h - d.last_section.margin_top - 20.0 * pitch - room;
+        d
+    };
+    let pages = |d: &Document| lay(d).pages.len();
+    let single = {
+        let l = lay(&doc(LineSpacing::Multiple(1.0), 600.0, &[]));
+        l.caret(&Pos::body(1, 0)).unwrap().top - l.caret(&Pos::body(0, 0)).unwrap().top
+    };
+    let only = ["\u{000C}", "After"];
+    let start = ["\u{000C}After"];
+    // Exactly 24 pt lines, 10 pt left: the break's own paragraph moves, a blank page follows.
+    assert_eq!(pages(&doc(LineSpacing::Exactly(24.0), 10.0, &only)), 3, "exact, break only");
+    assert_eq!(pages(&doc(LineSpacing::Exactly(24.0), 10.0, &start)), 2, "exact, break before text");
+    // Double spacing: the paragraph moves when its text cannot fit. Its leading can hang into
+    // the bottom margin once the paragraph mark fits.
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single - 0.2, &only)), 3, "double, text doesn't fit");
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single + 0.2, &only)), 2, "double, leading hangs");
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), 2.0 * single + 0.2, &only)), 2, "double, line fits");
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single - 0.2, &start)), 2, "double, break before text");
+}
+
 /// #534: indents in characters (`w:firstLineChars`) are measured in the paragraph mark's font
 /// size and win over the indent in points.
 #[test]
@@ -7590,6 +8105,72 @@ fn no_line_break_right_after_a_slash() {
         }
     }
     assert!(lines > 10, "{lines} lines");
+}
+
+/// The text of every laid-out line.
+fn body_lines(l: &DocLayout, text: &str) -> Vec<String> {
+    l.pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|it| {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()))
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn no_line_break_inside_a_query_address() {
+    // Word keeps "/?type=" and "/_back" whole (measured: a request address went to the next
+    // line whole, a long one breaking only where it no longer fits).
+    for addr in ["https://example.org/portal/_back/?type=objects_export&action=get", "https://example.org/portal/_back_office/reports/_export_all"] {
+        for k in 0..60 {
+            let text = format!("{}{addr} end", "a ".repeat(k));
+            let lines = body_lines(&lay(&Document::from_text(&text)), &text);
+            for (a, b) in lines.iter().zip(&lines[1..]) {
+                assert!(!a.ends_with('?') && !a.ends_with('/'), "{k}: a line ends inside the address: {a:?} / {b:?}");
+            }
+        }
+    }
+}
+
+/// A path that starts after a space ("caption /_back") wraps whole: UAX #14 has no break between
+/// the space and the slash, so the break before the slash is the only one there.
+#[test]
+fn a_path_after_a_space_wraps_whole() {
+    let text = "enregistrement /_back_office_reports";
+    let mut wrapped = 0;
+    // Down to the width where the path still fits on a line (it no longer does at 425 pt).
+    for m in 100..=420 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let lines = body_lines(&lay(&d), text);
+        if lines.len() < 2 {
+            continue; // fits on one line
+        }
+        wrapped += 1;
+        assert_eq!(lines, ["enregistrement ", "/_back_office_reports"], "the path is split at margin {m}");
+    }
+    assert!(wrapped > 50, "{wrapped} widths wrapped");
+}
+
+/// A question mark in CJK text keeps the break after it: only a query's `?` before an ASCII
+/// letter, digit or underscore loses it.
+#[test]
+fn a_question_mark_in_cjk_text_keeps_its_break() {
+    let text = "你好?世界".repeat(40);
+    let mut ended = false;
+    for m in 300..=440 {
+        let mut d = Document::from_text(&text);
+        d.last_section.margin_right = m as f32;
+        let lines = body_lines(&lay(&d), &text);
+        ended |= lines[..lines.len() - 1].iter().any(|l| l.ends_with('?'));
+    }
+    assert!(ended, "no line ever ends after the question mark");
 }
 
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
@@ -7718,6 +8299,7 @@ fn a_no_break_space_before_a_slash_still_holds() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore = "coverage instrumentation skews the time ratio")]
 fn unequal_formats_lay_out_in_linear_time() {
     crate::test_fonts();
     // Runs whose formats never compare equal (NaN spacing from a hostile file) each get a style;
@@ -7875,6 +8457,7 @@ fn graphic_items_draw_inside_the_object() {
             bold: false,
             align: TextAlign::Center,
             font: None,
+            angle: 0.0,
         },
     ];
     let mut d = Document::from_text("Chart");
@@ -7905,6 +8488,7 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     };
     let items = vec![text([f32::NAN, 0.0, 10.0, 10.0], 10.0), text([0.0, 0.0, f32::INFINITY, 10.0], 10.0), text([0.0, 0.0, 10.0, 10.0], f32::NAN)];
     let graphic = Graphic { kind: GraphicKind::Diagram, items, ..Default::default() };
@@ -7913,6 +8497,45 @@ fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
     d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
     let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
     assert!(!draws.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text == "Q1")));
+}
+
+/// A chart's vertical axis title (text turned -90°) is laid out along its tall box and drawn
+/// turned about the box's center.
+#[test]
+fn turned_graphic_text_is_drawn_turned_about_its_box() {
+    crate::test_fonts();
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 20.0, 20.0, 100.0],
+        text: "Sales".into(),
+        size: 10.0,
+        color: Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+        angle: -90.0,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    let turned = draws
+        .iter()
+        .find_map(|x| match x {
+            display::Draw::Rotated { cx, cy, spin, items } => Some((*cx, *cy, *spin, items)),
+            _ => None,
+        })
+        .expect("the title is turned");
+    let (cx, cy, spin, items) = turned;
+    assert_eq!(spin.deg, 270.0);
+    let Some(display::Draw::Glyphs { glyphs, text, .. }) = items.first() else { panic!("{items:?}") };
+    assert_eq!(text, "Sales");
+    // Laid out level across the box's 100 pt height, centered on the box's center.
+    let (first, last) = (glyphs[0].1, glyphs[glyphs.len() - 1].1);
+    assert!(first > cx - 50.0 && last < cx + 50.0 && first < cx && last > cx, "{first} {last} about {cx}");
+    assert!((glyphs[0].2 - cy).abs() < 10.0, "baseline {} near {cy}", glyphs[0].2);
 }
 
 #[test]
@@ -7935,6 +8558,7 @@ fn chart_text_the_font_lacks_is_drawn_in_a_fallback_face() {
         bold: false,
         align: TextAlign::Center,
         font: None,
+        angle: 0.0,
     }];
     let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
     let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
@@ -8640,8 +9264,8 @@ fn picture_row(room: f32, min: f32, pic_h: f32, lines: usize) -> (DocLayout, Vec
         t.rows[1].props.height = Some(min);
         t.rows[1].props.height_rule = HeightRule::AtLeast;
     }
-    for c in 1..3 {
-        t.rows[1].cells[c].blocks = lines_in_cell(lines, "N/A");
+    for cell in &mut t.rows[1].cells[1..3] {
+        cell.blocks = lines_in_cell(lines, "N/A");
     }
     set_at_least_row_spacing(&mut t);
     let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
@@ -10186,6 +10810,87 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
+/// Text typed after a raised or lowered character sits where that character does: an input
+/// method's composition there is drawn on the line's baseline shifted as the run is (positive up),
+/// as the committed text is drawn, not on the line's own baseline.
+#[test]
+fn typing_style_takes_the_runs_baseline_shift() {
+    use wordcraft_doc::props::VertAlign;
+    let mut d = Document::from_text("x2");
+    d.format_range(&Pos::body(0, 1), &Pos::body(0, 2), &|c| c.vert_align = Some(VertAlign::Superscript)).unwrap();
+    let l = lay(&d);
+    let (plain, line) = l.typing_style(&Pos::body(0, 1), 0).expect("after the x");
+    let (raised, base) = l.typing_style(&Pos::body(0, 2), 0).expect("after the superscript 2");
+    assert_eq!(plain.shift, 0.0);
+    assert!(raised.shift > 0.0, "a superscript is raised: {}", raised.shift);
+    assert!((line - raised.shift - base).abs() < 0.01, "line {line}, shift {}, baseline {base}", raised.shift);
+}
+
+/// Text typed after a character the run's font lacks asks for the run's own font, not the fallback
+/// face that drew that character: an input method's composition after a Chinese character in a
+/// Latin font draws its letters as the committed letters are drawn.
+#[test]
+fn typing_style_asks_for_the_runs_font_after_a_fallback_character() {
+    let text = "A\u{4f60}";
+    let l = lay(&Document::from_text(text));
+    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let face_at = |off: usize| para.clusters.iter().find(|c| c.start == off).map(|c| para.styles[c.style as usize].face.id());
+    let (latin, han) = (face_at(0), face_at(1));
+    if latin == han {
+        eprintln!("skipped: the body font has the character, or no installed font does");
+        return;
+    }
+    let (run, _) = l.typing_style(&Pos::body(0, text.len()), 0).expect("after the Chinese character");
+    assert_eq!(Some(run.face.id()), han, "the character before the caret is drawn in a fallback face");
+    assert_eq!(Some(run.requested_face.id()), latin, "text typed there asks for the run's own font");
+}
+
+#[test]
+fn a_missing_east_asian_font_is_drawn_in_its_font_table_alternate() {
+    crate::test_fonts();
+    // #2702 for the run's East Asian font (`w:eastAsia`): one that isn't installed is drawn in the
+    // alternate its font table names, when that one is installed and has the characters. Take an
+    // installed CJK font other than the one fallback would pick anyway, so the test tells them apart.
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false);
+    let fallback = wordcraft_fonts::FontDb::global().fallback_for('你', 0).map(|f| f.family.clone());
+    let Some(asian) = wordcraft_fonts::FontDb::global().east_asian_families().into_iter().find(|f| {
+        let r = resolve(f);
+        Some(f) != fallback.as_ref() && !r.substituted && r.face.covers('你') && r.face.covers('好')
+    }) else {
+        eprintln!("skipped: no second Chinese font installed");
+        return;
+    };
+    let missing = "No Such East Asian Font 2702";
+    let text = "Hello 你好";
+    let faces = |alternate: bool| {
+        let mut d = Document::from_text(text);
+        if alternate {
+            d.settings.font_alt_names = vec![(missing.into(), asian.clone())];
+        }
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+            c.font = Some(wordcraft_doc::styles::BODY_FONT.into());
+            c.font_ea = Some(missing.into());
+        })
+        .unwrap();
+        let l = lay(&d);
+        let para =
+            l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let drawn = para
+            .clusters
+            .iter()
+            .filter(|c| text.get(c.start..c.end).and_then(|s| s.chars().next()).is_some_and(|ch| !ch.is_ascii()))
+            .map(|c| para.styles[c.style as usize].face.id())
+            .collect::<Vec<_>>();
+        (drawn, l.substituted_fonts())
+    };
+    let asian_face = resolve(&asian).face.id();
+    let (with, reported) = faces(true);
+    assert!(!with.is_empty() && with.iter().all(|f| *f == asian_face), "你好 in the alternate {asian}");
+    // Drawn in an installed alternate, the font asked for is still missing (#4770).
+    assert!(reported.iter().any(|(f, _)| f == missing), "{reported:?}");
+    assert!(faces(false).0.iter().all(|f| *f != asian_face), "without the alternate, fallback picks another font");
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]
@@ -10203,7 +10908,7 @@ fn footer_page_total_needs_one_body_pass() {
     d.last_section.footers.default = Some(id);
     let first = |d: &Document| {
         let totals = Totals::first_guess(d.sections().len());
-        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true, (&EarlyFloats::new(), true))
+        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), (&HashMap::new(), None), &totals, true, (&EarlyFloats::new(), true))
     };
     assert!(matches!(first(&d), Pass::Done(l) if l.pages.len() == 3), "the footer's total asked for another pass");
     // The same field in the body is only known once every page is laid out.
@@ -10327,8 +11032,8 @@ fn a_hidden_cell_mark_takes_no_room() {
         let mut d = Document::from_text("Above");
         let mut t = Table::new(3, 2, 300.0);
         for (r, text) in [(0, "R1"), (2, "R3")] {
-            for c in 0..2 {
-                t.rows[r].cells[c].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+            for cell in &mut t.rows[r].cells {
+                cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
             }
         }
         for (cell, hide) in t.rows[1].cells.iter_mut().zip(hide) {
@@ -11864,6 +12569,219 @@ fn cell_widths_override_grid() {
 }
 
 #[test]
+fn percentage_cell_widths_that_disagree_or_span_columns() {
+    // Measured in Word (A4, 451.3 pt between the margins; 468 pt here), autofit tables 100% wide:
+    // rows asking 30/10/10/30 and 10/30/10/30, in either order, give 30/30/10/30 (each column its
+    // largest); a merged cell asking 50% over the first two columns, beside 10% and 40%, gives
+    // those two 50% between them; a merged 20% over columns asking 40% and 10% changes nothing;
+    // and a nested table's percentages are of its own width.
+    let cell_text = |s: &str| vec![wordcraft_doc::para_block(Paragraph::with_text(s, Default::default()))];
+    let table = |rows: &[&[(Option<f32>, u32)]]| {
+        let mut t = Table::new(rows.len(), 4, 460.3);
+        t.grid = vec![107.3, 37.2, 31.95, 283.85];
+        t.props.width_pct = Some(100.0);
+        for (row, spec) in t.rows.iter_mut().zip(rows) {
+            row.cells.truncate(spec.len());
+            for (cell, (pct, span)) in row.cells.iter_mut().zip(spec.iter()) {
+                cell.props.width = None;
+                cell.props.width_pct = *pct;
+                cell.props.span = *span;
+                cell.blocks = cell_text("A");
+            }
+        }
+        t
+    };
+    let starts_at = |t: Table, prefix: &[u32], row: u32| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let x: Vec<f32> = (0..4)
+            .map(|c| {
+                let path: Vec<u32> = prefix.iter().copied().chain([row, c, 0]).collect();
+                let [(x, _, _)] = para_at(&l, &path)[..] else { panic!("cell {c} missing") };
+                x
+            })
+            .collect();
+        x.iter().map(|v| v - x[0]).collect::<Vec<_>>()
+    };
+    let near = |got: Vec<f32>, want: [f32; 4], what: &str| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "{what}: columns start at {got:?}, not {want:?}");
+    };
+    let at = |shares: [f32; 3]| [0.0, shares[0] * 468.0, shares[1] * 468.0, shares[2] * 468.0];
+    let p = |v: f32| (Some(v), 1);
+    let auto = (None, 1);
+    let open = [auto, auto, auto, auto];
+    near(
+        starts_at(table(&[&[p(30.0), p(10.0), p(10.0), p(30.0)], &[p(10.0), p(30.0), p(10.0), p(30.0)], &open]), &[0], 2),
+        at([0.3, 0.6, 0.7]),
+        "rows disagree",
+    );
+    near(
+        starts_at(table(&[&[p(10.0), p(30.0), p(10.0), p(30.0)], &[p(30.0), p(10.0), p(10.0), p(30.0)], &open]), &[0], 2),
+        at([0.3, 0.6, 0.7]),
+        "the other order",
+    );
+    let merged = starts_at(table(&[&[(Some(50.0), 2), p(10.0), p(40.0)], &open]), &[0], 1);
+    near(vec![merged[0], merged[2], merged[3]].into_iter().chain([0.0]).collect(), [0.0, 0.5 * 468.0, 0.6 * 468.0, 0.0], "merged 50%");
+    near(
+        starts_at(table(&[&[p(40.0), p(10.0), p(10.0), p(40.0)], &[(Some(20.0), 2), auto, auto], &open]), &[0], 2),
+        at([0.4, 0.5, 0.6]),
+        "a smaller merged cell",
+    );
+    // The nested table fills the outer table's only cell, less the cell's margins.
+    let inner = table(&[&[p(40.0), p(10.0), p(10.0), p(40.0)], &open]);
+    let mut outer = Table::new(1, 1, 468.0);
+    outer.props.width_pct = Some(100.0);
+    outer.rows[0].cells[0].props.width_pct = Some(100.0);
+    outer.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(inner)), wordcraft_doc::para_block(Paragraph::new())];
+    let nested = starts_at(outer, &[0, 0, 0, 0], 1);
+    let w = nested[3] / 0.6;
+    near(nested, [0.0, 0.4 * w, 0.5 * w, 0.6 * w], "nested");
+    assert!(w > 400.0 && w <= 468.0, "the nested table is {w} wide");
+}
+#[test]
+fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
+    // Measured in Word (A4, 451.3 pt between the margins; 468 pt here): a 40/10/10/40 header row
+    // over rows without cell widths lays out 40/10/10/40 of the table, from the grid
+    // 107.3/37.2/32/283.9 pt a document saved. The same with the row in the middle, in a fixed
+    // table, with the table 100% wide or without a width; 144 pt for 40% of a 360 pt table; and
+    // 20/5/5/20 scaled up to fill the table.
+    let starts = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let x: Vec<f32> = (0..4)
+            .map(|c| {
+                let [(x, _, _)] = para_at(&l, &[0, 2, c, 0])[..] else { panic!("cell {c} missing") };
+                x
+            })
+            .collect();
+        x.iter().map(|v| v - x[0]).collect::<Vec<_>>()
+    };
+    let table = |pct_row: usize, pcts: [f32; 4]| {
+        let mut t = Table::new(4, 4, 460.3);
+        t.grid = vec![107.3, 37.2, 31.95, 283.85];
+        for (r, row) in t.rows.iter_mut().enumerate() {
+            for (cell, p) in row.cells.iter_mut().zip(pcts) {
+                cell.props.width = None;
+                cell.props.width_pct = (r == pct_row).then_some(p);
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+            }
+        }
+        t
+    };
+    let near = |got: Vec<f32>, want: [f32; 4]| {
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "columns start at {got:?}, not {want:?}");
+    };
+    let of = |w: f32| [0.0, w * 0.4, w * 0.5, w * 0.6];
+    near(starts(table(0, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(1, [40.0, 10.0, 10.0, 40.0])), of(468.0));
+    near(starts(table(0, [20.0, 5.0, 5.0, 20.0])), of(468.0));
+    // A fixed table without a width of its own keeps its grid's 460.3 pt; 100% wide, it takes
+    // the text width.
+    let mut fixed = table(0, [40.0, 10.0, 10.0, 40.0]);
+    fixed.props.fixed = true;
+    near(starts(fixed.clone()), of(460.3));
+    fixed.props.width_pct = Some(100.0);
+    near(starts(fixed), of(468.0));
+    let mut full = table(0, [40.0, 10.0, 10.0, 40.0]);
+    full.props.width_pct = Some(100.0);
+    near(starts(full), of(468.0));
+    let mut narrow = table(0, [20.0, 5.0, 5.0, 20.0]);
+    narrow.props.width = Some(360.0);
+    near(starts(narrow), of(360.0));
+    // A row that starts one column in gives its percentages to the columns it covers: 10/10/40
+    // there agree with the header row's 10/10/40 over the last three columns.
+    let mut shifted = table(0, [40.0, 10.0, 10.0, 40.0]);
+    shifted.rows[1].props.grid_before = 1;
+    shifted.rows[1].cells.remove(0);
+    for (cell, p) in shifted.rows[1].cells.iter_mut().zip([10.0, 10.0, 40.0]) {
+        cell.props.width_pct = Some(p);
+    }
+    near(starts(shifted), of(468.0));
+    // Past 100% Word gives every column but the last its share of the table and the last what
+    // is left: 44/11/11/44 starts the columns at 44%, 55% and 66%. At 60/20/20/60 nothing is left,
+    // so the last column takes its longest word and the other three give up the same width.
+    near(starts(table(0, [44.0, 11.0, 11.0, 44.0])), [0.0, 0.44, 0.55, 0.66].map(|f| f * 468.0));
+    let over = starts(table(0, [60.0, 20.0, 20.0, 60.0]));
+    let lost = [0.6 * 468.0 - over[1], 0.2 * 468.0 - (over[2] - over[1]), 0.2 * 468.0 - (over[3] - over[2])];
+    assert!(lost[0] > 1.0 && lost.iter().all(|l| (l - lost[0]).abs() < 0.01), "columns start at {over:?}");
+    // A fixed table gives the last column 2 pt and clips its text to the cell instead; the
+    // others share the rest of its 460.3 pt (Word: 275.5, 91.5, 91 and 2 pt).
+    let mut fixed_over = table(0, [60.0, 20.0, 20.0, 60.0]);
+    fixed_over.props.fixed = true;
+    for row in &mut fixed_over.rows {
+        row.cells[3].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Lorem ipsum", Default::default()))];
+    }
+    near(starts(fixed_over.clone()), [0.0, 0.6, 0.8, 1.0].map(|f| f * (460.3 - 2.0)));
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(fixed_over)).unwrap();
+    let l = lay(&d);
+    let cells: Vec<(usize, f32, bool)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Cell { cell, rect, clip, row: 0, .. } = i { Some((*cell, rect.w, *clip)) } else { None })
+        .collect();
+    assert!(cells.iter().any(|&(c, w, clip)| c == 3 && (w - 2.0).abs() < 0.01 && clip), "the last cell is 2 pt and clipped: {cells:?}");
+    assert!(cells.iter().all(|&(c, _, clip)| c == 3 || !clip), "only the last cell is clipped: {cells:?}");
+    // When the columns before the last already pass 100% (80/40/40/20), Word gives them their
+    // shares left to right until the width runs out, and the table keeps its width: in a fixed
+    // table the third and fourth columns get 2 pt, the shares being of 460.3 - 4 pt; in an
+    // autofit table they get their longest words, the first two giving up the same width.
+    let widths = |t: Table| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let mut w: Vec<(usize, f32)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Cell { cell, rect, row: 0, .. } = i { Some((*cell, rect.w)) } else { None })
+            .collect();
+        w.sort_by_key(|c| c.0);
+        w.into_iter().map(|c| c.1).collect::<Vec<f32>>()
+    };
+    let mut fixed_far = table(0, [80.0, 40.0, 40.0, 20.0]);
+    fixed_far.props.fixed = true;
+    let got = widths(fixed_far);
+    let room = 460.3 - 4.0;
+    let want = [0.8 * room, 0.2 * room, 2.0, 2.0];
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01), "fixed 80/40/40/20: {got:?}, not {want:?}");
+    assert!((got.iter().sum::<f32>() - 460.3).abs() < 0.01, "fixed 80/40/40/20 is {} wide", got.iter().sum::<f32>());
+    // A fixed grid narrower than 2 pt a column keeps its width: the columns share it.
+    let mut fixed_narrow = table(0, [80.0, 40.0, 40.0, 20.0]);
+    fixed_narrow.props.fixed = true;
+    fixed_narrow.grid = vec![1.5; 4];
+    let got = widths(fixed_narrow);
+    assert!(got.iter().all(|w| (w - 1.5).abs() < 0.01), "a fixed 6 pt grid of 80/40/40/20: {got:?}");
+    let got = widths(table(0, [80.0, 40.0, 40.0, 20.0]));
+    assert!((got.iter().sum::<f32>() - 468.0).abs() < 0.01, "autofit 80/40/40/20 is {} wide: {got:?}", got.iter().sum::<f32>());
+    let lost = [0.8 * 468.0 - got[0], 0.2 * 468.0 - got[1]];
+    assert!(lost[0] > 1.0 && (lost[0] - lost[1]).abs() < 0.01 && got[2] > 1.0 && got[3] > 1.0, "autofit 80/40/40/20: {got:?}");
+    // A smaller percentage in another row of a column changes nothing: the column takes its
+    // largest. A merged cell's 20% goes to the two columns under it, which ask none.
+    let mut disagreeing = table(0, [40.0, 10.0, 10.0, 40.0]);
+    disagreeing.rows[1].cells[0].props.width_pct = Some(10.0);
+    near(starts(disagreeing), of(468.0));
+    let mut spanned = table(0, [40.0, 10.0, 10.0, 40.0]);
+    spanned.rows[0].cells.remove(2);
+    spanned.rows[0].cells[1].props.span = 2;
+    spanned.rows[0].cells[1].props.width_pct = Some(20.0);
+    let got = starts(spanned);
+    assert!((got[1] - 0.4 * 468.0).abs() < 0.01 && (got[3] - 0.6 * 468.0).abs() < 0.01, "merged 20%: columns start at {got:?}");
+    // A column no cell sizes and an absolute width alongside keep the grid.
+    let grid = [0.0, 107.3, 144.5, 176.45];
+    let mut unsized_column = table(0, [40.0, 10.0, 10.0, 40.0]);
+    unsized_column.rows[0].cells[3].props.width_pct = None;
+    let mut absolute = table(0, [40.0, 10.0, 10.0, 40.0]);
+    absolute.rows[1].cells[0].props.width = Some(100.0);
+    for t in [unsized_column, absolute] {
+        let got = starts(t);
+        let k = got[3] / grid[3];
+        near(got, grid.map(|g| g * k));
+    }
+}
+
+#[test]
 fn ambiguous_widths_keep_grid() {
     crate::test_fonts();
     let mut t = Table::new(2, 3, 450.0);
@@ -12451,6 +13369,7 @@ fn split_cell_moves_image_frame() {
             text_box: None,
             wrap: Wrap::Square,
             origin: wordcraft_geom::Point::new(3.0, 145.0),
+            group_boxes: Vec::new(),
         };
         let mut kept = image.clone();
         kept.translate(0.0, top - 150.0);
@@ -14003,7 +14922,15 @@ fn last_rewrap_pass_keeps_early_floats_clear_of_text() {
     let one_page = picture_above_anchor(&"Earlier text flows beside the picture placed above its anchor. ".repeat(3), 4, 72.0);
     for d in [one_page, early_float_across_pages()] {
         let totals = Totals::first_guess(d.sections().len());
-        let pass = layout_pass(&d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, false, (&EarlyFloats::new(), false));
+        let pass = layout_pass(
+            &d,
+            &mut LayoutCache::new(),
+            &LayoutOptions::default(),
+            (&HashMap::new(), None),
+            &totals,
+            false,
+            (&EarlyFloats::new(), false),
+        );
         let Pass::Done(l) = pass else { panic!("a last pass is done") };
         let (under, n) = text_under_shapes(&l);
         assert_eq!(under, None);
@@ -14321,6 +15248,60 @@ fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
         return;
     }
     panic!("no width in the sweep wrapped the paragraph");
+}
+
+/// A row of hyphens wraps at any hyphen in Word: after a gap, the row first fills the line and
+/// its rest goes on the next, where UAX #14 (LB21) keeps the hyphens together and the whole row
+/// moved to the next line. The first width that wraps must leave `Deed ` and part of the row on
+/// the first line. A row of non-breaking hyphens (U+2011) stays whole, so the first wrap moves it
+/// whole, breaking at the space.
+#[test]
+fn a_row_of_hyphens_wraps_at_any_hyphen_like_word() {
+    let lines_of = |text: &str, margin_right: f32| -> Vec<String> {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = margin_right;
+        let l = lay(&d);
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect()
+    };
+
+    let text = format!("Deed {}", "-".repeat(16));
+    let mut wrapped = false;
+    for m in 100..=540 {
+        let lines = lines_of(&text, m as f32);
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert!(lines[0].starts_with("Deed -"), "the first line takes part of the row: {lines:?}");
+        assert!(lines[1].starts_with('-'), "the rest of the row follows: {lines:?}");
+        assert_eq!(lines.concat(), text, "no hyphen is lost or added: {lines:?}");
+        wrapped = true;
+        break;
+    }
+    assert!(wrapped, "no width in the sweep wrapped the row of hyphens");
+
+    let row = "\u{2011}".repeat(16);
+    let text = format!("Deed {row}");
+    for m in 100..=540 {
+        let lines = lines_of(&text, m as f32);
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines[0], "Deed ", "the only break is at the space: {lines:?}");
+        assert_eq!(lines[1], row, "the row of non-breaking hyphens stays whole: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the non-breaking row");
 }
 
 /// docxide-pdf `dot-open-token*`: UAX #14 allows a break between a full stop and an opening
@@ -15320,5 +16301,90 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         let confined = place(direction, false);
         let reference = place(direction, true);
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
+}
+
+/// A header paragraph beside a Square float on its last lines only: those lines are shorter than
+/// the first. A click on the first line past the short last line's end is still on the header's
+/// text, so a Behind Text picture under it is not grabbed there (#5601 review).
+#[test]
+fn header_text_covers_the_whole_width_of_a_wrapped_first_line() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = "Header words that wrap across the whole line and carry on over several lines of the header \
+        paragraph so there are three lines here and the last one is cut short by the float beside it";
+    let mut d = Document::new();
+    let id =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    d.last_section.headers.default = Some(id);
+    let at = |off| Pos::new(wordcraft_doc::StoryRef::Part(id), wordcraft_doc::Path(vec![0]), off);
+    // The Square float narrows the lines below the first two, on the right.
+    let square = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 300.0, y: 30.0, ..Default::default() };
+    d.insert_object(&at(0), rect_shape(160.0, 80.0, square), &Default::default()).unwrap();
+    // The Behind Text picture lies under the first line, past where the last line ends.
+    let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 340.0, y: 0.0, ..Default::default() };
+    d.insert_object(&at(0), rect_shape(120.0, 20.0, behind), &Default::default()).unwrap();
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let lines: Vec<_> = page
+        .header
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, l0, l1, x, y, .. } => {
+                Some((*x, *y, (*l0..*l1).filter_map(|i| para.lines.get(i)).map(|l| (l.top, l.height, l.right)).collect::<Vec<_>>()))
+            }
+            _ => None,
+        })
+        .collect();
+    let (x, y, ls) = lines.first().expect("header lines").clone();
+    let (first, last) = (ls.first().expect("first"), ls.last().expect("last"));
+    assert!(last.2 + 40.0 < first.2 - 20.0, "the last line is shorter than the first: {ls:?}");
+    let (px, py) = (x + first.2 - 15.0, y + first.0 + first.1 / 2.0);
+    assert!(l.object_at_in(0, px, py, 0.0, wordcraft_doc::StoryRef::Part(id)).is_none(), "on the first line's text, not the picture: {lines:?}");
+}
+
+/// `Line::left`/`right` are the edges available to a line, not where its ink sits: a centred or
+/// right-aligned header line covers the Behind Text picture across its whole band, so a click in
+/// the empty space beside its text is still on the header text. Beyond the band (an indent, or
+/// beside a float) and 40pt of slack the picture is hit (#5601 review).
+#[test]
+fn header_text_covers_the_whole_band_of_centred_and_right_lines() {
+    use wordcraft_doc::Align;
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for align in [Align::Center, Align::Right] {
+        let mut d = Document::new();
+        let mut p = wordcraft_doc::Paragraph::with_text("Header", Default::default());
+        p.props.align = Some(align);
+        p.props.indent_left = Some(150.0);
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+        d.last_section.headers.default = Some(id);
+        let story = wordcraft_doc::StoryRef::Part(id);
+        let at = Pos::new(story, wordcraft_doc::Path(vec![0]), 0);
+        // A Behind Text picture across the whole text width, level with the header line.
+        let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, ..Default::default() };
+        d.insert_object(&at, rect_shape(460.0, 20.0, behind), &Default::default()).unwrap();
+        let l = lay(&d);
+        let (x, y, left, right, height, ink0) = l.pages[0]
+            .header
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { para, l0, x, y, .. } => {
+                    para.lines.get(*l0).and_then(|ln| Some((*x, *y, ln.left, ln.right, ln.height, *ln.xs.first()?)))
+                }
+                _ => None,
+            })
+            .expect("header line");
+        // `left`/`right` are the band edges available to the line, not the ink extent.
+        assert!((left - 150.0).abs() < 0.5, "{align:?}: the band's left edge is the indent: {left}");
+        assert!(ink0 > left + 100.0, "{align:?}: the ink starts well inside the band: ink {ink0}, band left {left}");
+        let ym = y + height / 2.0;
+        let hit = |px: f32| l.object_at_in(0, px, ym, 0.0, story).is_some();
+        // Inside the band, wherever the centred or right-aligned ink sits: header text.
+        assert!(!hit(x + left + 5.0), "{align:?}: the band's left end is text");
+        assert!(!hit(x + (left + right) / 2.0), "{align:?}: the band's middle is text");
+        // Between the indent and the ink is still the text band, not the picture.
+        assert!(!hit(x + left + 160.0), "{align:?}: between the indent and the ink is text");
+        // Within 40pt of the band's left end is still text; further left the picture is hit.
+        assert!(!hit(x + left - 30.0), "{align:?}: within 40pt left of the band is text");
+        assert!(hit(x + left - 60.0), "{align:?}: beyond 40pt left of the band the picture is hit");
     }
 }
