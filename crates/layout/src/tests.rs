@@ -4529,6 +4529,22 @@ fn line_numbers_follow_the_line_number_style() {
     assert!(styled.iter().all(|(size, color)| *size == 8.0 && *color == red), "{styled:?}");
 }
 
+/// A page break ending a paragraph keeps the paragraph mark with it, which Word draws on the
+/// break's line: the mark's line takes no line number. Word for Mac 16.114.4, a manuscript with
+/// `w:lnNumType w:countBy="1"` whose sections each end with a page break after their last text:
+/// the line numbers go on unbroken across each break.
+#[test]
+fn the_mark_kept_with_a_closing_page_break_takes_no_line_number() {
+    crate::test_fonts();
+    let mut d = Document::from_text("Text\u{000C}\nNext");
+    d.last_section.line_numbers = Some(Default::default());
+    let l = lay(&d);
+    // Line numbers per page: one beside "Text", one beside "Next" (2, not 3).
+    let numbers: Vec<usize> =
+        l.pages.iter().map(|pg| pg.items.iter().filter(|it| matches!(it, Placed::Lines { story, .. } if *story == DECOR_STORY)).count()).collect();
+    assert_eq!(numbers, [1, 1]);
+}
+
 /// #6018: German Word saves the "line number" style as `Zeilennummer`; the numbers still take
 /// its formatting, found by the built-in name.
 #[test]
