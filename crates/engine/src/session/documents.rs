@@ -51,6 +51,7 @@ pub struct DocState {
     pub(super) find: FindState,
     pub(super) goal_x: Option<f32>,
     pub(super) page_hint: usize,
+    pub(super) caret_upstream: bool,
     pub(super) new_header_parts: Vec<u32>,
     pub(super) hf_return: Option<Selection>,
     pub(super) history: Vec<Arc<Undo>>,
@@ -108,6 +109,7 @@ impl DocState {
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
+            caret_upstream: false,
             new_header_parts: Vec::new(),
             hf_return: None,
             history: Vec::new(),
@@ -212,6 +214,7 @@ impl Session {
             find: _,
             goal_x: _,
             page_hint: _,
+            caret_upstream: _,
             new_header_parts: _,
             hf_return: _,
             history: _,
@@ -315,6 +318,7 @@ impl Session {
             find,
             goal_x,
             page_hint,
+            caret_upstream,
             new_header_parts,
             hf_return,
             history,
@@ -365,6 +369,7 @@ impl Session {
         swap(&mut self.find, find);
         swap(&mut self.goal_x, goal_x);
         swap(&mut self.page_hint, page_hint);
+        swap(&mut self.caret_upstream, caret_upstream);
         swap(&mut self.new_header_parts, new_header_parts);
         swap(&mut self.hf_return, hf_return);
         swap(&mut self.history, history);

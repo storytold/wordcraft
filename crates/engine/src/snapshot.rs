@@ -13,6 +13,8 @@ use wordcraft_layout::{DocLayout, NumeralMode, ViewMode};
 pub struct EditSnapshot {
     pub(super) doc: Document,
     pub(super) sel: Selection,
+    /// The caret's affinity at a soft wrap, drawn with the selection.
+    pub(super) caret_upstream: bool,
     /// `Session::pending` and `Session::pending_at` then: they go together, so a restored caret
     /// gets back the formatting it had, carried by Backspace or set there (#6518).
     pub(super) pending: Option<wordcraft_doc::props::CharProps>,
