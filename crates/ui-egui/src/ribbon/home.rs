@@ -189,7 +189,9 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                     let mut size = st.get("size").and_then(Value::as_f64).map(fmt).unwrap_or_default();
                     let sizes: Vec<Entry<String>> =
                         wordcraft_engine::cmd::format::SIZES.iter().map(|s| Entry::new(fmt(f64::from(*s)), fmt(f64::from(*s)))).collect();
-                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes).show(ui);
+                    let out = craft::ui::pickers::ComboBox::new(tl!("Font Size").to_string(), Bind::bound(&mut size), &sizes)
+                        .tooltip(tl!("Font Size").to_string())
+                        .show(ui);
                     if let Some(v) = out.edit.events.committed()
                         && let Ok(x) = v.trim().parse::<f64>()
                     {
