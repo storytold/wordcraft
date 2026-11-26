@@ -1,4 +1,4 @@
-use super::doc_state::{ColumnBlock, Selection};
+use super::doc_state::{ColumnBlock, MathEdit, Selection, TypedWord};
 use super::ime_state::ImeCaretState;
 use super::snapshot_types::RunSnapshot;
 use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
@@ -20,10 +20,16 @@ struct SuccessContext<'a> {
     sel_before: &'a Selection,
 }
 
-struct ElsewhereContext {
+type MdSnapshot = (Option<crate::cmd::md_source::MdSource>, Option<crate::cmd::md_source::FileText>);
+
+struct ElsewhereContext<'a> {
+    id: &'a str,
     home: u64,
     mark: u64,
     before_doc: Option<RunSnapshot>,
+    rev_restore: Option<u64>,
+    dirty_before: Option<bool>,
+    math_before: Option<Option<MathEdit>>,
     blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
     default_language_before: Option<String>,
     pending_application_change_before: bool,
@@ -63,33 +69,40 @@ impl Session {
 
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
-    /// it was; a panic inside a command becomes an error.
+    /// it was; a panic inside a command, or in the checks and hooks around it, becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
-        if self.md_source.is_some()
-            && let Some(mutates) = self.registry.get(id).map(|spec| spec.mutates)
-        {
-            crate::cmd::md_source::before_command(self, id, mutates)?;
-        }
-        // Formatting Backspace carried over is for typing where the character was deleted: a
-        // caret the front end moved itself (a click elsewhere) has left it behind (#6518).
-        self.drop_stale_carried();
-        let carried_before = self.pending_at.clone().map(|at| (self.pending.clone(), at));
-        // The formatting waiting at the caret is not part of the document snapshot a failed
-        // command is rolled back to: put it back here, so a refused edit (a Backspace into a
-        // locked content control) leaves it as it was.
-        let document_before = self.document_id;
-        let waiting_before = (self.pending.clone(), self.pending_at.clone());
-        let result = self.run_command(id, params);
-        if result.is_ok() {
-            self.settle_carried(carried_before);
-        } else if self.document_id == document_before {
-            (self.pending, self.pending_at) = waiting_before;
-        }
-        result
+        // Panics in the command and the work after it are caught inside, with the document
+        // restored; this catches the rest (the Markdown source, `enabled` and protection
+        // pre-checks) (#3721).
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if self.md_source.is_some()
+                && let Some(mutates) = self.registry.get(id).map(|spec| spec.mutates)
+            {
+                crate::cmd::md_source::before_command(self, id, mutates)?;
+            }
+            // Formatting Backspace carried over is for typing where the character was deleted: a
+            // caret the front end moved itself (a click elsewhere) has left it behind (#6518).
+            self.drop_stale_carried();
+            let carried_before = self.pending_at.clone().map(|at| (self.pending.clone(), at));
+            // The formatting waiting at the caret is not part of the document snapshot a failed
+            // command is rolled back to: put it back here, so a refused edit (a Backspace into a
+            // locked content control) leaves it as it was.
+            let document_before = self.document_id;
+            let waiting_before = (self.pending.clone(), self.pending_at.clone());
+            let result = self.run_command(id, params);
+            if result.is_ok() {
+                self.settle_carried(carried_before);
+            } else if self.document_id == document_before {
+                (self.pending, self.pending_at) = waiting_before;
+            }
+            result
+        }))
+        .unwrap_or_else(|p| Err(panicked(id, &*p)))
     }
 
     /// Dispatches `id` through the command registry with transactional rollback on failure,
-    /// tracking history, undo checkpoints, and IME outcomes.
+    /// tracking history, undo checkpoints, and IME outcomes. `run` without its outer panic guard:
+    /// the checks, the guarded dispatch and the hooks after it.
     fn run_command(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
         // The document the command starts in, and the first id a document it opens can have.
         let home = self.document_id;
@@ -148,6 +161,7 @@ impl Session {
         // Commands may leave an equation (a whole-body replacement) even after they fail; put
         // the editing session back with the document.
         let math_before = spec.mutates.then(|| self.math.clone());
+        let md_before = self.md_snapshot(id);
         let before_doc: Option<RunSnapshot> = if spec.mutates {
             Some((
                 self.doc.clone(),
@@ -192,6 +206,10 @@ impl Session {
                 self.merge.preview,
             )
         });
+        // What the hooks after a command may change, taken before the tweaks below (a caret move
+        // closes the typing group) and the dispatch (`select.member` picks a member): a failed
+        // command puts back what it started with.
+        let hooks_before = HookState::of(self);
         let typing = spec.id == "text.insert" || spec.id == "equation.type";
         if spec.mutates && !typing {
             self.typing_open = false;
@@ -217,6 +235,10 @@ impl Session {
             self.pending_move = None;
         }
         let sel_before = self.sel.clone();
+        // A command that doesn't mutate has no document snapshot: what a failed hook puts back.
+        let nav_before = (!spec.mutates).then(|| (self.column.clone(), self.math.clone()));
+        // The formatting waiting at the caret, for every command: a failed one leaves it as it was.
+        let pending_command_before = self.pending.clone();
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
         let default_language_before = self.prefs.default_language.clone();
@@ -228,93 +250,142 @@ impl Session {
             Some(r) => r,
             None => crate::cmd::column::dispatch(self, id, mutates, run, params),
         }));
-        let mut result = match result {
-            Ok(r) => r,
-            Err(p) => {
-                let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
-                Err(CmdError::Failed(format!("{id} panicked: {msg}")))
-            }
-        };
+        let mut result = result.unwrap_or_else(|p| Err(panicked(id, &*p)));
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
             return self.finish_elsewhere(
-                ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
+                ElsewhereContext {
+                    id,
+                    home,
+                    mark,
+                    before_doc,
+                    rev_restore,
+                    dirty_before,
+                    math_before,
+                    blocks_before,
+                    default_language_before,
+                    pending_application_change_before,
+                },
                 result,
             );
         }
-        // Restrict Editing: outside the exceptions nothing may change.
+        // The protected-region check and the work after a successful command walk the document
+        // it produced, so they are guarded too: a panic or refusal there takes the failure path
+        // below, which restores the document (#3721).
         if result.is_ok()
-            && guard
-            && let Some((before, ..)) = &before_doc
-            && !crate::cmd::protect::outside_unchanged(before, &self.doc, &self.author)
+            && let Err(e) = self.finish_success_guarded(
+                guard,
+                hooks_before,
+                nav_before,
+                SuccessContext {
+                    id,
+                    spec,
+                    before_doc: &before_doc,
+                    pending_before: &pending_before,
+                    document_id_before,
+                    replaces_document,
+                    dirty_before,
+                    rev_restore,
+                    pushed,
+                    mutates,
+                    ime_caret_before,
+                    rev_before,
+                    sel_before: &sel_before,
+                },
+            )
         {
-            result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
+            result = Err(e);
         }
-        match &result {
-            Ok(_) => self.finish_success(SuccessContext {
-                id,
-                spec,
-                before_doc: &before_doc,
-                pending_before: &pending_before,
-                document_id_before,
-                replaces_document,
-                dirty_before,
-                rev_restore,
-                pushed,
-                mutates,
-                ime_caret_before,
-                rev_before,
-                sel_before: &sel_before,
-            }),
-            Err(e) => {
-                self.ime_edit_outcome = ImeEditOutcome::default();
-                self.pending_ime_application_change = pending_application_change_before;
-                self.autocap = None;
-                self.prefs.default_language = default_language_before;
-                if let Some(epoch) = ime_epoch_before {
-                    self.ime_body_epoch = epoch;
-                }
-                if let Some(math) = math_before {
-                    self.math = math;
-                }
-                if let Some(versions) = versions_before {
-                    self.versions = versions;
-                }
-                if let Some((path, file_name, document_id, password, dirty, bib_style, merge_preview)) = identity_before {
-                    self.path = path;
-                    self.file_name = file_name;
-                    self.document_id = document_id;
-                    self.password = password;
-                    self.dirty = dirty;
-                    self.bib_style = bib_style;
-                    self.merge.preview = merge_preview;
-                }
-                if let Some((d, s, h, r, t, ev, c)) = before_doc {
-                    self.doc = d;
-                    self.sel = s;
-                    self.history = h;
-                    self.redo = r;
-                    self.typing_open = t;
-                    // The steps the command pushed out are back, so they no longer count as gone.
-                    self.undo_evicted = ev;
-                    self.column = c;
-                    // Its step is gone with them: its undo group has none to merge into.
-                    if pushed {
-                        self.join_anchor = false;
-                    }
-                }
-                if let Some(dirty) = dirty_before {
-                    self.dirty = dirty;
-                }
-                if let Some(rev) = rev_restore {
-                    self.restore_rev(rev);
-                }
-                if let Some(b) = blocks_before {
-                    self.building_blocks = b;
-                }
-                self.status = e.to_string();
+        if let Err(e) = &result {
+            // A document the command opened behind this one closes again.
+            self.close_opened(home, mark);
+            self.ime_edit_outcome = ImeEditOutcome::default();
+            self.pending_ime_application_change = pending_application_change_before;
+            self.autocap = None;
+            self.pending = pending_command_before;
+            self.prefs.default_language = default_language_before;
+            if let Some(epoch) = ime_epoch_before {
+                self.ime_body_epoch = epoch;
             }
+            if let Some(math) = math_before {
+                self.math = math;
+            }
+            self.restore_md(md_before);
+            if let Some(versions) = versions_before {
+                self.versions = versions;
+            }
+            if let Some((path, file_name, document_id, password, dirty, bib_style, merge_preview)) = identity_before {
+                self.path = path;
+                self.file_name = file_name;
+                self.document_id = document_id;
+                self.password = password;
+                self.dirty = dirty;
+                self.bib_style = bib_style;
+                self.merge.preview = merge_preview;
+            }
+            if let Some((d, s, h, r, t, ev, c)) = before_doc {
+                self.doc = d;
+                self.sel = s;
+                self.history = h;
+                self.redo = r;
+                self.typing_open = t;
+                // The steps the command pushed out are back, so they no longer count as gone.
+                self.undo_evicted = ev;
+                self.column = c;
+                // Its step is gone with them: its undo group has none to merge into.
+                if pushed {
+                    self.join_anchor = false;
+                }
+            }
+            if let Some(dirty) = dirty_before {
+                self.dirty = dirty;
+            }
+            if let Some(rev) = rev_restore {
+                self.restore_rev(rev);
+            }
+            if let Some(b) = blocks_before {
+                self.building_blocks = b;
+            }
+            self.status = e.to_string();
         }
         result
+    }
+
+    /// The protected-region check and [`Self::finish_success`], under their own panic guard
+    /// (#3721). On a refusal or a panic, what the hooks changed outside the document snapshot is
+    /// put back, and a command that doesn't mutate (so has no snapshot) gets its selection back;
+    /// the caller's failure path restores the rest.
+    fn finish_success_guarded(
+        &mut self,
+        guard: bool,
+        hooks_before: HookState,
+        nav_before: Option<(Option<ColumnBlock>, Option<MathEdit>)>,
+        context: SuccessContext<'_>,
+    ) -> Result<(), CmdError> {
+        let id = context.id;
+        let nav_before = nav_before.map(|(column, math)| (context.sel_before.clone(), column, math));
+        let post = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Restrict Editing: outside the exceptions nothing may change.
+            if guard
+                && let Some((before, ..)) = context.before_doc
+                && !crate::cmd::protect::outside_unchanged(before, &self.doc, &self.author)
+            {
+                return Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
+            }
+            self.finish_success(context);
+            #[cfg(test)]
+            injected_panic(&PANIC_AFTER_COMMAND, "after-command");
+            Ok(())
+        }));
+        let post = post.unwrap_or_else(|p| Err(panicked(id, &*p)));
+        if post.is_err() {
+            hooks_before.restore(self);
+            if let Some((sel, column, math)) = nav_before {
+                self.sel = sel;
+                self.column = column;
+                self.math = math;
+            }
+        }
+        post
     }
 
     /// After a command, formatting Backspace carried over stays only where typing would use it
@@ -464,46 +535,178 @@ impl Session {
     /// Succeeded: the first document loses the undo step made for the command when its text is
     /// as it was (opening a document is no edit to undo there). Failed: the documents the command opened close again and the first document is
     /// active and as it was.
-    fn finish_elsewhere(&mut self, context: ElsewhereContext, result: Result<Value, CmdError>) -> Result<Value, CmdError> {
-        let ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before } = context;
+    fn finish_elsewhere(&mut self, context: ElsewhereContext<'_>, result: Result<Value, CmdError>) -> Result<Value, CmdError> {
+        let ElsewhereContext {
+            id,
+            home,
+            mark,
+            before_doc,
+            rev_restore,
+            dirty_before,
+            math_before,
+            blocks_before,
+            default_language_before,
+            pending_application_change_before,
+        } = context;
         // Another document is a state change the input method has to see, never an IME edit.
         self.ime_edit_outcome = ImeEditOutcome::default();
-        match &result {
-            Ok(_) => {
-                self.put_back_parked(home, before_doc);
-                self.clamp_selection();
-                self.ime_state_seen = Some(self.current_ime_caret_state());
-                self.reset_ime_state_revision();
-                if !self.ime_origin {
-                    self.pending_ime_application_change = true;
-                }
-            }
-            Err(e) => {
-                self.pending_ime_application_change = pending_application_change_before;
-                self.autocap = None;
-                self.prefs.default_language = default_language_before;
-                if self.is_open(home) {
-                    let _ = self.switch_to(home);
-                    let opened: Vec<u64> = self.order.iter().copied().filter(|d| *d >= mark && *d != home).collect();
-                    for d in opened {
-                        let _ = self.close_document(d);
-                    }
-                    if let Some((d, s, h, r, t, ev, c)) = before_doc {
-                        self.doc = d;
-                        self.sel = s;
-                        self.history = h;
-                        self.redo = r;
-                        self.typing_open = t;
-                        self.undo_evicted = ev;
-                        self.column = c;
-                    }
-                }
-                if let Some(b) = blocks_before {
-                    self.building_blocks = b;
-                }
-                self.status = e.to_string();
+        let mut result = result;
+        if result.is_ok() {
+            // Guarded like the work after a command in `run` (#3721): a panic here closes what the
+            // command opened and puts the first document back, as a failed command does. The
+            // snapshot is cloned (its blocks are shared) so the failure path still has it.
+            let snapshot = before_doc.clone();
+            if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.settle_elsewhere(home, snapshot))) {
+                result = Err(panicked(id, &*p));
             }
         }
+        if let Err(e) = &result {
+            self.pending_ime_application_change = pending_application_change_before;
+            self.autocap = None;
+            self.prefs.default_language = default_language_before;
+            if self.is_open(home) {
+                let _ = self.switch_to(home);
+                self.close_opened(home, mark);
+                if let Some((d, s, h, r, t, ev, c)) = before_doc {
+                    self.doc = d;
+                    self.sel = s;
+                    self.history = h;
+                    self.redo = r;
+                    self.typing_open = t;
+                    self.undo_evicted = ev;
+                    self.column = c;
+                }
+                // Layouts made for the edit are not the restored document's.
+                if let Some(rev) = rev_restore {
+                    self.restore_rev(rev);
+                }
+                if let Some(dirty) = dirty_before {
+                    self.dirty = dirty;
+                }
+                // The equation session parked with the first document may hold the rejected edit.
+                if let Some(math) = math_before {
+                    self.math = math;
+                }
+            }
+            if let Some(b) = blocks_before {
+                self.building_blocks = b;
+            }
+            self.status = e.to_string();
+        }
         result
+    }
+
+    /// Leaving Markdown Source applies its text and drops it, and the text command edits it: what
+    /// a failed one puts back. Only the toggle touches the file's own text.
+    fn md_snapshot(&self, id: &str) -> Option<MdSnapshot> {
+        matches!(id, "view.markdownSource" | "view.markdownSourceText")
+            .then(|| (self.md_source.clone(), (id == "view.markdownSource").then(|| self.md_file.clone())))
+    }
+
+    fn restore_md(&mut self, snapshot: Option<MdSnapshot>) {
+        if let Some((src, file)) = snapshot {
+            self.md_source = src;
+            if let Some(file) = file {
+                self.md_file = file;
+            }
+        }
+    }
+
+    /// Closes the documents a command opened (ids from `mark` on) other than `home`.
+    fn close_opened(&mut self, home: u64, mark: u64) {
+        let opened: Vec<u64> = self.order.iter().copied().filter(|d| *d >= mark && *d != home).collect();
+        for d in opened {
+            let _ = self.close_document(d);
+        }
+    }
+
+    /// The success path of [`Self::finish_elsewhere`]: the first document gets its snapshot back
+    /// where it is parked, and the input method sees the new document.
+    fn settle_elsewhere(&mut self, home: u64, before_doc: Option<RunSnapshot>) {
+        self.put_back_parked(home, before_doc);
+        self.clamp_selection();
+        self.ime_state_seen = Some(self.current_ime_caret_state());
+        self.reset_ime_state_revision();
+        if !self.ime_origin {
+            self.pending_ime_application_change = true;
+        }
+        #[cfg(test)]
+        injected_panic(&PANIC_SETTLING_ELSEWHERE, "settle-elsewhere");
+    }
+}
+
+/// What the hooks after a command change outside the document snapshot, as it was before the
+/// command ran: put back when one of them panics or refuses (#3721).
+struct HookState {
+    typing_open: bool,
+    column_mode: bool,
+    collapsed: Vec<(usize, u64)>,
+    ime_state_seen: Option<ImeCaretState>,
+    ime_state_revision: Option<u64>,
+    typing: Option<TypedWord>,
+    edit_marks: Vec<Pos>,
+    go_back_step: usize,
+    hf_return: Option<Selection>,
+    also_selected: Vec<Pos>,
+    member: Option<crate::cmd::canvas::CanvasMember>,
+}
+
+impl HookState {
+    /// What the after-command hooks may change, as it is before the command runs.
+    fn of(s: &Session) -> Self {
+        HookState {
+            typing_open: s.typing_open,
+            column_mode: s.column_mode,
+            collapsed: s.view.outline.collapsed.clone(),
+            ime_state_seen: s.ime_state_seen.clone(),
+            ime_state_revision: s.ime_state_revision,
+            typing: s.typing.clone(),
+            edit_marks: s.edit_marks.clone(),
+            go_back_step: s.go_back_step,
+            hf_return: s.hf_return.clone(),
+            also_selected: s.also_selected.clone(),
+            member: s.member.clone(),
+        }
+    }
+
+    /// Puts back what the hooks changed, after a hook panicked or refused.
+    fn restore(self, s: &mut Session) {
+        s.typing_open = self.typing_open;
+        s.column_mode = self.column_mode;
+        s.view.outline.collapsed = self.collapsed;
+        s.ime_state_seen = self.ime_state_seen;
+        s.ime_state_revision = self.ime_state_revision;
+        s.typing = self.typing;
+        s.edit_marks = self.edit_marks;
+        s.go_back_step = self.go_back_step;
+        s.hf_return = self.hf_return;
+        s.also_selected = self.also_selected;
+        s.member = self.member;
+    }
+}
+
+/// The error a caught panic in command `id` becomes.
+fn panicked(id: &str, p: &(dyn std::any::Any + Send)) -> CmdError {
+    #[cfg(test)]
+    PANICS_CAUGHT.with(|n| n.set(n.get() + 1));
+    let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+    CmdError::Failed(format!("{id} panicked: {msg}"))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the next successful command panics at the end of its after-command hooks (#3721).
+    pub(crate) static PANIC_AFTER_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Tests: the next command that ends in another document panics while settling there (#3721).
+    pub(crate) static PANIC_SETTLING_ELSEWHERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Tests: how many panics `Session::run` has caught on this thread.
+    pub(crate) static PANICS_CAUGHT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[allow(clippy::panic)]
+fn injected_panic(flag: &'static std::thread::LocalKey<std::cell::Cell<bool>>, what: &str) {
+    if flag.with(|f| f.replace(false)) {
+        panic!("injected {what} panic");
     }
 }
