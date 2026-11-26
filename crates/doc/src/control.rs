@@ -366,6 +366,39 @@ pub fn pair_events(events: &[ControlEvent]) -> (Vec<(usize, usize, usize)>, Vec<
     (pairs, orphans)
 }
 
+/// The controls of a run of rows (or of a row's cells), as the events of a block list: item `j`'s
+/// wrap opens its controls before it and closes `close` after it.
+fn wrap_events<'a>(wraps: impl Iterator<Item = &'a ControlWrap>) -> Vec<ControlEvent<'a>> {
+    let mut out = Vec::new();
+    for (j, w) in wraps.enumerate() {
+        out.extend(w.open.iter().map(|control| ControlEvent::Open { block: j, off: None, control }));
+        out.extend((0..w.close.min(10_000)).map(|_| ControlEvent::Close { block: j, off: None }));
+    }
+    out
+}
+
+/// The whole controls among `events` that hold item `at` (at byte `off` of it, when it is a
+/// paragraph, else inside it), outermost first, each with whether it is kept on a table, row or
+/// cell rather than having both ends as paragraph markers.
+fn enclosing<'a>(events: &[ControlEvent<'a>], at: usize, off: usize, out: &mut Vec<(&'a ContentControl, bool)>) {
+    // Before item `at`: the controls opening before a table; then the markers at their offsets
+    // (or the inside of the table); then the controls closing after it.
+    let key = |e: &ControlEvent| match (e, e.off()) {
+        (_, Some(off)) => (e.block(), 1, off),
+        (ControlEvent::Open { .. }, None) => (e.block(), 0, 0),
+        (ControlEvent::Close { .. }, None) => (e.block(), 2, 0),
+    };
+    let here = (at, 1, off);
+    let (mut pairs, _) = pair_events(events);
+    pairs.sort_unstable();
+    for (o, c, _) in pairs {
+        let (Some(open @ ControlEvent::Open { control, .. }), Some(close)) = (events.get(o), events.get(c)) else { continue };
+        if key(open) < here && here <= key(close) {
+            out.push((*control, open.off().is_none() || close.off().is_none()));
+        }
+    }
+}
+
 /// A whole content control around paragraph content.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControlRange {
@@ -508,7 +541,8 @@ fn balance_list(bl: &mut Blocks) -> usize {
 }
 
 impl Document {
-    fn control_stories(&self) -> Vec<StoryRef> {
+    /// The stories that can hold content controls and form fields: the body and every part.
+    pub fn control_stories(&self) -> Vec<StoryRef> {
         std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k))).collect()
     }
 
@@ -540,6 +574,51 @@ impl Document {
             .into_iter()
             .filter(|r| r.contains(p))
             .max_by(|a, b| (&a.start.path, a.start.off).cmp(&(&b.start.path, b.start.off)))
+    }
+
+    /// Every content control around `p`, outermost first, each with whether it is kept on a
+    /// table, row or cell ([`ControlWrap`]) rather than having both ends as markers in paragraph
+    /// text. [`Document::control_at`] sees only the latter. Unpaired markers and wraps enclose
+    /// nothing.
+    pub fn controls_around(&self, p: &Pos) -> Vec<(&ContentControl, bool)> {
+        let mut out = Vec::new();
+        let Some(mut bl) = self.story(p.story) else { return out };
+        let steps = &p.path.0;
+        let mut i = 0;
+        while let Some(&b) = steps.get(i) {
+            let b = usize::try_from(b).unwrap_or(usize::MAX);
+            let last = i + 1 == steps.len();
+            enclosing(&control_events(bl), b, if last { p.off } else { 0 }, &mut out);
+            if last || i / 3 >= MAX_DEPTH {
+                break;
+            }
+            let (Some(Block::Table(t)), Some(&r), Some(&c)) = (bl.get(b).map(|b| &**b), steps.get(i + 1), steps.get(i + 2)) else { break };
+            let (r, c) = (usize::try_from(r).unwrap_or(usize::MAX), usize::try_from(c).unwrap_or(usize::MAX));
+            let Some(row) = t.rows.get(r) else { break };
+            enclosing(&wrap_events(t.rows.iter().map(|row| &row.controls)), r, 0, &mut out);
+            enclosing(&wrap_events(row.cells.iter().map(|cell| &cell.controls)), c, 0, &mut out);
+            let Some(cell) = row.cells.get(c) else { break };
+            bl = &cell.blocks;
+            i += 3;
+        }
+        out
+    }
+
+    /// Whether any table, row or cell of a story keeps a content control ([`ControlWrap`]).
+    pub fn story_has_wraps(&self, s: StoryRef) -> bool {
+        fn any(bl: &Blocks, depth: usize) -> bool {
+            depth <= MAX_DEPTH
+                && bl.iter().any(|b| match &**b {
+                    Block::Table(t) => {
+                        !t.controls.is_empty()
+                            || t.rows
+                                .iter()
+                                .any(|r| !r.controls.is_empty() || r.cells.iter().any(|c| !c.controls.is_empty() || any(&c.blocks, depth + 1)))
+                    }
+                    Block::Para(_) => false,
+                })
+        }
+        self.story(s).is_some_and(|bl| any(bl, 0))
     }
 
     fn story_has_controls(&self, s: StoryRef) -> bool {
