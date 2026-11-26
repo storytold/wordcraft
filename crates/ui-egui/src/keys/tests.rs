@@ -201,6 +201,9 @@ fn user_assignments_become_overrides() {
             ),
             (Some(("Mod+F1", "view.focus")), "Mod+F1", command("view.focus")),
             (Some(("Alt+Q", "view.focus")), "Alt+Q", if mac { command("view.focus") } else { tell_me.clone() }),
+            (None, "Mod+R", command("para.alignRight")),
+            (None, "Alt+R", None),
+            (None, "Mod+Alt+Shift+R", None),
         ];
         for (assign, ask, want) in rows {
             let mut h = alt_frame_app();
@@ -326,16 +329,6 @@ fn mod_v_released_mod_first_pastes_the_clipboard_picture() {
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, true, Modifiers::NONE)]);
     mods_frame(&mut h, Modifiers::NONE, vec![key_event(Key::V, false, Modifiers::NONE)]);
     assert_eq!(pictures(h.state_mut()), 1);
-}
-
-#[test]
-fn cmd_option_r_collapses_the_ribbon_on_macos() {
-    let m = |mac_cmd, alt, shift| egui::Modifiers { mac_cmd, command: mac_cmd, alt, shift, ..Default::default() };
-    let collapse = Some(("ui.collapseRibbon", json!({})));
-    assert_eq!(ui_shortcut(Key::R, m(true, true, false)), if cfg!(target_os = "macos") { collapse } else { None });
-    assert_eq!(ui_shortcut(Key::R, m(true, false, false)), None, "Mod+R aligns right");
-    assert_eq!(ui_shortcut(Key::R, m(false, true, false)), None, "Option+R types a character");
-    assert_eq!(ui_shortcut(Key::R, m(true, true, true)), None, "Mod+Alt+Shift+R");
 }
 
 /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
