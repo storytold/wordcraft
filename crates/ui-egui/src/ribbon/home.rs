@@ -8,7 +8,7 @@ use craft::ui::contract::{
 };
 use craft::ui::display::Divider;
 use craft::ui::layout_components::{Row, Stack};
-use craft::ui::list::ThumbAspect;
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::primitives::{HAlign, TextRun};
 use craft::ui::tile_grid::{CaptionPlace, Tile, TileGrid};
@@ -85,7 +85,7 @@ fn bullets_menu(ui: &mut Ui, cx: &mut BodyCx<'_>, app: &mut WordApp) {
         .select(SelectMode::None)
         .activate(ActivateOn::Click)
         .card_columns(BULLETS.len())
-        .content_cells()
+        .thumb_size(ThumbSize::Small)
         // One row, all shown; the menu's body is the one scroll.
         .natural_height(true)
         .show_items(ui, &source, &mut |c, _| {
@@ -157,6 +157,7 @@ pub(super) fn home(row: &mut RibbonRow<'_>, app: &mut WordApp) {
                 ("Paste", "edit.paste"),
                 ("Keep Text Only", "edit.pasteText"),
                 ("Merge Formatting", "edit.pasteMerge"),
+                ("Paste as Nested Table", "edit.pasteNestedTable"),
                 ("Paste Special…", "edit.pasteSpecial"),
             ] {
                 MenuItem::command(CommandRef::new(id)).label(tl!(label).to_string()).show(ui);

@@ -705,40 +705,38 @@ impl PreferencesModel for OptionsModel<'_> {
         }
     }
 
-    fn custom_row(&mut self, ui: &mut Ui, key: &str) {
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
         match key {
             "general.defaultApp" => default_app_row(self.app, ui),
-            "proofing.autoCorrect" => {
-                if Button::new(tl!("AutoCorrect Options")).show(ui).clicked() {
-                    self.run("tools.autocorrect", json!({}));
-                }
-            }
+            "proofing.autoCorrect" => self.command_button(ui, tl!("AutoCorrect Options"), "tools.autocorrect"),
             "proofing.customDictionaryFile" => self.custom_dictionary_file(ui),
             "proofing.customDictionary" => self.custom_dictionary(ui),
             "language.proofingLanguage" => {
                 Text::new(self.strings.proofing_language.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                false
             }
             // PLAN: assumed `your_languages(app: &mut WordApp, ui: &mut Ui)` (chrome-w12)
-            "language.yourLanguages" => crate::language_packs::your_languages(self.app, ui),
-            "language.dictionaryFiles" => dictionary_files(ui),
-            "advanced.customizeKeyboard" => {
-                if Button::new(tl!("Customize…")).show(ui).clicked() {
-                    self.run("tools.customizeKeyboard", json!({}));
-                }
+            "language.yourLanguages" => {
+                crate::language_packs::your_languages(self.app, ui);
+                false
             }
-            "advanced.customizeRibbon" if Button::new(tl!("Customize…")).show(ui).clicked() => {
-                self.run("tools.customizeRibbon", json!({}));
+            "language.dictionaryFiles" => {
+                dictionary_files(ui);
+                false
             }
-            _ => {}
+            "advanced.customizeKeyboard" => self.command_button(ui, tl!("Customize…"), "tools.customizeKeyboard"),
+            "advanced.customizeRibbon" => self.command_button(ui, tl!("Customize…"), "tools.customizeRibbon"),
+            _ => false,
         }
     }
 
-    fn custom_page(&mut self, ui: &mut Ui, page: &str) {
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool {
         if page == "agents" {
             Text::new(tl!("Agents")).role(TypeRole::Heading).show(ui);
             Text::new(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."))
                 .show(ui);
         }
+        false
     }
 
     fn reset_page(&mut self, page: &str) {
@@ -762,21 +760,32 @@ impl OptionsModel<'_> {
     /// Enter or focus loss. The field is given the saved path and never writes it: the framework
     /// holds the draft while an edit is open and drops it when the saved path changes (an agent's
     /// `file.options`) or the page is left, so no edit open always shows the saved path.
-    fn custom_dictionary_file(&mut self, ui: &mut Ui) {
+    /// A button that runs `command` when clicked; whether it did.
+    fn command_button(&mut self, ui: &mut Ui, label: impl Into<craft::ui::runtime::env::Label>, command: &str) -> bool {
+        let clicked = Button::new(label).show(ui).clicked();
+        if clicked {
+            self.run(command, json!({}));
+        }
+        clicked
+    }
+
+    fn custom_dictionary_file(&mut self, ui: &mut Ui) -> bool {
         let saved = self.app.session.prefs.custom_dictionary.clone().unwrap_or_default();
         let out = TextField::new(tl!("Dictionary file:"), Bind::given(saved)).limit(None).show(ui);
         let committed = out.events.into_iter().find_map(|event| match event {
             EditEvent::Commit { after, .. } => Some(after),
             _ => None,
         });
+        let changed = committed.is_some();
         if let Some(path) = committed {
             self.set("proofing.customDictionaryFile", PrefValue::Text(path));
         }
+        changed
     }
 
     /// The custom dictionary: the words Add to Dictionary kept, each with a Remove button, and a
     /// field to add one.
-    fn custom_dictionary(&mut self, ui: &mut Ui) {
+    fn custom_dictionary(&mut self, ui: &mut Ui) -> bool {
         let words = wordcraft_engine::proof::user_dictionary();
         if words.is_empty() {
             Text::new(tl!("No words yet. Add to Dictionary on a misspelled word puts it here.")).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
@@ -793,8 +802,10 @@ impl OptionsModel<'_> {
                 }
             })
         });
+        let mut changed = false;
         if let Some(w) = removed.take() {
             self.options(json!({"removeWords": [w]}));
+            changed = true;
         }
         // Enter or Add files the draft and clears it.
         Row::new().show(ui, |ui, cx| {
@@ -806,8 +817,10 @@ impl OptionsModel<'_> {
             if ok && (add || out.submitted) {
                 self.options(json!({"addWords": [word]}));
                 draft.clear();
+                changed = true;
             }
         });
+        changed
     }
 }
 
@@ -861,7 +874,7 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
 /// the host can (`Services::make_default_app`: Windows opens Default apps, Linux and BSD use
 /// `xdg-mime`); macOS shows how to do it in Finder, the web shows nothing.
 #[cfg(not(target_arch = "wasm32"))]
-fn default_app_row(app: &mut WordApp, ui: &mut Ui) {
+fn default_app_row(app: &mut WordApp, ui: &mut Ui) -> bool {
     if app.services.make_default_app.is_some() {
         let hint = if cfg!(target_os = "windows") {
             tl!("Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.")
@@ -872,6 +885,7 @@ fn default_app_row(app: &mut WordApp, ui: &mut Ui) {
         // Only a person's click changes system defaults: an automation client's pass does not.
         if clicked && !WindowHost::of(ui.ctx()).injected_pass() {
             let _ = app.make_default_app();
+            return true;
         }
     } else if cfg!(target_os = "macos") {
         Text::new(tl!("To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All."))
@@ -879,11 +893,14 @@ fn default_app_row(app: &mut WordApp, ui: &mut Ui) {
             .shade(Shade::Faint)
             .show(ui);
     }
+    false
 }
 
 /// The web has no system default apps to change: nothing to show.
 #[cfg(target_arch = "wasm32")]
-fn default_app_row(_app: &mut WordApp, _ui: &mut Ui) {}
+fn default_app_row(_app: &mut WordApp, _ui: &mut Ui) -> bool {
+    false
+}
 
 /// The Options page.
 pub fn page(app: &mut WordApp, ui: &mut Ui) {

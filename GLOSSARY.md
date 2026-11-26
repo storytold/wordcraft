@@ -66,3 +66,16 @@ _Avoid_: Tofu, box, notdef character
 A picture the document refers to that the output cannot include: its part is absent, its data
 cannot be decoded, its format is unsupported, or it is linked from outside the file.
 _Avoid_: Broken image, dropped image
+
+## Windows
+
+**Document window**:
+A top-level window showing one open document. A document can be shown in several document windows
+at once (View › New Window); each window shows exactly one.
+_Avoid_: Viewport (that is the framework's surface), root window, tab
+
+**Save prompt**:
+The question "Save changes?" asked when the last document window showing a document with unsaved
+changes is about to close. It belongs to that window and appears there; while it is up, the other
+windows wait.
+_Avoid_: Close guard, save dialog, unsaved-changes dialog
